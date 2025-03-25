@@ -16,7 +16,7 @@
 3. **Environment Configuration**
 
    - Integrate `dotenv` for reading environment variables (Discord token, OpenAI key).
-   - Confirm secrets aren’t checked into version control.
+   - Confirm secrets aren't checked into version control.
 
 4. **Testing & CI Setup**
    - Install and configure Jest or Mocha/Chai for unit tests.
@@ -33,18 +33,18 @@
 2. **GPT Integration**
 
    - Install and configure OpenAI Node.js SDK.
-   - Draft a minimal “spam detection” function that calls GPT with a short prompt.
+   - Draft a minimal "spam detection" function that calls GPT with a short prompt.
    - Use a test stub for the GPT call if you want offline testing.
    - Write tests verifying that the function processes GPT output to yield a final classification.
 
 3. **Combine Heuristics + GPT**
 
-   - Introduce a “suspicion score” system, where heuristics produce a partial score.
+   - Introduce a "suspicion score" system, where heuristics produce a partial score.
    - If the heuristic result is borderline, call GPT. If GPT or heuristics strongly suggest spam, flag the user.
    - Write integration tests (bot receives a message → detection logic → outcome).
 
 4. **Verification & Role Management**
-   - Add logic to assign a “Restricted” role if flagged.
+   - Add logic to assign a "Restricted" role if flagged.
    - Optionally open a verification thread or ticket.
    - Provide commands for admins to override or finalize (verify/ban).
    - Test: ensure role assignment is correct, that threads are created, etc.
@@ -58,7 +58,7 @@
 
 2. **Cross-Server Reputation** (Optional in a later iteration)
 
-   - Add a shared database or a central endpoint that aggregates a user’s suspicion from multiple servers.
+   - Add a shared database or a central endpoint that aggregates a user's suspicion from multiple servers.
    - If a user is flagged in many servers, raise suspicion automatically.
 
 3. **Advanced Logging & Analytics**
@@ -75,7 +75,7 @@
 
 # 2. Breaking the Blueprint into Iterative Chunks
 
-Here’s a high-level breakdown of development chunks:
+Here's a high-level breakdown of development chunks:
 
 1. **Chunk A: Project & Testing Setup**
 
@@ -117,7 +117,7 @@ Here’s a high-level breakdown of development chunks:
 
 # 3. Further Iteration into Smaller Steps
 
-We’ll refine each chunk into smaller steps for safe, incremental building:
+We'll refine each chunk into smaller steps for safe, incremental building:
 
 ## 3.1 Chunk A: Project & Testing Setup
 
@@ -141,63 +141,88 @@ We’ll refine each chunk into smaller steps for safe, incremental building:
 2. **C2**: Hardcode thresholds (e.g. 5 messages in 10 sec).
 3. **C3**: If threshold exceeded, mark user as suspicious.
 4. **C4**: Write unit tests verifying the logic for normal vs. spammy usage.
-5. **C5**: Add a simple suspicious keyword check (e.g., “nitro scam” → suspicious). Test coverage.
+5. **C5**: Add a simple suspicious keyword check (e.g., "nitro scam" → suspicious). Test coverage.
 
 ## 3.4 Chunk D: GPT Integration
 
 1. **D1**: Install `openai`.
 2. **D2**: Create a `GPTService` class that can accept user data + context → returns classification.
-3. **D3**: In test environment, mock the GPT call to return “SUSPICIOUS” or “OK” based on dummy input.
+3. **D3**: In test environment, mock the GPT call to return "SUSPICIOUS" or "OK" based on dummy input.
 4. **D4**: Write a real (non-mocked) test to confirm actual GPT response (may not be run often).
 5. **D5**: Ensure secrets are loaded from `.env`.
 
 ## 3.5 Chunk E: Combined Detection Flow
 
-1. **E1**: Create a `DetectionOrchestrator` that calls `HeuristicService` first.
-2. **E2**: If borderline, pass user data to `GPTService`.
-3. **E3**: Return a final suspicion flag.
-4. **E4**: Write integration tests for normal, borderline, and obviously spammy.
-5. **E5**: Ensure the bot uses `DetectionOrchestrator` on message events.
+1. **E1**: Create a revised `DetectionOrchestrator.ts` that incorporates:
+
+   - Heuristic checks first (message frequency, suspicious keywords).
+   - Account age and server-join date checks:
+     - If a user is new (recent account creation or newly joined), automatically pass their first few messages (and profile data) to GPT for analysis.
+     - If the user is established (older account and longer server membership), only pass borderline or suspicious messages to GPT.
+
+2. **E2**: Ensure GPT is also called automatically when a user joins the server:
+
+   - Collect basic profile data upon join (account age, username, any known server invites).
+   - Immediately call GPT for an initial classification (e.g., "OK" vs. "SUSPICIOUS").
+
+3. **E3**: Produce a final label (OK or SUSPICIOUS) after combining heuristic and GPT results:
+
+   - Heuristics raise a baseline suspicion score.
+   - GPT can override to "SUSPICIOUS," especially for brand-new or borderline users.
+
+4. **E4**: Write integration tests (`DetectionOrchestrator.test.ts`) to cover:
+
+   - Brand-new user on join → GPT is called.
+   - Brand-new user's first few messages → GPT is called automatically.
+   - Estabished user with spammy behavior → Heuristics + GPT if borderline.
+   - Established user with normal behavior → Heuristics alone, no GPT call.
+
+5. **E5**: In the bot's event handlers:
+   - On `guildMemberAdd`: run the GPT-based check.
+   - On each user message: use heuristics first, then trigger GPT only if the user is new or borderline.
+   - If final label is "SUSPICIOUS," continue logging the user flag (for now).
 
 ## 3.6 Chunk F: Verification & Role Management
 
-1. **F1**: Add a “Restricted” role to test server, store its ID in `.env` or config.
-2. **F2**: When user is flagged, apply restricted role.
-3. **F3**: Create a `!verify` or similar command for admins.
-4. **F4**: Write tests verifying that flagged user is assigned the restricted role.
-5. **F5**: Optionally open threads for suspicious users with a short prompt, test that the thread is created.
+1. **F1**: Retain or create a "Restricted" role in the server, stored in `.env` or config.
+2. **F2**: When `DetectionOrchestrator` returns "SUSPICIOUS," apply the restricted role if possible.
+3. **F3**: Provide an admin command like `!verify @user` that removes the restricted role.
+4. **F4**: Write tests mocking role assignment and Discord methods, verifying role application/removal.
+5. **F5**: (Optional) Open a verification thread/channel for flagged users.
 
 ## 3.7 Chunk G: Prompt Strategy & Few-Shot
 
-1. **G1**: Refine `GPTService` prompt to include few-shot examples.
-2. **G2**: Develop borderline user profiles as test fixtures (recent account + normal bio, or older account + suspicious bio).
-3. **G3**: Evaluate whether GPT improves classification with these examples.
-4. **G4**: Adjust logic if needed (confidence thresholds).
-5. **G5**: Update tests to include these borderline scenarios.
+1. **G1**: Continue refining GPT prompts with few-shot examples:
+   - Include sample profiles for brand-new accounts, borderline behaviors, and older accounts.
+2. **G2**: Add tests for borderline user scenarios, especially new accounts:
+   - Confirm few-shot references help GPT detect suspicious or malicious patterns.
+3. **G3**: Keep prompting logic in a config or separate file for easy updates.
+4. **G4**: Maintain or adjust thresholds (like number of messages before GPT stops auto-checking a new user).
+5. **G5**: Monitor performance and token usage if prompts become larger.
 
 ## 3.8 Chunk H: Persistence & Logging (Supabase)
 
-1. **H1**: Install & configure Supabase client.
-2. **H2**: Create a table for storing flagged actions (userID, suspicion reason, timestamp).
-3. **H3**: Add logging calls in `DetectionOrchestrator`.
-4. **H4**: Test storing and retrieving flagged user data from Supabase.
-5. **H5**: Possibly add a simple admin command to list flagged users.
+1. **H1**: Install and set up the Supabase JS client.
+2. **H2**: Create or update database tables (e.g., `flagged_users`) with columns for user ID, reason, timestamp, and whether the user is new or established.
+3. **H3**: Ensure the `DetectionOrchestrator` or a dedicated service logs flagged events to the database, especially for new joins flagged by GPT.
+4. **H4**: Write tests using mocked Supabase to confirm insertion of joined/flagged user data.
+5. **H5**: (Optional) Provide a `!flagged` command to display suspicious users from the DB.
 
-## 3.9 Chunk I: Cross-Server / Advanced Features
+## 3.9 Chunk I: Cross-Server & Advanced Features (Optional)
 
-1. **I1**: Create a table for user “reputation” across multiple servers.
-2. **I2**: When a user is flagged in one server, reflect that in the shared DB.
-3. **I3**: On other servers, factor cross-server suspicion into detection logic.
-4. **I4**: Test with multiple mock servers and confirm repeated suspicious activity is recognized.
-5. **I5**: Evaluate performance, cost, final reliability.
+1. **I1**: Extend the Supabase schema to handle cross-server reputation scores.
+2. **I2**: Incorporate user reputation if flagged in multiple servers (extra suspicion).
+3. **I3**: Add tests simulating cross-server joins with prior flags.
+4. **I4**: Tune the threshold for automatically restricting known offenders.
+5. **I5**: Confirm final stability and address any performance concerns.
 
 ---
 
 # 4. Series of Code-Generation Prompts for a TDD Approach
 
-Below is a **step-by-step set of prompts** that build on each other. Each prompt focuses on a discrete chunk. You’d feed these to your code-generation LLM (e.g., GPT-4) to produce the relevant code and tests incrementally.
+Below is a **step-by-step set of prompts** that build on each other. Each prompt focuses on a discrete chunk. You'd feed these to your code-generation LLM (e.g., GPT-4) to produce the relevant code and tests incrementally.
 
-> **Important:** Each prompt is enclosed in triple backticks to indicate “text” usage, as requested.
+> **Important:** Each prompt is enclosed in triple backticks to indicate "text" usage, as requested.
 
 ---
 
@@ -239,9 +264,9 @@ We have a working TypeScript + Jest setup. Now we want to create a basic Discord
 1. Install `discord.js`.
 2. Create a `Bot.ts` that exports a `startBot()` function.
    - It should log in using a token from an environment variable, e.g. `process.env.DISCORD_TOKEN`.
-   - Listen for the `ready` event and log “Bot is ready!”.
+   - Listen for the `ready` event and log "Bot is ready!".
    - Listen for messages. If message content is `!ping`, reply with `Pong!`.
-3. Write a test to ensure that `startBot()` doesn’t throw errors. You can mock `discord.js` if necessary.
+3. Write a test to ensure that `startBot()` doesn't throw errors. You can mock `discord.js` if necessary.
 4. Provide instructions for running the bot locally.
 
 **Output**:
@@ -261,10 +286,10 @@ We now have a minimal Discord bot. Next, add heuristic spam detection.
 **Task**:
 1. Create a `HeuristicService.ts` that tracks message frequency:
    - If a user sends >5 messages in 10 seconds, mark them as suspicious.
-2. Add a suspicious keyword check (e.g., “nitro scam”).
+2. Add a suspicious keyword check (e.g., "nitro scam").
 3. Write unit tests for `HeuristicService` to ensure it flags users appropriately.
-4. Integrate `HeuristicService` into the bot’s message event:
-   - If flagged, just log “User flagged for spam” for now.
+4. Integrate `HeuristicService` into the bot's message event:
+   - If flagged, just log "User flagged for spam" for now.
 
 **Output**:
 - `HeuristicService.ts` with two main checks: frequency and suspicious keywords.
@@ -284,9 +309,9 @@ We have basic heuristics. Now we want to add GPT-based analysis.
 
 **Task**:
 1. Install `openai`.
-2. Create a `GPTService.ts` with a function `classifyUserProfile(profileData: any): Promise<string>` returning either “OK” or “SUSPICIOUS”.
-3. Add minimal prompt logic (e.g., “You are a Discord moderation assistant. Classify user.”).
-4. Write unit tests mocking the openai client (return “OK” or “SUSPICIOUS”).
+2. Create a `GPTService.ts` with a function `classifyUserProfile(profileData: any): Promise<string>` returning either "OK" or "SUSPICIOUS".
+3. Add minimal prompt logic (e.g., "You are a Discord moderation assistant. Classify user.").
+4. Write unit tests mocking the openai client (return "OK" or "SUSPICIOUS").
 5. Add environment variable `OPENAI_API_KEY`.
 6. Do not integrate with the bot flow yet—just build and test `GPTService`.
 
@@ -309,13 +334,13 @@ Combine heuristics and GPT-based analysis.
 1. Create a `DetectionOrchestrator.ts` that:
    - Calls `HeuristicService` to get a suspicion score or label.
    - If borderline or uncertain, calls `GPTService`.
-   - Produces a final label: “OK” or “SUSPICIOUS.”
+   - Produces a final label: "OK" or "SUSPICIOUS."
 2. Add integration tests that simulate:
    - Obvious spam scenario (heuristics alone).
    - Borderline scenario → GPT call.
    - Normal scenario → no flag.
 3. Integrate `DetectionOrchestrator` into the bot. On message event:
-   - If final label is “SUSPICIOUS,” log it for now.
+   - If final label is "SUSPICIOUS," log it for now.
 
 **Output**:
 - `DetectionOrchestrator.ts` & `.test.ts`.
@@ -333,10 +358,10 @@ Begin now.
 Add restricted role assignment, plus minimal admin override commands.
 
 **Task**:
-1. In `Bot.ts`, store a “Restricted Role” ID from `.env` or a config file.
-2. When `DetectionOrchestrator` returns “SUSPICIOUS”, apply the restricted role to that user if possible.
-3. Create an admin-only command “!verify @user” that removes the restricted role from a user.
-4. Write tests to mock role assignment methods.
+1. In `Bot.ts`, store a "Restricted Role" ID from `.env` or a config file.
+2. When `DetectionOrchestrator` returns "SUSPICIOUS," apply the restricted role if possible.
+3. Create an admin-only command "!verify @user" that removes the restricted role.
+4. Write tests mocking role assignment and Discord methods, verifying role application/removal.
 5. Document how to set the restricted role ID.
 
 **Output**:
@@ -356,7 +381,7 @@ Refine the GPT classification with a few-shot approach for borderline user profi
 
 **Task**:
 1. Update `GPTService` to include example user profiles in the prompt (few-shot examples).
-2. Provide at least 2–3 examples labeled as “OK” or “SUSPICIOUS.”
+2. Provide at least 2–3 examples labeled as "OK" or "SUSPICIOUS."
 3. Add or update tests with borderline user data to see if classification improves.
 4. Possibly add a small config for altering thresholds or example prompts.
 
@@ -377,10 +402,10 @@ Add persistent logging for flagged users, storing them in Supabase.
 
 **Task**:
 1. Install and configure the Supabase JS client.
-2. Create a table (e.g., “flagged_users”) with columns: userId, reason, timestamp.
-3. In `DetectionOrchestrator` or a “LoggingService”, insert a record when a user is flagged “SUSPICIOUS.”
+2. Create a table (e.g., "flagged_users") with columns: userId, reason, timestamp.
+3. In `DetectionOrchestrator` or a "LoggingService", insert a record when a user is flagged "SUSPICIOUS."
 4. Write a test that mocks Supabase, verifying that it receives the correct data.
-5. Optionally add a command “!flagged” that lists all flagged users from the DB.
+5. Optionally add a command "!flagged" that lists all flagged users from the DB.
 
 **Output**:
 - `LoggingService.ts` or `DatabaseService.ts` with Supabase logic.
@@ -392,7 +417,7 @@ Begin now.
 
 ---
 
-## 4.9 **Prompt: Chunk I – Cross-Server / Advanced Features**
+## 4.9 **Prompt: Chunk I – Cross-Server & Advanced Features (Optional)**
 
 ```text
 Optional advanced features for multi-server user reputation.
@@ -419,7 +444,7 @@ Begin now.
 Now we tie everything together and ensure no orphan code remains.
 
 **Task**:
-1. Review each chunk’s code, ensure code references are correct and that all services are injected or imported as needed.
+1. Review each chunk's code, ensure code references are correct and that all services are injected or imported as needed.
 2. Clean up logs, finalize readme, confirm test coverage.
 3. Provide a final demonstration on how to run the bot, set environment variables, and see it in action on a test Discord server.
 

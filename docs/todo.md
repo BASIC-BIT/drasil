@@ -60,55 +60,63 @@ Below is a **`todo.md`** document that serves as a comprehensive, step-by-step c
 
 ## Chunk E: Combined Detection Flow
 
-- [ ] **E1**: Create `DetectionOrchestrator.ts`:
-  - Calls `HeuristicService` first for a suspicion score or label.
-  - If borderline or uncertain, calls `GPTService`.
-  - Final output: "OK" or "SUSPICIOUS".
-- [ ] **E2**: Write integration tests (`DetectionOrchestrator.test.ts`) covering:
-  - Obvious spam scenario.
-  - Borderline scenario → GPT check.
-  - Normal usage → no flag.
-- [ ] **E3**: In the bot's message handler, replace the direct `HeuristicService` call with `DetectionOrchestrator`.
-- [ ] **E4**: If final label is "SUSPICIOUS," continue just logging "User flagged" for now.
-- [ ] **E5**: Ensure consistent error handling and logging.
+- [x] **E1**: Create or revise a `DetectionOrchestrator.ts` that incorporates:
+  - Heuristic checks first (message frequency, suspicious keywords).
+  - Account age and server-join date checks:
+    - If a user is new (recent account creation or newly joined), automatically pass their first few messages (plus profile info) to GPT for analysis.
+    - If the user is established, only pass borderline or suspicious messages to GPT.
+- [x] **E2**: Ensure GPT is also called automatically when a user joins the server:
+  - Collect and provide account age, username, and any relevant info to GPT.
+  - Classify as "OK" or "SUSPICIOUS" on join.
+- [x] **E3**: Combine heuristic and GPT results into a final label ("OK" or "SUSPICIOUS").
+- [x] **E4**: Write integration tests (`DetectionOrchestrator.test.ts`) covering:
+  - Brand-new user join (GPT is called).
+  - First few messages from a new user (GPT is called).
+  - Established user spamming (heuristics → GPT if borderline).
+  - Established user normal usage (heuristics alone).
+- [x] **E5**: Update the bot's event handlers:
+  - On `guildMemberAdd`: automatically call GPT classification.
+  - On each message: use heuristics first, then GPT if user is new or borderline.
+  - Log "User flagged" if final label is "SUSPICIOUS."
 
 ---
 
 ## Chunk F: Verification & Role Management
 
-- [ ] **F1**: Add a "Restricted" role (manually created in your Discord server) and store its ID in `.env` or a config file.
-- [ ] **F2**: When a user is flagged as "SUSPICIOUS," the bot automatically applies the restricted role to them.
-- [ ] **F3**: Implement a basic admin command (e.g., `!verify @user`) that removes the restricted role.
-- [ ] **F4**: Write tests to mock Discord's role assignment methods.
-- [ ] **F5**: (Optional) Create a verification thread or private channel for suspicious users.
-- [ ] **F6**: Document usage of the restricted role: how to create it, set ID, etc.
+- [ ] **F1**: Retain or create a "Restricted" role in the server, with its ID in `.env` or a config file.
+- [ ] **F2**: When `DetectionOrchestrator` returns "SUSPICIOUS", automatically apply the restricted role.
+- [ ] **F3**: Provide an admin-only command `!verify @user` that removes the restricted role.
+- [ ] **F4**: Write tests mocking Discord's role assignment, verifying restricted role application and removal.
+- [ ] **F5**: (Optional) Open a verification thread or private channel for flagged users.
 
 ---
 
 ## Chunk G: Prompt Strategy & Few-Shot
 
-- [ ] **G1**: Enhance GPT prompts in `GPTService` with few-shot examples:
-  - Provide at least 2–3 reference user profiles labeled "OK" or "SUSPICIOUS."
-- [ ] **G2**: Update tests with borderline user scenarios to evaluate prompt improvements.
-- [ ] **G3**: Optionally add a config or separate file for these few-shot prompts so they're easy to adjust.
-- [ ] **G4**: Document any changes to the GPT classification logic or thresholds.
-- [ ] **G5**: Evaluate performance and cost if more tokens are used for prompts.
+- [ ] **G1**: Refine `GPTService` with few-shot examples:
+  - Provide sample profiles for brand-new accounts, borderline users, and older accounts.
+- [ ] **G2**: Write or update tests for borderline user scenarios, confirming effectiveness of example references.
+- [ ] **G3**: Keep prompting logic in a config or separate file for easy updates.
+- [ ] **G4**: Adjust thresholds (e.g., number of messages before GPT stops auto-checking a new user).
+- [ ] **G5**: Monitor performance and costs if larger prompts are used.
 
 ---
 
 ## Chunk H: Persistence & Logging (Supabase)
 
-- [ ] **H1**: Install and configure the Supabase JS client.
-- [ ] **H2**: Set up a Supabase table, e.g., `flagged_users`:
-  - Columns: `id`, `userId`, `reason`, `timestamp`.
-- [ ] **H3**: Create a `LoggingService.ts` or `DatabaseService.ts` that inserts a record whenever a user is flagged "SUSPICIOUS."
-- [ ] **H4**: Write tests with a mocked Supabase client verifying DB insertion/retrieval.
-- [ ] **H5**: Optionally add a command `!flagged` listing flagged users from the DB.
-- [ ] **H6**: Document Supabase setup (DB URL, keys in `.env`).
+- [ ] **H1**: Install and set up the Supabase JS client.
+- [ ] **H2**: Create or update a table (e.g. `flagged_users`) with columns for user ID, reason, timestamp, and whether the user is new/established.
+- [ ] **H3**: Ensure flagged "SUSPICIOUS" events (especially for new joins) are logged in the DB.
+- [ ] **H4**: Write tests using mocked Supabase that verify flagged joins/messages are inserted correctly.
+- [ ] **H5**: (Optional) Provide a `!flagged` command to display suspicious users from the DB.
 
 ---
 
-## Chunk I: Cross-Server / Advanced Features (Optional)
+## Chunk I: Cross-Server & Advanced Features (Optional)
 
-- [ ] **I1**: Extend Supabase schema for cross-server reputation (e.g., table for `userId`, `
+- [ ] **I1**: Extend the Supabase schema for cross-server reputation tracking.
+- [ ] **I2**: Incorporate user reputation (if flagged in multiple servers, raise suspicion).
+- [ ] **I3**: Write tests simulating multi-server joins, verifying suspicion raises appropriately.
+- [ ] **I4**: Tune thresholds for automatically restricting known offenders.
+- [ ] **I5**: Ensure final stability, handle performance concerns at scale.
 ```
