@@ -9,7 +9,7 @@ module.exports = {
   resetMocks: true,
   restoreMocks: true,
   moduleNameMapper: {
-    '^./index': '<rootDir>/src/__mocks__/index.ts'
+    '^./index': '<rootDir>/src/__mocks__/index.ts',
   },
-  transform: {}
-}; 
+  transform: {},
+};

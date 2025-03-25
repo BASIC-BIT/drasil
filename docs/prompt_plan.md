@@ -1,62 +1,74 @@
 # 1. Detailed, Step-by-Step Blueprint
 
 ## 1.1 Project Initialization & Basic Setup
-1. **Project Scaffolding**  
-   - Create a new TypeScript project.  
-   - Initialize `package.json` and install dependencies: `discord.js`, `openai`, `dotenv`, `typescript`, `ts-node`, `jest`, etc.  
+
+1. **Project Scaffolding**
+
+   - Create a new TypeScript project.
+   - Initialize `package.json` and install dependencies: `discord.js`, `openai`, `dotenv`, `typescript`, `ts-node`, `jest`, etc.
    - Configure `tsconfig.json` for Node.js runtime.
 
-2. **Discord Bot Initialization**  
-   - Create a bare-bones Discord bot using `discord.js` that can log in with a token and respond to a basic command (`!ping` → `Pong!`).  
+2. **Discord Bot Initialization**
+
+   - Create a bare-bones Discord bot using `discord.js` that can log in with a token and respond to a basic command (`!ping` → `Pong!`).
    - Add simple tests for sanity checks.
 
-3. **Environment Configuration**  
-   - Integrate `dotenv` for reading environment variables (Discord token, OpenAI key).  
+3. **Environment Configuration**
+
+   - Integrate `dotenv` for reading environment variables (Discord token, OpenAI key).
    - Confirm secrets aren’t checked into version control.
 
-4. **Testing & CI Setup**  
-   - Install and configure Jest or Mocha/Chai for unit tests.  
+4. **Testing & CI Setup**
+   - Install and configure Jest or Mocha/Chai for unit tests.
    - Add a minimal GitHub Actions (or similar) CI pipeline to run tests on every push.
 
 ## 1.2 Core Bot Functionality (Heuristics + GPT)
-1. **Heuristic Checks**  
-   - Implement a simple message frequency check.  
-   - Implement a basic suspicious keyword/link check.  
+
+1. **Heuristic Checks**
+
+   - Implement a simple message frequency check.
+   - Implement a basic suspicious keyword/link check.
    - Write unit tests to ensure flags are raised under specific conditions (e.g., more than X messages in Y seconds).
 
-2. **GPT Integration**  
-   - Install and configure OpenAI Node.js SDK.  
-   - Draft a minimal “spam detection” function that calls GPT with a short prompt.  
-   - Use a test stub for the GPT call if you want offline testing.  
+2. **GPT Integration**
+
+   - Install and configure OpenAI Node.js SDK.
+   - Draft a minimal “spam detection” function that calls GPT with a short prompt.
+   - Use a test stub for the GPT call if you want offline testing.
    - Write tests verifying that the function processes GPT output to yield a final classification.
 
-3. **Combine Heuristics + GPT**  
-   - Introduce a “suspicion score” system, where heuristics produce a partial score.  
-   - If the heuristic result is borderline, call GPT. If GPT or heuristics strongly suggest spam, flag the user.  
+3. **Combine Heuristics + GPT**
+
+   - Introduce a “suspicion score” system, where heuristics produce a partial score.
+   - If the heuristic result is borderline, call GPT. If GPT or heuristics strongly suggest spam, flag the user.
    - Write integration tests (bot receives a message → detection logic → outcome).
 
-4. **Verification & Role Management**  
-   - Add logic to assign a “Restricted” role if flagged.  
-   - Optionally open a verification thread or ticket.  
-   - Provide commands for admins to override or finalize (verify/ban).  
+4. **Verification & Role Management**
+   - Add logic to assign a “Restricted” role if flagged.
+   - Optionally open a verification thread or ticket.
+   - Provide commands for admins to override or finalize (verify/ban).
    - Test: ensure role assignment is correct, that threads are created, etc.
 
 ## 1.3 Refinements & Future Enhancements
-1. **Prompt Strategy & Fine Tuning**  
-   - Expand the GPT prompt with few-shot examples.  
+
+1. **Prompt Strategy & Fine Tuning**
+
+   - Expand the GPT prompt with few-shot examples.
    - Write tests that mimic borderline user profiles.
 
-2. **Cross-Server Reputation** (Optional in a later iteration)  
-   - Add a shared database or a central endpoint that aggregates a user’s suspicion from multiple servers.  
+2. **Cross-Server Reputation** (Optional in a later iteration)
+
+   - Add a shared database or a central endpoint that aggregates a user’s suspicion from multiple servers.
    - If a user is flagged in many servers, raise suspicion automatically.
 
-3. **Advanced Logging & Analytics**  
-   - Store flagged events in a database (e.g., Supabase).  
+3. **Advanced Logging & Analytics**
+
+   - Store flagged events in a database (e.g., Supabase).
    - Provide an admin command or minimal dashboard to review flagged history.
 
-4. **Production Hardening**  
-   - Rate-limit GPT calls.  
-   - Provide fallback if GPT API fails.  
+4. **Production Hardening**
+   - Rate-limit GPT calls.
+   - Provide fallback if GPT API fails.
    - Ensure stable error handling and logging.
 
 ---
@@ -65,32 +77,40 @@
 
 Here’s a high-level breakdown of development chunks:
 
-1. **Chunk A: Project & Testing Setup**  
+1. **Chunk A: Project & Testing Setup**
+
    - Initialize repo, TypeScript, jest testing, basic CI.
 
-2. **Chunk B: Minimal Discord Bot**  
+2. **Chunk B: Minimal Discord Bot**
+
    - Basic `discord.js` client, connect using token, add a `ping` command.
 
-3. **Chunk C: Heuristic Spam Detection**  
+3. **Chunk C: Heuristic Spam Detection**
+
    - Rate-limit checks, suspicious keyword detection, unit tests for each.
 
-4. **Chunk D: GPT Integration**  
+4. **Chunk D: GPT Integration**
+
    - Connect OpenAI, create a function to classify user data with GPT, unit test using mocks.
 
-5. **Chunk E: Combined Detection Flow**  
-   - If borderline heuristics → call GPT. If spammy → restrict user.  
+5. **Chunk E: Combined Detection Flow**
+
+   - If borderline heuristics → call GPT. If spammy → restrict user.
    - Integration test with sample messages.
 
-6. **Chunk F: Verification & Role Management**  
+6. **Chunk F: Verification & Role Management**
+
    - Assign restricted roles, create verification threads, admin override commands.
 
-7. **Chunk G: Prompt Strategy & Few-Shot**  
+7. **Chunk G: Prompt Strategy & Few-Shot**
+
    - Enhance GPT calls, refine prompt format, test borderline user profiles.
 
-8. **Chunk H: Persistence & Logging**  
+8. **Chunk H: Persistence & Logging**
+
    - Store flagged data in Supabase, add logs/analytics as time allows.
 
-9. **Chunk I: Cross-Server / Advanced Features**  
+9. **Chunk I: Cross-Server / Advanced Features**
    - Expand logic to share data among servers, add optional advanced features.
 
 ---
@@ -100,66 +120,75 @@ Here’s a high-level breakdown of development chunks:
 We’ll refine each chunk into smaller steps for safe, incremental building:
 
 ## 3.1 Chunk A: Project & Testing Setup
-1. **A1**: Create Git repository, run `npm init -y`.  
-2. **A2**: Install dev dependencies: `typescript`, `ts-node`, `jest`, `@types/jest`, `ts-jest`.  
-3. **A3**: Configure `tsconfig.json` and `jest.config.js`.  
-4. **A4**: Add a sample test (`src/__tests__/sanity.test.ts`).  
+
+1. **A1**: Create Git repository, run `npm init -y`.
+2. **A2**: Install dev dependencies: `typescript`, `ts-node`, `jest`, `@types/jest`, `ts-jest`.
+3. **A3**: Configure `tsconfig.json` and `jest.config.js`.
+4. **A4**: Add a sample test (`src/__tests__/sanity.test.ts`).
 5. **A5**: Setup a basic GitHub Actions workflow to run `npm test`.
 
 ## 3.2 Chunk B: Minimal Discord Bot
-1. **B1**: Install `discord.js`.  
-2. **B2**: Create `Bot.ts` with a simple `Client`.  
-3. **B3**: Listen for `ready` event and log a success message.  
-4. **B4**: Implement `!ping` command, returning `Pong!`.  
+
+1. **B1**: Install `discord.js`.
+2. **B2**: Create `Bot.ts` with a simple `Client`.
+3. **B3**: Listen for `ready` event and log a success message.
+4. **B4**: Implement `!ping` command, returning `Pong!`.
 5. **B5**: Write a test ensuring the bot can load without errors (mock Discord.js if needed).
 
 ## 3.3 Chunk C: Heuristic Spam Detection
-1. **C1**: Create a `HeuristicService` class with minimal logic for tracking message frequency.  
-2. **C2**: Hardcode thresholds (e.g. 5 messages in 10 sec).  
-3. **C3**: If threshold exceeded, mark user as suspicious.  
-4. **C4**: Write unit tests verifying the logic for normal vs. spammy usage.  
+
+1. **C1**: Create a `HeuristicService` class with minimal logic for tracking message frequency.
+2. **C2**: Hardcode thresholds (e.g. 5 messages in 10 sec).
+3. **C3**: If threshold exceeded, mark user as suspicious.
+4. **C4**: Write unit tests verifying the logic for normal vs. spammy usage.
 5. **C5**: Add a simple suspicious keyword check (e.g., “nitro scam” → suspicious). Test coverage.
 
 ## 3.4 Chunk D: GPT Integration
-1. **D1**: Install `openai`.  
-2. **D2**: Create a `GPTService` class that can accept user data + context → returns classification.  
-3. **D3**: In test environment, mock the GPT call to return “SUSPICIOUS” or “OK” based on dummy input.  
-4. **D4**: Write a real (non-mocked) test to confirm actual GPT response (may not be run often).  
+
+1. **D1**: Install `openai`.
+2. **D2**: Create a `GPTService` class that can accept user data + context → returns classification.
+3. **D3**: In test environment, mock the GPT call to return “SUSPICIOUS” or “OK” based on dummy input.
+4. **D4**: Write a real (non-mocked) test to confirm actual GPT response (may not be run often).
 5. **D5**: Ensure secrets are loaded from `.env`.
 
 ## 3.5 Chunk E: Combined Detection Flow
-1. **E1**: Create a `DetectionOrchestrator` that calls `HeuristicService` first.  
-2. **E2**: If borderline, pass user data to `GPTService`.  
-3. **E3**: Return a final suspicion flag.  
-4. **E4**: Write integration tests for normal, borderline, and obviously spammy.  
+
+1. **E1**: Create a `DetectionOrchestrator` that calls `HeuristicService` first.
+2. **E2**: If borderline, pass user data to `GPTService`.
+3. **E3**: Return a final suspicion flag.
+4. **E4**: Write integration tests for normal, borderline, and obviously spammy.
 5. **E5**: Ensure the bot uses `DetectionOrchestrator` on message events.
 
 ## 3.6 Chunk F: Verification & Role Management
-1. **F1**: Add a “Restricted” role to test server, store its ID in `.env` or config.  
-2. **F2**: When user is flagged, apply restricted role.  
-3. **F3**: Create a `!verify` or similar command for admins.  
-4. **F4**: Write tests verifying that flagged user is assigned the restricted role.  
+
+1. **F1**: Add a “Restricted” role to test server, store its ID in `.env` or config.
+2. **F2**: When user is flagged, apply restricted role.
+3. **F3**: Create a `!verify` or similar command for admins.
+4. **F4**: Write tests verifying that flagged user is assigned the restricted role.
 5. **F5**: Optionally open threads for suspicious users with a short prompt, test that the thread is created.
 
 ## 3.7 Chunk G: Prompt Strategy & Few-Shot
-1. **G1**: Refine `GPTService` prompt to include few-shot examples.  
-2. **G2**: Develop borderline user profiles as test fixtures (recent account + normal bio, or older account + suspicious bio).  
-3. **G3**: Evaluate whether GPT improves classification with these examples.  
-4. **G4**: Adjust logic if needed (confidence thresholds).  
+
+1. **G1**: Refine `GPTService` prompt to include few-shot examples.
+2. **G2**: Develop borderline user profiles as test fixtures (recent account + normal bio, or older account + suspicious bio).
+3. **G3**: Evaluate whether GPT improves classification with these examples.
+4. **G4**: Adjust logic if needed (confidence thresholds).
 5. **G5**: Update tests to include these borderline scenarios.
 
 ## 3.8 Chunk H: Persistence & Logging (Supabase)
-1. **H1**: Install & configure Supabase client.  
-2. **H2**: Create a table for storing flagged actions (userID, suspicion reason, timestamp).  
-3. **H3**: Add logging calls in `DetectionOrchestrator`.  
-4. **H4**: Test storing and retrieving flagged user data from Supabase.  
+
+1. **H1**: Install & configure Supabase client.
+2. **H2**: Create a table for storing flagged actions (userID, suspicion reason, timestamp).
+3. **H3**: Add logging calls in `DetectionOrchestrator`.
+4. **H4**: Test storing and retrieving flagged user data from Supabase.
 5. **H5**: Possibly add a simple admin command to list flagged users.
 
 ## 3.9 Chunk I: Cross-Server / Advanced Features
-1. **I1**: Create a table for user “reputation” across multiple servers.  
-2. **I2**: When a user is flagged in one server, reflect that in the shared DB.  
-3. **I3**: On other servers, factor cross-server suspicion into detection logic.  
-4. **I4**: Test with multiple mock servers and confirm repeated suspicious activity is recognized.  
+
+1. **I1**: Create a table for user “reputation” across multiple servers.
+2. **I2**: When a user is flagged in one server, reflect that in the shared DB.
+3. **I3**: On other servers, factor cross-server suspicion into detection logic.
+4. **I4**: Test with multiple mock servers and confirm repeated suspicious activity is recognized.
 5. **I5**: Evaluate performance, cost, final reliability.
 
 ---
@@ -175,9 +204,9 @@ Below is a **step-by-step set of prompts** that build on each other. Each prompt
 ## 4.1 **Prompt: Chunk A – Project & Testing Setup**
 
 ```text
-You are assisting with a TypeScript project for a Discord anti-spam bot. 
+You are assisting with a TypeScript project for a Discord anti-spam bot.
 
-**Task**: Initialize the project and testing environment. 
+**Task**: Initialize the project and testing environment.
 
 **Requirements**:
 1. Create a new Node.js project (`npm init -y`).
@@ -194,7 +223,7 @@ You are assisting with a TypeScript project for a Discord anti-spam bot.
 - The `jest.config.js`.
 - The sample test file content.
 
-Write all code. Then summarize steps to initialize, run, and confirm everything works. 
+Write all code. Then summarize steps to initialize, run, and confirm everything works.
 
 Begin now.
 ```
@@ -405,8 +434,9 @@ Begin now.
 ---
 
 ## 5. Closing Notes
-- These prompts ensure **progressive and test-driven development**.  
-- Each step references prior code. No leftover or orphan modules.  
-- Heuristics, GPT integration, role management, and eventually advanced features are layered piece by piece.  
+
+- These prompts ensure **progressive and test-driven development**.
+- Each step references prior code. No leftover or orphan modules.
+- Heuristics, GPT integration, role management, and eventually advanced features are layered piece by piece.
 
 By following these carefully separated prompts in sequence, you (and your code-generation LLM) can incrementally build a robust, thoroughly tested spam detection and prevention bot without sudden leaps in complexity.
