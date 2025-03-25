@@ -36,7 +36,7 @@ console.log('API key loaded:', apiKey ? 'Yes (length: ' + apiKey.length + ')' : 
 // Set debug mode for more verbose output
 process.env.DEBUG = 'true';
 
-describe('GPTService - Real API', () => {
+describe.skip('GPTService - Real API', () => {
   // Run this test only when you want to test with the real API
   it('should classify a normal user profile using the real OpenAI API', async () => {
     // Check if API key exists
