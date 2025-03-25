@@ -19,14 +19,14 @@ Below is a **`todo.md`** document that serves as a comprehensive, step-by-step c
 
 ## Chunk B: Minimal Discord Bot
 
-- [ ] **B1**: Install `discord.js`.
-- [ ] **B2**: Create `Bot.ts` (or similarly named file):
+- [x] **B1**: Install `discord.js`.
+- [x] **B2**: Create `Bot.ts` (or similarly named file):
   - Exports a `startBot()` function.
   - Logs in using `process.env.DISCORD_TOKEN`.
   - Listens for the `ready` event and logs "Bot is ready!".
-- [ ] **B3**: Implement a simple message handler (e.g., if content is `!ping`, reply with "Pong!").
-- [ ] **B4**: Add a test (`startBot.test.ts`) ensuring the bot starts without errors (mock `discord.js` if needed).
-- [ ] **B5**: Document how to run locally (`.env` usage for `DISCORD_TOKEN`).
+- [x] **B3**: Implement a simple message handler (e.g., if content is `!ping`, reply with "Pong!").
+- [x] **B4**: Add a test (`startBot.test.ts`) ensuring the bot starts without errors (mock `discord.js` if needed).
+- [x] **B5**: Document how to run locally (`.env` usage for `DISCORD_TOKEN`).
 
 ---
 

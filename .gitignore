@@ -51,4 +51,7 @@ coverage/
 
 # Project specific
 supabase/.temp/
-supabase/.env 
+supabase/.env
+
+# OS files
+Thumbs.db 
