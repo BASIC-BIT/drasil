@@ -9,10 +9,9 @@ export interface UserProfileData {
   username: string;
   discriminator?: string;
   nickname?: string;
-  bio?: string;
   accountCreatedAt?: Date;
   joinedServerAt?: Date;
-  connectedAccounts?: string[];
+  recentMessage?: string;
   // Add other relevant profile fields as needed
 }
 
@@ -57,7 +56,7 @@ export class GPTService {
       // Create a structured prompt for GPT
       const prompt = this.createPrompt(profileData);
 
-      console.log('Sending request to OpenAI with prompt:', prompt.substring(0, 100) + '...');
+      console.log('Sending request to OpenAI with prompt:', prompt.substring(0, 400) + '...');
 
       // Call OpenAI API
       const response = await this.openai.chat.completions.create({
@@ -118,15 +117,8 @@ export class GPTService {
    * @returns A formatted prompt string
    */
   private createPrompt(profileData: UserProfileData): string {
-    const {
-      username,
-      discriminator,
-      nickname,
-      bio,
-      accountCreatedAt,
-      joinedServerAt,
-      connectedAccounts,
-    } = profileData;
+    const { username, discriminator, nickname, accountCreatedAt, joinedServerAt, recentMessage } =
+      profileData;
 
     // Format account creation and join dates if available
     const accountAge = accountCreatedAt
@@ -137,18 +129,20 @@ export class GPTService {
       ? `${Math.floor((Date.now() - joinedServerAt.getTime()) / (1000 * 60 * 60 * 24))} days ago`
       : 'unknown';
 
-    // Format connected accounts if available
-    const connectedAccountsStr = connectedAccounts?.length ? connectedAccounts.join(', ') : 'none';
-
-    // Create the structured prompt
-    return `Please analyze this Discord user profile:
+    // Create the structured prompt focusing only on available Discord data
+    let prompt = `Please analyze this Discord user profile:
 Username: ${username}${discriminator ? `#${discriminator}` : ''}
 ${nickname ? `Nickname: ${nickname}` : ''}
 Account age: ${accountAge}
-Joined server: ${joinedServerDaysAgo}
-Connected accounts: ${connectedAccountsStr}
-${bio ? `Bio: ${bio}` : 'No bio'}
+Joined server: ${joinedServerDaysAgo}`;
 
-Based on these details, classify the user as either 'OK' or 'SUSPICIOUS'.`;
+    // Add recent message if available
+    if (recentMessage) {
+      prompt += `\nRecent message: "${recentMessage}"`;
+    }
+
+    prompt += `\n\nBased on these details, classify the user as either 'OK' or 'SUSPICIOUS'.`;
+
+    return prompt;
   }
 }

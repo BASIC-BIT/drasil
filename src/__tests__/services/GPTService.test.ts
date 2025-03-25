@@ -13,19 +13,17 @@ describe('GPTService', () => {
   const normalUser: UserProfileData = {
     username: 'normal_user',
     discriminator: '1234',
-    bio: 'I am a legitimate user who enjoys gaming and art.',
     accountCreatedAt: new Date(Date.now() - 180 * 24 * 60 * 60 * 1000), // 180 days old
     joinedServerAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // Joined 30 days ago
-    connectedAccounts: ['Spotify', 'Xbox'],
+    recentMessage: "Hello everyone, I'm new here!",
   };
 
   const suspiciousUser: UserProfileData = {
     username: 'free_nitro_giveaway',
     discriminator: '9999',
-    bio: 'Click my profile for FREE DISCORD NITRO! Check my website!',
     accountCreatedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), // Only 2 days old
     joinedServerAt: new Date(Date.now() - 1 * 60 * 60 * 1000), // Joined 1 hour ago
-    connectedAccounts: [],
+    recentMessage: 'Click my profile for FREE DISCORD NITRO! Check my website!',
   };
 
   beforeEach(() => {
@@ -38,7 +36,7 @@ describe('GPTService', () => {
 
   describe('classifyUserProfile', () => {
     it('should classify normal users as "OK"', async () => {
-      // Mock the OpenAI API response for a normal user
+      // Mock the OpenAI API to return a successful response
       mockCreate.mockResolvedValueOnce({
         choices: [
           {
@@ -50,42 +48,62 @@ describe('GPTService', () => {
         ],
       });
 
-      // Call the method and expect "OK" result
+      // Call the method
       const result = await gptService.classifyUserProfile(normalUser);
+
+      // Verify the result
       expect(result).toBe('OK');
 
-      // Verify the OpenAI API was called with expected parameters
-      expect(mockCreate).toHaveBeenCalledTimes(1);
-      expect(mockCreate.mock.calls[0][0].messages[0].role).toBe('system');
-      expect(mockCreate.mock.calls[0][0].model).toBe('gpt-4o-mini');
+      // Verify the OpenAI API was called with the expected parameters
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: 'user',
+              content: expect.stringContaining(normalUser.username),
+            }),
+          ]),
+        })
+      );
     });
 
     it('should classify suspicious users as "SUSPICIOUS"', async () => {
-      // Mock the OpenAI API response for a suspicious user
+      // Mock the OpenAI API to return a suspicious response
       mockCreate.mockResolvedValueOnce({
         choices: [
           {
             message: {
               content:
-                'SUSPICIOUS - New account with suspicious username and bio mentioning free nitro.',
+                'SUSPICIOUS - New account with suspicious username and recent message mentioning free nitro.',
             },
           },
         ],
       });
 
-      // Call the method and expect "SUSPICIOUS" result
+      // Call the method
       const result = await gptService.classifyUserProfile(suspiciousUser);
+
+      // Verify the result
       expect(result).toBe('SUSPICIOUS');
 
-      // Verify the OpenAI API was called with expected parameters
-      expect(mockCreate).toHaveBeenCalledTimes(1);
+      // Verify the OpenAI API was called with the expected parameters
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: 'user',
+              content: expect.stringContaining(suspiciousUser.username),
+            }),
+          ]),
+        })
+      );
     });
 
     it('should default to "OK" if API call fails', async () => {
-      // Mock an API error
+      // Mock the OpenAI API to throw an error
       mockCreate.mockRejectedValueOnce(new Error('API Error'));
 
-      // Call the method and expect "OK" result (default for error case)
+      // Call the method and expect "OK" result (default for errors)
       const result = await gptService.classifyUserProfile(normalUser);
       expect(result).toBe('OK');
 

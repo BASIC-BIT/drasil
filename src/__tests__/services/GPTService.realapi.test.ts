@@ -52,10 +52,8 @@ describe.skip('GPTService - Real API', () => {
     const normalUser: UserProfileData = {
       username: 'regular_gamer',
       discriminator: '1234',
-      bio: 'I enjoy playing Minecraft and Valorant. Cat enthusiast. Discord member since 2019.',
       accountCreatedAt: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000), // 1 year old account
       joinedServerAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // joined 30 days ago
-      connectedAccounts: ['Spotify', 'Steam', 'Xbox'],
     };
 
     console.log('Calling OpenAI API with normal user...');
@@ -92,10 +90,8 @@ describe.skip('GPTService - Real API', () => {
     const suspiciousUser: UserProfileData = {
       username: 'FREE_NITRO_GlFT',
       discriminator: '0001',
-      bio: 'Get FREE Discord Nitro! Click my profile link to claim your gift now!',
       accountCreatedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), // 1 day old
       joinedServerAt: new Date(Date.now() - 30 * 60 * 1000), // joined 30 minutes ago
-      connectedAccounts: [],
     };
 
     console.log('Calling OpenAI API with suspicious user...');

@@ -21,14 +21,12 @@ describe('DetectionOrchestrator', () => {
   const normalUserProfile: UserProfileData = {
     username: 'NormalUser',
     discriminator: '1234',
-    bio: 'I like coding and gaming',
     accountCreatedAt: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000), // 1 year old account
     joinedServerAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // Joined 30 days ago
   };
 
   const newUserProfile: UserProfileData = {
     username: 'NewUser',
-    bio: 'Just joined Discord!',
     accountCreatedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), // 2 days old account
     joinedServerAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), // Joined 1 day ago
   };
