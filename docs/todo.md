@@ -32,15 +32,15 @@ Below is a **`todo.md`** document that serves as a comprehensive, step-by-step c
 
 ## Chunk C: Heuristic Spam Detection
 
-- [ ] **C1**: Create `HeuristicService.ts` for basic spam checks:
+- [x] **C1**: Create `HeuristicService.ts` for basic spam checks:
   - Message frequency tracking (e.g., if user sends >5 messages in 10 seconds).
   - Suspicious keyword detection (e.g., "nitro scam").
-- [ ] **C2**: Write unit tests (`HeuristicService.test.ts`) verifying:
+- [x] **C2**: Write unit tests (`HeuristicService.test.ts`) verifying:
   - Normal usage does not trigger flags.
   - Rapid messages or keyword triggers a flag.
-- [ ] **C3**: Integrate `HeuristicService` into the bot's message event:
+- [x] **C3**: Integrate `HeuristicService` into the bot's message event:
   - If flagged, log "User flagged for spam" (temporary action).
-- [ ] **C4**: Document threshold settings (e.g., `MAX_MESSAGES`, `TIME_FRAME`).
+- [x] **C4**: Document threshold settings (e.g., `MAX_MESSAGES`, `TIME_FRAME`).
 
 ---
 

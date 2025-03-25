@@ -19,6 +19,13 @@ This bot uses:
 - **Restricted Role**: Automate partial lockdown of flagged users
 - **Verification Threads**: Quickly confirm or deny suspicious accounts
 
+### Heuristic Spam Detection
+
+The bot currently implements the following heuristic checks:
+
+- **Message Frequency**: Flags users who send more than 5 messages within 10 seconds
+- **Suspicious Keywords**: Detects common scam phrases like "free discord nitro", "claim your prize", etc.
+
 ## Getting Started
 
 1. **Clone** this repository:

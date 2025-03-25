@@ -1,11 +1,13 @@
 import { Client, GatewayIntentBits, Message } from 'discord.js';
 import * as dotenv from 'dotenv';
+import { HeuristicService } from './services/HeuristicService';
 
 // Load environment variables
 dotenv.config();
 
 export class Bot {
   private client: Client;
+  private heuristicService: HeuristicService;
 
   constructor() {
     this.client = new Client({
@@ -15,6 +17,9 @@ export class Bot {
         GatewayIntentBits.MessageContent,
       ],
     });
+
+    // Initialize services
+    this.heuristicService = new HeuristicService();
 
     // Set up event handlers
     this.client.on('ready', this.handleReady.bind(this));
@@ -32,6 +37,15 @@ export class Bot {
     // Handle ping command
     if (message.content === '!ping') {
       await message.reply('Pong!');
+    }
+
+    // Check for spam using heuristic service
+    const userId = message.author.id;
+    const content = message.content;
+
+    if (this.heuristicService.isMessageSuspicious(userId, content)) {
+      console.log(`User flagged for spam: ${message.author.tag} (${userId})`);
+      console.log(`Message content: ${content}`);
     }
   }
 
