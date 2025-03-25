@@ -1,0 +1,63 @@
+---
+description: 
+globs: **/*.test.ts,**/__mocks__/**/*.*,**/__tests__/**/*.*
+alwaysApply: false
+---
+# Jest Testing Best Practices
+
+## Mocking Modules
+
+- Use `jest.mock()` to automatically mock external modules
+- Create dedicated mock files in `__mocks__` directory that match module structure
+- Export mock functions to allow access in tests for verification and setup
+- Keep mock implementation similar to the real code's interface
+- Avoid constructor dependency injection when possible; use module mocking instead
+
+## Test Structure
+
+- Structure tests with `describe` and `it` blocks for readability
+- Use descriptive test names that explain what is being tested
+- Follow AAA pattern: Arrange, Act, Assert
+- Test both normal operation and error cases
+- Use `beforeEach` to set up the environment for each test
+- Use `afterEach` to clean up after tests when needed
+
+## Mock Functions
+
+- Use `jest.fn()` for individual function mocks
+- Set up mock implementations with `mockImplementation()` or `mockResolvedValue()`/`mockRejectedValue()` for async functions
+- Verify mocks were called correctly with `expect(mockFn).toHaveBeenCalledWith(...)`
+- Verify call count with `expect(mockFn).toHaveBeenCalledTimes(n)`
+- Reset mocks between tests with `jest.clearAllMocks()`
+
+## Asynchronous Testing
+
+- Use `async`/`await` syntax for asynchronous tests
+- Remember to `await` promises in test assertions
+- Test both success and error cases for async functions
+- Use `mockResolvedValue()` and `mockRejectedValue()` for async mock functions
+
+## Best Practices
+
+- Test behavior, not implementation details
+- Keep tests independent of each other
+- Write tests that are resilient to implementation changes
+- Mock only what's necessary - don't over-mock
+- Focus on testing public API and outcomes, not private methods
+- Use snapshots sparingly and review them carefully
+- Keep assertions focused on one concept per test
+
+## Dependency Handling
+
+- Prefer module mocking over dependency injection for testability
+- Use automatic mocking for modules with `jest.mock()`
+- Create manual mocks for modules that need specific behavior
+- For environment variables, use `process.env` mocking or setup files
+
+## Configuration
+
+- Use a dedicated `jest.config.js` file
+- Set up transform configuration for TypeScript with `ts-jest`
+- Configure coverage thresholds and reports
+- Use `setupFilesAfterEnv` for global test setup
+- Configure `testMatch` or `testRegex` patterns for test discovery 

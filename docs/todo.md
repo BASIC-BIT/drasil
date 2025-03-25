@@ -46,15 +46,15 @@ Below is a **`todo.md`** document that serves as a comprehensive, step-by-step c
 
 ## Chunk D: GPT Integration
 
-- [ ] **D1**: Install the OpenAI Node.js SDK: `openai`.
-- [ ] **D2**: Create `GPTService.ts`:
+- [x] **D1**: Install the OpenAI Node.js SDK: `openai`.
+- [x] **D2**: Create `GPTService.ts`:
   - Export a function `classifyUserProfile(profileData: any) => Promise<"OK" | "SUSPICIOUS">`.
   - Minimal prompt structure, e.g., "You are a Discord moderation assistant. Classify user."
-- [ ] **D3**: Write tests (`GPTService.test.ts`) mocking the OpenAI API:
+- [x] **D3**: Write tests (`GPTService.test.ts`) mocking the OpenAI API:
   - One test returning "OK".
   - Another test returning "SUSPICIOUS".
-- [ ] **D4**: Add `OPENAI_API_KEY` to `.env`, confirm no secrets committed to Git.
-- [ ] **D5**: (Optional) Write a real test hitting the actual API (only run locally, not in CI).
+- [x] **D4**: Add `OPENAI_API_KEY` to `.env`, confirm no secrets committed to Git.
+- [x] **D5**: (Optional) Write a real test hitting the actual API (only run locally, not in CI).
 
 ---
 

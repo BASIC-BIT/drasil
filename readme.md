@@ -1,4 +1,4 @@
-# AI-Powered Discord Anti-Spam Bot 🚀
+# 🌳 Drasil - Automatic Discord Scammer Protection Bot 🛡️
 
 A Discord bot that leverages GPT-based analysis and heuristic checks to proactively detect and mitigate spammers and scammers in Discord servers.
 
