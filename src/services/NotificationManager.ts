@@ -8,9 +8,8 @@ import {
   ThreadAutoArchiveDuration,
   Message,
   Client,
-  MessageComponentInteraction,
-  PermissionFlagsBits,
   User,
+  ThreadChannel,
 } from 'discord.js';
 import { DetectionResult } from './DetectionOrchestrator';
 
@@ -54,24 +53,26 @@ export class NotificationManager {
    * Sends a notification to the admin channel about a suspicious user
    * @param member The suspicious guild member
    * @param detectionResult The detection result
-   * @returns Promise resolving to true if the notification was sent, false otherwise
+   * @param sourceMessage Optional message that triggered the detection
+   * @returns Promise resolving to the sent message or null if sending failed
    */
   public async notifySuspiciousUser(
     member: GuildMember,
-    detectionResult: DetectionResult
-  ): Promise<boolean> {
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<Message | null> {
     if (!this.adminChannelId) {
       console.error('No admin channel ID configured');
-      return false;
+      return null;
     }
 
     try {
       // Get the admin channel
       const channel = await this.getAdminChannel();
-      if (!channel) return false;
+      if (!channel) return null;
 
       // Create the embed with user information
-      const embed = this.createSuspiciousUserEmbed(member, detectionResult);
+      const embed = this.createSuspiciousUserEmbed(member, detectionResult, sourceMessage);
 
       // Create buttons for admin actions
       const actionRow = this.createActionRow(member.id);
@@ -82,25 +83,25 @@ export class NotificationManager {
         components: [actionRow],
       });
 
-      return true;
+      return message;
     } catch (error) {
       console.error('Failed to send suspicious user notification:', error);
-      return false;
+      return null;
     }
   }
 
   /**
    * Creates a thread for a suspicious user in the verification channel
    * @param member The suspicious guild member
-   * @returns Promise resolving to true if the thread was created successfully
+   * @returns Promise resolving to the created thread or null if creation failed
    */
-  public async createVerificationThread(member: GuildMember): Promise<boolean> {
+  public async createVerificationThread(member: GuildMember): Promise<ThreadChannel | null> {
     // Try verification channel first, fall back to admin channel if not configured
     const channelId = this.verificationChannelId || this.adminChannelId;
 
     if (!channelId) {
       console.error('No verification or admin channel ID configured');
-      return false;
+      return null;
     }
 
     try {
@@ -109,7 +110,7 @@ export class NotificationManager {
         ? await this.getVerificationChannel()
         : await this.getAdminChannel();
 
-      if (!channel) return false;
+      if (!channel) return null;
 
       // Create a thread for verification
       const threadName = `Verification: ${member.user.username}`;
@@ -128,10 +129,10 @@ export class NotificationManager {
         content: `# Verification for <@${member.id}>\n\nHello <@${member.id}>, your account has been automatically flagged for verification.\n\nTo help us verify your account, please answer these questions:\n\n1. How did you find our community?\n2. What interests you here?\n\nOnce you respond, a moderator will review your answers and grant you full access to the server if everything checks out.`,
       });
 
-      return true;
+      return thread;
     } catch (error) {
       console.error('Failed to create verification thread:', error);
-      return false;
+      return null;
     }
   }
 
@@ -140,11 +141,13 @@ export class NotificationManager {
    * @param message The original notification message
    * @param actionTaken The action that was taken
    * @param admin The admin who took the action
+   * @param thread Optional verification thread that was created
    */
   public async logActionToMessage(
     message: Message,
     actionTaken: string,
-    admin: User
+    admin: User,
+    thread?: ThreadChannel
   ): Promise<boolean> {
     try {
       // Get the existing embed
@@ -158,7 +161,11 @@ export class NotificationManager {
       const timestamp = Math.floor(Date.now() / 1000);
       const actionLogField = updatedEmbed.data.fields?.find((field) => field.name === 'Action Log');
 
+      // Create log entry, add thread link if provided
       let actionLogContent = `• <@${admin.id}> ${actionTaken} <t:${timestamp}:R>`;
+      if (thread && actionTaken.includes('created a verification thread')) {
+        actionLogContent = `• <@${admin.id}> [created a verification thread](${thread.url}) <t:${timestamp}:R>`;
+      }
 
       if (actionLogField) {
         // Append to existing log
@@ -186,11 +193,13 @@ export class NotificationManager {
    * Creates an embed for displaying suspicious user information
    * @param member The guild member
    * @param detectionResult The detection result
+   * @param sourceMessage Optional message that triggered the detection
    * @returns An EmbedBuilder with user information
    */
   private createSuspiciousUserEmbed(
     member: GuildMember,
-    detectionResult: DetectionResult
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
   ): EmbedBuilder {
     const accountCreatedAt = new Date(member.user.createdTimestamp);
     const joinedServerAt = member.joinedAt;
@@ -222,7 +231,12 @@ export class NotificationManager {
     // Create trigger information
     let triggerInfo: string;
     if (detectionResult.triggerSource === 'message' && detectionResult.triggerContent) {
-      triggerInfo = `Flagged for message: "${detectionResult.triggerContent}"`;
+      // If we have the source message, create a direct link to it
+      if (sourceMessage) {
+        triggerInfo = `[Flagged for message](${sourceMessage.url}): "${detectionResult.triggerContent}"`;
+      } else {
+        triggerInfo = `Flagged for message: "${detectionResult.triggerContent}"`;
+      }
     } else {
       triggerInfo = 'Flagged upon joining server';
     }

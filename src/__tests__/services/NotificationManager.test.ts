@@ -1,4 +1,4 @@
-import { Client, GuildMember, ThreadAutoArchiveDuration } from 'discord.js';
+import { Client, GuildMember, ThreadAutoArchiveDuration, ThreadChannel } from 'discord.js';
 import { NotificationManager } from '../../services/NotificationManager';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
 
@@ -8,6 +8,7 @@ class MockThread {
   members = {
     add: jest.fn().mockResolvedValue(undefined),
   };
+  url = 'https://discord.com/channels/123456789/987654321'; // Mock thread URL
 }
 
 class MockThreadManager {
@@ -99,7 +100,7 @@ describe('NotificationManager', () => {
         mockDetectionResult
       );
 
-      expect(result).toBe(true);
+      expect(result).toBeTruthy();
       expect(mockClient.channels.fetch).toHaveBeenCalledWith('mock-channel-id');
       const channel = await mockClient.channels.fetch();
       expect(channel.send).toHaveBeenCalled();
@@ -110,7 +111,7 @@ describe('NotificationManager', () => {
       expect(sentMessage.components).toBeDefined();
     });
 
-    it('should return false if admin channel ID is not configured', async () => {
+    it('should return null if admin channel ID is not configured', async () => {
       const result = await notificationManager.notifySuspiciousUser(
         mockMember as unknown as GuildMember,
         {
@@ -122,11 +123,11 @@ describe('NotificationManager', () => {
         }
       );
 
-      expect(result).toBe(false);
+      expect(result).toBeNull();
       expect(mockClient.channels.fetch).not.toHaveBeenCalled();
     });
 
-    it('should return false if fetching the channel fails', async () => {
+    it('should return null if fetching the channel fails', async () => {
       notificationManager.setAdminChannelId('mock-channel-id');
       mockClient.channels.fetch.mockRejectedValueOnce(new Error('Failed to fetch channel'));
 
@@ -141,7 +142,7 @@ describe('NotificationManager', () => {
         }
       );
 
-      expect(result).toBe(false);
+      expect(result).toBeNull();
     });
   });
 
@@ -152,7 +153,7 @@ describe('NotificationManager', () => {
         mockMember as unknown as GuildMember
       );
 
-      expect(result).toBe(true);
+      expect(result).toBeTruthy(); // Check that result is a thread object
       expect(mockClient.channels.fetch).toHaveBeenCalledWith('mock-channel-id');
 
       const channel = await mockClient.channels.fetch();
@@ -174,20 +175,20 @@ describe('NotificationManager', () => {
         mockMember as unknown as GuildMember
       );
 
-      expect(result).toBe(true);
+      expect(result).toBeTruthy(); // Check that result is a thread object
       expect(mockClient.channels.fetch).toHaveBeenCalledWith('verification-channel-id');
     });
 
-    it('should return false if no channel IDs are configured', async () => {
+    it('should return null if no channel IDs are configured', async () => {
       const result = await notificationManager.createVerificationThread(
         mockMember as unknown as GuildMember
       );
 
-      expect(result).toBe(false);
+      expect(result).toBeNull(); // Now returns null instead of false
       expect(mockClient.channels.fetch).not.toHaveBeenCalled();
     });
 
-    it('should return false if creating the thread fails', async () => {
+    it('should return null if creating the thread fails', async () => {
       notificationManager.setAdminChannelId('mock-channel-id');
       const channel = await mockClient.channels.fetch();
       channel.threads.create.mockRejectedValueOnce(new Error('Failed to create thread'));
@@ -196,7 +197,7 @@ describe('NotificationManager', () => {
         mockMember as unknown as GuildMember
       );
 
-      expect(result).toBe(false);
+      expect(result).toBeNull(); // Now returns null instead of false
     });
   });
 
@@ -257,6 +258,30 @@ describe('NotificationManager', () => {
       );
     });
 
+    it('should include thread link when thread is provided', async () => {
+      const mockMessage = {
+        embeds: [{ data: { fields: [] } }],
+        edit: jest.fn().mockResolvedValue(undefined),
+      };
+      const mockAdmin = { id: '987654321' };
+      const mockThread = new MockThread();
+
+      await notificationManager.logActionToMessage(
+        mockMessage as any,
+        'created a verification thread',
+        mockAdmin as any,
+        mockThread as unknown as ThreadChannel
+      );
+
+      // Check that the thread link is included in the action log
+      const editCall = mockMessage.edit.mock.calls[0][0];
+      const updatedField = editCall.embeds[0].data.fields.find(
+        (f: { name: string }) => f.name === 'Action Log'
+      );
+      expect(updatedField.value).toContain('created a verification thread');
+      expect(updatedField.value).toContain(mockThread.url);
+    });
+
     it('should append to existing action log if one exists', async () => {
       const existingActionLog = '• <@123456> verified the user <t:1234567890:R>';
       const mockMessage = {
@@ -267,7 +292,13 @@ describe('NotificationManager', () => {
             },
           },
         ],
-        edit: jest.fn().mockResolvedValue(undefined),
+        edit: jest.fn().mockImplementation((options) => {
+          // Mock a proper edit by actually modifying the fields
+          mockMessage.embeds[0].data.fields[0].value = options.embeds[0].data.fields.find(
+            (f: { name: string }) => f.name === 'Action Log'
+          ).value;
+          return Promise.resolve(undefined);
+        }),
       };
       const mockAdmin = { id: '987654321' };
 
@@ -278,10 +309,8 @@ describe('NotificationManager', () => {
       );
 
       // Check that the existing log is preserved in the update
-      const editCall = mockMessage.edit.mock.calls[0][0];
-      const updatedField = editCall.embeds[0].data.fields.find((f) => f.name === 'Action Log');
-      expect(updatedField.value).toContain(existingActionLog);
-      expect(updatedField.value).toContain('banned the user');
+      expect(mockMessage.embeds[0].data.fields[0].value).toContain(existingActionLog);
+      expect(mockMessage.embeds[0].data.fields[0].value).toContain('banned the user');
     });
 
     it('should return false if the message has no embeds', async () => {

@@ -11,6 +11,7 @@ import {
   Interaction,
   ButtonInteraction,
   RESTPostAPIChatInputApplicationCommandsJSONBody,
+  ThreadChannel,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { HeuristicService } from './services/HeuristicService';
@@ -221,6 +222,9 @@ export class Bot {
       // Get the original message to update with action log
       const message = interaction.message;
 
+      // Variable for thread, declared outside case block to avoid lexical declaration issues
+      let thread: ThreadChannel | null = null;
+
       // Handle the specific button action
       switch (action) {
         case 'verify':
@@ -244,13 +248,22 @@ export class Bot {
           break;
 
         case 'thread':
-          await this.createVerificationThread(member, interaction);
-          // Log the action to the original message
-          await this.notificationManager.logActionToMessage(
-            message,
-            'created a verification thread',
-            interaction.user
-          );
+          thread = await this.createVerificationThread(member, interaction);
+          // Log the action to the original message with the thread link
+          if (thread) {
+            await this.notificationManager.logActionToMessage(
+              message,
+              'created a verification thread',
+              interaction.user,
+              thread
+            );
+          } else {
+            await this.notificationManager.logActionToMessage(
+              message,
+              'failed to create a verification thread',
+              interaction.user
+            );
+          }
           break;
 
         default:
@@ -416,19 +429,21 @@ export class Bot {
   private async createVerificationThread(
     member: GuildMember,
     interaction: ChatInputCommandInteraction | ButtonInteraction
-  ): Promise<void> {
-    const success = await this.notificationManager.createVerificationThread(member);
+  ): Promise<ThreadChannel | null> {
+    const thread = await this.notificationManager.createVerificationThread(member);
 
-    if (success) {
+    if (thread) {
       await interaction.reply({
         content: `✅ Created a verification thread for ${member.user.tag}.`,
         ephemeral: true,
       });
+      return thread;
     } else {
       await interaction.reply({
         content: `❌ Failed to create a verification thread for ${member.user.tag}. Please check the bot's permissions and channel configuration.`,
         ephemeral: true,
       });
+      return null;
     }
   }
 
@@ -485,12 +500,14 @@ export class Bot {
             console.log(`Failed to assign restricted role to ${message.author.tag}`);
           }
 
-          // Send notification to admin channel
-          const notifySuccess = await this.notificationManager.notifySuspiciousUser(
+          // Send notification to admin channel with the source message
+          const notificationMessage = await this.notificationManager.notifySuspiciousUser(
             message.member,
-            detectionResult
+            detectionResult,
+            message // Pass the source message for linking
           );
-          if (notifySuccess) {
+
+          if (notificationMessage) {
             console.log(`Sent notification to admin channel about ${message.author.tag}`);
           } else {
             console.log(`Failed to send notification to admin channel about ${message.author.tag}`);
@@ -528,12 +545,30 @@ export class Bot {
         }
 
         // Send notification to admin channel
-        const notifySuccess = await this.notificationManager.notifySuspiciousUser(
+        const notificationMessage = await this.notificationManager.notifySuspiciousUser(
           member,
           detectionResult
         );
-        if (notifySuccess) {
+
+        if (notificationMessage) {
           console.log(`Sent notification to admin channel about ${member.user.tag}`);
+
+          // Automatically create a verification thread for new joins
+          const thread = await this.notificationManager.createVerificationThread(member);
+
+          if (thread) {
+            console.log(`Created verification thread for ${member.user.tag}`);
+            // Log the action to the notification message
+            const botUser = this.client.user;
+            if (botUser) {
+              await this.notificationManager.logActionToMessage(
+                notificationMessage,
+                'automatically created a verification thread',
+                botUser,
+                thread
+              );
+            }
+          }
         } else {
           console.log(`Failed to send notification to admin channel about ${member.user.tag}`);
         }

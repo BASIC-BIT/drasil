@@ -90,8 +90,10 @@ describe('Bot', () => {
       mockDetectionOrchestrator.detectMessage.mockResolvedValue({
         label: 'SUSPICIOUS',
         confidence: 0.95,
-        reason: 'Test suspicious message detection',
+        reasons: ['Test suspicious message detection'],
         usedGPT: false,
+        triggerSource: 'message',
+        triggerContent: 'Suspicious message',
       });
 
       const mockMessage = {
@@ -129,7 +131,9 @@ describe('Bot', () => {
         label: 'OK',
         confidence: 0.9,
         usedGPT: false,
-        reason: '',
+        reasons: [],
+        triggerSource: 'message',
+        triggerContent: 'Hello, how are you today?',
       });
 
       const mockMessage = {
@@ -157,7 +161,8 @@ describe('Bot', () => {
         label: 'SUSPICIOUS',
         confidence: 0.75,
         usedGPT: true,
-        reason: 'New account, recently created',
+        reasons: ['New account, recently created'],
+        triggerSource: 'join',
       });
 
       const mockMember = {
@@ -187,7 +192,8 @@ describe('Bot', () => {
         label: 'OK',
         confidence: 0.8,
         usedGPT: true,
-        reason: 'Established account',
+        reasons: ['Established account'],
+        triggerSource: 'join',
       });
 
       const mockMember = {

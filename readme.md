@@ -123,6 +123,7 @@ When a user is flagged as suspicious, the bot will:
 
 - Report command - allow users to report another user, which will run the bot detection on them (and, hilariously enough, also run the bot detection on the user that submitted the report)
 - Automatic CAPTCHA on suspected members?
+- Generally improve button interactions - add a confirmation prompt to the ban button, prevent creation of multiple threads, and add change how interactions are handled once it's already been handled (if we press Verify, then Ban, what happens?)
 
 ## Contributing 🤝
 
