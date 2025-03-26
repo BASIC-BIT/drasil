@@ -355,19 +355,25 @@ Begin now.
 ## 4.6 **Prompt: Chunk F – Verification & Role Management**
 
 ```text
-Add restricted role assignment, plus minimal admin override commands.
+We want to replace exclamation commands with slash commands and provide an admin/summary channel message containing interactive buttons.
 
 **Task**:
-1. In `Bot.ts`, store a "Restricted Role" ID from `.env` or a config file.
-2. When `DetectionOrchestrator` returns "SUSPICIOUS," apply the restricted role if possible.
-3. Create an admin-only command "!verify @user" that removes the restricted role.
-4. Write tests mocking role assignment and Discord methods, verifying role application/removal.
-5. Document how to set the restricted role ID.
+1. Implement slash commands for verification and banning (e.g., `/verify @user`, `/ban @user`) rather than "!verify @user".
+2. Create (or reuse) a "Restricted" role (ID stored in `.env` or config).
+3. When `DetectionOrchestrator` returns "SUSPICIOUS," post an embed or message to a configured admin or summary channel with interactive buttons:
+   - A "Verify" button that removes the Restricted role.
+   - A "Ban" button that bans the user.
+   - A "Create Thread" button that opens a dedicated thread to discuss or verify the user further.
+4. Write unit/integration tests that mock slash commands and role management to ensure that:
+   - The user is restricted if flagged.
+   - Admins can verify (remove restricted role) or ban using the slash command or the channel button.
+   - Threads are created properly if the button is clicked.
+5. Document how to register slash commands (via Discord's application command system) and how to configure the summary channel.
 
 **Output**:
-- Role management logic (in the message event or a separate `RoleService.ts`).
-- Tests verifying role assignment and admin override.
-- Updated readme: how to set restricted role ID, how to verify flagged users.
+- Updated role/verification logic to use slash commands and summary-channel messages with interactive buttons.
+- Tests verifying correct assignment, removal of roles, and channel-based interactions.
+- Updated docs for slash command registration.
 
 Begin now.
 ```

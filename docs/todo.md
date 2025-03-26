@@ -83,11 +83,14 @@ Below is a **`todo.md`** document that serves as a comprehensive, step-by-step c
 
 ## Chunk F: Verification & Role Management
 
-- [ ] **F1**: Retain or create a "Restricted" role in the server, with its ID in `.env` or a config file.
-- [ ] **F2**: When `DetectionOrchestrator` returns "SUSPICIOUS", automatically apply the restricted role.
-- [ ] **F3**: Provide an admin-only command `!verify @user` that removes the restricted role.
-- [ ] **F4**: Write tests mocking Discord's role assignment, verifying restricted role application and removal.
-- [ ] **F5**: (Optional) Open a verification thread or private channel for flagged users.
+- [x] **F1**: Provide slash commands (e.g., /verify, /ban) rather than exclamation commands.
+- [x] **F2**: Create (or reuse) a "Restricted" role (ID in `.env` or config).
+- [x] **F3**: When `DetectionOrchestrator` flags a user, post an embed or message to an admin/summary channel with interactive buttons:
+  - "Verify" button → removes the Restricted role
+  - "Ban" button → bans the user
+  - "Create Thread" button → opens a dedicated thread for further discussion
+- [x] **F4**: Write tests mocking Discord's slash commands and role assignment flow, verifying the user can be restricted, verified, or banned properly.
+- [x] **F5**: (Optional) Provide a fallback manual command or extra slash commands if moderators prefer typed interactions.
 
 ---
 

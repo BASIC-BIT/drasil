@@ -39,6 +39,8 @@ The bot currently implements the following heuristic checks:
    ```
 3. **Configure environment**:
    - Create a `.env` file and provide your `DISCORD_TOKEN`, `OPENAI_API_KEY`, etc.
+   - Add the `RESTRICTED_ROLE_ID` for the role to assign to suspicious users
+   - Add the `ADMIN_CHANNEL_ID` for the channel to post suspicious user notifications
 4. **Run the bot**:
    ```bash
    npm start
@@ -47,9 +49,48 @@ The bot currently implements the following heuristic checks:
 ## Usage
 
 - Invite the bot to your server.
-- Follow the setup wizard (`/wizard`)
+- Follow the setup instructions below
 - Update config as needed (spam thresholds, OpenAI prompts).
 - Let the bot automatically classify new users or run the `/verify` command for manual overrides.
+
+## Setup
+
+### Server Configuration
+
+1. **Create a Restricted Role**:
+
+   - Create a role in your Discord server that has limited permissions
+   - Take note of the role ID (enable Developer Mode in Discord Settings -> Advanced, then right-click the role and select "Copy ID")
+   - Add this ID to your `.env` file as `RESTRICTED_ROLE_ID`
+
+2. **Create an Admin Channel**:
+   - Create a channel that only moderators/admins have access to
+   - This channel will receive notifications about suspicious users with interactive buttons
+   - Copy the channel ID and add it to your `.env` file as `ADMIN_CHANNEL_ID`
+
+### Slash Commands
+
+The bot automatically registers the following slash commands during startup:
+
+- `/ping` - Check if the bot is online
+- `/verify @user` - Remove the restricted role from a user
+- `/ban @user [reason]` - Ban a user from the server with an optional reason
+- `/createthread @user` - Create a verification thread for a user
+
+Slash commands are automatically registered when the bot starts up. There's no need for manual registration.
+
+### Admin Channel Notifications
+
+When a user is flagged as suspicious, the bot will:
+
+1. Assign the configured restricted role to limit their server access
+2. Send a notification to the admin channel with:
+   - User details (username, ID, join date, etc.)
+   - Detection confidence and reason
+   - Interactive buttons:
+     - **Verify User** button to remove the restricted role
+     - **Ban User** button to ban the user from the server
+     - **Create Thread** button to open a verification thread for further investigation
 
 ## Spam Detection Heuristics
 

@@ -32,6 +32,7 @@
     "@babel/preset-env": "^7.26.9",
     "@babel/preset-typescript": "^7.27.0",
     "@eslint/js": "^9.23.0",
+    "@jest/globals": "^29.7.0",
     "@types/jest": "^29.5.14",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
@@ -52,6 +53,8 @@
   "dependencies": {
     "discord.js": "^14.18.0",
     "dotenv": "^16.4.7",
-    "openai": "^4.89.0"
+    "jest-mock-extended": "^4.0.0-beta1",
+    "openai": "^4.89.0",
+    "type-fest": "^4.38.0"
   }
 }
