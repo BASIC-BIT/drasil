@@ -1,9 +1,5 @@
 import { UserProfileData } from '../../services/GPTService';
 import * as gptConfig from '../../config/gpt-config';
-import { setupConsoleMocking } from '../utils/console-mocks';
-
-// Silence console.error and console.warn during tests
-setupConsoleMocking(['error', 'warn']);
 
 describe('GPT Config Formatting', () => {
   describe('getFormattedExamples', () => {

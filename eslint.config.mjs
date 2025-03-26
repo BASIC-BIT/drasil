@@ -57,7 +57,13 @@ const configs = [
   },
   // Test files config
   {
-    files: ['**/*.spec.ts', '**/*.test.ts', 'test/**/*.ts', '**/__mocks__/**/*.ts'],
+    files: [
+      '**/*.spec.ts',
+      '**/*.test.ts',
+      'test/**/*.ts',
+      '**/__mocks__/**/*.ts',
+      '**/__tests__/**/*.*',
+    ],
     languageOptions: {
       globals: {
         ...globals.node,

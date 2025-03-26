@@ -24,7 +24,7 @@ const silencedMethods: Record<string, boolean> = {
  */
 export function silenceConsole(methods?: Array<'log' | 'error' | 'warn' | 'info'>): void {
   const methodsToSilence = methods || ['error', 'warn'];
-  
+
   methodsToSilence.forEach((method) => {
     console[method] = jest.fn();
     silencedMethods[method] = true;
@@ -37,7 +37,7 @@ export function silenceConsole(methods?: Array<'log' | 'error' | 'warn' | 'info'
  */
 export function restoreConsole(methods?: Array<'log' | 'error' | 'warn' | 'info'>): void {
   const methodsToRestore = methods || ['error', 'warn', 'log', 'info'];
-  
+
   methodsToRestore.forEach((method) => {
     console[method] = originalConsole[method];
     silencedMethods[method] = false;
@@ -69,15 +69,17 @@ export function withConsoleOutput<T>(
   methods?: Array<'log' | 'error' | 'warn' | 'info'>
 ): () => Promise<T> {
   return async () => {
-    const methodsToRestore = methods || Object.keys(silencedMethods).filter(
-      (method) => silencedMethods[method as keyof typeof silencedMethods]
-    ) as Array<'log' | 'error' | 'warn' | 'info'>;
-    
+    const methodsToRestore =
+      methods ||
+      (Object.keys(silencedMethods).filter(
+        (method) => silencedMethods[method as keyof typeof silencedMethods]
+      ) as Array<'log' | 'error' | 'warn' | 'info'>);
+
     // Restore console methods temporarily
     methodsToRestore.forEach((method) => {
       console[method] = originalConsole[method];
     });
-    
+
     try {
       // Run the test
       return await testFn();
@@ -90,4 +92,4 @@ export function withConsoleOutput<T>(
       });
     }
   };
-} 
+}
