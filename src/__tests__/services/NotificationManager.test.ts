@@ -18,8 +18,18 @@ class MockThreadManager {
   });
 }
 
+class MockMessage {
+  embeds = [];
+  components = [];
+  edit = jest.fn().mockResolvedValue(undefined);
+  url = 'https://discord.com/channels/123456789/message/123456';
+}
+
 class MockTextChannel {
-  send = jest.fn().mockResolvedValue(undefined);
+  send = jest.fn().mockImplementation(() => {
+    const message = new MockMessage();
+    return Promise.resolve(message);
+  });
   threads = new MockThreadManager();
   isTextBased() {
     return true;
@@ -149,14 +159,20 @@ describe('NotificationManager', () => {
   describe('createVerificationThread', () => {
     it('should create a verification thread successfully using admin channel', async () => {
       notificationManager.setAdminChannelId('mock-channel-id');
+
+      // Ensure thread.members.add is called
+      const mockThread = new MockThread();
+      mockThread.members.add.mockClear();
+
+      const channel = await mockClient.channels.fetch();
+      channel.threads.create.mockImplementationOnce(() => Promise.resolve(mockThread));
+
       const result = await notificationManager.createVerificationThread(
         mockMember as unknown as GuildMember
       );
 
-      expect(result).toBeTruthy(); // Check that result is a thread object
+      expect(result).toBeTruthy();
       expect(mockClient.channels.fetch).toHaveBeenCalledWith('mock-channel-id');
-
-      const channel = await mockClient.channels.fetch();
       expect(channel.threads.create).toHaveBeenCalledWith({
         name: `Verification: ${mockMember.user.username}`,
         autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
@@ -165,8 +181,8 @@ describe('NotificationManager', () => {
       });
 
       // Verify member is added to the thread
-      const thread = await channel.threads.create();
-      expect(thread.members.add).toHaveBeenCalledWith(mockMember.id);
+      expect(mockThread.members.add).toHaveBeenCalledWith(mockMember.id);
+      expect(mockThread.send).toHaveBeenCalled();
     });
 
     it('should create a verification thread successfully using verification channel', async () => {
@@ -175,7 +191,7 @@ describe('NotificationManager', () => {
         mockMember as unknown as GuildMember
       );
 
-      expect(result).toBeTruthy(); // Check that result is a thread object
+      expect(result).toBeTruthy();
       expect(mockClient.channels.fetch).toHaveBeenCalledWith('verification-channel-id');
     });
 
@@ -184,7 +200,7 @@ describe('NotificationManager', () => {
         mockMember as unknown as GuildMember
       );
 
-      expect(result).toBeNull(); // Now returns null instead of false
+      expect(result).toBeNull();
       expect(mockClient.channels.fetch).not.toHaveBeenCalled();
     });
 
@@ -197,7 +213,7 @@ describe('NotificationManager', () => {
         mockMember as unknown as GuildMember
       );
 
-      expect(result).toBeNull(); // Now returns null instead of false
+      expect(result).toBeNull();
     });
   });
 
@@ -231,7 +247,6 @@ describe('NotificationManager', () => {
     });
   });
 
-  // Add test for new logActionToMessage method
   describe('logActionToMessage', () => {
     it('should update an existing message with action log', async () => {
       const mockMessage = {
@@ -283,34 +298,54 @@ describe('NotificationManager', () => {
     });
 
     it('should append to existing action log if one exists', async () => {
+      // Mock the date for consistent timestamps in tests
+      const originalDateNow = Date.now;
+      Date.now = jest.fn().mockReturnValue(1234567890000); // Fixed timestamp
+
       const existingActionLog = '• <@123456> verified the user <t:1234567890:R>';
-      const mockMessage = {
-        embeds: [
-          {
-            data: {
-              fields: [{ name: 'Action Log', value: existingActionLog }],
-            },
-          },
-        ],
-        edit: jest.fn().mockImplementation((options) => {
-          // Mock a proper edit by actually modifying the fields
-          mockMessage.embeds[0].data.fields[0].value = options.embeds[0].data.fields.find(
-            (f: { name: string }) => f.name === 'Action Log'
-          ).value;
-          return Promise.resolve(undefined);
-        }),
+
+      // Create an embed that exactly matches the structure expected by EmbedBuilder.from
+      const mockEmbed = {
+        data: {
+          fields: [{ name: 'Action Log', value: existingActionLog }],
+        },
+        // Add the toJSON method required for EmbedBuilder.from to work correctly
+        toJSON: function () {
+          return this.data;
+        },
       };
+
+      // Create a proper mock message
+      const mockMessage = {
+        embeds: [mockEmbed],
+        edit: jest.fn().mockResolvedValue(undefined),
+      };
+
       const mockAdmin = { id: '987654321' };
 
+      // Call the method
       await notificationManager.logActionToMessage(
         mockMessage as any,
         'banned the user',
         mockAdmin as any
       );
 
-      // Check that the existing log is preserved in the update
-      expect(mockMessage.embeds[0].data.fields[0].value).toContain(existingActionLog);
-      expect(mockMessage.embeds[0].data.fields[0].value).toContain('banned the user');
+      // Restore the original Date.now
+      Date.now = originalDateNow;
+
+      // Check that edit was called with the right parameters
+      expect(mockMessage.edit).toHaveBeenCalled();
+
+      // Get the updated embed from the edit call
+      const editCallArgs = mockMessage.edit.mock.calls[0][0];
+
+      // Verify the action log has the expected content
+      expect(editCallArgs.embeds[0].data.fields[0].name).toBe('Action Log');
+      expect(editCallArgs.embeds[0].data.fields[0].value).toContain(existingActionLog);
+      expect(editCallArgs.embeds[0].data.fields[0].value).toContain('banned the user');
+      expect(editCallArgs.embeds[0].data.fields[0].value).toBe(
+        `${existingActionLog}\n• <@987654321> banned the user <t:1234567890:R>`
+      );
     });
 
     it('should return false if the message has no embeds', async () => {
