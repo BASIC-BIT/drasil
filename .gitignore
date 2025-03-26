@@ -55,3 +55,5 @@ supabase/.env
 
 # OS files
 Thumbs.db 
+
+repomix-output.xml

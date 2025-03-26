@@ -1,0 +1,12 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# AI Codebase Navigation and Documentation
+
+ALWAYS read the [CODEBASE_MAP.md](mdc:docs/CODEBASE_MAP.md) file to gain context before reading, writing, or planning any change.  ALWAYS keep this file up to date after performing changes.
+
+Read/update the [spec.md](mdc:docs/spec.md), [tech_spec.md](mdc:docs/tech_spec.md), and [README.md](mdc:README.md) documents as is appropriate during development to keep them up to date and maintained.
+
+Updates to the [spec.md](mdc:docs/spec.md) and [tech_spec.md](mdc:docs/tech_spec.md) files should be ammended at the bottom, crossing out anything no longer relevant before it, to maintain a log of the changes.
