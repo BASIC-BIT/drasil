@@ -68,8 +68,10 @@ Implement a hybrid spam detection model combining heuristic (rule-based) and LLM
 - **Selective API Usage:**
   - Use GPT only for borderline or unclear cases.
   - Batch or cache repeated spam checks to minimize API calls.
-- **Confidence Scores:**
-  - Provide clear confidence outputs from GPT to admins for informed moderation decisions.
+- **Confidence Classification:**
+  - Translate GPT confidence scores to Low/Medium/High classification for admin clarity
+  - Maintain internal percentage values for analytics
+  - Low: 0-40%, Medium: 41-70%, High: 71-100%
 
 ### Future Spam Detection Enhancements:
 
@@ -85,10 +87,13 @@ Implement a hybrid spam detection model combining heuristic (rule-based) and LLM
 - **Services:**
   - Spam detection logic (Heuristics + GPT).
   - Discord interaction handling (roles, moderation actions).
+  - Verification thread management.
+  - Admin notification formatting and interaction logging.
   - Supabase CRUD operations.
 - **Controllers:**
   - Discord event handling.
   - Admin command interfaces.
+  - Button interaction handling.
 
 ### Dependency Injection Setup (InversifyJS):
 
@@ -101,7 +106,7 @@ Implement a hybrid spam detection model combining heuristic (rule-based) and LLM
 
 - **Users Table:** `user_id`, `discord_id`, `username`, `created_at`, `last_flagged_at`, `spam_confidence_score`
 - **Moderation Logs Table:** `log_id`, `user_id`, `action_taken`, `action_by_admin`, `reason`, `timestamp`
-- **Server Configuration Table:** `server_id`, `restricted_role_id`, `admin_notification_role_id`, `admin_summary_channel_id`, `auto_create_threads`
+- **Server Configuration Table:** `server_id`, `restricted_role_id`, `admin_notification_role_id`, `admin_summary_channel_id`, `verification_channel_id`, `auto_create_threads`
 
 ## 6. Security & Permissions
 

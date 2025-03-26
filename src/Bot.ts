@@ -218,18 +218,39 @@ export class Bot {
         return;
       }
 
+      // Get the original message to update with action log
+      const message = interaction.message;
+
       // Handle the specific button action
       switch (action) {
         case 'verify':
           await this.verifyUser(member, interaction);
+          // Log the action to the original message
+          await this.notificationManager.logActionToMessage(
+            message,
+            'verified the user',
+            interaction.user
+          );
           break;
 
         case 'ban':
           await this.banUser(member, 'Banned via admin panel button', interaction);
+          // Log the action to the original message
+          await this.notificationManager.logActionToMessage(
+            message,
+            'banned the user',
+            interaction.user
+          );
           break;
 
         case 'thread':
           await this.createVerificationThread(member, interaction);
+          // Log the action to the original message
+          await this.notificationManager.logActionToMessage(
+            message,
+            'created a verification thread',
+            interaction.user
+          );
           break;
 
         default:
@@ -452,8 +473,8 @@ export class Bot {
         console.log(`User flagged for spam: ${message.author.tag} (${userId})`);
         console.log(`Message content: ${content}`);
         console.log(`Detection confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-        console.log(`Reason: ${detectionResult.reason}`);
-        console.log(`Used GPT: ${detectionResult.usedGPT}`);
+        console.log(`Reasons: ${detectionResult.reasons.join(', ')}`);
+        console.log(`Trigger source: ${detectionResult.triggerSource}`);
 
         // Assign restricted role if user is in a guild
         if (message.member) {
@@ -495,7 +516,8 @@ export class Bot {
       if (detectionResult.label === 'SUSPICIOUS') {
         console.log(`New member flagged as suspicious: ${member.user.tag} (${member.id})`);
         console.log(`Detection confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-        console.log(`Reason: ${detectionResult.reason}`);
+        console.log(`Reasons: ${detectionResult.reasons.join(', ')}`);
+        console.log(`Trigger source: ${detectionResult.triggerSource}`);
 
         // Assign restricted role
         const restrictSuccess = await this.roleManager.assignRestrictedRole(member);
@@ -585,7 +607,7 @@ export class Bot {
           await message.reply(
             `Test result: ${newAccountResult.label}\n` +
               `Confidence: ${(newAccountResult.confidence * 100).toFixed(2)}%\n` +
-              `Reason: ${newAccountResult.reason}\n` +
+              `Reason: ${newAccountResult.reasons.join(', ')}\n` +
               `Used GPT: ${newAccountResult.usedGPT}`
           );
           break;
@@ -603,7 +625,7 @@ export class Bot {
             `Test message: "${spamMessage}"\n` +
               `Result: ${spamResult.label}\n` +
               `Confidence: ${(spamResult.confidence * 100).toFixed(2)}%\n` +
-              `Reason: ${spamResult.reason}\n` +
+              `Reason: ${spamResult.reasons.join(', ')}\n` +
               `Used GPT: ${spamResult.usedGPT}`
           );
           break;

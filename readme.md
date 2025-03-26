@@ -64,9 +64,16 @@ The bot currently implements the following heuristic checks:
    - Add this ID to your `.env` file as `RESTRICTED_ROLE_ID`
 
 2. **Create an Admin Channel**:
+
    - Create a channel that only moderators/admins have access to
    - This channel will receive notifications about suspicious users with interactive buttons
    - Copy the channel ID and add it to your `.env` file as `ADMIN_CHANNEL_ID`
+
+3. **Create a Verification Channel**:
+   - Create a channel visible only to admins and users with the restricted role
+   - Configure so restricted users can't see message history
+   - This is where verification threads will be created
+   - Copy the channel ID and add it to your `.env` file as `VERIFICATION_CHANNEL_ID`
 
 ### Slash Commands
 
@@ -86,11 +93,17 @@ When a user is flagged as suspicious, the bot will:
 1. Assign the configured restricted role to limit their server access
 2. Send a notification to the admin channel with:
    - User details (username, ID, join date, etc.)
-   - Detection confidence and reason
+   - Detection confidence level (Low, Medium, or High)
+   - Trigger reason (message content or join event)
+   - Bullet-pointed list of detection reasons
    - Interactive buttons:
      - **Verify User** button to remove the restricted role
      - **Ban User** button to ban the user from the server
-     - **Create Thread** button to open a verification thread for further investigation
+     - **Create Thread** button to open a verification thread
+3. Log all admin actions (button presses) directly in the notification message
+4. Create verification threads in a dedicated verification channel that's visible only to:
+   - Server administrators and moderators
+   - The restricted user (only their own thread)
 
 ## Spam Detection Heuristics
 
@@ -104,6 +117,7 @@ When a user is flagged as suspicious, the bot will:
 - Get banner and avatar url, run through image detection
 - training data!!! We're just sending info to GPT right now, it'd be _really_ cool to instead gather evidence from known scammers to train a model. The best part is, we can use data from usage of the bot to eventually train a model. We can also implement "few-shot" learning by adding a few well-curated examples to the GPT user classification prompt.
 - Tie in data from other servers - if many servers have listed that user as trusted, then it's probably good. We have to prevent gaming the system on this though. I was floating the idea of "trusted servers", where you can specify other servers you're networked with.. but that's crazy and overkill.
+- Adding onto the few-shot idea, we could even potentially automate this process by allowing admins to "add case to training data", which would add it to the prompt specifically for their server. This could potentially be automated on a large scale by automating the human reinforced learning on by adding examples that resulted in false negatives or false positives to the prompt
 
 ## Future Feature Ideas
 

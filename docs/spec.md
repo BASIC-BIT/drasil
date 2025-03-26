@@ -35,12 +35,17 @@ This bot detects and mitigates spam, scams, and suspicious accounts within Disco
 - Optional (strongly recommended)
 - Posts concise AI-generated summaries with:
   - Username
-  - AI suspicion confidence
-  - Reasons for flagging
+  - AI suspicion confidence (Low/Medium/High)
+  - Trigger source (message content or join event)
+  - Bullet-pointed reasons for flagging
 - Interactive buttons:
   - ✅ Verify user
   - 🚫 Ban user
   - 🧵 Create verification thread (optional auto-creation or manual)
+- Action logging directly in notification messages:
+  - Records which admin took what action
+  - Includes timestamps for accountability
+  - Maintains complete history in original message
 
 ### Admin Notification Role
 
@@ -54,14 +59,17 @@ This bot detects and mitigates spam, scams, and suspicious accounts within Disco
 ## 4. Verification Process
 
 - Restricted role assignment upon flagging (admin-configurable)
-- Verification threads (configurable auto-creation vs. manual)
+- Verification threads created in dedicated verification channel:
+  - Channel visible only to admins and users with restricted role
+  - Restricted users can only see their own threads, not channel history
+  - Private threads to maintain separation between verification cases
 - User prompted to answer simple verification questions:
   - "How did you find our community?"
   - "What interests you here?"
 
 ## 5. Role & Channel Configuration
 
-- Roles (restricted role, admin notification role) and summary channels optionally configurable during onboarding
+- Roles (restricted role, admin notification role) and channels (admin summary, verification) optionally configurable during onboarding
 - Clear warnings when optional settings skipped
 - Optional automatic creation of roles/channels during onboarding
 

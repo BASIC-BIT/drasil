@@ -6,7 +6,11 @@ import {
   GuildMember,
   TextChannel,
   ThreadAutoArchiveDuration,
+  Message,
   Client,
+  MessageComponentInteraction,
+  PermissionFlagsBits,
+  User,
 } from 'discord.js';
 import { DetectionResult } from './DetectionOrchestrator';
 
@@ -21,11 +25,13 @@ export interface NotificationButton {
  */
 export class NotificationManager {
   private adminChannelId: string | undefined;
+  private verificationChannelId: string | undefined;
   private client: Client;
 
-  constructor(client: Client, adminChannelId?: string) {
+  constructor(client: Client, adminChannelId?: string, verificationChannelId?: string) {
     this.client = client;
     this.adminChannelId = adminChannelId || process.env.ADMIN_CHANNEL_ID;
+    this.verificationChannelId = verificationChannelId || process.env.VERIFICATION_CHANNEL_ID;
   }
 
   /**
@@ -34,6 +40,14 @@ export class NotificationManager {
    */
   public setAdminChannelId(channelId: string): void {
     this.adminChannelId = channelId;
+  }
+
+  /**
+   * Sets the ID of the verification channel
+   * @param channelId The Discord channel ID for verification threads
+   */
+  public setVerificationChannelId(channelId: string): void {
+    this.verificationChannelId = channelId;
   }
 
   /**
@@ -63,7 +77,7 @@ export class NotificationManager {
       const actionRow = this.createActionRow(member.id);
 
       // Send the message to the admin channel
-      await channel.send({
+      const message = await channel.send({
         embeds: [embed],
         components: [actionRow],
       });
@@ -76,19 +90,25 @@ export class NotificationManager {
   }
 
   /**
-   * Creates a thread for a suspicious user in the admin channel
+   * Creates a thread for a suspicious user in the verification channel
    * @param member The suspicious guild member
-   * @returns Promise resolving to the created thread, or undefined if creation failed
+   * @returns Promise resolving to true if the thread was created successfully
    */
   public async createVerificationThread(member: GuildMember): Promise<boolean> {
-    if (!this.adminChannelId) {
-      console.error('No admin channel ID configured');
+    // Try verification channel first, fall back to admin channel if not configured
+    const channelId = this.verificationChannelId || this.adminChannelId;
+
+    if (!channelId) {
+      console.error('No verification or admin channel ID configured');
       return false;
     }
 
     try {
-      // Get the admin channel
-      const channel = await this.getAdminChannel();
+      // Get the verification channel or fall back to admin channel
+      const channel = this.verificationChannelId
+        ? await this.getVerificationChannel()
+        : await this.getAdminChannel();
+
       if (!channel) return false;
 
       // Create a thread for verification
@@ -97,18 +117,67 @@ export class NotificationManager {
         name: threadName,
         autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
         reason: `Verification thread for suspicious user: ${member.user.tag}`,
+        type: 11, // PrivateThread
       });
+
+      // Add the member to the private thread so they can see it
+      await thread.members.add(member.id);
 
       // Send an initial message to the thread
       await thread.send({
-        content: `Verification thread for <@${member.id}> (${member.user.tag}).
-        
-Please ask the user for more information to determine if they are legitimate or a potential scammer.`,
+        content: `# Verification for <@${member.id}>\n\nHello <@${member.id}>, your account has been automatically flagged for verification.\n\nTo help us verify your account, please answer these questions:\n\n1. How did you find our community?\n2. What interests you here?\n\nOnce you respond, a moderator will review your answers and grant you full access to the server if everything checks out.`,
       });
 
       return true;
     } catch (error) {
       console.error('Failed to create verification thread:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Log an admin action to the notification message
+   * @param message The original notification message
+   * @param actionTaken The action that was taken
+   * @param admin The admin who took the action
+   */
+  public async logActionToMessage(
+    message: Message,
+    actionTaken: string,
+    admin: User
+  ): Promise<boolean> {
+    try {
+      // Get the existing embed
+      const existingEmbed = message.embeds[0];
+      if (!existingEmbed) return false;
+
+      // Create a new embed based on the existing one
+      const updatedEmbed = EmbedBuilder.from(existingEmbed);
+
+      // Add or update the Action Log field
+      const timestamp = Math.floor(Date.now() / 1000);
+      const actionLogField = updatedEmbed.data.fields?.find((field) => field.name === 'Action Log');
+
+      let actionLogContent = `• <@${admin.id}> ${actionTaken} <t:${timestamp}:R>`;
+
+      if (actionLogField) {
+        // Append to existing log
+        actionLogContent = `${actionLogField.value}\n${actionLogContent}`;
+      }
+
+      if (actionLogField) {
+        // Update existing field
+        actionLogField.value = actionLogContent;
+      } else {
+        // Add new field
+        updatedEmbed.addFields({ name: 'Action Log', value: actionLogContent, inline: false });
+      }
+
+      // Update the message
+      await message.edit({ embeds: [updatedEmbed] });
+      return true;
+    } catch (error) {
+      console.error('Failed to log action to message:', error);
       return false;
     }
   }
@@ -126,6 +195,38 @@ Please ask the user for more information to determine if they are legitimate or 
     const accountCreatedAt = new Date(member.user.createdTimestamp);
     const joinedServerAt = member.joinedAt;
 
+    // Get unix timestamps for Discord timestamp formatting
+    const accountCreatedTimestamp = Math.floor(accountCreatedAt.getTime() / 1000);
+    const joinedServerTimestamp = joinedServerAt ? Math.floor(joinedServerAt.getTime() / 1000) : 0;
+
+    // Format the account timestamps with both absolute and relative format
+    const accountCreatedFormatted = `<t:${accountCreatedTimestamp}:F> (<t:${accountCreatedTimestamp}:R>)`;
+    const joinedServerFormatted = joinedServerAt
+      ? `<t:${joinedServerTimestamp}:F> (<t:${joinedServerTimestamp}:R>)`
+      : 'Unknown';
+
+    // Convert confidence to Low/Medium/High
+    const confidencePercent = detectionResult.confidence * 100;
+    let confidenceLevel: string;
+    if (confidencePercent <= 40) {
+      confidenceLevel = '🟢 Low';
+    } else if (confidencePercent <= 70) {
+      confidenceLevel = '🟡 Medium';
+    } else {
+      confidenceLevel = '🔴 High';
+    }
+
+    // Format reasons as bullet points
+    const reasonsFormatted = detectionResult.reasons.map((reason) => `• ${reason}`).join('\n');
+
+    // Create trigger information
+    let triggerInfo: string;
+    if (detectionResult.triggerSource === 'message' && detectionResult.triggerContent) {
+      triggerInfo = `Flagged for message: "${detectionResult.triggerContent}"`;
+    } else {
+      triggerInfo = 'Flagged upon joining server';
+    }
+
     return new EmbedBuilder()
       .setColor('#FF0000')
       .setTitle('Suspicious User Detected')
@@ -134,23 +235,11 @@ Please ask the user for more information to determine if they are legitimate or 
       .addFields(
         { name: 'Username', value: member.user.tag, inline: true },
         { name: 'User ID', value: member.id, inline: true },
-        { name: 'Account Created', value: accountCreatedAt.toLocaleString(), inline: true },
-        {
-          name: 'Joined Server',
-          value: joinedServerAt ? joinedServerAt.toLocaleString() : 'Unknown',
-          inline: true,
-        },
-        {
-          name: 'Detection Confidence',
-          value: `${(detectionResult.confidence * 100).toFixed(2)}%`,
-          inline: true,
-        },
-        { name: 'Used GPT', value: detectionResult.usedGPT ? 'Yes' : 'No', inline: true },
-        {
-          name: 'Reason',
-          value: detectionResult.reason || 'No specific reason provided',
-          inline: false,
-        }
+        { name: 'Account Created', value: accountCreatedFormatted, inline: false },
+        { name: 'Joined Server', value: joinedServerFormatted, inline: false },
+        { name: 'Detection Confidence', value: confidenceLevel, inline: true },
+        { name: 'Trigger', value: triggerInfo, inline: false },
+        { name: 'Reasons', value: reasonsFormatted || 'No specific reason provided', inline: false }
       )
       .setTimestamp();
   }
@@ -203,6 +292,31 @@ Please ask the user for more information to determine if they are legitimate or 
       return channel as TextChannel;
     } catch (error) {
       console.error(`Failed to fetch admin channel with ID ${this.adminChannelId}:`, error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Helper method to get the verification channel
+   * @returns The TextChannel for verification threads, or undefined if not found
+   */
+  private async getVerificationChannel(): Promise<TextChannel | undefined> {
+    if (!this.verificationChannelId) return undefined;
+
+    try {
+      const channel = await this.client.channels.fetch(this.verificationChannelId);
+
+      if (!channel || !channel.isTextBased() || channel.isDMBased()) {
+        console.error(`Channel with ID ${this.verificationChannelId} is not a text channel`);
+        return undefined;
+      }
+
+      return channel as TextChannel;
+    } catch (error) {
+      console.error(
+        `Failed to fetch verification channel with ID ${this.verificationChannelId}:`,
+        error
+      );
       return undefined;
     }
   }

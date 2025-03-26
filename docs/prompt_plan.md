@@ -111,7 +111,14 @@ Here's a high-level breakdown of development chunks:
    - Store flagged data in Supabase, add logs/analytics as time allows.
 
 9. **Chunk I: Cross-Server / Advanced Features**
+
    - Expand logic to share data among servers, add optional advanced features.
+
+10. **Chunk J: Enhanced Admin Notifications & Verification System**
+    - Improve admin notification embeds with better formatting and confidence display
+    - Add action logging to track admin interactions
+    - Create dedicated verification channel with private threads
+    - Enhance timestamp and reason formatting for clarity
 
 ---
 
@@ -215,6 +222,46 @@ We'll refine each chunk into smaller steps for safe, incremental building:
 3. **I3**: Add tests simulating cross-server joins with prior flags.
 4. **I4**: Tune the threshold for automatically restricting known offenders.
 5. **I5**: Confirm final stability and address any performance concerns.
+
+## 3.10 Chunk J: Enhanced Admin Notifications & Verification System
+
+1. **J1**: Implement action logging when interaction buttons are pressed:
+
+   - Log which admin pressed the button and what action they took
+   - Implement as edits to the original notification message (or alternatively as a follow-up message)
+   - Ensure clear attribution and timestamp
+
+2. **J2**: Convert the detection confidence percentage to a Low/Medium/High system:
+
+   - 0-40%: Low confidence
+   - 41-70%: Medium confidence
+   - 71-100%: High confidence
+   - Remove the "Used GPT" field from embeds as it's unnecessary
+   - Keep internal percentage values for analytics
+
+3. **J3**: Improve timestamp displays:
+
+   - Format both account creation and join dates to include:
+     - Full timestamp (e.g., March 15, 2023 3:45 PM)
+     - Relative Discord timestamp using Discord's <t:timestamp:R> format
+
+4. **J4**: Add trigger reason display:
+
+   - Include the source that triggered the flag:
+     - If message-triggered: Show the message content
+     - If join-triggered: State "Flagged upon joining server"
+   - Provide context to help moderators make informed decisions
+
+5. **J5**: Format reason list as bullet points:
+
+   - Convert reasons to a string array internally
+   - Format as bullet points in embed using Discord's markdown
+
+6. **J6**: Create a dedicated verification channel and update thread logic:
+   - Make channel visible only to admins and users with restricted role
+   - Ensure restricted users can't see message history
+   - Configure thread creation to use this channel
+   - Set proper visibility permissions for private threads
 
 ---
 
@@ -458,6 +505,56 @@ Now we tie everything together and ensure no orphan code remains.
 - The final, fully integrated code.
 - A checklist that everything is configured (env, roles, GPT).
 - A summary of how to operate, test, and maintain the bot.
+
+Begin now.
+```
+
+---
+
+## 4.11 **Prompt: Chunk J – Enhanced Admin Notifications & Verification System**
+
+```text
+We need to enhance our admin notification embeds and verification system for improved usability and clarity.
+
+**Task**:
+1. Implement action logging when interaction buttons are pressed:
+   - Log which admin pressed the button and what action they took
+   - Implement as edits to the original notification message (or alternatively as a follow-up message)
+   - Ensure clear attribution and timestamp
+
+2. Convert the detection confidence percentage to a Low/Medium/High system:
+   - 0-40%: Low confidence
+   - 41-70%: Medium confidence
+   - 71-100%: High confidence
+   - Remove the "Used GPT" field from embeds as it's unnecessary
+   - Keep internal percentage values for analytics
+
+3. Improve timestamp displays:
+   - Format both account creation and join dates to include:
+     - Full timestamp (e.g., March 15, 2023 3:45 PM)
+     - Relative Discord timestamp using Discord's <t:timestamp:R> format
+
+4. Add trigger reason display:
+   - Include the source that triggered the flag:
+     - If message-triggered: Show the message content
+     - If join-triggered: State "Flagged upon joining server"
+   - Provide context to help moderators make informed decisions
+
+5. Format reason list as bullet points:
+   - Convert reasons to a string array internally
+   - Format as bullet points in embed using Discord's markdown
+
+6. Create a dedicated verification channel and update thread logic:
+   - Make channel visible only to admins and users with restricted role
+   - Ensure restricted users can't see message history
+   - Configure thread creation to use this channel
+   - Set proper visibility permissions for private threads
+
+**Output**:
+- Updated embed creation and interaction handling code
+- New verification channel configuration code
+- Improved formatting for timestamps and reason lists
+- Thread creation logic using the verification channel
 
 Begin now.
 ```

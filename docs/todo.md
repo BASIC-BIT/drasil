@@ -122,4 +122,45 @@ Below is a **`todo.md`** document that serves as a comprehensive, step-by-step c
 - [ ] **I3**: Write tests simulating multi-server joins, verifying suspicion raises appropriately.
 - [ ] **I4**: Tune thresholds for automatically restricting known offenders.
 - [ ] **I5**: Ensure final stability, handle performance concerns at scale.
+
+---
+
+## Chunk J: Enhanced Admin Notifications & Verification System
+
+- [ ] **J1**: Implement action logging for interaction buttons:
+
+  - Log which admin pressed the button and what action they took
+  - Update original message with action logs (or send follow-up message)
+  - Ensure clear attribution and timestamp
+
+- [ ] **J2**: Replace detection confidence percentage with Low/Medium/High system:
+
+  - 0-40%: Low confidence
+  - 41-70%: Medium confidence
+  - 71-100%: High confidence
+  - Remove "Used GPT" field from embeds
+  - Keep internal percentage values for analytics
+
+- [ ] **J3**: Enhance timestamp displays:
+
+  - Format account creation and join dates to include both:
+    - Full timestamp (e.g., March 15, 2023 3:45 PM)
+    - Relative Discord timestamp (<t:timestamp:R>)
+
+- [ ] **J4**: Add trigger reason to admin notifications:
+
+  - Include message content if message-triggered
+  - State "Flagged upon joining server" if join-triggered
+  - Provide context for moderator decision-making
+
+- [ ] **J5**: Format reason lists as bullet points:
+
+  - Convert reasons to string array internally
+  - Use Discord markdown for bullet point formatting in embeds
+
+- [ ] **J6**: Set up dedicated verification channel and thread system:
+  - Create channel visible only to admins and restricted users
+  - Configure so restricted users can't see message history
+  - Update thread creation logic to use verification channel
+  - Set appropriate permissions for private threads
 ```

@@ -11,7 +11,9 @@ export interface DetectionResult {
   label: 'OK' | 'SUSPICIOUS';
   confidence: number;
   usedGPT: boolean;
-  reason?: string;
+  reasons: string[];
+  triggerSource: 'message' | 'join';
+  triggerContent?: string;
 }
 
 export class DetectionOrchestrator {
@@ -50,16 +52,16 @@ export class DetectionOrchestrator {
 
     // Calculate initial suspicion score based on heuristics
     let suspicionScore = 0;
-    let reason = '';
+    let reasons: string[] = [];
 
     if (isSuspiciousFrequency) {
       suspicionScore += 0.5; // +50% suspicious for high message frequency
-      reason += 'High message frequency. ';
+      reasons.push('High message frequency');
     }
 
     if (hasSuspiciousKeywords) {
       suspicionScore += 0.6; // +60% suspicious for suspicious keywords
-      reason += 'Contains suspicious keywords. ';
+      reasons.push('Contains suspicious keywords');
     }
 
     // Check if user is new (if profile data available)
@@ -73,12 +75,12 @@ export class DetectionOrchestrator {
 
     if (isNewAccount) {
       suspicionScore += 0.2; // +20% suspicious for new account
-      reason += 'New Discord account. ';
+      reasons.push('New Discord account');
     }
 
     if (isNewServerMember) {
       suspicionScore += 0.1; // +10% suspicious for new server member
-      reason += 'Recently joined server. ';
+      reasons.push('Recently joined server');
     }
 
     // Determine if we should use GPT
@@ -105,12 +107,12 @@ export class DetectionOrchestrator {
       // If GPT says SUSPICIOUS, set high suspicion score
       if (gptResult === 'SUSPICIOUS') {
         suspicionScore = 0.9; // 90% suspicious
-        reason += 'GPT analysis flagged as suspicious. ';
+        reasons.push('GPT analysis flagged as suspicious');
       } else {
         // If GPT says OK, reduce suspicion but don't eliminate it entirely if there were
         // strong heuristic signals
         suspicionScore = Math.max(0, suspicionScore - 0.3);
-        reason += 'GPT analysis indicates user is likely legitimate. ';
+        reasons.push('GPT analysis indicates user is likely legitimate');
       }
 
       // Return the final result with GPT influence
@@ -118,7 +120,9 @@ export class DetectionOrchestrator {
         label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
         confidence: Math.abs(suspicionScore - 0.5) * 2, // Scale to 0-1 confidence
         usedGPT: true,
-        reason: reason.trim(),
+        reasons: reasons,
+        triggerSource: 'message',
+        triggerContent: content,
       };
     }
 
@@ -127,7 +131,9 @@ export class DetectionOrchestrator {
       label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
       confidence: Math.abs(suspicionScore - 0.5) * 2, // Scale to 0-1 confidence
       usedGPT: false,
-      reason: reason.trim(),
+      reasons: reasons,
+      triggerSource: 'message',
+      triggerContent: content,
     };
   }
 
@@ -142,7 +148,7 @@ export class DetectionOrchestrator {
     // For new joins, we always want to use GPT if possible
     // But we'll still calculate an initial suspicion score
     let suspicionScore = 0;
-    let reason = '';
+    let reasons: string[] = [];
 
     // Check if user is new to Discord
     const isNewAccount = profileData.accountCreatedAt
@@ -151,7 +157,7 @@ export class DetectionOrchestrator {
 
     if (isNewAccount) {
       suspicionScore += 0.3; // +30% suspicious for new account
-      reason += 'New Discord account. ';
+      reasons.push('New Discord account');
     }
 
     // Call GPT to analyze the profile
@@ -160,11 +166,11 @@ export class DetectionOrchestrator {
     // Adjust suspicion score based on GPT result
     if (gptResult === 'SUSPICIOUS') {
       suspicionScore += 0.6; // +60% suspicious from GPT
-      reason += 'GPT analysis flagged as suspicious. ';
+      reasons.push('GPT analysis flagged as suspicious');
     } else {
       // If GPT says OK, reduce suspicion
       suspicionScore = Math.max(0, suspicionScore - 0.2);
-      reason += 'GPT analysis indicates user is likely legitimate. ';
+      reasons.push('GPT analysis indicates user is likely legitimate');
     }
 
     // Return the final result
@@ -172,7 +178,8 @@ export class DetectionOrchestrator {
       label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
       confidence: Math.abs(suspicionScore - 0.5) * 2, // Scale to 0-1 confidence
       usedGPT: true,
-      reason: reason.trim(),
+      reasons: reasons,
+      triggerSource: 'join',
     };
   }
 
