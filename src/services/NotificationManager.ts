@@ -369,13 +369,19 @@ export class NotificationManager {
             PermissionFlagsBits.ViewChannel,
             PermissionFlagsBits.SendMessages,
             PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.CreatePublicThreads,
+            PermissionFlagsBits.CreatePrivateThreads,
           ],
         },
         // Restricted role - can view and send messages, but not read history
         {
           id: restrictedRoleId,
-          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
-          deny: [PermissionFlagsBits.ReadMessageHistory],
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory, // TODO: Check if users need to be granted this to see history of private thread
+            PermissionFlagsBits.SendMessagesInThreads,
+          ],
         },
         // Bot - full access
         {
@@ -386,13 +392,17 @@ export class NotificationManager {
             PermissionFlagsBits.ReadMessageHistory,
             PermissionFlagsBits.ManageChannels,
             PermissionFlagsBits.ManageThreads,
+            PermissionFlagsBits.CreatePublicThreads,
+            PermissionFlagsBits.CreatePrivateThreads,
+            PermissionFlagsBits.SendMessagesInThreads,
+            PermissionFlagsBits.ModerateMembers,
           ],
         },
       ];
 
-      // Find admin roles by checking for administrator permission
+      // Find admin roles by checking for manage channels permission
       const adminRoles = guild.roles.cache.filter((role) =>
-        role.permissions.has(PermissionFlagsBits.Administrator)
+        role.permissions.has(PermissionFlagsBits.ManageChannels)
       );
 
       // Add admin roles to permission overwrites
