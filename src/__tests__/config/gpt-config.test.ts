@@ -1,5 +1,9 @@
 import { UserProfileData } from '../../services/GPTService';
 import * as gptConfig from '../../config/gpt-config';
+import { setupConsoleMocking } from '../utils/console-mocks';
+
+// Silence console.error and console.warn during tests
+setupConsoleMocking(['error', 'warn']);
 
 describe('GPT Config Formatting', () => {
   describe('getFormattedExamples', () => {
@@ -9,30 +13,58 @@ describe('GPT Config Formatting', () => {
       // Check that the result contains the header text
       expect(result).toContain('Here are some examples:');
 
-      // Check that suspicious examples are included
-      gptConfig.gptConfig.suspiciousExamples.forEach((example) => {
+      // Check for category headers
+      expect(result).toContain('Clearly suspicious examples');
+      expect(result).toContain('Borderline suspicious examples');
+      expect(result).toContain('Borderline normal examples');
+      expect(result).toContain('Clearly normal examples');
+
+      // Check that clearly suspicious examples are included
+      gptConfig.gptConfig.clearlySuspiciousExamples.forEach((example) => {
         expect(result).toContain(`Username: ${example.username}`);
-        expect(result).toContain('Classification: SUSPICIOUS');
       });
 
-      // Check that normal examples are included
-      gptConfig.gptConfig.normalExamples.forEach((example) => {
+      // Check that borderline suspicious examples are included
+      gptConfig.gptConfig.borderlineSuspiciousExamples.forEach((example) => {
         expect(result).toContain(`Username: ${example.username}`);
-        expect(result).toContain('Classification: OK');
       });
+
+      // Check that all suspicious examples are classified as SUSPICIOUS
+      const suspiciousExampleCount =
+        gptConfig.gptConfig.clearlySuspiciousExamples.length +
+        gptConfig.gptConfig.borderlineSuspiciousExamples.length;
+      expect(result.match(/Classification: SUSPICIOUS/g)?.length).toBe(suspiciousExampleCount);
+
+      // Check that borderline normal examples are included
+      gptConfig.gptConfig.borderlineNormalExamples.forEach((example) => {
+        expect(result).toContain(`Username: ${example.username}`);
+      });
+
+      // Check that clearly normal examples are included
+      gptConfig.gptConfig.clearlyNormalExamples.forEach((example) => {
+        expect(result).toContain(`Username: ${example.username}`);
+      });
+
+      // Check that all normal examples are classified as OK
+      const normalExampleCount =
+        gptConfig.gptConfig.clearlyNormalExamples.length +
+        gptConfig.gptConfig.borderlineNormalExamples.length;
+      expect(result.match(/Classification: OK/g)?.length).toBe(normalExampleCount);
     });
 
     it('should include all required fields for each example', () => {
       const result = gptConfig.getFormattedExamples();
 
-      // Check that all examples include account age and join date
-      expect(result.match(/Account age:/g)?.length).toBe(
-        gptConfig.gptConfig.suspiciousExamples.length + gptConfig.gptConfig.normalExamples.length
-      );
+      // Calculate total number of examples
+      const totalExampleCount =
+        gptConfig.gptConfig.clearlySuspiciousExamples.length +
+        gptConfig.gptConfig.borderlineSuspiciousExamples.length +
+        gptConfig.gptConfig.borderlineNormalExamples.length +
+        gptConfig.gptConfig.clearlyNormalExamples.length;
 
-      expect(result.match(/Joined server:/g)?.length).toBe(
-        gptConfig.gptConfig.suspiciousExamples.length + gptConfig.gptConfig.normalExamples.length
-      );
+      // Check that all examples include account age and join date
+      expect(result.match(/Account age:/g)?.length).toBe(totalExampleCount);
+      expect(result.match(/Joined server:/g)?.length).toBe(totalExampleCount);
     });
   });
 

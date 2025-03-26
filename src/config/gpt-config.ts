@@ -43,14 +43,36 @@ export interface GPTServiceConfig {
   newAccountThresholdDays: number;
 
   /**
-   * Examples of suspicious users for few-shot learning
+   * Examples of clearly suspicious users for few-shot learning (obvious spam/scam)
    */
-  suspiciousExamples: UserProfileData[];
+  clearlySuspiciousExamples: UserProfileData[];
 
   /**
-   * Examples of normal/OK users for few-shot learning
+   * Examples of borderline suspicious users for few-shot learning
+   * (not obvious spam, but should still be flagged)
    */
-  normalExamples: UserProfileData[];
+  borderlineSuspiciousExamples: UserProfileData[];
+
+  /**
+   * Examples of borderline normal/OK users for few-shot learning
+   * (has some unusual characteristics but should not be flagged)
+   */
+  borderlineNormalExamples: UserProfileData[];
+
+  /**
+   * Examples of clearly normal/OK users for few-shot learning (obvious legitimate users)
+   */
+  clearlyNormalExamples: UserProfileData[];
+
+  /**
+   * @deprecated Use clearlySuspiciousExamples and borderlineSuspiciousExamples instead
+   */
+  suspiciousExamples?: UserProfileData[];
+
+  /**
+   * @deprecated Use clearlyNormalExamples and borderlineNormalExamples instead
+   */
+  normalExamples?: UserProfileData[];
 }
 
 /**
@@ -60,9 +82,8 @@ export const gptConfig: GPTServiceConfig = {
   // Accounts less than 30 days old are considered "new"
   newAccountThresholdDays: 30,
 
-  // TODO: Add real life examples here
-  // Examples of suspicious users for few-shot learning
-  suspiciousExamples: [
+  // Category 1: Clearly suspicious examples (obvious spam/scam)
+  clearlySuspiciousExamples: [
     {
       username: 'Free_Nitro_Giveaway',
       discriminator: '0001',
@@ -93,8 +114,61 @@ export const gptConfig: GPTServiceConfig = {
     },
   ],
 
-  // Examples of normal users for few-shot learning
-  normalExamples: [
+  // Category 2: Borderline suspicious examples (subtle but should be flagged)
+  borderlineSuspiciousExamples: [
+    {
+      username: 'Emily_Johnson',
+      discriminator: '1984',
+      accountCreatedAt: getDaysAgoWithVariance(15), // 15 days old
+      joinedServerAt: getDaysAgoWithVariance(1), // joined 1 day ago
+      recentMessage: 'Hey guys, anyone into NFTs? I got some cool art to share, DM me.',
+    },
+    {
+      username: 'crypto_enthusiast',
+      discriminator: '5544',
+      accountCreatedAt: getDaysAgoWithVariance(20), // 20 days old
+      joinedServerAt: getDaysAgoWithVariance(2), // joined 2 days ago
+      recentMessage: 'I made 5x returns using this trading strategy: tradinglink.co/strategy',
+    },
+    {
+      username: 'AlexGaming',
+      discriminator: '7212',
+      nickname: 'Alex | Giveaway Soon',
+      accountCreatedAt: getDaysAgoWithVariance(25), // 25 days old
+      joinedServerAt: getHoursAgoWithVariance(12), // joined 12 hours ago
+      recentMessage:
+        'Bored of playing alone? Join my community server, we have giveaways every week!',
+    },
+  ],
+
+  // Category 3: Borderline normal examples (unusual but should be OK)
+  borderlineNormalExamples: [
+    {
+      username: 'shaliassa',
+      discriminator: '4321',
+      accountCreatedAt: getDaysAgoWithVariance(10), // 10 days old
+      joinedServerAt: getDaysAgoWithVariance(1), // joined today
+      recentMessage: "Hello! I'm looking for people to play with. Anyone here?",
+    },
+    {
+      username: 'undrana_burta',
+      discriminator: '2468',
+      accountCreatedAt: getDaysAgoWithVariance(14), // 14 days old
+      joinedServerAt: getDaysAgoWithVariance(1), // joined 1 day ago
+      recentMessage: 'Check out my portfolio at github.com/codinghelp. Any feedback appreciated!',
+    },
+    {
+      username: 'xX_DarkShadow_Xx',
+      discriminator: '3690',
+      nickname: '💀Shadow💀',
+      accountCreatedAt: getDaysAgoWithVariance(21), // 21 days old
+      joinedServerAt: getDaysAgoWithVariance(3), // joined 3 days ago
+      recentMessage: 'Does anyone know when the next Fortnite tournament is?',
+    },
+  ],
+
+  // Category 4: Clearly normal examples (obviously legitimate users)
+  clearlyNormalExamples: [
     {
       username: 'GamerDude',
       discriminator: '1234',
@@ -157,15 +231,30 @@ export function formatProfileExample(
  */
 export function getFormattedExamples(): string {
   let examples = '\n\nHere are some examples:\n';
+  let index = 0;
 
-  // Add suspicious examples
-  gptConfig.suspiciousExamples.forEach((example, index) => {
-    examples += formatProfileExample(example, index, 'SUSPICIOUS');
+  // Add clearly suspicious examples
+  examples += '\n// Clearly suspicious examples (obvious spam/scam)';
+  gptConfig.clearlySuspiciousExamples.forEach((example) => {
+    examples += formatProfileExample(example, index++, 'SUSPICIOUS');
   });
 
-  // Add normal examples
-  gptConfig.normalExamples.forEach((example, index) => {
-    examples += formatProfileExample(example, index, 'OK');
+  // Add borderline suspicious examples
+  examples += '\n// Borderline suspicious examples (subtle but should be flagged)';
+  gptConfig.borderlineSuspiciousExamples.forEach((example) => {
+    examples += formatProfileExample(example, index++, 'SUSPICIOUS');
+  });
+
+  // Add borderline normal examples
+  examples += '\n// Borderline normal examples (unusual but should be OK)';
+  gptConfig.borderlineNormalExamples.forEach((example) => {
+    examples += formatProfileExample(example, index++, 'OK');
+  });
+
+  // Add clearly normal examples
+  examples += '\n// Clearly normal examples (obviously legitimate users)';
+  gptConfig.clearlyNormalExamples.forEach((example) => {
+    examples += formatProfileExample(example, index++, 'OK');
   });
 
   return examples;

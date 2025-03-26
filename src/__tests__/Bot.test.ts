@@ -1,3 +1,9 @@
+// Add import for console mocking at the top of the file
+import { setupConsoleMocking } from './utils/console-mocks';
+
+// Silence console.error and console.warn during tests
+setupConsoleMocking(['error', 'warn']);
+
 // Mock classes
 class MockSlashCommandBuilder {
   setName() {

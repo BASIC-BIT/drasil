@@ -1,6 +1,10 @@
 import { Client, GuildMember, ThreadAutoArchiveDuration, ThreadChannel } from 'discord.js';
 import { NotificationManager } from '../../services/NotificationManager';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
+import { setupConsoleMocking } from '../utils/console-mocks';
+
+// Silence console.error and console.warn during tests
+setupConsoleMocking(['error', 'warn']);
 
 // Mock classes
 class MockThread {
