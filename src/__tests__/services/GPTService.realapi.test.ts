@@ -113,4 +113,43 @@ describe.skip('GPTService - Real API', () => {
       throw error; // Re-throw to fail the test
     }
   }, 30000); // Increase timeout for API call
+
+  it('should classify a borderline user profile with few-shot examples', async () => {
+    // Check if API key exists
+    if (!process.env.OPENAI_API_KEY) {
+      console.warn('Skipping real API test: No OpenAI API key found in .env file');
+      return;
+    }
+
+    // Create the service instance
+    const gptService = new GPTService();
+
+    // Sample borderline user profile - not clearly spam but has some suspicious traits
+    const borderlineUser: UserProfileData = {
+      username: 'sanorious',
+      discriminator: '8032',
+      accountCreatedAt: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000), // 45 days old
+      joinedServerAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), // joined 3 days ago
+      recentMessage: 'Anyone interested in gaming accessories? I found some good deals.',
+    };
+
+    console.log('Calling OpenAI API with borderline user...');
+    try {
+      // Call the API - this will make a real API request!
+      const result = await gptService.classifyUserProfile(borderlineUser);
+
+      console.log('API call successful, result:', result);
+
+      // Check the result - we expect a string response
+      expect(typeof result).toBe('string');
+      expect(['OK', 'SUSPICIOUS']).toContain(result);
+
+      // Log the classification without asserting specific value
+      console.log(`Real API classification for borderline user: ${result}`);
+      console.log('This is a good test for the few-shot learning improvements');
+    } catch (error) {
+      console.error('Test error with API call:', error);
+      throw error; // Re-throw to fail the test
+    }
+  }, 30000); // Increase timeout for API call
 });

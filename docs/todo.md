@@ -93,12 +93,12 @@
 
 ## Chunk G: Prompt Strategy & Few-Shot
 
-- [ ] **G1**: Refine `GPTService` with few-shot examples:
+- [x] **G1**: Refine `GPTService` with few-shot examples:
   - Provide sample profiles for brand-new accounts, borderline users, and older accounts.
-- [ ] **G2**: Write or update tests for borderline user scenarios, confirming effectiveness of example references.
-- [ ] **G3**: Keep prompting logic in a config or separate file for easy updates.
-- [ ] **G4**: Adjust thresholds (e.g., number of messages before GPT stops auto-checking a new user).
-- [ ] **G5**: Monitor performance and costs if larger prompts are used.
+- [x] **G2**: Write or update tests for borderline user scenarios, confirming effectiveness of example references.
+- [x] **G3**: Keep prompting logic in a config or separate file for easy updates.
+- [x] **G4**: Adjust thresholds (e.g., number of messages before GPT stops auto-checking a new user).
+- [x] **G5**: Monitor performance and costs if larger prompts are used.
 
 ---
 

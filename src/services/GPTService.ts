@@ -4,6 +4,7 @@
  * - Returns "OK" or "SUSPICIOUS" based on AI analysis
  */
 import OpenAI from 'openai';
+import { getFormattedExamples } from '../config/gpt-config';
 
 export interface UserProfileData {
   username: string;
@@ -53,7 +54,7 @@ export class GPTService {
    */
   public async classifyUserProfile(profileData: UserProfileData): Promise<string> {
     try {
-      // Create a structured prompt for GPT
+      // Create a structured prompt for GPT with few-shot examples
       const prompt = this.createPrompt(profileData);
 
       console.log('Sending request to OpenAI with prompt:', prompt.substring(0, 400) + '...');
@@ -65,7 +66,7 @@ export class GPTService {
           {
             role: 'system',
             content:
-              "You are a Discord moderation assistant. Based on the user's profile, classify whether the user is suspicious. If suspicious, respond 'SUSPICIOUS'; if normal, respond 'OK'.",
+              "You are a Discord moderation assistant. Based on the user's profile, classify whether the user is suspicious. If suspicious, respond 'SUSPICIOUS'; if normal, respond 'OK'. In your decision, consider factors like account age, username characteristics, nickname if available, how recently they joined, and the content of their recent message if provided.",
           },
           {
             role: 'user',
@@ -112,9 +113,10 @@ export class GPTService {
 
   /**
    * Creates a structured prompt for GPT based on profile data
+   * Includes few-shot examples to improve classification accuracy
    *
    * @param profileData The user profile data
-   * @returns A formatted prompt string
+   * @returns A formatted prompt string with examples
    */
   private createPrompt(profileData: UserProfileData): string {
     const { username, discriminator, nickname, accountCreatedAt, joinedServerAt, recentMessage } =
@@ -141,7 +143,10 @@ Joined server: ${joinedServerDaysAgo}`;
       prompt += `\nRecent message: "${recentMessage}"`;
     }
 
-    prompt += `\n\nBased on these details, classify the user as either 'OK' or 'SUSPICIOUS'.`;
+    // Add few-shot examples from configuration
+    prompt += getFormattedExamples();
+
+    prompt += `\n\nBased on these details and examples, classify the user above as either 'OK' or 'SUSPICIOUS'.`;
 
     return prompt;
   }
