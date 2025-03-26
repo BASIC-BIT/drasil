@@ -12,10 +12,18 @@ export class RoleManager {
 
   /**
    * Sets the ID of the restricted role
-   * @param roleId The Discord role ID to use for restricted users
+   * @param roleId The Discord role ID for restricting users
    */
   public setRestrictedRoleId(roleId: string): void {
     this.restrictedRoleId = roleId;
+  }
+
+  /**
+   * Gets the current restricted role ID
+   * @returns The current restricted role ID or undefined if not set
+   */
+  public getRestrictedRoleId(): string | undefined {
+    return this.restrictedRoleId;
   }
 
   /**

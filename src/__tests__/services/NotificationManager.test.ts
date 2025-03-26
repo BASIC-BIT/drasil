@@ -11,46 +11,25 @@ class MockThread {
   url = 'https://discord.com/channels/123456789/987654321'; // Mock thread URL
 }
 
-class MockThreadManager {
-  create = jest.fn().mockImplementation(() => {
-    const thread = new MockThread();
-    return Promise.resolve(thread);
-  });
-}
-
-class MockMessage {
-  embeds = [];
-  components = [];
-  edit = jest.fn().mockResolvedValue(undefined);
-  url = 'https://discord.com/channels/123456789/message/123456';
-}
-
-class MockTextChannel {
-  send = jest.fn().mockImplementation(() => {
-    const message = new MockMessage();
-    return Promise.resolve(message);
-  });
-  threads = new MockThreadManager();
-  isTextBased() {
-    return true;
-  }
-  isDMBased() {
-    return false;
-  }
-}
-
-class MockChannelManager {
-  private channel: MockTextChannel;
-  constructor() {
-    this.channel = new MockTextChannel();
-  }
-  fetch = jest.fn().mockImplementation(() => Promise.resolve(this.channel));
-}
-
 class MockClient {
-  channels: MockChannelManager;
+  channels: any;
+  user?: any;
+
   constructor() {
-    this.channels = new MockChannelManager();
+    this.channels = {
+      fetch: jest.fn().mockResolvedValue({
+        isTextBased: jest.fn().mockReturnValue(true),
+        isDMBased: jest.fn().mockReturnValue(false),
+        send: jest.fn().mockResolvedValue({
+          embeds: [],
+          components: [],
+          edit: jest.fn().mockResolvedValue({}),
+        }),
+        threads: {
+          create: jest.fn().mockResolvedValue(new MockThread()),
+        },
+      }),
+    };
   }
 }
 
@@ -363,6 +342,110 @@ describe('NotificationManager', () => {
 
       expect(result).toBe(false);
       expect(mockMessage.edit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('setupVerificationChannel', () => {
+    let mockGuild: any;
+    let mockRolesCache: Map<string, any>;
+    let mockEveryoneRole: any;
+    let mockAdminRole: any;
+    let mockRestrictedRole: any;
+
+    beforeEach(() => {
+      // Set up mock guild with roles
+      mockRolesCache = new Map();
+
+      // Create mock roles
+      mockEveryoneRole = {
+        id: 'everyone-role-id',
+      };
+
+      mockAdminRole = {
+        id: 'admin-role-id',
+        permissions: {
+          has: jest.fn().mockReturnValue(true), // This role has administrator permission
+        },
+      };
+
+      mockRestrictedRole = {
+        id: 'restricted-role-id',
+      };
+
+      // Add roles to the cache
+      mockRolesCache.set(mockEveryoneRole.id, mockEveryoneRole);
+      mockRolesCache.set(mockAdminRole.id, mockAdminRole);
+
+      // Create the mock guild
+      mockGuild = {
+        roles: {
+          everyone: mockEveryoneRole,
+          cache: {
+            filter: jest.fn().mockReturnValue({
+              forEach: jest.fn((callback) => {
+                callback(mockAdminRole);
+              }),
+            }),
+          },
+        },
+        channels: {
+          create: jest.fn().mockResolvedValue({
+            id: 'verification-channel-id',
+          }),
+        },
+      };
+
+      // Ensure the client has a user for permissions
+      mockClient.user = { id: 'bot-user-id' };
+    });
+
+    it('should create a verification channel with correct permissions', async () => {
+      const result = await notificationManager.setupVerificationChannel(
+        mockGuild as any,
+        mockRestrictedRole.id
+      );
+
+      // Check that the channel was created
+      expect(result).toBe('verification-channel-id');
+      expect(mockGuild.channels.create).toHaveBeenCalled();
+
+      // Check the channel options
+      const channelOptions = mockGuild.channels.create.mock.calls[0][0];
+      expect(channelOptions.name).toBe('verification');
+      expect(channelOptions.type).toBeDefined();
+
+      // Check permission overwrites were provided
+      expect(channelOptions.permissionOverwrites).toHaveLength(4); // everyone, restricted role, bot, admin role
+
+      // Check that the verification channel ID was stored
+      expect(notificationManager['verificationChannelId']).toBe('verification-channel-id');
+    });
+
+    it('should return null if guild is not provided', async () => {
+      const result = await notificationManager.setupVerificationChannel(
+        null as any,
+        mockRestrictedRole.id
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null if restricted role ID is not provided', async () => {
+      const result = await notificationManager.setupVerificationChannel(mockGuild as any, '');
+
+      expect(result).toBeNull();
+    });
+
+    it('should handle errors when creating the channel', async () => {
+      // Mock the channel creation to fail
+      mockGuild.channels.create.mockRejectedValueOnce(new Error('Failed to create channel'));
+
+      const result = await notificationManager.setupVerificationChannel(
+        mockGuild as any,
+        mockRestrictedRole.id
+      );
+
+      expect(result).toBeNull();
     });
   });
 });

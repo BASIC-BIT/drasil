@@ -12,6 +12,7 @@ import {
   ButtonInteraction,
   RESTPostAPIChatInputApplicationCommandsJSONBody,
   ThreadChannel,
+  PermissionFlagsBits,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { HeuristicService } from './services/HeuristicService';
@@ -73,6 +74,9 @@ export class Bot {
           option.setName('user').setDescription('The user to create a thread for').setRequired(true)
         ),
       new SlashCommandBuilder().setName('ping').setDescription('Check if the bot is running'),
+      new SlashCommandBuilder()
+        .setName('setupverification')
+        .setDescription('Set up a dedicated verification channel for restricted users'),
     ].map((command) => command.toJSON());
 
     // Set up event handlers
@@ -175,6 +179,10 @@ export class Bot {
 
       case 'createthread':
         await this.handleCreateThreadCommand(interaction);
+        break;
+
+      case 'setupverification':
+        await this.handleSetupVerificationCommand(interaction);
         break;
 
       default:
@@ -673,6 +681,66 @@ export class Bot {
     } catch (error) {
       console.error('Error in test command:', error);
       await message.reply('An error occurred while executing the test command.');
+    }
+  }
+
+  // TODO: We don't really *need* this functionality right now, but I'm leaving it around
+  // TODO cont: because it will be useful in the future for the setup wizard flow
+  private async handleSetupVerificationCommand(
+    interaction: ChatInputCommandInteraction
+  ): Promise<void> {
+    // Check if the interaction is in a guild
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({
+        content: 'This command can only be used in a server.',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Check if the user has the required permissions
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({
+        content: 'You need administrator permissions to set up the verification channel.',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Defer the reply as the channel creation might take a moment
+    await interaction.deferReply({ ephemeral: true });
+
+    // Get the restricted role ID
+    const restrictedRoleId =
+      process.env.RESTRICTED_ROLE_ID || this.roleManager.getRestrictedRoleId();
+    if (!restrictedRoleId) {
+      await interaction.editReply({
+        content: 'No restricted role ID configured. Please set up the restricted role first.',
+      });
+      return;
+    }
+
+    // Create the verification channel
+    const channelId = await this.notificationManager.setupVerificationChannel(
+      guild,
+      restrictedRoleId
+    );
+
+    if (channelId) {
+      await interaction.editReply({
+        content: `✅ Verification channel created successfully! Channel ID: ${channelId}`,
+      });
+
+      // Update the environment variable or configuration
+      process.env.VERIFICATION_CHANNEL_ID = channelId; // TODO: This will be a database update
+      console.log(`Verification channel created with ID: ${channelId}`);
+    } else {
+      await interaction.editReply({
+        content:
+          "❌ Failed to create verification channel. Please check the bot's permissions and try again.",
+      });
     }
   }
 }

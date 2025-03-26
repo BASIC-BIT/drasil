@@ -10,6 +10,10 @@ import {
   Client,
   User,
   ThreadChannel,
+  PermissionFlagsBits,
+  GuildChannelCreateOptions,
+  Guild,
+  ChannelType,
 } from 'discord.js';
 import { DetectionResult } from './DetectionOrchestrator';
 
@@ -332,6 +336,95 @@ export class NotificationManager {
         error
       );
       return undefined;
+    }
+  }
+
+  /**
+   * Sets up a verification channel with the proper permissions
+   * @param guild The guild to create the channel in
+   * @param restrictedRoleId The ID of the restricted role
+   * @returns Promise resolving to the created channel ID or null if creation failed
+   */
+  public async setupVerificationChannel(
+    guild: Guild,
+    restrictedRoleId: string
+  ): Promise<string | null> {
+    if (!guild) {
+      console.error('Guild is required to set up verification channel');
+      return null;
+    }
+
+    if (!restrictedRoleId) {
+      console.error('Restricted role ID is required to set up verification channel');
+      return null;
+    }
+
+    try {
+      // Create permission overwrites for the channel
+      const permissionOverwrites = [
+        // Default role (everyone) - deny access
+        {
+          id: guild.roles.everyone.id,
+          deny: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+          ],
+        },
+        // Restricted role - can view and send messages, but not read history
+        {
+          id: restrictedRoleId,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+          deny: [PermissionFlagsBits.ReadMessageHistory],
+        },
+        // Bot - full access
+        {
+          id: this.client.user?.id || '',
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.ManageChannels,
+            PermissionFlagsBits.ManageThreads,
+          ],
+        },
+      ];
+
+      // Find admin roles by checking for administrator permission
+      const adminRoles = guild.roles.cache.filter((role) =>
+        role.permissions.has(PermissionFlagsBits.Administrator)
+      );
+
+      // Add admin roles to permission overwrites
+      adminRoles.forEach((role) => {
+        permissionOverwrites.push({
+          id: role.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+          ],
+        });
+      });
+
+      // Create the verification channel
+      const channelOptions: GuildChannelCreateOptions = {
+        name: 'verification',
+        type: ChannelType.GuildText,
+        permissionOverwrites: permissionOverwrites,
+        topic:
+          'This channel is for verifying users flagged by the anti-spam system. Only admins and flagged users can see this channel.',
+      };
+
+      const verificationChannel = await guild.channels.create(channelOptions);
+
+      // Store the channel ID
+      this.verificationChannelId = verificationChannel.id;
+
+      return verificationChannel.id;
+    } catch (error) {
+      console.error('Failed to set up verification channel:', error);
+      return null;
     }
   }
 }
