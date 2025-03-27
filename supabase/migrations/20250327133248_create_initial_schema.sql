@@ -1,5 +1,7 @@
--- This script creates the initial database schema for the Discord anti-spam bot
--- Run this in your Supabase SQL editor
+-- Create initial schema for Discord anti-spam bot
+
+-- Enable UUID extension if not already enabled
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Servers table (guild configuration)
 CREATE TABLE IF NOT EXISTS servers (

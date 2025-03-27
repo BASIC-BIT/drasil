@@ -13,6 +13,7 @@ import {
   RESTPostAPIChatInputApplicationCommandsJSONBody,
   ThreadChannel,
   PermissionFlagsBits,
+  Guild,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { HeuristicService } from './services/HeuristicService';
@@ -20,6 +21,8 @@ import { GPTService, UserProfileData } from './services/GPTService';
 import { DetectionOrchestrator } from './services/DetectionOrchestrator';
 import { RoleManager } from './services/RoleManager';
 import { NotificationManager } from './services/NotificationManager';
+import { ConfigService } from './config/ConfigService';
+import { globalConfig } from './config/GlobalConfig';
 
 // Load environment variables
 dotenv.config();
@@ -31,6 +34,7 @@ export class Bot {
   private detectionOrchestrator: DetectionOrchestrator;
   private roleManager: RoleManager;
   private notificationManager: NotificationManager;
+  private configService: ConfigService;
   private commands: RESTPostAPIChatInputApplicationCommandsJSONBody[];
 
   constructor() {
@@ -49,6 +53,7 @@ export class Bot {
     this.detectionOrchestrator = new DetectionOrchestrator(this.heuristicService, this.gptService);
     this.roleManager = new RoleManager();
     this.notificationManager = new NotificationManager(this.client);
+    this.configService = new ConfigService();
 
     // Define slash commands
     this.commands = [
@@ -84,6 +89,7 @@ export class Bot {
     this.client.on('messageCreate', this.handleMessage.bind(this));
     this.client.on('guildMemberAdd', this.handleGuildMemberAdd.bind(this));
     this.client.on('interactionCreate', this.handleInteraction.bind(this));
+    this.client.on('guildCreate', this.handleGuildCreate.bind(this));
   }
 
   /**
@@ -107,9 +113,22 @@ export class Bot {
     }
   }
 
-  private handleReady(): void {
-    console.log('Bot is ready!');
-    this.registerCommands();
+  private async handleReady(): Promise<void> {
+    if (!this.client.user) {
+      console.error('Client user not available');
+      return;
+    }
+
+    console.log(`Logged in as ${this.client.user.tag}!`);
+
+    // Initialize services
+    await this.configService.initialize();
+
+    // Initialize servers
+    await this.initializeServers();
+
+    // Register slash commands
+    await this.registerCommands();
   }
 
   private async registerCommands(): Promise<void> {
@@ -741,6 +760,66 @@ export class Bot {
         content:
           "❌ Failed to create verification channel. Please check the bot's permissions and try again.",
       });
+    }
+  }
+
+  /**
+   * Initialize server configurations for all guilds the bot is in
+   */
+  private async initializeServers(): Promise<void> {
+    if (!this.client.user) {
+      console.error('Client user not available');
+      return;
+    }
+
+    console.log('Initializing server configurations...');
+
+    // Get all guilds the bot is in
+    const guilds = this.client.guilds.cache;
+
+    for (const [guildId, guild] of guilds) {
+      try {
+        // This will create a default configuration if one doesn't exist
+        await this.configService.getServerConfig(guildId);
+        console.log(`Initialized configuration for guild: ${guild.name} (${guildId})`);
+      } catch (error) {
+        console.error(`Failed to initialize configuration for guild ${guildId}:`, error);
+      }
+    }
+
+    console.log(`Initialized configurations for ${guilds.size} guilds`);
+  }
+
+  /**
+   * Handle when the bot joins a new guild
+   */
+  private async handleGuildCreate(guild: Guild): Promise<void> {
+    try {
+      console.log(`Bot joined new guild: ${guild.name} (${guild.id})`);
+
+      // Create default configuration for the new guild
+      const config = await this.configService.getServerConfig(guild.id);
+      console.log(`Created default configuration for guild: ${guild.name} (${guild.id})`);
+
+      // Set up verification channel if auto_setup is enabled globally
+      if (globalConfig.getSettings().autoSetupVerificationChannels) {
+        const restrictedRoleId = config.restricted_role_id;
+        if (restrictedRoleId) {
+          const channelId = await this.notificationManager.setupVerificationChannel(
+            guild,
+            restrictedRoleId
+          );
+          if (channelId) {
+            // Update the configuration with the new channel ID
+            await this.configService.updateServerConfig(guild.id, {
+              verification_channel_id: channelId,
+            });
+            console.log(`Set up verification channel for guild: ${guild.name} (${guild.id})`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`Failed to handle new guild ${guild.id}:`, error);
     }
   }
 }

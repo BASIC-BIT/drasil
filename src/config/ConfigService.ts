@@ -1,6 +1,7 @@
 import { ServerRepository } from '../repositories/ServerRepository';
 import { Server, ServerSettings } from '../repositories/types';
 import { isSupabaseConfigured } from './supabase';
+import { globalConfig } from './GlobalConfig';
 
 /**
  * Service for managing configuration and providing a bridge
@@ -55,19 +56,35 @@ export class ConfigService {
     if (isSupabaseConfigured()) {
       try {
         const server = await this.serverRepository.findByGuildId(guildId);
-
         if (server) {
           // Update cache
           this.serverCache.set(guildId, server);
           return server;
         }
+
+        // If no server found, create a default one and save it
+        const defaultConfig = this.createDefaultConfig(guildId);
+        await this.serverRepository.upsertByGuildId(guildId, defaultConfig);
+
+        // Retrieve the saved server to ensure we have the complete object
+        const savedServer = await this.serverRepository.findByGuildId(guildId);
+        if (savedServer) {
+          this.serverCache.set(guildId, savedServer);
+          return savedServer;
+        }
+
+        // Fallback to the default config if we couldn't retrieve the saved server
+        this.serverCache.set(guildId, defaultConfig);
+        return defaultConfig;
       } catch (error) {
         console.error(`Failed to get server configuration for guild ${guildId}:`, error);
       }
     }
 
-    // If no configuration exists yet, create a default one using environment variables
-    return this.createDefaultServerConfig(guildId);
+    // If no configuration exists yet or database failed, create a default one
+    const defaultConfig = this.createDefaultConfig(guildId);
+    this.serverCache.set(guildId, defaultConfig);
+    return defaultConfig;
   }
 
   /**
@@ -75,48 +92,59 @@ export class ConfigService {
    * @param guildId The Discord guild ID
    * @returns The default server configuration
    */
-  private async createDefaultServerConfig(guildId: string): Promise<Server> {
-    const defaultServer: Partial<Server> = {
+  private createDefaultConfig(guildId: string): Server {
+    const globalSettings = globalConfig.getSettings();
+    const defaultSettings = {
+      message_threshold: globalSettings.defaultServerSettings.messageThreshold,
+      message_timeframe: globalSettings.defaultServerSettings.messageTimeframe,
+      suspicious_keywords: globalSettings.defaultSuspiciousKeywords,
+      min_confidence_threshold: globalSettings.defaultServerSettings.minConfidenceThreshold,
+      auto_restrict: true,
+      use_gpt_on_join: true,
+      gpt_message_check_count: 3,
+      message_retention_days: globalSettings.defaultServerSettings.messageRetentionDays,
+      detection_retention_days: globalSettings.defaultServerSettings.detectionRetentionDays,
+    };
+
+    // Create an in-memory server object
+    return {
+      id: 'local-' + guildId,
       guild_id: guildId,
       restricted_role_id: process.env.RESTRICTED_ROLE_ID,
       admin_channel_id: process.env.ADMIN_CHANNEL_ID,
       verification_channel_id: process.env.VERIFICATION_CHANNEL_ID,
       admin_notification_role_id: process.env.ADMIN_NOTIFICATION_ROLE_ID,
       is_active: true,
-      settings: {
-        message_threshold: 5,
-        message_timeframe: 10,
-        suspicious_keywords: ['free nitro', 'discord nitro', 'claim your prize'],
-        min_confidence_threshold: 70,
-        auto_restrict: true,
-        use_gpt_on_join: true,
-        gpt_message_check_count: 3,
-        message_retention_days: 7,
-        detection_retention_days: 30,
-      },
-    };
-
-    // If Supabase is configured, save the default configuration
-    if (isSupabaseConfigured()) {
-      try {
-        const server = await this.serverRepository.upsertByGuildId(guildId, defaultServer);
-        // Update cache
-        this.serverCache.set(guildId, server);
-        return server;
-      } catch (error) {
-        console.error(`Failed to create default server configuration for guild ${guildId}:`, error);
-      }
-    }
-
-    // If we couldn't save to database, create an in-memory server object
-    return {
-      id: 'local-' + guildId,
-      guild_id: guildId,
-      ...defaultServer,
-      is_active: true,
+      settings: defaultSettings,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     } as Server;
+  }
+
+  /**
+   * Create or get a server configuration, preserving existing settings if found
+   * @param guildId The Discord guild ID
+   * @returns The server configuration
+   */
+  private async createDefaultServerConfig(guildId: string): Promise<Server> {
+    // Try to get existing server first
+    let existingServer: Server | null = null;
+    if (isSupabaseConfigured()) {
+      try {
+        existingServer = await this.serverRepository.findByGuildId(guildId);
+      } catch (error) {
+        console.error(`Failed to fetch existing server config for guild ${guildId}:`, error);
+      }
+    }
+
+    // If we have an existing server, return it as is without modifying its settings
+    if (existingServer) {
+      // This is the important part - we're preserving the existing server settings
+      return existingServer;
+    }
+
+    // Otherwise, create a new default configuration
+    return this.createDefaultConfig(guildId);
   }
 
   /**

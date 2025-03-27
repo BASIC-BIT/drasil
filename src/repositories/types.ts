@@ -22,20 +22,15 @@ export interface Server {
  * Flexible server settings stored as JSON
  */
 export interface ServerSettings {
-  // Heuristic settings
-  message_threshold?: number; // Max messages in timeframe
-  message_timeframe?: number; // Timeframe in seconds
-  suspicious_keywords?: string[]; // List of suspicious keywords
-
-  // GPT settings
-  min_confidence_threshold?: number; // Minimum confidence to flag (0-100)
-  auto_restrict?: boolean; // Auto-restrict suspicious users
-  use_gpt_on_join?: boolean; // Use GPT when user joins
+  message_threshold?: number; // Number of messages before triggering detection
+  message_timeframe?: number; // Timeframe in seconds for message threshold
+  suspicious_keywords?: string[]; // Keywords that trigger detection
+  min_confidence_threshold?: number; // Minimum confidence for GPT detection
+  auto_restrict?: boolean; // Whether to automatically restrict users
+  use_gpt_on_join?: boolean; // Whether to use GPT for join verification
   gpt_message_check_count?: number; // Number of messages to check with GPT
-
-  // Retention settings
-  message_retention_days?: number; // Days to keep message content
-  detection_retention_days?: number; // Days to keep detection events
+  message_retention_days?: number; // Days to retain message history
+  detection_retention_days?: number; // Days to retain detection history
 }
 
 /**

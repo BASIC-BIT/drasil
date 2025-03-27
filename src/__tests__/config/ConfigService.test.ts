@@ -2,6 +2,7 @@ import { ConfigService } from '../../config/ConfigService';
 import { ServerRepository } from '../../repositories/ServerRepository';
 import { Server, ServerSettings } from '../../repositories/types';
 import * as supabaseConfig from '../../config/supabase';
+import { globalConfig } from '../../config/GlobalConfig';
 
 // Mock the ServerRepository
 jest.mock('../../repositories/ServerRepository');
@@ -156,33 +157,59 @@ describe('ConfigService', () => {
 
     it('should create default config if not found in database', async () => {
       (supabaseConfig.isSupabaseConfigured as jest.Mock).mockReturnValue(true);
-      mockServerRepository.findByGuildId.mockResolvedValueOnce(null);
-      mockServerRepository.upsertByGuildId.mockResolvedValueOnce({
+
+      // Reset mocks
+      mockServerRepository.findByGuildId.mockReset();
+      mockServerRepository.upsertByGuildId.mockReset();
+
+      // Mock findByGuildId to return null for the first call only (when checking if server exists)
+      mockServerRepository.findByGuildId.mockImplementation(() => {
+        if (mockServerRepository.findByGuildId.mock.calls.length === 1) {
+          return Promise.resolve(null);
+        } else {
+          // For subsequent calls, return the saved server
+          return Promise.resolve({
+            ...mockServer,
+            id: 'local-new-guild-id',
+            guild_id: 'new-guild-id',
+            updated_at: fixedDate.toISOString(),
+          });
+        }
+      });
+
+      // Mock upsertByGuildId to return the saved server
+      mockServerRepository.upsertByGuildId.mockResolvedValue({
         ...mockServer,
         id: 'local-new-guild-id',
         guild_id: 'new-guild-id',
         updated_at: fixedDate.toISOString(),
       });
 
-      // When Supabase is configured, it should try to save the default config
-      expect(mockServerRepository.upsertByGuildId).toHaveBeenCalledWith('new-guild-id', {
-        guild_id: 'new-guild-id',
-        restricted_role_id: 'env-role-id',
-        admin_channel_id: 'env-channel-id',
-        verification_channel_id: 'env-verification-id',
-        admin_notification_role_id: 'env-notification-id',
-        is_active: true,
-        settings: {
-          message_threshold: 5,
-          message_timeframe: 10,
-          suspicious_keywords: ['free nitro', 'discord nitro', 'claim your prize'],
-          min_confidence_threshold: 70,
-          auto_restrict: true,
-          use_gpt_on_join: true,
-          gpt_message_check_count: 3,
-          message_retention_days: 7,
-          detection_retention_days: 30,
-        },
+      // Call getServerConfig to trigger the creation of a default config
+      const result = await configService.getServerConfig('new-guild-id');
+
+      // Verify the result has expected properties
+      expect(result.guild_id).toBe('new-guild-id');
+      expect(result.restricted_role_id).toBe('env-role-id');
+      expect(result.admin_channel_id).toBe('env-channel-id');
+      expect(result.verification_channel_id).toBe('env-verification-id');
+      expect(result.admin_notification_role_id).toBe('env-notification-id');
+      expect(result.is_active).toBe(true);
+
+      // Verify upsertByGuildId was called
+      expect(mockServerRepository.upsertByGuildId).toHaveBeenCalled();
+
+      // Verify settings match the expected values
+      expect(result.settings).toEqual({
+        message_threshold: 5,
+        message_timeframe: 10,
+        suspicious_keywords: ['free nitro', 'discord nitro', 'claim your prize'],
+        min_confidence_threshold: 70,
+        auto_restrict: true,
+        use_gpt_on_join: true,
+        gpt_message_check_count: 3,
+        message_retention_days: 7,
+        detection_retention_days: 30,
       });
     });
   });
@@ -294,6 +321,145 @@ describe('ConfigService', () => {
         message_retention_days: 7,
         detection_retention_days: 30,
       });
+    });
+  });
+
+  describe('createDefaultServerConfig', () => {
+    const testGuildId = '123456789';
+
+    beforeEach(() => {
+      // Reset global config to default settings
+      (globalConfig as any).settings = {
+        autoSetupVerificationChannels: true,
+        defaultServerSettings: {
+          messageThreshold: 5,
+          messageTimeframe: 10,
+          minConfidenceThreshold: 70,
+          messageRetentionDays: 7,
+          detectionRetentionDays: 30,
+        },
+        defaultSuspiciousKeywords: ['free nitro', 'discord nitro', 'claim your prize'],
+      };
+
+      // Mock environment variables
+      process.env.RESTRICTED_ROLE_ID = 'test-role-id';
+      process.env.ADMIN_CHANNEL_ID = 'test-channel-id';
+      process.env.VERIFICATION_CHANNEL_ID = 'test-verification-id';
+      process.env.ADMIN_NOTIFICATION_ROLE_ID = 'test-notification-id';
+    });
+
+    it('should create default config using global settings', async () => {
+      // Mock the repository's upsert method
+      mockServerRepository.upsertByGuildId.mockResolvedValueOnce({
+        id: 'test-id',
+        guild_id: testGuildId,
+        is_active: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as Server);
+
+      const config = await configService.getServerConfig(testGuildId);
+
+      // Verify the settings match global config
+      const globalSettings = globalConfig.getSettings();
+      expect(config.settings).toEqual({
+        message_threshold: globalSettings.defaultServerSettings.messageThreshold,
+        message_timeframe: globalSettings.defaultServerSettings.messageTimeframe,
+        suspicious_keywords: globalSettings.defaultSuspiciousKeywords,
+        min_confidence_threshold: globalSettings.defaultServerSettings.minConfidenceThreshold,
+        auto_restrict: true,
+        use_gpt_on_join: true,
+        gpt_message_check_count: 3,
+        message_retention_days: globalSettings.defaultServerSettings.messageRetentionDays,
+        detection_retention_days: globalSettings.defaultServerSettings.detectionRetentionDays,
+      });
+    });
+
+    it('should use updated global settings when creating new server config', async () => {
+      // Update global settings
+      globalConfig.updateSettings({
+        defaultServerSettings: {
+          messageThreshold: 10,
+          messageTimeframe: 20,
+          minConfidenceThreshold: 80,
+          messageRetentionDays: 14,
+          detectionRetentionDays: 60,
+        },
+        defaultSuspiciousKeywords: ['test keyword'],
+      });
+
+      // Mock the repository's upsert method
+      mockServerRepository.upsertByGuildId.mockResolvedValueOnce({
+        id: 'test-id',
+        guild_id: testGuildId,
+        is_active: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as Server);
+
+      const config = await configService.getServerConfig(testGuildId);
+
+      // Verify the settings match updated global config
+      const globalSettings = globalConfig.getSettings();
+      expect(config.settings).toEqual({
+        message_threshold: globalSettings.defaultServerSettings.messageThreshold,
+        message_timeframe: globalSettings.defaultServerSettings.messageTimeframe,
+        suspicious_keywords: globalSettings.defaultSuspiciousKeywords,
+        min_confidence_threshold: globalSettings.defaultServerSettings.minConfidenceThreshold,
+        auto_restrict: true,
+        use_gpt_on_join: true,
+        gpt_message_check_count: 3,
+        message_retention_days: globalSettings.defaultServerSettings.messageRetentionDays,
+        detection_retention_days: globalSettings.defaultServerSettings.detectionRetentionDays,
+      });
+    });
+
+    it('should preserve existing server settings when updating', async () => {
+      // Mock an existing server configuration
+      const existingServer: Server = {
+        id: 'test-id',
+        guild_id: testGuildId,
+        is_active: true,
+        settings: {
+          message_threshold: 15,
+          message_timeframe: 30,
+          suspicious_keywords: ['custom keyword'],
+          min_confidence_threshold: 90,
+          auto_restrict: false,
+          use_gpt_on_join: false,
+          gpt_message_check_count: 5,
+          message_retention_days: 10,
+          detection_retention_days: 45,
+        },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      // Clear any previous mock implementations
+      mockServerRepository.findByGuildId.mockReset();
+
+      // Set up the mock to return the existing server for this specific test
+      mockServerRepository.findByGuildId.mockImplementation((id) => {
+        console.log(`findByGuildId called with: ${id}`);
+        if (id === testGuildId) {
+          console.log('Returning existing server');
+          return Promise.resolve(existingServer);
+        }
+        console.log('Returning null');
+        return Promise.resolve(null);
+      });
+
+      // Ensure Supabase is configured for this test
+      (supabaseConfig.isSupabaseConfigured as jest.Mock).mockReturnValue(true);
+
+      // Call the private method directly
+      const config = await configService['createDefaultServerConfig'](testGuildId);
+
+      console.log('Existing server settings:', existingServer.settings);
+      console.log('Config settings:', config.settings);
+
+      // Verify the existing settings are preserved
+      expect(config.settings).toEqual(existingServer.settings);
     });
   });
 });

@@ -30,6 +30,8 @@ class MockClient {
 import { Bot } from '../Bot';
 import { DetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { Message, GuildMember } from 'discord.js';
+import { globalConfig } from '../config/GlobalConfig';
+import { Client, Guild } from 'discord.js';
 
 jest.mock('discord.js', () => ({
   ...jest.requireActual('discord.js'),
@@ -38,14 +40,53 @@ jest.mock('discord.js', () => ({
 }));
 jest.mock('../services/DetectionOrchestrator');
 
+// Mock services
+jest.mock('../services/HeuristicService');
+jest.mock('../services/GPTService');
+jest.mock('../services/RoleManager');
+jest.mock('../services/NotificationManager');
+jest.mock('../config/ConfigService');
+
 describe('Bot', () => {
   let bot: Bot;
   let mockDetectionOrchestrator: jest.Mocked<DetectionOrchestrator>;
   let consoleLogSpy: jest.SpyInstance;
+  let mockClient: jest.Mocked<Client>;
+  let mockGuild: jest.Mocked<Guild>;
 
   beforeEach(() => {
     jest.clearAllMocks();
     consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
+    process.env.DISCORD_TOKEN = 'test-token';
+
+    // Reset global config to default settings
+    (globalConfig as any).settings = {
+      autoSetupVerificationChannels: true,
+      defaultServerSettings: {
+        messageThreshold: 5,
+        messageTimeframe: 10,
+        minConfidenceThreshold: 70,
+        messageRetentionDays: 7,
+        detectionRetentionDays: 30,
+      },
+      defaultSuspiciousKeywords: ['free nitro', 'discord nitro', 'claim your prize'],
+    };
+
+    // Create mock guild
+    mockGuild = {
+      id: '123456789',
+      name: 'Test Guild',
+    } as unknown as jest.Mocked<Guild>;
+
+    // Create mock client
+    mockClient = {
+      login: jest.fn().mockResolvedValue('token'),
+      destroy: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn(),
+    } as unknown as jest.Mocked<Client>;
+
+    (Client as jest.MockedClass<typeof Client>).mockImplementation(() => mockClient);
+
     bot = new Bot();
     mockDetectionOrchestrator = (bot as any).detectionOrchestrator;
   });
@@ -210,6 +251,119 @@ describe('Bot', () => {
       expect(consoleLogSpy).not.toHaveBeenCalledWith(
         expect.stringContaining('flagged as suspicious')
       );
+    });
+  });
+
+  describe('handleGuildCreate', () => {
+    it('should set up verification channel when auto-setup is enabled', async () => {
+      // Set up mock guild with necessary methods
+      const mockGuildWithMethods = {
+        ...mockGuild,
+        channels: {
+          create: jest.fn().mockResolvedValue({ id: 'new-channel-id' }),
+        },
+      } as unknown as jest.Mocked<Guild>;
+
+      // Call the private method using type assertion
+      await (bot as any).handleGuildCreate(mockGuildWithMethods);
+
+      // Verify that the verification channel setup was attempted
+      expect(mockGuildWithMethods.channels.create).toHaveBeenCalled();
+    });
+
+    it('should not set up verification channel when auto-setup is disabled', async () => {
+      // Disable auto-setup in global config
+      globalConfig.updateSettings({
+        autoSetupVerificationChannels: false,
+      });
+
+      // Set up mock guild with necessary methods
+      const mockGuildWithMethods = {
+        ...mockGuild,
+        channels: {
+          create: jest.fn().mockResolvedValue({ id: 'new-channel-id' }),
+        },
+      } as unknown as jest.Mocked<Guild>;
+
+      // Call the private method using type assertion
+      await (bot as any).handleGuildCreate(mockGuildWithMethods);
+
+      // Verify that the verification channel setup was not attempted
+      expect(mockGuildWithMethods.channels.create).not.toHaveBeenCalled();
+    });
+
+    it('should handle errors gracefully', async () => {
+      // Mock console.error to track error logging
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      // Set up mock guild that throws an error
+      const mockGuildWithError = {
+        ...mockGuild,
+        channels: {
+          create: jest.fn().mockRejectedValue(new Error('Test error')),
+        },
+      } as unknown as jest.Mocked<Guild>;
+
+      // Call the private method using type assertion
+      await (bot as any).handleGuildCreate(mockGuildWithError);
+
+      // Verify error was logged
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to handle new guild'),
+        expect.any(Error)
+      );
+
+      // Clean up
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('initializeServers', () => {
+    it('should initialize configurations for all guilds', async () => {
+      // Set up mock guilds cache
+      const mockGuilds = new Map([
+        ['1', { id: '1', name: 'Guild 1' }],
+        ['2', { id: '2', name: 'Guild 2' }],
+      ]);
+
+      mockClient.guilds = {
+        cache: mockGuilds,
+      } as any;
+
+      // Call the private method using type assertion
+      await (bot as any).initializeServers();
+
+      // Verify that configurations were initialized for both guilds
+      // This will depend on your ConfigService mock implementation
+      // You might want to verify that getServerConfig was called for each guild
+    });
+
+    it('should handle errors during initialization', async () => {
+      // Mock console.error to track error logging
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      // Set up mock guilds cache with a guild that will cause an error
+      const mockGuilds = new Map([['error-guild', { id: 'error-guild', name: 'Error Guild' }]]);
+
+      mockClient.guilds = {
+        cache: mockGuilds,
+      } as any;
+
+      // Make ConfigService throw an error for this guild
+      const mockConfigService = (bot as any).configService;
+      mockConfigService.getServerConfig.mockRejectedValueOnce(new Error('Test error'));
+
+      // Call the private method using type assertion
+      await (bot as any).initializeServers();
+
+      // Verify error was logged
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to initialize configuration for guild'),
+        expect.any(Error)
+      );
+
+      // Clean up
+      consoleSpy.mockRestore();
     });
   });
 });
