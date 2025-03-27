@@ -12,7 +12,7 @@ This plan outlines the step-by-step process for converting our Discord anti-spam
 4. **Training Data:** Collect and store data for future model training
 5. **Cross-Server Intelligence:** Enable information sharing across multiple Discord servers
 
-## High-Level Architecture 
+## High-Level Architecture
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
@@ -34,16 +34,19 @@ This plan outlines the step-by-step process for converting our Discord anti-spam
 ### Chunk H1: Supabase Setup & Infrastructure
 
 1. **H1.1: Supabase Project Creation**
+
    - Create Supabase project
    - Configure authentication settings
    - Document API keys and endpoints
 
 2. **H1.2: Database Schema Design**
+
    - Design schema for all required tables
    - Document relationships and constraints
    - Create migration scripts
 
 3. **H1.3: Repository Layer Setup**
+
    - Create base repository interfaces
    - Implement connection management
    - Add error handling and retries
@@ -56,16 +59,19 @@ This plan outlines the step-by-step process for converting our Discord anti-spam
 ### Chunk H2: Core Entity Management
 
 1. **H2.1: Server Configuration Repository**
+
    - Create servers table
    - Implement CRUD operations
    - Add caching for frequently accessed configuration
 
 2. **H2.2: User Repository**
+
    - Create users table with Discord metadata
    - Implement user lookup and creation
    - Add methods for user history
 
 3. **H2.3: Configuration Management Service**
+
    - Create service for managing server configurations
    - Implement fallback to defaults
    - Add validation logic
@@ -78,16 +84,19 @@ This plan outlines the step-by-step process for converting our Discord anti-spam
 ### Chunk H3: Detection History & Flagging
 
 1. **H3.1: Detection Events Repository**
+
    - Create detection_events table
    - Implement methods to record detection outcomes
    - Add querying capabilities
 
 2. **H3.2: User Flags Repository**
+
    - Create user_flags table
    - Add methods for flag management
    - Implement flag history and status tracking
 
 3. **H3.3: DetectionOrchestrator Integration**
+
    - Update orchestrator to use repositories
    - Store detection results
    - Retrieve historical data for context
@@ -100,16 +109,19 @@ This plan outlines the step-by-step process for converting our Discord anti-spam
 ### Chunk H4: Message & Context Storage
 
 1. **H4.1: Message Repository**
+
    - Create messages table for flagged messages
    - Implement privacy-focused retention policies
    - Add message metadata storage
 
 2. **H4.2: Context Repository**
+
    - Create context table for GPT prompts/responses
    - Store relevant conversation context
    - Implement context retrieval methods
 
 3. **H4.3: GPTService Integration**
+
    - Update GPT service to store prompts and responses
    - Retrieve historical contexts
    - Track token usage
@@ -122,16 +134,19 @@ This plan outlines the step-by-step process for converting our Discord anti-spam
 ### Chunk H5: Analytics & Insights
 
 1. **H5.1: Analytics Repository**
+
    - Create analytics tables
    - Implement aggregation methods
    - Add time-series capabilities
 
 2. **H5.2: Analytics Service**
+
    - Create service for analytics collection
    - Implement metric calculations
    - Add periodic aggregation jobs
 
 3. **H5.3: Admin Commands for Analytics**
+
    - Create /stats command
    - Implement analytics visualizations
    - Add filtering capabilities
@@ -144,16 +159,19 @@ This plan outlines the step-by-step process for converting our Discord anti-spam
 ### Chunk H6: Environment Transition
 
 1. **H6.1: Config Migration Tool**
+
    - Create tool to migrate env vars to database
    - Support bulk imports
    - Add validation and logging
 
 2. **H6.2: Configuration UI**
+
    - Add Discord commands for configuration
    - Implement configuration verification
    - Add help documentation
 
 3. **H6.3: Backup & Restore**
+
    - Implement database backup procedures
    - Create restore functionality
    - Add scheduling for regular backups
@@ -166,16 +184,19 @@ This plan outlines the step-by-step process for converting our Discord anti-spam
 ### Chunk H7: Multi-Server Intelligence
 
 1. **H7.1: Cross-Server Schema Extensions**
+
    - Add server relationship tables
    - Implement trust networks
    - Create shared intelligence tables
 
 2. **H7.2: Trust Network Service**
+
    - Create service for managing server relationships
    - Implement trust calculation
    - Add verification methods
 
 3. **H7.3: Shared Intelligence**
+
    - Create methods for sharing flagged users
    - Implement privacy controls
    - Add opt-in/opt-out functionality
@@ -188,16 +209,19 @@ This plan outlines the step-by-step process for converting our Discord anti-spam
 ### Chunk H8: Training Data Collection
 
 1. **H8.1: Training Data Repository**
+
    - Create training_data table
    - Implement data collection methods
    - Add labeling capabilities
 
 2. **H8.2: Admin Labeling Interface**
+
    - Add commands for labeling data
    - Implement bulk labeling
    - Create export functionality
 
 3. **H8.3: Automated Collection**
+
    - Implement automatic data collection
    - Add privacy filtering
    - Create periodic cleanup jobs
@@ -214,6 +238,7 @@ This plan outlines the step-by-step process for converting our Discord anti-spam
 Focus on setting up Supabase and implementing the core repositories and services needed to store basic configuration and user data.
 
 1. **Week 1: Infrastructure Setup**
+
    - Set up Supabase project
    - Design initial schema
    - Create base repository layer
@@ -229,6 +254,7 @@ Focus on setting up Supabase and implementing the core repositories and services
 Enhance the detection system to store and retrieve historical data for improved accuracy.
 
 1. **Week 3: Detection Storage**
+
    - Implement detection event storage
    - Add flag tracking
    - Update orchestrator to use historical data
@@ -244,6 +270,7 @@ Enhance the detection system to store and retrieve historical data for improved 
 Add analytics to track bot performance and provide insights to administrators.
 
 1. **Week 5: Analytics Foundation**
+
    - Implement analytics tables
    - Create analytics service
    - Add basic metric collection
@@ -258,11 +285,13 @@ Add analytics to track bot performance and provide insights to administrators.
 Implement more advanced features for multi-server support and training data collection.
 
 1. **Week 7: Environmental Transition**
+
    - Create migration tools
    - Implement configuration UI
    - Add backup functionality
 
 2. **Week 8: Multi-Server Support**
+
    - Implement cross-server schema
    - Create trust network
    - Add shared intelligence
@@ -394,16 +423,19 @@ CREATE TABLE training_data (
 ## Migration Strategy
 
 1. **Step 1: Parallel Operation**
+
    - Run database alongside environment variables
    - Read from database, fall back to environment variables
    - Log discrepancies
 
 2. **Step 2: Write Everywhere**
+
    - Write to both database and memory
    - Validate consistency
    - Prefer database for reads
 
 3. **Step 3: Database Primary**
+
    - Make database the primary source
    - Keep environment variables as fallback
    - Add migration warnings
@@ -416,16 +448,19 @@ CREATE TABLE training_data (
 ## Code Structure Changes
 
 1. **Repository Layer**
+
    - Create `/src/repositories` directory
    - Add base repository interface
    - Implement concrete repositories for each entity
 
 2. **Service Layer Updates**
+
    - Inject repositories into services
    - Update methods to use persistent storage
    - Add caching where appropriate
 
 3. **Configuration Management**
+
    - Create configuration service
    - Add initialization from database
    - Implement real-time updates
@@ -438,11 +473,13 @@ CREATE TABLE training_data (
 ## Testing Strategy
 
 1. **Unit Tests**
+
    - Mock repositories for service tests
    - Test database operations in isolation
    - Validate edge cases
 
 2. **Integration Tests**
+
    - Use test database for integration testing
    - Test full workflows with persistence
    - Validate data consistency
@@ -455,16 +492,19 @@ CREATE TABLE training_data (
 ## Rollout Plan
 
 1. **Alpha Release**
+
    - Implement core persistence (H1, H2)
    - Test with limited users
    - Gather feedback on database performance
 
 2. **Beta Release**
+
    - Add remaining critical features (H3, H4, H5)
    - Expand testing group
    - Monitor performance and make adjustments
 
 3. **Full Release**
+
    - Complete all planned features
    - Migrate existing users
    - Monitor and support transition
@@ -477,16 +517,19 @@ CREATE TABLE training_data (
 ## Future Considerations
 
 1. **Scaling**
+
    - Monitor database performance as user base grows
    - Implement additional caching as needed
    - Consider sharding for very large installations
 
 2. **Analytics Dashboard**
+
    - Create web interface for analytics
    - Add custom report generation
    - Implement visualizations
 
 3. **Advanced Intelligence**
+
    - Use collected data to train custom models
    - Implement more sophisticated detection algorithms
    - Add behavior analysis capabilities
@@ -494,4 +537,4 @@ CREATE TABLE training_data (
 4. **Privacy Controls**
    - Implement granular data retention policies
    - Add user data anonymization
-   - Create data export/deletion capabilities 
+   - Create data export/deletion capabilities

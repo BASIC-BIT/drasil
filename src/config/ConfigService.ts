@@ -1,0 +1,180 @@
+import { ServerRepository } from '../repositories/ServerRepository';
+import { Server, ServerSettings } from '../repositories/types';
+import { isSupabaseConfigured } from './supabase';
+
+/**
+ * Service for managing configuration and providing a bridge
+ * between environment variables and database configuration
+ */
+export class ConfigService {
+  private serverRepository: ServerRepository;
+  private serverCache: Map<string, Server> = new Map();
+
+  constructor() {
+    this.serverRepository = new ServerRepository();
+  }
+
+  /**
+   * Initialize the configuration service
+   * Loads all active servers into cache
+   */
+  async initialize(): Promise<void> {
+    // Only attempt to load from database if Supabase is configured
+    if (isSupabaseConfigured()) {
+      try {
+        const servers = await this.serverRepository.findAllActive();
+
+        // Cache all active servers
+        servers.forEach((server) => {
+          this.serverCache.set(server.guild_id, server);
+        });
+
+        console.log(`Loaded ${servers.length} server configurations from database`);
+      } catch (error) {
+        console.error('Failed to load server configurations from database:', error);
+      }
+    } else {
+      console.warn('Supabase is not configured. Using environment variables for configuration.');
+    }
+  }
+
+  /**
+   * Get a server configuration, first from cache, then from database
+   * Falls back to environment variables if needed
+   * @param guildId The Discord guild ID
+   * @returns The server configuration
+   */
+  async getServerConfig(guildId: string): Promise<Server> {
+    // Check cache first
+    const cachedServer = this.serverCache.get(guildId);
+    if (cachedServer) {
+      return cachedServer;
+    }
+
+    // Try to get from database if Supabase is configured
+    if (isSupabaseConfigured()) {
+      try {
+        const server = await this.serverRepository.findByGuildId(guildId);
+
+        if (server) {
+          // Update cache
+          this.serverCache.set(guildId, server);
+          return server;
+        }
+      } catch (error) {
+        console.error(`Failed to get server configuration for guild ${guildId}:`, error);
+      }
+    }
+
+    // If no configuration exists yet, create a default one using environment variables
+    return this.createDefaultServerConfig(guildId);
+  }
+
+  /**
+   * Create a default server configuration using environment variables
+   * @param guildId The Discord guild ID
+   * @returns The default server configuration
+   */
+  private async createDefaultServerConfig(guildId: string): Promise<Server> {
+    const defaultServer: Partial<Server> = {
+      guild_id: guildId,
+      restricted_role_id: process.env.RESTRICTED_ROLE_ID,
+      admin_channel_id: process.env.ADMIN_CHANNEL_ID,
+      verification_channel_id: process.env.VERIFICATION_CHANNEL_ID,
+      admin_notification_role_id: process.env.ADMIN_NOTIFICATION_ROLE_ID,
+      is_active: true,
+      settings: {
+        message_threshold: 5,
+        message_timeframe: 10,
+        suspicious_keywords: ['free nitro', 'discord nitro', 'claim your prize'],
+        min_confidence_threshold: 70,
+        auto_restrict: true,
+        use_gpt_on_join: true,
+        gpt_message_check_count: 3,
+        message_retention_days: 7,
+        detection_retention_days: 30,
+      },
+    };
+
+    // If Supabase is configured, save the default configuration
+    if (isSupabaseConfigured()) {
+      try {
+        const server = await this.serverRepository.upsertByGuildId(guildId, defaultServer);
+        // Update cache
+        this.serverCache.set(guildId, server);
+        return server;
+      } catch (error) {
+        console.error(`Failed to create default server configuration for guild ${guildId}:`, error);
+      }
+    }
+
+    // If we couldn't save to database, create an in-memory server object
+    return {
+      id: 'local-' + guildId,
+      guild_id: guildId,
+      ...defaultServer,
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as Server;
+  }
+
+  /**
+   * Update a server configuration
+   * @param guildId The Discord guild ID
+   * @param data The data to update
+   * @returns The updated server configuration
+   */
+  async updateServerConfig(guildId: string, data: Partial<Server>): Promise<Server> {
+    if (isSupabaseConfigured()) {
+      try {
+        const server = await this.serverRepository.upsertByGuildId(guildId, data);
+        // Update cache
+        this.serverCache.set(guildId, server);
+        return server;
+      } catch (error) {
+        console.error(`Failed to update server configuration for guild ${guildId}:`, error);
+      }
+    }
+
+    // If we couldn't save to database, update the cached version or create a new one
+    const currentConfig =
+      this.serverCache.get(guildId) || (await this.createDefaultServerConfig(guildId));
+    const updatedServer: Server = {
+      ...currentConfig,
+      ...data,
+      updated_at: new Date().toISOString(),
+    };
+
+    // Update cache
+    this.serverCache.set(guildId, updatedServer);
+    return updatedServer;
+  }
+
+  /**
+   * Update specific settings for a server
+   * @param guildId The Discord guild ID
+   * @param settings The settings to update
+   * @returns The updated server configuration
+   */
+  async updateServerSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server> {
+    // Get current server config
+    const currentConfig = await this.getServerConfig(guildId);
+
+    // Merge existing settings with new ones
+    const updatedSettings = {
+      ...(currentConfig.settings || {}),
+      ...settings,
+    };
+
+    // Update the server configuration with new settings
+    return this.updateServerConfig(guildId, { settings: updatedSettings });
+  }
+
+  /**
+   * Clear the server cache
+   */
+  clearCache(): void {
+    this.serverCache.clear();
+  }
+}

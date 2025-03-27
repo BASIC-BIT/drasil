@@ -21,6 +21,7 @@ Supabase was selected as our database solution for several reasons:
 ### Core Tables
 
 #### `servers`
+
 Stores Discord server (guild) configurations and settings.
 
 ```sql
@@ -42,6 +43,7 @@ COMMENT ON COLUMN servers.settings IS 'JSON blob for flexible configuration stor
 ```
 
 #### `users`
+
 Stores Discord user information independent of servers.
 
 ```sql
@@ -62,6 +64,7 @@ COMMENT ON COLUMN users.global_reputation_score IS 'Cross-server reputation scor
 ```
 
 #### `server_members`
+
 Maps users to servers with server-specific data.
 
 ```sql
@@ -88,6 +91,7 @@ COMMENT ON COLUMN server_members.reputation_score IS 'Server-specific reputation
 ### Detection & Verification Data
 
 #### `detection_events`
+
 Records spam detection events.
 
 ```sql
@@ -119,6 +123,7 @@ COMMENT ON COLUMN detection_events.reasons IS 'Array of reasons for flagging';
 ```
 
 #### `messages`
+
 Stores message content for flagged users (limited retention).
 
 ```sql
@@ -143,6 +148,7 @@ COMMENT ON TABLE messages IS 'Message content for flagged users (limited retenti
 ```
 
 #### `verification_threads`
+
 Tracks verification thread status and outcomes.
 
 ```sql
@@ -169,6 +175,7 @@ COMMENT ON TABLE verification_threads IS 'Verification threads for suspicious us
 ### Analytics & Telemetry
 
 #### `analytics`
+
 Daily aggregated metrics per server.
 
 ```sql
@@ -196,6 +203,7 @@ COMMENT ON COLUMN analytics.metrics IS 'Additional metrics as JSON';
 ```
 
 #### `gpt_usage`
+
 Tracks GPT API usage for cost analysis and optimization.
 
 ```sql
@@ -223,6 +231,7 @@ COMMENT ON TABLE gpt_usage IS 'Tracks GPT API usage for cost analysis';
 ### Advanced Features
 
 #### `server_relationships`
+
 Defines trust relationships between servers.
 
 ```sql
@@ -245,6 +254,7 @@ COMMENT ON TABLE server_relationships IS 'Trust relationships between servers';
 ```
 
 #### `training_data`
+
 Collected data for future model training.
 
 ```sql
@@ -322,11 +332,13 @@ The database will be implemented in phases:
 ## Environment-Specific Considerations
 
 ### Development Environment
+
 - Separate development database with sample data
 - Relaxed retention policies
 - Debug-level logging
 
 ### Production Environment
+
 - Strict security policies
 - Optimized performance configurations
 - Comprehensive backup strategy
@@ -338,4 +350,4 @@ The database will be implemented in phases:
 2. **Vector Storage**: Potential use of pgvector for semantic content matching
 3. **ML Integration**: Infrastructure for model training and deployment
 4. **Data Export**: Tools for extracting analytics for external processing
-5. **API Extensions**: Potential for exposing analytics via external API 
+5. **API Extensions**: Potential for exposing analytics via external API
