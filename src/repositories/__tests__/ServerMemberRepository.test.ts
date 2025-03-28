@@ -7,13 +7,13 @@ jest.mock('../../config/supabase', () => ({
   supabase: {
     from: jest.fn(),
     rpc: jest.fn(),
+    upsert: jest.fn(),
   },
 }));
 
 describe('ServerMemberRepository', () => {
   let repository: ServerMemberRepository;
   const mockMember: ServerMember = {
-    id: 'member123',
     server_id: 'server123',
     user_id: 'user123',
     join_date: '2024-03-27T00:00:00Z',
@@ -90,61 +90,46 @@ describe('ServerMemberRepository', () => {
 
   describe('upsertMember', () => {
     it('should update existing member', async () => {
-      // Mock findByServerAndUser
-      const mockFindSingle = jest.fn().mockResolvedValue({
-        data: mockMember,
+      const updatedMember = { ...mockMember, reputation_score: 0.8 };
+
+      // Mock for upsert
+      const mockUpsertSingle = jest.fn().mockResolvedValue({
+        data: updatedMember,
         error: null,
       });
-      const mockFindEq2 = jest.fn().mockReturnValue({ single: mockFindSingle });
-      const mockFindEq1 = jest.fn().mockReturnValue({ eq: mockFindEq2 });
-      const mockFindSelect = jest.fn().mockReturnValue({ eq: mockFindEq1 });
+      const mockUpsertSelect = jest.fn().mockReturnValue({ single: mockUpsertSingle });
+      const mockUpsert = jest.fn().mockReturnValue({ select: mockUpsertSelect });
 
-      // Mock update
-      const mockUpdateSingle = jest.fn().mockResolvedValue({
-        data: { ...mockMember, reputation_score: 0.8 },
-        error: null,
-      });
-      const mockUpdateSelect = jest.fn().mockReturnValue({ single: mockUpdateSingle });
-      const mockUpdateEq2 = jest.fn().mockReturnValue({ select: mockUpdateSelect });
-      const mockUpdateEq1 = jest.fn().mockReturnValue({ eq: mockUpdateEq2 });
-      const mockUpdate = jest.fn().mockReturnValue({ eq: mockUpdateEq1 });
-
-      // Setup supabase mock to return different chains for find and update
-      (supabase.from as jest.Mock)
-        .mockReturnValueOnce({ select: mockFindSelect }) // for find
-        .mockReturnValueOnce({ update: mockUpdate }); // for update
+      // Setup supabase mock
+      (supabase.from as jest.Mock).mockReturnValue({ upsert: mockUpsert });
 
       const result = await repository.upsertMember(mockMember.server_id, mockMember.user_id, {
         reputation_score: 0.8,
       });
 
-      expect(result).toEqual({ ...mockMember, reputation_score: 0.8 });
+      expect(result).toEqual(updatedMember);
       expect(supabase.from).toHaveBeenCalledWith('server_members');
-      expect(mockUpdate).toHaveBeenCalled();
+      expect(mockUpsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          server_id: mockMember.server_id,
+          user_id: mockMember.user_id,
+          reputation_score: 0.8,
+        }),
+        { onConflict: 'server_id,user_id' }
+      );
     });
 
     it('should create new member when not found', async () => {
-      // Mock findByServerAndUser to return null
-      const mockFindSingle = jest.fn().mockResolvedValue({
-        data: null,
-        error: { code: 'PGRST116' },
-      });
-      const mockFindEq2 = jest.fn().mockReturnValue({ single: mockFindSingle });
-      const mockFindEq1 = jest.fn().mockReturnValue({ eq: mockFindEq2 });
-      const mockFindSelect = jest.fn().mockReturnValue({ eq: mockFindEq1 });
-
-      // Mock insert
-      const mockInsertSingle = jest.fn().mockResolvedValue({
+      // Mock for upsert
+      const mockUpsertSingle = jest.fn().mockResolvedValue({
         data: mockMember,
         error: null,
       });
-      const mockInsertSelect = jest.fn().mockReturnValue({ single: mockInsertSingle });
-      const mockInsert = jest.fn().mockReturnValue({ select: mockInsertSelect });
+      const mockUpsertSelect = jest.fn().mockReturnValue({ single: mockUpsertSingle });
+      const mockUpsert = jest.fn().mockReturnValue({ select: mockUpsertSelect });
 
       // Setup supabase mock
-      (supabase.from as jest.Mock)
-        .mockReturnValueOnce({ select: mockFindSelect }) // for find
-        .mockReturnValueOnce({ insert: mockInsert }); // for insert
+      (supabase.from as jest.Mock).mockReturnValue({ upsert: mockUpsert });
 
       const result = await repository.upsertMember('server123', 'user123', {
         join_date: '2024-03-27T00:00:00Z',
@@ -152,7 +137,14 @@ describe('ServerMemberRepository', () => {
 
       expect(result).toEqual(mockMember);
       expect(supabase.from).toHaveBeenCalledWith('server_members');
-      expect(mockInsert).toHaveBeenCalled();
+      expect(mockUpsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          server_id: 'server123',
+          user_id: 'user123',
+          join_date: '2024-03-27T00:00:00Z',
+        }),
+        { onConflict: 'server_id,user_id' }
+      );
     });
   });
 
@@ -160,7 +152,7 @@ describe('ServerMemberRepository', () => {
     it('should return restricted members', async () => {
       const restrictedMembers = [
         { ...mockMember, is_restricted: true },
-        { ...mockMember, id: 'member456', is_restricted: true },
+        { ...mockMember, server_id: 'server456', user_id: 'user456', is_restricted: true },
       ];
 
       const mockEq2 = jest.fn().mockResolvedValue({

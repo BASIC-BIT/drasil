@@ -7,6 +7,10 @@
 import { HeuristicService } from './HeuristicService';
 import { GPTService, UserProfileData } from './GPTService';
 import { DetectionEventsRepository } from '../repositories/DetectionEventsRepository';
+import { UserRepository } from '../repositories/UserRepository';
+import { ServerRepository } from '../repositories/ServerRepository';
+import { ServerMemberRepository } from '../repositories/ServerMemberRepository';
+import { User } from '../repositories/types';
 
 export interface DetectionResult {
   label: 'OK' | 'SUSPICIOUS';
@@ -15,12 +19,16 @@ export interface DetectionResult {
   reasons: string[];
   triggerSource: 'message' | 'join';
   triggerContent: string;
+  profileData?: UserProfileData;
 }
 
 export class DetectionOrchestrator {
   private heuristicService: HeuristicService;
   private gptService: GPTService;
   private detectionEventsRepository: DetectionEventsRepository;
+  private userRepository: UserRepository;
+  private serverRepository: ServerRepository;
+  private serverMemberRepository: ServerMemberRepository;
 
   // Threshold to determine when to use GPT (0.3-0.7 is borderline)
   private readonly BORDERLINE_LOWER = 0.3;
@@ -33,11 +41,17 @@ export class DetectionOrchestrator {
   constructor(
     heuristicService: HeuristicService,
     gptService: GPTService,
-    detectionEventsRepository: DetectionEventsRepository
+    detectionEventsRepository: DetectionEventsRepository,
+    userRepository?: UserRepository,
+    serverRepository?: ServerRepository,
+    serverMemberRepository?: ServerMemberRepository
   ) {
     this.heuristicService = heuristicService;
     this.gptService = gptService;
     this.detectionEventsRepository = detectionEventsRepository;
+    this.userRepository = userRepository || new UserRepository();
+    this.serverRepository = serverRepository || new ServerRepository();
+    this.serverMemberRepository = serverMemberRepository || new ServerMemberRepository();
   }
 
   /**
@@ -137,6 +151,7 @@ export class DetectionOrchestrator {
         reasons: reasons,
         triggerSource: 'message',
         triggerContent: content,
+        profileData: profileData,
       };
     } else {
       result = {
@@ -195,6 +210,7 @@ export class DetectionOrchestrator {
       reasons: reasons,
       triggerSource: 'join',
       triggerContent: '',
+      profileData: profileData,
     };
 
     // Store the detection result
@@ -205,6 +221,7 @@ export class DetectionOrchestrator {
 
   /**
    * Stores a detection result in the database
+   * Ensures that user, server, and server_member records exist before creating the detection event
    *
    * @param serverId The Discord server ID
    * @param userId The Discord user ID
@@ -218,7 +235,42 @@ export class DetectionOrchestrator {
     messageId?: string
   ): Promise<void> {
     try {
-      await this.detectionEventsRepository.create({
+      console.log(`Storing detection result for server ${serverId}, user ${userId}`);
+
+      // Get profile data if available from either detectMessage or detectNewJoin call
+      const profileData = result.profileData;
+
+      // Ensure server record exists
+      console.log('Creating/updating server record');
+      await this.serverRepository.upsertByGuildId(serverId, {});
+
+      // Ensure user record exists with proper fields
+      console.log('Creating/updating user record');
+      const userData: User = {
+        // Default values if no profile data available
+        username: profileData?.username || 'Unknown User',
+        account_created_at:
+          profileData?.accountCreatedAt?.toISOString() || new Date().toISOString(),
+        discord_id: userId,
+      };
+
+      await this.userRepository.upsertByDiscordId(userId, userData);
+
+      // Set is_restricted to true if the result is suspicious
+      const isRestricted = result.label === 'SUSPICIOUS';
+
+      // Ensure server_member relationship exists
+      console.log('Creating/updating server member record');
+      await this.serverMemberRepository.upsertMember(serverId, userId, {
+        join_date: profileData?.joinedServerAt?.toISOString() || new Date().toISOString(),
+        last_message_at: new Date().toISOString(),
+        is_restricted: isRestricted,
+        message_count: 1,
+      });
+
+      // Create the detection event
+      console.log('Creating detection event');
+      const detectionEvent = {
         server_id: serverId,
         user_id: userId,
         message_id: messageId,
@@ -234,9 +286,22 @@ export class DetectionOrchestrator {
         metadata: {
           trigger_content: result.triggerContent,
         },
-      });
+      };
+
+      console.log('Detection event data:', JSON.stringify(detectionEvent, null, 2));
+
+      const createdEvent = await this.detectionEventsRepository.create(detectionEvent);
+      console.log('Detection event created:', createdEvent?.id || 'unknown id');
+
+      // If suspicious, update server member record to mark as restricted
+      if (isRestricted) {
+        console.log('Marking user as restricted in server member record');
+        await this.serverMemberRepository.updateRestrictionStatus(serverId, userId, true);
+      }
     } catch (error) {
       console.error('Failed to store detection result:', error);
+      // Rethrow the error so it can be handled by the caller
+      throw error;
     }
   }
 

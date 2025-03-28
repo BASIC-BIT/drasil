@@ -22,7 +22,6 @@ describe('ConfigService', () => {
   const fixedDate = new Date('2023-01-01T00:00:00.000Z');
 
   const mockServer: Server = {
-    id: 'local-123456789012345678',
     guild_id: '123456789012345678',
     restricted_role_id: undefined,
     admin_channel_id: undefined,
@@ -59,20 +58,17 @@ describe('ConfigService', () => {
       upsertByGuildId: jest.fn().mockImplementation(async (guildId, data) => ({
         ...mockServer,
         ...data,
-        id: `local-${guildId}`,
         guild_id: guildId,
         updated_at: new Date().toISOString(),
       })),
       updateSettings: jest.fn().mockImplementation(async (guildId, settings) => ({
         ...mockServer,
-        id: `local-${guildId}`,
         guild_id: guildId,
         settings: { ...mockServer.settings, ...settings },
         updated_at: new Date().toISOString(),
       })),
       setActive: jest.fn().mockImplementation(async (guildId, isActive) => ({
         ...mockServer,
-        id: `local-${guildId}`,
         guild_id: guildId,
         is_active: isActive,
         updated_at: new Date().toISOString(),
@@ -161,7 +157,6 @@ describe('ConfigService', () => {
           // For subsequent calls, return the saved server
           return Promise.resolve({
             ...mockServer,
-            id: 'local-new-guild-id',
             guild_id: 'new-guild-id',
             updated_at: fixedDate.toISOString(),
           });
@@ -171,7 +166,6 @@ describe('ConfigService', () => {
       // Mock upsertByGuildId to return the saved server
       mockServerRepository.upsertByGuildId.mockResolvedValue({
         ...mockServer,
-        id: 'local-new-guild-id',
         guild_id: 'new-guild-id',
         updated_at: fixedDate.toISOString(),
       });
@@ -336,7 +330,6 @@ describe('ConfigService', () => {
     it('should create default config using global settings', async () => {
       // Mock the repository's upsert method
       mockServerRepository.upsertByGuildId.mockResolvedValueOnce({
-        id: `local-${testGuildId}`,
         guild_id: testGuildId,
         restricted_role_id: undefined,
         admin_channel_id: undefined,
@@ -378,12 +371,10 @@ describe('ConfigService', () => {
 
       // Mock the repository's upsert method
       mockServerRepository.upsertByGuildId.mockResolvedValueOnce({
-        id: 'test-id',
+        guild_id: testGuildId,
         restricted_role_id: undefined,
         admin_channel_id: undefined,
         verification_channel_id: undefined,
-        guild_id: testGuildId,
-        admin_notification_role_id: undefined,
         is_active: true,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -409,7 +400,6 @@ describe('ConfigService', () => {
     it('should preserve existing server settings when updating', async () => {
       // Mock an existing server configuration
       const existingServer: Server = {
-        id: 'test-id',
         guild_id: testGuildId,
         is_active: true,
         settings: {

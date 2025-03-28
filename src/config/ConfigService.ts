@@ -119,7 +119,6 @@ export class ConfigService {
 
     // Create an in-memory server object
     return {
-      id: 'local-' + guildId,
       guild_id: guildId,
       restricted_role_id: undefined,
       admin_channel_id: undefined,
@@ -129,7 +128,7 @@ export class ConfigService {
       settings: defaultSettings,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    } as Server;
+    };
   }
 
   /**

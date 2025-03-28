@@ -24,6 +24,9 @@ import { NotificationManager } from './services/NotificationManager';
 import { ConfigService } from './config/ConfigService';
 import { globalConfig } from './config/GlobalConfig';
 import { DetectionEventsRepository } from './repositories/DetectionEventsRepository';
+import { UserRepository } from './repositories/UserRepository';
+import { ServerRepository } from './repositories/ServerRepository';
+import { ServerMemberRepository } from './repositories/ServerMemberRepository';
 
 // Load environment variables
 dotenv.config();
@@ -54,10 +57,19 @@ export class Bot {
     this.gptService = new GPTService();
     this.configService = new ConfigService();
     this.detectionEventsRepository = new DetectionEventsRepository();
+
+    // Initialize repositories
+    const userRepository = new UserRepository();
+    const serverRepository = new ServerRepository();
+    const serverMemberRepository = new ServerMemberRepository();
+
     this.detectionOrchestrator = new DetectionOrchestrator(
       this.heuristicService,
       this.gptService,
-      this.detectionEventsRepository
+      this.detectionEventsRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
     );
     this.roleManager = new RoleManager(undefined, this.configService);
     this.notificationManager = new NotificationManager(
@@ -249,23 +261,25 @@ export class Bot {
   private async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
     const customId = interaction.customId;
 
-    // Parse the button ID format: action_userId
-    const [action, userId] = customId.split('_');
-
-    if (!userId) {
-      await interaction.reply({
-        content: 'Invalid button ID format',
-        ephemeral: true,
-      });
-      return;
-    }
-
     try {
-      // Fetch the target user from the server
+      // Extract user ID and action from custom ID
+      const [action, userId] = customId.split('_');
+
+      // Get the message this button is attached to
+      const message = interaction.message;
+      if (!message) {
+        await interaction.reply({
+          content: 'Could not find the associated message.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      // Get the guild member
       const guild = interaction.guild;
       if (!guild) {
         await interaction.reply({
-          content: 'This command can only be used in a server',
+          content: 'This button can only be used in a server.',
           ephemeral: true,
         });
         return;
@@ -274,43 +288,40 @@ export class Bot {
       const member = await guild.members.fetch(userId).catch(() => null);
       if (!member) {
         await interaction.reply({
-          content: `Could not find user with ID ${userId} in this server.`,
+          content: 'Could not find this user in the server.',
           ephemeral: true,
         });
         return;
       }
 
-      // Get the original message to update with action log
-      const message = interaction.message;
-
-      // Variable for thread, declared outside case block to avoid lexical declaration issues
       let thread: ThreadChannel | null = null;
 
       // Handle the specific button action
       switch (action) {
-        case 'verify':
-          await this.verifyUser(member, interaction);
-          // Log the action to the original message
-          await this.notificationManager.logActionToMessage(
-            message,
-            'verified the user',
-            interaction.user
-          );
+        case 'verify': {
+          const success = await this.verifyUser(member, interaction);
+          if (success) {
+            await this.notificationManager.logActionToMessage(
+              message,
+              'verified the user',
+              interaction.user
+            );
+          }
           break;
+        }
 
-        case 'ban':
+        case 'ban': {
           await this.banUser(member, 'Banned via admin panel button', interaction);
-          // Log the action to the original message
           await this.notificationManager.logActionToMessage(
             message,
             'banned the user',
             interaction.user
           );
           break;
+        }
 
-        case 'thread':
+        case 'thread': {
           thread = await this.createVerificationThread(member, interaction);
-          // Log the action to the original message with the thread link
           if (thread) {
             await this.notificationManager.logActionToMessage(
               message,
@@ -318,14 +329,9 @@ export class Bot {
               interaction.user,
               thread
             );
-          } else {
-            await this.notificationManager.logActionToMessage(
-              message,
-              'failed to create a verification thread',
-              interaction.user
-            );
           }
           break;
+        }
 
         default:
           await interaction.reply({
@@ -372,7 +378,7 @@ export class Bot {
       return;
     }
 
-    // Verify the user
+    // Verify the user - no need to log action for slash commands
     await this.verifyUser(member, interaction);
   }
 
@@ -450,7 +456,20 @@ export class Bot {
   private async verifyUser(
     member: GuildMember,
     interaction: ChatInputCommandInteraction | ButtonInteraction
-  ): Promise<void> {
+  ): Promise<boolean> {
+    // Get server configuration
+    const serverConfig = await this.configService.getServerConfig(member.guild.id);
+
+    // Check if restricted role is configured
+    if (!serverConfig.restricted_role_id) {
+      await interaction.reply({
+        content:
+          '❌ No restricted role configured. Please set up the restricted role first using:\n`/config key:restricted_role_id value:<role-id>`\n\nTo get a role ID, enable Developer Mode in Discord Settings -> Advanced, then right-click the role and select "Copy ID".',
+        ephemeral: true,
+      });
+      return false;
+    }
+
     // Remove the restricted role
     const success = await this.roleManager.removeRestrictedRole(member);
 
@@ -459,11 +478,13 @@ export class Bot {
         content: `✅ User ${member.user.tag} has been verified and the restricted role has been removed.`,
         ephemeral: true,
       });
+      return true;
     } else {
       await interaction.reply({
         content: `❌ Failed to remove restricted role from ${member.user.tag}. Please check the bot's permissions and role configuration.`,
         ephemeral: true,
       });
+      return false;
     }
   }
 
@@ -579,6 +600,14 @@ export class Bot {
       }
     } catch (error) {
       console.error('Error detecting spam:', error);
+      console.error(
+        `Details: serverId=${serverId}, userId=${userId}, content length=${content.length}`
+      );
+      if (error instanceof Error) {
+        console.error(
+          `Error name: ${error.name}, message: ${error.message}, stack: ${error.stack}`
+        );
+      }
     }
   }
 
@@ -680,6 +709,11 @@ export class Bot {
       let spamMessage: string;
       let spamResult;
 
+      if (!message.member) {
+        await message.reply('This command can only be used in a server.');
+        return;
+      }
+
       switch (testCommand) {
         case 'spam':
           // Simulate message frequency spam
@@ -694,7 +728,7 @@ export class Bot {
         case 'newaccount':
           // Create a simulated profile with recent account creation
           newAccountProfile = {
-            ...this.extractUserProfileData(message.author, message.member as GuildMember),
+            ...this.extractUserProfileData(message.author, message.member),
             accountCreatedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), // 1 day old account
             joinedServerAt: new Date(Date.now() - 1 * 60 * 60 * 1000), // Joined 1 hour ago
           };
@@ -722,7 +756,7 @@ export class Bot {
             message.guild?.id || 'TEST',
             message.author.id,
             spamMessage,
-            this.extractUserProfileData(message.author, message.member as GuildMember)
+            this.extractUserProfileData(message.author, message.member)
           );
 
           await message.reply(

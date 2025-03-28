@@ -19,7 +19,6 @@ jest.mock('../../config/supabase', () => ({
 describe('ServerRepository', () => {
   let repository: ServerRepository;
   const mockServer: Server = {
-    id: '123e4567-e89b-12d3-a456-426614174000',
     guild_id: '123456789012345678',
     restricted_role_id: '123456789012345679',
     admin_channel_id: '123456789012345680',

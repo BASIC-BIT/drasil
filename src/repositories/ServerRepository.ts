@@ -50,41 +50,17 @@ export class ServerRepository extends SupabaseRepository<Server> {
         updated_at: new Date().toISOString(),
       };
 
-      const { data: existing, error: findError } = await supabase
+      // Use upsert operation with guild_id as the primary key
+      const { data: upserted, error } = await supabase
         .from(this.tableName)
-        .select('id')
-        .eq('guild_id', guildId)
+        .upsert(serverData, { onConflict: 'guild_id' })
+        .select()
         .single();
 
-      // Handle the specific "no rows" error as a valid "not found" case
-      if (findError && findError.code !== 'PGRST116') {
-        throw findError;
-      }
+      if (error) throw error;
+      if (!upserted) throw new Error('Failed to upsert server: No data returned');
 
-      if (existing) {
-        // Update existing server
-        const { data: updated, error } = await supabase
-          .from(this.tableName)
-          .update(serverData)
-          .eq('guild_id', guildId)
-          .select()
-          .single();
-
-        if (error) throw error;
-        return updated as Server;
-      } else {
-        // Create new server
-        const { data: created, error } = await supabase
-          .from(this.tableName)
-          .insert({ ...serverData, created_at: new Date().toISOString() })
-          .select()
-          .single();
-
-        if (error) throw error;
-        if (!created) throw new Error('Failed to create server: No data returned');
-
-        return created as Server;
-      }
+      return upserted as Server;
     } catch (error) {
       this.handleError(error as Error, 'upsertByGuildId');
     }

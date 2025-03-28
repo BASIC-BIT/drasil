@@ -50,41 +50,17 @@ export class UserRepository extends SupabaseRepository<User> {
         updated_at: new Date().toISOString(),
       };
 
-      const { data: existing, error: findError } = await supabase
+      // Use upsert operation with discord_id as the primary key
+      const { data: upserted, error } = await supabase
         .from(this.tableName)
-        .select('id')
-        .eq('discord_id', discordId)
+        .upsert(userData, { onConflict: 'discord_id' })
+        .select()
         .single();
 
-      // Handle the specific "no rows" error as a valid "not found" case
-      if (findError && findError.code !== 'PGRST116') {
-        throw findError;
-      }
+      if (error) throw error;
+      if (!upserted) throw new Error('Failed to upsert user: No data returned');
 
-      if (existing) {
-        // Update existing user
-        const { data: updated, error } = await supabase
-          .from(this.tableName)
-          .update(userData)
-          .eq('discord_id', discordId)
-          .select()
-          .single();
-
-        if (error) throw error;
-        return updated as User;
-      } else {
-        // Create new user
-        const { data: created, error } = await supabase
-          .from(this.tableName)
-          .insert({ ...userData, created_at: new Date().toISOString() })
-          .select()
-          .single();
-
-        if (error) throw error;
-        if (!created) throw new Error('Failed to create user: No data returned');
-
-        return created as User;
-      }
+      return upserted as User;
     } catch (error) {
       this.handleError(error as Error, 'upsertByDiscordId');
     }

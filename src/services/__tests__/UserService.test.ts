@@ -13,7 +13,6 @@ describe('UserService', () => {
   let serverMemberRepository: jest.Mocked<ServerMemberRepository>;
 
   const mockUser: User = {
-    id: '123',
     discord_id: '456789',
     username: 'testuser',
     global_reputation_score: 0.5,
@@ -22,9 +21,8 @@ describe('UserService', () => {
   };
 
   const mockMember: ServerMember = {
-    id: 'member123',
     server_id: 'server123',
-    user_id: '123',
+    user_id: '456789',
     join_date: '2024-03-27T00:00:00Z',
     reputation_score: 0.5,
     is_restricted: false,
@@ -133,11 +131,11 @@ describe('UserService', () => {
     it('should update server and global reputation scores', async () => {
       const memberships = [
         { ...mockMember, reputation_score: 0.8 },
-        { ...mockMember, id: 'member456', reputation_score: 0.6 },
+        { ...mockMember, server_id: 'server456', user_id: 'user456', reputation_score: 0.6 },
       ];
 
       serverMemberRepository.updateReputationScore.mockResolvedValue(mockMember);
-      userRepository.findById.mockResolvedValue(mockUser);
+      userRepository.findByDiscordId.mockResolvedValue(mockUser);
       serverMemberRepository.findMany.mockResolvedValue(memberships);
       userRepository.updateGlobalReputationScore.mockResolvedValue(mockUser);
 
@@ -156,7 +154,7 @@ describe('UserService', () => {
 
     it('should not update global score if user not found', async () => {
       serverMemberRepository.updateReputationScore.mockResolvedValue(mockMember);
-      userRepository.findById.mockResolvedValue(null);
+      userRepository.findByDiscordId.mockResolvedValue(null);
 
       await service.updateUserReputation(mockMember.server_id, mockMember.user_id, 0.8);
 
@@ -242,7 +240,7 @@ describe('UserService', () => {
     it('should return restricted users in server', async () => {
       const restrictedMembers = [
         { ...mockMember, is_restricted: true },
-        { ...mockMember, id: 'member456', is_restricted: true },
+        { ...mockMember, server_id: 'server456', user_id: 'user456', is_restricted: true },
       ];
       serverMemberRepository.findRestrictedMembers.mockResolvedValue(restrictedMembers);
 

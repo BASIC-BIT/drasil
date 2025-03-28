@@ -5,8 +5,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Servers table (guild configuration)
 CREATE TABLE IF NOT EXISTS servers (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  guild_id TEXT UNIQUE NOT NULL,
+  guild_id TEXT PRIMARY KEY, -- Using Discord guild ID directly as primary key
   restricted_role_id TEXT,
   admin_channel_id TEXT,
   verification_channel_id TEXT,
@@ -22,15 +21,13 @@ COMMENT ON COLUMN servers.settings IS 'JSON blob for flexible configuration stor
 
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  discord_id TEXT NOT NULL,
+  discord_id TEXT PRIMARY KEY, -- Using Discord user ID directly as primary key
   username TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   global_reputation_score REAL,
   account_created_at TIMESTAMP WITH TIME ZONE,
-  metadata JSONB DEFAULT '{}'::JSONB,
-  UNIQUE(discord_id)
+  metadata JSONB DEFAULT '{}'::JSONB
 );
 
 COMMENT ON TABLE users IS 'Discord users across all servers';
@@ -38,16 +35,15 @@ COMMENT ON COLUMN users.global_reputation_score IS 'Cross-server reputation scor
 
 -- Server members (users in specific servers)
 CREATE TABLE IF NOT EXISTS server_members (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  server_id TEXT REFERENCES servers(guild_id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(discord_id) ON DELETE CASCADE,
   join_date TIMESTAMP WITH TIME ZONE,
   reputation_score REAL DEFAULT 0.0,
   is_restricted BOOLEAN DEFAULT FALSE,
   last_verified_at TIMESTAMP WITH TIME ZONE,
   last_message_at TIMESTAMP WITH TIME ZONE,
   message_count INTEGER DEFAULT 0,
-  UNIQUE(server_id, user_id)
+  PRIMARY KEY (server_id, user_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_server_members_server ON server_members(server_id);

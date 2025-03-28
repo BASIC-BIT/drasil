@@ -27,7 +27,7 @@ const configs = [
   // Base config for all TypeScript files
   {
     files: ['**/*.ts'],
-    ignores: ['**/*.test.ts', '**/*.spec.ts', 'test/**/*'],
+    ignores: ['**/*.test.ts', '**/*.spec.ts', 'test/**/*', 'dist/**/*'],
     languageOptions: {
       globals: {
         ...globals.node,
@@ -52,6 +52,7 @@ const configs = [
   // Base JavaScript recommended config
   {
     files: ['**/*.{js,mjs,cjs,ts}'],
+    ignores: ['dist/**/*'],
     plugins: { js },
     extends: ['js/recommended'],
   },
@@ -64,6 +65,7 @@ const configs = [
       '**/__mocks__/**/*.ts',
       '**/__tests__/**/*.*',
     ],
+    ignores: ['dist/**/*'],
     languageOptions: {
       globals: {
         ...globals.node,

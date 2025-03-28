@@ -8,6 +8,14 @@ The project is currently focused on implementing the core functionality of the D
 
 ### Completed
 
+- ✅ **Repository Separation of Concerns**:
+
+  - DetectionEventsRepository simplified to only create events
+  - DetectionOrchestrator now responsible for user and server creation
+  - Proper integration with UserRepository and ServerRepository
+  - Clear responsibilities between services and repositories
+  - Improved error propagation and logging
+
 - ✅ **Detection Events Implementation**:
 
   - DetectionEventsRepository with full test coverage
@@ -236,6 +244,7 @@ The system currently implements:
    - Type-safe configuration access
 
 6. **Repository Testing Strategy**:
+
    - Mock Supabase client for unit testing
    - Properly mock method chaining for Supabase operations
    - Use `mockResolvedValue` for async responses
@@ -243,6 +252,14 @@ The system currently implements:
    - Test both success and error cases for all operations
    - Use `expect.objectContaining()` for dynamic fields like timestamps
    - Separate mock setups for multiple operations in the same test
+
+7. **Repository Pattern Implementation**:
+   - Clear separation of concerns between repositories
+   - DetectionOrchestrator responsible for ensuring entities exist
+   - Entity-specific repositories focused on their own domain
+   - Improved error handling and logging for debugging
+   - Proper foreign key relationships maintained
+   - Simplified code with clear responsibilities
 
 ### Open Questions & Considerations
 
@@ -278,12 +295,14 @@ The system currently implements:
 
 ### Immediate Tasks
 
-1. **Complete Detection Events Integration**:
+1. **Completed Detection Events Integration**:
 
    - ✅ Set up DetectionEventsRepository
    - ✅ Integrate with DetectionOrchestrator
    - ✅ Add proper error handling
    - ✅ Add comprehensive test coverage
+   - ✅ Implement proper creation of related entities
+   - ✅ Ensure consistent error propagation
    - 🔄 Implement performance testing for high volume
    - 🔄 Add historical data retrieval
    - 🔄 Implement verification thread tracking
@@ -360,9 +379,10 @@ The system currently implements:
    - Need to plan for scaling with increased adoption
    - Consider premium tier options for sustainability
 
-4. **Database Error Handling**:
+4. **Database Error Handling and Entity Relationships**:
    - Improved error handling for Supabase operations
    - Proper handling of "not found" cases with PostgrestError code 'PGRST116'
-   - Careful data preparation for database operations to avoid validation errors
-   - Consistent return types for repository methods
-   - Detailed documentation of error handling patterns in supabase-error-handling.md
+   - Clear separation of concerns between repositories
+   - Consistent pattern for entity creation and relationships
+   - Proper debugging with detailed logging
+   - Detailed error messages with context for troubleshooting

@@ -3,5 +3,6 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["src/**/*", "*.js", "*.mjs", "*.cjs", ".*.js", ".*.mjs", ".*.cjs"]
+  "include": ["src/**/*", "*.js", "*.mjs", "*.cjs", ".*.js", ".*.mjs", ".*.cjs"],
+  "exclude": ["dist/**/*"]
 }

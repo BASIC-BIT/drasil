@@ -12,7 +12,47 @@ export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent
   }
 
   /**
+   * Create a new detection event
+   * @param data The detection event data
+   * @returns The created detection event
+   */
+  async create(data: Partial<DetectionEvent>): Promise<DetectionEvent> {
+    try {
+      if (!data.server_id || !data.user_id) {
+        throw new Error('server_id and user_id are required to create a detection event');
+      }
+
+      // Create the detection event
+      const { data: created, error } = await supabase
+        .from(this.tableName)
+        .insert(data)
+        .select()
+        .single<DetectionEvent>();
+
+      if (error) {
+        console.error('Error creating detection event:', error);
+        throw error;
+      }
+
+      if (!created) {
+        throw new Error('Failed to create detection event: No data returned');
+      }
+
+      return created;
+    } catch (error: unknown) {
+      console.error('Exception in create detection event:', error);
+      if (error instanceof Error || this.isPostgrestError(error)) {
+        throw this.handleError(error, 'create');
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Find detection events for a specific user in a server
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @returns Array of detection events
    */
   async findByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]> {
     try {
@@ -38,6 +78,9 @@ export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent
 
   /**
    * Find recent detection events for a server
+   * @param serverId The Discord server ID
+   * @param limit Maximum number of events to return
+   * @returns Array of detection events
    */
   async findRecentByServer(serverId: string, limit: number = 50): Promise<DetectionEvent[]> {
     try {
@@ -60,6 +103,10 @@ export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent
 
   /**
    * Record an admin action on a detection event
+   * @param id The detection event ID
+   * @param action The admin action taken
+   * @param adminId The Discord ID of the admin
+   * @returns The updated detection event
    */
   async recordAdminAction(
     id: string,
@@ -90,6 +137,10 @@ export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent
 
   /**
    * Get detection statistics for a server within a date range
+   * @param serverId The Discord server ID
+   * @param startDate Start date for statistics
+   * @param endDate End date for statistics
+   * @returns Statistics object
    */
   async getServerStats(
     serverId: string,
@@ -139,6 +190,8 @@ export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent
 
   /**
    * Clean up old detection events based on retention policy
+   * @param retentionDays Number of days to retain events
+   * @returns Number of deleted events
    */
   async cleanupOldEvents(retentionDays: number): Promise<number> {
     try {

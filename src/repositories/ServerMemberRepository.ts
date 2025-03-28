@@ -12,8 +12,8 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
 
   /**
    * Find a server member by server ID and user ID
-   * @param serverId The server UUID
-   * @param userId The user UUID
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
    * @returns The server member or null if not found
    */
   async findByServerAndUser(serverId: string, userId: string): Promise<ServerMember | null> {
@@ -39,8 +39,8 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
 
   /**
    * Create or update a server member
-   * @param serverId The server UUID
-   * @param userId The user UUID
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
    * @param data The server member data to upsert
    * @returns The created or updated server member
    */
@@ -57,33 +57,17 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
         ...data,
       };
 
-      const existing = await this.findByServerAndUser(serverId, userId);
+      // Use upsert operation with server_id and user_id as the composite primary key
+      const { data: upserted, error } = await supabase
+        .from(this.tableName)
+        .upsert(memberData, { onConflict: 'server_id,user_id' })
+        .select()
+        .single();
 
-      if (existing) {
-        // Update existing member
-        const { data: updated, error } = await supabase
-          .from(this.tableName)
-          .update(memberData)
-          .eq('server_id', serverId)
-          .eq('user_id', userId)
-          .select()
-          .single();
+      if (error) throw error;
+      if (!upserted) throw new Error('Failed to upsert server member: No data returned');
 
-        if (error) throw error;
-        return updated as ServerMember;
-      } else {
-        // Create new member
-        const { data: created, error } = await supabase
-          .from(this.tableName)
-          .insert(memberData)
-          .select()
-          .single();
-
-        if (error) throw error;
-        if (!created) throw new Error('Failed to create server member: No data returned');
-
-        return created as ServerMember;
-      }
+      return upserted as ServerMember;
     } catch (error) {
       this.handleError(error as Error, 'upsertMember');
     }
@@ -91,7 +75,7 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
 
   /**
    * Find all members in a server
-   * @param serverId The server UUID
+   * @param serverId The Discord server ID
    * @returns Array of server members
    */
   async findByServer(serverId: string): Promise<ServerMember[]> {
@@ -110,7 +94,7 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
 
   /**
    * Find all restricted members in a server
-   * @param serverId The server UUID
+   * @param serverId The Discord server ID
    * @returns Array of restricted server members
    */
   async findRestrictedMembers(serverId: string): Promise<ServerMember[]> {
@@ -130,8 +114,8 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
 
   /**
    * Update a member's reputation score
-   * @param serverId The server UUID
-   * @param userId The user UUID
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
    * @param score The new reputation score
    * @returns The updated server member
    */
@@ -162,8 +146,8 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
 
   /**
    * Update member's message count and last message timestamp
-   * @param serverId The server UUID
-   * @param userId The user UUID
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
    * @returns The updated server member
    */
   async incrementMessageCount(serverId: string, userId: string): Promise<ServerMember | null> {
@@ -183,8 +167,8 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
 
   /**
    * Update member's verification status
-   * @param serverId The server UUID
-   * @param userId The user UUID
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
    * @param isRestricted Whether the user is restricted
    * @returns The updated server member
    */

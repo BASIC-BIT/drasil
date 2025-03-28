@@ -4,5 +4,5 @@
     "types": ["jest", "node"]
   },
   "include": ["src/**/*", "test/**/*", "**/*.test.ts", "**/*.spec.ts", "**/__tests__/**/*.*"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "dist/**/*"]
 }

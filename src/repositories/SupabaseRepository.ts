@@ -18,15 +18,12 @@ export class RepositoryError extends Error {
 /**
  * Specific Supabase implementation of the BaseRepository
  */
-export class SupabaseRepository<T extends { id: ID }, ID = string> extends AbstractBaseRepository<
-  T,
-  ID
-> {
+export class SupabaseRepository<T, ID = string> extends AbstractBaseRepository<T, ID> {
   /**
    * Create a new Supabase repository
    * @param tableName The name of the table in Supabase
    */
-  constructor(tableName: string) {
+  constructor(protected tableName: string) {
     super(tableName);
   }
 

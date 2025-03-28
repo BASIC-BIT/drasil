@@ -415,4 +415,152 @@ describe('Bot', () => {
       );
     });
   });
+
+  describe('Verification handling', () => {
+    let mockGuildMember: any;
+    let mockInteraction: any;
+    let mockMessage: any;
+
+    beforeEach(() => {
+      // Import mocks
+      const { MockGuildMember } = require('../__mocks__/discord.js');
+
+      // Create mock guild member
+      mockGuildMember = MockGuildMember({
+        id: 'mock-user-id',
+        username: 'TestUser',
+        guildId: 'mock-guild-id',
+      });
+
+      // Create mock interaction
+      mockInteraction = {
+        reply: jest.fn().mockResolvedValue(undefined),
+        ephemeral: true,
+        user: { id: 'mock-admin-id', tag: 'Admin#1234' },
+      };
+
+      // Create mock message for action logging
+      mockMessage = {
+        id: 'mock-message-id',
+        edit: jest.fn().mockResolvedValue(undefined),
+      };
+
+      // Mock roleManager
+      bot.roleManager = {
+        removeRestrictedRole: jest.fn().mockResolvedValue(true),
+      };
+
+      // Mock notificationManager
+      bot.notificationManager = {
+        logActionToMessage: jest.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    it('should fail verification when restricted role is not configured', async () => {
+      // Arrange
+      bot.configService.getServerConfig.mockResolvedValue({
+        restricted_role_id: null,
+      });
+
+      // Act
+      const result = await bot.verifyUser(mockGuildMember, mockInteraction);
+
+      // Assert
+      expect(result).toBe(false);
+      expect(mockInteraction.reply).toHaveBeenCalledWith({
+        content: expect.stringContaining('No restricted role configured'),
+        ephemeral: true,
+      });
+      expect(bot.roleManager.removeRestrictedRole).not.toHaveBeenCalled();
+      expect(bot.notificationManager.logActionToMessage).not.toHaveBeenCalled();
+    });
+
+    it('should successfully verify user when role is configured', async () => {
+      // Arrange
+      bot.configService.getServerConfig.mockResolvedValue({
+        restricted_role_id: 'mock-role-id',
+      });
+
+      // Act
+      const result = await bot.verifyUser(mockGuildMember, mockInteraction);
+
+      // Assert
+      expect(result).toBe(true);
+      expect(mockInteraction.reply).toHaveBeenCalledWith({
+        content: expect.stringContaining('has been verified'),
+        ephemeral: true,
+      });
+      expect(bot.roleManager.removeRestrictedRole).toHaveBeenCalledWith(mockGuildMember);
+    });
+
+    it('should handle role removal failure', async () => {
+      // Arrange
+      bot.configService.getServerConfig.mockResolvedValue({
+        restricted_role_id: 'mock-role-id',
+      });
+      bot.roleManager.removeRestrictedRole.mockResolvedValue(false);
+
+      // Act
+      const result = await bot.verifyUser(mockGuildMember, mockInteraction);
+
+      // Assert
+      expect(result).toBe(false);
+      expect(mockInteraction.reply).toHaveBeenCalledWith({
+        content: expect.stringContaining('Failed to remove restricted role'),
+        ephemeral: true,
+      });
+      expect(bot.notificationManager.logActionToMessage).not.toHaveBeenCalled();
+    });
+
+    it('should log action only on successful verification via button', async () => {
+      // Arrange
+      bot.configService.getServerConfig.mockResolvedValue({
+        restricted_role_id: 'mock-role-id',
+      });
+      // Mock button interaction
+      const buttonInteraction = {
+        ...mockInteraction,
+        message: mockMessage,
+        customId: 'verify_mock-user-id',
+        isButton: () => true,
+        guild: {
+          members: {
+            fetch: jest.fn().mockResolvedValue(mockGuildMember),
+          },
+        },
+      };
+
+      // Act
+      await bot.handleButtonInteraction(buttonInteraction);
+
+      // Assert
+      expect(bot.notificationManager.logActionToMessage).toHaveBeenCalledWith(
+        mockMessage,
+        'verified the user',
+        buttonInteraction.user
+      );
+    });
+
+    it('should not log action for slash command verification', async () => {
+      // Arrange
+      bot.configService.getServerConfig.mockResolvedValue({
+        restricted_role_id: 'mock-role-id',
+      });
+      // Mock slash command interaction
+      const slashInteraction = {
+        ...mockInteraction,
+        isChatInputCommand: () => true,
+        options: {
+          getUser: jest.fn().mockReturnValue({ id: 'mock-user-id', tag: 'TestUser#1234' }),
+        },
+      };
+
+      // Act
+      const result = await bot.verifyUser(mockGuildMember, slashInteraction);
+
+      // Assert
+      expect(result).toBe(true);
+      expect(bot.notificationManager.logActionToMessage).not.toHaveBeenCalled();
+    });
+  });
 });

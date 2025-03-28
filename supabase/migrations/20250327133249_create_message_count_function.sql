@@ -1,7 +1,7 @@
 -- Function to atomically increment a member's message count and update last message timestamp
 CREATE OR REPLACE FUNCTION increment_member_message_count(
-  p_server_id UUID,
-  p_user_id UUID,
+  p_server_id TEXT,
+  p_user_id TEXT,
   p_timestamp TIMESTAMP WITH TIME ZONE
 )
 RETURNS server_members

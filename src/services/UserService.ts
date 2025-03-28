@@ -71,7 +71,7 @@ export class UserService {
     await this.serverMemberRepository.updateReputationScore(serverId, userId, serverScore);
 
     // Get all server scores for this user to calculate global score
-    const user = await this.userRepository.findById(userId);
+    const user = await this.userRepository.findByDiscordId(userId);
     if (!user) return;
 
     // Find all server memberships

@@ -339,11 +339,13 @@ The database implementation is divided into several chunks, each focusing on a s
 
 ### Chunk H3: Detection History & Flagging
 
-- 🔄 Detection events repository
+- ✅ Detection events repository
   - ✅ Create detection_events table
   - ✅ Implement methods to record detection outcomes
   - ✅ Add proper error handling with PostgrestError
   - ✅ Add comprehensive test coverage
+  - ✅ Implement proper separation of concerns
+  - ✅ Clear responsibility boundaries
   - ⏳ Add performance tests for high-volume scenarios
 - 🔄 User flags repository
   - ⏳ Create user_flags table
@@ -351,9 +353,11 @@ The database implementation is divided into several chunks, each focusing on a s
   - 🔄 Implement flag history and status tracking
   - ⏳ Create unit tests with transaction rollbacks
   - ⏳ Add integration tests for flag workflows
-- 🔄 DetectionOrchestrator integration
+- ✅ DetectionOrchestrator integration
   - ✅ Update orchestrator to use repositories
   - ✅ Store detection results
+  - ✅ Create required entities (users, server members)
+  - ✅ Proper error propagation and logging
   - ⏳ Retrieve historical data for context
   - ✅ Create unit tests with proper mocking
   - ✅ Add integration tests for full detection flow
@@ -643,6 +647,145 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
   }
 
   // Other server member-specific methods...
+}
+
+// Detection Events Repository
+export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent> {
+  constructor() {
+    super('detection_events');
+  }
+
+  /**
+   * Create a new detection event
+   * Note: This repository is only responsible for creating the event itself.
+   * The DetectionOrchestrator is responsible for creating related entities.
+   *
+   * @param data The detection event data
+   * @returns The created detection event
+   */
+  async create(data: Partial<DetectionEvent>): Promise<DetectionEvent> {
+    try {
+      if (!data.server_id || !data.user_id) {
+        throw new Error('server_id and user_id are required to create a detection event');
+      }
+
+      // Create the detection event
+      const { data: created, error } = await supabase
+        .from(this.tableName)
+        .insert(data)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error creating detection event:', error);
+        throw error;
+      }
+
+      if (!created) {
+        throw new Error('Failed to create detection event: No data returned');
+      }
+
+      return created as DetectionEvent;
+    } catch (error: unknown) {
+      console.error('Exception in create detection event:', error);
+      if (error instanceof Error || this.isPostgrestError(error)) {
+        throw this.handleError(error, 'create');
+      }
+      throw error;
+    }
+  }
+
+  // Other detection event specific methods...
+}
+```
+
+## Detection Orchestrator
+
+The DetectionOrchestrator is responsible for creating all required entities before creating a detection event:
+
+```typescript
+/**
+ * Stores a detection result in the database
+ * Ensures that user, server, and server_member records exist before creating the detection event
+ *
+ * @param serverId The Discord server ID
+ * @param userId The Discord user ID
+ * @param result The detection result
+ * @param messageId Optional message ID for message detections
+ */
+private async storeDetectionResult(
+  serverId: string,
+  userId: string,
+  result: DetectionResult,
+  messageId?: string
+): Promise<void> {
+  try {
+    console.log(`Storing detection result for server ${serverId}, user ${userId}`);
+
+    // Get profile data if available from either detectMessage or detectNewJoin call
+    const profileData = result.profileData;
+
+    // Ensure server record exists
+    console.log('Creating/updating server record');
+    await this.serverRepository.upsertByGuildId(serverId, {});
+
+    // Ensure user record exists with proper fields
+    console.log('Creating/updating user record');
+    const userData = {
+      // Default values if no profile data available
+      username: profileData?.username || 'Unknown User',
+      account_created_at: profileData?.accountCreatedAt?.toISOString() || new Date().toISOString(),
+    };
+
+    await this.userRepository.upsertByDiscordId(userId, userData);
+
+    // Set is_restricted to true if the result is suspicious
+    const isRestricted = result.label === 'SUSPICIOUS';
+
+    // Ensure server_member relationship exists
+    console.log('Creating/updating server member record');
+    await this.serverMemberRepository.upsertMember(serverId, userId, {
+      join_date: profileData?.joinedServerAt?.toISOString() || new Date().toISOString(),
+      last_message_at: new Date().toISOString(),
+      is_restricted: isRestricted,
+      message_count: 1,
+    });
+
+    // Create the detection event
+    console.log('Creating detection event');
+    const detectionEvent = {
+      server_id: serverId,
+      user_id: userId,
+      message_id: messageId,
+      detection_type: result.triggerSource === 'message' ? 'MESSAGE' : 'JOIN',
+      confidence: result.confidence,
+      confidence_level: this.getConfidenceLevel(result.confidence),
+      reasons: result.reasons,
+      used_gpt: result.usedGPT,
+      detected_at: new Date(),
+      admin_action: undefined,
+      admin_action_by: undefined,
+      admin_action_at: undefined,
+      metadata: {
+        trigger_content: result.triggerContent,
+      },
+    };
+
+    console.log('Detection event data:', JSON.stringify(detectionEvent, null, 2));
+
+    const createdEvent = await this.detectionEventsRepository.create(detectionEvent);
+    console.log('Detection event created:', createdEvent.id);
+
+    // If suspicious, update server member record to mark as restricted
+    if (isRestricted) {
+      console.log('Marking user as restricted in server member record');
+      await this.serverMemberRepository.updateRestrictionStatus(serverId, userId, true);
+    }
+  } catch (error) {
+    console.error('Failed to store detection result:', error);
+    // Rethrow the error so it can be handled by the caller
+    throw error;
+  }
 }
 ```
 
