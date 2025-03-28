@@ -1,29 +1,29 @@
 // Mock implementations for discord.js
 
 // Mock BitField implementations
-class MockBitField {
-  bitfield: number;
+// class MockBitField {
+//   bitfield: number;
 
-  constructor(bits: number | number[] = 0) {
-    this.bitfield = Array.isArray(bits) ? bits.reduce((acc, bit) => acc | bit, 0) : bits;
-  }
+//   constructor(bits: number | number[] = 0) {
+//     this.bitfield = Array.isArray(bits) ? bits.reduce((acc, bit) => acc | bit, 0) : bits;
+//   }
 
-  add(...bits: number[]): this {
-    this.bitfield |= bits.reduce((acc, bit) => acc | bit, 0);
-    return this;
-  }
+//   add(...bits: number[]): this {
+//     this.bitfield |= bits.reduce((acc, bit) => acc | bit, 0);
+//     return this;
+//   }
 
-  remove(...bits: number[]): this {
-    this.bitfield &= ~bits.reduce((acc, bit) => acc | bit, 0);
-    return this;
-  }
+//   remove(...bits: number[]): this {
+//     this.bitfield &= ~bits.reduce((acc, bit) => acc | bit, 0);
+//     return this;
+//   }
 
-  has(bit: number): boolean {
-    return (this.bitfield & bit) === bit;
-  }
-}
+//   has(bit: number): boolean {
+//     return (this.bitfield & bit) === bit;
+//   }
+// }
 
-class MockIntentsBitField extends MockBitField {}
+// class MockIntentsBitField extends MockBitField {}
 
 // Simple Collection implementation for mocks
 class MockCollection<K, V> extends Map<K, V> {
@@ -31,7 +31,7 @@ class MockCollection<K, V> extends Map<K, V> {
     if (!this.has(key)) {
       this.set(key, defaultValueGenerator());
     }
-    return this.get(key)!;
+    return this.get(key) as V;
   }
 
   hasAll(keys: K[]): boolean {

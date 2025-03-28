@@ -1,6 +1,9 @@
 import { RoleManager } from '../services/RoleManager';
 import { NotificationManager } from '../services/NotificationManager';
 
+process.env.SUPABASE_URL = 'https://mock-url.com';
+process.env.SUPABASE_KEY = 'mock-key';
+
 // Mock all dependencies directly
 jest.mock('../services/RoleManager');
 jest.mock('../services/NotificationManager');

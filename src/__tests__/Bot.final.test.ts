@@ -217,6 +217,7 @@ describe('Bot', () => {
 
   describe('Guild creation handling', () => {
     // Skip this test for now as it requires more complex mocking
+    // eslint-disable-next-line jest/no-disabled-tests
     it.skip('should set up verification channel when auto-setup is enabled', async () => {
       // Import the mock directly
       const { MockGuild } = require('../__mocks__/discord.js');
