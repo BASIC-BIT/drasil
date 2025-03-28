@@ -45,7 +45,7 @@ Supabase was selected as our database solution for several reasons:
 
 ### Current Tables
 
-The servers table is currently implemented:
+The following tables are currently implemented in the schema:
 
 ```sql
 -- Servers table (guild configuration)
@@ -66,6 +66,8 @@ COMMENT ON TABLE servers IS 'Discord servers where the bot is installed';
 ```
 
 ### Planned Tables
+
+The following tables are defined in the schema but not yet fully utilized:
 
 ```sql
 -- Users table
@@ -105,6 +107,8 @@ CREATE INDEX idx_server_members_user ON server_members(user_id);
 
 COMMENT ON TABLE server_members IS 'Mapping table for users in specific Discord servers';
 ```
+
+The following tables are planned for future implementation:
 
 ```sql
 -- Detection events
@@ -285,13 +289,13 @@ The database implementation is divided into several chunks, each focusing on a s
   - ✅ Implement SupabaseClient connection management
   - ✅ Add error handling and retries
   - ✅ Create TypeScript types for database entities
-- ✅ Testing infrastructure
-  - ✅ Set up test database in Supabase
-  - ✅ Create mock repositories for testing
-  - ✅ Implement integration tests for repositories
-  - ✅ Create fixtures for test data
-  - ✅ Add test isolation strategies (unique IDs, cleanup hooks)
-  - ✅ Implement transaction-based test rollbacks
+- 🔄 Testing infrastructure
+  - ⏳ Set up test database in Supabase
+  - ✅ Create mock repositories for testing (ServerRepository)
+  - 🔄 Implement integration tests for repositories (basic tests only)
+  - ⏳ Create fixtures for test data
+  - ⏳ Add test isolation strategies (unique IDs, cleanup hooks)
+  - ⏳ Implement transaction-based test rollbacks
 
 ### Chunk H2: Core Entity Management
 
@@ -304,18 +308,18 @@ The database implementation is divided into several chunks, each focusing on a s
   - ✅ Handle new guild joins with guildCreate event
   - ✅ Add behavior-based tests for configuration flow
 - 🔄 User repository
-  - ✅ Create users table with Discord metadata
+  - ✅ Create users table schema with Discord metadata
   - 🔄 Implement user lookup and creation
   - 🔄 Add methods for user history
-  - 🔄 Create unit tests with proper isolation
-  - 🔄 Add integration tests for user workflows
+  - ⏳ Create unit tests with proper isolation
+  - ⏳ Add integration tests for user workflows
 - ✅ Configuration management service
   - ✅ Create service for managing server configurations
   - ✅ Implement fallback to defaults
   - ✅ Add validation logic
   - ✅ Create unit tests with proper abstraction levels
-  - ✅ Add integration tests for config persistence
-  - ✅ Document configuration flow and test cases
+  - 🔄 Add integration tests for config persistence
+  - 🔄 Document configuration flow and test cases
 - 🔄 User management service
   - 🔄 Create service for user operations
   - 🔄 Add methods for tracking user status
@@ -326,28 +330,28 @@ The database implementation is divided into several chunks, each focusing on a s
 ### Chunk H3: Detection History & Flagging
 
 - 🔄 Detection events repository
-  - 🔄 Create detection_events table
+  - ⏳ Create detection_events table
   - 🔄 Implement methods to record detection outcomes
   - 🔄 Add querying capabilities
-  - 🔄 Create unit tests with proper isolation
-  - 🔄 Add performance tests for high-volume scenarios
+  - ⏳ Create unit tests with proper isolation
+  - ⏳ Add performance tests for high-volume scenarios
 - 🔄 User flags repository
-  - 🔄 Create user_flags table
+  - ⏳ Create user_flags table
   - 🔄 Add methods for flag management
   - 🔄 Implement flag history and status tracking
-  - 🔄 Create unit tests with transaction rollbacks
-  - 🔄 Add integration tests for flag workflows
+  - ⏳ Create unit tests with transaction rollbacks
+  - ⏳ Add integration tests for flag workflows
 - 🔄 DetectionOrchestrator integration
   - 🔄 Update orchestrator to use repositories
   - 🔄 Store detection results
-  - 🔄 Retrieve historical data for context
+  - ⏳ Retrieve historical data for context
   - 🔄 Create unit tests with proper mocking
   - 🔄 Add integration tests for full detection flow
 - 🔄 Thread & verification tracking
-  - 🔄 Create verification_threads table
+  - ⏳ Create verification_threads table
   - 🔄 Track verification outcomes
   - 🔄 Store thread references
-  - 🔄 Create unit tests with cleanup hooks
+  - ⏳ Create unit tests with cleanup hooks
   - 🔄 Add integration tests for verification flow
 
 ### Chunk H4: Message & Context Storage
@@ -366,11 +370,11 @@ The database implementation is divided into several chunks, each focusing on a s
 
 ### Chunk H6: Environment Transition
 
-- ✅ Config migration tool
-  - ✅ Create tool to migrate env vars to database
-  - ✅ Support bulk imports
-  - ✅ Add validation and logging
-  - ✅ Create unit tests with proper isolation
+- 🔄 Config migration tool
+  - 🔄 Create tool to migrate env vars to database
+  - ⏳ Support bulk imports
+  - 🔄 Add validation and logging
+  - 🔄 Create unit tests with proper isolation
   - ✅ Add integration tests for migration flows
 - ✅ Configuration UI
   - ✅ Add Discord commands for configuration
@@ -379,10 +383,10 @@ The database implementation is divided into several chunks, each focusing on a s
   - ✅ Create unit tests with proper mocking
   - ✅ Add integration tests for UI flows
 - ⏳ Backup & restore
-- ✅ Environment detection
-  - ✅ Add environment awareness (dev/test/prod)
-  - ✅ Implement appropriate logging levels
-  - ✅ Configure fallbacks for each environment
+- 🔄 Environment detection
+  - 🔄 Add environment awareness (dev/test/prod)
+  - 🔄 Implement appropriate logging levels
+  - 🔄 Configure fallbacks for each environment
   - ✅ Create unit tests with proper isolation
   - ✅ Add integration tests for environment switching
 
@@ -523,19 +527,21 @@ The transition from environment variables to database storage will follow these 
 
 ### Integration Testing Enhancements
 
-- ✅ Set up proper test database environment
-- ✅ Implement end-to-end workflow tests
-- ✅ Add performance testing for critical paths
-- ✅ Create realistic test data scenarios
-- ✅ Add proper test isolation strategies
+- ⏳ Set up proper test database environment
+- 🔄 Implement end-to-end workflow tests
+- ⏳ Add performance testing for critical paths
+- ⏳ Create realistic test data scenarios
+- ⏳ Add proper test isolation strategies
 
 ### CI/CD Integration
 
-- ✅ Set up GitHub Actions for database tests
-- ✅ Configure test environment variables
-- ✅ Add migration verification steps
-- ✅ Implement proper test reporting
-- ✅ Add performance benchmarking
+- ⏳ Set up GitHub Actions for database tests
+- ⏳ Configure test environment variables
+- ⏳ Add migration verification steps
+- ⏳ Implement proper test reporting
+- ⏳ Add performance benchmarking
+
+**Note**: GitHub Actions for database tests have not been implemented yet. This is planned for a future iteration.
 
 1. **Unit Tests**:
    - Mock repositories for service tests
@@ -595,9 +601,9 @@ Different data types have different retention requirements:
 
 ## Deployment Milestones
 
-- ✅ Alpha Release (H1, H2)
-  - ✅ Basic infrastructure
-  - ✅ Core entity management
+- 🔄 Alpha Release (H1, H2)
+  - 🔄 Basic infrastructure
+  - 🔄 Core entity management
   - ✅ Initial test coverage
 - 🔄 Beta Release (H3, H4, H5)
   - 🔄 Detection system

@@ -73,9 +73,9 @@ Created new file from docs/database content:
 - Testing approach
 - Future considerations for scaling and analytics
 
-## Files That Can Be Removed from docs/
+## Files Pending Removal from docs/
 
-The following files in the `docs` directory can now be removed as their information has been consolidated into the `memory-bank` files:
+The following files in the `docs` directory have had their information consolidated into the `memory-bank` files but have not yet been removed:
 
 1. CODEBASE_MAP.md - Content merged into systemPatterns.md
 2. prompt_plan.md - Implementation details extracted to activeContext.md and systemPatterns.md
@@ -90,6 +90,6 @@ The following files in the `docs` directory can now be removed as their informat
 ## Next Steps
 
 1. Verify that all critical information has been preserved in the memory-bank files
-2. Remove the unnecessary files from the docs/ directory
+2. Remove the unnecessary files from the docs/ directory once verification is complete
 3. Update any references to the old documentation files
 4. Consider adding cross-references between memory-bank files for better navigation

@@ -126,8 +126,8 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ SupabaseRepository generic implementation
   - ✅ ServerRepository specific implementation
 - ✅ Server configuration persistence
-- 🔄 User repository implementation
-- 🔄 Server member repository implementation
+- 🔄 User repository implementation (schema created but repository not implemented)
+- 🔄 Server member repository implementation (schema created but repository not implemented)
 - 🔄 Moderation logs and action tracking
 - 🔄 Cross-server data sharing
 

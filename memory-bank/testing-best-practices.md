@@ -245,14 +245,18 @@ By following these best practices, we can create more robust and maintainable te
 
 ### Repository Layer Testing
 
-**Strategy:**
+**Current Implementation:**
 
 - Mock the Supabase client for unit tests
-- Test repository methods with real Supabase instance in integration tests
-- Verify CRUD operations work as expected
+- Basic unit tests for ServerRepository implemented
+
+**Planned Enhancements (Not Yet Implemented):**
+- Integration tests with real Supabase instance
 - Test error handling and edge cases
 
 ### Test Isolation Strategies
+
+**Planned Strategies (Not Yet Implemented):**
 
 1. **Unique Identifiers**
 
@@ -290,7 +294,9 @@ By following these best practices, we can create more robust and maintainable te
 
 ### Database Transactions
 
-**Strategy:**
+**Planned Strategy (Not Yet Implemented):**
+
+Currently, no transaction-based test isolation is implemented. The following strategies are planned for future implementation:
 
 - Use transactions with rollbacks to isolate tests
 - Create test-specific database users with appropriate permissions
@@ -300,12 +306,14 @@ By following these best practices, we can create more robust and maintainable te
 
 ### Automated Testing Pipeline
 
-**Implementation:**
+**Planned Implementation (Not Yet Implemented):**
 
 - Run unit tests on every pull request
 - Run integration tests on staging deployments
 - Include database migrations in test flow
 - Verify database schema consistency
+
+**Note**: GitHub Actions for automated testing have not been set up yet. Currently, all tests are run manually during development.
 
 ### Debugging Test Failures
 
