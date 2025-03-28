@@ -118,8 +118,6 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ Auto-setup options
   - ✅ Singleton pattern for global access
 
-## What's In Progress
-
 ### Database Integration
 
 - ✅ Supabase client setup
@@ -128,14 +126,24 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ BaseRepository interface
   - ✅ SupabaseRepository generic implementation
   - ✅ ServerRepository specific implementation
+  - ✅ UserRepository implementation with tests
+  - ✅ ServerMemberRepository implementation with tests
 - ✅ Server configuration persistence
 - ✅ Server configuration command implementation
-- 🔄 User repository implementation (schema created but repository not implemented)
-- 🔄 Server member repository implementation (schema created but repository not implemented)
+- ✅ User repository implementation
+  - ✅ CRUD operations for users
+  - ✅ Global reputation management
+  - ✅ User metadata handling
+  - ✅ Comprehensive test coverage
+- ✅ Server member repository implementation
+  - ✅ Member CRUD operations
+  - ✅ Message count tracking
+  - ✅ Restriction status management
+  - ✅ Comprehensive test coverage
 - 🔄 Moderation logs and action tracking
 - 🔄 Cross-server data sharing
 
-## What's Left to Build
+## What's In Progress
 
 ### Persistence & Logging
 
@@ -228,12 +236,14 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 
 ### Code Coverage
 
-- Unit tests: Present for core services
+- Unit tests: Present for core services and repositories
   - HeuristicService
   - GPTService
   - DetectionOrchestrator
   - ConfigService
   - ServerRepository
+  - UserRepository (100% coverage)
+  - ServerMemberRepository (100% coverage)
 - Integration tests: Limited
   - Bot.integration.test.ts
 - End-to-end tests: Not implemented

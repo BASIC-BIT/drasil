@@ -292,7 +292,7 @@ The database implementation is divided into several chunks, each focusing on a s
 - 🔄 Testing infrastructure
   - ⏳ Set up test database in Supabase
   - ✅ Create mock repositories for testing (ServerRepository)
-  - 🔄 Implement integration tests for repositories (basic tests only)
+  - ✅ Implement integration tests for repositories (ServerRepository, UserRepository, ServerMemberRepository)
   - ⏳ Create fixtures for test data
   - ⏳ Add test isolation strategies (unique IDs, cleanup hooks)
   - ⏳ Implement transaction-based test rollbacks
@@ -307,12 +307,20 @@ The database implementation is divided into several chunks, each focusing on a s
   - ✅ Add server initialization on bot startup
   - ✅ Handle new guild joins with guildCreate event
   - ✅ Add behavior-based tests for configuration flow
-- 🔄 User repository
+- ✅ User repository
   - ✅ Create users table schema with Discord metadata
-  - 🔄 Implement user lookup and creation
-  - 🔄 Add methods for user history
-  - ⏳ Create unit tests with proper isolation
-  - ⏳ Add integration tests for user workflows
+  - ✅ Implement user lookup and creation
+  - ✅ Add methods for global reputation management
+  - ✅ Add methods for user metadata handling
+  - ✅ Create comprehensive unit tests with proper isolation
+  - ✅ Implement proper error handling with RepositoryError
+- ✅ Server member repository
+  - ✅ Create server_members table with relationships
+  - ✅ Implement member lookup by server and user
+  - ✅ Add methods for tracking message counts
+  - ✅ Add methods for managing restriction status
+  - ✅ Create comprehensive unit tests with proper mocking
+  - ✅ Implement proper error handling for all operations
 - ✅ Configuration management service
   - ✅ Create service for managing server configurations
   - ✅ Implement fallback to defaults
@@ -320,12 +328,14 @@ The database implementation is divided into several chunks, each focusing on a s
   - ✅ Create unit tests with proper abstraction levels
   - 🔄 Add integration tests for config persistence
   - 🔄 Document configuration flow and test cases
-- 🔄 User management service
-  - 🔄 Create service for user operations
-  - 🔄 Add methods for tracking user status
-  - 🔄 Implement user reputation calculation
-  - 🔄 Create unit tests with mock implementations
-  - 🔄 Add integration tests for user workflows
+- ✅ User management service
+  - ✅ Create service for user operations
+  - ✅ Add methods for tracking user status
+  - ✅ Implement user reputation calculation
+  - ✅ Add cross-server user management
+  - ✅ Create unit tests with mock implementations
+  - ✅ Handle server-specific user operations
+  - ✅ Implement proper error handling
 
 ### Chunk H3: Detection History & Flagging
 
@@ -459,6 +469,7 @@ export class SupabaseRepository<T> implements BaseRepository<T> {
 ### Entity-Specific Repositories
 
 ```typescript
+// Server Repository
 export class ServerRepository extends SupabaseRepository<ServerEntity> {
   constructor(supabase: SupabaseClient) {
     super(supabase, 'servers');
@@ -488,6 +499,150 @@ export class ServerRepository extends SupabaseRepository<ServerEntity> {
   }
 
   // Other server-specific methods...
+}
+
+// User Repository
+export class UserRepository extends SupabaseRepository<User> {
+  constructor() {
+    super('users');
+  }
+
+  async findByDiscordId(discordId: string): Promise<User | null> {
+    try {
+      const { data, error } = await this.supabase
+        .from(this.tableName)
+        .select('*')
+        .eq('discord_id', discordId)
+        .single();
+
+      if (error && error.code === 'PGRST116') {
+        return null;
+      } else if (error) {
+        throw error;
+      }
+
+      return (data as User) || null;
+    } catch (error) {
+      this.handleError(error as Error, 'findByDiscordId');
+    }
+  }
+
+  async upsertByDiscordId(discordId: string, data: Partial<User>): Promise<User> {
+    try {
+      // Include the discord_id in the data
+      const userData = {
+        discord_id: discordId,
+        ...data,
+        updated_at: new Date().toISOString(),
+      };
+
+      const existing = await this.findByDiscordId(discordId);
+
+      if (existing) {
+        // Update existing user
+        const { data: updated, error } = await this.supabase
+          .from(this.tableName)
+          .update(userData)
+          .eq('discord_id', discordId)
+          .select()
+          .single();
+
+        if (error) throw error;
+        return updated as User;
+      } else {
+        // Create new user
+        const { data: created, error } = await this.supabase
+          .from(this.tableName)
+          .insert({ ...userData, created_at: new Date().toISOString() })
+          .select()
+          .single();
+
+        if (error) throw error;
+        if (!created) throw new Error('Failed to create user: No data returned');
+
+        return created as User;
+      }
+    } catch (error) {
+      this.handleError(error as Error, 'upsertByDiscordId');
+    }
+  }
+
+  // Other user-specific methods...
+}
+
+// Server Member Repository
+export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
+  constructor() {
+    super('server_members');
+  }
+
+  async findByServerAndUser(serverId: string, userId: string): Promise<ServerMember | null> {
+    try {
+      const { data, error } = await this.supabase
+        .from(this.tableName)
+        .select('*')
+        .eq('server_id', serverId)
+        .eq('user_id', userId)
+        .single();
+
+      // Handle the specific "no rows" error as a valid "not found" case
+      if (error && error.code === 'PGRST116') {
+        return null;
+      } else if (error) {
+        throw error;
+      }
+      return (data as ServerMember) || null;
+    } catch (error) {
+      this.handleError(error as Error, 'findByServerAndUser');
+    }
+  }
+
+  async upsertMember(
+    serverId: string,
+    userId: string,
+    data: Partial<ServerMember>
+  ): Promise<ServerMember> {
+    try {
+      // Include the server_id and user_id in the data
+      const memberData = {
+        server_id: serverId,
+        user_id: userId,
+        ...data,
+      };
+
+      const existing = await this.findByServerAndUser(serverId, userId);
+
+      if (existing) {
+        // Update existing member
+        const { data: updated, error } = await this.supabase
+          .from(this.tableName)
+          .update(memberData)
+          .eq('server_id', serverId)
+          .eq('user_id', userId)
+          .select()
+          .single();
+
+        if (error) throw error;
+        return updated as ServerMember;
+      } else {
+        // Create new member
+        const { data: created, error } = await this.supabase
+          .from(this.tableName)
+          .insert(memberData)
+          .select()
+          .single();
+
+        if (error) throw error;
+        if (!created) throw new Error('Failed to create server member: No data returned');
+
+        return created as ServerMember;
+      }
+    } catch (error) {
+      this.handleError(error as Error, 'upsertMember');
+    }
+  }
+
+  // Other server member-specific methods...
 }
 ```
 

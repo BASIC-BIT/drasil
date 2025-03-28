@@ -36,7 +36,7 @@
 
 ## Mocking Strategy for Complex Libraries
 
-Based on our experience debugging and fixing tests in the project, we've established the following best practices for mocking complex npm libraries like discord.js:
+Based on our experience debugging and fixing tests in the project, we've established the following best practices for mocking complex npm libraries like discord.js and Supabase:
 
 ### 1. Function-Based Mocks vs. Class-Based Mocks
 
@@ -214,73 +214,108 @@ it('should respond to !ping command', async () => {
 - Check for typos in property names
 - Use Jest's `.mockImplementation()` to provide custom behavior
 
-## Recommended Testing Structure
-
-1. **Mock External Dependencies**:
-
-   - Create dedicated mock files in `__mocks__` directory
-   - Implement function-based mocks with proper typing
-   - Use null-safe property access in all mocks
-
-2. **Expose Private Members for Testing**:
-
-   - Create a dedicated `Bot.ts` mock that exposes private methods
-   - Use type assertions carefully when accessing private members
-   - Document the use of type assertions for clarity
-
-3. **Focus on Behavior, Not Implementation**:
-
-   - Test what the code does, not how it does it
-   - Verify outputs for given inputs
-   - Mock only what's necessary for the test
-
-4. **Handle Errors Gracefully**:
-   - Implement proper error handling in mocks
-   - Test both success and error paths
-   - Use try/catch blocks to verify error handling behavior
-
-By following these best practices, we can create more robust and maintainable tests for complex libraries like discord.js.
-
 ## Supabase Integration Testing
 
 ### Repository Layer Testing
 
-**Current Implementation:**
+**Best Practices:**
 
-- Mock the Supabase client for unit tests
-- Basic unit tests for ServerRepository implemented
+1. **Mock Supabase Client Method Chaining:**
 
-**Planned Enhancements (Not Yet Implemented):**
+   ```typescript
+   // Correct way to mock Supabase method chains
+   const mockSingle = jest.fn().mockResolvedValue({
+     data: mockData,
+     error: null,
+   });
+   const mockEq = jest.fn().mockReturnValue({ single: mockSingle });
+   const mockSelect = jest.fn().mockReturnValue({ eq: mockEq });
+   (supabase.from as jest.Mock).mockReturnValue({ select: mockSelect });
+   ```
 
-- Integration tests with real Supabase instance
-- Test error handling and edge cases
+2. **Handle Dynamic Fields:**
 
-### Test Isolation Strategies
+   ```typescript
+   // Use expect.objectContaining for partial object matching
+   expect(mockUpdate).toHaveBeenCalledWith(
+     expect.objectContaining({
+       field: value,
+       updated_at: expect.any(String),
+     })
+   );
+   ```
 
-**Planned Strategies (Not Yet Implemented):**
+3. **Mock Multiple Operations:**
 
-1. **Unique Identifiers**
+   ```typescript
+   // Mock different chains for find and update operations
+   (supabase.from as jest.Mock)
+     .mockReturnValueOnce({ select: mockFindSelect }) // for find
+     .mockReturnValueOnce({ update: mockUpdate }); // for update
+   ```
 
-   - Generate unique IDs for each test suite to prevent data conflicts
-   - Use UUIDs or timestamped identifiers
+4. **Error Handling:**
 
-2. **Cleanup After Tests**
+   ```typescript
+   // Test database errors
+   const mockSingle = jest.fn().mockResolvedValue({
+     data: null,
+     error: { message: 'Database error' },
+   });
+   await expect(repository.method()).rejects.toThrow('Database error');
+   ```
 
-   - Use `afterEach` or `afterAll` hooks to clean up test data
-   - Implement transaction rollbacks when possible
+5. **Test Setup and Cleanup:**
 
-3. **Isolated Data Sets**
-   - Use prefixes or namespaces to separate test data
-   - Create test-specific schemas when appropriate
+   ```typescript
+   beforeEach(() => {
+     jest.clearAllMocks();
+     repository = new Repository();
+   });
 
-### Row-Level Security Testing
+   afterEach(() => {
+     jest.clearAllMocks();
+     jest.resetModules();
+   });
+   ```
 
-**Areas to Cover:**
+### Common Supabase Testing Patterns
 
-- Test access with different user roles (anonymous, authenticated)
-- Verify policy enforcement for CRUD operations
-- Test edge cases and policy bypasses
-- Verify negative cases (access that should be denied)
+1. **Finding Records:**
+
+   ```typescript
+   // Test successful find
+   mockSingle.mockResolvedValue({ data: mockData, error: null });
+
+   // Test not found
+   mockSingle.mockResolvedValue({ data: null, error: { code: 'PGRST116' } });
+
+   // Test error
+   mockSingle.mockResolvedValue({ data: null, error: { message: 'Error' } });
+   ```
+
+2. **Upserting Records:**
+
+   ```typescript
+   // Mock find then update/insert
+   mockFindSingle.mockResolvedValue({ data: existingData, error: null });
+   mockUpdateSingle.mockResolvedValue({ data: updatedData, error: null });
+   ```
+
+3. **Listing Records:**
+
+   ```typescript
+   // Mock list operation
+   mockSelect.mockResolvedValue({ data: items, error: null });
+   ```
+
+4. **Filtering Records:**
+   ```typescript
+   // Mock filter operation
+   mockLt.mockResolvedValue({ data: filteredItems, error: null });
+   ```
+
+By following these patterns and best practices, we ensure consistent and reliable testing of our Supabase integrations.
 
 ## Test Data Management
 

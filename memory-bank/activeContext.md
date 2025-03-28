@@ -66,10 +66,20 @@ The project is currently focused on implementing the core functionality of the D
   - Dedicated verification channel setup
 
 - ✅ **Supabase Error Handling Improvements**:
+
   - Fixed bug with server configuration creation
   - Proper handling of "not found" cases in repositories
   - Improved data validation before database operations
   - Documented best practices in supabase-error-handling.md
+
+- ✅ **Database Repository Implementation**:
+  - Implemented ServerRepository with tests
+  - Implemented UserRepository with tests
+  - Implemented ServerMemberRepository with tests
+  - Comprehensive test coverage for all repositories
+  - Fixed method chaining issues in Supabase mocks
+  - Added proper error handling for all database operations
+  - Added proper cleanup in test lifecycle hooks
 
 ### In Progress
 
@@ -80,6 +90,7 @@ The project is currently focused on implementing the core functionality of the D
   - Server configuration command (/config)
   - Caching strategy for configurations
   - Database-based configuration (removed environment variable dependencies)
+  - User service implementation with database integration
 
 ### Pending
 
@@ -113,6 +124,7 @@ The system currently implements:
 
    - **RoleManager**: Restricted role assignment and removal
    - **NotificationManager**: Admin notifications and verification threads
+   - **UserService**: Handles user operations across servers
 
 4. **Configuration**:
 
@@ -130,6 +142,9 @@ The system currently implements:
    - **Repository Pattern**: Abstraction for data operations
    - **Supabase Integration**: PostgreSQL database access
    - **Server Configuration**: Persistent storage for settings
+   - **User Repository**: Manages Discord users across servers
+   - **Server Member Repository**: Manages user data in specific servers
+   - **User Service**: Coordinates operations between repositories
 
 ## Active Decisions & Considerations
 
@@ -195,11 +210,21 @@ The system currently implements:
    - Consistent error propagation with context using RepositoryError
 
 5. **Server Configuration Management**:
+
    - Database-stored configuration values instead of environment variables
    - Server-specific settings with `/config` command
    - Real-time service updates when configuration changes
-   - Initialization of services with database values on startup
-   - Administrator-only access to configuration commands
+   - Cache-first approach with database fallback
+   - Type-safe configuration access
+
+6. **Repository Testing Strategy**:
+   - Mock Supabase client for unit testing
+   - Properly mock method chaining for Supabase operations
+   - Use `mockResolvedValue` for async responses
+   - Add comprehensive cleanup in test lifecycle hooks
+   - Test both success and error cases for all operations
+   - Use `expect.objectContaining()` for dynamic fields like timestamps
+   - Separate mock setups for multiple operations in the same test
 
 ### Open Questions & Considerations
 
