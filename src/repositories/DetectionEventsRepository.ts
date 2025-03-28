@@ -1,14 +1,87 @@
+import { injectable, inject } from 'inversify';
 import { SupabaseRepository } from './SupabaseRepository';
 import { DetectionEvent } from './types';
-import { supabase } from '../config/supabase';
-import { PostgrestError } from '@supabase/supabase-js';
+import { TYPES } from '../di/symbols';
+import { PostgrestError, SupabaseClient } from '@supabase/supabase-js';
+
+/**
+ * Interface for Detection Events Repository
+ */
+export interface IDetectionEventsRepository {
+  /**
+   * Create a new detection event
+   * @param data The detection event data
+   * @returns The created detection event
+   */
+  create(data: Partial<DetectionEvent>): Promise<DetectionEvent>;
+
+  /**
+   * Find detection events for a specific user in a server
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @returns Array of detection events
+   */
+  findByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]>;
+
+  /**
+   * Find recent detection events for a server
+   * @param serverId The Discord server ID
+   * @param limit Maximum number of events to return
+   * @returns Array of detection events
+   */
+  findRecentByServer(serverId: string, limit?: number): Promise<DetectionEvent[]>;
+
+  /**
+   * Record an admin action on a detection event
+   * @param id The detection event ID
+   * @param action The admin action taken
+   * @param adminId The Discord ID of the admin
+   * @returns The updated detection event
+   */
+  recordAdminAction(
+    id: string,
+    action: 'Verified' | 'Banned' | 'Ignored',
+    adminId: string
+  ): Promise<DetectionEvent | null>;
+
+  /**
+   * Get detection statistics for a server within a date range
+   * @param serverId The Discord server ID
+   * @param startDate Start date for statistics
+   * @param endDate End date for statistics
+   * @returns Statistics object
+   */
+  getServerStats(
+    serverId: string,
+    startDate: Date,
+    endDate: Date
+  ): Promise<{
+    total: number;
+    verified: number;
+    banned: number;
+    ignored: number;
+    pending: number;
+    gptUsage: number;
+  }>;
+
+  /**
+   * Clean up old detection events based on retention policy
+   * @param retentionDays Number of days to retain events
+   * @returns Number of deleted events
+   */
+  cleanupOldEvents(retentionDays: number): Promise<number>;
+}
 
 /**
  * Repository for managing detection events
  */
-export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent, string> {
-  constructor() {
-    super('detection_events');
+@injectable()
+export class DetectionEventsRepository
+  extends SupabaseRepository<DetectionEvent, string>
+  implements IDetectionEventsRepository
+{
+  constructor(@inject(TYPES.SupabaseClient) supabaseClient: SupabaseClient) {
+    super('detection_events', supabaseClient);
   }
 
   /**
@@ -23,7 +96,7 @@ export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent
       }
 
       // Create the detection event
-      const { data: created, error } = await supabase
+      const { data: created, error } = await this.supabaseClient
         .from(this.tableName)
         .insert(data)
         .select()
@@ -56,7 +129,7 @@ export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent
    */
   async findByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .select('*')
         .eq('server_id', serverId)
@@ -84,7 +157,7 @@ export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent
    */
   async findRecentByServer(serverId: string, limit: number = 50): Promise<DetectionEvent[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .select('*')
         .eq('server_id', serverId)
@@ -114,7 +187,7 @@ export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent
     adminId: string
   ): Promise<DetectionEvent | null> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .update({
           admin_action: action,
@@ -155,7 +228,7 @@ export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent
     gptUsage: number;
   }> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .select('*')
         .eq('server_id', serverId)
@@ -198,14 +271,13 @@ export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent
       const cutoffDate = new Date();
       cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
 
-      const { data, error } = await supabase
+      const { count, error } = await this.supabaseClient
         .from(this.tableName)
-        .delete()
-        .lt('detected_at', cutoffDate.toISOString())
-        .select();
+        .delete({ count: 'exact' })
+        .lt('detected_at', cutoffDate.toISOString());
 
       if (error) throw error;
-      return data?.length || 0;
+      return count || 0;
     } catch (error: unknown) {
       if (error instanceof Error || this.isPostgrestError(error)) {
         this.handleError(error, 'cleanupOldEvents');
@@ -214,7 +286,18 @@ export class DetectionEventsRepository extends SupabaseRepository<DetectionEvent
     }
   }
 
+  /**
+   * Type guard for PostgrestError
+   * @param error Unknown error to check
+   * @returns Boolean indicating if error is a PostgrestError
+   */
   private isPostgrestError(error: unknown): error is PostgrestError {
-    return typeof error === 'object' && error !== null && 'code' in error && 'message' in error;
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      'message' in error &&
+      'details' in error
+    );
   }
 }

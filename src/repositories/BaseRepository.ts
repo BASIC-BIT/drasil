@@ -1,8 +1,10 @@
+import { injectable } from 'inversify';
+
 /**
  * Generic base repository interface that defines common CRUD operations
  * All specific repositories should implement this interface
  */
-export interface BaseRepository<T, ID> {
+export interface IBaseRepository<T, ID = string> {
   /**
    * Find a single entity by its ID
    * @param id The entity ID
@@ -38,13 +40,21 @@ export interface BaseRepository<T, ID> {
    * @returns Boolean indicating success
    */
   delete(id: ID): Promise<boolean>;
+
+  /**
+   * Count entities matching the given filter criteria
+   * @param filter Object containing filter criteria
+   * @returns Count of matching entities
+   */
+  count(filter?: Partial<T>): Promise<number>;
 }
 
 /**
  * Abstract base repository class with common functionality
  * Concrete repositories will extend this class
  */
-export abstract class AbstractBaseRepository<T, ID> implements BaseRepository<T, ID> {
+@injectable()
+export abstract class AbstractBaseRepository<T, ID = string> implements IBaseRepository<T, ID> {
   /**
    * The name of the table/collection in the database
    */
@@ -59,4 +69,5 @@ export abstract class AbstractBaseRepository<T, ID> implements BaseRepository<T,
   abstract create(data: Partial<T>): Promise<T>;
   abstract update(id: ID, data: Partial<T>): Promise<T | null>;
   abstract delete(id: ID): Promise<boolean>;
+  abstract count(filter?: Partial<T>): Promise<number>;
 }

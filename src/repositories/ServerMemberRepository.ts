@@ -1,13 +1,100 @@
+import { injectable, inject } from 'inversify';
+import { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseRepository } from './SupabaseRepository';
 import { ServerMember } from './types';
-import { supabase } from '../config/supabase';
+import { TYPES } from '../di/symbols';
+
+/**
+ * Interface for the ServerMemberRepository
+ */
+export interface IServerMemberRepository {
+  /**
+   * Find a server member by server ID and user ID
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @returns The server member or null if not found
+   */
+  findByServerAndUser(serverId: string, userId: string): Promise<ServerMember | null>;
+
+  /**
+   * Create or update a server member
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @param data The server member data to upsert
+   * @returns The created or updated server member
+   */
+  upsertMember(
+    serverId: string,
+    userId: string,
+    data: Partial<ServerMember>
+  ): Promise<ServerMember>;
+
+  /**
+   * Find all members in a server
+   * @param serverId The Discord server ID
+   * @returns Array of server members
+   */
+  findByServer(serverId: string): Promise<ServerMember[]>;
+
+  /**
+   * Find all memberships for a specific user across all servers
+   * @param userId The Discord user ID
+   * @returns Array of server members
+   */
+  findByUser(userId: string): Promise<ServerMember[]>;
+
+  /**
+   * Find all restricted members in a server
+   * @param serverId The Discord server ID
+   * @returns Array of restricted server members
+   */
+  findRestrictedMembers(serverId: string): Promise<ServerMember[]>;
+
+  /**
+   * Update a member's reputation score
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @param score The new reputation score
+   * @returns The updated server member
+   */
+  updateReputationScore(
+    serverId: string,
+    userId: string,
+    score: number
+  ): Promise<ServerMember | null>;
+
+  /**
+   * Update member's message count and last message timestamp
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @returns The updated server member
+   */
+  incrementMessageCount(serverId: string, userId: string): Promise<ServerMember | null>;
+
+  /**
+   * Update member's verification status
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @param isRestricted Whether the user is restricted
+   * @returns The updated server member
+   */
+  updateRestrictionStatus(
+    serverId: string,
+    userId: string,
+    isRestricted: boolean
+  ): Promise<ServerMember | null>;
+}
 
 /**
  * Repository for managing server members (users in specific servers)
  */
-export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
-  constructor() {
-    super('server_members');
+@injectable()
+export class ServerMemberRepository
+  extends SupabaseRepository<ServerMember>
+  implements IServerMemberRepository
+{
+  constructor(@inject(TYPES.SupabaseClient) supabaseClient: SupabaseClient) {
+    super('server_members', supabaseClient);
   }
 
   /**
@@ -18,7 +105,7 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
    */
   async findByServerAndUser(serverId: string, userId: string): Promise<ServerMember | null> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .select('*')
         .eq('server_id', serverId)
@@ -58,7 +145,7 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
       };
 
       // Use upsert operation with server_id and user_id as the composite primary key
-      const { data: upserted, error } = await supabase
+      const { data: upserted, error } = await this.supabaseClient
         .from(this.tableName)
         .upsert(memberData, { onConflict: 'server_id,user_id' })
         .select()
@@ -80,7 +167,7 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
    */
   async findByServer(serverId: string): Promise<ServerMember[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .select('*')
         .eq('server_id', serverId);
@@ -93,13 +180,32 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
   }
 
   /**
+   * Find all memberships for a specific user across all servers
+   * @param userId The Discord user ID
+   * @returns Array of server members
+   */
+  async findByUser(userId: string): Promise<ServerMember[]> {
+    try {
+      const { data, error } = await this.supabaseClient
+        .from(this.tableName)
+        .select('*')
+        .eq('user_id', userId);
+
+      if (error) throw error;
+      return (data as ServerMember[]) || [];
+    } catch (error) {
+      this.handleError(error as Error, 'findByUser');
+    }
+  }
+
+  /**
    * Find all restricted members in a server
    * @param serverId The Discord server ID
    * @returns Array of restricted server members
    */
   async findRestrictedMembers(serverId: string): Promise<ServerMember[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .select('*')
         .eq('server_id', serverId)
@@ -125,7 +231,7 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
     score: number
   ): Promise<ServerMember | null> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .update({ reputation_score: score })
         .eq('server_id', serverId)
@@ -152,7 +258,7 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
    */
   async incrementMessageCount(serverId: string, userId: string): Promise<ServerMember | null> {
     try {
-      const { data, error } = await supabase.rpc('increment_member_message_count', {
+      const { data, error } = await this.supabaseClient.rpc('increment_member_message_count', {
         p_server_id: serverId,
         p_user_id: userId,
         p_timestamp: new Date().toISOString(),
@@ -187,7 +293,7 @@ export class ServerMemberRepository extends SupabaseRepository<ServerMember> {
         updateData.last_verified_at = new Date().toISOString();
       }
 
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .update(updateData)
         .eq('server_id', serverId)

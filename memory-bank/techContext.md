@@ -42,14 +42,24 @@ This document details the technical implementation of the Discord Anti-Spam Bot,
 
 ### Dependency Injection
 
-- **InversifyJS** (Planned):
-  - Modular architecture, improved testability
-  - Promotes clean separation of concerns (services, repositories, Discord client, etc.)
+- **InversifyJS**: Full-featured IoC container:
+  - Decorator-based dependency injection (@injectable, @inject)
+  - Interface-driven design
+  - Symbol-based dependency identification
+  - Flexible binding configuration
+  - Singleton and transient scope support
+  - Container configuration in src/di/container.ts
+  - Symbol definitions in src/di/symbols.ts
+  - Testable architecture with mock injections
 
 ### Testing Tools
 
 - **Jest**: Testing framework for unit and integration tests
 - **ts-jest**: TypeScript integration for Jest
+- **InversifyJS Testing Utilities**:
+  - createTestContainer(): Creates container with all dependencies mocked
+  - createServiceTestContainer(): Creates container with real service implementation
+  - createMocks(): Creates mock implementations for all services and repositories
 - **Custom Mocks**:
   - `__mocks__/discord.js.ts`: Mocks Discord client and interactions
   - `__mocks__/openai.ts`: Mocks OpenAI API responses
@@ -107,6 +117,154 @@ This document details the technical implementation of the Discord Anti-Spam Bot,
   - `/ping`: Check if the bot is running
   - `/setupverification`: Set up a verification channel
   - `/config`: Configure server-specific settings (role IDs, channel IDs, etc.)
+
+## Dependency Injection Architecture
+
+### Container Configuration
+
+The bot uses InversifyJS for dependency injection with a centralized container configuration:
+
+```typescript
+// src/di/container.ts
+export function configureContainer(): Container {
+  // Configure external dependencies
+  configureExternalDependencies(container);
+
+  // Configure repositories
+  configureRepositories(container);
+
+  // Configure services
+  configureServices(container);
+
+  return container;
+}
+```
+
+### External Dependency Injection
+
+External dependencies are injected into the application:
+
+```typescript
+function configureExternalDependencies(container: Container): void {
+  // Discord client
+  container.bind<Client>(TYPES.DiscordClient).toConstantValue(
+    new Client({
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers,
+      ],
+    })
+  );
+
+  // OpenAI client
+  container.bind<OpenAI>(TYPES.OpenAI).toConstantValue(
+    new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY || '',
+    })
+  );
+
+  // Supabase client
+  container.bind<SupabaseClient>(TYPES.SupabaseClient).toConstantValue(
+    createClient(supabaseUrl, supabaseKey, {
+      auth: {
+        persistSession: false,
+      },
+    })
+  );
+}
+```
+
+### Repository and Service Registration
+
+Repositories and services are registered with appropriate scopes:
+
+```typescript
+function configureRepositories(container: Container): void {
+  container.bind<IServerRepository>(TYPES.ServerRepository).to(ServerRepository).inSingletonScope();
+  container.bind<IUserRepository>(TYPES.UserRepository).to(UserRepository).inSingletonScope();
+  // Additional repositories...
+}
+
+function configureServices(container: Container): void {
+  container.bind<IHeuristicService>(TYPES.HeuristicService).to(HeuristicService).inSingletonScope();
+  container.bind<IGPTService>(TYPES.GPTService).to(GPTService).inSingletonScope();
+  // Additional services...
+}
+```
+
+### Symbol-Based Dependency Identification
+
+Dependencies are identified using symbols:
+
+```typescript
+// src/di/symbols.ts
+export const TYPES = {
+  // Core classes
+  Bot: Symbol.for('Bot'),
+
+  // Services
+  HeuristicService: Symbol.for('HeuristicService'),
+  GPTService: Symbol.for('GPTService'),
+  // Additional symbols...
+
+  // Repositories
+  BaseRepository: Symbol.for('BaseRepository'),
+  SupabaseRepository: Symbol.for('SupabaseRepository'),
+  // Additional symbols...
+
+  // External dependencies
+  DiscordClient: Symbol.for('DiscordClient'),
+  OpenAI: Symbol.for('OpenAI'),
+  SupabaseClient: Symbol.for('SupabaseClient'),
+};
+```
+
+### Injectable Service with Dependencies
+
+Services implement interfaces and use constructor injection:
+
+```typescript
+@injectable()
+export class DetectionOrchestrator implements IDetectionOrchestrator {
+  constructor(
+    @inject(TYPES.HeuristicService) private heuristicService: IHeuristicService,
+    @inject(TYPES.GPTService) private gptService: IGPTService,
+    @inject(TYPES.DetectionEventsRepository)
+    private detectionEventsRepository: IDetectionEventsRepository,
+    @inject(TYPES.UserRepository) private userRepository: IUserRepository,
+    @inject(TYPES.ServerRepository) private serverRepository: IServerRepository,
+    @inject(TYPES.ServerMemberRepository) private serverMemberRepository: IServerMemberRepository
+  ) {}
+
+  // Service methods...
+}
+```
+
+### Application Bootstrap
+
+The application is started by resolving the Bot from the container:
+
+```typescript
+// src/index.ts
+import 'reflect-metadata';
+import { container } from './di/container';
+import { TYPES } from './di/symbols';
+import { IBot } from './Bot';
+
+// Get the bot instance from the container
+const bot = container.get<IBot>(TYPES.Bot);
+
+// Start the bot
+bot.startBot().catch(console.error);
+
+// Handle termination signals
+process.on('SIGINT', async () => {
+  await bot.destroy();
+  process.exit(0);
+});
+```
 
 ## Spam Detection Strategies
 
@@ -168,24 +326,33 @@ The bot implements a hybrid spam detection approach combining multiple technique
 - **Client Initialization**:
 
   ```typescript
-  this.client = new Client({
-    intents: [
-      GatewayIntentBits.Guilds,
-      GatewayIntentBits.GuildMessages,
-      GatewayIntentBits.MessageContent,
-      GatewayIntentBits.GuildMembers,
-    ],
-  });
+  // In container.ts
+  container.bind<Client>(TYPES.DiscordClient).toConstantValue(
+    new Client({
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers,
+      ],
+    })
+  );
   ```
 
 - **Event Handling**:
 
   ```typescript
-  this.client.on('ready', this.handleReady.bind(this));
-  this.client.on('messageCreate', this.handleMessage.bind(this));
-  this.client.on('guildMemberAdd', this.handleGuildMemberAdd.bind(this));
-  this.client.on('interactionCreate', this.handleInteraction.bind(this));
-  this.client.on('guildCreate', this.handleGuildCreate.bind(this));
+  // In Bot.ts
+  constructor(
+    @inject(TYPES.DiscordClient) private client: Client,
+    // Other dependencies...
+  ) {
+    this.client.on('ready', this.handleReady.bind(this));
+    this.client.on('messageCreate', this.handleMessage.bind(this));
+    this.client.on('guildMemberAdd', this.handleGuildMemberAdd.bind(this));
+    this.client.on('interactionCreate', this.handleInteraction.bind(this));
+    this.client.on('guildCreate', this.handleGuildCreate.bind(this));
+  }
   ```
 
 - **Slash Command Registration**:
@@ -212,21 +379,28 @@ The bot implements a hybrid spam detection approach combining multiple technique
 - **API Call Configuration**:
 
   ```typescript
-  const response = await this.openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      {
-        role: 'system',
-        content: 'You are a Discord moderation assistant...',
-      },
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-    temperature: 0.3,
-    max_tokens: 50,
-  });
+  @injectable()
+  export class GPTService implements IGPTService {
+    constructor(@inject(TYPES.OpenAI) private openai: OpenAI) {}
+
+    // ...
+
+    response = await this.openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a Discord moderation assistant...',
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      temperature: 0.3,
+      max_tokens: 50,
+    });
+  }
   ```
 
 - **Error Handling**:
@@ -239,11 +413,14 @@ The bot implements a hybrid spam detection approach combining multiple technique
 - **Client Initialization**:
 
   ```typescript
-  export const supabase = createClient(supabaseUrl, supabaseKey, {
-    auth: {
-      persistSession: false, // We don't need auth features for the bot
-    },
-  });
+  // In container.ts
+  container.bind<SupabaseClient>(TYPES.SupabaseClient).toConstantValue(
+    createClient(supabaseUrl, supabaseKey, {
+      auth: {
+        persistSession: false, // We don't need auth features for the bot
+      },
+    })
+  );
   ```
 
 - **Database Schema**:
@@ -261,6 +438,117 @@ The bot implements a hybrid spam detection approach combining multiple technique
 - **Row-Level Security**:
   - Enabled on all tables
   - Service role has full access
+
+## Testing Strategy with InversifyJS
+
+### Test Utilities
+
+The project includes several test utilities for working with InversifyJS:
+
+```typescript
+// src/__tests__/utils/test-container.ts
+
+/**
+ * Creates mock implementations for all services and repositories
+ * @returns Object containing all mock services and repositories
+ */
+export function createMocks() {
+  // Create mocks for all services and repositories
+  // ...
+}
+
+/**
+ * Create a test container with mock implementations
+ * @param customMocks Optional custom mocks to override the default ones
+ * @returns Configured InversifyJS container for testing
+ */
+export function createTestContainer(
+  customMocks?: Partial<ReturnType<typeof createMocks>>
+): Container {
+  const container = new Container();
+  const mocks = { ...createMocks(), ...customMocks };
+
+  // Bind external dependencies, services, and repositories
+  // ...
+
+  return container;
+}
+
+/**
+ * Creates a container with real implementations but mock dependencies
+ * This is useful for testing a specific service with mocked dependencies
+ */
+export function createServiceTestContainer<T>(
+  serviceIdentifier: symbol,
+  serviceImplementation: new (...args: any[]) => T,
+  customMocks?: Partial<ReturnType<typeof createMocks>>
+): Container {
+  const container = createTestContainer(customMocks);
+
+  // Rebind the service to use the real implementation
+  container.unbind(serviceIdentifier);
+  container.bind<T>(serviceIdentifier).to(serviceImplementation);
+
+  return container;
+}
+```
+
+### Service Unit Testing
+
+Service tests use focused containers with real service implementations:
+
+```typescript
+describe('Bot with InversifyJS', () => {
+  let container: Container;
+  let bot: IBot;
+  let mocks: ReturnType<typeof createMocks>;
+
+  beforeEach(() => {
+    // Create a container with real Bot implementation but mock dependencies
+    container = createServiceTestContainer(TYPES.Bot, Bot);
+
+    // Get the mocks for assertions
+    mocks = createMocks();
+
+    // Get the bot from the container
+    bot = container.get<IBot>(TYPES.Bot);
+  });
+
+  // Test cases...
+});
+```
+
+### Container Integration Testing
+
+Integration tests verify the container configuration:
+
+```typescript
+describe('InversifyJS Container Configuration', () => {
+  let container: Container;
+
+  beforeEach(() => {
+    // Set up environment variables
+    process.env.DISCORD_TOKEN = 'test-token';
+    process.env.OPENAI_API_KEY = 'test-key';
+    process.env.SUPABASE_URL = 'https://test.supabase.co';
+    process.env.SUPABASE_KEY = 'test-key';
+
+    // Configure the container
+    container = configureContainer();
+  });
+
+  describe('External dependencies', () => {
+    it('should resolve Discord client', () => {
+      const client = container.get<Client>(TYPES.DiscordClient);
+      expect(client).toBeDefined();
+    });
+
+    // More tests...
+  });
+
+  // Additional test groups for repositories, services, etc.
+});
+```
 
 ## Technical Constraints
 

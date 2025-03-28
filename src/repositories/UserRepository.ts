@@ -1,23 +1,61 @@
+import { injectable, inject } from 'inversify';
+import { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseRepository } from './SupabaseRepository';
 import { User } from './types';
-import { supabase } from '../config/supabase';
+import { TYPES } from '../di/symbols';
 
 /**
- * Repository for managing Discord users across servers
+ * Interface for UserRepository
  */
-export class UserRepository extends SupabaseRepository<User> {
-  constructor() {
-    super('users');
+export interface IUserRepository {
+  /**
+   * Find a user by Discord ID
+   * @param discordId The Discord user ID
+   * @returns The user data or null if not found
+   */
+  findByDiscordId(discordId: string): Promise<User | null>;
+
+  /**
+   * Create or update a user
+   * @param discordId The Discord user ID
+   * @param data The user data to upsert
+   * @returns The created or updated user
+   */
+  upsertByDiscordId(discordId: string, data: Partial<User>): Promise<User>;
+
+  /**
+   * Update a user's global reputation score
+   * @param discordId The Discord user ID
+   * @param score The new reputation score
+   * @returns The updated user
+   */
+  updateReputationScore(discordId: string, score: number): Promise<User | null>;
+
+  /**
+   * Get all users with reputation scores below a threshold
+   * @param threshold The reputation score threshold
+   * @returns Array of users below the threshold
+   */
+  findByReputationBelow(threshold: number): Promise<User[]>;
+}
+
+/**
+ * Repository for managing user data
+ */
+@injectable()
+export class UserRepository extends SupabaseRepository<User> implements IUserRepository {
+  constructor(@inject(TYPES.SupabaseClient) supabaseClient: SupabaseClient) {
+    super('users', supabaseClient);
   }
 
   /**
    * Find a user by Discord ID
    * @param discordId The Discord user ID
-   * @returns The user or null if not found
+   * @returns The user data or null if not found
    */
   async findByDiscordId(discordId: string): Promise<User | null> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .select('*')
         .eq('discord_id', discordId)
@@ -36,7 +74,7 @@ export class UserRepository extends SupabaseRepository<User> {
   }
 
   /**
-   * Create or update a user by Discord ID
+   * Create or update a user
    * @param discordId The Discord user ID
    * @param data The user data to upsert
    * @returns The created or updated user
@@ -50,8 +88,7 @@ export class UserRepository extends SupabaseRepository<User> {
         updated_at: new Date().toISOString(),
       };
 
-      // Use upsert operation with discord_id as the primary key
-      const { data: upserted, error } = await supabase
+      const { data: upserted, error } = await this.supabaseClient
         .from(this.tableName)
         .upsert(userData, { onConflict: 'discord_id' })
         .select()
@@ -72,9 +109,9 @@ export class UserRepository extends SupabaseRepository<User> {
    * @param score The new reputation score
    * @returns The updated user
    */
-  async updateGlobalReputationScore(discordId: string, score: number): Promise<User | null> {
+  async updateReputationScore(discordId: string, score: number): Promise<User | null> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .update({
           global_reputation_score: score,
@@ -84,25 +121,26 @@ export class UserRepository extends SupabaseRepository<User> {
         .select()
         .single();
 
+      // Handle the specific "no rows" error as a valid "not found" case
       if (error && error.code === 'PGRST116') {
         return null;
       } else if (error) {
         throw error;
       }
-      return (data as User) || null;
+      return data as User;
     } catch (error) {
-      this.handleError(error as Error, 'updateGlobalReputationScore');
+      this.handleError(error as Error, 'updateReputationScore');
     }
   }
 
   /**
-   * Find users with reputation scores below a threshold
+   * Get all users with reputation scores below a threshold
    * @param threshold The reputation score threshold
    * @returns Array of users below the threshold
    */
-  async findUsersWithLowReputation(threshold: number): Promise<User[]> {
+  async findByReputationBelow(threshold: number): Promise<User[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .select('*')
         .lt('global_reputation_score', threshold);
@@ -110,42 +148,7 @@ export class UserRepository extends SupabaseRepository<User> {
       if (error) throw error;
       return (data as User[]) || [];
     } catch (error) {
-      this.handleError(error as Error, 'findUsersWithLowReputation');
-    }
-  }
-
-  /**
-   * Update user metadata
-   * @param discordId The Discord user ID
-   * @param metadata The metadata to update/merge
-   * @returns The updated user
-   */
-  async updateMetadata(discordId: string, metadata: Record<string, unknown>): Promise<User | null> {
-    try {
-      // First get the current metadata
-      const current = await this.findByDiscordId(discordId);
-      if (!current) return null;
-
-      // Merge the new metadata with existing
-      const updatedMetadata = {
-        ...(current.metadata || {}),
-        ...metadata,
-      };
-
-      const { data, error } = await supabase
-        .from(this.tableName)
-        .update({
-          metadata: updatedMetadata,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('discord_id', discordId)
-        .select()
-        .single();
-
-      if (error) throw error;
-      return (data as User) || null;
-    } catch (error) {
-      this.handleError(error as Error, 'updateMetadata');
+      this.handleError(error as Error, 'findByReputationBelow');
     }
   }
 }

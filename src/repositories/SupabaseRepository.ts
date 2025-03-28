@@ -1,6 +1,7 @@
-import { PostgrestError } from '@supabase/supabase-js';
+import { injectable, inject } from 'inversify';
+import { PostgrestError, SupabaseClient } from '@supabase/supabase-js';
 import { AbstractBaseRepository } from './BaseRepository';
-import { supabase } from '../config/supabase';
+import { TYPES } from '../di/symbols';
 
 /**
  * Base error class for Supabase repository operations
@@ -18,12 +19,17 @@ export class RepositoryError extends Error {
 /**
  * Specific Supabase implementation of the BaseRepository
  */
+@injectable()
 export class SupabaseRepository<T, ID = string> extends AbstractBaseRepository<T, ID> {
   /**
    * Create a new Supabase repository
    * @param tableName The name of the table in Supabase
+   * @param supabaseClient The Supabase client instance
    */
-  constructor(protected tableName: string) {
+  constructor(
+    protected tableName: string,
+    @inject(TYPES.SupabaseClient) protected supabaseClient: SupabaseClient
+  ) {
     super(tableName);
   }
 
@@ -46,7 +52,11 @@ export class SupabaseRepository<T, ID = string> extends AbstractBaseRepository<T
    */
   async findById(id: ID): Promise<T | null> {
     try {
-      const { data, error } = await supabase.from(this.tableName).select('*').eq('id', id).single();
+      const { data, error } = await this.supabaseClient
+        .from(this.tableName)
+        .select('*')
+        .eq('id', id)
+        .single();
 
       // Handle the specific "no rows" error as a valid "not found" case
       if (error && error.code === 'PGRST116') {
@@ -65,7 +75,7 @@ export class SupabaseRepository<T, ID = string> extends AbstractBaseRepository<T
    */
   async findMany(filter: Partial<T> = {}): Promise<T[]> {
     try {
-      let query = supabase.from(this.tableName).select('*');
+      let query = this.supabaseClient.from(this.tableName).select('*');
 
       // Apply filters
       Object.entries(filter).forEach(([key, value]) => {
@@ -88,7 +98,7 @@ export class SupabaseRepository<T, ID = string> extends AbstractBaseRepository<T
    */
   async create(data: Partial<T>): Promise<T> {
     try {
-      const { data: created, error } = await supabase
+      const { data: created, error } = await this.supabaseClient
         .from(this.tableName)
         .insert(data)
         .select()
@@ -113,7 +123,7 @@ export class SupabaseRepository<T, ID = string> extends AbstractBaseRepository<T
    */
   async update(id: ID, data: Partial<T>): Promise<T | null> {
     try {
-      const { data: updated, error } = await supabase
+      const { data: updated, error } = await this.supabaseClient
         .from(this.tableName)
         .update(data)
         .eq('id', id)
@@ -137,7 +147,7 @@ export class SupabaseRepository<T, ID = string> extends AbstractBaseRepository<T
    */
   async delete(id: ID): Promise<boolean> {
     try {
-      const { error } = await supabase.from(this.tableName).delete().eq('id', id);
+      const { error } = await this.supabaseClient.from(this.tableName).delete().eq('id', id);
 
       if (error) throw error;
       return true;
@@ -151,7 +161,9 @@ export class SupabaseRepository<T, ID = string> extends AbstractBaseRepository<T
    */
   async count(filter: Partial<T> = {}): Promise<number> {
     try {
-      let query = supabase.from(this.tableName).select('*', { count: 'exact', head: true });
+      let query = this.supabaseClient
+        .from(this.tableName)
+        .select('*', { count: 'exact', head: true });
 
       // Apply filters
       Object.entries(filter).forEach(([key, value]) => {

@@ -123,6 +123,24 @@ Administrators receive:
   - Links to verification threads when created
   - Maintains complete history in original message
 
+## Overview
+
+The Discord Anti-Spam Bot is a specialized bot for Discord servers that detects and prevents spam, scams, and other unwanted content. It employs a multi-layered detection approach combining heuristic analysis and AI-powered content evaluation using OpenAI's GPT models.
+
+## Target Users
+
+### Server Administrators
+
+- Discord server owners and administrators who need to protect their communities
+- Community managers for gaming groups, educational servers, and professional communities
+- Moderators of large communities who need automation to handle high message volumes
+
+### End Users (Server Members)
+
+- Regular Discord users who benefit from a safer environment
+- Users who may be falsely flagged and need a clear appeal process
+- New server members who will experience the verification process
+
 ## User Experience Goals
 
 ### For Server Administrators
@@ -183,6 +201,22 @@ Administrators receive:
   - Fair treatment based on behavior
   - Cross-server reputation benefits for established users
 
+## Core Value Proposition
+
+### For Server Administrators
+
+- Automated detection reduces moderation workload
+- Configurable sensitivity to match community needs
+- Detailed admin notifications provide context for moderation decisions
+- Cross-server reputation system helps identify problematic users before they cause issues
+
+### For Server Members
+
+- Safer environment with fewer spam and scam messages
+- Transparent moderation process with clear steps for resolving false positives
+- Reduced disruption from malicious actors
+- Less exposure to potentially harmful content
+
 ## Key Differentiators
 
 What sets our bot apart from existing solutions is our AI-first approach to spam detection:
@@ -220,6 +254,7 @@ What sets our bot apart from existing solutions is our AI-first approach to spam
    - Service-oriented design for modularity
    - Caching strategies for performance
    - Comprehensive error handling
+   - **Dependency Injection** for improved testability and maintainability
 
 ## Target Audience
 
@@ -256,7 +291,84 @@ The bot provides a streamlined onboarding experience:
 
 All roles and channels are optionally configurable during onboarding, with clear warnings when optional settings are skipped and automatic creation options available.
 
+## Feature Sets
+
+### Core Detection Features
+
+- Message content analysis for spam patterns
+- User behavior monitoring (message frequency, patterns)
+- New account detection and verification
+- Cross-server reputation tracking
+- AI-powered content analysis using GPT
+
+### Admin Controls
+
+- Server-specific configuration options
+- Custom approval/verification channels
+- Notification settings for different alert levels
+- Whitelist and blacklist management
+- Customizable automated responses
+
+### User Experience
+
+- Clear verification process for new users
+- Non-intrusive operation for verified users
+- Simple appeal process for false positives
+- Helpful error messages and instructions
+
+## Key Architecture Considerations
+
+### Reliability Requirements
+
+- 24/7 availability for continuous server protection
+- Graceful degradation when external services (like OpenAI) experience issues
+- Robust error handling and automatic recovery
+- Efficient resource usage to handle multiple servers simultaneously
+
+### Scalability Factors
+
+- Design to handle multiple servers with different configurations
+- Efficient database usage for cross-server user tracking
+- Rate limiting and queue management for API calls
+
+### Security Concerns
+
+- Safe handling of message content data
+- Appropriate permission levels for command access
+- Protection against abuse of moderation features
+- Secure storage of configuration settings
+
+### Maintainability Improvements
+
+- **Dependency Injection with InversifyJS**
+  - Clear separation of concerns through interface-based design
+  - Improved testability with mockable dependencies
+  - Simplified service instantiation and lifecycle management
+  - Reduced coupling between components
+  - Centralized configuration in the container module
+
+### Integration Points
+
+- Discord API for message monitoring and actions
+- OpenAI API for content analysis
+- Supabase for persistent storage
+- Potential future integrations with other anti-spam services
+
 ## Success Metrics
+
+### Technical Performance
+
+- Response time for message analysis (target: <500ms for non-AI methods, <2s for AI methods)
+- False positive rate (target: <5%)
+- False negative rate (target: <10%)
+- System uptime (target: 99.9%)
+
+### User Satisfaction
+
+- Admin satisfaction with configuration options
+- Reduction in reported spam incidents
+- Minimal complaints about false positives
+- Admin time saved on manual moderation
 
 The bot's effectiveness will be measured by:
 
@@ -294,6 +406,37 @@ The bot's effectiveness will be measured by:
    - Efficient resource utilization
    - Minimal downtime or errors
 
+## Development Approach
+
+### Engineering Principles
+
+- **Testability**: All components designed with testing in mind
+  - InversifyJS dependency injection enables proper isolation for unit testing
+  - Test containers simplify integration testing for complex component interactions
+- **Modularity**: Clean interfaces between components
+- **Graceful Degradation**: Service stays functional even when external services fail
+- **Configurability**: Extensive configuration options without code changes
+
+### Technical Decisions
+
+#### Current Technical Foundations
+
+- TypeScript for type safety and developer experience
+- Discord.js for Discord API interaction
+- OpenAI SDK for GPT integration
+- Supabase for data persistence
+- **InversifyJS for dependency injection**
+  - Enables flexible component composition
+  - Simplifies testing through dependency mocking
+  - Provides clean architecture with interface-based design
+  - Centralizes service instantiation and configuration
+
+#### Future Considerations
+
+- Possible migration to a microservices architecture for larger scale
+- Integration with additional AI models for improved detection
+- Development of custom ML models specifically trained on Discord spam patterns
+
 ## Future Roadmap
 
 ### Planned Enhancements
@@ -320,3 +463,95 @@ The bot's effectiveness will be measured by:
    - Configuration management interface
    - Analytics and reporting
    - User management features
+
+## Roadmap Highlights
+
+### Current Phase
+
+- Core detection system implementation
+- Basic admin controls
+- Initial AI integration
+- **Architectural improvements with InversifyJS**
+  - Refactoring existing services to use dependency injection
+  - Creating interfaces for all services and repositories
+  - Implementing test utilities for InversifyJS testing
+
+### Next Phase
+
+- Enhanced detection algorithms
+- Improved configurability
+- Cross-server reputation system
+- Advanced analytics for admins
+
+### Future Vision
+
+- Integration with other security bots/services
+- Community-contributed detection rules
+- Machine learning model trained on Discord-specific data
+- API for custom integrations
+
+## Product Development Process
+
+### Feature Development Lifecycle
+
+1. Requirement gathering from Discord server admins
+2. Initial specification and architecture design
+3. Implementation with comprehensive testing
+4. Limited beta testing on partner servers
+5. Feedback collection and iteration
+6. General availability release
+
+### Quality Assurance Process
+
+- Comprehensive unit testing of all components
+- Integration tests for service interactions
+- End-to-end testing in live Discord environments
+- Performance testing under various load conditions
+- Regular security reviews
+
+## Known Challenges
+
+### Technical Challenges
+
+- Rate limiting in Discord API
+- Cost management for OpenAI API usage
+- Ensuring high availability with external dependencies
+- Managing state across multiple servers
+- Ensuring type safety across the codebase
+
+### User Experience Challenges
+
+- Balancing detection sensitivity with false positive rate
+- Providing clear explanations of moderation actions
+- Creating a smooth verification process for new users
+- Ensuring administrators understand configuration options
+
+## Integration Landscape
+
+### Current Integrations
+
+- Discord API (primary platform)
+- OpenAI API (for content analysis)
+- Supabase (for data persistence)
+
+### Potential Future Integrations
+
+- Other anti-spam services for collaborative detection
+- Custom web dashboard for advanced configuration
+- Discord server analytics platforms
+- Cross-platform support (beyond Discord)
+
+## Deployment and Operations
+
+### Hosting Strategy
+
+- Serverless deployment for cost efficiency and scalability
+- Consideration for regional deployments as user base grows
+- Database scaling plan for increased server count
+
+### Monitoring and Maintenance
+
+- Comprehensive logging of all detection events
+- Performance monitoring for bottlenecks
+- Error tracking and alerting system
+- Regular dependency updates

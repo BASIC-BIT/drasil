@@ -1,9 +1,60 @@
+import { injectable } from 'inversify';
+
+/**
+ * Interface for the heuristic-based spam detection service
+ */
+export interface IHeuristicService {
+  /**
+   * Analyzes a message for suspicious patterns using rule-based heuristics
+   * @param userId The Discord user ID
+   * @param content The message content to analyze
+   * @param serverId The server ID where the message was sent (optional)
+   * @returns Object with result and reasons
+   */
+  analyzeMessage(
+    userId: string,
+    content: string,
+    serverId?: string
+  ): {
+    result: 'OK' | 'SUSPICIOUS';
+    reasons: string[];
+  };
+
+  /**
+   * Checks if a message is suspicious based on frequency and keywords
+   * @param userId The Discord user ID
+   * @param content The message content
+   * @returns Whether the message is suspicious
+   */
+  isMessageSuspicious(userId: string, content: string): boolean;
+
+  /**
+   * Checks if the user is sending messages too frequently
+   * @param userId The Discord user ID
+   * @returns Whether the user has exceeded the frequency threshold
+   */
+  isFrequencyAboveThreshold(userId: string): boolean;
+
+  /**
+   * Checks if content contains suspicious keywords
+   * @param content The message content
+   * @returns Whether suspicious keywords were detected
+   */
+  containsSuspiciousKeywords(content: string): boolean;
+
+  /**
+   * Clears the message history (mainly for testing)
+   */
+  clearMessageHistory(): void;
+}
+
 /**
  * HeuristicService: Provides basic spam detection using heuristic methods
  * - Message frequency checking (> 5 messages in 10 seconds)
  * - Suspicious keyword detection
  */
-export class HeuristicService {
+@injectable()
+export class HeuristicService implements IHeuristicService {
   private readonly MESSAGE_THRESHOLD = 5; // max messages allowed
   private readonly TIME_WINDOW_MS = 10000; // 10 seconds in milliseconds
   private readonly SUSPICIOUS_KEYWORDS = [
@@ -20,6 +71,40 @@ export class HeuristicService {
 
   // Store message timestamps by user ID
   private userMessages: Map<string, number[]> = new Map();
+
+  /**
+   * Analyzes a message with comprehensive heuristics
+   * @param userId The Discord user ID
+   * @param content The message content to analyze
+   * @param serverId The server ID where the message was sent (optional)
+   * @returns Object with result and reasons
+   */
+  public analyzeMessage(
+    userId: string,
+    content: string,
+    // eslint-disable-next-line no-unused-vars
+    _serverId?: string
+  ): {
+    result: 'OK' | 'SUSPICIOUS';
+    reasons: string[];
+  } {
+    const reasons: string[] = [];
+    let result: 'OK' | 'SUSPICIOUS' = 'OK';
+
+    // Check message frequency
+    if (this.isFrequencyAboveThreshold(userId)) {
+      reasons.push('User is sending messages too quickly');
+      result = 'SUSPICIOUS';
+    }
+
+    // Check for suspicious keywords
+    if (this.containsSuspiciousKeywords(content)) {
+      reasons.push('Message contains suspicious keywords or patterns');
+      result = 'SUSPICIOUS';
+    }
+
+    return { result, reasons };
+  }
 
   /**
    * Checks if a message is suspicious based on:

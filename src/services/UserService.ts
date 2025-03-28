@@ -1,46 +1,79 @@
 import { User, ServerMember } from '../repositories/types';
-import { UserRepository } from '../repositories/UserRepository';
-import { ServerMemberRepository } from '../repositories/ServerMemberRepository';
+import { IUserRepository } from '../repositories/UserRepository';
+import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
+import { injectable, inject } from 'inversify';
+import { TYPES } from '../di/symbols';
 
 /**
- * Service for managing users and their server memberships
+ * Interface for the UserService
  */
-export class UserService {
+export interface IUserService {
+  getOrCreateUser(discordId: string, username?: string): Promise<User>;
+  getOrCreateMember(serverId: string, userId: string, joinDate?: string): Promise<ServerMember>;
+  updateUserReputation(serverId: string, userId: string, serverScore: number): Promise<void>;
+  handleUserMessage(
+    serverId: string,
+    userId: string,
+    discordId: string,
+    username: string
+  ): Promise<void>;
+  updateUserRestriction(
+    serverId: string,
+    userId: string,
+    isRestricted: boolean
+  ): Promise<ServerMember | null>;
+  getRestrictedUsers(serverId: string): Promise<ServerMember[]>;
+  updateUserMetadata(discordId: string, metadata: Record<string, unknown>): Promise<User | null>;
+  findLowReputationUsers(threshold: number): Promise<User[]>;
+}
+
+/**
+ * Service for managing users and their relationships with servers
+ */
+@injectable()
+export class UserService implements IUserService {
   constructor(
-    private userRepository: UserRepository,
-    private serverMemberRepository: ServerMemberRepository
+    @inject(TYPES.UserRepository) private userRepository: IUserRepository,
+    @inject(TYPES.ServerMemberRepository) private serverMemberRepository: IServerMemberRepository
   ) {}
 
   /**
-   * Get or create a user by Discord ID
+   * Get an existing user by Discord ID or create a new one
    * @param discordId The Discord user ID
-   * @param username Optional Discord username
-   * @returns The user
+   * @param username The Discord username (optional)
+   * @returns The user data
    */
   async getOrCreateUser(discordId: string, username?: string): Promise<User> {
     const user = await this.userRepository.findByDiscordId(discordId);
+
     if (user) {
-      // Update username if provided and different
-      if (username && username !== user.username) {
-        return await this.userRepository.upsertByDiscordId(discordId, { username });
+      // Update username if it changed
+      if (username && user.username !== username) {
+        return await this.userRepository.upsertByDiscordId(discordId, {
+          ...user,
+          username,
+        });
       }
       return user;
     }
 
     // Create new user
     return await this.userRepository.upsertByDiscordId(discordId, {
-      username,
-      global_reputation_score: 0.0,
-      account_created_at: new Date().toISOString(),
+      discord_id: discordId,
+      username: username || 'Unknown User',
+      global_reputation_score: 100, // Default reputation score
+      // Use actual timestamp for new users
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     });
   }
 
   /**
-   * Get or create a server member
+   * Get an existing server member or create a new one
    * @param serverId The server UUID
    * @param userId The user UUID
-   * @param joinDate Optional join date
-   * @returns The server member
+   * @param joinDate The date the user joined the server (optional)
+   * @returns The server member data
    */
   async getOrCreateMember(
     serverId: string,
@@ -48,23 +81,23 @@ export class UserService {
     joinDate?: string
   ): Promise<ServerMember> {
     const member = await this.serverMemberRepository.findByServerAndUser(serverId, userId);
-    if (member) {
-      return member;
-    }
+
+    if (member) return member;
 
     // Create new member
     return await this.serverMemberRepository.upsertMember(serverId, userId, {
       join_date: joinDate || new Date().toISOString(),
-      reputation_score: 0.0,
       message_count: 0,
+      is_restricted: false,
+      reputation_score: 50, // Default neutral score
     });
   }
 
   /**
-   * Update a user's reputation in a server and potentially their global score
+   * Update user reputation score in server and globally
    * @param serverId The server UUID
    * @param userId The user UUID
-   * @param serverScore The new server-specific reputation score
+   * @param serverScore The new server-specific score
    */
   async updateUserReputation(serverId: string, userId: string, serverScore: number): Promise<void> {
     // Update server-specific score
@@ -75,15 +108,18 @@ export class UserService {
     if (!user) return;
 
     // Find all server memberships
-    const memberships = await this.serverMemberRepository.findMany({ user_id: userId });
+    const memberships = await this.serverMemberRepository.findByUser(userId);
     if (memberships.length === 0) return;
 
     // Calculate global score as weighted average of server scores
-    const totalScore = memberships.reduce((sum, member) => sum + (member.reputation_score || 0), 0);
+    const totalScore = memberships.reduce(
+      (sum: number, member: ServerMember) => sum + (member.reputation_score || 0),
+      0
+    );
     const globalScore = totalScore / memberships.length;
 
     // Update global reputation score
-    await this.userRepository.updateGlobalReputationScore(user.discord_id, globalScore);
+    await this.userRepository.updateReputationScore(user.discord_id, globalScore);
   }
 
   /**
@@ -144,7 +180,21 @@ export class UserService {
     discordId: string,
     metadata: Record<string, unknown>
   ): Promise<User | null> {
-    return await this.userRepository.updateMetadata(discordId, metadata);
+    // First fetch the current user
+    const user = await this.userRepository.findByDiscordId(discordId);
+    if (!user) return null;
+
+    // Update the user with the new metadata
+    const updatedUser = {
+      ...user,
+      metadata: {
+        ...user.metadata,
+        ...metadata,
+      },
+      updated_at: new Date().toISOString(),
+    };
+
+    return await this.userRepository.upsertByDiscordId(discordId, updatedUser);
   }
 
   /**
@@ -153,6 +203,6 @@ export class UserService {
    * @returns Array of users below the threshold
    */
   async findLowReputationUsers(threshold: number): Promise<User[]> {
-    return await this.userRepository.findUsersWithLowReputation(threshold);
+    return await this.userRepository.findByReputationBelow(threshold);
   }
 }

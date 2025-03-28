@@ -1,13 +1,58 @@
+import { injectable, inject } from 'inversify';
+import { SupabaseClient } from '@supabase/supabase-js';
 import { SupabaseRepository } from './SupabaseRepository';
 import { Server, ServerSettings } from './types';
-import { supabase } from '../config/supabase';
+import { TYPES } from '../di/symbols';
+
+/**
+ * Interface for the ServerRepository
+ */
+export interface IServerRepository {
+  /**
+   * Find a server by Discord guild ID
+   * @param guildId The Discord guild ID
+   * @returns The server configuration or null if not found
+   */
+  findByGuildId(guildId: string): Promise<Server | null>;
+
+  /**
+   * Create or update a server configuration
+   * @param guildId The Discord guild ID
+   * @param data The server data to upsert
+   * @returns The created or updated server
+   */
+  upsertByGuildId(guildId: string, data: Partial<Server>): Promise<Server>;
+
+  /**
+   * Update specific settings for a server
+   * @param guildId The Discord guild ID
+   * @param settings The settings to update
+   * @returns The updated server
+   */
+  updateSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server | null>;
+
+  /**
+   * Mark a server as active or inactive
+   * @param guildId The Discord guild ID
+   * @param isActive Whether the bot is active in this server
+   * @returns The updated server
+   */
+  setActive(guildId: string, isActive: boolean): Promise<Server | null>;
+
+  /**
+   * Get all active server configurations
+   * @returns Array of active servers
+   */
+  findAllActive(): Promise<Server[]>;
+}
 
 /**
  * Repository for managing server/guild configurations
  */
-export class ServerRepository extends SupabaseRepository<Server> {
-  constructor() {
-    super('servers');
+@injectable()
+export class ServerRepository extends SupabaseRepository<Server> implements IServerRepository {
+  constructor(@inject(TYPES.SupabaseClient) supabaseClient: SupabaseClient) {
+    super('servers', supabaseClient);
   }
 
   /**
@@ -17,7 +62,7 @@ export class ServerRepository extends SupabaseRepository<Server> {
    */
   async findByGuildId(guildId: string): Promise<Server | null> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .select('*')
         .eq('guild_id', guildId)
@@ -51,7 +96,7 @@ export class ServerRepository extends SupabaseRepository<Server> {
       };
 
       // Use upsert operation with guild_id as the primary key
-      const { data: upserted, error } = await supabase
+      const { data: upserted, error } = await this.supabaseClient
         .from(this.tableName)
         .upsert(serverData, { onConflict: 'guild_id' })
         .select()
@@ -83,7 +128,7 @@ export class ServerRepository extends SupabaseRepository<Server> {
         ...settings,
       };
 
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .update({
           settings: updatedSettings,
@@ -113,7 +158,7 @@ export class ServerRepository extends SupabaseRepository<Server> {
    */
   async setActive(guildId: string, isActive: boolean): Promise<Server | null> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .update({
           is_active: isActive,
@@ -141,7 +186,10 @@ export class ServerRepository extends SupabaseRepository<Server> {
    */
   async findAllActive(): Promise<Server[]> {
     try {
-      const { data, error } = await supabase.from(this.tableName).select('*').eq('is_active', true);
+      const { data, error } = await this.supabaseClient
+        .from(this.tableName)
+        .select('*')
+        .eq('is_active', true);
 
       if (error) throw error;
       return (data as Server[]) || [];

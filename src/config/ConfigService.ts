@@ -1,18 +1,65 @@
-import { ServerRepository } from '../repositories/ServerRepository';
+import { injectable, inject } from 'inversify';
+import { IServerRepository } from '../repositories/ServerRepository';
 import { Server, ServerSettings } from '../repositories/types';
 import { isSupabaseConfigured } from './supabase';
 import { globalConfig } from './GlobalConfig';
+import { TYPES } from '../di/symbols';
+import { SupabaseClient } from '@supabase/supabase-js';
+
+/**
+ * Interface for the ConfigService
+ */
+export interface IConfigService {
+  /**
+   * Initialize the configuration service
+   * Loads all active servers into cache
+   */
+  initialize(): Promise<void>;
+
+  /**
+   * Get a server configuration, first from cache, then from database
+   * Falls back to environment variables if needed
+   * @param guildId The Discord guild ID
+   * @returns The server configuration
+   */
+  getServerConfig(guildId: string): Promise<Server>;
+
+  /**
+   * Update a server configuration
+   * @param guildId The Discord guild ID
+   * @param data The data to update
+   * @returns The updated server configuration
+   */
+  updateServerConfig(guildId: string, data: Partial<Server>): Promise<Server>;
+
+  /**
+   * Update specific settings for a server
+   * @param guildId The Discord guild ID
+   * @param settings The settings to update
+   * @returns The updated server configuration
+   */
+  updateServerSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server>;
+
+  /**
+   * Clear the server cache
+   */
+  clearCache(): void;
+}
 
 /**
  * Service for managing configuration and providing a bridge
  * between environment variables and database configuration
  */
-export class ConfigService {
-  private serverRepository: ServerRepository;
+@injectable()
+export class ConfigService implements IConfigService {
+  private serverRepository: IServerRepository;
   private serverCache: Map<string, Server> = new Map();
 
-  constructor() {
-    this.serverRepository = new ServerRepository();
+  constructor(
+    @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
+    @inject(TYPES.SupabaseClient) private supabaseClient: SupabaseClient
+  ) {
+    this.serverRepository = serverRepository;
   }
 
   /**

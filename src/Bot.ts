@@ -1,6 +1,5 @@
 import {
   Client,
-  GatewayIntentBits,
   Message,
   GuildMember,
   User,
@@ -16,68 +15,77 @@ import {
   Guild,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
-import { HeuristicService } from './services/HeuristicService';
-import { GPTService, UserProfileData } from './services/GPTService';
-import { DetectionOrchestrator } from './services/DetectionOrchestrator';
-import { RoleManager } from './services/RoleManager';
-import { NotificationManager } from './services/NotificationManager';
-import { ConfigService } from './config/ConfigService';
+import { injectable, inject } from 'inversify';
+import { IHeuristicService } from './services/HeuristicService';
+import { IGPTService, UserProfileData } from './services/GPTService';
+import { IDetectionOrchestrator } from './services/DetectionOrchestrator';
+import { IRoleManager } from './services/RoleManager';
+import { INotificationManager } from './services/NotificationManager';
+import { IConfigService } from './config/ConfigService';
 import { globalConfig } from './config/GlobalConfig';
-import { DetectionEventsRepository } from './repositories/DetectionEventsRepository';
-import { UserRepository } from './repositories/UserRepository';
-import { ServerRepository } from './repositories/ServerRepository';
-import { ServerMemberRepository } from './repositories/ServerMemberRepository';
+import { IDetectionEventsRepository } from './repositories/DetectionEventsRepository';
+import { IUserRepository } from './repositories/UserRepository';
+import { IServerRepository } from './repositories/ServerRepository';
+import { IServerMemberRepository } from './repositories/ServerMemberRepository';
+import { TYPES } from './di/symbols';
 
 // Load environment variables
 dotenv.config();
 
-export class Bot {
+/**
+ * Interface for the Bot class
+ */
+export interface IBot {
+  /**
+   * Start the bot and connect to Discord
+   */
+  startBot(): Promise<void>;
+
+  /**
+   * Clean up resources and disconnect from Discord
+   */
+  destroy(): Promise<void>;
+}
+
+@injectable()
+export class Bot implements IBot {
   private client: Client;
-  private heuristicService: HeuristicService;
-  private gptService: GPTService;
-  private detectionOrchestrator: DetectionOrchestrator;
-  private roleManager: RoleManager;
-  private notificationManager: NotificationManager;
-  private configService: ConfigService;
-  private detectionEventsRepository: DetectionEventsRepository;
+  private heuristicService: IHeuristicService;
+  private gptService: IGPTService;
+  private detectionOrchestrator: IDetectionOrchestrator;
+  private roleManager: IRoleManager;
+  private notificationManager: INotificationManager;
+  private configService: IConfigService;
+  private detectionEventsRepository: IDetectionEventsRepository;
+  private userRepository: IUserRepository;
+  private serverRepository: IServerRepository;
+  private serverMemberRepository: IServerMemberRepository;
   private commands: RESTPostAPIChatInputApplicationCommandsJSONBody[];
 
-  constructor() {
-    this.client = new Client({
-      intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers,
-      ],
-    });
-
-    // Initialize services
-    this.heuristicService = new HeuristicService();
-    this.gptService = new GPTService();
-    this.configService = new ConfigService();
-    this.detectionEventsRepository = new DetectionEventsRepository();
-
-    // Initialize repositories
-    const userRepository = new UserRepository();
-    const serverRepository = new ServerRepository();
-    const serverMemberRepository = new ServerMemberRepository();
-
-    this.detectionOrchestrator = new DetectionOrchestrator(
-      this.heuristicService,
-      this.gptService,
-      this.detectionEventsRepository,
-      userRepository,
-      serverRepository,
-      serverMemberRepository
-    );
-    this.roleManager = new RoleManager(undefined, this.configService);
-    this.notificationManager = new NotificationManager(
-      this.client,
-      undefined,
-      undefined,
-      this.configService
-    );
+  constructor(
+    @inject(TYPES.DiscordClient) client: Client,
+    @inject(TYPES.HeuristicService) heuristicService: IHeuristicService,
+    @inject(TYPES.GPTService) gptService: IGPTService,
+    @inject(TYPES.DetectionOrchestrator) detectionOrchestrator: IDetectionOrchestrator,
+    @inject(TYPES.RoleManager) roleManager: IRoleManager,
+    @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
+    @inject(TYPES.ConfigService) configService: IConfigService,
+    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
+    @inject(TYPES.UserRepository) userRepository: IUserRepository,
+    @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
+    @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository
+  ) {
+    this.client = client;
+    this.heuristicService = heuristicService;
+    this.gptService = gptService;
+    this.detectionOrchestrator = detectionOrchestrator;
+    this.roleManager = roleManager;
+    this.notificationManager = notificationManager;
+    this.configService = configService;
+    this.detectionEventsRepository = detectionEventsRepository;
+    this.userRepository = userRepository;
+    this.serverRepository = serverRepository;
+    this.serverMemberRepository = serverMemberRepository;
 
     // Define slash commands
     this.commands = [

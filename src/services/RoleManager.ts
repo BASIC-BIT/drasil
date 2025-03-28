@@ -1,16 +1,59 @@
 import { GuildMember, Role } from 'discord.js';
-import { ConfigService } from '../config/ConfigService';
+import { injectable, inject } from 'inversify';
+import { IConfigService } from '../config/ConfigService';
+import { TYPES } from '../di/symbols';
 
 /**
- * Service for managing user roles, particularly for restriction and verification
+ * Interface for the RoleManager service
  */
-export class RoleManager {
-  private restrictedRoleId: string | undefined;
-  private configService: ConfigService;
+export interface IRoleManager {
+  /**
+   * Initialize the role manager with guild-specific settings
+   * @param guildId The Discord guild ID
+   */
+  initialize(guildId: string): Promise<void>;
 
-  constructor(restrictedRoleId?: string, configService?: ConfigService) {
+  /**
+   * Sets the ID of the restricted role
+   * @param roleId The Discord role ID for restricting users
+   */
+  setRestrictedRoleId(roleId: string): void;
+
+  /**
+   * Gets the current restricted role ID
+   * @returns The current restricted role ID or undefined if not set
+   */
+  getRestrictedRoleId(): string | undefined;
+
+  /**
+   * Assigns the restricted role to a guild member
+   * @param member The guild member to restrict
+   * @returns Promise resolving to true if successful, false if the role couldn't be assigned
+   */
+  assignRestrictedRole(member: GuildMember): Promise<boolean>;
+
+  /**
+   * Removes the restricted role from a guild member
+   * @param member The guild member to verify (unrestrict)
+   * @returns Promise resolving to true if successful, false if the role couldn't be removed
+   */
+  removeRestrictedRole(member: GuildMember): Promise<boolean>;
+}
+
+/**
+ * Service for managing user roles, particularly for restricting suspicious users
+ */
+@injectable()
+export class RoleManager implements IRoleManager {
+  private restrictedRoleId?: string;
+  private configService: IConfigService;
+
+  constructor(
+    @inject(TYPES.ConfigService) configService: IConfigService,
+    restrictedRoleId?: string
+  ) {
     this.restrictedRoleId = restrictedRoleId;
-    this.configService = configService || new ConfigService();
+    this.configService = configService;
   }
 
   public async initialize(guildId: string): Promise<void> {

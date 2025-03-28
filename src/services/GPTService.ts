@@ -3,8 +3,10 @@
  * - Analyzes user profile data to determine if user is suspicious
  * - Returns "OK" or "SUSPICIOUS" based on AI analysis
  */
+import { injectable, inject } from 'inversify';
 import OpenAI from 'openai';
 import { getFormattedExamples } from '../config/gpt-config';
+import { TYPES } from '../di/symbols';
 
 export interface UserProfileData {
   username: string;
@@ -16,6 +18,30 @@ export interface UserProfileData {
   // Add other relevant profile fields as needed
 }
 
+/**
+ * Interface for the GPT service that performs AI-powered analysis
+ */
+export interface IGPTService {
+  /**
+   * Analyzes a user profile to determine if they are suspicious
+   * @param userProfile Object containing user information
+   * @returns Object with result, confidence and reasons
+   */
+  analyzeProfile(userProfile: {
+    userId: string;
+    username: string;
+    accountAge?: number;
+    joinedServer?: Date;
+    messageHistory?: string[];
+    avatarUrl?: string;
+    isBot?: boolean;
+  }): Promise<{
+    result: 'OK' | 'SUSPICIOUS';
+    confidence: number;
+    reasons: string[];
+  }>;
+}
+
 // Type for OpenAI error with response data
 interface OpenAIErrorWithResponse extends Error {
   response?: {
@@ -23,26 +49,89 @@ interface OpenAIErrorWithResponse extends Error {
   };
 }
 
-export class GPTService {
+/**
+ * Implementation of the GPT service using OpenAI API
+ */
+@injectable()
+export class GPTService implements IGPTService {
   private openai: OpenAI;
 
-  constructor() {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      console.error('No OpenAI API key found in environment variables');
+  constructor(@inject(TYPES.OpenAI) openai?: OpenAI) {
+    if (openai) {
+      this.openai = openai;
+    } else {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        console.error('No OpenAI API key found in environment variables');
+      }
+
+      // Initialize the OpenAI client with API key from environment variable
+      this.openai = new OpenAI({
+        apiKey,
+        dangerouslyAllowBrowser: true, // Add this if testing in browser environment
+      });
+
+      // Display partial key for debugging
+      if (apiKey) {
+        const firstFour = apiKey.substring(0, 4);
+        const lastFour = apiKey.substring(apiKey.length - 4);
+        console.log(`OpenAI client initialized with API key: ${firstFour}...${lastFour}`);
+      }
     }
+  }
 
-    // Initialize the OpenAI client with API key from environment variable
-    this.openai = new OpenAI({
-      apiKey,
-      dangerouslyAllowBrowser: true, // Add this if testing in browser environment
-    });
+  /**
+   * Analyzes a user profile to determine if they are suspicious
+   * @param userProfile Object containing user information
+   * @returns Object with result, confidence and reasons
+   */
+  public async analyzeProfile(userProfile: {
+    userId: string;
+    username: string;
+    accountAge?: number;
+    joinedServer?: Date;
+    messageHistory?: string[];
+    avatarUrl?: string;
+    isBot?: boolean;
+  }): Promise<{
+    result: 'OK' | 'SUSPICIOUS';
+    confidence: number;
+    reasons: string[];
+  }> {
+    try {
+      // Convert the user profile data to the format expected by the OpenAI API
+      const profileData: UserProfileData = {
+        username: userProfile.username,
+        accountCreatedAt: userProfile.accountAge
+          ? new Date(Date.now() - userProfile.accountAge * 86400000)
+          : undefined,
+        joinedServerAt: userProfile.joinedServer,
+        recentMessage: userProfile.messageHistory?.[0],
+      };
 
-    // Display partial key for debugging
-    if (apiKey) {
-      const firstFour = apiKey.substring(0, 4);
-      const lastFour = apiKey.substring(apiKey.length - 4);
-      console.log(`OpenAI client initialized with API key: ${firstFour}...${lastFour}`);
+      // Call the classification method
+      const classification = await this.classifyUserProfile(profileData);
+
+      // Extract confidence and reasons (mock implementation - would be enhanced with actual GPT output parsing)
+      const confidence = classification === 'SUSPICIOUS' ? 0.8 : 0.2;
+      const reasons =
+        classification === 'SUSPICIOUS'
+          ? ['Suspicious user profile detected']
+          : ['User profile appears normal'];
+
+      return {
+        result: classification as 'OK' | 'SUSPICIOUS',
+        confidence,
+        reasons,
+      };
+    } catch (error) {
+      console.error('Error in GPT analysis:', error);
+      // Default to less restrictive result in case of errors
+      return {
+        result: 'OK',
+        confidence: 0.1,
+        reasons: ['Error in GPT analysis'],
+      };
     }
   }
 
@@ -52,7 +141,7 @@ export class GPTService {
    * @param profileData The user profile data to analyze
    * @returns Promise resolving to "OK" or "SUSPICIOUS"
    */
-  public async classifyUserProfile(profileData: UserProfileData): Promise<string> {
+  private async classifyUserProfile(profileData: UserProfileData): Promise<string> {
     try {
       // Create a structured prompt for GPT with few-shot examples
       const prompt = this.createPrompt(profileData);

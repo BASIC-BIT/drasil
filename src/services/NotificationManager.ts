@@ -1,22 +1,24 @@
+import { injectable, inject } from 'inversify';
 import {
   ActionRowBuilder,
-  ButtonBuilder,
   ButtonStyle,
-  EmbedBuilder,
-  GuildMember,
-  TextChannel,
-  ThreadAutoArchiveDuration,
-  Message,
   Client,
+  EmbedBuilder,
+  ButtonBuilder,
+  GuildMember,
+  Message,
   User,
   ThreadChannel,
+  TextChannel,
+  Guild,
+  ThreadAutoArchiveDuration,
+  ChannelType,
   PermissionFlagsBits,
   GuildChannelCreateOptions,
-  Guild,
-  ChannelType,
 } from 'discord.js';
+import { IConfigService } from '../config/ConfigService';
+import { TYPES } from '../di/symbols';
 import { DetectionResult } from './DetectionOrchestrator';
-import { ConfigService } from '../config/ConfigService';
 
 export interface NotificationButton {
   id: string;
@@ -25,24 +27,90 @@ export interface NotificationButton {
 }
 
 /**
+ * Interface for NotificationManager service
+ */
+export interface INotificationManager {
+  /**
+   * Initializes the notification manager with server configuration
+   * @param guildId The Discord guild ID
+   */
+  initialize(guildId: string): Promise<void>;
+
+  /**
+   * Sets the ID of the admin summary channel
+   * @param channelId The Discord channel ID for admin notifications
+   */
+  setAdminChannelId(channelId: string): void;
+
+  /**
+   * Sets the ID of the verification channel
+   * @param channelId The Discord channel ID for verification threads
+   */
+  setVerificationChannelId(channelId: string): void;
+
+  /**
+   * Sends a notification to the admin channel about a suspicious user
+   * @param member The suspicious guild member
+   * @param detectionResult The detection result
+   * @param sourceMessage Optional message that triggered the detection
+   * @returns Promise resolving to the sent message or null if sending failed
+   */
+  notifySuspiciousUser(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<Message | null>;
+
+  /**
+   * Creates a thread for a suspicious user in the verification channel
+   * @param member The suspicious guild member
+   * @returns Promise resolving to the created thread or null if creation failed
+   */
+  createVerificationThread(member: GuildMember): Promise<ThreadChannel | null>;
+
+  /**
+   * Log an admin action to the notification message
+   * @param message The original notification message
+   * @param actionTaken The action that was taken
+   * @param admin The admin who took the action
+   * @param thread Optional verification thread that was created
+   */
+  logActionToMessage(
+    message: Message,
+    actionTaken: string,
+    admin: User,
+    thread?: ThreadChannel
+  ): Promise<boolean>;
+
+  /**
+   * Sets up a verification channel with appropriate permissions
+   * @param guild The Discord guild to set up the channel in
+   * @param restrictedRoleId The ID of the restricted role
+   * @returns The ID of the created channel or null if creation failed
+   */
+  setupVerificationChannel(guild: Guild, restrictedRoleId: string): Promise<string | null>;
+}
+
+/**
  * Service for managing notifications to admin/summary channels
  */
-export class NotificationManager {
+@injectable()
+export class NotificationManager implements INotificationManager {
   private adminChannelId: string | undefined;
   private verificationChannelId: string | undefined;
   private client: Client;
-  private configService: ConfigService;
+  private configService: IConfigService;
 
   constructor(
-    client: Client,
+    @inject(TYPES.DiscordClient) client: Client,
+    @inject(TYPES.ConfigService) configService: IConfigService,
     adminChannelId?: string,
-    verificationChannelId?: string,
-    configService?: ConfigService
+    verificationChannelId?: string
   ) {
     this.client = client;
     this.adminChannelId = adminChannelId;
     this.verificationChannelId = verificationChannelId;
-    this.configService = configService || new ConfigService();
+    this.configService = configService;
   }
 
   public async initialize(guildId: string): Promise<void> {
@@ -198,8 +266,8 @@ export class NotificationManager {
         updatedEmbed.addFields({ name: 'Action Log', value: actionLogContent, inline: false });
       }
 
-      // Update the message
-      await message.edit({ embeds: [updatedEmbed] });
+      // Update the message with the new embed
+      await message.edit({ embeds: [updatedEmbed], components: [] });
       return true;
     } catch (error) {
       console.error('Failed to log action to message:', error);
@@ -354,10 +422,10 @@ export class NotificationManager {
   }
 
   /**
-   * Sets up a verification channel with the proper permissions
-   * @param guild The guild to create the channel in
+   * Sets up a verification channel with appropriate permissions
+   * @param guild The Discord guild to set up the channel in
    * @param restrictedRoleId The ID of the restricted role
-   * @returns Promise resolving to the created channel ID or null if creation failed
+   * @returns The ID of the created channel or null if creation failed
    */
   public async setupVerificationChannel(
     guild: Guild,

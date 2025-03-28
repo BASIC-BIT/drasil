@@ -2,7 +2,7 @@
 
 ## Current Development Focus
 
-The project is currently focused on implementing the core functionality of the Discord Anti-Spam Bot. Based on the todo.md file and the current codebase, we have completed several key chunks of work and are now working on detection event persistence and testing improvements.
+The project is currently focused on implementing the core functionality of the Discord Anti-Spam Bot. Based on the todo.md file and the current codebase, we have completed several key chunks of work and are now working on detection event persistence, testing improvements, and dependency injection implementation.
 
 ## Recent Milestones
 
@@ -33,6 +33,18 @@ The project is currently focused on implementing the core functionality of the D
   - Updated test assertions to match actual error messages
   - Ensured consistent error handling across repositories
   - Added comprehensive test coverage for error cases
+
+- ✅ **InversifyJS Dependency Injection**:
+
+  - Implemented InversifyJS container configuration
+  - Created interfaces for all services and repositories
+  - Updated existing classes to use @injectable and @inject decorators
+  - Defined symbols for all injectable dependencies
+  - Refactored Bot class to use dependency injection
+  - Updated index.ts to use container for dependency resolution
+  - Created test utilities for InversifyJS testing
+  - Added integration tests for container validation
+  - Updated README with InversifyJS testing documentation
 
 - ✅ **Project & Testing Setup**:
 
@@ -131,28 +143,38 @@ The project is currently focused on implementing the core functionality of the D
 
 The system currently implements:
 
-1. **Bot Core (Bot.ts)**:
+1. **Dependency Injection with InversifyJS**:
 
-   - Main orchestrator class
+   - Central container configuration in `src/di/container.ts`
+   - Symbol definitions in `src/di/symbols.ts`
+   - Interfaces for all services and repositories
+   - `@injectable()` decorators on all service and repository classes
+   - `@inject()` decorators for constructor parameters
+   - Singleton scope for most services and repositories
+   - Testable architecture with mock injections
+
+2. **Bot Core (Bot.ts)**:
+
+   - Main orchestrator class implementing IBot interface
    - Event handling for Discord interactions
-   - Service initialization and coordination
+   - Service initialization through dependency injection
    - Command registration and processing
    - Button interaction handling
    - Server initialization and management
 
-2. **Detection Services**:
+3. **Detection Services**:
 
    - **HeuristicService**: Fast, rule-based detection
    - **GPTService**: AI-powered deep analysis
    - **DetectionOrchestrator**: Combines both approaches with smart routing
 
-3. **User Management**:
+4. **User Management**:
 
    - **RoleManager**: Restricted role assignment and removal
    - **NotificationManager**: Admin notifications and verification threads
    - **UserService**: Handles user operations across servers
 
-4. **Configuration**:
+5. **Configuration**:
 
    - **ConfigService**: Server-specific settings with caching
    - **GlobalConfig**: Application-wide settings
@@ -164,7 +186,7 @@ The system currently implements:
      - Updates services in real-time
      - Eliminates need for environment variables
 
-5. **Data Access**:
+6. **Data Access**:
    - **Repository Pattern**: Abstraction for data operations
    - **Supabase Integration**: PostgreSQL database access
    - **Server Configuration**: Persistent storage for settings
@@ -176,7 +198,17 @@ The system currently implements:
 
 ### Current Technical Decisions
 
-1. **GPT Usage Optimization**:
+1. **Dependency Injection Implementation**:
+
+   - Using InversifyJS for IoC container management
+   - Interfaces defined for all injectable components
+   - Symbol-based dependency resolution
+   - Singleton scope for repositories and stateful services
+   - Transient scope for stateless services
+   - External dependency injection (Discord client, OpenAI, Supabase)
+   - Test utilities for container-based testing
+
+2. **GPT Usage Optimization**:
 
    - Using gpt-4o-mini model for improved accuracy with reasonable cost
    - Selective invocation strategy:
@@ -192,7 +224,7 @@ The system currently implements:
    - Low temperature (0.3) for more consistent responses
    - Limited token usage (max_tokens: 50) for efficiency
 
-2. **Admin Notification Format**:
+3. **Admin Notification Format**:
 
    - Confidence level display:
      - 🟢 Low (0-40%)
@@ -215,7 +247,7 @@ The system currently implements:
      - Links to verification threads when applicable
      - Maintains complete history in original message
 
-3. **Verification Channel Structure**:
+4. **Verification Channel Structure**:
 
    - Dedicated channel with specific permissions:
      - Everyone: No access (deny ViewChannel)
@@ -227,7 +259,7 @@ The system currently implements:
    - Automatic thread creation for flagged new joins
    - Manual thread creation via button or command
 
-4. **Database Error Handling**:
+5. **Database Error Handling**:
 
    - Specific handling for PostgrestError code 'PGRST116' (no rows found)
    - Treating "not found" cases as valid null returns rather than errors
@@ -235,7 +267,7 @@ The system currently implements:
    - Excluding non-UUID formatted IDs when creating new records
    - Consistent error propagation with context using RepositoryError
 
-5. **Server Configuration Management**:
+6. **Server Configuration Management**:
 
    - Database-stored configuration values instead of environment variables
    - Server-specific settings with `/config` command
@@ -243,7 +275,7 @@ The system currently implements:
    - Cache-first approach with database fallback
    - Type-safe configuration access
 
-6. **Repository Testing Strategy**:
+7. **Repository Testing Strategy**:
 
    - Mock Supabase client for unit testing
    - Properly mock method chaining for Supabase operations
@@ -253,7 +285,7 @@ The system currently implements:
    - Use `expect.objectContaining()` for dynamic fields like timestamps
    - Separate mock setups for multiple operations in the same test
 
-7. **Repository Pattern Implementation**:
+8. **Repository Pattern Implementation**:
    - Clear separation of concerns between repositories
    - DetectionOrchestrator responsible for ensuring entities exist
    - Entity-specific repositories focused on their own domain
@@ -313,6 +345,8 @@ The system currently implements:
    - ✅ Mock implementations for external dependencies
    - ✅ Add tests for Supabase repositories
    - ✅ Add tests for error handling scenarios
+   - ✅ Add integration tests for InversifyJS container
+   - ✅ Implement test utilities for dependency injection
    - 🔄 Add performance tests for high-volume scenarios
    - 🔄 Improve integration tests for end-to-end flows
    - 🔄 Add tests for database operations
@@ -320,6 +354,7 @@ The system currently implements:
 3. **Documentation Updates**:
    - ✅ Document Supabase error handling best practices
    - ✅ Document server configuration command
+   - ✅ Document InversifyJS testing approach
    - 🔄 Update README with setup instructions
    - 🔄 Document database schema and migrations
    - 🔄 Create admin guide for bot configuration

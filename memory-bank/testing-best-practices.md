@@ -22,6 +22,7 @@
 - Repository layer interactions with Supabase
 - Service coordination
 - End-to-end workflows
+- InversifyJS container configuration validation
 
 ### Database Testing
 
@@ -33,6 +34,301 @@
 - Migration scripts
 - Row-level security (RLS) policies
 - Complex query performance
+
+## Testing with InversifyJS
+
+### Setting Up the Test Container
+
+The project includes dedicated utilities for testing with InversifyJS dependency injection:
+
+1. **The `createMocks()` Function**:
+
+```typescript
+export function createMocks() {
+  // Create mocks for all services
+  const mockHeuristicService: jest.Mocked<IHeuristicService> = {
+    analyzeMessage: jest.fn().mockReturnValue({ result: 'OK', reasons: [] }),
+    isMessageSuspicious: jest.fn().mockReturnValue(false),
+    // Other methods...
+  };
+
+  // Create mocks for all repositories
+  const mockUserRepository: jest.Mocked<IUserRepository> = {
+    findByDiscordId: jest.fn().mockResolvedValue(null),
+    // Other methods...
+  };
+
+  // External dependencies
+  const mockDiscordClient: jest.Mocked<Partial<Client>> = {
+    login: jest.fn().mockResolvedValue('mock-token'),
+    // Other methods...
+  };
+
+  return {
+    mockHeuristicService,
+    mockGPTService,
+    // Other mocks...
+  };
+}
+```
+
+2. **The `createTestContainer()` Function**:
+
+```typescript
+export function createTestContainer(
+  customMocks?: Partial<ReturnType<typeof createMocks>>
+): Container {
+  const container = new Container();
+  const mocks = { ...createMocks(), ...customMocks };
+
+  // Bind external dependencies
+  container.bind(TYPES.DiscordClient).toConstantValue(mocks.mockDiscordClient as Client);
+  container.bind(TYPES.OpenAI).toConstantValue(mocks.mockOpenAI as OpenAI);
+
+  // Bind services
+  container
+    .bind<IHeuristicService>(TYPES.HeuristicService)
+    .toConstantValue(mocks.mockHeuristicService);
+  container.bind<IGPTService>(TYPES.GPTService).toConstantValue(mocks.mockGPTService);
+
+  // Bind repositories
+  container.bind<IUserRepository>(TYPES.UserRepository).toConstantValue(mocks.mockUserRepository);
+
+  return container;
+}
+```
+
+3. **The `createServiceTestContainer()` Function**:
+
+```typescript
+export function createServiceTestContainer<T>(
+  serviceIdentifier: symbol,
+  serviceImplementation: new (...args: any[]) => T,
+  customMocks?: Partial<ReturnType<typeof createMocks>>
+): Container {
+  const container = createTestContainer(customMocks);
+
+  // Rebind the service to use the real implementation
+  container.unbind(serviceIdentifier);
+  container.bind<T>(serviceIdentifier).to(serviceImplementation);
+
+  return container;
+}
+```
+
+### Testing Patterns
+
+#### 1. Testing a Service with Mocked Dependencies
+
+```typescript
+describe('DetectionOrchestrator', () => {
+  let container: Container;
+  let detectionOrchestrator: IDetectionOrchestrator;
+  let mocks: ReturnType<typeof createMocks>;
+
+  beforeEach(() => {
+    // Create container with real DetectionOrchestrator but mock dependencies
+    container = createServiceTestContainer(TYPES.DetectionOrchestrator, DetectionOrchestrator);
+
+    // Access mocks for assertions
+    mocks = createMocks();
+
+    // Get service from container
+    detectionOrchestrator = container.get<IDetectionOrchestrator>(TYPES.DetectionOrchestrator);
+  });
+
+  it('should detect suspicious message with GPT', async () => {
+    // Arrange - Set up mock behavior
+    const mockMessage = 'suspicious message';
+    const mockUserId = 'user123';
+    const mockServerId = 'server456';
+    const mockUser = { id: 'user123', username: 'testuser' };
+
+    mocks.mockHeuristicService.isMessageSuspicious.mockReturnValue(false);
+    mocks.mockGPTService.analyzeProfile.mockResolvedValue({
+      result: 'SUSPICIOUS',
+      confidence: 0.8,
+      reasons: ['Test reason'],
+    });
+
+    // Act - Call the method being tested
+    const result = await detectionOrchestrator.detectMessage(
+      mockServerId,
+      mockUserId,
+      mockMessage,
+      mockUser
+    );
+
+    // Assert - Verify the expected outcome
+    expect(result.label).toBe('SUSPICIOUS');
+    expect(result.confidence).toBeGreaterThan(0.7);
+    expect(mocks.mockHeuristicService.isMessageSuspicious).toHaveBeenCalled();
+    expect(mocks.mockGPTService.analyzeProfile).toHaveBeenCalled();
+  });
+});
+```
+
+#### 2. Testing Container Configuration
+
+```typescript
+describe('InversifyJS Container Configuration', () => {
+  let container: Container;
+
+  beforeEach(() => {
+    // Set up environment variables
+    process.env.DISCORD_TOKEN = 'test-token';
+    process.env.OPENAI_API_KEY = 'test-key';
+    process.env.SUPABASE_URL = 'https://test.supabase.co';
+    process.env.SUPABASE_KEY = 'test-key';
+
+    // Configure the container
+    container = configureContainer();
+  });
+
+  afterEach(() => {
+    // Clean up
+    delete process.env.DISCORD_TOKEN;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_KEY;
+  });
+
+  describe('External dependencies', () => {
+    it('should resolve Discord client', () => {
+      const client = container.get<Client>(TYPES.DiscordClient);
+      expect(client).toBeDefined();
+      expect(client.login).toBeDefined();
+    });
+
+    it('should resolve OpenAI client', () => {
+      const openai = container.get<OpenAI>(TYPES.OpenAI);
+      expect(openai).toBeDefined();
+      expect(openai.chat).toBeDefined();
+    });
+  });
+
+  describe('Services', () => {
+    it('should resolve all services', () => {
+      // Assert that all services can be resolved
+      const heuristicService = container.get<IHeuristicService>(TYPES.HeuristicService);
+      const gptService = container.get<IGPTService>(TYPES.GPTService);
+      const detectionOrchestrator = container.get<IDetectionOrchestrator>(
+        TYPES.DetectionOrchestrator
+      );
+
+      expect(heuristicService).toBeDefined();
+      expect(gptService).toBeDefined();
+      expect(detectionOrchestrator).toBeDefined();
+    });
+  });
+});
+```
+
+#### 3. Testing with Custom Mocks
+
+```typescript
+describe('UserService', () => {
+  let container: Container;
+  let userService: IUserService;
+  let mocks: ReturnType<typeof createMocks>;
+
+  beforeEach(() => {
+    // Get default mocks
+    mocks = createMocks();
+
+    // Customize mock behavior
+    mocks.mockUserRepository.findByDiscordId.mockResolvedValue({
+      id: 'db-user-id',
+      discord_id: 'discord-123',
+      username: 'TestUser',
+      global_reputation_score: 100,
+    });
+
+    // Create container with custom mocks
+    container = createServiceTestContainer(TYPES.UserService, UserService, {
+      mockUserRepository: mocks.mockUserRepository,
+    });
+
+    // Get service from container
+    userService = container.get<IUserService>(TYPES.UserService);
+  });
+
+  it('should get existing user', async () => {
+    // Act
+    const result = await userService.getOrCreateUser('discord-123');
+
+    // Assert
+    expect(result.discord_id).toBe('discord-123');
+    expect(mocks.mockUserRepository.findByDiscordId).toHaveBeenCalledWith('discord-123');
+    expect(mocks.mockUserRepository.upsertByDiscordId).not.toHaveBeenCalled();
+  });
+});
+```
+
+### Testing Private Methods
+
+When a class has private methods that need testing, use one of these approaches:
+
+1. **Test through public methods**:
+   The most maintainable approach is to test private methods indirectly through public methods.
+
+2. **Type assertions for tests**:
+   In cases where direct testing is necessary, use type assertions carefully:
+
+```typescript
+describe('GPTService private methods', () => {
+  let container: Container;
+  let gptService: GPTService; // Note: specific implementation type
+
+  beforeEach(() => {
+    container = createServiceTestContainer(TYPES.GPTService, GPTService);
+    gptService = container.get<GPTService>(TYPES.GPTService);
+  });
+
+  it('should properly format user data', () => {
+    // Access private method using type assertion
+    const result = (gptService as any).formatUserData({
+      username: 'test',
+      accountAge: 30,
+      joinDate: '2023-01-01',
+    });
+
+    expect(result).toContain('username: test');
+    expect(result).toContain('account age: 30 days');
+  });
+});
+```
+
+3. **Dedicated test class**:
+   For complex cases, create a test subclass that exposes private methods:
+
+```typescript
+// Test-only subclass
+class TestableGPTService extends GPTService {
+  public exposeFormatUserData(data: any): string {
+    return this.formatUserData(data);
+  }
+}
+
+describe('GPTService private methods', () => {
+  let testService: TestableGPTService;
+
+  beforeEach(() => {
+    // Create with appropriate mocks
+    testService = new TestableGPTService(mockOpenAI as any);
+  });
+
+  it('should properly format user data', () => {
+    const result = testService.exposeFormatUserData({
+      username: 'test',
+      accountAge: 30,
+      joinDate: '2023-01-01',
+    });
+
+    expect(result).toContain('username: test');
+  });
+});
+```
 
 ## Mocking Strategy for Complex Libraries
 

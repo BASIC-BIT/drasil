@@ -10,11 +10,16 @@ The Discord Anti-Spam Bot follows a modular, service-oriented architecture with 
 ├── src/                        # Source code directory
 │   ├── __tests__/             # Test files
 │   │   ├── config/            # Configuration tests
-│   │   └── repositories/      # Repository tests
+│   │   ├── integration/       # Integration tests
+│   │   ├── repositories/      # Repository tests
+│   │   └── utils/             # Test utilities
 │   ├── __mocks__/             # Mock files for testing
 │   ├── config/                # Configuration files
 │   │   ├── supabase.ts       # Supabase client configuration
 │   │   └── gpt-config.ts     # GPT configuration
+│   ├── di/                    # Dependency injection
+│   │   ├── container.ts      # InversifyJS container config
+│   │   └── symbols.ts        # InversifyJS symbol definitions
 │   ├── repositories/          # Data access layer
 │   │   ├── types.ts          # Database entity types
 │   │   ├── BaseRepository.ts # Base repository interface
@@ -33,11 +38,24 @@ The Discord Anti-Spam Bot follows a modular, service-oriented architecture with 
 
 ## Core Components
 
-### 1. Bot Class (Bot.ts)
+### 1. Dependency Injection Container (di/container.ts)
+
+The central configuration point for InversifyJS dependency injection:
+
+- Configures the InversifyJS container with all dependencies
+- Binds external dependencies (Discord client, OpenAI, Supabase)
+- Registers repositories in singleton scope
+- Registers services in singleton or transient scope as appropriate
+- Returns the configured container for use in the application
+- Used by index.ts to obtain service instances
+- Supports testing by providing mock implementations
+
+### 2. Bot Class (Bot.ts)
 
 The central orchestrator that:
 
-- Initializes and manages all services
+- Implements the IBot interface
+- Receives injected dependencies via constructor
 - Handles Discord events (messages, member joins, interactions)
 - Registers and handles slash commands (/verify, /ban, /createthread, /ping, /setupverification)
 - Coordinates verification and moderation actions
@@ -46,7 +64,7 @@ The central orchestrator that:
 - Handles new guild joins with automatic setup
 - Records detection events through DetectionEventsRepository
 
-### 2. Repository Pattern
+### 3. Repository Pattern
 
 #### BaseRepository (BaseRepository.ts)
 
@@ -60,25 +78,32 @@ The central orchestrator that:
 - Handles PostgrestError with custom RepositoryError class
 - Implements all CRUD operations using Supabase client
 - Provides additional utility methods like count()
+- Marked as @injectable() for dependency injection
+- Receives SupabaseClient via @inject() decorator
 
 #### ServerRepository (ServerRepository.ts)
 
 - Extends SupabaseRepository for server-specific operations
 - Provides methods like findByGuildId, upsertByGuildId, updateSettings, setActive, findAllActive
 - Manages server configuration persistence in the database
+- Implements IServerRepository interface
+- Marked as @injectable() for dependency injection
 
-### 3. Service Layer
+### 4. Service Layer
 
 #### ConfigService (ConfigService.ts)
 
+- Implements IConfigService interface
 - Manages server configurations with a cache-first approach
 - Creates default configurations when none exist
 - Bridges between environment variables and database storage
 - Provides methods to get, update, and manage server settings
 - Handles initialization of configurations on bot startup
+- Marked as @injectable() and receives dependencies via constructor
 
 #### DetectionOrchestrator (DetectionOrchestrator.ts)
 
+- Implements IDetectionOrchestrator interface
 - Orchestrates the spam detection process
 - Implements two main detection flows:
   - detectMessage: Analyzes user messages with heuristics first, then GPT if needed
@@ -87,55 +112,87 @@ The central orchestrator that:
 - Determines when to use GPT based on user newness and suspicion level
 - Records detection events in the database
 - Produces a final DetectionResult with label, confidence, reasons, and trigger source
+- Marked as @injectable() and receives service and repository dependencies via constructor
 
 #### GPTService (GPTService.ts)
 
+- Implements IGPTService interface
 - Integrates with OpenAI's API using gpt-4o-mini model
 - Analyzes user profiles and messages for suspicious patterns
 - Uses few-shot examples from gpt-config.ts to improve classification
 - Formats prompts with structured user data and examples
 - Returns "OK" or "SUSPICIOUS" classification
+- Marked as @injectable() and receives OpenAI client via constructor
 
 #### HeuristicService (HeuristicService.ts)
 
+- Implements IHeuristicService interface
 - Implements rule-based spam detection:
   - Message frequency tracking (>5 messages in 10 seconds)
   - Suspicious keyword detection (nitro scam, free discord nitro, etc.)
 - Maintains a map of user message timestamps
 - Provides fast, low-cost initial screening
+- Marked as @injectable() for dependency injection
 
 #### RoleManager (RoleManager.ts)
 
+- Implements IRoleManager interface
 - Manages the restricted role for flagged users
 - Provides methods to assign and remove the restricted role
 - Handles role lookup and caching for better performance
 - Falls back to environment variables if no role ID is configured
+- Marked as @injectable() and receives Discord client via constructor
 
 #### NotificationManager (NotificationManager.ts)
 
+- Implements INotificationManager interface
 - Creates and sends notifications to admin channels
 - Formats suspicious user embeds with detailed information
 - Creates interactive buttons for admin actions (verify, ban, create thread)
 - Manages verification threads for suspicious users
 - Logs admin actions to notification messages
 - Sets up verification channels with proper permissions
+- Marked as @injectable() and receives Discord client via constructor
 
 ## Key Design Patterns
 
-### 1. Dependency Injection
+### 1. Dependency Injection with InversifyJS
 
-Services are loosely coupled and communicate through well-defined interfaces. Dependencies are injected via constructors in the Bot class, making the system more testable and maintainable.
+Services are now integrated with full dependency injection using InversifyJS. The system uses:
+
+- Interface-based design with clear contracts
+- Symbol-based dependency identification
+- Constructor injection for dependencies
+- Proper scoping (singleton vs transient) for services
+- External dependency injection (Discord, OpenAI, Supabase)
+- Testable architecture with mock injections
 
 Example:
 
 ```typescript
-// In Bot.ts constructor
-this.heuristicService = new HeuristicService();
-this.gptService = new GPTService();
-this.detectionOrchestrator = new DetectionOrchestrator(this.heuristicService, this.gptService);
-this.roleManager = new RoleManager();
-this.notificationManager = new NotificationManager(this.client);
-this.configService = new ConfigService();
+// In container.ts
+container.bind<IHeuristicService>(TYPES.HeuristicService).to(HeuristicService).inSingletonScope();
+
+// In class implementation
+@injectable()
+export class DetectionOrchestrator implements IDetectionOrchestrator {
+  constructor(
+    @inject(TYPES.HeuristicService) private heuristicService: IHeuristicService,
+    @inject(TYPES.GPTService) private gptService: IGPTService,
+    @inject(TYPES.DetectionEventsRepository)
+    private detectionEventsRepository: IDetectionEventsRepository,
+    @inject(TYPES.UserRepository) userRepository: IUserRepository,
+    @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
+    @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository
+  ) {
+    // Constructor implementation
+  }
+}
+
+// In index.ts
+const container = configureContainer();
+const bot = container.get<IBot>(TYPES.Bot);
+await bot.startBot();
 ```
 
 ### 2. Repository Pattern
@@ -163,6 +220,7 @@ Business logic is encapsulated in focused service classes with single responsibi
 - **RoleManager**: Role assignment and management
 - **NotificationManager**: Admin notifications and verification threads
 - **ConfigService**: Configuration management
+- **UserService**: User and server membership management
 
 ### 4. Event-Driven Architecture
 
@@ -204,7 +262,7 @@ This pattern is implemented in the getServerConfig method, which:
 ### 1. Message Processing Flow
 
 ```
-Message Received → DetectionOrchestrator
+Message Received → Bot.ts → DetectionOrchestrator
 ├── HeuristicService (Quick Check)
 └── GPTService (Deep Analysis if user is new or borderline suspicious)
 → Final Decision → Action (via Bot.ts)
@@ -255,6 +313,18 @@ Slash Command or Button Interaction → Bot.ts
 └── Action Logging: NotificationManager.logActionToMessage
 ```
 
+### 5. Dependency Resolution Flow (with InversifyJS)
+
+```
+Application Start → index.ts
+├── Configure DI Container (container.ts)
+│   ├── Configure External Dependencies
+│   ├── Configure Repositories
+│   └── Configure Services
+├── Resolve Bot Instance (container.get<IBot>(TYPES.Bot))
+└── Start Bot (bot.startBot())
+```
+
 ## Error Handling Strategy
 
 1. **Service-Level Error Handling**:
@@ -285,20 +355,22 @@ Slash Command or Button Interaction → Bot.ts
 1. **Unit Tests**:
 
    - Service-specific tests in **tests** directory
-   - Mock dependencies for isolation
+   - Mock dependencies with InversifyJS test utilities
    - Test both success and error paths
+   - Use createServiceTestContainer for focused service testing
 
 2. **Integration Tests**:
 
+   - container.integration.test.ts for dependency resolution
    - Bot.integration.test.ts for end-to-end flows
    - Tests for critical paths like detection and notification
 
-3. **Mocking Strategy**:
+3. **InversifyJS Testing Utilities**:
 
-   - Mock implementations in **mocks** directory
-   - discord.js.ts mocks Discord client and interactions
-   - openai.ts mocks OpenAI API responses
-   - supabase.ts mocks database operations
+   - createTestContainer(): Creates container with all dependencies mocked
+   - createServiceTestContainer(): Creates container with a real service implementation
+   - createMocks(): Creates mock implementations for all services and repositories
+   - Custom mock implementations for external services (Discord, OpenAI, Supabase)
 
 4. **Real API Tests**:
    - GPTService.realapi.test.ts for testing actual OpenAI integration
@@ -319,26 +391,29 @@ The architecture provides several extension points:
    - Add new services or extend existing ones
    - Integrate into DetectionOrchestrator
    - Update detection result format if needed
+   - Register in the DI container
 
 3. **Database Schema Extensions**:
 
    - Add new migrations in supabase/migrations
    - Create new repository classes extending SupabaseRepository
    - Update types.ts with new entity interfaces
+   - Register new repositories in the DI container
 
 4. **Configuration Extensions**:
    - Add new settings to ServerSettings interface
    - Update GlobalConfig with new default values
    - Extend ConfigService methods as needed
+   - Bind new configuration objects in the container
 
 ## Development Guidelines
 
 ### 1. Service Integration
 
-- Services should be loosely coupled
+- Services should implement interfaces
 - Communication through well-defined interfaces
-- Dependency injection via constructor
-- Repository pattern for data access
+- Dependency injection via constructor with @inject decorators
+- Register services in the container
 
 ### 2. Error Handling
 
@@ -360,3 +435,4 @@ The architecture provides several extension points:
 - Mocks in `__mocks__` directory
 - Integration tests for critical paths
 - Repository tests with Supabase mocking
+- Use InversifyJS testing utilities for dependency injection testing

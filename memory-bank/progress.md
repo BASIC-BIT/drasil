@@ -40,6 +40,18 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ Reason tracking for decision explanation
   - ✅ Different workflows for messages vs. new joins
 
+### Dependency Injection Architecture
+
+- ✅ InversifyJS integration
+  - ✅ Container configuration in src/di/container.ts
+  - ✅ Symbol definitions in src/di/symbols.ts
+  - ✅ Interface definitions for all services
+  - ✅ @injectable() and @inject() decorators
+  - ✅ Singleton and transient service registration
+  - ✅ External dependency injection (Discord, OpenAI, Supabase)
+  - ✅ Dedicated test utilities for InversifyJS testing
+  - ✅ Container integration tests
+
 ### User Management
 
 - ✅ Role management
@@ -259,6 +271,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ServerMemberRepository (100% coverage)
 - Integration tests: Limited
   - Bot.integration.test.ts
+  - container.integration.test.ts
 - End-to-end tests: Not implemented
 
 ### Performance
@@ -311,12 +324,19 @@ The Discord Anti-Spam Bot is currently in active development with several key co
    - Limited validation of configuration values
 
 6. **Database Implementation** (IMPROVED):
+
    - ✅ Initial schema created and successfully utilized
    - ✅ User, ServerMember, and DetectionEvents repositories implemented
    - ✅ Proper separation of concerns between repositories
    - ✅ Clear entity creation responsibilities
    - ✅ Enhanced error handling and logging
    - ⏳ No data migration strategy for schema changes
+
+7. **Dependency Injection Testing Challenges**:
+   - Some tests need updating to work with InversifyJS
+   - Issues with accessing private methods in tests
+   - Need for more mocking utilities
+   - More comprehensive integration tests needed
 
 ## Next Milestone Goals
 
@@ -352,7 +372,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 
 ## Documentation Status
 
-- README: Present but minimal
+- README: Updated with InversifyJS testing information
 - API Documentation: Not started
 - Admin Guide: Not started
 - Developer Guide: Not started

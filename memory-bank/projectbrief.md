@@ -83,10 +83,17 @@ This project is an AI-powered Discord bot designed to prevent spam and manage us
   - Global settings for application-wide controls
 
 - **Cross-Server Intelligence** (Planned):
+
   - User tracking across multiple servers
   - Global reputation scoring system
   - Trust network for server verification
   - Privacy controls for data sharing
+
+- **Dependency Injection with InversifyJS**:
+  - Interface-based design for all services and repositories
+  - Centralized container configuration
+  - Type symbols for dependency identification
+  - Simplified testing with mockable dependencies
 
 ## Target Users
 
@@ -256,3 +263,131 @@ The detailed development roadmap is tracked in the progress.md file.
 - Optional self-hosting documentation
 - Pricing model integration via Stripe (second pass)
 - Web dashboard interface for easier bot management (third pass)
+
+## Technology Stack
+
+### Core Technologies
+
+- TypeScript
+- Node.js
+- Discord.js
+- OpenAI API
+- Supabase (PostgreSQL)
+- **InversifyJS** for dependency injection
+- Jest for testing
+
+### Development Tools
+
+- VS Code
+- ESLint
+- TypeScript compiler
+- Git/GitHub
+
+## Project Structure
+
+### Core Components
+
+- Bot class: Main entry point and Discord event handling
+- Detection Services: Heuristic and GPT-based detection
+- User Management: User profiles and reputation
+- Configuration System: Server-specific settings
+- Data Access: Repository layer for persistent storage
+
+### Key Files and Directories
+
+- `src/Bot.ts`: Main bot implementation
+- `src/services/`: Service implementations
+- `src/repositories/`: Data access layer
+- `src/di/`: Dependency injection configuration
+  - `container.ts`: InversifyJS container setup
+  - `symbols.ts`: Type symbols for dependency injection
+- `src/__tests__/`: Test files and utilities
+
+## Development Approach
+
+### Engineering Principles
+
+- **Testability**: All components designed with testing in mind
+  - InversifyJS dependency injection enables proper isolation in tests
+  - Test containers simplify integration testing
+- **Modularity**: Clean interfaces between components
+- **Error Handling**: Graceful degradation when external services fail
+- **Configuration**: Extensive configuration options without code changes
+
+### Development Workflow
+
+1. Feature planning and technical design
+2. Implementation with TDD approach
+3. Code review and refinement
+4. Integration testing
+5. Deployment and monitoring
+
+## Current Status and Next Steps
+
+### Completed Work
+
+- Core bot architecture and Discord integration
+- Basic detection services
+- Database schema and repositories
+- **InversifyJS implementation**
+  - Interface design for all services
+  - Container configuration
+  - Symbol definitions
+  - Test utilities for InversifyJS
+
+### Upcoming Work
+
+- Enhanced detection algorithms
+- Improved configurability
+- Cross-server reputation system
+- Advanced analytics for admins
+
+## Technical Challenges
+
+### Solved Challenges
+
+- Discord API integration
+- OpenAI API integration for content analysis
+- Database schema design for user and server tracking
+- **Dependency management with InversifyJS**
+  - Component coupling and circular dependency prevention
+  - External service injection
+  - Testing strategy
+
+### Outstanding Challenges
+
+- Rate limiting in Discord API
+- Cost management for OpenAI API usage
+- Scaling to support large numbers of servers
+- Performance optimization for message processing
+
+## Resources
+
+### Documentation
+
+- [Project README](../README.md)
+- [API Documentation](./API.md)
+- [Architecture Overview](./systemPatterns.md)
+- [Testing Best Practices](./testing-best-practices.md)
+
+### External Resources
+
+- [Discord.js Documentation](https://discord.js.org/)
+- [OpenAI API Documentation](https://platform.openai.com/docs/)
+- [Supabase Documentation](https://supabase.io/docs)
+- [InversifyJS Documentation](https://inversify.io/)
+
+## Team and Stakeholders
+
+### Development Team
+
+- Lead Developer
+- Backend Developer
+- QA Engineer
+- DevOps Specialist
+
+### Stakeholders
+
+- Discord Server Administrators
+- End Users (Discord Server Members)
+- Project Sponsors
