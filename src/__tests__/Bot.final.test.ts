@@ -45,6 +45,7 @@ describe('Bot', () => {
         content: '!ping',
         isBot: false,
         userId: 'mock-user-id',
+        guildId: 'mock-guild-id',
       });
 
       // Act
@@ -66,6 +67,7 @@ describe('Bot', () => {
         content: 'Hello there',
         isBot: true,
         userId: 'mock-bot-id',
+        guildId: 'mock-guild-id',
       });
 
       // Act
@@ -95,6 +97,7 @@ describe('Bot', () => {
         isBot: false,
         userId: 'mock-user-id',
         username: 'suspicious-user',
+        guildId: 'mock-guild-id',
       });
 
       // Act
@@ -102,15 +105,16 @@ describe('Bot', () => {
 
       // Assert
       expect(mockDetectionOrchestrator.detectMessage).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(String),
+        'mock-guild-id',
+        'mock-user-id',
+        'Suspicious message',
         expect.objectContaining({
-          username: expect.any(String),
+          username: 'suspicious-user',
         })
       );
     });
 
-    it('should not log normal messages', async () => {
+    it('should handle DM messages', async () => {
       // Import the mock directly
       const { MockMessage } = require('../__mocks__/discord.js');
 
@@ -129,13 +133,21 @@ describe('Bot', () => {
         isBot: false,
         userId: 'mock-user-id',
         username: 'normal-user',
+        guildId: null, // DM message
       });
 
       // Act
       await bot.handleMessage(mockMessage);
 
       // Assert
-      expect(mockDetectionOrchestrator.detectMessage).toHaveBeenCalled();
+      expect(mockDetectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+        'DM',
+        'mock-user-id',
+        'Hello, how are you today?',
+        expect.objectContaining({
+          username: 'normal-user',
+        })
+      );
     });
 
     it('should handle detection errors gracefully', async () => {
@@ -151,6 +163,7 @@ describe('Bot', () => {
         isBot: false,
         userId: 'mock-user-id',
         username: 'test-user',
+        guildId: 'mock-guild-id',
       });
 
       // Act
@@ -180,6 +193,7 @@ describe('Bot', () => {
       const mockMember = MockGuildMember({
         id: 'mock-user-id',
         username: 'TestUser',
+        guildId: 'mock-guild-id',
       });
 
       // Act
@@ -187,8 +201,10 @@ describe('Bot', () => {
 
       // Assert
       expect(mockDetectionOrchestrator.detectNewJoin).toHaveBeenCalledWith(
+        'mock-guild-id',
+        'mock-user-id',
         expect.objectContaining({
-          username: expect.any(String),
+          username: 'TestUser',
         })
       );
     });
@@ -204,6 +220,7 @@ describe('Bot', () => {
       const mockMember = MockGuildMember({
         id: 'mock-user-id',
         username: 'TestUser',
+        guildId: 'mock-guild-id',
       });
 
       // Act
@@ -358,6 +375,44 @@ describe('Bot', () => {
       // Assert
       expect(errorSpy).toHaveBeenCalled();
       errorSpy.mockRestore();
+    });
+  });
+
+  describe('Test commands', () => {
+    it('should handle test commands with server ID', async () => {
+      // Import the mock directly
+      const { MockMessage } = require('../__mocks__/discord.js');
+
+      // Arrange
+      mockDetectionOrchestrator.detectMessage.mockResolvedValue({
+        label: 'SUSPICIOUS',
+        confidence: 0.85,
+        reasons: ['Test command'],
+        usedGPT: false,
+        triggerSource: 'message',
+        triggerContent: '',
+      });
+
+      const mockMessage = MockMessage({
+        content: '!test spamwords',
+        isBot: false,
+        userId: 'mock-user-id',
+        username: 'test-user',
+        guildId: 'mock-guild-id',
+      });
+
+      // Act
+      await bot.handleMessage(mockMessage);
+
+      // Assert
+      expect(mockDetectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+        'mock-guild-id',
+        'mock-user-id',
+        'free discord nitro gift card claim your prize now',
+        expect.objectContaining({
+          username: 'test-user',
+        })
+      );
     });
   });
 });

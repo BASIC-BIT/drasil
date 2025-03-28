@@ -23,6 +23,7 @@ import { RoleManager } from './services/RoleManager';
 import { NotificationManager } from './services/NotificationManager';
 import { ConfigService } from './config/ConfigService';
 import { globalConfig } from './config/GlobalConfig';
+import { DetectionEventsRepository } from './repositories/DetectionEventsRepository';
 
 // Load environment variables
 dotenv.config();
@@ -35,6 +36,7 @@ export class Bot {
   private roleManager: RoleManager;
   private notificationManager: NotificationManager;
   private configService: ConfigService;
+  private detectionEventsRepository: DetectionEventsRepository;
   private commands: RESTPostAPIChatInputApplicationCommandsJSONBody[];
 
   constructor() {
@@ -51,7 +53,12 @@ export class Bot {
     this.heuristicService = new HeuristicService();
     this.gptService = new GPTService();
     this.configService = new ConfigService();
-    this.detectionOrchestrator = new DetectionOrchestrator(this.heuristicService, this.gptService);
+    this.detectionEventsRepository = new DetectionEventsRepository();
+    this.detectionOrchestrator = new DetectionOrchestrator(
+      this.heuristicService,
+      this.gptService,
+      this.detectionEventsRepository
+    );
     this.roleManager = new RoleManager(undefined, this.configService);
     this.notificationManager = new NotificationManager(
       this.client,
@@ -519,6 +526,7 @@ export class Bot {
 
     // Extract user data for detection
     const userId = message.author.id;
+    const serverId = message.guild?.id;
     const content = message.content;
 
     try {
@@ -532,6 +540,7 @@ export class Bot {
 
       // Use the detection orchestrator to analyze the message
       const detectionResult = await this.detectionOrchestrator.detectMessage(
+        serverId || 'DM',
         userId,
         content,
         profileData
@@ -581,7 +590,11 @@ export class Bot {
       const profileData = this.extractUserProfileData(member.user, member);
 
       // Run detection on new join
-      const detectionResult = await this.detectionOrchestrator.detectNewJoin(profileData);
+      const detectionResult = await this.detectionOrchestrator.detectNewJoin(
+        member.guild.id,
+        member.id,
+        profileData
+      );
 
       // If suspicious, take action
       if (detectionResult.label === 'SUSPICIOUS') {
@@ -628,7 +641,7 @@ export class Bot {
         }
       }
     } catch (error) {
-      console.error('Error processing new member:', error);
+      console.error('Error handling new member:', error);
     }
   }
 
@@ -688,6 +701,7 @@ export class Bot {
 
           // Analyze with this profile
           newAccountResult = await this.detectionOrchestrator.detectMessage(
+            message.guild?.id || 'TEST',
             message.author.id,
             'Test message with simulated new account',
             newAccountProfile
@@ -705,6 +719,7 @@ export class Bot {
           // Test with known spam keywords
           spamMessage = 'free discord nitro gift card claim your prize now';
           spamResult = await this.detectionOrchestrator.detectMessage(
+            message.guild?.id || 'TEST',
             message.author.id,
             spamMessage,
             this.extractUserProfileData(message.author, message.member as GuildMember)

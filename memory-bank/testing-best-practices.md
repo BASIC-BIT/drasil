@@ -317,6 +317,44 @@ it('should respond to !ping command', async () => {
 
 By following these patterns and best practices, we ensure consistent and reliable testing of our Supabase integrations.
 
+#### Error Handling Best Practices
+
+1. **PostgrestError Handling**:
+
+   ```typescript
+   // Mock PostgrestError with proper structure
+   const mockError = {
+     message: 'Database error',
+     details: '',
+     hint: '',
+     code: 'PGRST301',
+   } as PostgrestError;
+
+   // Mock error response
+   const mockOrder = jest.fn().mockResolvedValue({
+     data: null,
+     error: mockError,
+   });
+   ```
+
+2. **Error Assertion**:
+
+   ```typescript
+   // Test error handling with proper error message
+   await expect(repository.method()).rejects.toThrow(
+     'Database error during methodName: Database error'
+   );
+   ```
+
+3. **Not Found Cases**:
+   ```typescript
+   // Mock "not found" response with PGRST116
+   const mockSingle = jest.fn().mockResolvedValue({
+     data: null,
+     error: { code: 'PGRST116' },
+   });
+   ```
+
 ## Test Data Management
 
 ### Test Data Setup

@@ -128,6 +128,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ ServerRepository specific implementation
   - ✅ UserRepository implementation with tests
   - ✅ ServerMemberRepository implementation with tests
+  - ✅ DetectionEventsRepository implementation with tests
 - ✅ Server configuration persistence
 - ✅ Server configuration command implementation
 - ✅ User repository implementation
@@ -139,6 +140,11 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ Member CRUD operations
   - ✅ Message count tracking
   - ✅ Restriction status management
+  - ✅ Comprehensive test coverage
+- ✅ Detection events repository implementation
+  - ✅ Event recording and querying
+  - ✅ Proper error handling
+  - ✅ Integration with DetectionOrchestrator
   - ✅ Comprehensive test coverage
 - 🔄 Moderation logs and action tracking
 - 🔄 Cross-server data sharing
@@ -264,12 +270,12 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 
 ## Known Issues
 
-1. **Supabase Error Handling** (FIXED):
+1. **Test Coverage** (FIXED):
 
-   - ✅ Fixed issue with PostgrestError handling in repositories
-   - ✅ Properly handling "not found" cases with code 'PGRST116'
-   - ✅ Improved data validation before database operations
-   - ✅ Documented best practices in supabase-error-handling.md
+   - ✅ Fixed DetectionEventsRepository test error handling
+   - ✅ Improved mock setup for Supabase operations
+   - ✅ Added proper PostgrestError handling in tests
+   - ✅ Updated test assertions to match actual error messages
 
 2. **Button Interaction Timeout**:
 

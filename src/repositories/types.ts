@@ -61,3 +61,23 @@ export interface ServerMember {
   last_message_at?: string; // Last time user sent a message
   message_count?: number; // Total message count in server
 }
+
+/**
+ * Represents a spam detection event
+ */
+export interface DetectionEvent {
+  id: string;
+  server_id: string;
+  user_id: string;
+  message_id?: string;
+  detection_type: 'MESSAGE' | 'JOIN';
+  confidence: number;
+  confidence_level: 'Low' | 'Medium' | 'High';
+  reasons: string[];
+  used_gpt: boolean;
+  detected_at: Date;
+  admin_action?: 'Verified' | 'Banned' | 'Ignored';
+  admin_action_by?: string;
+  admin_action_at?: Date;
+  metadata: Record<string, unknown>;
+}

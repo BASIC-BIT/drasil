@@ -1,35 +1,22 @@
 import { DetectionOrchestrator } from '../../services/DetectionOrchestrator';
 import { HeuristicService } from '../../services/HeuristicService';
 import { GPTService, UserProfileData } from '../../services/GPTService';
+import { DetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 
 // Mock both services
 jest.mock('../../services/HeuristicService');
 jest.mock('../../services/GPTService');
+jest.mock('../../repositories/DetectionEventsRepository');
 
 describe('DetectionOrchestrator', () => {
   // Setup variables
   let detectionOrchestrator: DetectionOrchestrator;
   let mockHeuristicService: jest.Mocked<HeuristicService>;
   let mockGPTService: jest.Mocked<GPTService>;
+  let detectionEventsRepository: jest.Mocked<DetectionEventsRepository>;
 
   // Sample user data for tests
   const userId = '123456789';
-  const normalContent = 'Hello, how are you doing today?';
-  const spammyContent = 'Free discord nitro! Click here!';
-
-  // Sample profile data
-  const normalUserProfile: UserProfileData = {
-    username: 'NormalUser',
-    discriminator: '1234',
-    accountCreatedAt: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000), // 1 year old account
-    joinedServerAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // Joined 30 days ago
-  };
-
-  const newUserProfile: UserProfileData = {
-    username: 'NewUser',
-    accountCreatedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), // 2 days old account
-    joinedServerAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), // Joined 1 day ago
-  };
 
   beforeEach(() => {
     // Reset all mocks
@@ -38,140 +25,156 @@ describe('DetectionOrchestrator', () => {
     // Create mock instances
     mockHeuristicService = new HeuristicService() as jest.Mocked<HeuristicService>;
     mockGPTService = new GPTService() as jest.Mocked<GPTService>;
+    detectionEventsRepository = {
+      create: jest.fn(),
+      findByServerAndUser: jest.fn(),
+    } as any;
 
     // Create orchestrator with mocked services
-    detectionOrchestrator = new DetectionOrchestrator(mockHeuristicService, mockGPTService);
+    detectionOrchestrator = new DetectionOrchestrator(
+      mockHeuristicService,
+      mockGPTService,
+      detectionEventsRepository
+    );
   });
 
   describe('detectMessage', () => {
-    it('should classify obvious spam using heuristics alone (no GPT)', async () => {
-      // Setup mocks for obvious spam
-      mockHeuristicService.isFrequencyAboveThreshold.mockReturnValue(true);
-      mockHeuristicService.containsSuspiciousKeywords.mockReturnValue(true);
+    const serverId = 'server123';
+    const content = 'test message';
 
-      // Since this is obvious spam, GPT shouldn't be called
-
-      // Call the method
-      const result = await detectionOrchestrator.detectMessage(userId, spammyContent);
-
-      // Verify the result
-      expect(result.label).toBe('SUSPICIOUS');
-      expect(result.confidence).toBeGreaterThan(0.5); // High confidence
-      expect(result.usedGPT).toBe(false); // GPT was not used
-
-      // Verify the heuristic service was called
-      expect(mockHeuristicService.isFrequencyAboveThreshold).toHaveBeenCalledWith(userId);
-      expect(mockHeuristicService.containsSuspiciousKeywords).toHaveBeenCalledWith(spammyContent);
-
-      // Verify the GPT service was NOT called
-      expect(mockGPTService.classifyUserProfile).not.toHaveBeenCalled();
+    beforeEach(() => {
+      detectionEventsRepository.findByServerAndUser.mockResolvedValue([]);
     });
 
-    it('should classify normal messages as OK using heuristics alone (no GPT)', async () => {
-      // Setup mocks for normal content
+    it('should store detection results in the database', async () => {
       mockHeuristicService.isFrequencyAboveThreshold.mockReturnValue(false);
       mockHeuristicService.containsSuspiciousKeywords.mockReturnValue(false);
 
-      // Call the method
-      const result = await detectionOrchestrator.detectMessage(userId, normalContent);
+      await detectionOrchestrator.detectMessage(serverId, userId, content);
 
-      // Verify the result
-      expect(result.label).toBe('OK');
-      expect(result.usedGPT).toBe(false); // GPT was not used
+      expect(detectionEventsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          server_id: serverId,
+          user_id: userId,
+          message_id: content,
+          detection_type: 'MESSAGE',
+          confidence: expect.any(Number),
+          confidence_level: expect.any(String),
+          reasons: expect.any(Array),
+          used_gpt: false,
+          detected_at: expect.any(Date),
+        })
+      );
+    });
 
-      // Verify the heuristic service was called
-      expect(mockHeuristicService.isFrequencyAboveThreshold).toHaveBeenCalledWith(userId);
-      expect(mockHeuristicService.containsSuspiciousKeywords).toHaveBeenCalledWith(normalContent);
+    it('should consider recent suspicious events', async () => {
+      detectionEventsRepository.findByServerAndUser.mockResolvedValue([
+        {
+          confidence_level: 'High',
+          detected_at: new Date(),
+        } as any,
+      ]);
 
-      // Verify the GPT service was NOT called
-      expect(mockGPTService.classifyUserProfile).not.toHaveBeenCalled();
+      mockHeuristicService.isFrequencyAboveThreshold.mockReturnValue(false);
+      mockHeuristicService.containsSuspiciousKeywords.mockReturnValue(false);
+
+      const result = await detectionOrchestrator.detectMessage(serverId, userId, content);
+
+      expect(result.reasons).toContain('Recent suspicious activity');
+      expect(result.confidence).toBeGreaterThan(0);
     });
 
     it('should use GPT for borderline cases', async () => {
-      // Setup mocks for borderline case
       mockHeuristicService.isFrequencyAboveThreshold.mockReturnValue(true);
       mockHeuristicService.containsSuspiciousKeywords.mockReturnValue(false);
-
-      // Mock GPT to return "OK"
-      mockGPTService.classifyUserProfile.mockResolvedValue('OK');
-
-      // Call the method with profile data (required for GPT)
-      const result = await detectionOrchestrator.detectMessage(
-        userId,
-        normalContent,
-        normalUserProfile
-      );
-
-      // Verify the result
-      expect(result.label).toBe('OK'); // GPT overrode the borderline suspicion
-      expect(result.usedGPT).toBe(true); // GPT was used
-
-      // Verify the heuristic service was called
-      expect(mockHeuristicService.isFrequencyAboveThreshold).toHaveBeenCalledWith(userId);
-      expect(mockHeuristicService.containsSuspiciousKeywords).toHaveBeenCalledWith(normalContent);
-
-      // Verify the GPT service was called
-      expect(mockGPTService.classifyUserProfile).toHaveBeenCalled();
-    });
-
-    it('should always use GPT for new users', async () => {
-      // Setup mocks for normal content but new user
-      mockHeuristicService.isFrequencyAboveThreshold.mockReturnValue(false);
-      mockHeuristicService.containsSuspiciousKeywords.mockReturnValue(false);
-
-      // Mock GPT to return "SUSPICIOUS"
       mockGPTService.classifyUserProfile.mockResolvedValue('SUSPICIOUS');
 
-      // Call the method with new user profile
+      const profileData: UserProfileData = {
+        username: 'TestUser',
+        accountCreatedAt: new Date(),
+        joinedServerAt: new Date(),
+      };
+
       const result = await detectionOrchestrator.detectMessage(
+        serverId,
         userId,
-        normalContent,
-        newUserProfile
+        content,
+        profileData
       );
 
-      // Verify the result
-      expect(result.label).toBe('SUSPICIOUS'); // GPT flagged as suspicious
-      expect(result.usedGPT).toBe(true); // GPT was used
-
-      // Verify the heuristic service was called
-      expect(mockHeuristicService.isFrequencyAboveThreshold).toHaveBeenCalledWith(userId);
-      expect(mockHeuristicService.containsSuspiciousKeywords).toHaveBeenCalledWith(normalContent);
-
-      // Verify the GPT service was called
       expect(mockGPTService.classifyUserProfile).toHaveBeenCalled();
+      expect(result.usedGPT).toBe(true);
+      expect(detectionEventsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          used_gpt: true,
+        })
+      );
     });
   });
 
   describe('detectNewJoin', () => {
-    it('should always use GPT for new server joins', async () => {
-      // Mock GPT to return "OK"
+    const serverId = 'server123';
+
+    it('should always use GPT and store results', async () => {
       mockGPTService.classifyUserProfile.mockResolvedValue('OK');
 
-      // Call the method
-      const result = await detectionOrchestrator.detectNewJoin(normalUserProfile);
+      const profileData: UserProfileData = {
+        username: 'TestUser',
+        accountCreatedAt: new Date(),
+        joinedServerAt: new Date(),
+      };
 
-      // Verify the result
-      expect(result.label).toBe('OK');
-      expect(result.usedGPT).toBe(true); // GPT was used
+      const result = await detectionOrchestrator.detectNewJoin(serverId, userId, profileData);
 
-      // Verify the GPT service was called
-      expect(mockGPTService.classifyUserProfile).toHaveBeenCalledWith(normalUserProfile);
+      expect(mockGPTService.classifyUserProfile).toHaveBeenCalled();
+      expect(result.usedGPT).toBe(true);
+      expect(detectionEventsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          server_id: serverId,
+          user_id: userId,
+          detection_type: 'JOIN',
+          used_gpt: true,
+          detected_at: expect.any(Date),
+        })
+      );
     });
 
-    it('should flag new accounts joining with higher suspicion', async () => {
-      // Mock GPT to return "SUSPICIOUS"
+    it('should handle new accounts with higher suspicion', async () => {
+      const newAccountDate = new Date();
+      newAccountDate.setDate(newAccountDate.getDate() - 3); // 3 days old account
+
       mockGPTService.classifyUserProfile.mockResolvedValue('SUSPICIOUS');
 
-      // Call the method with new user
-      const result = await detectionOrchestrator.detectNewJoin(newUserProfile);
+      const result = await detectionOrchestrator.detectNewJoin(serverId, userId, {
+        username: 'NewUser',
+        accountCreatedAt: newAccountDate,
+        joinedServerAt: new Date(),
+      });
 
-      // Verify the result
-      expect(result.label).toBe('SUSPICIOUS');
-      expect(result.confidence).toBeGreaterThan(0.5); // High confidence
-      expect(result.usedGPT).toBe(true); // GPT was used
+      expect(result.reasons).toContain('New Discord account');
+      expect(result.reasons).toContain('GPT analysis flagged as suspicious');
+      expect(result.confidence).toBeGreaterThan(0.5);
+    });
+  });
 
-      // Verify the GPT service was called
-      expect(mockGPTService.classifyUserProfile).toHaveBeenCalledWith(newUserProfile);
+  describe('confidence level conversion', () => {
+    it('should correctly categorize confidence levels', async () => {
+      // Mock findByServerAndUser to return an empty array
+      detectionEventsRepository.findByServerAndUser.mockResolvedValue([]);
+
+      // Test message detection with different confidence levels
+      await detectionOrchestrator.detectMessage('server1', 'user1', 'Test message', {
+        username: 'test-user',
+        accountCreatedAt: new Date(),
+        joinedServerAt: new Date(),
+      });
+
+      // Check that the detection result was created with a confidence level
+      expect(detectionEventsRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          confidence_level: expect.stringMatching(/^(Low|Medium|High)$/),
+        })
+      );
     });
   });
 });

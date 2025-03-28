@@ -4,6 +4,7 @@ export class Bot {
   public client: any;
   public detectionOrchestrator: any;
   public configService: any;
+  public detectionEventsRepository: any;
   public handleMessage: jest.Mock;
   public handleGuildMemberAdd: jest.Mock;
   public handleGuildCreate: jest.Mock;
@@ -27,6 +28,11 @@ export class Bot {
       detectNewJoin: jest.fn(),
     };
 
+    this.detectionEventsRepository = {
+      create: jest.fn(),
+      findByServerAndUser: jest.fn(),
+    };
+
     this.configService = {
       getServerConfig: jest.fn().mockResolvedValue({}),
       updateServerConfig: jest.fn().mockResolvedValue({}),
@@ -38,6 +44,7 @@ export class Bot {
       // Safely access properties with null checks
       const content = message?.content;
       const isBot = message?.author?.bot;
+      const serverId = message?.guild?.id;
 
       if (content === '!ping') {
         if (typeof message?.reply === 'function') {
@@ -50,9 +57,14 @@ export class Bot {
 
       try {
         if (message?.author?.id && content) {
-          await this.detectionOrchestrator.detectMessage(message.author.id, content, {
-            username: message.author?.username || 'unknown',
-          });
+          await this.detectionOrchestrator.detectMessage(
+            serverId || 'DM',
+            message.author.id,
+            content,
+            {
+              username: message.author?.username || 'unknown',
+            }
+          );
         }
       } catch (error) {
         console.error('Failed to process message', error || new Error('Unknown error'));
@@ -70,7 +82,11 @@ export class Bot {
             joinedServerAt: member.joinedAt || new Date(),
           };
 
-          await this.detectionOrchestrator.detectNewJoin(profileData);
+          await this.detectionOrchestrator.detectNewJoin(
+            member.guild?.id || 'TEST',
+            member.id,
+            profileData
+          );
         }
       } catch (error) {
         console.error('Failed to process new member', error || new Error('Unknown error'));

@@ -6,6 +6,7 @@
  */
 import { HeuristicService } from './HeuristicService';
 import { GPTService, UserProfileData } from './GPTService';
+import { DetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 
 export interface DetectionResult {
   label: 'OK' | 'SUSPICIOUS';
@@ -13,12 +14,13 @@ export interface DetectionResult {
   usedGPT: boolean;
   reasons: string[];
   triggerSource: 'message' | 'join';
-  triggerContent?: string;
+  triggerContent: string;
 }
 
 export class DetectionOrchestrator {
   private heuristicService: HeuristicService;
   private gptService: GPTService;
+  private detectionEventsRepository: DetectionEventsRepository;
 
   // Threshold to determine when to use GPT (0.3-0.7 is borderline)
   private readonly BORDERLINE_LOWER = 0.3;
@@ -28,39 +30,56 @@ export class DetectionOrchestrator {
   private readonly NEW_ACCOUNT_THRESHOLD_DAYS = 7;
   private readonly NEW_SERVER_MEMBER_THRESHOLD_DAYS = 3;
 
-  constructor(heuristicService: HeuristicService, gptService: GPTService) {
+  constructor(
+    heuristicService: HeuristicService,
+    gptService: GPTService,
+    detectionEventsRepository: DetectionEventsRepository
+  ) {
     this.heuristicService = heuristicService;
     this.gptService = gptService;
+    this.detectionEventsRepository = detectionEventsRepository;
   }
 
   /**
    * Detects if a message is suspicious using a combination of heuristic and GPT-based checks
    *
+   * @param serverId The Discord server ID
    * @param userId The Discord user ID
    * @param content The message content
    * @param profileData User profile data for GPT analysis
    * @returns A DetectionResult with the final label and metadata
    */
   public async detectMessage(
+    serverId: string,
     userId: string,
     content: string,
     profileData?: UserProfileData
   ): Promise<DetectionResult> {
-    // First, run heuristic checks
-    const isSuspiciousFrequency = this.heuristicService.isFrequencyAboveThreshold(userId);
-    const hasSuspiciousKeywords = this.heuristicService.containsSuspiciousKeywords(content);
+    // First, check recent detection history
+    const recentEvents = await this.detectionEventsRepository.findByServerAndUser(serverId, userId);
+    const recentSuspiciousEvents = recentEvents.filter((e) => e.confidence_level === 'High');
 
     // Calculate initial suspicion score based on heuristics
     let suspicionScore = 0;
     let reasons: string[] = [];
 
+    // If user has recent suspicious events, increase initial suspicion
+    if (recentSuspiciousEvents.length > 0) {
+      suspicionScore += 0.4; // Start with 40% suspicion
+      reasons.push('Recent suspicious activity');
+    }
+
+    // Run heuristic checks
+    const isSuspiciousFrequency = this.heuristicService.isFrequencyAboveThreshold(userId);
+    const hasSuspiciousKeywords = this.heuristicService.containsSuspiciousKeywords(content);
+
     if (isSuspiciousFrequency) {
-      suspicionScore += 0.5; // +50% suspicious for high message frequency
+      suspicionScore += 0.5;
       reasons.push('High message frequency');
     }
 
     if (hasSuspiciousKeywords) {
-      suspicionScore += 0.6; // +60% suspicious for suspicious keywords
+      suspicionScore += 0.6;
       reasons.push('Contains suspicious keywords');
     }
 
@@ -74,12 +93,12 @@ export class DetectionOrchestrator {
       : false;
 
     if (isNewAccount) {
-      suspicionScore += 0.2; // +20% suspicious for new account
+      suspicionScore += 0.2;
       reasons.push('New Discord account');
     }
 
     if (isNewServerMember) {
-      suspicionScore += 0.1; // +10% suspicious for new server member
+      suspicionScore += 0.1;
       reasons.push('Recently joined server');
     }
 
@@ -93,115 +112,170 @@ export class DetectionOrchestrator {
         (suspicionScore >= this.BORDERLINE_LOWER && suspicionScore <= this.BORDERLINE_UPPER)) &&
       profileData !== undefined;
 
-    // If we should use GPT and have profile data, call GPT
+    let result: DetectionResult;
+
     if (shouldUseGPT && profileData) {
-      // Add the message content to the profile data for better context
       const profileWithMessage = {
         ...profileData,
         recentMessage: content,
       };
 
-      // Call GPT to analyze the user
       const gptResult = await this.gptService.classifyUserProfile(profileWithMessage);
 
-      // If GPT says SUSPICIOUS, set high suspicion score
       if (gptResult === 'SUSPICIOUS') {
-        suspicionScore = 0.9; // 90% suspicious
+        suspicionScore = 0.9;
         reasons.push('GPT analysis flagged as suspicious');
       } else {
-        // If GPT says OK, reduce suspicion but don't eliminate it entirely if there were
-        // strong heuristic signals
         suspicionScore = Math.max(0, suspicionScore - 0.3);
         reasons.push('GPT analysis indicates user is likely legitimate');
       }
 
-      // Return the final result with GPT influence
-      return {
+      result = {
         label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
-        confidence: Math.abs(suspicionScore - 0.5) * 2, // Scale to 0-1 confidence
+        confidence: Math.abs(suspicionScore - 0.5) * 2,
         usedGPT: true,
+        reasons: reasons,
+        triggerSource: 'message',
+        triggerContent: content,
+      };
+    } else {
+      result = {
+        label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
+        confidence: Math.abs(suspicionScore - 0.5) * 2,
+        usedGPT: false,
         reasons: reasons,
         triggerSource: 'message',
         triggerContent: content,
       };
     }
 
-    // If we didn't use GPT, return the result based on heuristics alone
-    return {
-      label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
-      confidence: Math.abs(suspicionScore - 0.5) * 2, // Scale to 0-1 confidence
-      usedGPT: false,
-      reasons: reasons,
-      triggerSource: 'message',
-      triggerContent: content,
-    };
+    // Store the detection result
+    await this.storeDetectionResult(serverId, userId, result, content);
+
+    return result;
   }
 
   /**
-   * Detects if a user is suspicious when they join a server
-   * Always uses GPT for new joins if profile data is available
+   * Detects if a new server join is suspicious using GPT-based analysis
    *
-   * @param profileData User profile data for GPT analysis
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @param profileData User profile data for analysis
    * @returns A DetectionResult with the final label and metadata
    */
-  public async detectNewJoin(profileData: UserProfileData): Promise<DetectionResult> {
-    // For new joins, we always want to use GPT if possible
-    // But we'll still calculate an initial suspicion score
+  public async detectNewJoin(
+    serverId: string,
+    userId: string,
+    profileData: UserProfileData
+  ): Promise<DetectionResult> {
+    // Always use GPT for new joins
+    const gptResult = await this.gptService.classifyUserProfile(profileData);
+
+    // Calculate suspicion score
     let suspicionScore = 0;
     let reasons: string[] = [];
 
-    // Check if user is new to Discord
-    const isNewAccount = profileData.accountCreatedAt
-      ? this.isNewAccount(profileData.accountCreatedAt)
-      : false;
-
+    // Check if account is new
+    const isNewAccount = this.isNewAccount(profileData.accountCreatedAt);
     if (isNewAccount) {
-      suspicionScore += 0.3; // +30% suspicious for new account
+      suspicionScore += 0.4;
       reasons.push('New Discord account');
     }
 
-    // Call GPT to analyze the profile
-    const gptResult = await this.gptService.classifyUserProfile(profileData);
-
-    // Adjust suspicion score based on GPT result
+    // Add GPT result
     if (gptResult === 'SUSPICIOUS') {
-      suspicionScore += 0.6; // +60% suspicious from GPT
+      suspicionScore += 0.5;
       reasons.push('GPT analysis flagged as suspicious');
-    } else {
-      // If GPT says OK, reduce suspicion
-      suspicionScore = Math.max(0, suspicionScore - 0.2);
-      reasons.push('GPT analysis indicates user is likely legitimate');
     }
 
-    // Return the final result
-    return {
+    const result: DetectionResult = {
       label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
-      confidence: Math.abs(suspicionScore - 0.5) * 2, // Scale to 0-1 confidence
+      confidence: Math.abs(suspicionScore - 0.5) * 2,
       usedGPT: true,
       reasons: reasons,
       triggerSource: 'join',
+      triggerContent: '',
     };
+
+    // Store the detection result
+    await this.storeDetectionResult(serverId, userId, result);
+
+    return result;
+  }
+
+  /**
+   * Stores a detection result in the database
+   *
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @param result The detection result
+   * @param messageId Optional message ID for message detections
+   */
+  private async storeDetectionResult(
+    serverId: string,
+    userId: string,
+    result: DetectionResult,
+    messageId?: string
+  ): Promise<void> {
+    try {
+      await this.detectionEventsRepository.create({
+        server_id: serverId,
+        user_id: userId,
+        message_id: messageId,
+        detection_type: result.triggerSource === 'message' ? 'MESSAGE' : 'JOIN',
+        confidence: result.confidence,
+        confidence_level: this.getConfidenceLevel(result.confidence),
+        reasons: result.reasons,
+        used_gpt: result.usedGPT,
+        detected_at: new Date(),
+        admin_action: undefined,
+        admin_action_by: undefined,
+        admin_action_at: undefined,
+        metadata: {
+          trigger_content: result.triggerContent,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to store detection result:', error);
+    }
+  }
+
+  /**
+   * Converts a confidence score to a confidence level
+   *
+   * @param confidence The confidence score (0-1)
+   * @returns The confidence level ('Low', 'Medium', or 'High')
+   */
+  private getConfidenceLevel(confidence: number): 'Low' | 'Medium' | 'High' {
+    if (confidence < 0.3) return 'Low';
+    if (confidence < 0.7) return 'Medium';
+    return 'High';
   }
 
   /**
    * Checks if an account is considered "new" based on creation date
    *
    * @param accountCreatedAt The account creation date
-   * @returns true if the account is newer than the threshold
+   * @returns True if the account is considered new
    */
-  private isNewAccount(accountCreatedAt: Date): boolean {
-    const accountAgeDays = (Date.now() - accountCreatedAt.getTime()) / (1000 * 60 * 60 * 24);
-    return accountAgeDays < this.NEW_ACCOUNT_THRESHOLD_DAYS;
+  private isNewAccount(accountCreatedAt: Date | undefined): boolean {
+    if (!accountCreatedAt) return false;
+    const daysSinceCreation = Math.floor(
+      (Date.now() - accountCreatedAt.getTime()) / (1000 * 60 * 60 * 24)
+    );
+    return daysSinceCreation <= this.NEW_ACCOUNT_THRESHOLD_DAYS;
   }
 
   /**
-   * Checks if a user is a new server member based on join date
+   * Checks if a server member is considered "new" based on join date
    *
    * @param joinedServerAt The server join date
-   * @returns true if the user joined more recently than the threshold
+   * @returns True if the member is considered new to the server
    */
   private isNewServerMember(joinedServerAt: Date): boolean {
-    const memberAgeDays = (Date.now() - joinedServerAt.getTime()) / (1000 * 60 * 60 * 24);
-    return memberAgeDays < this.NEW_SERVER_MEMBER_THRESHOLD_DAYS;
+    const daysSinceJoin = Math.floor(
+      (Date.now() - joinedServerAt.getTime()) / (1000 * 60 * 60 * 24)
+    );
+    return daysSinceJoin <= this.NEW_SERVER_MEMBER_THRESHOLD_DAYS;
   }
 }

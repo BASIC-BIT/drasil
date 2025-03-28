@@ -2,11 +2,29 @@
 
 ## Current Development Focus
 
-The project is currently focused on implementing the core functionality of the Discord Anti-Spam Bot. Based on the todo.md file and the current codebase, we have completed several key chunks of work and are now working on database integration with Supabase.
+The project is currently focused on implementing the core functionality of the Discord Anti-Spam Bot. Based on the todo.md file and the current codebase, we have completed several key chunks of work and are now working on detection event persistence and testing improvements.
 
 ## Recent Milestones
 
 ### Completed
+
+- ✅ **Detection Events Implementation**:
+
+  - DetectionEventsRepository with full test coverage
+  - Integration with DetectionOrchestrator
+  - Proper error handling for database operations
+  - Event recording and querying functionality
+  - Updated Bot.ts to use DetectionEventsRepository
+  - Added server ID to detection method signatures
+
+- ✅ **Test Coverage Improvements**:
+
+  - Fixed DetectionEventsRepository test error handling
+  - Improved mock setup for Supabase operations
+  - Added proper PostgrestError handling in tests
+  - Updated test assertions to match actual error messages
+  - Ensured consistent error handling across repositories
+  - Added comprehensive test coverage for error cases
 
 - ✅ **Project & Testing Setup**:
 
@@ -260,27 +278,25 @@ The system currently implements:
 
 ### Immediate Tasks
 
-1. **Implement Supabase Integration**:
+1. **Complete Detection Events Integration**:
 
-   - ✅ Set up Supabase client
-   - ✅ Create initial database schema
-   - ✅ Implement repository pattern for servers
-   - ✅ Implement server configuration persistence
-   - ✅ Fix error handling in repository methods
-   - ✅ Implement server configuration command (/config)
-   - ✅ Remove environment variable dependencies
-   - 🔄 Implement user and server_member repositories
-   - 🔄 Add logging for flagged users and moderation actions
-   - 🔄 Implement cross-server reputation tracking
+   - ✅ Set up DetectionEventsRepository
+   - ✅ Integrate with DetectionOrchestrator
+   - ✅ Add proper error handling
+   - ✅ Add comprehensive test coverage
+   - 🔄 Implement performance testing for high volume
+   - 🔄 Add historical data retrieval
+   - 🔄 Implement verification thread tracking
 
 2. **Enhance Testing Coverage**:
 
    - ✅ Basic unit tests for services
    - ✅ Mock implementations for external dependencies
-   - 🔄 Add tests for Supabase repositories
+   - ✅ Add tests for Supabase repositories
+   - ✅ Add tests for error handling scenarios
+   - 🔄 Add performance tests for high-volume scenarios
    - 🔄 Improve integration tests for end-to-end flows
    - 🔄 Add tests for database operations
-   - 🔄 Add tests for error handling scenarios
 
 3. **Documentation Updates**:
    - ✅ Document Supabase error handling best practices

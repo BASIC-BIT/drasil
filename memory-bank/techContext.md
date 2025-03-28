@@ -293,6 +293,7 @@ The bot implements a hybrid spam detection approach combining multiple technique
 ### Current Tables
 
 - **servers**:
+
   ```sql
   CREATE TABLE IF NOT EXISTS servers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -306,6 +307,31 @@ The bot implements a hybrid spam detection approach combining multiple technique
     settings JSONB DEFAULT '{}'::JSONB,
     is_active BOOLEAN DEFAULT TRUE
   );
+  ```
+
+- **detection_events**:
+
+  ```sql
+  CREATE TABLE IF NOT EXISTS detection_events (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    message_id TEXT,
+    detection_type TEXT NOT NULL,
+    confidence REAL,
+    confidence_level TEXT, -- 'Low', 'Medium', 'High'
+    reasons TEXT[],
+    used_gpt BOOLEAN DEFAULT FALSE,
+    detected_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    admin_action TEXT, -- 'Verified', 'Banned', 'Ignored'
+    admin_action_by TEXT, -- Discord ID of admin who took action
+    admin_action_at TIMESTAMP WITH TIME ZONE,
+    metadata JSONB DEFAULT '{}'::JSONB
+  );
+
+  CREATE INDEX idx_detection_events_server ON detection_events(server_id);
+  CREATE INDEX idx_detection_events_user ON detection_events(user_id);
+  CREATE INDEX idx_detection_events_date ON detection_events(detected_at);
   ```
 
 ### Planned Tables

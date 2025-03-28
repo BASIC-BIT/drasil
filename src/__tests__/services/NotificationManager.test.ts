@@ -130,6 +130,7 @@ describe('NotificationManager', () => {
           usedGPT: true,
           reasons: ['test'],
           triggerSource: 'message',
+          triggerContent: 'Test message',
         }
       );
 
@@ -149,6 +150,7 @@ describe('NotificationManager', () => {
           usedGPT: true,
           reasons: ['test'],
           triggerSource: 'join',
+          triggerContent: 'User join event',
         }
       );
 
@@ -228,6 +230,7 @@ describe('NotificationManager', () => {
         usedGPT: true,
         reasons: ['test'],
         triggerSource: 'message',
+        triggerContent: 'Test message',
       });
 
       expect(mockClient.channels.fetch).toHaveBeenCalledWith(newChannelId);

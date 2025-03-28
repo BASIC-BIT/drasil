@@ -101,6 +101,8 @@ const MockMessage = (options: any = {}) => ({
           username: options.username || 'mock-user',
         },
       },
+  guild: options.guildId ? { id: options.guildId } : null,
+  guildId: options.guildId || null,
   reply: jest.fn().mockResolvedValue(undefined),
 });
 
@@ -137,6 +139,7 @@ const MockGuildMember = (options: any = {}) => ({
   },
   nickname: options.nickname,
   joinedAt: options.joinedAt || new Date(),
+  guild: options.guild || { id: options.guildId || 'mock-guild-id' },
 });
 
 // Mock Client

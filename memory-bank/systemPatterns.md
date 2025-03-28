@@ -44,6 +44,7 @@ The central orchestrator that:
 - Processes button interactions for admin actions
 - Initializes server configurations on startup
 - Handles new guild joins with automatic setup
+- Records detection events through DetectionEventsRepository
 
 ### 2. Repository Pattern
 
@@ -84,6 +85,7 @@ The central orchestrator that:
   - detectNewJoin: Always uses GPT for new server joins
 - Calculates suspicion scores based on multiple factors
 - Determines when to use GPT based on user newness and suspicion level
+- Records detection events in the database
 - Produces a final DetectionResult with label, confidence, reasons, and trigger source
 
 #### GPTService (GPTService.ts)
@@ -206,6 +208,7 @@ Message Received → DetectionOrchestrator
 ├── HeuristicService (Quick Check)
 └── GPTService (Deep Analysis if user is new or borderline suspicious)
 → Final Decision → Action (via Bot.ts)
+   ├── Record Detection Event
    ├── Assign Restricted Role (if suspicious)
    └── Send Admin Notification (if suspicious)
 ```
@@ -216,7 +219,8 @@ Message Received → DetectionOrchestrator
 New Member → Bot.ts
 ├── Extract Profile Data
 ├── DetectionOrchestrator.detectNewJoin
-│   └── GPTService (Always used for new joins)
+│   ├── GPTService (Always used for new joins)
+│   └── Record Detection Event
 └── If Suspicious:
     ├── RoleManager (Assign Restricted Role)
     ├── NotificationManager (Send Admin Notification)
