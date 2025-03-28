@@ -749,6 +749,7 @@ Currently, no transaction-based test isolation is implemented. The following str
      ```
 
 2. **Testing Through Public API**:
+
    - Prefer testing through public methods instead of accessing private properties
    - Use dependency injection to manipulate internal state
    - Verify effects of operations through public methods
@@ -882,6 +883,7 @@ Currently, no transaction-based test isolation is implemented. The following str
    - Format: `it('should <behavior> when <condition>')`
    - Group related tests together
    - Example:
+
      ```typescript
      describe('updateUserMetadata', () => {
        it('should update user metadata and return updated user', async () => {

@@ -103,13 +103,9 @@ export class NotificationManager implements INotificationManager {
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
-    @inject(TYPES.ConfigService) configService: IConfigService,
-    adminChannelId?: string,
-    verificationChannelId?: string
+    @inject(TYPES.ConfigService) configService: IConfigService
   ) {
     this.client = client;
-    this.adminChannelId = adminChannelId;
-    this.verificationChannelId = verificationChannelId;
     this.configService = configService;
   }
 

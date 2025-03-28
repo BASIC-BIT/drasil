@@ -48,11 +48,7 @@ export class RoleManager implements IRoleManager {
   private restrictedRoleId?: string;
   private configService: IConfigService;
 
-  constructor(
-    @inject(TYPES.ConfigService) configService: IConfigService,
-    restrictedRoleId?: string
-  ) {
-    this.restrictedRoleId = restrictedRoleId;
+  constructor(@inject(TYPES.ConfigService) configService: IConfigService) {
     this.configService = configService;
   }
 
