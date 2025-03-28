@@ -64,6 +64,12 @@ The project is currently focused on implementing the core functionality of the D
   - Action logging in notification messages
   - Dedicated verification channel setup
 
+- ✅ **Supabase Error Handling Improvements**:
+  - Fixed bug with server configuration creation
+  - Proper handling of "not found" cases in repositories
+  - Improved data validation before database operations
+  - Documented best practices in supabase-error-handling.md
+
 ### In Progress
 
 - 🔄 **Persistence & Logging (Supabase)**:
@@ -170,6 +176,13 @@ The system currently implements:
    - Automatic thread creation for flagged new joins
    - Manual thread creation via button or command
 
+4. **Database Error Handling**:
+   - Specific handling for PostgrestError code 'PGRST116' (no rows found)
+   - Treating "not found" cases as valid null returns rather than errors
+   - Careful data preparation before database operations
+   - Excluding non-UUID formatted IDs when creating new records
+   - Consistent error propagation with context using RepositoryError
+
 ### Open Questions & Considerations
 
 1. **Database Schema Design**:
@@ -210,6 +223,7 @@ The system currently implements:
    - ✅ Create initial database schema
    - ✅ Implement repository pattern for servers
    - ✅ Implement server configuration persistence
+   - ✅ Fix error handling in repository methods
    - 🔄 Implement user and server_member repositories
    - 🔄 Add logging for flagged users and moderation actions
    - 🔄 Implement cross-server reputation tracking
@@ -224,6 +238,7 @@ The system currently implements:
    - 🔄 Add tests for error handling scenarios
 
 3. **Documentation Updates**:
+   - ✅ Document Supabase error handling best practices
    - 🔄 Update README with setup instructions
    - 🔄 Document database schema and migrations
    - 🔄 Create admin guide for bot configuration
@@ -281,3 +296,10 @@ The system currently implements:
    - Need to evaluate hosting options for cost-efficiency
    - Need to plan for scaling with increased adoption
    - Consider premium tier options for sustainability
+
+4. **Database Error Handling**:
+   - Improved error handling for Supabase operations
+   - Proper handling of "not found" cases with PostgrestError code 'PGRST116'
+   - Careful data preparation for database operations to avoid validation errors
+   - Consistent return types for repository methods
+   - Detailed documentation of error handling patterns in supabase-error-handling.md

@@ -253,6 +253,13 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 
 ## Known Issues
 
+1. **Supabase Error Handling** (FIXED):
+
+   - ✅ Fixed issue with PostgrestError handling in repositories
+   - ✅ Properly handling "not found" cases with code 'PGRST116'
+   - ✅ Improved data validation before database operations
+   - ✅ Documented best practices in supabase-error-handling.md
+
 1. **Button Interaction Timeout**:
 
    - Discord buttons expire after 15 minutes

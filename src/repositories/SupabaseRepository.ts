@@ -51,7 +51,12 @@ export class SupabaseRepository<T extends { id: ID }, ID = string> extends Abstr
     try {
       const { data, error } = await supabase.from(this.tableName).select('*').eq('id', id).single();
 
-      if (error) throw error;
+      // Handle the specific "no rows" error as a valid "not found" case
+      if (error && error.code === 'PGRST116') {
+        return null;
+      } else if (error) {
+        throw error;
+      }
       return (data as T) || null;
     } catch (error) {
       this.handleError(error as PostgrestError | Error, 'findById');
@@ -92,7 +97,12 @@ export class SupabaseRepository<T extends { id: ID }, ID = string> extends Abstr
         .select()
         .single();
 
-      if (error) throw error;
+      // Handle the specific "no rows" error
+      if (error && error.code === 'PGRST116') {
+        throw new Error('Failed to create entity: No data returned');
+      } else if (error) {
+        throw error;
+      }
       if (!created) throw new Error('Failed to create entity: No data returned');
 
       return created as T;
@@ -113,7 +123,12 @@ export class SupabaseRepository<T extends { id: ID }, ID = string> extends Abstr
         .select()
         .single();
 
-      if (error) throw error;
+      // Handle the specific "no rows" error as a valid "not found" case
+      if (error && error.code === 'PGRST116') {
+        return null;
+      } else if (error) {
+        throw error;
+      }
       return (updated as T) || null;
     } catch (error) {
       this.handleError(error as PostgrestError | Error, 'update');

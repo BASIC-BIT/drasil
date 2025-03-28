@@ -64,7 +64,18 @@ export class ConfigService {
 
         // If no server found, create a default one and save it
         const defaultConfig = this.createDefaultConfig(guildId);
-        await this.serverRepository.upsertByGuildId(guildId, defaultConfig);
+        // Create a copy of defaultConfig without the 'id' field to avoid UUID validation errors
+        // Extract only the fields we want to send to the database
+        const configForDb = {
+          guild_id: defaultConfig.guild_id,
+          restricted_role_id: defaultConfig.restricted_role_id,
+          admin_channel_id: defaultConfig.admin_channel_id,
+          verification_channel_id: defaultConfig.verification_channel_id,
+          admin_notification_role_id: defaultConfig.admin_notification_role_id,
+          is_active: defaultConfig.is_active,
+          settings: defaultConfig.settings,
+        };
+        await this.serverRepository.upsertByGuildId(guildId, configForDb);
 
         // Retrieve the saved server to ensure we have the complete object
         const savedServer = await this.serverRepository.findByGuildId(guildId);

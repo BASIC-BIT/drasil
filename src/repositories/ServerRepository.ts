@@ -23,7 +23,12 @@ export class ServerRepository extends SupabaseRepository<Server> {
         .eq('guild_id', guildId)
         .single();
 
-      if (error) throw error;
+      // Handle the specific "no rows" error as a valid "not found" case
+      if (error && error.code === 'PGRST116') {
+        return null;
+      } else if (error) {
+        throw error;
+      }
       return (data as Server) || null;
     } catch (error) {
       this.handleError(error as Error, 'findByGuildId');
@@ -45,11 +50,16 @@ export class ServerRepository extends SupabaseRepository<Server> {
         updated_at: new Date().toISOString(),
       };
 
-      const { data: existing } = await supabase
+      const { data: existing, error: findError } = await supabase
         .from(this.tableName)
         .select('id')
         .eq('guild_id', guildId)
         .single();
+
+      // Handle the specific "no rows" error as a valid "not found" case
+      if (findError && findError.code !== 'PGRST116') {
+        throw findError;
+      }
 
       if (existing) {
         // Update existing server
@@ -107,7 +117,12 @@ export class ServerRepository extends SupabaseRepository<Server> {
         .select()
         .single();
 
-      if (error) throw error;
+      // Handle the specific "no rows" error as a valid "not found" case
+      if (error && error.code === 'PGRST116') {
+        return null;
+      } else if (error) {
+        throw error;
+      }
       return data as Server;
     } catch (error) {
       this.handleError(error as Error, 'updateSettings');
@@ -132,7 +147,12 @@ export class ServerRepository extends SupabaseRepository<Server> {
         .select()
         .single();
 
-      if (error) throw error;
+      // Handle the specific "no rows" error as a valid "not found" case
+      if (error && error.code === 'PGRST116') {
+        return null;
+      } else if (error) {
+        throw error;
+      }
       return data as Server;
     } catch (error) {
       this.handleError(error as Error, 'setActive');
