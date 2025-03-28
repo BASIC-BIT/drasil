@@ -39,8 +39,6 @@ The bot currently implements the following heuristic checks:
    ```
 3. **Configure environment**:
    - Create a `.env` file and provide your `DISCORD_TOKEN`, `OPENAI_API_KEY`, etc.
-   - Add the `RESTRICTED_ROLE_ID` for the role to assign to suspicious users
-   - Add the `ADMIN_CHANNEL_ID` for the channel to post suspicious user notifications
 4. **Run the bot**:
    ```bash
    npm start
@@ -50,7 +48,8 @@ The bot currently implements the following heuristic checks:
 
 - Invite the bot to your server.
 - Follow the setup instructions below
-- Update config as needed (spam thresholds, OpenAI prompts).
+- Use the `/config` command to set up server-specific settings
+- Update other config as needed (spam thresholds, OpenAI prompts).
 - Let the bot automatically classify new users or run the `/verify` command for manual overrides.
 
 ## Setup
@@ -61,19 +60,19 @@ The bot currently implements the following heuristic checks:
 
    - Create a role in your Discord server that has limited permissions
    - Take note of the role ID (enable Developer Mode in Discord Settings -> Advanced, then right-click the role and select "Copy ID")
-   - Add this ID to your `.env` file as `RESTRICTED_ROLE_ID`
+   - Use the `/config key:restricted_role_id value:<role-id>` command to set this value
 
 2. **Create an Admin Channel**:
 
    - Create a channel that only moderators/admins have access to
    - This channel will receive notifications about suspicious users with interactive buttons
-   - Copy the channel ID and add it to your `.env` file as `ADMIN_CHANNEL_ID`
+   - Use the `/config key:admin_channel_id value:<channel-id>` command to set this value
 
 3. **Create a Verification Channel**:
    - Create a channel visible only to admins and users with the restricted role
    - Configure so restricted users can't see message history
    - This is where verification threads will be created
-   - Copy the channel ID and add it to your `.env` file as `VERIFICATION_CHANNEL_ID`
+   - Use the `/config key:verification_channel_id value:<channel-id>` command to set this value
 
 ### Slash Commands
 
@@ -83,6 +82,7 @@ The bot automatically registers the following slash commands during startup:
 - `/verify @user` - Remove the restricted role from a user
 - `/ban @user [reason]` - Ban a user from the server with an optional reason
 - `/createthread @user` - Create a verification thread for a user
+- `/config key:value value:value` - Configure server-specific settings
 
 Slash commands are automatically registered when the bot starts up. There's no need for manual registration.
 

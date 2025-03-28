@@ -1,6 +1,8 @@
 import { Client, GuildMember, ThreadAutoArchiveDuration, ThreadChannel } from 'discord.js';
 import { NotificationManager } from '../../services/NotificationManager';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
+import { ConfigService } from '../../config/ConfigService';
+import { Server } from '../../repositories/types';
 
 // Mock classes
 class MockThread {
@@ -58,18 +60,37 @@ jest.mock('discord.js', () => ({
   Client: jest.fn().mockImplementation(() => new MockClient()),
 }));
 
+// Mock ConfigService
+jest.mock('../../config/ConfigService');
+
 describe('NotificationManager', () => {
   let notificationManager: NotificationManager;
   let mockClient: MockClient;
   let mockMember: MockGuildMember;
+  let mockConfigService: jest.Mocked<ConfigService>;
 
   beforeEach(() => {
     jest.clearAllMocks();
     mockClient = new MockClient();
     mockMember = new MockGuildMember();
-    delete process.env.ADMIN_CHANNEL_ID;
-    delete process.env.VERIFICATION_CHANNEL_ID;
-    notificationManager = new NotificationManager(mockClient as unknown as Client);
+
+    // Create mock ConfigService
+    mockConfigService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        id: 'mock-server-id',
+        guild_id: 'mock-guild-id',
+        admin_channel_id: 'mock-admin-channel-id',
+        verification_channel_id: 'mock-verification-channel-id',
+        is_active: true,
+      } as Server),
+    } as unknown as jest.Mocked<ConfigService>;
+
+    notificationManager = new NotificationManager(
+      mockClient as unknown as Client,
+      undefined,
+      undefined,
+      mockConfigService
+    );
   });
 
   describe('notifySuspiciousUser', () => {
@@ -223,6 +244,28 @@ describe('NotificationManager', () => {
       await notificationManager.createVerificationThread(mockMember as unknown as GuildMember);
 
       expect(mockClient.channels.fetch).toHaveBeenCalledWith(newChannelId);
+    });
+  });
+
+  describe('initialize', () => {
+    it('should get channel IDs from the database during initialization', async () => {
+      // Create a new NotificationManager with no initial channel IDs
+      const newNotificationManager = new NotificationManager(
+        mockClient as unknown as Client,
+        undefined,
+        undefined,
+        mockConfigService
+      );
+
+      // Initialize the notification manager with a guild ID
+      await newNotificationManager.initialize('test-guild-id');
+
+      // Verify the ConfigService was called with the correct guild ID
+      expect(mockConfigService.getServerConfig).toHaveBeenCalledWith('test-guild-id');
+
+      // Verify the channel IDs were set from the database
+      expect(newNotificationManager['adminChannelId']).toBe('mock-admin-channel-id');
+      expect(newNotificationManager['verificationChannelId']).toBe('mock-verification-channel-id');
     });
   });
 

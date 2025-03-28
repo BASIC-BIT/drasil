@@ -251,6 +251,7 @@ By following these best practices, we can create more robust and maintainable te
 - Basic unit tests for ServerRepository implemented
 
 **Planned Enhancements (Not Yet Implemented):**
+
 - Integration tests with real Supabase instance
 - Test error handling and edge cases
 

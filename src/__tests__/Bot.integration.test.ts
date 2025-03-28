@@ -1,5 +1,6 @@
 import { RoleManager } from '../services/RoleManager';
 import { NotificationManager } from '../services/NotificationManager';
+import { ConfigService } from '../config/ConfigService';
 
 process.env.SUPABASE_URL = 'https://mock-url.com';
 process.env.SUPABASE_KEY = 'mock-key';
@@ -10,6 +11,7 @@ jest.mock('../services/NotificationManager');
 jest.mock('../services/HeuristicService');
 jest.mock('../services/GPTService');
 jest.mock('../services/DetectionOrchestrator');
+jest.mock('../config/ConfigService');
 
 // Import the discord.js mock - already set up via Jest's module mock system
 jest.mock('discord.js');
@@ -21,8 +23,6 @@ import { Bot } from '../Bot';
 describe.skip('Bot Tests', () => {
   // Set environment variables
   process.env.DISCORD_TOKEN = 'mock-token';
-  process.env.RESTRICTED_ROLE_ID = 'mock-role-id';
-  process.env.ADMIN_CHANNEL_ID = 'mock-channel-id';
 
   let bot: Bot;
 
@@ -39,6 +39,7 @@ describe.skip('Bot Tests', () => {
     expect(bot).toBeDefined();
     expect(RoleManager).toHaveBeenCalled();
     expect(NotificationManager).toHaveBeenCalled();
+    expect(ConfigService).toHaveBeenCalled();
   });
 
   it('should start the bot with token', async () => {

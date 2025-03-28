@@ -16,6 +16,7 @@ import {
   ChannelType,
 } from 'discord.js';
 import { DetectionResult } from './DetectionOrchestrator';
+import { ConfigService } from '../config/ConfigService';
 
 export interface NotificationButton {
   id: string;
@@ -30,11 +31,24 @@ export class NotificationManager {
   private adminChannelId: string | undefined;
   private verificationChannelId: string | undefined;
   private client: Client;
+  private configService: ConfigService;
 
-  constructor(client: Client, adminChannelId?: string, verificationChannelId?: string) {
+  constructor(
+    client: Client,
+    adminChannelId?: string,
+    verificationChannelId?: string,
+    configService?: ConfigService
+  ) {
     this.client = client;
-    this.adminChannelId = adminChannelId || process.env.ADMIN_CHANNEL_ID;
-    this.verificationChannelId = verificationChannelId || process.env.VERIFICATION_CHANNEL_ID;
+    this.adminChannelId = adminChannelId;
+    this.verificationChannelId = verificationChannelId;
+    this.configService = configService || new ConfigService();
+  }
+
+  public async initialize(guildId: string): Promise<void> {
+    const config = await this.configService.getServerConfig(guildId);
+    this.adminChannelId = config.admin_channel_id || this.adminChannelId;
+    this.verificationChannelId = config.verification_channel_id || this.verificationChannelId;
   }
 
   /**

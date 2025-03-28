@@ -47,7 +47,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ Restricted role assignment for suspicious users
   - ✅ Role removal for verified users
   - ✅ Role lookup with caching for performance
-  - ✅ Fallback to environment variables if needed
+  - ✅ Database-backed role configuration
 
 - ✅ Verification system
 
@@ -62,6 +62,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ /createthread command for manual thread creation
   - ✅ /setupverification command for channel configuration
   - ✅ /ping command for bot status check
+  - ✅ /config command for server configuration management
 
 ### Admin Interface
 
@@ -96,11 +97,13 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 
 ### Configuration System
 
-- ✅ Environment variable integration
+- ✅ Configuration management
 
-  - ✅ Discord token and API keys
-  - ✅ Channel and role IDs
-  - ✅ Fallback configuration values
+  - ✅ Critical API keys via environment variables (Discord token, OpenAI API key)
+  - ✅ Server-specific configuration via database (role IDs, channel IDs)
+  - ✅ `/config` command for updating server-specific settings
+  - ✅ Real-time configuration updates without bot restart
+  - ✅ Database-stored channel and role IDs
 
 - ✅ Server-specific configuration
 
@@ -126,6 +129,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ SupabaseRepository generic implementation
   - ✅ ServerRepository specific implementation
 - ✅ Server configuration persistence
+- ✅ Server configuration command implementation
 - 🔄 User repository implementation (schema created but repository not implemented)
 - 🔄 Server member repository implementation (schema created but repository not implemented)
 - 🔄 Moderation logs and action tracking
@@ -138,11 +142,13 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 - 🔄 User profile tracking and updates
 
 - ⏳ Message history persistence
+
   - ⏳ Message storage schema design
   - ⏳ Message repository implementation
   - ⏳ Retention policy enforcement
 
 - ⏳ Moderation action logging
+
   - ⏳ Action log schema design
   - ⏳ Action repository implementation
   - ⏳ Admin attribution and timestamps
@@ -156,12 +162,14 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 ### Advanced Features
 
 - ⏳ Cross-server reputation system
+
   - ⏳ Global user tracking
   - ⏳ Reputation score calculation
   - ⏳ Trust network implementation
   - ⏳ Privacy controls and opt-out options
 
 - ⏳ Custom fine-tuned AI model
+
   - ⏳ Training data collection
   - ⏳ Model fine-tuning pipeline
   - ⏳ Model evaluation framework
@@ -176,11 +184,13 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 ### Deployment & Operations
 
 - ⏳ Production deployment setup
+
   - ⏳ Hosting environment configuration
   - ⏳ Environment variable management
   - ⏳ Deployment automation
 
 - ⏳ Monitoring and alerting
+
   - ⏳ Error tracking and notification
   - ⏳ Performance monitoring
   - ⏳ Usage statistics collection
@@ -195,12 +205,14 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 ### User Experience Enhancements
 
 - ⏳ Web dashboard for configuration
+
   - ⏳ Server settings management
   - ⏳ User management interface
   - ⏳ Analytics and reporting views
   - ⏳ Authentication and authorization
 
 - ⏳ Enhanced admin controls
+
   - ⏳ Bulk moderation actions
   - ⏳ Custom verification workflows
   - ⏳ Threshold customization
@@ -267,9 +279,11 @@ The Discord Anti-Spam Bot is currently in active development with several key co
    - Potential memory issues with message history tracking
    - Database connection limits not configured
 
-5. **Configuration Management**:
+5. **Configuration Management** (IMPROVED):
 
-   - Environment variables used for some configuration
+   - ✅ Implemented `/config` command for server-specific settings
+   - ✅ Removed dependency on environment variables for server configuration
+   - ✅ Added database persistence for configuration values
    - No web interface for configuration management
    - Limited validation of configuration values
 

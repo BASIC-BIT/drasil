@@ -9,6 +9,7 @@ This document summarizes the consolidation of documentation between the `docs` d
 ### 1. systemPatterns.md
 
 Added from CODEBASE_MAP.md:
+
 - Directory structure
 - Development guidelines
 - Common patterns
@@ -17,6 +18,7 @@ Added from CODEBASE_MAP.md:
 ### 2. techContext.md
 
 Added from tech_spec.md and spam_detection_guide.md:
+
 - Overview section
 - Dependency injection information
 - Comprehensive spam detection strategies
@@ -26,6 +28,7 @@ Added from tech_spec.md and spam_detection_guide.md:
 ### 3. testing-best-practices.md
 
 Added from testing-strategy.md:
+
 - Testing layers (unit, integration, database)
 - Supabase integration testing strategies
 - Test isolation strategies
@@ -37,6 +40,7 @@ Added from testing-strategy.md:
 ### 4. productContext.md
 
 Added from spec.md and spam_detection_spec.md:
+
 - Core functionality section
 - User detection events
 - AI detection data points
@@ -49,6 +53,7 @@ Added from spec.md and spam_detection_spec.md:
 ### 5. progress.md
 
 Updated from todo.md:
+
 - Fixed numbering in Known Issues section
 - Added more detailed breakdown of in-progress items
 - Added reference to todo.md as source
@@ -57,6 +62,7 @@ Updated from todo.md:
 ### 6. projectbrief.md
 
 Added from spec.md:
+
 - User detection events
 - Enhanced admin interface details
 - Permissions & security section
@@ -66,6 +72,7 @@ Added from spec.md:
 ### 7. database-implementation.md
 
 Created new file from docs/database content:
+
 - Database implementation plan
 - Schema definitions for all tables
 - Repository pattern implementation details

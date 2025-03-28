@@ -50,10 +50,15 @@ export class Bot {
     // Initialize services
     this.heuristicService = new HeuristicService();
     this.gptService = new GPTService();
-    this.detectionOrchestrator = new DetectionOrchestrator(this.heuristicService, this.gptService);
-    this.roleManager = new RoleManager();
-    this.notificationManager = new NotificationManager(this.client);
     this.configService = new ConfigService();
+    this.detectionOrchestrator = new DetectionOrchestrator(this.heuristicService, this.gptService);
+    this.roleManager = new RoleManager(undefined, this.configService);
+    this.notificationManager = new NotificationManager(
+      this.client,
+      undefined,
+      undefined,
+      this.configService
+    );
 
     // Define slash commands
     this.commands = [
@@ -82,6 +87,24 @@ export class Bot {
       new SlashCommandBuilder()
         .setName('setupverification')
         .setDescription('Set up a dedicated verification channel for restricted users'),
+      new SlashCommandBuilder()
+        .setName('config')
+        .setDescription('Configure server settings')
+        .addStringOption((option) =>
+          option
+            .setName('key')
+            .setDescription('The configuration key to update')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Restricted Role ID', value: 'restricted_role_id' },
+              { name: 'Admin Channel ID', value: 'admin_channel_id' },
+              { name: 'Verification Channel ID', value: 'verification_channel_id' },
+              { name: 'Admin Notification Role ID', value: 'admin_notification_role_id' }
+            )
+        )
+        .addStringOption((option) =>
+          option.setName('value').setDescription('The value to set').setRequired(true)
+        ),
     ].map((command) => command.toJSON());
 
     // Set up event handlers
@@ -202,6 +225,10 @@ export class Bot {
 
       case 'setupverification':
         await this.handleSetupVerificationCommand(interaction);
+        break;
+
+      case 'config':
+        await this.handleConfigCommand(interaction);
         break;
 
       default:
@@ -732,8 +759,13 @@ export class Bot {
     await interaction.deferReply({ ephemeral: true });
 
     // Get the restricted role ID
-    const restrictedRoleId =
-      process.env.RESTRICTED_ROLE_ID || this.roleManager.getRestrictedRoleId();
+    // Get the server configuration
+    const serverConfig = await this.configService.getServerConfig(guild.id);
+
+    // Use the restricted role ID from the database
+    const restrictedRoleId = serverConfig.restricted_role_id;
+
+    // If no restricted role ID is found, prompt the user to set it
     if (!restrictedRoleId) {
       await interaction.editReply({
         content: 'No restricted role ID configured. Please set up the restricted role first.',
@@ -753,7 +785,10 @@ export class Bot {
       });
 
       // Update the environment variable or configuration
-      process.env.VERIFICATION_CHANNEL_ID = channelId; // TODO: This will be a database update
+      // Update the configuration in the database
+      await this.configService.updateServerConfig(guild.id, {
+        verification_channel_id: channelId,
+      });
       console.log(`Verification channel created with ID: ${channelId}`);
     } else {
       await interaction.editReply({
@@ -780,7 +815,22 @@ export class Bot {
     for (const [guildId, guild] of guilds) {
       try {
         // This will create a default configuration if one doesn't exist
-        await this.configService.getServerConfig(guildId);
+        const config = await this.configService.getServerConfig(guildId);
+
+        // Initialize services with the server configuration
+        await this.roleManager.initialize(guildId);
+        await this.notificationManager.initialize(guildId);
+
+        // Update the services with the configuration values
+        if (config.restricted_role_id)
+          this.roleManager.setRestrictedRoleId(config.restricted_role_id);
+
+        if (config.admin_channel_id)
+          this.notificationManager.setAdminChannelId(config.admin_channel_id);
+
+        if (config.verification_channel_id)
+          this.notificationManager.setVerificationChannelId(config.verification_channel_id);
+
         console.log(`Initialized configuration for guild: ${guild.name} (${guildId})`);
       } catch (error) {
         console.error(`Failed to initialize configuration for guild ${guildId}:`, error);
@@ -820,6 +870,79 @@ export class Bot {
       }
     } catch (error) {
       console.error(`Failed to handle new guild ${guild.id}:`, error);
+    }
+  }
+
+  /**
+   * Handle the /config command to update server configuration
+   * @param interaction The slash command interaction
+   */
+  private async handleConfigCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+    // Check if the interaction is in a guild
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({
+        content: 'This command can only be used in a server.',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Check if the user has the required permissions
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({
+        content: 'You need administrator permissions to configure the bot.',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Get the key and value from the command options
+    const key = interaction.options.getString('key', true);
+    const value = interaction.options.getString('value', true);
+
+    // Validate the key
+    const validKeys = [
+      'restricted_role_id',
+      'admin_channel_id',
+      'verification_channel_id',
+      'admin_notification_role_id',
+    ];
+    if (!validKeys.includes(key)) {
+      await interaction.reply({
+        content: `Invalid configuration key: ${key}. Valid keys are: ${validKeys.join(', ')}`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    try {
+      // Update the configuration in the database
+      await this.configService.updateServerConfig(guild.id, {
+        [key]: value,
+      });
+
+      // Update the services with the new values
+      if (key === 'restricted_role_id') {
+        this.roleManager.setRestrictedRoleId(value);
+      } else if (key === 'admin_channel_id') {
+        this.notificationManager.setAdminChannelId(value);
+      } else if (key === 'verification_channel_id') {
+        this.notificationManager.setVerificationChannelId(value);
+      }
+
+      // Respond to the user
+      await interaction.reply({
+        content: `✅ Configuration updated successfully!\n\`${key}\` has been set to \`${value}\``,
+        ephemeral: true,
+      });
+    } catch (error) {
+      console.error(`Failed to update configuration for guild ${guild.id}:`, error);
+      await interaction.reply({
+        content: 'An error occurred while updating the configuration. Please try again later.',
+        ephemeral: true,
+      });
     }
   }
 }

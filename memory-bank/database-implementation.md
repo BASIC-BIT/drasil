@@ -496,16 +496,19 @@ export class ServerRepository extends SupabaseRepository<ServerEntity> {
 The transition from environment variables to database storage will follow these steps:
 
 1. **Parallel Operation**:
+
    - Run database alongside environment variables
    - Read from database, fall back to environment variables
    - Log discrepancies
 
 2. **Write Everywhere**:
+
    - Write to both database and memory
    - Validate consistency
    - Prefer database for reads
 
 3. **Database Primary**:
+
    - Make database the primary source
    - Keep environment variables as fallback
    - Add migration warnings
@@ -544,11 +547,13 @@ The transition from environment variables to database storage will follow these 
 **Note**: GitHub Actions for database tests have not been implemented yet. This is planned for a future iteration.
 
 1. **Unit Tests**:
+
    - Mock repositories for service tests
    - Test database operations in isolation
    - Validate edge cases
 
 2. **Integration Tests**:
+
    - Use test database for integration testing
    - Test full workflows with persistence
    - Validate data consistency
@@ -621,21 +626,25 @@ Different data types have different retention requirements:
 ## Future Considerations
 
 1. **Scaling**:
+
    - Monitor database performance as user base grows
    - Implement additional caching as needed
    - Consider sharding for very large installations
 
 2. **Analytics Dashboard**:
+
    - Create web interface for analytics
    - Add custom report generation
    - Implement visualizations
 
 3. **Advanced Intelligence**:
+
    - Use collected data to train custom models
    - Implement more sophisticated detection algorithms
    - Add behavior analysis capabilities
 
 4. **Privacy Controls**:
+
    - Implement granular data retention policies
    - Add user data anonymization
    - Create data export/deletion capabilities

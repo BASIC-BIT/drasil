@@ -71,10 +71,7 @@ This document details the technical implementation of the Discord Anti-Spam Bot,
 - `OPENAI_API_KEY`: API key for OpenAI services
 - `SUPABASE_URL`: URL for Supabase instance
 - `SUPABASE_KEY`: Anonymous key for Supabase access
-- `RESTRICTED_ROLE_ID`: (Optional) ID of the restricted role
-- `ADMIN_CHANNEL_ID`: (Optional) ID of the admin notification channel
-- `VERIFICATION_CHANNEL_ID`: (Optional) ID of the verification channel
-- `ADMIN_NOTIFICATION_ROLE_ID`: (Optional) ID of the role to ping for notifications
+- `NODE_ENV`: Environment setting (development, production)
 
 ### Local Development Setup
 
@@ -109,6 +106,7 @@ This document details the technical implementation of the Discord Anti-Spam Bot,
   - `/createthread`: Create a verification thread for a user
   - `/ping`: Check if the bot is running
   - `/setupverification`: Set up a verification channel
+  - `/config`: Configure server-specific settings (role IDs, channel IDs, etc.)
 
 ## Spam Detection Strategies
 
@@ -117,14 +115,17 @@ The bot implements a hybrid spam detection approach combining multiple technique
 ### Heuristic and Rule-Based Techniques
 
 - **Message Frequency & Flood Detection**:
+
   - Defined thresholds for message volumes (5 messages in 10 seconds)
   - Automatic moderation actions triggered at thresholds
 
 - **Keyword and Pattern Filtering**:
+
   - Regular expressions and keyword blacklists for scam words, malicious URLs
   - Frequent updates to address evolving spam tactics
 
 - **URL and Link Analysis**:
+
   - Validation against known malicious domains
   - Heuristic checks for suspicious URL patterns
 
@@ -135,6 +136,7 @@ The bot implements a hybrid spam detection approach combining multiple technique
 ### AI-Powered Analysis
 
 - **GPT Integration**:
+
   - Using gpt-4o-mini model for nuanced spam detection
   - Prompt engineering with clear instructions and expected output format
   - Few-shot learning with categorized examples
@@ -149,6 +151,7 @@ The bot implements a hybrid spam detection approach combining multiple technique
 ### Hybrid Detection Approach
 
 - **Multi-Layered Filtering**:
+
   - Fast heuristic checks for immediate blocking of obvious spam
   - GPT analysis reserved for borderline or unclear cases
   - New users always analyzed by GPT upon joining
@@ -402,6 +405,7 @@ The bot implements a hybrid spam detection approach combining multiple technique
 ## Future Technical Enhancements
 
 - **Spam Detection Improvements**:
+
   - Cross-server trust networks for shared reputation data
   - Advanced behavioral analytics for pattern recognition
   - Adaptive learning from moderation actions

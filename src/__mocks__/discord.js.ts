@@ -62,6 +62,7 @@ class MockSlashCommandBuilder {
       setName: () => option,
       setDescription: () => option,
       setRequired: () => option,
+      addChoices: () => option,
     };
     callback(option);
     return this;
@@ -72,6 +73,7 @@ class MockSlashCommandBuilder {
       setName: () => option,
       setDescription: () => option,
       setRequired: () => option,
+      addChoices: () => option,
     };
     callback(option);
     return this;

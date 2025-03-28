@@ -1,11 +1,15 @@
 import { GuildMember, Role } from 'discord.js';
 import { RoleManager } from '../../services/RoleManager';
+import { ConfigService } from '../../config/ConfigService';
+import { Server } from '../../repositories/types';
 
 jest.mock('discord.js');
+jest.mock('../../config/ConfigService');
 
 describe('RoleManager', () => {
   let roleManager: RoleManager;
   let mockMember: jest.Mocked<GuildMember>;
+  let mockConfigService: jest.Mocked<ConfigService>;
   let mockRole: Role;
 
   beforeEach(() => {
@@ -33,7 +37,20 @@ describe('RoleManager', () => {
       },
     } as unknown as jest.Mocked<GuildMember>;
 
-    roleManager = new RoleManager('mock-role-id');
+    // Create mock ConfigService
+    mockConfigService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        id: 'mock-server-id',
+        guild_id: 'mock-guild-id',
+        restricted_role_id: 'mock-role-id',
+        is_active: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        settings: {},
+      } as Server),
+    } as unknown as jest.Mocked<ConfigService>;
+
+    roleManager = new RoleManager('mock-role-id', mockConfigService);
   });
 
   describe('assignRestrictedRole', () => {
@@ -45,7 +62,7 @@ describe('RoleManager', () => {
     });
 
     it('should return false if the role ID is not configured', async () => {
-      roleManager = new RoleManager();
+      roleManager = new RoleManager(undefined, mockConfigService);
 
       const result = await roleManager.assignRestrictedRole(mockMember);
 
@@ -72,7 +89,7 @@ describe('RoleManager', () => {
     });
 
     it('should return false if the role ID is not configured', async () => {
-      roleManager = new RoleManager();
+      roleManager = new RoleManager(undefined, mockConfigService);
 
       const result = await roleManager.removeRestrictedRole(mockMember);
 
@@ -105,6 +122,31 @@ describe('RoleManager', () => {
       const result = await roleManager.assignRestrictedRole(mockMember);
       expect(result).toBe(true);
       expect(mockMember.roles.add).toHaveBeenCalledWith(newMockRole);
+    });
+
+    it('should get the role ID from the database during initialization', async () => {
+      // Create a new RoleManager with no initial role ID
+      const newRoleManager = new RoleManager(undefined, mockConfigService);
+
+      // Mock the getServerConfig to return a server with a role ID
+      mockConfigService.getServerConfig.mockResolvedValueOnce({
+        id: 'db-server-id',
+        guild_id: 'test-guild-id',
+        restricted_role_id: 'db-role-id',
+        is_active: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        settings: {},
+      } as Server);
+
+      // Initialize the role manager with a guild ID
+      await newRoleManager.initialize('test-guild-id');
+
+      // Verify the ConfigService was called with the correct guild ID
+      expect(mockConfigService.getServerConfig).toHaveBeenCalledWith('test-guild-id');
+
+      // Verify the role ID was set from the database
+      expect(newRoleManager.getRestrictedRoleId()).toBe('db-role-id');
     });
   });
 });

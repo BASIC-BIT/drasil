@@ -57,6 +57,7 @@ The project is currently focused on implementing the core functionality of the D
   - Message content evaluation
 
 - ✅ **Enhanced Admin Notifications**:
+
   - Formatted embeds with detailed user information
   - Low/Medium/High confidence display
   - Improved timestamp formatting with relative times
@@ -76,8 +77,9 @@ The project is currently focused on implementing the core functionality of the D
   - Database schema design (initial migration created)
   - Repository pattern implementation
   - Server configuration persistence
+  - Server configuration command (/config)
   - Caching strategy for configurations
-  - Fallback to environment variables
+  - Database-based configuration (removed environment variable dependencies)
 
 ### Pending
 
@@ -116,7 +118,13 @@ The system currently implements:
 
    - **ConfigService**: Server-specific settings with caching
    - **GlobalConfig**: Application-wide settings
-   - **Environment Variables**: Sensitive configuration
+   - **Server Configuration Command**:
+     - `/config` command for updating server settings
+     - Supports updating restricted_role_id, admin_channel_id, verification_channel_id, admin_notification_role_id
+     - Requires administrator permissions
+     - Persists settings in database
+     - Updates services in real-time
+     - Eliminates need for environment variables
 
 5. **Data Access**:
    - **Repository Pattern**: Abstraction for data operations
@@ -162,10 +170,12 @@ The system currently implements:
      - Create Thread (primary style)
    - Action logging directly in notification messages:
      - Admin attribution
-     - Timestamp of action
-     - Thread links when applicable
+     - Timestamps for accountability
+     - Links to verification threads when applicable
+     - Maintains complete history in original message
 
 3. **Verification Channel Structure**:
+
    - Dedicated channel with specific permissions:
      - Everyone: No access (deny ViewChannel)
      - Restricted role: Can view and send messages
@@ -177,11 +187,19 @@ The system currently implements:
    - Manual thread creation via button or command
 
 4. **Database Error Handling**:
+
    - Specific handling for PostgrestError code 'PGRST116' (no rows found)
    - Treating "not found" cases as valid null returns rather than errors
    - Careful data preparation before database operations
    - Excluding non-UUID formatted IDs when creating new records
    - Consistent error propagation with context using RepositoryError
+
+5. **Server Configuration Management**:
+   - Database-stored configuration values instead of environment variables
+   - Server-specific settings with `/config` command
+   - Real-time service updates when configuration changes
+   - Initialization of services with database values on startup
+   - Administrator-only access to configuration commands
 
 ### Open Questions & Considerations
 
@@ -224,6 +242,8 @@ The system currently implements:
    - ✅ Implement repository pattern for servers
    - ✅ Implement server configuration persistence
    - ✅ Fix error handling in repository methods
+   - ✅ Implement server configuration command (/config)
+   - ✅ Remove environment variable dependencies
    - 🔄 Implement user and server_member repositories
    - 🔄 Add logging for flagged users and moderation actions
    - 🔄 Implement cross-server reputation tracking
@@ -239,6 +259,7 @@ The system currently implements:
 
 3. **Documentation Updates**:
    - ✅ Document Supabase error handling best practices
+   - ✅ Document server configuration command
    - 🔄 Update README with setup instructions
    - 🔄 Document database schema and migrations
    - 🔄 Create admin guide for bot configuration
@@ -291,6 +312,7 @@ The system currently implements:
    - Permission management complexity
 
 3. **Cost Management**:
+
    - Selective GPT usage strategy implemented
    - Need to monitor and optimize token usage
    - Need to evaluate hosting options for cost-efficiency

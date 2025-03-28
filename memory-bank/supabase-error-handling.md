@@ -28,6 +28,7 @@ if (error && error.code === 'PGRST116') {
 ```
 
 This change was applied to:
+
 - `findByGuildId` in ServerRepository
 - `findById` in SupabaseRepository
 - `update` in SupabaseRepository
@@ -54,16 +55,19 @@ const configForDb = {
 ## Best Practices for Supabase Error Handling
 
 1. **Distinguish Between Error Types**:
+
    - 'PGRST116' (No rows returned) should be treated as a valid "not found" case
    - Other PostgrestError codes should be thrown as errors
    - Non-PostgrestError errors should be handled separately
 
 2. **Data Validation Before Database Operations**:
+
    - Ensure data conforms to database schema requirements
    - Remove or transform fields that might cause validation errors
    - Let the database generate UUIDs and timestamps when possible
 
 3. **Consistent Return Types**:
+
    - Methods should return null for "not found" cases, not throw errors
    - This allows higher-level code to handle missing data gracefully
    - Document the expected return types clearly in method comments

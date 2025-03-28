@@ -24,10 +24,10 @@ describe('ConfigService', () => {
   const mockServer: Server = {
     id: 'local-123456789012345678',
     guild_id: '123456789012345678',
-    restricted_role_id: 'env-role-id',
-    admin_channel_id: 'env-channel-id',
-    verification_channel_id: 'env-verification-id',
-    admin_notification_role_id: 'env-notification-id',
+    restricted_role_id: undefined,
+    admin_channel_id: undefined,
+    verification_channel_id: undefined,
+    admin_notification_role_id: undefined,
     is_active: true,
     settings: {
       message_threshold: 5,
@@ -51,15 +51,6 @@ describe('ConfigService', () => {
 
     // Store original environment
     originalEnv = process.env;
-
-    // Set up environment variables
-    process.env = {
-      ...originalEnv,
-      RESTRICTED_ROLE_ID: 'env-role-id',
-      ADMIN_CHANNEL_ID: 'env-channel-id',
-      VERIFICATION_CHANNEL_ID: 'env-verification-id',
-      ADMIN_NOTIFICATION_ROLE_ID: 'env-notification-id',
-    };
 
     // Set up the mocked ServerRepository instance
     mockServerRepository = {
@@ -190,10 +181,10 @@ describe('ConfigService', () => {
 
       // Verify the result has expected properties
       expect(result.guild_id).toBe('new-guild-id');
-      expect(result.restricted_role_id).toBe('env-role-id');
-      expect(result.admin_channel_id).toBe('env-channel-id');
-      expect(result.verification_channel_id).toBe('env-verification-id');
-      expect(result.admin_notification_role_id).toBe('env-notification-id');
+      expect(result.restricted_role_id).toBeUndefined();
+      expect(result.admin_channel_id).toBeUndefined();
+      expect(result.verification_channel_id).toBeUndefined();
+      expect(result.admin_notification_role_id).toBeUndefined();
       expect(result.is_active).toBe(true);
 
       // Verify upsertByGuildId was called
@@ -340,19 +331,16 @@ describe('ConfigService', () => {
         },
         defaultSuspiciousKeywords: ['free nitro', 'discord nitro', 'claim your prize'],
       };
-
-      // Mock environment variables
-      process.env.RESTRICTED_ROLE_ID = 'test-role-id';
-      process.env.ADMIN_CHANNEL_ID = 'test-channel-id';
-      process.env.VERIFICATION_CHANNEL_ID = 'test-verification-id';
-      process.env.ADMIN_NOTIFICATION_ROLE_ID = 'test-notification-id';
     });
 
     it('should create default config using global settings', async () => {
       // Mock the repository's upsert method
       mockServerRepository.upsertByGuildId.mockResolvedValueOnce({
-        id: 'test-id',
+        id: `local-${testGuildId}`,
         guild_id: testGuildId,
+        restricted_role_id: undefined,
+        admin_channel_id: undefined,
+        verification_channel_id: undefined,
         is_active: true,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -391,7 +379,11 @@ describe('ConfigService', () => {
       // Mock the repository's upsert method
       mockServerRepository.upsertByGuildId.mockResolvedValueOnce({
         id: 'test-id',
+        restricted_role_id: undefined,
+        admin_channel_id: undefined,
+        verification_channel_id: undefined,
         guild_id: testGuildId,
+        admin_notification_role_id: undefined,
         is_active: true,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),

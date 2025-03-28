@@ -1,13 +1,23 @@
 import { GuildMember, Role } from 'discord.js';
+import { ConfigService } from '../config/ConfigService';
 
 /**
  * Service for managing user roles, particularly for restriction and verification
  */
 export class RoleManager {
   private restrictedRoleId: string | undefined;
+  private configService: ConfigService;
 
-  constructor(restrictedRoleId?: string) {
-    this.restrictedRoleId = restrictedRoleId || process.env.RESTRICTED_ROLE_ID;
+  constructor(restrictedRoleId?: string, configService?: ConfigService) {
+    this.restrictedRoleId = restrictedRoleId;
+    this.configService = configService || new ConfigService();
+  }
+
+  public async initialize(guildId: string): Promise<void> {
+    const config = await this.configService.getServerConfig(guildId);
+    if (config.restricted_role_id) {
+      this.restrictedRoleId = config.restricted_role_id;
+    }
   }
 
   /**

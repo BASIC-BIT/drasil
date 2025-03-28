@@ -299,16 +299,19 @@ The bot's effectiveness will be measured by:
 ### Planned Enhancements
 
 1. **Custom fine-tuned AI model**:
+
    - Gather large volumes of confirmed spam and scam profiles
    - Fine-tune a GPT model specifically on these examples
    - Improve accuracy for subtle scam behavior detection
 
 2. **Cross-server reputation system**:
+
    - Trusted networks for shared reputation data
    - Global suspicion raising for users flagged in multiple servers
    - Verification records from reputable servers
 
 3. **Advanced data analysis**:
+
    - Image analysis for profile pictures and banners
    - Behavioral logs for messaging patterns
    - Friend request and DM pattern tracking

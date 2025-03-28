@@ -7,7 +7,6 @@ dotenv.config();
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_KEY || '';
 
-
 // Validate environment variables
 if (!supabaseUrl || !supabaseKey) {
   console.error('Error: Missing Supabase environment variables. Please check your .env file.');
