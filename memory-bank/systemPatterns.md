@@ -9,6 +9,7 @@ The Discord Anti-Spam Bot follows a modular, service-oriented architecture with 
 ### 1. Bot Class (Bot.ts)
 
 The central orchestrator that:
+
 - Initializes and manages all services
 - Handles Discord events (messages, member joins, interactions)
 - Registers and handles slash commands (/verify, /ban, /createthread, /ping, /setupverification)
@@ -20,17 +21,20 @@ The central orchestrator that:
 ### 2. Repository Pattern
 
 #### BaseRepository (BaseRepository.ts)
+
 - Interface and abstract class defining common CRUD operations (findById, findMany, create, update, delete)
 - Provides a consistent contract for all repositories
 - Enables type-safe database operations with generics
 
 #### SupabaseRepository (SupabaseRepository.ts)
+
 - Extends AbstractBaseRepository with Supabase-specific implementation
 - Handles PostgrestError with custom RepositoryError class
 - Implements all CRUD operations using Supabase client
 - Provides additional utility methods like count()
 
 #### ServerRepository (ServerRepository.ts)
+
 - Extends SupabaseRepository for server-specific operations
 - Provides methods like findByGuildId, upsertByGuildId, updateSettings, setActive, findAllActive
 - Manages server configuration persistence in the database
@@ -38,6 +42,7 @@ The central orchestrator that:
 ### 3. Service Layer
 
 #### ConfigService (ConfigService.ts)
+
 - Manages server configurations with a cache-first approach
 - Creates default configurations when none exist
 - Bridges between environment variables and database storage
@@ -45,6 +50,7 @@ The central orchestrator that:
 - Handles initialization of configurations on bot startup
 
 #### DetectionOrchestrator (DetectionOrchestrator.ts)
+
 - Orchestrates the spam detection process
 - Implements two main detection flows:
   - detectMessage: Analyzes user messages with heuristics first, then GPT if needed
@@ -54,6 +60,7 @@ The central orchestrator that:
 - Produces a final DetectionResult with label, confidence, reasons, and trigger source
 
 #### GPTService (GPTService.ts)
+
 - Integrates with OpenAI's API using gpt-4o-mini model
 - Analyzes user profiles and messages for suspicious patterns
 - Uses few-shot examples from gpt-config.ts to improve classification
@@ -61,6 +68,7 @@ The central orchestrator that:
 - Returns "OK" or "SUSPICIOUS" classification
 
 #### HeuristicService (HeuristicService.ts)
+
 - Implements rule-based spam detection:
   - Message frequency tracking (>5 messages in 10 seconds)
   - Suspicious keyword detection (nitro scam, free discord nitro, etc.)
@@ -68,12 +76,14 @@ The central orchestrator that:
 - Provides fast, low-cost initial screening
 
 #### RoleManager (RoleManager.ts)
+
 - Manages the restricted role for flagged users
 - Provides methods to assign and remove the restricted role
 - Handles role lookup and caching for better performance
 - Falls back to environment variables if no role ID is configured
 
 #### NotificationManager (NotificationManager.ts)
+
 - Creates and sends notifications to admin channels
 - Formats suspicious user embeds with detailed information
 - Creates interactive buttons for admin actions (verify, ban, create thread)
@@ -88,6 +98,7 @@ The central orchestrator that:
 Services are loosely coupled and communicate through well-defined interfaces. Dependencies are injected via constructors in the Bot class, making the system more testable and maintainable.
 
 Example:
+
 ```typescript
 // In Bot.ts constructor
 this.heuristicService = new HeuristicService();
@@ -107,6 +118,7 @@ Data access is abstracted through repositories, providing a clean separation bet
 3. **ServerRepository**: Specific implementation for server entities
 
 This pattern provides:
+
 - Swappable data sources
 - Centralized data access logic
 - Simplified testing through mocking
@@ -152,6 +164,7 @@ The ConfigService implements a cache-first approach for server configurations:
 4. Return data
 
 This pattern is implemented in the getServerConfig method, which:
+
 - First checks the serverCache Map
 - Falls back to database lookup if not in cache
 - Creates default configuration if none exists
@@ -213,17 +226,20 @@ Slash Command or Button Interaction → Bot.ts
 
 ## Error Handling Strategy
 
-1. **Service-Level Error Handling**: 
+1. **Service-Level Error Handling**:
+
    - Each service handles its domain-specific errors
    - Try/catch blocks around critical operations
    - Detailed error logging with context
 
-2. **Repository Error Handling**: 
+2. **Repository Error Handling**:
+
    - Custom RepositoryError class with cause tracking
    - Specific handling for PostgrestError vs general errors
    - Centralized error handling in handleError method
 
 3. **Top-Level Error Handling**:
+
    - Bot.ts catches errors in event handlers and command processing
    - Interaction errors provide user feedback when possible
    - Console logging for all errors with stack traces
@@ -236,16 +252,19 @@ Slash Command or Button Interaction → Bot.ts
 ## Testing Approach
 
 1. **Unit Tests**:
-   - Service-specific tests in __tests__ directory
+
+   - Service-specific tests in **tests** directory
    - Mock dependencies for isolation
    - Test both success and error paths
 
 2. **Integration Tests**:
+
    - Bot.integration.test.ts for end-to-end flows
    - Tests for critical paths like detection and notification
 
 3. **Mocking Strategy**:
-   - Mock implementations in __mocks__ directory
+
+   - Mock implementations in **mocks** directory
    - discord.js.ts mocks Discord client and interactions
    - openai.ts mocks OpenAI API responses
    - supabase.ts mocks database operations
@@ -259,16 +278,19 @@ Slash Command or Button Interaction → Bot.ts
 The architecture provides several extension points:
 
 1. **New Commands**:
+
    - Add to commands array in Bot.ts constructor
    - Implement handler method in Bot class
    - Register with Discord API in registerCommands method
 
 2. **New Detection Methods**:
+
    - Add new services or extend existing ones
    - Integrate into DetectionOrchestrator
    - Update detection result format if needed
 
 3. **Database Schema Extensions**:
+
    - Add new migrations in supabase/migrations
    - Create new repository classes extending SupabaseRepository
    - Update types.ts with new entity interfaces

@@ -11,35 +11,41 @@ The Memory Bank is designed to maintain perfect documentation of the project, en
 The Memory Bank follows a hierarchical structure where files build upon each other:
 
 1. **projectbrief.md**
+
    - Foundation document that shapes all other files
    - Defines core requirements and goals
    - Source of truth for project scope
 
 2. **productContext.md**
+
    - Why this project exists
    - Problems it solves
    - How it should work
    - User experience goals
 
 3. **systemPatterns.md**
+
    - System architecture
    - Key technical decisions
    - Design patterns in use
    - Component relationships
 
 4. **techContext.md**
+
    - Technologies used
    - Development setup
    - Technical constraints
    - Dependencies
 
 5. **activeContext.md**
+
    - Current work focus
    - Recent changes
    - Next steps
    - Active decisions and considerations
 
 6. **progress.md**
+
    - What works
    - What's left to build
    - Current status
@@ -74,6 +80,7 @@ The Memory Bank should be maintained with precision and clarity, as it serves as
 ## Additional Context
 
 As the project evolves, additional files or folders may be added to the Memory Bank to organize:
+
 - Complex feature documentation
 - Integration specifications
 - API documentation

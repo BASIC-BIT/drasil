@@ -7,48 +7,56 @@ The project is currently focused on implementing the core functionality of the D
 ## Recent Milestones
 
 ### Completed
-- ✅ **Project & Testing Setup**: 
+
+- ✅ **Project & Testing Setup**:
+
   - Repository initialization with TypeScript
   - Jest testing framework configuration
   - ESLint and Prettier setup
   - Basic project structure
 
-- ✅ **Minimal Discord Bot**: 
+- ✅ **Minimal Discord Bot**:
+
   - Discord.js client integration
   - Event handling for messages, members, and interactions
   - Slash command registration and handling
   - Basic bot lifecycle management
 
-- ✅ **Heuristic Spam Detection**: 
+- ✅ **Heuristic Spam Detection**:
+
   - Message frequency tracking (>5 messages in 10 seconds)
   - Suspicious keyword detection
   - Efficient message history management
 
-- ✅ **GPT Integration**: 
+- ✅ **GPT Integration**:
+
   - OpenAI SDK integration with gpt-4o-mini model
   - User profile analysis
   - Structured prompt formatting
   - Error handling and fallback strategies
 
-- ✅ **Combined Detection Flow**: 
+- ✅ **Combined Detection Flow**:
+
   - DetectionOrchestrator implementation
   - Selective GPT usage based on user newness and suspicion level
   - Confidence scoring system
   - Reason tracking for admin transparency
 
-- ✅ **Verification & Role Management**: 
+- ✅ **Verification & Role Management**:
+
   - Restricted role assignment for suspicious users
   - Slash commands for verification and moderation
   - Button interactions for admin actions
   - Verification thread creation
 
-- ✅ **Prompt Strategy & Few-Shot**: 
+- ✅ **Prompt Strategy & Few-Shot**:
+
   - Categorized examples (clearly suspicious, borderline suspicious, etc.)
   - Structured prompt formatting
   - Account age and join date analysis
   - Message content evaluation
 
-- ✅ **Enhanced Admin Notifications**: 
+- ✅ **Enhanced Admin Notifications**:
   - Formatted embeds with detailed user information
   - Low/Medium/High confidence display
   - Improved timestamp formatting with relative times
@@ -57,7 +65,8 @@ The project is currently focused on implementing the core functionality of the D
   - Dedicated verification channel setup
 
 ### In Progress
-- 🔄 **Persistence & Logging (Supabase)**: 
+
+- 🔄 **Persistence & Logging (Supabase)**:
   - Database schema design (initial migration created)
   - Repository pattern implementation
   - Server configuration persistence
@@ -65,7 +74,8 @@ The project is currently focused on implementing the core functionality of the D
   - Fallback to environment variables
 
 ### Pending
-- ⏳ **Cross-Server & Advanced Features**: 
+
+- ⏳ **Cross-Server & Advanced Features**:
   - User tracking across servers
   - Global reputation scores
   - Advanced behavioral analytics
@@ -76,7 +86,8 @@ The project is currently focused on implementing the core functionality of the D
 
 The system currently implements:
 
-1. **Bot Core (Bot.ts)**: 
+1. **Bot Core (Bot.ts)**:
+
    - Main orchestrator class
    - Event handling for Discord interactions
    - Service initialization and coordination
@@ -85,15 +96,18 @@ The system currently implements:
    - Server initialization and management
 
 2. **Detection Services**:
+
    - **HeuristicService**: Fast, rule-based detection
    - **GPTService**: AI-powered deep analysis
    - **DetectionOrchestrator**: Combines both approaches with smart routing
 
 3. **User Management**:
+
    - **RoleManager**: Restricted role assignment and removal
    - **NotificationManager**: Admin notifications and verification threads
 
 4. **Configuration**:
+
    - **ConfigService**: Server-specific settings with caching
    - **GlobalConfig**: Application-wide settings
    - **Environment Variables**: Sensitive configuration
@@ -108,6 +122,7 @@ The system currently implements:
 ### Current Technical Decisions
 
 1. **GPT Usage Optimization**:
+
    - Using gpt-4o-mini model for improved accuracy with reasonable cost
    - Selective invocation strategy:
      - Always use for new server joins
@@ -123,6 +138,7 @@ The system currently implements:
    - Limited token usage (max_tokens: 50) for efficiency
 
 2. **Admin Notification Format**:
+
    - Confidence level display:
      - 🟢 Low (0-40%)
      - 🟡 Medium (41-70%)
@@ -157,6 +173,7 @@ The system currently implements:
 ### Open Questions & Considerations
 
 1. **Database Schema Design**:
+
    - Initial schema created with three main tables:
      - servers: Guild configuration storage
      - users: Cross-server user tracking (planned)
@@ -167,6 +184,7 @@ The system currently implements:
    - Plan for data retention and pruning
 
 2. **Performance Optimization**:
+
    - Server configuration caching implemented
    - Need to implement rate limiting for GPT API calls
    - Consider message queue for high-traffic servers
@@ -187,6 +205,7 @@ The system currently implements:
 ### Immediate Tasks
 
 1. **Implement Supabase Integration**:
+
    - ✅ Set up Supabase client
    - ✅ Create initial database schema
    - ✅ Implement repository pattern for servers
@@ -196,6 +215,7 @@ The system currently implements:
    - 🔄 Implement cross-server reputation tracking
 
 2. **Enhance Testing Coverage**:
+
    - ✅ Basic unit tests for services
    - ✅ Mock implementations for external dependencies
    - 🔄 Add tests for Supabase repositories
@@ -213,6 +233,7 @@ The system currently implements:
 ### Future Enhancements
 
 1. **Cross-Server Reputation**:
+
    - Implement user tracking across servers
    - Design reputation scoring algorithm
    - Create trust network for server verification
@@ -220,6 +241,7 @@ The system currently implements:
    - Add admin controls for reputation management
 
 2. **Web Dashboard**:
+
    - Design admin interface for configuration
    - Implement analytics and reporting
    - Add user management features
@@ -236,6 +258,7 @@ The system currently implements:
 ## Current Challenges
 
 1. **Balancing Detection Accuracy**:
+
    - Current approach uses a hybrid system:
      - Fast heuristics for obvious cases
      - GPT for nuanced analysis
@@ -245,6 +268,7 @@ The system currently implements:
    - Need to adapt to evolving spam techniques
 
 2. **Discord API Limitations**:
+
    - Button interactions expire after 15 minutes
    - Gateway connection requirements for certain events
    - Rate limits for high-traffic operations

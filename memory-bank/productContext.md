@@ -10,6 +10,7 @@ Discord servers face persistent challenges with spam, scams, and malicious users
 4. Require significant manual moderation effort, overwhelming server administrators
 
 This creates an environment where:
+
 - Users may be exposed to scams before moderators can intervene
 - Server administrators spend excessive time on moderation
 - Legitimate users face frustrating verification processes
@@ -32,12 +33,15 @@ Rather than waiting for obvious spam patterns, the bot uses GPT-powered analysis
 ### 2. Hybrid Detection Approach
 
 The bot combines:
+
 - **Fast heuristic checks**:
+
   - Message frequency tracking (>5 messages in 10 seconds)
   - Suspicious keyword detection (nitro scam, free discord nitro, etc.)
   - Pattern matching for common spam formats
 
 - **Sophisticated GPT analysis**:
+
   - User profile evaluation with account age and join date
   - Message content analysis for subtle spam indicators
   - Few-shot learning with categorized examples
@@ -54,6 +58,7 @@ This multi-layered approach provides both speed and accuracy.
 ### 3. Streamlined Verification
 
 For flagged users, the bot:
+
 - **Automatically assigns a restricted role** limiting server access
 - **Creates dedicated verification threads** in a private channel
 - **Sends verification instructions** to guide legitimate users
@@ -63,7 +68,9 @@ For flagged users, the bot:
 ### 4. Admin-Friendly Interface
 
 Administrators receive:
+
 - **Detailed notification embeds** with:
+
   - User profile information and avatar
   - Account creation and join timestamps (both absolute and relative)
   - Detection confidence level (Low/Medium/High)
@@ -71,6 +78,7 @@ Administrators receive:
   - Trigger source (message content or join event)
 
 - **Interactive buttons** for one-click actions:
+
   - Verify User (removes restricted role)
   - Ban User (removes from server)
   - Create Thread (for verification conversation)
@@ -86,18 +94,21 @@ Administrators receive:
 ### For Server Administrators
 
 - **Reduced Workload**:
+
   - Automatic detection of suspicious users
   - Proactive restriction before spam occurs
   - One-click moderation actions
   - Organized verification system
 
 - **Clear Information**:
+
   - Detailed notification embeds
   - Confidence levels for detection reliability
   - Reason explanations for transparency
   - Action history for accountability
 
 - **Simple Controls**:
+
   - Interactive buttons for common actions
   - Slash commands for additional control
   - Verification threads for communication
@@ -112,18 +123,21 @@ Administrators receive:
 ### For Server Members
 
 - **Safer Environment**:
+
   - Proactive protection from scams
   - Reduced exposure to spam messages
   - Fewer disruptive raid attacks
   - More focused community discussions
 
 - **Minimal Friction**:
+
   - No verification for most legitimate users
   - Targeted restrictions only for suspicious accounts
   - Simple verification process if flagged incorrectly
   - Quick resolution through dedicated threads
 
 - **Transparent Process**:
+
   - Clear verification instructions
   - Private communication channels
   - Consistent moderation standards
@@ -140,24 +154,28 @@ Administrators receive:
 What sets our bot apart from existing solutions:
 
 1. **AI-First Approach**:
+
    - GPT-powered analysis for nuanced understanding
    - Few-shot learning with categorized examples
    - Context-aware evaluation of user profiles
    - Sophisticated message content analysis
 
 2. **Proactive vs. Reactive**:
+
    - New join analysis before any messages
    - Account age and creation time evaluation
    - Early restriction of suspicious accounts
    - Prevention rather than cleanup
 
 3. **Admin-Optimized UX**:
+
    - Detailed yet scannable notification embeds
    - One-click moderation actions
    - Integrated action logging
    - Dedicated verification system
 
 4. **Balanced Protection**:
+
    - Selective verification only for suspicious users
    - Smart routing between heuristics and GPT
    - Confidence levels for informed decisions
@@ -172,46 +190,52 @@ What sets our bot apart from existing solutions:
 ## Target Audience
 
 - **Primary**: Medium to large Discord communities (500+ members)
-   - Gaming communities with public invites
-   - Open educational and professional groups
-   - Content creator communities
-   - Public interest groups
+
+  - Gaming communities with public invites
+  - Open educational and professional groups
+  - Content creator communities
+  - Public interest groups
 
 - **Secondary**: Smaller communities with specific security concerns
-   - Communities with sensitive discussions
-   - Groups that have experienced raids or spam attacks
-   - Servers with limited moderation resources
-   - Communities with vulnerable populations
+
+  - Communities with sensitive discussions
+  - Groups that have experienced raids or spam attacks
+  - Servers with limited moderation resources
+  - Communities with vulnerable populations
 
 - **Tertiary**: Public-facing official Discord servers
-   - Brand and product communities
-   - Support servers for software and services
-   - Event-based communities with fluctuating membership
-   - Multi-server networks with shared moderation
+  - Brand and product communities
+  - Support servers for software and services
+  - Event-based communities with fluctuating membership
+  - Multi-server networks with shared moderation
 
 ## Success Metrics
 
 The bot's effectiveness will be measured by:
 
 1. **Reduction in Successful Spam Incidents**:
+
    - Fewer spam messages reaching general channels
    - Decreased number of users reporting scam attempts
    - Reduced need for message deletion and cleanup
    - Lower frequency of raid attacks
 
 2. **False Positive Rate**:
+
    - Minimal incorrect flagging of legitimate users
    - Quick resolution of false positives through verification
    - Decreasing trend in false positive rate over time
    - Positive feedback on verification experience
 
 3. **Admin Time Savings**:
+
    - Reduced time spent on manual moderation
    - Fewer required admin interventions
    - Quicker resolution of moderation issues
    - More efficient verification process
 
 4. **User Satisfaction**:
+
    - Positive feedback from administrators
    - Minimal complaints from legitimate users
    - Increased server retention rates

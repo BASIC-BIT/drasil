@@ -3,10 +3,13 @@
 ## Technology Stack
 
 ### Programming Language
+
 - **TypeScript**: Provides type safety, improved maintainability, and better developer experience
 
 ### Core Libraries
+
 - **Discord.js**: Comprehensive Discord API wrapper that provides:
+
   - Client for connecting to Discord Gateway
   - Event handling for messages, members, interactions
   - Slash command registration and handling
@@ -15,12 +18,14 @@
   - Permission management
 
 - **OpenAI Node.js SDK**: Official SDK for GPT integration:
+
   - Chat completions API for GPT-4o-mini model
   - Structured message formatting
   - Error handling for API responses
   - Temperature and token control
 
 - **Supabase JS Client**: PostgreSQL database client:
+
   - Type-safe database operations
   - Row-level security support
   - Real-time capabilities (not currently used)
@@ -32,15 +37,17 @@
   - Used for Discord token, OpenAI API key, and Supabase credentials
 
 ### Testing Tools
+
 - **Jest**: Testing framework for unit and integration tests
 - **ts-jest**: TypeScript integration for Jest
-- **Custom Mocks**: 
+- **Custom Mocks**:
   - `__mocks__/discord.js.ts`: Mocks Discord client and interactions
   - `__mocks__/openai.ts`: Mocks OpenAI API responses
   - `__mocks__/supabase.ts`: Mocks database operations
   - `config/__mocks__/supabase.ts`: Mocks Supabase client configuration
 
 ### Development Tools
+
 - **ESLint**: Code linting with TypeScript integration
 - **Prettier**: Code formatting
 - **Babel**: JavaScript transpilation for testing
@@ -49,6 +56,7 @@
 ## Development Environment
 
 ### Required Environment Variables
+
 - `DISCORD_TOKEN`: Bot authentication token from Discord Developer Portal
 - `OPENAI_API_KEY`: API key for OpenAI services
 - `SUPABASE_URL`: URL for Supabase instance
@@ -59,6 +67,7 @@
 - `ADMIN_NOTIFICATION_ROLE_ID`: (Optional) ID of the role to ping for notifications
 
 ### Local Development Setup
+
 1. Clone repository
 2. Install dependencies with `npm install`
 3. Create `.env` file with required environment variables
@@ -66,13 +75,16 @@
 5. Start development server with `npm run dev`
 
 ### Discord Bot Configuration
+
 - **Required Gateway Intents**:
+
   - `GatewayIntentBits.Guilds`: For guild events
   - `GatewayIntentBits.GuildMessages`: For message events
   - `GatewayIntentBits.MessageContent`: For message content access
   - `GatewayIntentBits.GuildMembers`: For member join events
 
 - **Required Permissions**:
+
   - Read Messages
   - Send Messages
   - Manage Messages
@@ -91,7 +103,9 @@
 ## External Services Integration
 
 ### Discord API
+
 - **Client Initialization**:
+
   ```typescript
   this.client = new Client({
     intents: [
@@ -104,6 +118,7 @@
   ```
 
 - **Event Handling**:
+
   ```typescript
   this.client.on('ready', this.handleReady.bind(this));
   this.client.on('messageCreate', this.handleMessage.bind(this));
@@ -113,6 +128,7 @@
   ```
 
 - **Slash Command Registration**:
+
   ```typescript
   const rest = new REST({ version: '10' }).setToken(token);
   await rest.put(Routes.applicationCommands(clientId), { body: this.commands });
@@ -123,21 +139,24 @@
   - Handlers for verify, ban, and thread creation
 
 ### OpenAI GPT
+
 - **Model**: gpt-4o-mini (specified in GPTService.ts)
 
 - **Prompt Structure**:
+
   - System message defining the assistant's role
   - User message with structured profile data
   - Few-shot examples of suspicious and normal users
 
 - **API Call Configuration**:
+
   ```typescript
   const response = await this.openai.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [
       {
         role: 'system',
-        content: "You are a Discord moderation assistant...",
+        content: 'You are a Discord moderation assistant...',
       },
       {
         role: 'user',
@@ -155,7 +174,9 @@
   - Includes detailed error information in development
 
 ### Supabase
+
 - **Client Initialization**:
+
   ```typescript
   export const supabase = createClient(supabaseUrl, supabaseKey, {
     auth: {
@@ -165,11 +186,13 @@
   ```
 
 - **Database Schema**:
+
   - `servers`: Guild configuration storage
   - `users`: Cross-server user tracking (planned)
   - `server_members`: User-server relationship (planned)
 
 - **Repository Pattern**:
+
   - `BaseRepository`: Interface for common operations
   - `SupabaseRepository`: Generic implementation
   - `ServerRepository`: Server-specific operations
@@ -181,6 +204,7 @@
 ## Technical Constraints
 
 ### Discord API Limitations
+
 - Rate limits on API calls
 - Message size limitations
 - Button interaction timeout (components expire after 15 minutes)
@@ -188,6 +212,7 @@
 - Slash command registration delays
 
 ### OpenAI API Considerations
+
 - Cost per token for API calls
 - Rate limits on requests
 - Response time variability
@@ -195,6 +220,7 @@
 - Potential for service outages
 
 ### Performance Requirements
+
 - Low latency for message processing
 - Efficient caching for frequently accessed data
 - Minimal memory footprint for hosting
@@ -204,6 +230,7 @@
 ## Database Schema
 
 ### Current Tables
+
 - **servers**:
   ```sql
   CREATE TABLE IF NOT EXISTS servers (
@@ -221,7 +248,9 @@
   ```
 
 ### Planned Tables
+
 - **users**:
+
   ```sql
   CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -253,6 +282,7 @@
   ```
 
 ### Migrations
+
 - Located in `supabase/migrations/`
 - Current migration: `20250327133248_create_initial_schema.sql`
 - Creates initial tables with indexes and comments
@@ -261,18 +291,21 @@
 ## Security Considerations
 
 ### Credential Management
+
 - All sensitive keys stored in environment variables
 - No hardcoded secrets in codebase
 - Regular credential rotation recommended
 - Partial key logging for debugging (first/last 4 chars only)
 
 ### Data Privacy
+
 - Minimal user data storage
 - Clear documentation on what data is stored
 - Compliance with Discord's Terms of Service
 - Row-level security in database
 
 ### Error Handling
+
 - Comprehensive error catching to prevent crashes
 - Graceful degradation when services fail
 - Logging of errors without exposing sensitive information
@@ -281,11 +314,13 @@
 ## Deployment Strategy
 
 ### Initial Deployment
+
 - Centrally hosted service on VPS or AWS
 - Environment variable configuration for production
 - Node.js runtime environment
 
 ### Scaling Considerations
+
 - Horizontal scaling for multiple bot instances
 - Database connection pooling
 - Caching strategies for high-traffic servers
@@ -294,12 +329,14 @@
 ## Monitoring & Maintenance
 
 ### Logging
+
 - Structured logging for error tracking
 - Console-based logging in development
 - Error details for debugging
 - API response logging in development mode
 
 ### Updates & Maintenance
+
 - Regular dependency updates
 - Backward compatibility considerations
 - Database migration strategy
