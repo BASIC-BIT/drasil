@@ -37,6 +37,35 @@ export interface IUserRepository {
    * @returns Array of users below the threshold
    */
   findByReputationBelow(threshold: number): Promise<User[]>;
+
+  /**
+   * Increment the number of servers where a user is flagged as suspicious
+   * @param discordId The Discord user ID
+   * @returns The updated user
+   */
+  incrementSuspiciousServerCount(discordId: string): Promise<User | null>;
+
+  /**
+   * Decrement the number of servers where a user is flagged as suspicious
+   * @param discordId The Discord user ID
+   * @returns The updated user
+   */
+  decrementSuspiciousServerCount(discordId: string): Promise<User | null>;
+
+  /**
+   * Mark a user as first flagged
+   * @param discordId The Discord user ID
+   * @param timestamp Optional timestamp of first flag (defaults to now)
+   * @returns The updated user
+   */
+  setFirstFlagged(discordId: string, timestamp?: string): Promise<User | null>;
+
+  /**
+   * Find users with suspicious activity in multiple servers
+   * @param threshold Minimum number of suspicious servers (default: 2)
+   * @returns Array of users flagged in multiple servers
+   */
+  findUsersFlaggedInMultipleServers(threshold?: number): Promise<User[]>;
 }
 
 /**
@@ -149,6 +178,127 @@ export class UserRepository extends SupabaseRepository<User> implements IUserRep
       return (data as User[]) || [];
     } catch (error) {
       this.handleError(error as Error, 'findByReputationBelow');
+    }
+  }
+
+  /**
+   * Increment the number of servers where a user is flagged as suspicious
+   * @param discordId The Discord user ID
+   * @returns The updated user
+   */
+  async incrementSuspiciousServerCount(discordId: string): Promise<User | null> {
+    try {
+      // First, check if the user exists and get their current count
+      const user = await this.findByDiscordId(discordId);
+      if (!user) return null;
+
+      // Calculate the new count
+      const currentCount = user.suspicious_server_count || 0;
+      const newCount = currentCount + 1;
+
+      // Update with the new count
+      const { data, error } = await this.supabaseClient
+        .from(this.tableName)
+        .update({
+          suspicious_server_count: newCount,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('discord_id', discordId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as User;
+    } catch (error) {
+      this.handleError(error as Error, 'incrementSuspiciousServerCount');
+    }
+  }
+
+  /**
+   * Decrement the number of servers where a user is flagged as suspicious
+   * @param discordId The Discord user ID
+   * @returns The updated user
+   */
+  async decrementSuspiciousServerCount(discordId: string): Promise<User | null> {
+    try {
+      // First, check if the user exists and get their current count
+      const user = await this.findByDiscordId(discordId);
+      if (!user) return null;
+
+      // Calculate the new count (never go below 0)
+      const currentCount = user.suspicious_server_count || 0;
+      const newCount = Math.max(0, currentCount - 1);
+
+      // Update with the new count
+      const { data, error } = await this.supabaseClient
+        .from(this.tableName)
+        .update({
+          suspicious_server_count: newCount,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('discord_id', discordId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as User;
+    } catch (error) {
+      this.handleError(error as Error, 'decrementSuspiciousServerCount');
+    }
+  }
+
+  /**
+   * Mark a user as first flagged
+   * @param discordId The Discord user ID
+   * @param timestamp Optional timestamp of first flag (defaults to now)
+   * @returns The updated user
+   */
+  async setFirstFlagged(discordId: string, timestamp?: string): Promise<User | null> {
+    try {
+      // First, check if the user exists
+      const user = await this.findByDiscordId(discordId);
+      if (!user) return null;
+
+      // Only set first_flagged_at if it's not already set
+      if (user.first_flagged_at) {
+        return user;
+      }
+
+      // Set the first_flagged_at timestamp
+      const flaggedTime = timestamp || new Date().toISOString();
+      const { data, error } = await this.supabaseClient
+        .from(this.tableName)
+        .update({
+          first_flagged_at: flaggedTime,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('discord_id', discordId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data as User;
+    } catch (error) {
+      this.handleError(error as Error, 'setFirstFlagged');
+    }
+  }
+
+  /**
+   * Find users with suspicious activity in multiple servers
+   * @param threshold Minimum number of suspicious servers (default: 2)
+   * @returns Array of users flagged in multiple servers
+   */
+  async findUsersFlaggedInMultipleServers(threshold: number = 2): Promise<User[]> {
+    try {
+      const { data, error } = await this.supabaseClient
+        .from(this.tableName)
+        .select('*')
+        .gte('suspicious_server_count', threshold);
+
+      if (error) throw error;
+      return (data as User[]) || [];
+    } catch (error) {
+      this.handleError(error as Error, 'findUsersFlaggedInMultipleServers');
     }
   }
 }

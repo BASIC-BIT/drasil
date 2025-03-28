@@ -19,6 +19,7 @@ import {
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { DetectionResult } from './DetectionOrchestrator';
+import { IVerificationThreadRepository } from '../repositories/VerificationThreadRepository';
 
 export interface NotificationButton {
   id: string;
@@ -89,6 +90,28 @@ export interface INotificationManager {
    * @returns The ID of the created channel or null if creation failed
    */
   setupVerificationChannel(guild: Guild, restrictedRoleId: string): Promise<string | null>;
+
+  /**
+   * Get a list of all open verification threads
+   * @param serverId The Discord server ID
+   * @returns Array of open thread IDs
+   */
+  getOpenVerificationThreads(serverId: string): Promise<string[]>;
+
+  /**
+   * Resolve a verification thread
+   * @param serverId The Discord server ID
+   * @param threadId The Discord thread ID
+   * @param resolution The resolution of the thread (verified, banned, ignored)
+   * @param resolvedBy The Discord ID of the user who resolved the thread
+   * @returns Whether the thread was successfully resolved
+   */
+  resolveVerificationThread(
+    serverId: string,
+    threadId: string,
+    resolution: 'verified' | 'banned' | 'ignored',
+    resolvedBy: string
+  ): Promise<boolean>;
 }
 
 /**
@@ -100,13 +123,17 @@ export class NotificationManager implements INotificationManager {
   private verificationChannelId: string | undefined;
   private client: Client;
   private configService: IConfigService;
+  private verificationThreadRepository: IVerificationThreadRepository;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
-    @inject(TYPES.ConfigService) configService: IConfigService
+    @inject(TYPES.ConfigService) configService: IConfigService,
+    @inject(TYPES.VerificationThreadRepository)
+    verificationThreadRepository: IVerificationThreadRepository
   ) {
     this.client = client;
     this.configService = configService;
+    this.verificationThreadRepository = verificationThreadRepository;
   }
 
   public async initialize(guildId: string): Promise<void> {
@@ -211,6 +238,9 @@ export class NotificationManager implements INotificationManager {
         content: `# Verification for <@${member.id}>\n\nHello <@${member.id}>, your account has been automatically flagged for verification.\n\nTo help us verify your account, please answer these questions:\n\n1. How did you find our community?\n2. What interests you here?\n\nOnce you respond, a moderator will review your answers and grant you full access to the server if everything checks out.`,
       });
 
+      // Store thread in the database
+      await this.verificationThreadRepository.createThread(member.guild.id, member.id, thread.id);
+
       return thread;
     } catch (error) {
       console.error('Failed to create verification thread:', error);
@@ -247,6 +277,18 @@ export class NotificationManager implements INotificationManager {
       let actionLogContent = `• <@${admin.id}> ${actionTaken} <t:${timestamp}:R>`;
       if (thread && actionTaken.includes('created a verification thread')) {
         actionLogContent = `• <@${admin.id}> [created a verification thread](${thread.url}) <t:${timestamp}:R>`;
+
+        // Update the thread status if it's a verification or ban action
+        if (
+          message.guildId &&
+          (actionTaken.includes('verified') || actionTaken.includes('banned'))
+        ) {
+          const resolution = actionTaken.includes('verified')
+            ? ('verified' as const)
+            : ('banned' as const);
+
+          await this.resolveVerificationThread(message.guildId, thread.id, resolution, admin.id);
+        }
       }
 
       if (actionLogField) {
@@ -513,6 +555,51 @@ export class NotificationManager implements INotificationManager {
     } catch (error) {
       console.error('Failed to set up verification channel:', error);
       return null;
+    }
+  }
+
+  /**
+   * Get a list of all open verification threads
+   * @param serverId The Discord server ID
+   * @returns Array of open thread IDs
+   */
+  public async getOpenVerificationThreads(serverId: string): Promise<string[]> {
+    try {
+      const threads = await this.verificationThreadRepository.findByStatus(serverId, 'open');
+      return threads.map((thread) => thread.thread_id);
+    } catch (error) {
+      console.error('Failed to get open verification threads:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Resolve a verification thread
+   * @param serverId The Discord server ID
+   * @param threadId The Discord thread ID
+   * @param resolution The resolution of the thread (verified, banned, ignored)
+   * @param resolvedBy The Discord ID of the user who resolved the thread
+   * @returns Whether the thread was successfully resolved
+   */
+  public async resolveVerificationThread(
+    serverId: string,
+    threadId: string,
+    resolution: 'verified' | 'banned' | 'ignored',
+    resolvedBy: string
+  ): Promise<boolean> {
+    try {
+      const result = await this.verificationThreadRepository.updateThreadStatus(
+        serverId,
+        threadId,
+        'resolved',
+        resolvedBy,
+        resolution
+      );
+
+      return !!result;
+    } catch (error) {
+      console.error('Failed to resolve verification thread:', error);
+      return false;
     }
   }
 }

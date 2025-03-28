@@ -352,6 +352,7 @@ The system currently implements:
    - 🔄 Add tests for database operations
 
 3. **Documentation Updates**:
+
    - ✅ Document Supabase error handling best practices
    - ✅ Document server configuration command
    - ✅ Document InversifyJS testing approach
@@ -360,6 +361,29 @@ The system currently implements:
    - 🔄 Create admin guide for bot configuration
    - 🔄 Document environment variables and configuration options
    - 🔄 Create developer guide for extending the bot
+
+4. **Alpha Release Critical Components**:
+   - ❌ User flags repository (Cancelled - integrating into existing tables)
+     - ❌ Create user_flags table
+     - ❌ Complete methods for flag management
+     - ❌ Implement flag history and status tracking
+     - ❌ Create unit tests with transaction rollbacks
+   - 🆕 Extend Existing Tables for Flag Functionality
+     - 🔄 Add flag columns to server_members table (is_restricted, verification_status, etc.)
+     - 🔄 Add reputation columns to users table (global_reputation_score, suspicious_server_count)
+     - 🔄 Update repository methods to support flag operations
+     - 🔄 Add migration for new columns
+     - 🔄 Add tests for flag-related operations
+   - 🔄 Thread & verification tracking
+     - ⏳ Create verification_threads table
+     - 🔄 Track verification outcomes
+     - 🔄 Store thread references
+     - 🔄 Add integration tests for verification flow
+   - 🔄 Polish & usability improvements
+     - ⏳ Implement graceful handling for button timeout
+     - ⏳ Add visual indication of button expiration
+     - ⏳ Enhance verification instructions clarity
+     - ⏳ Improve feedback for admin actions
 
 ### Future Enhancements
 
@@ -424,6 +448,7 @@ The system currently implements:
    - Detailed error messages with context for troubleshooting
 
 5. **InversifyJS Testing Best Practices**:
+
    - **Private Property Access**: Use proper type assertions with `(as any)` for accessing private properties instead of bracket notation which causes TypeScript errors.
    - **Dynamic Values**: Use `expect.any(String)` or `expect.any(Date)` for dynamically generated fields like timestamps rather than exact values.
    - **Mock Implementation**: Create proper mock implementations that match the interface, especially for complex objects with nested properties.
@@ -434,3 +459,13 @@ The system currently implements:
    - **Error Scenario Testing**: Properly set up mocks for error scenarios to ensure error propagation is tested correctly.
    - **Custom Assertions**: Use extension methods and custom matchers for cleaner test assertions.
    - **Test Isolation**: Ensure proper cleanup between tests using `afterEach` and `jest.clearAllMocks()` to prevent test interference.
+
+6. **Performance Optimization for Alpha Release**:
+   - Need to implement rate limiting for OpenAI API calls
+   - Message queue system needed for high-traffic servers
+   - Memory usage optimization for message history tracking
+   - Database connection pooling configuration
+   - Performance metrics and monitoring implementation
+   - Stress testing needed to identify bottlenecks
+   - Caching strategy refinement for server configurations
+   - Implement graceful degradation for external service outages

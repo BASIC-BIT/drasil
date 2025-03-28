@@ -347,12 +347,28 @@ The database implementation is divided into several chunks, each focusing on a s
   - ✅ Implement proper separation of concerns
   - ✅ Clear responsibility boundaries
   - ⏳ Add performance tests for high-volume scenarios
-- 🔄 User flags repository
-  - ⏳ Create user_flags table
-  - 🔄 Add methods for flag management
-  - 🔄 Implement flag history and status tracking
-  - ⏳ Create unit tests with transaction rollbacks
-  - ⏳ Add integration tests for flag workflows
+- ❌ User flags repository (Cancelled - integrating into existing tables)
+  - ❌ Create user_flags table
+  - ❌ Add methods for flag management
+  - ❌ Implement flag history and status tracking
+  - ❌ Create unit tests with transaction rollbacks
+  - ❌ Add integration tests for flag workflows
+- 🆕 Extend existing tables for flag functionality
+  - 🔄 Server member flag columns
+    - 🔄 Add is_restricted (boolean) column
+    - 🔄 Add verification_status (enum) column
+    - 🔄 Add restriction_reason (text) column
+    - 🔄 Add last_status_change (timestamp) column
+    - 🔄 Add moderator_id (text) column
+  - 🔄 User reputation columns
+    - 🔄 Add global_reputation_score (integer) column
+    - 🔄 Add suspicious_server_count (integer) column
+    - 🔄 Add first_flagged_at (timestamp) column
+  - 🔄 Repository method updates
+    - 🔄 Update ServerMemberRepository with flag methods
+    - 🔄 Update UserRepository with reputation methods
+    - 🔄 Add tests for new functionality
+  - 🔄 Create migration for new columns
 - ✅ DetectionOrchestrator integration
   - ✅ Update orchestrator to use repositories
   - ✅ Store detection results

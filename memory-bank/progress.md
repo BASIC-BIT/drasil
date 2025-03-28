@@ -192,6 +192,55 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ⏳ Server activity monitoring
   - ⏳ Performance metrics
 
+### Alpha Release Priorities
+
+- ❌ User flags repository (Cancelled - integrating into existing tables)
+
+  - ❌ Create user_flags table
+  - ❌ Methods for flag management
+  - ❌ Flag history and status tracking
+  - ❌ Unit tests with transaction rollbacks
+
+- 🆕 Extend Existing Tables for Flag Functionality
+
+  - 🔄 Server Member Flag Columns
+    - is_restricted (boolean): Current restriction status
+    - verification_status (enum): 'pending', 'verified', 'rejected'
+    - restriction_reason (text): Why the user was restricted
+    - last_status_change (timestamp): When status last changed
+    - moderator_id (text): Who changed the status
+  - 🔄 User Reputation Columns
+    - global_reputation_score (integer): Cross-server reputation
+    - suspicious_server_count (integer): Number of servers flagged in
+    - first_flagged_at (timestamp): First time flagged anywhere
+  - 🔄 Repository Method Updates
+    - Add flag management methods to ServerMemberRepository
+    - Add reputation management methods to UserRepository
+    - Update tests for new functionality
+  - 🔄 Migration creation
+    - Create SQL migration for new columns
+    - Add indexes for performance
+
+- 🔄 Verification thread tracking
+
+  - ⏳ Create verification_threads table
+  - 🔄 Track verification outcomes
+  - 🔄 Store thread references
+  - ⏳ Tests for verification flow
+
+- 🔄 Performance optimization
+
+  - ⏳ Rate limiting for OpenAI API calls
+  - ⏳ Message queue for high-traffic servers
+  - ⏳ Memory usage optimization
+  - ⏳ Stress testing under load
+
+- 🔄 User experience improvements
+  - ⏳ Button timeout handling
+  - ⏳ Visual indication of button expiration
+  - ⏳ Enhanced verification instructions
+  - ⏳ Improved admin action feedback
+
 ### Advanced Features
 
 - ⏳ Cross-server reputation system

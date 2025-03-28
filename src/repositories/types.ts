@@ -43,6 +43,8 @@ export interface User {
   global_reputation_score?: number; // Cross-server reputation score
   account_created_at?: string; // When the Discord account was created
   metadata?: Record<string, unknown>; // Additional metadata
+  suspicious_server_count?: number; // Number of servers where the user has been flagged
+  first_flagged_at?: string; // When the user was first flagged in any server
 }
 
 /**
@@ -57,6 +59,10 @@ export interface ServerMember {
   last_verified_at?: string; // Last time user was verified
   last_message_at?: string; // Last time user sent a message
   message_count?: number; // Total message count in server
+  verification_status?: 'pending' | 'verified' | 'rejected'; // Current verification status
+  restriction_reason?: string; // Reason why the user was restricted
+  last_status_change?: string; // When the status was last changed
+  moderator_id?: string; // Discord ID of the moderator who changed the status
 }
 
 /**
@@ -77,4 +83,19 @@ export interface DetectionEvent {
   admin_action_by?: string;
   admin_action_at?: string | Date;
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * Represents a verification thread for a suspicious user
+ */
+export interface VerificationThread {
+  id: string; // UUID for the thread record
+  server_id: string; // Discord server ID
+  user_id: string; // Discord user ID
+  thread_id: string; // Discord thread ID
+  created_at: string | Date; // When the thread was created
+  status: 'open' | 'resolved' | 'abandoned'; // Current thread status
+  resolved_at?: string | Date; // When the thread was resolved
+  resolved_by?: string; // Discord ID of the user who resolved the thread
+  resolution?: 'verified' | 'banned' | 'ignored'; // Resolution outcome
 }
