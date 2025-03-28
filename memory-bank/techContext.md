@@ -1,5 +1,9 @@
 # Discord Anti-Spam Bot: Technical Context
 
+## Overview
+
+This document details the technical implementation of the Discord Anti-Spam Bot, including the technology stack, development environment, external service integrations, and technical considerations.
+
 ## Technology Stack
 
 ### Programming Language
@@ -35,6 +39,12 @@
   - Loads variables from .env file
   - Secure storage of sensitive credentials
   - Used for Discord token, OpenAI API key, and Supabase credentials
+
+### Dependency Injection
+
+- **InversifyJS** (Planned):
+  - Modular architecture, improved testability
+  - Promotes clean separation of concerns (services, repositories, Discord client, etc.)
 
 ### Testing Tools
 
@@ -99,6 +109,54 @@
   - `/createthread`: Create a verification thread for a user
   - `/ping`: Check if the bot is running
   - `/setupverification`: Set up a verification channel
+
+## Spam Detection Strategies
+
+The bot implements a hybrid spam detection approach combining multiple techniques:
+
+### Heuristic and Rule-Based Techniques
+
+- **Message Frequency & Flood Detection**:
+  - Defined thresholds for message volumes (5 messages in 10 seconds)
+  - Automatic moderation actions triggered at thresholds
+
+- **Keyword and Pattern Filtering**:
+  - Regular expressions and keyword blacklists for scam words, malicious URLs
+  - Frequent updates to address evolving spam tactics
+
+- **URL and Link Analysis**:
+  - Validation against known malicious domains
+  - Heuristic checks for suspicious URL patterns
+
+- **Behavioral Heuristics**:
+  - Tracking of user behaviors like excessive mentions, emoji spam
+  - Higher suspicion scores for recently created accounts or new server members
+
+### AI-Powered Analysis
+
+- **GPT Integration**:
+  - Using gpt-4o-mini model for nuanced spam detection
+  - Prompt engineering with clear instructions and expected output format
+  - Few-shot learning with categorized examples
+  - Selective invocation to balance cost and accuracy
+
+- **Confidence Classification**:
+  - Low: 0-40% confidence
+  - Medium: 41-70% confidence
+  - High: 71-100% confidence
+  - Internal percentage values maintained for analytics
+
+### Hybrid Detection Approach
+
+- **Multi-Layered Filtering**:
+  - Fast heuristic checks for immediate blocking of obvious spam
+  - GPT analysis reserved for borderline or unclear cases
+  - New users always analyzed by GPT upon joining
+
+- **Performance Optimization**:
+  - Rate limiting and selective API usage
+  - Caching strategies for frequently accessed data
+  - Efficient message history tracking
 
 ## External Services Integration
 
@@ -343,9 +401,17 @@
 
 ## Future Technical Enhancements
 
+- **Spam Detection Improvements**:
+  - Cross-server trust networks for shared reputation data
+  - Advanced behavioral analytics for pattern recognition
+  - Adaptive learning from moderation actions
+
 - Custom fine-tuned AI model for improved detection
 - Web dashboard for configuration and analytics
 - Cross-server trusted network implementation
 - Enhanced analytics and reporting features
 - Persistent storage for message history and detection logs
 - User reputation tracking across servers
+
+- Real-time admin notifications for system events
+- Status webpage for uptime/downtime tracking

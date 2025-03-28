@@ -1,5 +1,30 @@
 # Discord Anti-Spam Bot: Product Context
 
+## Core Functionality
+
+### User Detection Events
+
+- **Immediate check** upon user joining server
+- **Initial full-server scan** upon bot onboarding
+- **Periodic scans** of existing users (interval configurable)
+- **Triggered scans** by suspicious user behavior (rapid message sending, excessive DMs)
+
+### AI Detection Data Points
+
+- Discord username and discriminator
+- Nickname (analysis for pronounceability, special characters)
+- Profile description, pronouns, bio
+- External connections (Spotify, Steam, Xbox, etc.)
+- Profile picture and banner image analysis
+- Account creation date, server join date
+- Mutual server information (when available)
+
+### Detection Outcomes
+
+- Binary classification (SUSPICIOUS or OK)
+- Confidence score clearly communicated in admin summaries (Low/Medium/High)
+- Detailed reasons for flagging
+
 ## Problem Statement
 
 Discord servers face persistent challenges with spam, scams, and malicious users. Current solutions often:
@@ -22,7 +47,13 @@ Our Discord Anti-Spam Bot addresses these challenges through:
 
 ### 1. Proactive Detection
 
-Rather than waiting for obvious spam patterns, the bot uses GPT-powered analysis to identify suspicious accounts based on subtle patterns, even before they've broken obvious rules. The implementation includes:
+Rather than waiting for obvious spam patterns, the bot uses GPT-powered analysis to identify suspicious accounts based on subtle patterns, even before they've broken obvious rules. This proactive approach allows us to:
+
+1. Analyze subtle patterns or suspicious profiles
+2. Make informed decisions on user authenticity
+3. Intervene **before** harm occurs
+
+The implementation includes:
 
 - **New Join Analysis**: Every new member is automatically analyzed by GPT
 - **Account Age Evaluation**: Recently created accounts receive extra scrutiny
@@ -57,13 +88,16 @@ This multi-layered approach provides both speed and accuracy.
 
 ### 3. Streamlined Verification
 
-For flagged users, the bot:
+For flagged users, the bot implements a structured verification process:
 
 - **Automatically assigns a restricted role** limiting server access
 - **Creates dedicated verification threads** in a private channel
 - **Sends verification instructions** to guide legitimate users
 - **Maintains privacy** by isolating verification conversations
 - **Preserves context** by keeping verification threads organized
+- **Prompts users** with simple verification questions:
+  - "How did you find our community?"
+  - "What interests you here?"
 
 ### 4. Admin-Friendly Interface
 
@@ -151,7 +185,7 @@ Administrators receive:
 
 ## Key Differentiators
 
-What sets our bot apart from existing solutions:
+What sets our bot apart from existing solutions is our AI-first approach to spam detection:
 
 1. **AI-First Approach**:
 
@@ -189,14 +223,14 @@ What sets our bot apart from existing solutions:
 
 ## Target Audience
 
-- **Primary**: Medium to large Discord communities (500+ members)
+- **Primary**: Medium to large Discord communities (500+ members):
 
   - Gaming communities with public invites
   - Open educational and professional groups
   - Content creator communities
   - Public interest groups
 
-- **Secondary**: Smaller communities with specific security concerns
+- **Secondary**: Smaller communities with specific security concerns:
 
   - Communities with sensitive discussions
   - Groups that have experienced raids or spam attacks
@@ -204,10 +238,23 @@ What sets our bot apart from existing solutions:
   - Communities with vulnerable populations
 
 - **Tertiary**: Public-facing official Discord servers
+
   - Brand and product communities
   - Support servers for software and services
   - Event-based communities with fluctuating membership
   - Multi-server networks with shared moderation
+
+## Onboarding Process
+
+The bot provides a streamlined onboarding experience:
+
+1. Introduction and benefits explanation
+2. Configurable restricted role setup
+3. Configurable admin notification role setup
+4. Optional admin summary channel configuration
+5. Initial full server scan and summarized results
+
+All roles and channels are optionally configurable during onboarding, with clear warnings when optional settings are skipped and automatic creation options available.
 
 ## Success Metrics
 
@@ -246,3 +293,27 @@ The bot's effectiveness will be measured by:
    - Low latency for message processing
    - Efficient resource utilization
    - Minimal downtime or errors
+
+## Future Roadmap
+
+### Planned Enhancements
+
+1. **Custom fine-tuned AI model**:
+   - Gather large volumes of confirmed spam and scam profiles
+   - Fine-tune a GPT model specifically on these examples
+   - Improve accuracy for subtle scam behavior detection
+
+2. **Cross-server reputation system**:
+   - Trusted networks for shared reputation data
+   - Global suspicion raising for users flagged in multiple servers
+   - Verification records from reputable servers
+
+3. **Advanced data analysis**:
+   - Image analysis for profile pictures and banners
+   - Behavioral logs for messaging patterns
+   - Friend request and DM pattern tracking
+
+4. **Web dashboard**:
+   - Configuration management interface
+   - Analytics and reporting
+   - User management features

@@ -35,6 +35,13 @@ This project is an AI-powered Discord bot designed to prevent spam and manage us
 
 ## Key Features
 
+- **User Detection Events**:
+
+  - Immediate check upon user joining server
+  - Initial full-server scan upon bot onboarding
+  - Periodic scans of existing users (interval configurable)
+  - Triggered scans by suspicious user behavior
+
 - **AI-Powered Analysis**:
 
   - GPT-4o-mini integration for sophisticated detection
@@ -60,6 +67,10 @@ This project is an AI-powered Discord bot designed to prevent spam and manage us
 - **Admin Interface**:
 
   - Detailed notification embeds with user information
+    - Username and avatar
+    - AI suspicion confidence (Low/Medium/High)
+    - Trigger source (message content or join event)
+    - Bullet-pointed reasons for flagging
   - Interactive buttons for one-click moderation actions
   - Action logging directly in notification messages
   - Slash commands for additional control
@@ -137,7 +148,7 @@ This project is an AI-powered Discord bot designed to prevent spam and manage us
 
 ## Development Approach
 
-The project follows a test-driven, iterative development approach with clearly defined chunks of work, each building on the previous:
+The project follows a test-driven, iterative development approach with clearly defined chunks of work:
 
 1. **Project Setup and Testing Framework**:
 
@@ -209,12 +220,39 @@ The detailed development roadmap is tracked in the progress.md file.
 - **Security Constraints**:
 
   - Must maintain user privacy and data security
-  - Should implement proper permission management
+  - Principle of least privilege (only permissions explicitly needed)
   - Must secure sensitive configuration and credentials
-  - Should follow row-level security for database access
+  - Row-level security for database access
 
 - **User Experience Constraints**:
   - Must minimize friction for legitimate users
   - Should provide clear verification instructions
   - Must offer transparent moderation processes
   - Should balance security with usability
+
+## Permissions & Security
+
+### Recommended Bot Permissions
+
+- Read Messages
+- Send & Manage Messages
+- Create & Manage Threads
+- Manage Roles
+- Ban Members
+- Kick Members (optional)
+- View Audit Log
+- Read Message History
+
+## Hosting & Infrastructure
+
+### Initial Hosting
+
+- Centrally hosted service on VPS or AWS
+- Open-source, public GitHub repository
+- Environment-variable secured OpenAI API integration
+
+### Future Enhancements
+
+- Optional self-hosting documentation
+- Pricing model integration via Stripe (second pass)
+- Web dashboard interface for easier bot management (third pass)

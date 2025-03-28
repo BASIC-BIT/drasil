@@ -1,8 +1,35 @@
 # Discord Anti-Spam Bot: System Patterns
 
-## System Architecture
+## Project Overview
 
 The Discord Anti-Spam Bot follows a modular, service-oriented architecture with clear separation of concerns. This document outlines the key architectural patterns and design decisions.
+
+## Directory Structure
+
+```
+├── src/                        # Source code directory
+│   ├── __tests__/             # Test files
+│   │   ├── config/            # Configuration tests
+│   │   └── repositories/      # Repository tests
+│   ├── __mocks__/             # Mock files for testing
+│   ├── config/                # Configuration files
+│   │   ├── supabase.ts       # Supabase client configuration
+│   │   └── gpt-config.ts     # GPT configuration
+│   ├── repositories/          # Data access layer
+│   │   ├── types.ts          # Database entity types
+│   │   ├── BaseRepository.ts # Base repository interface
+│   │   ├── SupabaseRepository.ts # Supabase implementation
+│   │   └── ServerRepository.ts   # Server configuration repository
+│   ├── services/             # Core services
+│   ├── Bot.ts               # Main bot class
+│   └── index.ts             # Application entry point
+├── docs/                    # Legacy documentation (being migrated to memory-bank)
+├── memory-bank/            # Project documentation and context
+├── supabase/               # Supabase configuration
+│   └── migrations/         # Database migrations
+├── .env                    # Environment variables
+└── configuration files     # Various config files (tsconfig.json, etc.)
+```
 
 ## Core Components
 
@@ -299,3 +326,33 @@ The architecture provides several extension points:
    - Add new settings to ServerSettings interface
    - Update GlobalConfig with new default values
    - Extend ConfigService methods as needed
+
+## Development Guidelines
+
+### 1. Service Integration
+
+- Services should be loosely coupled
+- Communication through well-defined interfaces
+- Dependency injection via constructor
+- Repository pattern for data access
+
+### 2. Error Handling
+
+- Comprehensive error catching in Bot.ts
+- Service-specific error handling
+- Repository error handling
+- Graceful degradation when services fail
+
+### 3. Configuration
+
+- Environment variables for sensitive data
+- Database-backed configuration
+- Runtime configuration via Discord commands
+- Cached configurations for performance
+
+### 4. Testing
+
+- Unit tests in `__tests__` directory
+- Mocks in `__mocks__` directory
+- Integration tests for critical paths
+- Repository tests with Supabase mocking

@@ -1,5 +1,39 @@
 # Discord Anti-Spam Bot: Testing Best Practices
 
+## Testing Layers
+
+### Unit Testing
+
+**Purpose:** Verify the correct functioning of individual components in isolation.
+
+**Key Principles:**
+
+- Test at the appropriate level of abstraction
+- Focus on behavior over implementation details
+- Create deterministic tests with proper mock implementations
+- Test both happy paths and error handling
+
+### Integration Testing
+
+**Purpose:** Verify interactions between components and with external services like Supabase.
+
+**Key Areas:**
+
+- Repository layer interactions with Supabase
+- Service coordination
+- End-to-end workflows
+
+### Database Testing
+
+**Purpose:** Verify database schema, migrations, and access patterns.
+
+**Areas to Test:**
+
+- Schema validation
+- Migration scripts
+- Row-level security (RLS) policies
+- Complex query performance
+
 ## Mocking Strategy for Complex Libraries
 
 Based on our experience debugging and fixing tests in the project, we've established the following best practices for mocking complex npm libraries like discord.js:
@@ -206,3 +240,84 @@ it('should respond to !ping command', async () => {
    - Use try/catch blocks to verify error handling behavior
 
 By following these best practices, we can create more robust and maintainable tests for complex libraries like discord.js.
+
+## Supabase Integration Testing
+
+### Repository Layer Testing
+
+**Strategy:**
+
+- Mock the Supabase client for unit tests
+- Test repository methods with real Supabase instance in integration tests
+- Verify CRUD operations work as expected
+- Test error handling and edge cases
+
+### Test Isolation Strategies
+
+1. **Unique Identifiers**
+
+   - Generate unique IDs for each test suite to prevent data conflicts
+   - Use UUIDs or timestamped identifiers
+
+2. **Cleanup After Tests**
+
+   - Use `afterEach` or `afterAll` hooks to clean up test data
+   - Implement transaction rollbacks when possible
+
+3. **Isolated Data Sets**
+   - Use prefixes or namespaces to separate test data
+   - Create test-specific schemas when appropriate
+
+### Row-Level Security Testing
+
+**Areas to Cover:**
+
+- Test access with different user roles (anonymous, authenticated)
+- Verify policy enforcement for CRUD operations
+- Test edge cases and policy bypasses
+- Verify negative cases (access that should be denied)
+
+## Test Data Management
+
+### Test Data Setup
+
+**Best Practices:**
+
+- Create realistic test data covering edge cases
+- Use factories or builders for consistent test entities
+- Document expected initial state
+- Reset to known state between tests
+
+### Database Transactions
+
+**Strategy:**
+
+- Use transactions with rollbacks to isolate tests
+- Create test-specific database users with appropriate permissions
+- Consider database snapshots for complex scenarios
+
+## CI/CD Integration
+
+### Automated Testing Pipeline
+
+**Implementation:**
+
+- Run unit tests on every pull request
+- Run integration tests on staging deployments
+- Include database migrations in test flow
+- Verify database schema consistency
+
+### Debugging Test Failures
+
+**Best Practices:**
+
+- Add conditional logging in tests
+- Use descriptive test and variable names
+- Isolate failing tests with `.only`
+- Implement step-by-step test verification
+
+**Common Issues and Solutions:**
+
+- Database Connection Issues: Verify Supabase is running and accessible
+- Authentication Problems: Verify correct roles and JWT claims
+- Test Isolation Failures: Ensure proper cleanup between tests
