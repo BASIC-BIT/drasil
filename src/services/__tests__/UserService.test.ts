@@ -1,16 +1,20 @@
-import { UserService } from '../UserService';
-import { UserRepository } from '../../repositories/UserRepository';
-import { ServerMemberRepository } from '../../repositories/ServerMemberRepository';
+import { UserService, IUserService } from '../UserService';
+import { IUserRepository } from '../../repositories/UserRepository';
+import { IServerMemberRepository } from '../../repositories/ServerMemberRepository';
 import { User, ServerMember } from '../../repositories/types';
+import { Container } from 'inversify';
+import { TYPES } from '../../di/symbols';
+import 'reflect-metadata';
 
 // Mock repositories
 jest.mock('../../repositories/UserRepository');
 jest.mock('../../repositories/ServerMemberRepository');
 
 describe('UserService', () => {
-  let service: UserService;
-  let userRepository: jest.Mocked<UserRepository>;
-  let serverMemberRepository: jest.Mocked<ServerMemberRepository>;
+  let service: IUserService;
+  let mockUserRepository: jest.Mocked<IUserRepository>;
+  let mockServerMemberRepository: jest.Mocked<IServerMemberRepository>;
+  let container: Container;
 
   const mockUser: User = {
     discord_id: '456789',
@@ -33,9 +37,47 @@ describe('UserService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    userRepository = new UserRepository() as jest.Mocked<UserRepository>;
-    serverMemberRepository = new ServerMemberRepository() as jest.Mocked<ServerMemberRepository>;
-    service = new UserService(userRepository, serverMemberRepository);
+
+    // Create mock repositories
+    mockUserRepository = {
+      findByDiscordId: jest.fn(),
+      upsertByDiscordId: jest.fn(),
+      updateReputationScore: jest.fn(),
+      findMany: jest.fn(),
+      findById: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      count: jest.fn(),
+      findByReputationBelow: jest.fn(),
+    } as unknown as jest.Mocked<IUserRepository>;
+
+    mockServerMemberRepository = {
+      findByServerAndUser: jest.fn(),
+      upsertMember: jest.fn(),
+      findByUser: jest.fn(),
+      updateReputationScore: jest.fn(),
+      incrementMessageCount: jest.fn(),
+      updateRestrictionStatus: jest.fn(),
+      findRestrictedMembers: jest.fn(),
+      findMany: jest.fn(),
+      findById: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      count: jest.fn(),
+    } as unknown as jest.Mocked<IServerMemberRepository>;
+
+    // Set up DI container
+    container = new Container();
+    container.bind<IUserRepository>(TYPES.UserRepository).toConstantValue(mockUserRepository);
+    container
+      .bind<IServerMemberRepository>(TYPES.ServerMemberRepository)
+      .toConstantValue(mockServerMemberRepository);
+    container.bind<IUserService>(TYPES.UserService).to(UserService);
+
+    // Get service from container
+    service = container.get<IUserService>(TYPES.UserService);
   });
 
   afterEach(() => {
@@ -45,45 +87,47 @@ describe('UserService', () => {
 
   describe('getOrCreateUser', () => {
     it('should return existing user when found', async () => {
-      userRepository.findByDiscordId.mockResolvedValue(mockUser);
+      mockUserRepository.findByDiscordId.mockResolvedValue(mockUser);
 
       const result = await service.getOrCreateUser(mockUser.discord_id);
 
       expect(result).toEqual(mockUser);
-      expect(userRepository.findByDiscordId).toHaveBeenCalledWith(mockUser.discord_id);
-      expect(userRepository.upsertByDiscordId).not.toHaveBeenCalled();
+      expect(mockUserRepository.findByDiscordId).toHaveBeenCalledWith(mockUser.discord_id);
+      expect(mockUserRepository.upsertByDiscordId).not.toHaveBeenCalled();
     });
 
     it('should update username if different', async () => {
       const updatedUser = { ...mockUser, username: 'newname' };
-      userRepository.findByDiscordId.mockResolvedValue(mockUser);
-      userRepository.upsertByDiscordId.mockResolvedValue(updatedUser);
+      mockUserRepository.findByDiscordId.mockResolvedValue(mockUser);
+      mockUserRepository.upsertByDiscordId.mockResolvedValue(updatedUser);
 
       const result = await service.getOrCreateUser(mockUser.discord_id, 'newname');
 
       expect(result).toEqual(updatedUser);
-      expect(userRepository.upsertByDiscordId).toHaveBeenCalledWith(mockUser.discord_id, {
+      expect(mockUserRepository.upsertByDiscordId).toHaveBeenCalledWith(mockUser.discord_id, {
+        ...mockUser,
         username: 'newname',
       });
     });
 
     it('should create new user when not found', async () => {
-      userRepository.findByDiscordId.mockResolvedValue(null);
-      userRepository.upsertByDiscordId.mockResolvedValue(mockUser);
+      mockUserRepository.findByDiscordId.mockResolvedValue(null);
+      mockUserRepository.upsertByDiscordId.mockResolvedValue(mockUser);
 
       const result = await service.getOrCreateUser('newuser', 'newname');
 
       expect(result).toEqual(mockUser);
-      expect(userRepository.upsertByDiscordId).toHaveBeenCalledWith('newuser', {
-        username: 'newname',
-        global_reputation_score: 0.0,
-        account_created_at: expect.any(String),
-      });
+      expect(mockUserRepository.upsertByDiscordId).toHaveBeenCalledWith(
+        'newuser',
+        expect.objectContaining({
+          username: 'newname',
+        })
+      );
     });
 
     it('should handle repository errors gracefully', async () => {
       const error = new Error('Database error');
-      userRepository.findByDiscordId.mockRejectedValue(error);
+      mockUserRepository.findByDiscordId.mockRejectedValue(error);
 
       await expect(service.getOrCreateUser(mockUser.discord_id)).rejects.toThrow('Database error');
     });
@@ -91,35 +135,38 @@ describe('UserService', () => {
 
   describe('getOrCreateMember', () => {
     it('should return existing member when found', async () => {
-      serverMemberRepository.findByServerAndUser.mockResolvedValue(mockMember);
+      mockServerMemberRepository.findByServerAndUser.mockResolvedValue(mockMember);
 
       const result = await service.getOrCreateMember(mockMember.server_id, mockMember.user_id);
 
       expect(result).toEqual(mockMember);
-      expect(serverMemberRepository.findByServerAndUser).toHaveBeenCalledWith(
+      expect(mockServerMemberRepository.findByServerAndUser).toHaveBeenCalledWith(
         mockMember.server_id,
         mockMember.user_id
       );
-      expect(serverMemberRepository.upsertMember).not.toHaveBeenCalled();
+      expect(mockServerMemberRepository.upsertMember).not.toHaveBeenCalled();
     });
 
     it('should create new member when not found', async () => {
-      serverMemberRepository.findByServerAndUser.mockResolvedValue(null);
-      serverMemberRepository.upsertMember.mockResolvedValue(mockMember);
+      mockServerMemberRepository.findByServerAndUser.mockResolvedValue(null);
+      mockServerMemberRepository.upsertMember.mockResolvedValue(mockMember);
 
       const result = await service.getOrCreateMember('server123', 'user123');
 
       expect(result).toEqual(mockMember);
-      expect(serverMemberRepository.upsertMember).toHaveBeenCalledWith('server123', 'user123', {
-        join_date: expect.any(String),
-        reputation_score: 0.0,
-        message_count: 0,
-      });
+      expect(mockServerMemberRepository.upsertMember).toHaveBeenCalledWith(
+        'server123',
+        'user123',
+        expect.objectContaining({
+          join_date: expect.any(String),
+          message_count: 0,
+        })
+      );
     });
 
     it('should handle repository errors gracefully', async () => {
       const error = new Error('Database error');
-      serverMemberRepository.findByServerAndUser.mockRejectedValue(error);
+      mockServerMemberRepository.findByServerAndUser.mockRejectedValue(error);
 
       await expect(service.getOrCreateMember('server123', 'user123')).rejects.toThrow(
         'Database error'
@@ -134,38 +181,38 @@ describe('UserService', () => {
         { ...mockMember, server_id: 'server456', user_id: 'user456', reputation_score: 0.6 },
       ];
 
-      serverMemberRepository.updateReputationScore.mockResolvedValue(mockMember);
-      userRepository.findByDiscordId.mockResolvedValue(mockUser);
-      serverMemberRepository.findMany.mockResolvedValue(memberships);
-      userRepository.updateGlobalReputationScore.mockResolvedValue(mockUser);
+      mockServerMemberRepository.updateReputationScore.mockResolvedValue(mockMember);
+      mockUserRepository.findByDiscordId.mockResolvedValue(mockUser);
+      mockServerMemberRepository.findByUser.mockResolvedValue(memberships);
+      mockUserRepository.updateReputationScore.mockResolvedValue(mockUser);
 
       await service.updateUserReputation(mockMember.server_id, mockMember.user_id, 0.8);
 
-      expect(serverMemberRepository.updateReputationScore).toHaveBeenCalledWith(
+      expect(mockServerMemberRepository.updateReputationScore).toHaveBeenCalledWith(
         mockMember.server_id,
         mockMember.user_id,
         0.8
       );
-      expect(userRepository.updateGlobalReputationScore).toHaveBeenCalledWith(
+      expect(mockUserRepository.updateReputationScore).toHaveBeenCalledWith(
         mockUser.discord_id,
         0.7 // Average of 0.8 and 0.6
       );
     });
 
     it('should not update global score if user not found', async () => {
-      serverMemberRepository.updateReputationScore.mockResolvedValue(mockMember);
-      userRepository.findByDiscordId.mockResolvedValue(null);
+      mockServerMemberRepository.updateReputationScore.mockResolvedValue(mockMember);
+      mockUserRepository.findByDiscordId.mockResolvedValue(null);
 
       await service.updateUserReputation(mockMember.server_id, mockMember.user_id, 0.8);
 
-      expect(serverMemberRepository.updateReputationScore).toHaveBeenCalled();
-      expect(serverMemberRepository.findMany).not.toHaveBeenCalled();
-      expect(userRepository.updateGlobalReputationScore).not.toHaveBeenCalled();
+      expect(mockServerMemberRepository.updateReputationScore).toHaveBeenCalled();
+      expect(mockServerMemberRepository.findByUser).not.toHaveBeenCalled();
+      expect(mockUserRepository.updateReputationScore).not.toHaveBeenCalled();
     });
 
     it('should handle repository errors gracefully', async () => {
       const error = new Error('Database error');
-      serverMemberRepository.updateReputationScore.mockRejectedValue(error);
+      mockServerMemberRepository.updateReputationScore.mockRejectedValue(error);
 
       await expect(
         service.updateUserReputation(mockMember.server_id, mockMember.user_id, 0.8)
@@ -175,8 +222,8 @@ describe('UserService', () => {
 
   describe('handleUserMessage', () => {
     it('should update user and increment message count', async () => {
-      userRepository.findByDiscordId.mockResolvedValue(mockUser);
-      serverMemberRepository.incrementMessageCount.mockResolvedValue(mockMember);
+      mockUserRepository.findByDiscordId.mockResolvedValue(mockUser);
+      mockServerMemberRepository.incrementMessageCount.mockResolvedValue(mockMember);
 
       await service.handleUserMessage(
         mockMember.server_id,
@@ -185,8 +232,8 @@ describe('UserService', () => {
         mockUser.username!
       );
 
-      expect(userRepository.findByDiscordId).toHaveBeenCalledWith(mockUser.discord_id);
-      expect(serverMemberRepository.incrementMessageCount).toHaveBeenCalledWith(
+      expect(mockUserRepository.findByDiscordId).toHaveBeenCalledWith(mockUser.discord_id);
+      expect(mockServerMemberRepository.incrementMessageCount).toHaveBeenCalledWith(
         mockMember.server_id,
         mockMember.user_id
       );
@@ -194,7 +241,7 @@ describe('UserService', () => {
 
     it('should handle repository errors gracefully', async () => {
       const error = new Error('Database error');
-      userRepository.findByDiscordId.mockRejectedValue(error);
+      mockUserRepository.findByDiscordId.mockRejectedValue(error);
 
       await expect(
         service.handleUserMessage(
@@ -210,7 +257,7 @@ describe('UserService', () => {
   describe('updateUserRestriction', () => {
     it('should update user restriction status', async () => {
       const restrictedMember = { ...mockMember, is_restricted: true };
-      serverMemberRepository.updateRestrictionStatus.mockResolvedValue(restrictedMember);
+      mockServerMemberRepository.updateRestrictionStatus.mockResolvedValue(restrictedMember);
 
       const result = await service.updateUserRestriction(
         mockMember.server_id,
@@ -219,7 +266,7 @@ describe('UserService', () => {
       );
 
       expect(result).toEqual(restrictedMember);
-      expect(serverMemberRepository.updateRestrictionStatus).toHaveBeenCalledWith(
+      expect(mockServerMemberRepository.updateRestrictionStatus).toHaveBeenCalledWith(
         mockMember.server_id,
         mockMember.user_id,
         true
@@ -228,7 +275,7 @@ describe('UserService', () => {
 
     it('should handle repository errors gracefully', async () => {
       const error = new Error('Database error');
-      serverMemberRepository.updateRestrictionStatus.mockRejectedValue(error);
+      mockServerMemberRepository.updateRestrictionStatus.mockRejectedValue(error);
 
       await expect(
         service.updateUserRestriction(mockMember.server_id, mockMember.user_id, true)
@@ -242,19 +289,19 @@ describe('UserService', () => {
         { ...mockMember, is_restricted: true },
         { ...mockMember, server_id: 'server456', user_id: 'user456', is_restricted: true },
       ];
-      serverMemberRepository.findRestrictedMembers.mockResolvedValue(restrictedMembers);
+      mockServerMemberRepository.findRestrictedMembers.mockResolvedValue(restrictedMembers);
 
       const result = await service.getRestrictedUsers(mockMember.server_id);
 
       expect(result).toEqual(restrictedMembers);
-      expect(serverMemberRepository.findRestrictedMembers).toHaveBeenCalledWith(
+      expect(mockServerMemberRepository.findRestrictedMembers).toHaveBeenCalledWith(
         mockMember.server_id
       );
     });
 
     it('should handle repository errors gracefully', async () => {
       const error = new Error('Database error');
-      serverMemberRepository.findRestrictedMembers.mockRejectedValue(error);
+      mockServerMemberRepository.findRestrictedMembers.mockRejectedValue(error);
 
       await expect(service.getRestrictedUsers(mockMember.server_id)).rejects.toThrow(
         'Database error'
@@ -264,43 +311,65 @@ describe('UserService', () => {
 
   describe('updateUserMetadata', () => {
     it('should update user metadata', async () => {
-      const metadata = { lastWarning: new Date().toISOString() };
-      const updatedUser = { ...mockUser, metadata };
-      userRepository.updateMetadata.mockResolvedValue(updatedUser);
+      const metadata = {
+        last_analysis: '2023-01-01T12:00:00Z',
+        profile_analyzed: true,
+      };
+      const updatedUser = {
+        ...mockUser,
+        metadata,
+      };
+      mockUserRepository.findByDiscordId.mockResolvedValue(mockUser);
+      mockUserRepository.upsertByDiscordId.mockResolvedValue(updatedUser);
 
       const result = await service.updateUserMetadata(mockUser.discord_id, metadata);
 
+      // Assert
       expect(result).toEqual(updatedUser);
-      expect(userRepository.updateMetadata).toHaveBeenCalledWith(mockUser.discord_id, metadata);
+      expect(mockUserRepository.upsertByDiscordId).toHaveBeenCalledWith(mockUser.discord_id, {
+        ...mockUser,
+        metadata,
+        updated_at: expect.any(String),
+      });
     });
 
-    it('should handle repository errors gracefully', async () => {
+    it('should return null if user not found', async () => {
+      mockUserRepository.findByDiscordId.mockResolvedValue(null);
+
+      const result = await service.updateUserMetadata('discord-123', { profile_analyzed: true });
+
+      expect(result).toBeNull();
+      expect(mockUserRepository.upsertByDiscordId).not.toHaveBeenCalled();
+    });
+
+    it('should handle errors when updating metadata', async () => {
       const error = new Error('Database error');
-      userRepository.updateMetadata.mockRejectedValue(error);
+      mockUserRepository.findByDiscordId.mockResolvedValue(mockUser);
+      mockUserRepository.upsertByDiscordId.mockRejectedValue(error);
 
       await expect(
-        service.updateUserMetadata(mockUser.discord_id, { test: 'data' })
+        service.updateUserMetadata('discord-123', { profile_analyzed: true })
       ).rejects.toThrow('Database error');
     });
   });
 
   describe('findLowReputationUsers', () => {
-    it('should return users with low reputation', async () => {
+    it('should return users with reputation below threshold', async () => {
       const lowRepUsers = [
-        { ...mockUser, global_reputation_score: 0.2 },
-        { ...mockUser, id: '456', discord_id: '789', global_reputation_score: 0.3 },
+        { ...mockUser, global_reputation_score: 0.3 },
+        { ...mockUser, discord_id: 'user456', global_reputation_score: 0.2 },
       ];
-      userRepository.findUsersWithLowReputation.mockResolvedValue(lowRepUsers);
+      mockUserRepository.findByReputationBelow.mockResolvedValue(lowRepUsers);
 
       const result = await service.findLowReputationUsers(0.4);
 
       expect(result).toEqual(lowRepUsers);
-      expect(userRepository.findUsersWithLowReputation).toHaveBeenCalledWith(0.4);
+      expect(mockUserRepository.findByReputationBelow).toHaveBeenCalledWith(0.4);
     });
 
     it('should handle repository errors gracefully', async () => {
       const error = new Error('Database error');
-      userRepository.findUsersWithLowReputation.mockRejectedValue(error);
+      mockUserRepository.findByReputationBelow.mockRejectedValue(error);
 
       await expect(service.findLowReputationUsers(0.4)).rejects.toThrow('Database error');
     });

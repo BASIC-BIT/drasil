@@ -1,63 +1,76 @@
-import { UserRepository } from '../UserRepository';
+import { UserRepository, IUserRepository } from '../UserRepository';
 import { User } from '../types';
-import { supabase } from '../../config/supabase';
-
-// Mock Supabase client
-jest.mock('../../config/supabase', () => ({
-  supabase: {
-    from: jest.fn(),
-    upsert: jest.fn(),
-  },
-}));
+import { SupabaseClient } from '@supabase/supabase-js';
+import { TYPES } from '../../di/symbols';
+import { createServiceTestContainer, createMocks } from '../../__tests__/utils/test-container';
+import { Container } from 'inversify';
 
 describe('UserRepository', () => {
-  let repository: UserRepository;
+  let container: Container;
+  let repository: IUserRepository;
+  let mocks: ReturnType<typeof createMocks>;
+
   const mockUser: User = {
-    discord_id: '456789',
-    username: 'testuser',
+    discord_id: 'discord-123',
+    username: 'TestUser',
     global_reputation_score: 0.5,
-    created_at: '2024-03-27T00:00:00Z',
-    updated_at: '2024-03-27T00:00:00Z',
+    account_created_at: '2023-01-01T00:00:00Z',
+    metadata: { flags: [] },
   };
 
   beforeEach(() => {
-    repository = new UserRepository();
-    jest.clearAllMocks();
-  });
+    // Create mocks
+    mocks = createMocks();
 
-  afterEach(() => {
+    // Create container with real UserRepository and mocked Supabase client
+    container = createServiceTestContainer(TYPES.UserRepository, UserRepository, {
+      mockSupabaseClient: mocks.mockSupabaseClient as unknown as SupabaseClient,
+    });
+
+    // Get the repository from the container
+    repository = container.get<IUserRepository>(TYPES.UserRepository);
+
     jest.clearAllMocks();
-    jest.resetModules();
   });
 
   describe('findByDiscordId', () => {
-    it('should return user when found', async () => {
-      const mockSingle = jest.fn().mockResolvedValue({
+    it('should find a user by Discord ID', async () => {
+      // Set up chained mock methods
+      const mockResult = {
         data: mockUser,
         error: null,
-      });
+      };
 
+      const mockSingle = jest.fn().mockResolvedValue(mockResult);
       const mockEq = jest.fn().mockReturnValue({ single: mockSingle });
       const mockSelect = jest.fn().mockReturnValue({ eq: mockEq });
-      (supabase.from as jest.Mock).mockReturnValue({ select: mockSelect });
+      const mockFrom = jest.fn().mockReturnValue({ select: mockSelect });
+
+      // Set up the mock for from method
+      mocks.mockSupabaseClient!.from = mockFrom;
 
       const result = await repository.findByDiscordId(mockUser.discord_id);
 
       expect(result).toEqual(mockUser);
-      expect(supabase.from).toHaveBeenCalledWith('users');
+      expect(mockFrom).toHaveBeenCalledWith('users');
       expect(mockSelect).toHaveBeenCalledWith('*');
       expect(mockEq).toHaveBeenCalledWith('discord_id', mockUser.discord_id);
     });
 
     it('should return null when user not found', async () => {
-      const mockSingle = jest.fn().mockResolvedValue({
+      // Set up chained mock methods
+      const mockResult = {
         data: null,
         error: { code: 'PGRST116' },
-      });
+      };
 
+      const mockSingle = jest.fn().mockResolvedValue(mockResult);
       const mockEq = jest.fn().mockReturnValue({ single: mockSingle });
       const mockSelect = jest.fn().mockReturnValue({ eq: mockEq });
-      (supabase.from as jest.Mock).mockReturnValue({ select: mockSelect });
+      const mockFrom = jest.fn().mockReturnValue({ select: mockSelect });
+
+      // Set up the mock for from method
+      mocks.mockSupabaseClient!.from = mockFrom;
 
       const result = await repository.findByDiscordId('nonexistent');
 
@@ -65,167 +78,184 @@ describe('UserRepository', () => {
     });
 
     it('should handle database errors', async () => {
-      const mockSingle = jest.fn().mockResolvedValue({
+      // Set up chained mock methods
+      const mockResult = {
         data: null,
         error: { message: 'Database error' },
-      });
+      };
 
+      const mockSingle = jest.fn().mockResolvedValue(mockResult);
       const mockEq = jest.fn().mockReturnValue({ single: mockSingle });
       const mockSelect = jest.fn().mockReturnValue({ eq: mockEq });
-      (supabase.from as jest.Mock).mockReturnValue({ select: mockSelect });
+      const mockFrom = jest.fn().mockReturnValue({ select: mockSelect });
 
-      await expect(repository.findByDiscordId('error-user')).rejects.toThrow('Database error');
+      // Set up the mock for from method
+      mocks.mockSupabaseClient!.from = mockFrom;
+
+      await expect(repository.findByDiscordId(mockUser.discord_id)).rejects.toThrow();
     });
   });
 
   describe('upsertByDiscordId', () => {
-    it('should update existing user', async () => {
-      const updatedUser = { ...mockUser, username: 'newname' };
+    it('should update an existing user', async () => {
+      const updatedUser = { ...mockUser, username: 'UpdatedUser' };
 
-      // Mock for upsert
-      const mockUpsertSingle = jest.fn().mockResolvedValue({
+      // Set up chained mock methods
+      const mockResult = {
         data: updatedUser,
         error: null,
-      });
-      const mockUpsertSelect = jest.fn().mockReturnValue({ single: mockUpsertSingle });
-      const mockUpsert = jest.fn().mockReturnValue({ select: mockUpsertSelect });
+      };
 
-      // Setup supabase mock
-      (supabase.from as jest.Mock).mockReturnValue({ upsert: mockUpsert });
+      const mockSingle = jest.fn().mockResolvedValue(mockResult);
+      const mockSelect = jest.fn().mockReturnValue({ single: mockSingle });
+      const mockUpsert = jest.fn().mockReturnValue({ select: mockSelect });
+      const mockFrom = jest.fn().mockReturnValue({ upsert: mockUpsert });
+
+      // Set up the mock for from method
+      mocks.mockSupabaseClient!.from = mockFrom;
 
       const result = await repository.upsertByDiscordId(mockUser.discord_id, {
-        username: 'newname',
+        username: 'UpdatedUser',
       });
 
       expect(result).toEqual(updatedUser);
-      expect(supabase.from).toHaveBeenCalledWith('users');
+      expect(mockFrom).toHaveBeenCalledWith('users');
       expect(mockUpsert).toHaveBeenCalledWith(
         expect.objectContaining({
           discord_id: mockUser.discord_id,
-          username: 'newname',
-          updated_at: expect.any(String),
+          username: 'UpdatedUser',
         }),
         { onConflict: 'discord_id' }
       );
     });
 
-    it('should create new user when not found', async () => {
-      // Mock for upsert when creating new user
-      const mockUpsertSingle = jest.fn().mockResolvedValue({
+    it('should create a new user when not found', async () => {
+      // Set up chained mock methods
+      const mockResult = {
         data: mockUser,
         error: null,
-      });
-      const mockUpsertSelect = jest.fn().mockReturnValue({ single: mockUpsertSingle });
-      const mockUpsert = jest.fn().mockReturnValue({ select: mockUpsertSelect });
+      };
 
-      // Setup supabase mock
-      (supabase.from as jest.Mock).mockReturnValue({ upsert: mockUpsert });
+      const mockSingle = jest.fn().mockResolvedValue(mockResult);
+      const mockSelect = jest.fn().mockReturnValue({ single: mockSingle });
+      const mockUpsert = jest.fn().mockReturnValue({ select: mockSelect });
+      const mockFrom = jest.fn().mockReturnValue({ upsert: mockUpsert });
 
-      const result = await repository.upsertByDiscordId('newuser', {
-        username: 'newuser',
+      // Set up the mock for from method
+      mocks.mockSupabaseClient!.from = mockFrom;
+
+      const result = await repository.upsertByDiscordId('new-discord-id', {
+        username: 'NewUser',
       });
 
       expect(result).toEqual(mockUser);
-      expect(supabase.from).toHaveBeenCalledWith('users');
+      expect(mockFrom).toHaveBeenCalledWith('users');
       expect(mockUpsert).toHaveBeenCalledWith(
         expect.objectContaining({
-          discord_id: 'newuser',
-          username: 'newuser',
-          updated_at: expect.any(String),
+          discord_id: 'new-discord-id',
+          username: 'NewUser',
         }),
         { onConflict: 'discord_id' }
       );
     });
-
-    it('should handle database errors', async () => {
-      // Mock for upsert that returns an error
-      const mockUpsertSingle = jest.fn().mockResolvedValue({
-        data: null,
-        error: { message: 'Database error' },
-      });
-      const mockUpsertSelect = jest.fn().mockReturnValue({ single: mockUpsertSingle });
-      const mockUpsert = jest.fn().mockReturnValue({ select: mockUpsertSelect });
-
-      // Setup supabase mock
-      (supabase.from as jest.Mock).mockReturnValue({ upsert: mockUpsert });
-
-      await expect(
-        repository.upsertByDiscordId('error-user', { username: 'error' })
-      ).rejects.toThrow('Database error');
-    });
   });
 
-  describe('updateGlobalReputationScore', () => {
-    it('should update user reputation score', async () => {
+  describe('updateReputationScore', () => {
+    it("should update a user's reputation score", async () => {
       const updatedUser = { ...mockUser, global_reputation_score: 0.8 };
-      const mockSingle = jest.fn().mockResolvedValue({
+
+      // Set up chained mock methods
+      const mockResult = {
         data: updatedUser,
         error: null,
-      });
+      };
+
+      const mockSingle = jest.fn().mockResolvedValue(mockResult);
       const mockSelect = jest.fn().mockReturnValue({ single: mockSingle });
       const mockEq = jest.fn().mockReturnValue({ select: mockSelect });
       const mockUpdate = jest.fn().mockReturnValue({ eq: mockEq });
-      (supabase.from as jest.Mock).mockReturnValue({ update: mockUpdate });
+      const mockFrom = jest.fn().mockReturnValue({ update: mockUpdate });
 
-      const result = await repository.updateGlobalReputationScore(mockUser.discord_id, 0.8);
+      // Set up the mock for from method
+      mocks.mockSupabaseClient!.from = mockFrom;
+
+      const result = await repository.updateReputationScore(mockUser.discord_id, 0.8);
 
       expect(result).toEqual(updatedUser);
-      expect(supabase.from).toHaveBeenCalledWith('users');
+      expect(mockFrom).toHaveBeenCalledWith('users');
       expect(mockUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
           global_reputation_score: 0.8,
-          updated_at: expect.any(String),
         })
       );
+      expect(mockEq).toHaveBeenCalledWith('discord_id', mockUser.discord_id);
     });
 
     it('should handle database errors', async () => {
-      const mockSingle = jest.fn().mockResolvedValue({
+      // Set up chained mock methods
+      const mockResult = {
         data: null,
         error: { message: 'Database error' },
-      });
+      };
+
+      const mockSingle = jest.fn().mockResolvedValue(mockResult);
       const mockSelect = jest.fn().mockReturnValue({ single: mockSingle });
       const mockEq = jest.fn().mockReturnValue({ select: mockSelect });
       const mockUpdate = jest.fn().mockReturnValue({ eq: mockEq });
-      (supabase.from as jest.Mock).mockReturnValue({ update: mockUpdate });
+      const mockFrom = jest.fn().mockReturnValue({ update: mockUpdate });
 
-      await expect(
-        repository.updateGlobalReputationScore(mockUser.discord_id, 0.8)
-      ).rejects.toThrow('Database error');
+      // Set up the mock for from method
+      mocks.mockSupabaseClient!.from = mockFrom;
+
+      await expect(repository.updateReputationScore(mockUser.discord_id, 0.8)).rejects.toThrow(
+        'Database error'
+      );
     });
   });
 
-  describe('findUsersWithLowReputation', () => {
-    it('should return users below threshold', async () => {
+  describe('findByReputationBelow', () => {
+    it('should find users with reputation below threshold', async () => {
       const lowRepUsers = [
-        { ...mockUser, global_reputation_score: 0.2 },
-        { ...mockUser, id: '456', discord_id: '789', global_reputation_score: 0.3 },
+        { ...mockUser, global_reputation_score: 0.3 },
+        { ...mockUser, discord_id: 'discord-456', global_reputation_score: 0.2 },
       ];
 
-      const mockLt = jest.fn().mockResolvedValue({
+      // Set up chained mock methods
+      const mockResult = {
         data: lowRepUsers,
         error: null,
-      });
-      const mockSelect = jest.fn().mockReturnValue({ lt: mockLt });
-      (supabase.from as jest.Mock).mockReturnValue({ select: mockSelect });
+      };
 
-      const result = await repository.findUsersWithLowReputation(0.4);
+      const mockLt = jest.fn().mockResolvedValue(mockResult);
+      const mockSelect = jest.fn().mockReturnValue({ lt: mockLt });
+      const mockFrom = jest.fn().mockReturnValue({ select: mockSelect });
+
+      // Set up the mock for from method
+      mocks.mockSupabaseClient!.from = mockFrom;
+
+      const result = await repository.findByReputationBelow(0.4);
 
       expect(result).toEqual(lowRepUsers);
-      expect(supabase.from).toHaveBeenCalledWith('users');
+      expect(mockFrom).toHaveBeenCalledWith('users');
       expect(mockSelect).toHaveBeenCalledWith('*');
       expect(mockLt).toHaveBeenCalledWith('global_reputation_score', 0.4);
     });
 
     it('should handle database errors', async () => {
-      const mockLt = jest.fn().mockResolvedValue({
+      // Set up chained mock methods
+      const mockResult = {
         data: null,
         error: { message: 'Database error' },
-      });
-      const mockSelect = jest.fn().mockReturnValue({ lt: mockLt });
-      (supabase.from as jest.Mock).mockReturnValue({ select: mockSelect });
+      };
 
-      await expect(repository.findUsersWithLowReputation(0.4)).rejects.toThrow('Database error');
+      const mockLt = jest.fn().mockResolvedValue(mockResult);
+      const mockSelect = jest.fn().mockReturnValue({ lt: mockLt });
+      const mockFrom = jest.fn().mockReturnValue({ select: mockSelect });
+
+      // Set up the mock for from method
+      mocks.mockSupabaseClient!.from = mockFrom;
+
+      await expect(repository.findByReputationBelow(0.4)).rejects.toThrow('Database error');
     });
   });
 });

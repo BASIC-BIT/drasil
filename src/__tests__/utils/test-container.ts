@@ -13,9 +13,10 @@ import { IUserRepository } from '../../repositories/UserRepository';
 import { IServerRepository } from '../../repositories/ServerRepository';
 import { IServerMemberRepository } from '../../repositories/ServerMemberRepository';
 import { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
-import { Client } from 'discord.js';
+import { Client, ClientUser } from 'discord.js';
 import { OpenAI } from 'openai';
 import { SupabaseClient } from '@supabase/supabase-js';
+import { IBot } from '../../Bot';
 
 /**
  * Creates mock implementations for all services and repositories
@@ -131,11 +132,22 @@ export function createMocks() {
       guild_id: guildId,
       ...data,
     })),
+    updateSettings: jest.fn().mockImplementation(async (guildId, settings) => ({
+      id: 'mock-server-id',
+      guild_id: guildId,
+      settings,
+    })),
+    setActive: jest.fn().mockImplementation(async (guildId, isActive) => ({
+      id: 'mock-server-id',
+      guild_id: guildId,
+      is_active: isActive,
+    })),
   };
 
   const mockServerMemberRepository: jest.Mocked<IServerMemberRepository> = {
     findByServerAndUser: jest.fn().mockResolvedValue(null),
     findByServer: jest.fn().mockResolvedValue([]),
+    findByUser: jest.fn().mockResolvedValue([]),
     findRestrictedMembers: jest.fn().mockResolvedValue([]),
     upsertMember: jest.fn().mockImplementation(async (serverId, userId, data) => ({
       id: 'mock-member-id',
@@ -159,22 +171,32 @@ export function createMocks() {
         user_id: userId,
         is_restricted: isRestricted,
       })),
-    findMany: jest.fn().mockResolvedValue([]),
   };
 
   const mockDetectionEventsRepository: jest.Mocked<IDetectionEventsRepository> = {
-    createDetectionEvent: jest.fn().mockImplementation(async (data) => ({
+    create: jest.fn().mockImplementation(async (data) => ({
       id: 'mock-event-id',
       ...data,
     })),
     findByServerAndUser: jest.fn().mockResolvedValue([]),
-    findRecentByServerAndUser: jest.fn().mockResolvedValue([]),
-    countRecentByServerAndUser: jest.fn().mockResolvedValue(0),
+    findRecentByServer: jest.fn().mockResolvedValue([]),
+    recordAdminAction: jest.fn().mockResolvedValue({
+      id: 'mock-event-id',
+      admin_action: 'Verified',
+    }),
+    getServerStats: jest.fn().mockResolvedValue({
+      total: 0,
+      verified: 0,
+      banned: 0,
+      ignored: 0,
+      pending: 0,
+      gptUsage: 0,
+    }),
     cleanupOldEvents: jest.fn().mockResolvedValue(0),
   };
 
   // External dependencies
-  const mockDiscordClient: jest.Mocked<Partial<Client>> = {
+  const mockDiscordClient = {
     login: jest.fn().mockResolvedValue('mock-token'),
     destroy: jest.fn().mockResolvedValue(undefined),
     on: jest.fn(),
@@ -182,10 +204,10 @@ export function createMocks() {
     user: {
       id: 'mock-bot-id',
       tag: 'MockBot#0000',
-    },
-  };
+    } as unknown as ClientUser,
+  } as unknown as jest.Mocked<Partial<Client>>;
 
-  const mockOpenAI: jest.Mocked<Partial<OpenAI>> = {
+  const mockOpenAI = {
     chat: {
       completions: {
         create: jest.fn().mockResolvedValue({
@@ -199,7 +221,7 @@ export function createMocks() {
         }),
       },
     },
-  };
+  } as unknown as jest.Mocked<Partial<OpenAI>>;
 
   const mockSupabaseClient: jest.Mocked<Partial<SupabaseClient>> = {
     from: jest.fn().mockReturnValue({
@@ -252,9 +274,9 @@ export function createMocks() {
 }
 
 /**
- * Create a test container with mock implementations
- * @param customMocks Optional custom mocks to override the default ones
- * @returns Configured InversifyJS container for testing
+ * Creates a test container with all dependencies mocked
+ * @param customMocks Override specific mocks with custom implementations
+ * @returns Configured container with mock dependencies
  */
 export function createTestContainer(
   customMocks?: Partial<ReturnType<typeof createMocks>>
@@ -263,58 +285,102 @@ export function createTestContainer(
   const mocks = { ...createMocks(), ...customMocks };
 
   // Bind external dependencies
-  container.bind(TYPES.DiscordClient).toConstantValue(mocks.mockDiscordClient as Client);
-  container.bind(TYPES.OpenAI).toConstantValue(mocks.mockOpenAI as OpenAI);
-  container.bind(TYPES.SupabaseClient).toConstantValue(mocks.mockSupabaseClient as SupabaseClient);
+  container.bind(TYPES.DiscordClient).toConstantValue(mocks.mockDiscordClient);
+  container.bind(TYPES.OpenAI).toConstantValue(mocks.mockOpenAI);
+  container.bind(TYPES.SupabaseClient).toConstantValue(mocks.mockSupabaseClient);
 
   // Bind services
-  container
-    .bind<IHeuristicService>(TYPES.HeuristicService)
-    .toConstantValue(mocks.mockHeuristicService);
-  container.bind<IGPTService>(TYPES.GPTService).toConstantValue(mocks.mockGPTService);
-  container
-    .bind<IDetectionOrchestrator>(TYPES.DetectionOrchestrator)
-    .toConstantValue(mocks.mockDetectionOrchestrator);
-  container.bind<IRoleManager>(TYPES.RoleManager).toConstantValue(mocks.mockRoleManager);
-  container
-    .bind<INotificationManager>(TYPES.NotificationManager)
-    .toConstantValue(mocks.mockNotificationManager);
-  container.bind<IConfigService>(TYPES.ConfigService).toConstantValue(mocks.mockConfigService);
+  container.bind(TYPES.HeuristicService).toConstantValue(mocks.mockHeuristicService);
+  container.bind(TYPES.GPTService).toConstantValue(mocks.mockGPTService);
+  container.bind(TYPES.RoleManager).toConstantValue(mocks.mockRoleManager);
+  container.bind(TYPES.NotificationManager).toConstantValue(mocks.mockNotificationManager);
+  container.bind(TYPES.DetectionOrchestrator).toConstantValue(mocks.mockDetectionOrchestrator);
+  container.bind(TYPES.ConfigService).toConstantValue(mocks.mockConfigService);
 
   // Bind repositories
-  container.bind<IUserRepository>(TYPES.UserRepository).toConstantValue(mocks.mockUserRepository);
+  container.bind(TYPES.ServerRepository).toConstantValue(mocks.mockServerRepository);
+  container.bind(TYPES.UserRepository).toConstantValue(mocks.mockUserRepository);
+  container.bind(TYPES.ServerMemberRepository).toConstantValue(mocks.mockServerMemberRepository);
   container
-    .bind<IServerRepository>(TYPES.ServerRepository)
-    .toConstantValue(mocks.mockServerRepository);
-  container
-    .bind<IServerMemberRepository>(TYPES.ServerMemberRepository)
-    .toConstantValue(mocks.mockServerMemberRepository);
-  container
-    .bind<IDetectionEventsRepository>(TYPES.DetectionEventsRepository)
+    .bind(TYPES.DetectionEventsRepository)
     .toConstantValue(mocks.mockDetectionEventsRepository);
+
+  // Bind Bot
+  container.bind(TYPES.Bot).toConstantValue({
+    startBot: jest.fn().mockResolvedValue(undefined),
+    destroy: jest.fn().mockResolvedValue(undefined),
+  } as unknown as IBot);
 
   return container;
 }
 
 /**
- * Creates a container with real implementations but mock dependencies
- * This is useful for testing a specific service with mocked dependencies
- *
- * @param serviceIdentifier The symbol for the service to test
- * @param serviceImplementation The concrete implementation of the service
- * @param customMocks Optional custom mocks to override the default ones
- * @returns Container configured for testing the specified service
+ * Creates a container with a real service implementation but all its dependencies mocked
+ * @param serviceIdentifier The symbol identifying the service to bind
+ * @param serviceImplementation The real service implementation to use
+ * @param customMocks Override specific mocks with custom implementations
+ * @returns Configured container with the real service but mock dependencies
  */
 export function createServiceTestContainer<T>(
   serviceIdentifier: symbol,
   serviceImplementation: new (...args: any[]) => T,
   customMocks?: Partial<ReturnType<typeof createMocks>>
 ): Container {
-  const container = createTestContainer(customMocks);
+  // Create a fresh container to avoid ambiguous bindings
+  const container = new Container();
+  const mocks = { ...createMocks(), ...customMocks };
 
-  // Rebind the service to use the real implementation
-  container.unbind(serviceIdentifier);
-  container.bind<T>(serviceIdentifier).to(serviceImplementation);
+  // Bind external dependencies
+  container.bind(TYPES.DiscordClient).toConstantValue(mocks.mockDiscordClient);
+  container.bind(TYPES.OpenAI).toConstantValue(mocks.mockOpenAI);
+  container.bind(TYPES.SupabaseClient).toConstantValue(mocks.mockSupabaseClient);
+
+  // Bind services
+  if (serviceIdentifier !== TYPES.HeuristicService) {
+    container.bind(TYPES.HeuristicService).toConstantValue(mocks.mockHeuristicService);
+  }
+  if (serviceIdentifier !== TYPES.GPTService) {
+    container.bind(TYPES.GPTService).toConstantValue(mocks.mockGPTService);
+  }
+  if (serviceIdentifier !== TYPES.RoleManager) {
+    container.bind(TYPES.RoleManager).toConstantValue(mocks.mockRoleManager);
+  }
+  if (serviceIdentifier !== TYPES.NotificationManager) {
+    container.bind(TYPES.NotificationManager).toConstantValue(mocks.mockNotificationManager);
+  }
+  if (serviceIdentifier !== TYPES.DetectionOrchestrator) {
+    container.bind(TYPES.DetectionOrchestrator).toConstantValue(mocks.mockDetectionOrchestrator);
+  }
+  if (serviceIdentifier !== TYPES.ConfigService) {
+    container.bind(TYPES.ConfigService).toConstantValue(mocks.mockConfigService);
+  }
+
+  // Bind repositories
+  if (serviceIdentifier !== TYPES.ServerRepository) {
+    container.bind(TYPES.ServerRepository).toConstantValue(mocks.mockServerRepository);
+  }
+  if (serviceIdentifier !== TYPES.UserRepository) {
+    container.bind(TYPES.UserRepository).toConstantValue(mocks.mockUserRepository);
+  }
+  if (serviceIdentifier !== TYPES.ServerMemberRepository) {
+    container.bind(TYPES.ServerMemberRepository).toConstantValue(mocks.mockServerMemberRepository);
+  }
+  if (serviceIdentifier !== TYPES.DetectionEventsRepository) {
+    container
+      .bind(TYPES.DetectionEventsRepository)
+      .toConstantValue(mocks.mockDetectionEventsRepository);
+  }
+
+  // Bind Bot
+  if (serviceIdentifier !== TYPES.Bot) {
+    container.bind(TYPES.Bot).toConstantValue({
+      startBot: jest.fn().mockResolvedValue(undefined),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    } as unknown as IBot);
+  }
+
+  // Bind the real implementation of the service
+  container.bind(serviceIdentifier).to(serviceImplementation);
 
   return container;
 }

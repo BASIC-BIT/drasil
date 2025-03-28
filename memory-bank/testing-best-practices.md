@@ -699,3 +699,335 @@ Currently, no transaction-based test isolation is implemented. The following str
 - Database Connection Issues: Verify Supabase is running and accessible
 - Authentication Problems: Verify correct roles and JWT claims
 - Test Isolation Failures: Ensure proper cleanup between tests
+
+# Testing Best Practices for InversifyJS and Jest
+
+## InversifyJS Testing
+
+### Container Setup
+
+1. **Dedicated Test Container**:
+
+   - Create a separate container for each test to ensure isolation
+   - Use `createServiceTestContainer` utility for consistent setup
+   - Bind all dependencies, including nested ones
+
+2. **Mock Injection**:
+
+   - Use `jest.mock()` for module-level mocking
+   - Create mock implementations that match interfaces
+   - Bind mocks to the test container using interfaces, not implementations
+   - Example:
+     ```typescript
+     container.bind<IUserRepository>(TYPES.UserRepository).toConstantValue(mockUserRepository);
+     ```
+
+3. **External Dependency Mocking**:
+   - Mock external clients like SupabaseClient, OpenAI, Discord.js
+   - Use named mocks that can be referenced in tests
+   - Supply mock implementations that handle method chaining
+   - Example:
+     ```typescript
+     const mockSupabaseClient = {
+       from: jest.fn().mockReturnThis(),
+       select: jest.fn().mockReturnThis(),
+       eq: jest.fn().mockReturnThis(),
+       single: jest.fn().mockResolvedValue({ data: mockData }),
+     };
+     container.bind(TYPES.SupabaseClient).toConstantValue(mockSupabaseClient);
+     ```
+
+### Private Property Access
+
+1. **Type Assertions for Private Properties**:
+
+   - Use `(instance as any).privateProperty` instead of `instance['privateProperty']`
+   - Avoids TypeScript errors when accessing private members
+   - Example:
+     ```typescript
+     (configService as any).serverCache.set(mockServer.guild_id, mockServer);
+     ```
+
+2. **Testing Through Public API**:
+   - Prefer testing through public methods instead of accessing private properties
+   - Use dependency injection to manipulate internal state
+   - Verify effects of operations through public methods
+   - Example:
+
+     ```typescript
+     // Instead of checking private property directly
+     // expect(notificationManager['verificationChannelId']).toBe('channel-id');
+
+     // Set the property through public method
+     notificationManager.setVerificationChannelId('verification-channel-id');
+
+     // Verify it's set by observing behavior through public API
+     await notificationManager.createVerificationThread(mockMember);
+     expect(mockClient.channels.fetch).toHaveBeenCalledWith('verification-channel-id');
+     ```
+
+### Mock Implementation
+
+1. **Dynamic Field Handling**:
+
+   - Use `expect.any(Type)` for fields that change between test runs
+   - Common for timestamps, IDs, and other generated fields
+   - Example:
+     ```typescript
+     expect(result).toEqual({
+       ...expectedData,
+       created_at: expect.any(String),
+       updated_at: expect.any(String),
+     });
+     ```
+
+2. **Complex Object Mocking**:
+
+   - Create well-structured mocks for complex objects
+   - Implement chainable methods for fluent APIs
+   - Mock only necessary functionality
+   - Example:
+     ```typescript
+     const mockMessage = {
+       embeds: [
+         {
+           data: {
+             fields: [],
+           },
+           toJSON: function () {
+             return this.data;
+           },
+         },
+       ],
+       edit: jest.fn().mockResolvedValue(undefined),
+     };
+     ```
+
+3. **Recursive Method Chaining**:
+   - Handle recursive API calls with appropriate mocks
+   - Return the mock itself for chainable methods
+   - Example:
+     ```typescript
+     mockRepository.findBy.mockReturnThis();
+     mockRepository.order.mockReturnThis();
+     mockRepository.limit.mockResolvedValue({ data: [mockEntity] });
+     ```
+
+## Jest Testing
+
+### Mock Configuration
+
+1. **Mock Reset and Cleanup**:
+
+   - Use `jest.clearAllMocks()` in `afterEach` for clean state
+   - Reset specific mocks when needed with `mockFn.mockReset()`
+   - Restore original implementation with `jest.restoreAllMocks()`
+   - Example:
+     ```typescript
+     afterEach(() => {
+       jest.clearAllMocks();
+     });
+     ```
+
+2. **Consistent Timestamps**:
+
+   - Use `jest.useFakeTimers()` and `jest.setSystemTime()` for consistent dates
+   - Mock Date constructor for new Date() instances
+   - Restore after tests with `jest.useRealTimers()`
+   - Example:
+     ```typescript
+     const fixedDate = new Date('2023-01-01T00:00:00.000Z');
+     jest.useFakeTimers();
+     jest.setSystemTime(fixedDate);
+     ```
+
+3. **Error Scenario Testing**:
+   - Configure mocks to simulate errors
+   - Test error propagation and handling
+   - Use `expect().rejects.toThrow()` for async errors
+   - Example:
+     ```typescript
+     mockUserRepository.upsertByDiscordId.mockRejectedValue(new Error('Database error'));
+     await expect(
+       userService.updateUserMetadata('discord-123', { profile_analyzed: true })
+     ).rejects.toThrow('Database error');
+     ```
+
+### Test Structure
+
+1. **Arrange-Act-Assert Pattern**:
+
+   - Clearly separate test setup, action, and verification
+   - Label sections with comments for clarity
+   - Example:
+
+     ```typescript
+     // Arrange
+     const mockUser = {
+       /* ... */
+     };
+     mockUserRepository.findByDiscordId.mockResolvedValue(mockUser);
+
+     // Act
+     const result = await userService.updateUserMetadata('discord-123', metadata);
+
+     // Assert
+     expect(result).toEqual(updatedUser);
+     expect(mockUserRepository.upsertByDiscordId).toHaveBeenCalledWith(/* ... */);
+     ```
+
+2. **Descriptive Test Names**:
+
+   - Use descriptive `describe` and `it` blocks
+   - Format: `it('should <behavior> when <condition>')`
+   - Group related tests together
+   - Example:
+     ```typescript
+     describe('updateUserMetadata', () => {
+       it('should update user metadata and return updated user', async () => {
+         // Test implementation
+       });
+
+       it('should handle errors when database operation fails', async () => {
+         // Test implementation
+       });
+     });
+     ```
+
+3. **Test Isolation**:
+   - Each test should be independent
+   - Don't rely on state from other tests
+   - Reset state in `beforeEach` or `afterEach`
+   - Example:
+     ```typescript
+     beforeEach(() => {
+       // Create fresh mocks for each test
+       mockUserRepository = jest.fn(); // Create new mocks
+       container = new Container(); // Create new container
+     });
+     ```
+
+## Common Pitfalls and Solutions
+
+1. **Missing Dependencies**:
+
+   - Error: `No bindings found for service: Symbol(SomeService)`
+   - Solution: Ensure all dependencies are bound in the test container
+   - Check for nested dependencies that might be needed
+
+2. **Private Property Access Errors**:
+
+   - Error: `Property 'someProperty' does not exist on type 'SomeClass'`
+   - Solution: Use `(instance as any).someProperty` instead of bracket notation
+
+3. **Mock Not Called Errors**:
+
+   - Error: `Expected mock function to have been called with <args>`
+   - Solution: Check if mock is properly configured and injected into the container
+
+4. **Asynchronous Test Failures**:
+
+   - Error: Test passes incorrectly without waiting for async operations
+   - Solution: Always use `async/await` for asynchronous tests
+
+5. **Dynamic Field Mismatches**:
+
+   - Error: `Expected "2023-05-01" but received "2023-05-02"`
+   - Solution: Use `expect.any(String)` or specific matchers for dynamic fields
+
+6. **Type Errors in Mocks**:
+
+   - Error: TypeScript errors in mock implementation
+   - Solution: Use proper interface typing for mocks and `as unknown as InterfaceType` for type assertions
+
+7. **Constructor Parameter Mismatches**:
+   - Error: `Cannot be assigned to the expected parameter type`
+   - Solution: Ensure mock parameters match the actual constructor requirements
+
+## Specialized Testing Techniques
+
+1. **Repository Testing**:
+
+   - Mock database clients and responses
+   - Test both success and error cases
+   - Verify proper query construction
+   - Example:
+     ```typescript
+     mockSupabaseClient.from.mockReturnThis();
+     mockSupabaseClient.select.mockReturnThis();
+     mockSupabaseClient.eq.mockReturnThis();
+     mockSupabaseClient.single.mockResolvedValue({ data: mockEntity });
+     ```
+
+2. **Service Integration Testing**:
+
+   - Test services with real implementations but mocked dependencies
+   - Focus on interaction between components
+   - Verify proper delegation to dependencies
+   - Example: Using real `DetectionOrchestrator` with mocked services
+
+3. **Event Handler Testing**:
+
+   - Mock event objects and contexts
+   - Verify proper event propagation
+   - Test different event scenarios
+   - Example: Testing Discord event handlers
+
+4. **Error Handling Testing**:
+   - Simulate database errors, API failures, and timeouts
+   - Verify proper error handling, logging, and user feedback
+   - Test recovery mechanisms
+   - Example: Testing repository error handling
+
+## Testing Utilities
+
+1. **Container Creation Helpers**:
+
+   ```typescript
+   export function createServiceTestContainer<T>(
+     serviceType: symbol,
+     serviceClass: new (...args: any[]) => T,
+     mocks: Record<string, any>
+   ): Container {
+     const container = new Container();
+
+     // Bind all mocks to the container
+     for (const [key, value] of Object.entries(mocks)) {
+       const mockType = TYPES[key.replace('mock', '')];
+       container.bind(mockType).toConstantValue(value);
+     }
+
+     // Bind the real service
+     container.bind(serviceType).to(serviceClass);
+
+     return container;
+   }
+   ```
+
+2. **Mock Creation Helpers**:
+
+   ```typescript
+   export function createMocks() {
+     return {
+       mockUserRepository: {
+         findByDiscordId: jest.fn(),
+         upsertByDiscordId: jest.fn(),
+         // Other methods...
+       } as jest.Mocked<IUserRepository>,
+
+       // Other mocks...
+     };
+   }
+   ```
+
+3. **Custom Matchers**:
+   ```typescript
+   expect.extend({
+     toHaveBeenCalledWithObject(received, expected) {
+       const calls = received.mock.calls;
+       // Implementation details...
+     },
+   });
+   ```
+
+By following these best practices, you can create robust, maintainable tests for InversifyJS applications that properly verify behavior while remaining resilient to implementation changes.

@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { Container } from 'inversify';
-import { createServiceTestContainer, createMocks } from '../utils/test-container';
+import { createMocks } from '../utils/test-container';
 import { TYPES } from '../../di/symbols';
 import { UserService } from '../../services/UserService';
 import { IUserRepository } from '../../repositories/UserRepository';
@@ -9,25 +9,24 @@ import { IServerMemberRepository } from '../../repositories/ServerMemberReposito
 describe('UserService', () => {
   let container: Container;
   let userService: UserService;
-  let mocks: ReturnType<typeof createMocks>;
   let mockUserRepository: jest.Mocked<IUserRepository>;
   let mockServerMemberRepository: jest.Mocked<IServerMemberRepository>;
 
   beforeEach(() => {
-    // Create a container with real UserService implementation but mock dependencies
-    container = createServiceTestContainer(TYPES.UserService, UserService);
+    // Create a new container for each test
+    container = new Container();
 
-    // Get the mocks for assertions
-    mocks = createMocks();
+    // Create our mock repositories
+    const mocks = createMocks();
     mockUserRepository = mocks.mockUserRepository;
     mockServerMemberRepository = mocks.mockServerMemberRepository;
 
-    // Override the container's mocks with our custom mocks
-    container.unbind(TYPES.UserRepository);
+    // Bind repositories to the container
     container.bind(TYPES.UserRepository).toConstantValue(mockUserRepository);
-
-    container.unbind(TYPES.ServerMemberRepository);
     container.bind(TYPES.ServerMemberRepository).toConstantValue(mockServerMemberRepository);
+
+    // Bind the real UserService
+    container.bind(TYPES.UserService).to(UserService);
 
     // Get the service from the container
     userService = container.get<UserService>(TYPES.UserService);
@@ -213,7 +212,7 @@ describe('UserService', () => {
       ];
 
       mockUserRepository.findByDiscordId.mockResolvedValue(user);
-      mockServerMemberRepository.findMany.mockResolvedValue(memberships);
+      mockServerMemberRepository.findByUser.mockResolvedValue(memberships);
 
       // Act
       await userService.updateUserReputation('server-123', 'discord-123', 80);
@@ -225,7 +224,7 @@ describe('UserService', () => {
         80
       );
       expect(mockUserRepository.findByDiscordId).toHaveBeenCalledWith('discord-123');
-      expect(mockServerMemberRepository.findMany).toHaveBeenCalledWith({ user_id: 'discord-123' });
+      expect(mockServerMemberRepository.findByUser).toHaveBeenCalledWith('discord-123');
 
       // Average of 80 and 60 is 70
       expect(mockUserRepository.updateReputationScore).toHaveBeenCalledWith('discord-123', 70);
@@ -245,7 +244,7 @@ describe('UserService', () => {
         80
       );
       expect(mockUserRepository.findByDiscordId).toHaveBeenCalledWith('discord-123');
-      expect(mockServerMemberRepository.findMany).not.toHaveBeenCalled();
+      expect(mockServerMemberRepository.findByUser).not.toHaveBeenCalled();
       expect(mockUserRepository.updateReputationScore).not.toHaveBeenCalled();
     });
 
@@ -259,7 +258,7 @@ describe('UserService', () => {
       };
 
       mockUserRepository.findByDiscordId.mockResolvedValue(user);
-      mockServerMemberRepository.findMany.mockResolvedValue([]);
+      mockServerMemberRepository.findByUser.mockResolvedValue([]);
 
       // Act
       await userService.updateUserReputation('server-123', 'discord-123', 80);
@@ -271,8 +270,101 @@ describe('UserService', () => {
         80
       );
       expect(mockUserRepository.findByDiscordId).toHaveBeenCalledWith('discord-123');
-      expect(mockServerMemberRepository.findMany).toHaveBeenCalledWith({ user_id: 'discord-123' });
+      expect(mockServerMemberRepository.findByUser).toHaveBeenCalledWith('discord-123');
       expect(mockUserRepository.updateReputationScore).not.toHaveBeenCalled();
+    });
+
+    it('should update user metadata', async () => {
+      // Arrange
+      const mockUser = {
+        id: 'user-123',
+        discord_id: 'discord-123',
+        username: 'test-user',
+        global_reputation_score: 70,
+      };
+
+      const metadata = {
+        profile_analyzed: true,
+        last_analysis: '2023-01-01T12:00:00Z',
+      };
+
+      const updatedUser = {
+        ...mockUser,
+        metadata,
+        updated_at: expect.any(String),
+      };
+
+      mockUserRepository.findByDiscordId.mockResolvedValue(mockUser);
+      mockUserRepository.upsertByDiscordId.mockResolvedValue(updatedUser);
+
+      // Act
+      const result = await userService.updateUserMetadata('discord-123', metadata);
+
+      // Assert
+      expect(result).toEqual(updatedUser);
+      expect(mockUserRepository.upsertByDiscordId).toHaveBeenCalledWith('discord-123', {
+        ...mockUser,
+        metadata,
+        updated_at: expect.any(String),
+      });
+    });
+
+    it('should handle errors when updating metadata', async () => {
+      // Arrange
+      const error = new Error('Database error');
+
+      // Mock the findByDiscordId to return valid user
+      const mockUser = {
+        discord_id: 'discord-123',
+        username: 'test-user',
+        global_reputation_score: 70,
+      };
+
+      mockUserRepository.findByDiscordId.mockResolvedValue(mockUser);
+      mockUserRepository.upsertByDiscordId.mockRejectedValue(error);
+
+      // Act & Assert
+      await expect(
+        userService.updateUserMetadata('discord-123', { profile_analyzed: true })
+      ).rejects.toThrow('Database error');
+    });
+  });
+
+  describe('findLowReputationUsers', () => {
+    it('should find users with reputation below threshold', async () => {
+      // Arrange
+      const lowRepUsers = [
+        {
+          id: 'user-123',
+          discord_id: 'discord-123',
+          username: 'sus-user',
+          global_reputation_score: 0.3,
+        },
+        {
+          id: 'user-456',
+          discord_id: 'discord-456',
+          username: 'another-sus-user',
+          global_reputation_score: 0.2,
+        },
+      ];
+
+      mockUserRepository.findByReputationBelow.mockResolvedValue(lowRepUsers);
+
+      // Act
+      const result = await userService.findLowReputationUsers(0.4);
+
+      // Assert
+      expect(result).toEqual(lowRepUsers);
+      expect(mockUserRepository.findByReputationBelow).toHaveBeenCalledWith(0.4);
+    });
+
+    it('should handle errors when finding low reputation users', async () => {
+      // Arrange
+      const error = new Error('Database error');
+      mockUserRepository.findByReputationBelow.mockRejectedValue(error);
+
+      // Act & Assert
+      await expect(userService.findLowReputationUsers(0.4)).rejects.toThrow('Database error');
     });
   });
 

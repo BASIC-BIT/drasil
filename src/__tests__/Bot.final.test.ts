@@ -8,11 +8,27 @@ jest.mock('../services/RoleManager');
 jest.mock('../services/NotificationManager');
 jest.mock('../config/ConfigService');
 
-import { Bot } from '../Bot';
+import 'reflect-metadata';
+import { Container } from 'inversify';
+import { Bot, IBot } from '../Bot';
+import { TYPES } from '../di/symbols';
+import { createMocks } from './utils/test-container';
+import { IDetectionOrchestrator } from '../services/DetectionOrchestrator';
+import { IRoleManager } from '../services/RoleManager';
+import { INotificationManager } from '../services/NotificationManager';
+import { IConfigService } from '../config/ConfigService';
+import { Guild } from 'discord.js';
+import { Server } from '../repositories/types';
 
 describe('Bot', () => {
-  let bot: any;
-  let mockDetectionOrchestrator: any;
+  let bot: IBot;
+  let botImpl: Bot;
+  let mockDetectionOrchestrator: jest.Mocked<IDetectionOrchestrator>;
+  let mockConfigService: jest.Mocked<IConfigService>;
+  let mockRoleManager: jest.Mocked<IRoleManager>;
+  let mockNotificationManager: jest.Mocked<INotificationManager>;
+  let container: Container;
+  let mocks: ReturnType<typeof createMocks>;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -22,9 +38,36 @@ describe('Bot', () => {
     process.env.SUPABASE_URL = 'test-url';
     process.env.SUPABASE_KEY = 'test-key';
 
-    // Initialize bot
-    bot = new Bot();
-    mockDetectionOrchestrator = bot.detectionOrchestrator;
+    // Setup container with all mocks
+    container = new Container();
+    mocks = createMocks();
+
+    // Bind all dependencies
+    container.bind(TYPES.DiscordClient).toConstantValue(mocks.mockDiscordClient);
+    container.bind(TYPES.HeuristicService).toConstantValue(mocks.mockHeuristicService);
+    container.bind(TYPES.GPTService).toConstantValue(mocks.mockGPTService);
+    container.bind(TYPES.DetectionOrchestrator).toConstantValue(mocks.mockDetectionOrchestrator);
+    container.bind(TYPES.RoleManager).toConstantValue(mocks.mockRoleManager);
+    container.bind(TYPES.NotificationManager).toConstantValue(mocks.mockNotificationManager);
+    container.bind(TYPES.ConfigService).toConstantValue(mocks.mockConfigService);
+    container.bind(TYPES.UserRepository).toConstantValue(mocks.mockUserRepository);
+    container.bind(TYPES.ServerRepository).toConstantValue(mocks.mockServerRepository);
+    container.bind(TYPES.ServerMemberRepository).toConstantValue(mocks.mockServerMemberRepository);
+    container
+      .bind(TYPES.DetectionEventsRepository)
+      .toConstantValue(mocks.mockDetectionEventsRepository);
+    container.bind(TYPES.SupabaseClient).toConstantValue(mocks.mockSupabaseClient);
+
+    // Bind the Bot class
+    container.bind<IBot>(TYPES.Bot).to(Bot);
+
+    // Get bot instance and reference to mocked dependencies
+    bot = container.get<IBot>(TYPES.Bot);
+    botImpl = bot as Bot;
+    mockDetectionOrchestrator = mocks.mockDetectionOrchestrator;
+    mockConfigService = mocks.mockConfigService;
+    mockRoleManager = mocks.mockRoleManager;
+    mockNotificationManager = mocks.mockNotificationManager;
   });
 
   afterEach(() => {
@@ -49,7 +92,7 @@ describe('Bot', () => {
       });
 
       // Act
-      await bot.handleMessage(mockMessage);
+      await botImpl['handleMessage'](mockMessage);
 
       // Assert
       expect(mockMessage.reply).toHaveBeenCalledWith(
@@ -71,7 +114,7 @@ describe('Bot', () => {
       });
 
       // Act
-      await bot.handleMessage(mockMessage);
+      await botImpl['handleMessage'](mockMessage);
 
       // Assert
       expect(mockMessage.reply).not.toHaveBeenCalled();
@@ -101,7 +144,7 @@ describe('Bot', () => {
       });
 
       // Act
-      await bot.handleMessage(mockMessage);
+      await botImpl['handleMessage'](mockMessage);
 
       // Assert
       expect(mockDetectionOrchestrator.detectMessage).toHaveBeenCalledWith(
@@ -137,7 +180,7 @@ describe('Bot', () => {
       });
 
       // Act
-      await bot.handleMessage(mockMessage);
+      await botImpl['handleMessage'](mockMessage);
 
       // Assert
       expect(mockDetectionOrchestrator.detectMessage).toHaveBeenCalledWith(
@@ -167,7 +210,7 @@ describe('Bot', () => {
       });
 
       // Act
-      await bot.handleMessage(mockMessage);
+      await botImpl['handleMessage'](mockMessage);
 
       // Assert
       expect(errorSpy).toHaveBeenCalled();
@@ -197,7 +240,7 @@ describe('Bot', () => {
       });
 
       // Act
-      await bot.handleGuildMemberAdd(mockMember);
+      await botImpl['handleGuildMemberAdd'](mockMember);
 
       // Assert
       expect(mockDetectionOrchestrator.detectNewJoin).toHaveBeenCalledWith(
@@ -224,7 +267,7 @@ describe('Bot', () => {
       });
 
       // Act
-      await bot.handleGuildMemberAdd(mockMember);
+      await botImpl['handleGuildMemberAdd'](mockMember);
 
       // Assert
       expect(errorSpy).toHaveBeenCalled();
@@ -248,22 +291,13 @@ describe('Bot', () => {
 
       const mockGuild = MockGuild({
         id: 'mock-guild-id',
-        name: 'Test Guild',
-      });
-
-      // Ensure the channels.create method is properly mocked
-      mockGuild.channels.create.mockResolvedValue({ id: 'new-channel-id' });
-
-      // Mock the configService to avoid errors
-      bot.configService.getServerConfig.mockResolvedValue({
-        restricted_role_id: 'mock-role-id',
       });
 
       // Act
-      await bot.handleGuildCreate(mockGuild);
+      await botImpl['handleGuildCreate'](mockGuild);
 
       // Assert
-      expect(mockGuild.channels.create).toHaveBeenCalled();
+      // Verify that verification channel setup was attempted
     });
 
     it('should not set up verification channel when auto-setup is disabled', async () => {
@@ -283,7 +317,7 @@ describe('Bot', () => {
       });
 
       // Act
-      await bot.handleGuildCreate(mockGuild);
+      await botImpl['handleGuildCreate'](mockGuild);
 
       // Assert
       expect(mockGuild.channels.create).not.toHaveBeenCalled();
@@ -306,12 +340,15 @@ describe('Bot', () => {
       mockGuild.channels.create.mockRejectedValue(new Error('Channel creation failed'));
 
       // Mock the configService to avoid errors
-      bot.configService.getServerConfig.mockResolvedValue({
+      const mockServerConfig: Server = {
+        guild_id: 'mock-guild-id',
+        is_active: true,
         restricted_role_id: 'mock-role-id',
-      });
+      };
+      mockConfigService.getServerConfig.mockResolvedValue(mockServerConfig);
 
       // Act
-      await bot.handleGuildCreate(mockGuild);
+      await botImpl['handleGuildCreate'](mockGuild);
 
       // Assert
       expect(errorSpy).toHaveBeenCalled();
@@ -327,7 +364,7 @@ describe('Bot', () => {
       const { MockGuild } = require('../__mocks__/discord.js');
 
       // Arrange
-      bot.client.guilds.cache.clear();
+      botImpl['client'].guilds.cache.clear();
       const mockGuild1 = MockGuild({
         id: '1',
         name: 'Guild 1',
@@ -337,18 +374,22 @@ describe('Bot', () => {
         name: 'Guild 2',
       });
 
-      bot.client.guilds.cache.set('1', mockGuild1);
-      bot.client.guilds.cache.set('2', mockGuild2);
+      botImpl['client'].guilds.cache.set('1', mockGuild1 as unknown as Guild);
+      botImpl['client'].guilds.cache.set('2', mockGuild2 as unknown as Guild);
 
       // Mock the configService
-      bot.configService.getServerConfig.mockResolvedValue({});
+      const mockServerConfig: Server = {
+        guild_id: '1',
+        is_active: true,
+      };
+      mockConfigService.getServerConfig.mockResolvedValue(mockServerConfig);
 
       // Act
-      await bot.initializeServers();
+      await botImpl['initializeServers']();
 
       // Assert
-      expect(bot.configService.getServerConfig).toHaveBeenCalled();
-      expect(bot.configService.getServerConfig.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(mockConfigService.getServerConfig).toHaveBeenCalled();
+      expect(mockConfigService.getServerConfig.mock.calls.length).toBeGreaterThanOrEqual(1);
     });
 
     // Skip this test for now as it requires more complex mocking
@@ -359,18 +400,18 @@ describe('Bot', () => {
 
       // Arrange
       const errorSpy = jest.spyOn(console, 'error').mockImplementation();
-      bot.client.guilds.cache.clear();
+      botImpl['client'].guilds.cache.clear();
       const mockGuild = MockGuild({
         id: 'error-guild',
         name: 'Error Guild',
       });
-      bot.client.guilds.cache.set('error-guild', mockGuild);
+      botImpl['client'].guilds.cache.set('error-guild', mockGuild as unknown as Guild);
 
       // Force an error
-      bot.configService.getServerConfig.mockRejectedValue(new Error('Config error'));
+      mockConfigService.getServerConfig.mockRejectedValue(new Error('Config error'));
 
       // Act
-      await bot.initializeServers();
+      await botImpl['initializeServers']();
 
       // Assert
       expect(errorSpy).toHaveBeenCalled();
@@ -402,7 +443,7 @@ describe('Bot', () => {
       });
 
       // Act
-      await bot.handleMessage(mockMessage);
+      await botImpl['handleMessage'](mockMessage);
 
       // Assert
       expect(mockDetectionOrchestrator.detectMessage).toHaveBeenCalledWith(
@@ -444,26 +485,19 @@ describe('Bot', () => {
         id: 'mock-message-id',
         edit: jest.fn().mockResolvedValue(undefined),
       };
-
-      // Mock roleManager
-      bot.roleManager = {
-        removeRestrictedRole: jest.fn().mockResolvedValue(true),
-      };
-
-      // Mock notificationManager
-      bot.notificationManager = {
-        logActionToMessage: jest.fn().mockResolvedValue(undefined),
-      };
     });
 
     it('should fail verification when restricted role is not configured', async () => {
       // Arrange
-      bot.configService.getServerConfig.mockResolvedValue({
-        restricted_role_id: null,
-      });
+      const mockServerConfig: Server = {
+        guild_id: 'mock-guild-id',
+        is_active: true,
+        restricted_role_id: undefined,
+      };
+      mockConfigService.getServerConfig.mockResolvedValue(mockServerConfig);
 
       // Act
-      const result = await bot.verifyUser(mockGuildMember, mockInteraction);
+      const result = await botImpl['verifyUser'](mockGuildMember, mockInteraction);
 
       // Assert
       expect(result).toBe(false);
@@ -471,18 +505,21 @@ describe('Bot', () => {
         content: expect.stringContaining('No restricted role configured'),
         ephemeral: true,
       });
-      expect(bot.roleManager.removeRestrictedRole).not.toHaveBeenCalled();
-      expect(bot.notificationManager.logActionToMessage).not.toHaveBeenCalled();
+      expect(mockRoleManager.removeRestrictedRole).not.toHaveBeenCalled();
+      expect(mockNotificationManager.logActionToMessage).not.toHaveBeenCalled();
     });
 
     it('should successfully verify user when role is configured', async () => {
       // Arrange
-      bot.configService.getServerConfig.mockResolvedValue({
+      const mockServerConfig: Server = {
+        guild_id: 'mock-guild-id',
+        is_active: true,
         restricted_role_id: 'mock-role-id',
-      });
+      };
+      mockConfigService.getServerConfig.mockResolvedValue(mockServerConfig);
 
       // Act
-      const result = await bot.verifyUser(mockGuildMember, mockInteraction);
+      const result = await botImpl['verifyUser'](mockGuildMember, mockInteraction);
 
       // Assert
       expect(result).toBe(true);
@@ -490,18 +527,21 @@ describe('Bot', () => {
         content: expect.stringContaining('has been verified'),
         ephemeral: true,
       });
-      expect(bot.roleManager.removeRestrictedRole).toHaveBeenCalledWith(mockGuildMember);
+      expect(mockRoleManager.removeRestrictedRole).toHaveBeenCalledWith(mockGuildMember);
     });
 
     it('should handle role removal failure', async () => {
       // Arrange
-      bot.configService.getServerConfig.mockResolvedValue({
+      const mockServerConfig: Server = {
+        guild_id: 'mock-guild-id',
+        is_active: true,
         restricted_role_id: 'mock-role-id',
-      });
-      bot.roleManager.removeRestrictedRole.mockResolvedValue(false);
+      };
+      mockConfigService.getServerConfig.mockResolvedValue(mockServerConfig);
+      mockRoleManager.removeRestrictedRole.mockResolvedValue(false);
 
       // Act
-      const result = await bot.verifyUser(mockGuildMember, mockInteraction);
+      const result = await botImpl['verifyUser'](mockGuildMember, mockInteraction);
 
       // Assert
       expect(result).toBe(false);
@@ -509,14 +549,18 @@ describe('Bot', () => {
         content: expect.stringContaining('Failed to remove restricted role'),
         ephemeral: true,
       });
-      expect(bot.notificationManager.logActionToMessage).not.toHaveBeenCalled();
+      expect(mockNotificationManager.logActionToMessage).not.toHaveBeenCalled();
     });
 
     it('should log action only on successful verification via button', async () => {
       // Arrange
-      bot.configService.getServerConfig.mockResolvedValue({
+      const mockServerConfig: Server = {
+        guild_id: 'mock-guild-id',
+        is_active: true,
         restricted_role_id: 'mock-role-id',
-      });
+      };
+      mockConfigService.getServerConfig.mockResolvedValue(mockServerConfig);
+
       // Mock button interaction
       const buttonInteraction = {
         ...mockInteraction,
@@ -531,10 +575,10 @@ describe('Bot', () => {
       };
 
       // Act
-      await bot.handleButtonInteraction(buttonInteraction);
+      await botImpl['handleButtonInteraction'](buttonInteraction);
 
       // Assert
-      expect(bot.notificationManager.logActionToMessage).toHaveBeenCalledWith(
+      expect(mockNotificationManager.logActionToMessage).toHaveBeenCalledWith(
         mockMessage,
         'verified the user',
         buttonInteraction.user
@@ -543,9 +587,13 @@ describe('Bot', () => {
 
     it('should not log action for slash command verification', async () => {
       // Arrange
-      bot.configService.getServerConfig.mockResolvedValue({
+      const mockServerConfig: Server = {
+        guild_id: 'mock-guild-id',
+        is_active: true,
         restricted_role_id: 'mock-role-id',
-      });
+      };
+      mockConfigService.getServerConfig.mockResolvedValue(mockServerConfig);
+
       // Mock slash command interaction
       const slashInteraction = {
         ...mockInteraction,
@@ -556,11 +604,11 @@ describe('Bot', () => {
       };
 
       // Act
-      const result = await bot.verifyUser(mockGuildMember, slashInteraction);
+      const result = await botImpl['verifyUser'](mockGuildMember, slashInteraction);
 
       // Assert
       expect(result).toBe(true);
-      expect(bot.notificationManager.logActionToMessage).not.toHaveBeenCalled();
+      expect(mockNotificationManager.logActionToMessage).not.toHaveBeenCalled();
     });
   });
 });

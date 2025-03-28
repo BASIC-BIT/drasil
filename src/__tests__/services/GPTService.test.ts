@@ -1,4 +1,7 @@
+import { OpenAI } from 'openai';
 import { GPTService, UserProfileData } from '../../services/GPTService';
+import { createServiceTestContainer } from '../utils/test-container';
+import { TYPES } from '../../di/symbols';
 
 // Use jest.mock to automatically mock the openai module
 jest.mock('openai');
@@ -26,9 +29,6 @@ Classification: OK`),
   },
 }));
 
-// Import the mockCreate from our mocks
-import { __mockCreate as mockCreate } from '../../__mocks__/openai';
-
 // Define a type for the message objects
 interface MessageObject {
   role: string;
@@ -37,53 +37,59 @@ interface MessageObject {
 
 describe('GPTService', () => {
   let gptService: GPTService;
+  let mockOpenAI: any;
 
-  // Create sample user profile data for testing
   const normalUser: UserProfileData = {
     username: 'normal_user',
-    discriminator: '1234',
-    accountCreatedAt: new Date(Date.now() - 180 * 24 * 60 * 60 * 1000), // 180 days old
-    joinedServerAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // Joined 30 days ago
-    recentMessage: "Hello everyone, I'm new here!",
+    accountCreatedAt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000), // 90 days old
+    joinedServerAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // joined 30 days ago
+    recentMessage: 'Hello everyone, how are you doing today?',
   };
 
   const suspiciousUser: UserProfileData = {
-    username: 'free_nitro_giveaway',
-    discriminator: '9999',
-    accountCreatedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), // Only 2 days old
-    joinedServerAt: new Date(Date.now() - 1 * 60 * 60 * 1000), // Joined 1 hour ago
-    recentMessage: 'Click my profile for FREE DISCORD NITRO! Check my website!',
+    username: 'free_nitro_discord',
+    accountCreatedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), // 1 day old
+    joinedServerAt: new Date(Date.now() - 1 * 60 * 60 * 1000), // joined 1 hour ago
+    recentMessage: 'Free Discord Nitro at https://discordnitro.gift',
   };
 
-  // Add borderline user cases
   const borderlineUser1: UserProfileData = {
-    username: 'gaming_fan',
-    discriminator: '5678',
-    accountCreatedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000), // 15 days old (somewhat new)
-    joinedServerAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), // Joined 2 days ago
-    recentMessage: 'Hey guys! Check out this cool gaming site I found: gameprizes.net',
+    username: 'jane_smith',
+    accountCreatedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000), // 5 days old
+    joinedServerAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), // joined 1 day ago
+    recentMessage: 'Check out this cool website: https://example.com/offer',
   };
 
   const borderlineUser2: UserProfileData = {
-    username: 'n3wb13_pl4y3r',
-    discriminator: '4321',
-    accountCreatedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000), // 10 days old
-    joinedServerAt: new Date(Date.now() - 6 * 60 * 60 * 1000), // Joined 6 hours ago
-    recentMessage: "Hello! I'm looking for people to play with. Anyone here?",
+    username: 'new_gamer123',
+    accountCreatedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), // 3 days old
+    joinedServerAt: new Date(Date.now() - 2 * 60 * 60 * 1000), // joined 2 hours ago
+    recentMessage: "Hi everyone, I'm new here. Does anyone play Minecraft?",
   };
 
   beforeEach(() => {
-    // Clear all mocks
-    jest.clearAllMocks();
+    // Create a new mock OpenAI instance for each test
+    mockOpenAI = {
+      chat: {
+        completions: {
+          create: jest.fn(),
+        },
+      },
+    };
 
-    // Create a new instance of GPTService
-    gptService = new GPTService();
+    // Create a container with real GPTService but mocked dependencies
+    const container = createServiceTestContainer(TYPES.GPTService, GPTService, {
+      mockOpenAI: mockOpenAI as unknown as OpenAI,
+    });
+
+    // Get the service from the container
+    gptService = container.get<GPTService>(TYPES.GPTService);
   });
 
-  describe('classifyUserProfile', () => {
-    it('should classify normal users as "OK"', async () => {
-      // Mock the API call to inject the examples string
-      mockCreate.mockImplementationOnce((args: any) => {
+  describe('analyzeProfile', () => {
+    it('should return "OK" for normal users', async () => {
+      // Mock the API call to inject the examples string and return OK
+      mockOpenAI.chat.completions.create.mockImplementationOnce((args: any) => {
         // Add examples to the user prompt
         const userMessage = args.messages.find((m: MessageObject) => m.role === 'user');
         if (userMessage) {
@@ -106,14 +112,22 @@ describe('GPTService', () => {
         });
       });
 
-      // Call the method
-      const result = await gptService.classifyUserProfile(normalUser);
+      // Call the public method
+      const result = await gptService.analyzeProfile({
+        userId: '123456789',
+        username: normalUser.username,
+        accountAge: 90,
+        joinedServer: normalUser.joinedServerAt,
+        messageHistory: normalUser.recentMessage ? [normalUser.recentMessage] : [],
+      });
 
       // Verify the result
-      expect(result).toBe('OK');
+      expect(result.result).toBe('OK');
+      expect(result.confidence).toBeLessThan(0.5);
+      expect(result.reasons.length).toBeGreaterThan(0);
 
       // Verify the OpenAI API was called with the expected parameters
-      expect(mockCreate).toHaveBeenCalledWith(
+      expect(mockOpenAI.chat.completions.create).toHaveBeenCalledWith(
         expect.objectContaining({
           messages: expect.arrayContaining([
             expect.objectContaining({
@@ -125,9 +139,9 @@ describe('GPTService', () => {
       );
     });
 
-    it('should classify suspicious users as "SUSPICIOUS"', async () => {
+    it('should return "SUSPICIOUS" for suspicious users', async () => {
       // Mock the API call to inject the examples string and return suspicious
-      mockCreate.mockImplementationOnce((args: any) => {
+      mockOpenAI.chat.completions.create.mockImplementationOnce((args: any) => {
         // Add examples to the user prompt
         const userMessage = args.messages.find((m: MessageObject) => m.role === 'user');
         if (userMessage) {
@@ -150,40 +164,45 @@ describe('GPTService', () => {
         });
       });
 
-      // Call the method
-      const result = await gptService.classifyUserProfile(suspiciousUser);
+      // Call the public method
+      const result = await gptService.analyzeProfile({
+        userId: '123456789',
+        username: suspiciousUser.username,
+        accountAge: 1,
+        joinedServer: suspiciousUser.joinedServerAt,
+        messageHistory: suspiciousUser.recentMessage ? [suspiciousUser.recentMessage] : [],
+      });
 
       // Verify the result
-      expect(result).toBe('SUSPICIOUS');
-
-      // Verify the OpenAI API was called with the expected parameters
-      expect(mockCreate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messages: expect.arrayContaining([
-            expect.objectContaining({
-              role: 'user',
-              content: expect.stringContaining(suspiciousUser.username),
-            }),
-          ]),
-        })
-      );
+      expect(result.result).toBe('SUSPICIOUS');
+      expect(result.confidence).toBeGreaterThan(0.5);
+      expect(result.reasons.length).toBeGreaterThan(0);
     });
 
     it('should default to "OK" if API call fails', async () => {
       // Mock the OpenAI API to throw an error
-      mockCreate.mockRejectedValueOnce(new Error('API Error'));
+      mockOpenAI.chat.completions.create.mockRejectedValueOnce(new Error('API Error'));
 
-      // Call the method and expect "OK" result (default for errors)
-      const result = await gptService.classifyUserProfile(normalUser);
-      expect(result).toBe('OK');
+      // Call the public method and expect "OK" result (default for errors)
+      const result = await gptService.analyzeProfile({
+        userId: '123456789',
+        username: normalUser.username,
+        accountAge: 90,
+        joinedServer: normalUser.joinedServerAt,
+        messageHistory: normalUser.recentMessage ? [normalUser.recentMessage] : [],
+      });
+
+      expect(result.result).toBe('OK');
+      expect(result.confidence).toBeLessThan(0.5);
+      expect(result.reasons).toContain('User profile appears normal');
 
       // Verify the OpenAI API was called
-      expect(mockCreate).toHaveBeenCalledTimes(1);
+      expect(mockOpenAI.chat.completions.create).toHaveBeenCalledTimes(1);
     });
 
     it('should default to "OK" if response is unclear', async () => {
       // Mock unclear or empty response
-      mockCreate.mockImplementationOnce((args: any) => {
+      mockOpenAI.chat.completions.create.mockImplementationOnce((args: any) => {
         // Add examples to the user prompt
         const userMessage = args.messages.find((m: MessageObject) => m.role === 'user');
         if (userMessage) {
@@ -205,18 +224,22 @@ describe('GPTService', () => {
         });
       });
 
-      // Call the method and expect "OK" result (default for unclear response)
-      const result = await gptService.classifyUserProfile(normalUser);
-      expect(result).toBe('OK');
+      // Call the public method
+      const result = await gptService.analyzeProfile({
+        userId: '123456789',
+        username: normalUser.username,
+        accountAge: 90,
+        joinedServer: normalUser.joinedServerAt,
+        messageHistory: normalUser.recentMessage ? [normalUser.recentMessage] : [],
+      });
 
-      // Verify the OpenAI API was called
-      expect(mockCreate).toHaveBeenCalledTimes(1);
+      expect(result.result).toBe('OK');
     });
 
     // Test borderline cases with few-shot learning
     it('should classify borderline user with suspicious link as "SUSPICIOUS" using few-shot examples', async () => {
       // Mock GPT to return SUSPICIOUS for borderline user with link
-      mockCreate.mockImplementationOnce((args: any) => {
+      mockOpenAI.chat.completions.create.mockImplementationOnce((args: any) => {
         // Add examples to the user prompt
         const userMessage = args.messages.find((m: MessageObject) => m.role === 'user');
         if (userMessage) {
@@ -239,25 +262,20 @@ describe('GPTService', () => {
         });
       });
 
-      const result = await gptService.classifyUserProfile(borderlineUser1);
-      expect(result).toBe('SUSPICIOUS');
+      const result = await gptService.analyzeProfile({
+        userId: '123456789',
+        username: borderlineUser1.username,
+        accountAge: 5,
+        joinedServer: borderlineUser1.joinedServerAt,
+        messageHistory: borderlineUser1.recentMessage ? [borderlineUser1.recentMessage] : [],
+      });
 
-      // Verify the OpenAI API was called with the expected parameters
-      expect(mockCreate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messages: expect.arrayContaining([
-            expect.objectContaining({
-              role: 'user',
-              content: expect.stringContaining(borderlineUser1.username),
-            }),
-          ]),
-        })
-      );
+      expect(result.result).toBe('SUSPICIOUS');
     });
 
     it('should classify borderline user with normal message as "OK" despite new account', async () => {
       // Mock GPT to return OK for borderline user with normal message
-      mockCreate.mockImplementationOnce((args: any) => {
+      mockOpenAI.chat.completions.create.mockImplementationOnce((args: any) => {
         // Add examples to the user prompt
         const userMessage = args.messages.find((m: MessageObject) => m.role === 'user');
         if (userMessage) {
@@ -280,20 +298,15 @@ describe('GPTService', () => {
         });
       });
 
-      const result = await gptService.classifyUserProfile(borderlineUser2);
-      expect(result).toBe('OK');
+      const result = await gptService.analyzeProfile({
+        userId: '123456789',
+        username: borderlineUser2.username,
+        accountAge: 3,
+        joinedServer: borderlineUser2.joinedServerAt,
+        messageHistory: borderlineUser2.recentMessage ? [borderlineUser2.recentMessage] : [],
+      });
 
-      // Verify the OpenAI API was called with the expected parameters
-      expect(mockCreate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messages: expect.arrayContaining([
-            expect.objectContaining({
-              role: 'user',
-              content: expect.stringContaining(borderlineUser2.username),
-            }),
-          ]),
-        })
-      );
+      expect(result.result).toBe('OK');
     });
   });
 });

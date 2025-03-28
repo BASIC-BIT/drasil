@@ -58,23 +58,31 @@ describe.skip('GPTService - Real API', () => {
 
     console.log('Calling OpenAI API with normal user...');
     try {
-      // Call the API - this will make a real API request!
-      const result = await gptService.classifyUserProfile(normalUser);
+      // Call the API using the public method instead of private classifyUserProfile
+      const result = await gptService.analyzeProfile({
+        userId: '123456789',
+        username: normalUser.username,
+        accountAge: 365,
+        joinedServer: normalUser.joinedServerAt,
+        messageHistory: normalUser.recentMessage ? [normalUser.recentMessage] : [],
+      });
 
       console.log('API call successful, result:', result);
 
-      // Check the result - we expect a string response
-      expect(typeof result).toBe('string');
-      expect(['OK', 'SUSPICIOUS']).toContain(result);
+      // Check the result structure
+      expect(result).toHaveProperty('result');
+      expect(result).toHaveProperty('confidence');
+      expect(result).toHaveProperty('reasons');
+      expect(['OK', 'SUSPICIOUS']).toContain(result.result);
 
       // We should expect this account to be classified as OK, but the AI might have other ideas
       // so we don't assert on the specific value
-      console.log(`Real API classification for normal user: ${result}`);
+      console.log(`Real API classification for normal user: ${result.result}`);
     } catch (error) {
       console.error('Test error with API call:', error);
       throw error; // Re-throw to fail the test
     }
-  }, 30000); // Increase timeout for API call
+  }, 30000);
 
   it('should classify a suspicious user profile using the real OpenAI API', async () => {
     // Check if API key exists
@@ -96,23 +104,31 @@ describe.skip('GPTService - Real API', () => {
 
     console.log('Calling OpenAI API with suspicious user...');
     try {
-      // Call the API - this will make a real API request!
-      const result = await gptService.classifyUserProfile(suspiciousUser);
+      // Call the API using the public method
+      const result = await gptService.analyzeProfile({
+        userId: '123456789',
+        username: suspiciousUser.username,
+        accountAge: 1,
+        joinedServer: suspiciousUser.joinedServerAt,
+        messageHistory: suspiciousUser.recentMessage ? [suspiciousUser.recentMessage] : [],
+      });
 
       console.log('API call successful, result:', result);
 
-      // Check the result - we expect a string response
-      expect(typeof result).toBe('string');
-      expect(['OK', 'SUSPICIOUS']).toContain(result);
+      // Check the result structure
+      expect(result).toHaveProperty('result');
+      expect(result).toHaveProperty('confidence');
+      expect(result).toHaveProperty('reasons');
+      expect(['OK', 'SUSPICIOUS']).toContain(result.result);
 
       // We should expect this account to be classified as SUSPICIOUS, but we're not strictly
       // asserting that to avoid test failures if the model changes its evaluations
-      console.log(`Real API classification for suspicious user: ${result}`);
+      console.log(`Real API classification for suspicious user: ${result.result}`);
     } catch (error) {
       console.error('Test error with API call:', error);
       throw error; // Re-throw to fail the test
     }
-  }, 30000); // Increase timeout for API call
+  }, 30000);
 
   it('should classify a borderline user profile with few-shot examples', async () => {
     // Check if API key exists
@@ -133,19 +149,30 @@ describe.skip('GPTService - Real API', () => {
       recentMessage: 'Anyone interested in gaming accessories? I found some good deals.',
     };
 
+    // Ensure the message is not undefined
+    const recentMessage = borderlineUser.recentMessage || 'No message';
+
     console.log('Calling OpenAI API with borderline user...');
     try {
-      // Call the API - this will make a real API request!
-      const result = await gptService.classifyUserProfile(borderlineUser);
+      // Call the API using the public method
+      const result = await gptService.analyzeProfile({
+        userId: '123456789',
+        username: borderlineUser.username,
+        accountAge: 45,
+        joinedServer: borderlineUser.joinedServerAt,
+        messageHistory: [recentMessage],
+      });
 
       console.log('API call successful, result:', result);
 
-      // Check the result - we expect a string response
-      expect(typeof result).toBe('string');
-      expect(['OK', 'SUSPICIOUS']).toContain(result);
+      // Check the result structure
+      expect(result).toHaveProperty('result');
+      expect(result).toHaveProperty('confidence');
+      expect(result).toHaveProperty('reasons');
+      expect(['OK', 'SUSPICIOUS']).toContain(result.result);
 
       // Log the classification without asserting specific value
-      console.log(`Real API classification for borderline user: ${result}`);
+      console.log(`Real API classification for borderline user: ${result.result}`);
       console.log('This is a good test for the few-shot learning improvements');
     } catch (error) {
       console.error('Test error with API call:', error);

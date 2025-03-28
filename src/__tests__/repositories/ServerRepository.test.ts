@@ -1,23 +1,15 @@
-import { ServerRepository } from '../../repositories/ServerRepository';
+import { ServerRepository, IServerRepository } from '../../repositories/ServerRepository';
 import { Server } from '../../repositories/types';
-import * as supabaseConfig from '../../config/supabase';
-
-// Mock the Supabase client
-jest.mock('../../config/supabase', () => ({
-  supabase: {
-    from: jest.fn().mockReturnThis(),
-    select: jest.fn().mockReturnThis(),
-    insert: jest.fn().mockReturnThis(),
-    update: jest.fn().mockReturnThis(),
-    delete: jest.fn().mockReturnThis(),
-    eq: jest.fn().mockReturnThis(),
-    single: jest.fn().mockReturnThis(),
-  },
-  isSupabaseConfigured: jest.fn().mockReturnValue(true),
-}));
+import { TYPES } from '../../di/symbols';
+import { createServiceTestContainer, createMocks } from '../utils/test-container';
+import { Container } from 'inversify';
+import { SupabaseClient } from '@supabase/supabase-js';
 
 describe('ServerRepository', () => {
-  let repository: ServerRepository;
+  let container: Container;
+  let repository: IServerRepository;
+  let mocks: ReturnType<typeof createMocks>;
+
   const mockServer: Server = {
     guild_id: '123456789012345678',
     restricted_role_id: '123456789012345679',
@@ -41,21 +33,33 @@ describe('ServerRepository', () => {
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    repository = new ServerRepository();
+    // Create mocks
+    mocks = createMocks();
+
+    // Create container with real ServerRepository and mocked Supabase client
+    container = createServiceTestContainer(TYPES.ServerRepository, ServerRepository, {
+      mockSupabaseClient: mocks.mockSupabaseClient as unknown as SupabaseClient,
+    });
+
+    // Get the repository from the container
+    repository = container.get<IServerRepository>(TYPES.ServerRepository);
   });
 
   describe('findByGuildId', () => {
     it('should find a server by guild ID', async () => {
       // Setup the mock to return our test server
-      const mockSupabase = supabaseConfig.supabase as jest.Mocked<any>;
-      mockSupabase.from.mockReturnThis();
-      mockSupabase.select.mockReturnThis();
-      mockSupabase.eq.mockReturnThis();
-      mockSupabase.single.mockResolvedValueOnce({
+      const mockResult = {
         data: mockServer,
         error: null,
-      });
+      };
+
+      const mockSingle = jest.fn().mockResolvedValue(mockResult);
+      const mockEq = jest.fn().mockReturnValue({ single: mockSingle });
+      const mockSelect = jest.fn().mockReturnValue({ eq: mockEq });
+      const mockFrom = jest.fn().mockReturnValue({ select: mockSelect });
+
+      // Set up the mock for from method
+      mocks.mockSupabaseClient!.from = mockFrom;
 
       // Call the repository method
       const result = await repository.findByGuildId(mockServer.guild_id);
@@ -64,22 +68,26 @@ describe('ServerRepository', () => {
       expect(result).toEqual(mockServer);
 
       // Verify the Supabase client was called correctly
-      expect(mockSupabase.from).toHaveBeenCalledWith('servers');
-      expect(mockSupabase.select).toHaveBeenCalledWith('*');
-      expect(mockSupabase.eq).toHaveBeenCalledWith('guild_id', mockServer.guild_id);
-      expect(mockSupabase.single).toHaveBeenCalled();
+      expect(mockFrom).toHaveBeenCalledWith('servers');
+      expect(mockSelect).toHaveBeenCalledWith('*');
+      expect(mockEq).toHaveBeenCalledWith('guild_id', mockServer.guild_id);
+      expect(mockSingle).toHaveBeenCalled();
     });
 
     it('should return null when server not found', async () => {
       // Setup the mock to return null data
-      const mockSupabase = supabaseConfig.supabase as jest.Mocked<any>;
-      mockSupabase.from.mockReturnThis();
-      mockSupabase.select.mockReturnThis();
-      mockSupabase.eq.mockReturnThis();
-      mockSupabase.single.mockResolvedValueOnce({
+      const mockResult = {
         data: null,
         error: null,
-      });
+      };
+
+      const mockSingle = jest.fn().mockResolvedValue(mockResult);
+      const mockEq = jest.fn().mockReturnValue({ single: mockSingle });
+      const mockSelect = jest.fn().mockReturnValue({ eq: mockEq });
+      const mockFrom = jest.fn().mockReturnValue({ select: mockSelect });
+
+      // Set up the mock for from method
+      mocks.mockSupabaseClient!.from = mockFrom;
 
       // Call the repository method
       const result = await repository.findByGuildId('nonexistent-guild');
@@ -91,14 +99,18 @@ describe('ServerRepository', () => {
     it('should handle errors correctly', async () => {
       // Setup the mock to throw an error
       const mockError = new Error('Database error');
-      const mockSupabase = supabaseConfig.supabase as jest.Mocked<any>;
-      mockSupabase.from.mockReturnThis();
-      mockSupabase.select.mockReturnThis();
-      mockSupabase.eq.mockReturnThis();
-      mockSupabase.single.mockResolvedValueOnce({
+      const mockResult = {
         data: null,
         error: mockError,
-      });
+      };
+
+      const mockSingle = jest.fn().mockResolvedValue(mockResult);
+      const mockEq = jest.fn().mockReturnValue({ single: mockSingle });
+      const mockSelect = jest.fn().mockReturnValue({ eq: mockEq });
+      const mockFrom = jest.fn().mockReturnValue({ select: mockSelect });
+
+      // Set up the mock for from method
+      mocks.mockSupabaseClient!.from = mockFrom;
 
       // Expect the method to throw an error
       await expect(repository.findByGuildId('error-guild')).rejects.toThrow();

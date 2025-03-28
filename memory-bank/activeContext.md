@@ -415,9 +415,22 @@ The system currently implements:
    - Consider premium tier options for sustainability
 
 4. **Database Error Handling and Entity Relationships**:
+
    - Improved error handling for Supabase operations
    - Proper handling of "not found" cases with PostgrestError code 'PGRST116'
    - Clear separation of concerns between repositories
    - Consistent pattern for entity creation and relationships
    - Proper debugging with detailed logging
    - Detailed error messages with context for troubleshooting
+
+5. **InversifyJS Testing Best Practices**:
+   - **Private Property Access**: Use proper type assertions with `(as any)` for accessing private properties instead of bracket notation which causes TypeScript errors.
+   - **Dynamic Values**: Use `expect.any(String)` or `expect.any(Date)` for dynamically generated fields like timestamps rather than exact values.
+   - **Mock Implementation**: Create proper mock implementations that match the interface, especially for complex objects with nested properties.
+   - **Container Configuration**: Ensure all dependencies are properly bound in the test container, including external services like SupabaseClient.
+   - **Constructor Parameters**: Ensure mock parameters match the implementation's constructor signature exactly, especially when using overloaded constructors.
+   - **Avoiding Direct Property Access**: Prefer testing through public methods rather than accessing private properties directly in tests.
+   - **Code Quality**: Remove unused imports and variables to avoid lint errors and improve test readability.
+   - **Error Scenario Testing**: Properly set up mocks for error scenarios to ensure error propagation is tested correctly.
+   - **Custom Assertions**: Use extension methods and custom matchers for cleaner test assertions.
+   - **Test Isolation**: Ensure proper cleanup between tests using `afterEach` and `jest.clearAllMocks()` to prevent test interference.
