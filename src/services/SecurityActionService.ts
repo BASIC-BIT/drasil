@@ -1,6 +1,7 @@
 /**
  * SecurityActionService: Handles security responses to detection results
  * - Receives detection results from DetectionOrchestrator
+ * - Ensures core entities exist in database
  * - Handles the appropriate actions (assigning roles, sending notifications, etc.)
  * - Coordinates between RoleManager and NotificationManager
  */
@@ -11,6 +12,9 @@ import { IRoleManager } from './RoleManager';
 import { INotificationManager } from './NotificationManager';
 import { DetectionResult } from './DetectionOrchestrator';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
+import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
+import { IUserService } from './UserService';
+import { IServerService } from './ServerService';
 
 /**
  * Interface for the SecurityActionService
@@ -69,15 +73,24 @@ export class SecurityActionService implements ISecurityActionService {
   private roleManager: IRoleManager;
   private notificationManager: INotificationManager;
   private detectionEventsRepository: IDetectionEventsRepository;
+  private serverMemberRepository: IServerMemberRepository;
+  private userService: IUserService;
+  private serverService: IServerService;
 
   constructor(
     @inject(TYPES.RoleManager) roleManager: IRoleManager,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
-    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository
+    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
+    @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
+    @inject(TYPES.UserService) userService: IUserService,
+    @inject(TYPES.ServerService) serverService: IServerService
   ) {
     this.roleManager = roleManager;
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
+    this.serverMemberRepository = serverMemberRepository;
+    this.userService = userService;
+    this.serverService = serverService;
   }
   
   /**
@@ -92,18 +105,45 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   /**
+   * Ensures all required entities exist in the database
+   * This should be called at the start of handling any security action
+   */
+  private async ensureEntitiesExist(
+    serverId: string,
+    userId: string,
+    username?: string,
+    joinedAt?: string
+  ): Promise<void> {
+    try {
+      // First, ensure the server exists
+      await this.serverService.getOrCreateServer(serverId);
+
+      // Then, ensure the user exists
+      await this.userService.getOrCreateUser(userId, username);
+
+      // Finally, ensure server_member record exists
+      await this.userService.getOrCreateMember(serverId, userId, joinedAt);
+    } catch (error) {
+      console.error('Failed to ensure entities exist:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Record a detection event in the database
    * 
    * @param serverId The Discord server ID
    * @param userId The Discord user ID
    * @param detectionResult The detection result
    * @param messageContent Optional message content that triggered the detection
+   * @param messageId Optional message ID that triggered the detection
    */
   private async recordDetectionEvent(
     serverId: string,
     userId: string,
     detectionResult: DetectionResult,
-    messageContent?: string
+    messageContent?: string,
+    messageId?: string
   ): Promise<void> {
     await this.detectionEventsRepository.create({
       server_id: serverId,
@@ -114,7 +154,7 @@ export class SecurityActionService implements ISecurityActionService {
       reasons: detectionResult.reasons,
       used_gpt: detectionResult.usedGPT,
       detected_at: new Date(),
-      message_id: messageContent ? crypto.randomUUID() : undefined,
+      message_id: messageId,
       metadata: messageContent ? { content: messageContent } : undefined
     });
   }
@@ -132,40 +172,60 @@ export class SecurityActionService implements ISecurityActionService {
     detectionResult: DetectionResult,
     sourceMessage?: Message
   ): Promise<boolean> {
-    console.log(`User flagged for spam: ${member.user.tag} (${member.id})`);
-    console.log(`Detection confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-    console.log(`Reasons: ${detectionResult.reasons.join(', ')}`);
-    console.log(`Trigger source: ${detectionResult.triggerSource}`);
+    try {
+      // Ensure all required entities exist first
+      await this.ensureEntitiesExist(
+        member.guild.id,
+        member.id,
+        member.user.username,
+        member.joinedAt?.toISOString()
+      );
 
-    // Record the detection event
-    await this.recordDetectionEvent(
-      member.guild.id,
-      member.id,
-      detectionResult,
-      sourceMessage?.content
-    );
+      console.log(`User flagged for spam: ${member.user.tag} (${member.id})`);
+      console.log(`Detection confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
+      console.log(`Reasons: ${detectionResult.reasons.join(', ')}`);
+      console.log(`Trigger source: ${detectionResult.triggerSource}`);
 
-    // Assign restricted role to the member
-    const restrictSuccess = await this.roleManager.assignRestrictedRole(member);
-    if (restrictSuccess) {
-      console.log(`Assigned restricted role to ${member.user.tag}`);
-    } else {
-      console.log(`Failed to assign restricted role to ${member.user.tag}`);
-      return false;
-    }
+      // Record the detection event
+      await this.recordDetectionEvent(
+        member.guild.id,
+        member.id,
+        detectionResult,
+        sourceMessage?.content,
+        sourceMessage?.id
+      );
 
-    // Send notification to admin channel
-    const notificationMessage = await this.notificationManager.notifySuspiciousUser(
-      member,
-      detectionResult,
-      sourceMessage // Pass the source message for linking if available
-    );
+      // Assign restricted role to the member
+      const restrictSuccess = await this.roleManager.assignRestrictedRole(member);
+      if (restrictSuccess) {
+        console.log(`Assigned restricted role to ${member.user.tag}`);
+      } else {
+        console.log(`Failed to assign restricted role to ${member.user.tag}`);
+        return false;
+      }
 
-    if (notificationMessage) {
-      console.log(`Sent notification to admin channel about ${member.user.tag}`);
-      return true;
-    } else {
-      console.log(`Failed to send notification to admin channel about ${member.user.tag}`);
+      // Send notification to admin channel
+      const notificationMessage = await this.notificationManager.notifySuspiciousUser(
+        member,
+        detectionResult,
+        sourceMessage // Pass the source message for linking if available
+      );
+
+      if (notificationMessage) {
+        console.log(`Sent notification to admin channel about ${member.user.tag}`);
+        
+        // Store the verification message ID
+        await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+          verification_message_id: notificationMessage.id
+        });
+        
+        return true;
+      } else {
+        console.log(`Failed to send notification to admin channel about ${member.user.tag}`);
+        return false;
+      }
+    } catch (error) {
+      console.error('Failed to handle suspicious message:', error);
       return false;
     }
   }
@@ -181,45 +241,63 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     detectionResult: DetectionResult
   ): Promise<boolean> {
-    console.log(`New member flagged as suspicious: ${member.user.tag} (${member.id})`);
-    console.log(`Detection confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-    console.log(`Reasons: ${detectionResult.reasons.join(', ')}`);
-    console.log(`Trigger source: ${detectionResult.triggerSource}`);
-
-    // Record the detection event
-    await this.recordDetectionEvent(
-      member.guild.id,
-      member.id,
-      detectionResult
-    );
-
-    // Assign restricted role
-    const restrictSuccess = await this.roleManager.assignRestrictedRole(member);
-    if (restrictSuccess) {
-      console.log(`Assigned restricted role to ${member.user.tag}`);
-    } else {
-      console.log(`Failed to assign restricted role to ${member.user.tag}`);
-      return false;
-    }
-
-    // Send notification to admin channel
-    const notificationMessage = await this.notificationManager.notifySuspiciousUser(
-      member,
-      detectionResult
-    );
-
-    if (notificationMessage) {
-      console.log(`Sent notification to admin channel about ${member.user.tag}`);
-
-      // Automatically create a verification thread for new joins
-      await this.createVerificationThreadForMember(
-        member, 
-        notificationMessage
+    try {
+      // Ensure all required entities exist first
+      await this.ensureEntitiesExist(
+        member.guild.id,
+        member.id,
+        member.user.username,
+        member.joinedAt?.toISOString()
       );
-      
-      return true;
-    } else {
-      console.log(`Failed to send notification to admin channel about ${member.user.tag}`);
+
+      console.log(`New member flagged as suspicious: ${member.user.tag} (${member.id})`);
+      console.log(`Detection confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
+      console.log(`Reasons: ${detectionResult.reasons.join(', ')}`);
+      console.log(`Trigger source: ${detectionResult.triggerSource}`);
+
+      // Record the detection event
+      await this.recordDetectionEvent(
+        member.guild.id,
+        member.id,
+        detectionResult
+      );
+
+      // Assign restricted role
+      const restrictSuccess = await this.roleManager.assignRestrictedRole(member);
+      if (restrictSuccess) {
+        console.log(`Assigned restricted role to ${member.user.tag}`);
+      } else {
+        console.log(`Failed to assign restricted role to ${member.user.tag}`);
+        return false;
+      }
+
+      // Send notification to admin channel
+      const notificationMessage = await this.notificationManager.notifySuspiciousUser(
+        member,
+        detectionResult
+      );
+
+      if (notificationMessage) {
+        console.log(`Sent notification to admin channel about ${member.user.tag}`);
+
+        // Store the verification message ID
+        await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+          verification_message_id: notificationMessage.id
+        });
+
+        // Automatically create a verification thread for new joins
+        await this.createVerificationThreadForMember(
+          member, 
+          notificationMessage
+        );
+        
+        return true;
+      } else {
+        console.log(`Failed to send notification to admin channel about ${member.user.tag}`);
+        return false;
+      }
+    } catch (error) {
+      console.error('Failed to handle suspicious join:', error);
       return false;
     }
   }

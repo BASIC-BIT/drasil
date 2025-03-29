@@ -4,6 +4,34 @@
 
 The Discord Anti-Spam Bot is currently in active development with several key components implemented and functioning. This document tracks the current state of the project, what's working, and what remains to be built.
 
+## Recently Completed
+
+### Service Architecture Improvements
+- ✅ Moved entity existence checks to SecurityActionService
+  - Ensures early verification of required entities
+  - Single point of responsibility for entity creation
+  - Proper error handling and logging
+  - Prevents cascading errors
+- ✅ Simplified UserReputationService
+  - Focused solely on reputation management
+  - Removed entity management responsibilities
+  - Cleaner, more maintainable code
+  - Better adherence to Single Responsibility Principle
+- ✅ Streamlined DetectionOrchestrator
+  - Focused purely on detection logic
+  - Removed user/reputation management code
+  - Clearer responsibility boundaries
+  - Improved maintainability
+
+### Service Flow Improvements
+- ✅ Implemented clear, unidirectional data flow:
+  1. DetectionOrchestrator: Detection logic
+  2. SecurityActionService: Entity verification and security actions
+  3. UserReputationService: Reputation updates
+- ✅ Better error handling and propagation
+- ✅ Improved logging and debugging capabilities
+- ✅ Clearer service boundaries and responsibilities
+
 ## What Works
 
 ### Core Bot Functionality

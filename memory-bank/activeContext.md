@@ -2,11 +2,18 @@
 
 ## Current Development Focus
 
-The project is currently focused on implementing the core functionality of the Discord Anti-Spam Bot. Based on the todo.md file and the current codebase, we have completed several key chunks of work and are now working on detection event persistence, testing improvements, and dependency injection implementation.
+The project is currently focused on implementing the core functionality of the Discord Anti-Spam Bot, with recent work on improving service architecture and responsibility separation.
 
 ## Recent Milestones
 
 ### Completed
+
+- ✅ **Service Architecture Improvements**:
+  - Moved entity existence checks to SecurityActionService
+  - Simplified UserReputationService to focus solely on reputation management
+  - Removed entity management from DetectionOrchestrator
+  - Improved error handling and logging across services
+  - Clear separation of responsibilities between services
 
 - ✅ **Repository Separation of Concerns**:
 
@@ -198,7 +205,14 @@ The system currently implements:
 
 ### Current Technical Decisions
 
-1. **Dependency Injection Implementation**:
+1. **Service Responsibility Separation**:
+   - SecurityActionService now handles entity existence verification
+   - Early entity verification ensures data consistency
+   - UserReputationService focused purely on reputation management
+   - DetectionOrchestrator focused purely on detection logic
+   - Clear, unidirectional flow: Detection → Security Action → Reputation
+
+2. **Dependency Injection Implementation**:
 
    - Using InversifyJS for IoC container management
    - Interfaces defined for all injectable components
@@ -208,7 +222,7 @@ The system currently implements:
    - External dependency injection (Discord client, OpenAI, Supabase)
    - Test utilities for container-based testing
 
-2. **GPT Usage Optimization**:
+3. **GPT Usage Optimization**:
 
    - Using gpt-4o-mini model for improved accuracy with reasonable cost
    - Selective invocation strategy:
@@ -224,7 +238,7 @@ The system currently implements:
    - Low temperature (0.3) for more consistent responses
    - Limited token usage (max_tokens: 50) for efficiency
 
-3. **Admin Notification Format**:
+4. **Admin Notification Format**:
 
    - Confidence level display:
      - 🟢 Low (0-40%)
@@ -247,7 +261,7 @@ The system currently implements:
      - Links to verification threads when applicable
      - Maintains complete history in original message
 
-4. **Verification Channel Structure**:
+5. **Verification Channel Structure**:
 
    - Dedicated channel with specific permissions:
      - Everyone: No access (deny ViewChannel)
@@ -259,7 +273,7 @@ The system currently implements:
    - Automatic thread creation for flagged new joins
    - Manual thread creation via button or command
 
-5. **Database Error Handling**:
+6. **Database Error Handling**:
 
    - Specific handling for PostgrestError code 'PGRST116' (no rows found)
    - Treating "not found" cases as valid null returns rather than errors
@@ -267,7 +281,7 @@ The system currently implements:
    - Excluding non-UUID formatted IDs when creating new records
    - Consistent error propagation with context using RepositoryError
 
-6. **Server Configuration Management**:
+7. **Server Configuration Management**:
 
    - Database-stored configuration values instead of environment variables
    - Server-specific settings with `/config` command
@@ -275,7 +289,7 @@ The system currently implements:
    - Cache-first approach with database fallback
    - Type-safe configuration access
 
-7. **Repository Testing Strategy**:
+8. **Repository Testing Strategy**:
 
    - Mock Supabase client for unit testing
    - Properly mock method chaining for Supabase operations
@@ -285,7 +299,7 @@ The system currently implements:
    - Use `expect.objectContaining()` for dynamic fields like timestamps
    - Separate mock setups for multiple operations in the same test
 
-8. **Repository Pattern Implementation**:
+9. **Repository Pattern Implementation**:
    - Clear separation of concerns between repositories
    - DetectionOrchestrator responsible for ensuring entities exist
    - Entity-specific repositories focused on their own domain

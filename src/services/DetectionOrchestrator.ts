@@ -8,11 +8,6 @@ import { injectable, inject } from 'inversify';
 import { IHeuristicService } from './HeuristicService';
 import { IGPTService, UserProfileData } from './GPTService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
-import { IUserRepository } from '../repositories/UserRepository';
-import { IServerRepository } from '../repositories/ServerRepository';
-import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
-import { IUserService } from './UserService';
-import { IServerService } from './ServerService';
 import { TYPES } from '../di/symbols';
 
 export interface DetectionResult {
@@ -65,11 +60,6 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
   private heuristicService: IHeuristicService;
   private gptService: IGPTService;
   private detectionEventsRepository: IDetectionEventsRepository;
-  private userRepository: IUserRepository;
-  private serverRepository: IServerRepository;
-  private serverMemberRepository: IServerMemberRepository;
-  private userService: IUserService;
-  private serverService: IServerService;
 
   // Threshold to determine when to use GPT (0.3-0.7 is borderline)
   private readonly BORDERLINE_LOWER = 0.3;
@@ -82,21 +72,11 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
   constructor(
     @inject(TYPES.HeuristicService) heuristicService: IHeuristicService,
     @inject(TYPES.GPTService) gptService: IGPTService,
-    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
-    @inject(TYPES.UserRepository) userRepository: IUserRepository,
-    @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
-    @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
-    @inject(TYPES.UserService) userService: IUserService,
-    @inject(TYPES.ServerService) serverService: IServerService
+    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository
   ) {
     this.heuristicService = heuristicService;
     this.gptService = gptService;
     this.detectionEventsRepository = detectionEventsRepository;
-    this.userRepository = userRepository;
-    this.serverRepository = serverRepository;
-    this.serverMemberRepository = serverMemberRepository;
-    this.userService = userService;
-    this.serverService = serverService;
   }
 
   /**
@@ -214,9 +194,6 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       };
     }
 
-    // Store the detection result
-    await this.storeDetectionResult(serverId, userId, result, content);
-
     return result;
   }
 
@@ -259,7 +236,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       suspicionScore += 0.7;
     }
 
-    const result: DetectionResult = {
+    return {
       label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
       confidence: Math.abs(suspicionScore - 0.5) * 2,
       usedGPT: true,
@@ -268,123 +245,6 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       triggerContent: 'Server Join',
       profileData: profileData,
     };
-
-    // Store the detection result
-    await this.storeDetectionResult(serverId, userId, result);
-
-    return result;
-  }
-
-  /**
-   * Stores a detection result in the database
-   *
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @param result The detection result
-   * @param messageId Optional message ID that triggered the detection
-   */
-  private async storeDetectionResult(
-    serverId: string,
-    userId: string,
-    result: DetectionResult,
-    messageId?: string
-  ): Promise<void> {
-    try {
-      // First, ensure the server exists using the ServerService
-      await this.serverService.getOrCreateServer(serverId);
-
-      // Then, ensure the user exists using the UserService
-      await this.userService.getOrCreateUser(userId, result.profileData?.username);
-
-      // Ensure server_member record exists using the UserService
-      await this.userService.getOrCreateMember(
-        serverId,
-        userId,
-        result.profileData?.joinedServerAt?.toISOString()
-      );
-
-      const confidenceLevel = this.getConfidenceLevel(result.confidence);
-
-      // Create the detection event data
-      const eventData = {
-        server_id: serverId,
-        user_id: userId,
-        message_id: messageId,
-        detection_type: result.triggerSource === 'join' ? 'join' : 'message',
-        confidence: result.confidence,
-        confidence_level: confidenceLevel,
-        reasons: result.reasons,
-        used_gpt: result.usedGPT,
-        detected_at: new Date().toISOString(),
-        metadata: {
-          triggerContent: result.triggerContent,
-        },
-      };
-
-      // Save to detection events repository
-      await this.detectionEventsRepository.create(eventData);
-
-      // Update user and server member models
-      this.updateUserModels(serverId, userId, result);
-    } catch (error) {
-      console.error('Failed to store detection result:', error);
-    }
-  }
-
-  /**
-   * Updates user and server member models with detection result
-   *
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @param result The detection result
-   */
-  private async updateUserModels(
-    serverId: string,
-    userId: string,
-    result: DetectionResult
-  ): Promise<void> {
-    try {
-      // Update the user's global reputation score if result is suspicious with high confidence
-      if (result.label === 'SUSPICIOUS' && result.confidence > 0.7) {
-        const user = await this.userRepository.findByDiscordId(userId);
-        if (user) {
-          // Decrement the global reputation score (minimum 0)
-          const newScore = Math.max(0, (user.global_reputation_score || 100) - 10);
-          await this.userRepository.updateReputationScore(userId, newScore);
-        }
-      }
-
-      // Update server member reputation
-      const member = await this.serverMemberRepository.findByServerAndUser(serverId, userId);
-      if (member) {
-        // Adjust reputation score based on result
-        let newScore = member.reputation_score || 50;
-        if (result.label === 'SUSPICIOUS') {
-          newScore = Math.max(0, newScore - result.confidence * 20);
-        } else {
-          newScore = Math.min(100, newScore + 5);
-        }
-        await this.serverMemberRepository.updateReputationScore(serverId, userId, newScore);
-      }
-    } catch (error) {
-      console.error('Failed to update user models:', error);
-    }
-  }
-
-  /**
-   * Converts a numeric confidence (0-1) to a level description
-   *
-   * @param confidence Confidence value between 0 and 1
-   * @returns Confidence level as Low, Medium, or High
-   */
-  private getConfidenceLevel(confidence: number): 'Low' | 'Medium' | 'High' {
-    if (confidence < 0.4) {
-      return 'Low';
-    } else if (confidence < 0.7) {
-      return 'Medium';
-    } else {
-      return 'High';
-    }
   }
 
   /**

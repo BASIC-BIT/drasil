@@ -63,6 +63,7 @@ export interface ServerMember {
   restriction_reason?: string; // Reason why the user was restricted
   last_status_change?: string; // When the status was last changed
   moderator_id?: string; // Discord ID of the moderator who changed the status
+  verification_message_id?: string; // Discord message ID of the verification/warning message
 }
 
 /**
