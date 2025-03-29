@@ -9,16 +9,12 @@ export interface IUserReputationService {
    * Handle the implications of a detection result on a user's reputation and status
    * - Updates reputation scores for both global and server-specific contexts
    * - Assumes all required entities already exist in the database
-   * 
+   *
    * @param serverId The Discord server ID
    * @param userId The Discord user ID
    * @param result The detection result
    */
-  handleDetectionResult(
-    serverId: string,
-    userId: string,
-    result: DetectionResult
-  ): Promise<void>;
+  handleDetectionResult(serverId: string, userId: string, result: DetectionResult): Promise<void>;
 }
 
 @injectable()
@@ -79,4 +75,4 @@ export class UserReputationService implements IUserReputationService {
       throw error;
     }
   }
-} 
+}

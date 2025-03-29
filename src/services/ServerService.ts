@@ -1,4 +1,4 @@
-import { Server } from '../repositories/types';
+import { Server, ServerSettings } from '../repositories/types';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { injectable, inject } from 'inversify';
 import { TYPES } from '../di/symbols';
@@ -20,7 +20,7 @@ export interface IServerService {
    * @param settings The settings to update
    * @returns The updated server
    */
-  updateServerSettings(guildId: string, settings: any): Promise<Server | null>;
+  updateServerSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server | null>;
 
   /**
    * Mark a server as active or inactive
@@ -65,7 +65,10 @@ export class ServerService implements IServerService {
    * @param settings The settings to update
    * @returns The updated server
    */
-  async updateServerSettings(guildId: string, settings: any): Promise<Server | null> {
+  async updateServerSettings(
+    guildId: string,
+    settings: Partial<ServerSettings>
+  ): Promise<Server | null> {
     return await this.serverRepository.updateSettings(guildId, settings);
   }
 

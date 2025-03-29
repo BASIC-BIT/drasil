@@ -9,6 +9,7 @@ The project is currently focused on implementing the core functionality of the D
 ### Completed
 
 - ✅ **Service Architecture Improvements**:
+
   - Moved entity existence checks to SecurityActionService
   - Simplified UserReputationService to focus solely on reputation management
   - Removed entity management from DetectionOrchestrator
@@ -206,6 +207,7 @@ The system currently implements:
 ### Current Technical Decisions
 
 1. **Service Responsibility Separation**:
+
    - SecurityActionService now handles entity existence verification
    - Early entity verification ensures data consistency
    - UserReputationService focused purely on reputation management

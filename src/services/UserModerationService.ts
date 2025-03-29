@@ -1,10 +1,11 @@
-import { GuildMember, User } from 'discord.js';
+import { GuildMember, User, ThreadChannel } from 'discord.js';
 import { injectable, inject } from 'inversify';
 import { TYPES } from '../di/symbols';
 import { IConfigService } from '../config/ConfigService';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
+import { IVerificationThreadRepository } from '../repositories/VerificationThreadRepository';
 
 /**
  * Interface for the UserModerationService
@@ -65,17 +66,21 @@ export class UserModerationService implements IUserModerationService {
   private serverMemberRepository: IServerMemberRepository;
   private notificationManager: INotificationManager;
   private roleManager: IRoleManager;
+  private verificationThreadRepository: IVerificationThreadRepository;
 
   constructor(
     @inject(TYPES.ConfigService) configService: IConfigService,
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
-    @inject(TYPES.RoleManager) roleManager: IRoleManager
+    @inject(TYPES.RoleManager) roleManager: IRoleManager,
+    @inject(TYPES.VerificationThreadRepository)
+    verificationThreadRepository: IVerificationThreadRepository
   ) {
     this.configService = configService;
     this.serverMemberRepository = serverMemberRepository;
     this.notificationManager = notificationManager;
     this.roleManager = roleManager;
+    this.verificationThreadRepository = verificationThreadRepository;
   }
 
   /**
@@ -103,7 +108,7 @@ export class UserModerationService implements IUserModerationService {
         // Update the member's verification status
         await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
           is_restricted: true,
-          verification_status: 'pending'
+          verification_status: 'pending',
         });
         return true;
       }
@@ -128,29 +133,43 @@ export class UserModerationService implements IUserModerationService {
 
       if (success) {
         // Update verification status
-        await this.updateVerificationStatus(
-          member.guild.id,
-          member.id,
-          'verified',
-          moderator.id
-        );
+        await this.updateVerificationStatus(member.guild.id, member.id, 'verified', moderator.id);
 
         // Get the existing verification message ID
-        const existingMember = await this.serverMemberRepository.findByServerAndUser(member.guild.id, member.id);
+        const existingMember = await this.serverMemberRepository.findByServerAndUser(
+          member.guild.id,
+          member.id
+        );
         const existingMessageId = existingMember?.verification_message_id;
 
-        // If we have an existing message, update it
+        // Get the verification thread if it exists
+        const verificationThread = await this.verificationThreadRepository.findByServerAndUser(
+          member.guild.id,
+          member.id
+        );
+
+        // If we have an existing message, update it and clear the ID
         if (existingMessageId) {
           const channel = await this.notificationManager.getAdminChannel();
           if (channel) {
             try {
               const message = await channel.messages.fetch(existingMessageId);
               if (message) {
+                // Fetch the thread if it exists
+                let thread: ThreadChannel | undefined;
+                if (verificationThread) {
+                  const fetchedThread = await channel.threads.fetch(verificationThread.thread_id);
+                  if (fetchedThread && fetchedThread.isThread()) {
+                    thread = fetchedThread;
+                  }
+                }
+
                 // Log the verification action to the message
                 await this.notificationManager.logActionToMessage(
                   message,
                   'verified the user',
-                  moderator
+                  moderator,
+                  thread
                 );
               }
             } catch (error) {
@@ -160,8 +179,18 @@ export class UserModerationService implements IUserModerationService {
 
           // Clear the verification message ID
           await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-            verification_message_id: undefined
+            verification_message_id: undefined, // Changed from null to undefined
           });
+        }
+
+        // If we have a verification thread, update its status
+        if (verificationThread) {
+          await this.notificationManager.resolveVerificationThread(
+            member.guild.id,
+            verificationThread.thread_id,
+            'verified',
+            moderator.id
+          );
         }
 
         return true;
@@ -186,35 +215,64 @@ export class UserModerationService implements IUserModerationService {
       await member.ban({ reason });
 
       // Update verification status
-      await this.updateVerificationStatus(
-        member.guild.id,
-        member.id,
-        'rejected',
-        moderator.id
-      );
+      await this.updateVerificationStatus(member.guild.id, member.id, 'rejected', moderator.id);
 
       // Get the existing verification message ID
-      const existingMember = await this.serverMemberRepository.findByServerAndUser(member.guild.id, member.id);
+      const existingMember = await this.serverMemberRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
       const existingMessageId = existingMember?.verification_message_id;
 
-      // If we have an existing message, update it
+      // Get the verification thread if it exists
+      const verificationThread = await this.verificationThreadRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
+
+      // If we have an existing message, update it and clear the ID
       if (existingMessageId) {
         const channel = await this.notificationManager.getAdminChannel();
         if (channel) {
           try {
             const message = await channel.messages.fetch(existingMessageId);
             if (message) {
+              // Fetch the thread if it exists
+              let thread: ThreadChannel | undefined;
+              if (verificationThread) {
+                const fetchedThread = await channel.threads.fetch(verificationThread.thread_id);
+                if (fetchedThread && fetchedThread.isThread()) {
+                  thread = fetchedThread;
+                }
+              }
+
               // Log the ban action to the message
               await this.notificationManager.logActionToMessage(
                 message,
                 'banned the user',
-                moderator
+                moderator,
+                thread
               );
             }
           } catch (error) {
             console.error('Failed to update notification message:', error);
           }
         }
+
+        // Clear the verification message ID
+        await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+          verification_message_id: undefined, // Changed from null to undefined
+        });
+      }
+
+      // If we have a verification thread, update its status
+      if (verificationThread) {
+        await this.notificationManager.resolveVerificationThread(
+          member.guild.id,
+          verificationThread.thread_id,
+          'banned',
+          moderator.id
+        );
       }
 
       return true;
@@ -251,4 +309,4 @@ export class UserModerationService implements IUserModerationService {
       return false;
     }
   }
-} 
+}

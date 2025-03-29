@@ -7,6 +7,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 ## Recently Completed
 
 ### Service Architecture Improvements
+
 - ✅ Moved entity existence checks to SecurityActionService
   - Ensures early verification of required entities
   - Single point of responsibility for entity creation
@@ -24,6 +25,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - Improved maintainability
 
 ### Service Flow Improvements
+
 - ✅ Implemented clear, unidirectional data flow:
   1. DetectionOrchestrator: Detection logic
   2. SecurityActionService: Entity verification and security actions

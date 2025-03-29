@@ -15,6 +15,7 @@ import {
   ChannelType,
   PermissionFlagsBits,
   GuildChannelCreateOptions,
+  ButtonInteraction,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
@@ -23,6 +24,8 @@ import { IVerificationThreadRepository } from '../repositories/VerificationThrea
 import { IUserService } from './UserService';
 import { IServerService } from './ServerService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
+import { DetectionEvent } from '../repositories/types';
+import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
 
 export interface NotificationButton {
   id: string;
@@ -123,6 +126,14 @@ export interface INotificationManager {
     resolution: 'verified' | 'banned' | 'ignored',
     resolvedBy: string
   ): Promise<boolean>;
+
+  /**
+   * Handle the history button interaction by sending a private ephemeral message with full detection history
+   * @param interaction The button interaction
+   * @param userId The Discord user ID whose history to show
+   * @returns Promise resolving to whether the history was successfully sent
+   */
+  handleHistoryButtonClick(interaction: ButtonInteraction, userId: string): Promise<boolean>;
 }
 
 /**
@@ -195,10 +206,7 @@ export class NotificationManager implements INotificationManager {
 
       return channel as TextChannel;
     } catch (error) {
-      console.error(
-        `Failed to fetch admin channel with ID ${this.adminChannelId}:`,
-        error
-      );
+      console.error(`Failed to fetch admin channel with ID ${this.adminChannelId}:`, error);
       return undefined;
     }
   }
@@ -230,13 +238,19 @@ export class NotificationManager implements INotificationManager {
       // Create the base embed
       const embed = await this.createSuspiciousUserEmbed(member, detectionResult, sourceMessage);
 
+      // Get detection events for action row
+      const detectionEvents = await this.detectionEventsRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
+
       // If we have an existing message, update it, otherwise create new
       if (existingMessageId) {
         try {
           const existingMessage = await channel.messages.fetch(existingMessageId);
           return await existingMessage.edit({
             embeds: [embed],
-            components: [this.createActionRow(member.id)],
+            components: [this.createActionRow(member.id, detectionEvents)],
           });
         } catch (error) {
           console.error('Failed to fetch existing message:', error);
@@ -247,7 +261,7 @@ export class NotificationManager implements INotificationManager {
       // Create a new message
       return await channel.send({
         embeds: [embed],
-        components: [this.createActionRow(member.id)],
+        components: [this.createActionRow(member.id, detectionEvents)],
       });
     } catch (error) {
       console.error('Failed to upsert suspicious user notification:', error);
@@ -346,18 +360,21 @@ export class NotificationManager implements INotificationManager {
       let actionLogContent = `• <@${admin.id}> ${actionTaken} <t:${timestamp}:R>`;
       if (thread && actionTaken.includes('created a verification thread')) {
         actionLogContent = `• <@${admin.id}> [created a verification thread](${thread.url}) <t:${timestamp}:R>`;
+      }
 
-        // Update the thread status if it's a verification or ban action
-        if (
-          message.guildId &&
-          (actionTaken.includes('verified') || actionTaken.includes('banned'))
-        ) {
-          const resolution = actionTaken.includes('verified')
-            ? ('verified' as const)
-            : ('banned' as const);
+      // Update the thread status if it's a verification or ban action
+      if (message.guildId && (actionTaken.includes('verified') || actionTaken.includes('banned'))) {
+        const resolution = actionTaken.includes('verified')
+          ? ('verified' as const)
+          : ('banned' as const);
 
+        // Update thread status in database
+        if (thread) {
           await this.resolveVerificationThread(message.guildId, thread.id, resolution, admin.id);
         }
+
+        // Update embed color based on resolution
+        updatedEmbed.setColor(resolution === 'verified' ? 0x00ff00 : 0x000000);
       }
 
       if (actionLogField) {
@@ -410,7 +427,7 @@ export class NotificationManager implements INotificationManager {
     // Convert confidence to Low/Medium/High
     const confidencePercent = detectionResult.confidence * 100;
     let confidenceLevel: string;
-    let embedColor: number = 0xFF0000; // Default red for suspicious/unverified users
+    let embedColor: number = 0xff0000; // Default red for suspicious/unverified users
 
     if (confidencePercent <= 40) {
       confidenceLevel = '🟢 Low';
@@ -428,7 +445,7 @@ export class NotificationManager implements INotificationManager {
     if (detectionResult.triggerSource === 'message' && detectionResult.triggerContent) {
       // Wrap trigger content in code blocks to prevent auto-linking
       const safeContent = `\`${detectionResult.triggerContent}\``;
-      
+
       // If we have the source message, create a direct link to it
       if (sourceMessage) {
         triggerInfo = `[Flagged for message](${sourceMessage.url}): ${safeContent}`;
@@ -448,9 +465,17 @@ export class NotificationManager implements INotificationManager {
     // Format detection history
     let detectionHistory = '';
     if (detectionEvents && detectionEvents.length > 0) {
-      detectionHistory = detectionEvents
-        .sort((a, b) => new Date(b.detected_at).getTime() - new Date(a.detected_at).getTime())
-        .map(event => {
+      // Sort events by date, most recent first
+      const sortedEvents = detectionEvents.sort(
+        (a, b) => new Date(b.detected_at).getTime() - new Date(a.detected_at).getTime()
+      );
+
+      // Take the 5 most recent events
+      const recentEvents = sortedEvents.slice(0, 5);
+
+      // Format the recent events
+      detectionHistory = recentEvents
+        .map((event) => {
           const timestamp = Math.floor(new Date(event.detected_at).getTime() / 1000);
           let entry = `• <t:${timestamp}:R>: ${event.detection_type}`;
           if (event.message_id) {
@@ -460,6 +485,11 @@ export class NotificationManager implements INotificationManager {
           return entry;
         })
         .join('\n');
+
+      // If there are more events, add a count
+      if (sortedEvents.length > 5) {
+        detectionHistory += `\n\n*${sortedEvents.length - 5} more events not shown*`;
+      }
     }
 
     // Get verification thread if it exists
@@ -471,7 +501,7 @@ export class NotificationManager implements INotificationManager {
     // Update embed color based on verification status if thread exists
     if (verificationThread?.status === 'resolved') {
       if (verificationThread.resolution === 'verified') {
-        embedColor = 0x00FF00; // Green for verified users
+        embedColor = 0x00ff00; // Green for verified users
       } else if (verificationThread.resolution === 'banned') {
         embedColor = 0x000000; // Black for banned users
       }
@@ -482,8 +512,8 @@ export class NotificationManager implements INotificationManager {
       .setColor(embedColor)
       .setTitle('Suspicious User Detected')
       .setDescription(
-        detectionEvents.length > 1 
-          ? `<@${member.id}> has been flagged as suspicious multiple times.`
+        detectionEvents.length > 1
+          ? `<@${member.id}> has been flagged as suspicious ${detectionEvents.length} times.`
           : `<@${member.id}> has been flagged as suspicious.`
       )
       .setThumbnail(member.user.displayAvatarURL())
@@ -500,22 +530,23 @@ export class NotificationManager implements INotificationManager {
 
     // Add detection history if we have any
     if (detectionHistory) {
-      embed.addFields({ 
-        name: 'Detection History', 
-        value: detectionHistory, 
-        inline: false 
+      embed.addFields({
+        name: 'Detection History',
+        value: detectionHistory,
+        inline: false,
       });
     }
 
     // Add verification thread status if it exists
     if (verificationThread) {
-      const threadStatus = verificationThread.status === 'resolved'
-        ? `${verificationThread.resolution} by <@${verificationThread.resolved_by}>`
-        : 'pending';
+      const threadStatus =
+        verificationThread.status === 'resolved'
+          ? `${verificationThread.resolution} by <@${verificationThread.resolved_by}>`
+          : 'pending';
       embed.addFields({
         name: 'Verification Status',
         value: `[Thread](https://discord.com/channels/${member.guild.id}/${verificationThread.thread_id}) status: ${threadStatus}`,
-        inline: false
+        inline: false,
       });
     }
 
@@ -525,9 +556,13 @@ export class NotificationManager implements INotificationManager {
   /**
    * Creates an action row with admin action buttons
    * @param userId The ID of the user the actions apply to
+   * @param detectionEvents Optional array of detection events to determine if history button is needed
    * @returns An ActionRowBuilder with buttons
    */
-  private createActionRow(userId: string): ActionRowBuilder<ButtonBuilder> {
+  private createActionRow(
+    userId: string,
+    detectionEvents?: DetectionEvent[]
+  ): ActionRowBuilder<ButtonBuilder> {
     // Create action buttons with user ID in the custom ID
     const verifyButton = new ButtonBuilder()
       .setCustomId(`verify_${userId}`)
@@ -544,12 +579,20 @@ export class NotificationManager implements INotificationManager {
       .setLabel('Create Thread')
       .setStyle(ButtonStyle.Primary);
 
+    // Add history button if needed
+    const buttons = [verifyButton, banButton, threadButton];
+
+    // Add view history button if we have more than 5 detection events
+    if (detectionEvents && detectionEvents.length > 5) {
+      const historyButton = new ButtonBuilder()
+        .setCustomId(`history_${userId}`)
+        .setLabel('View Full History')
+        .setStyle(ButtonStyle.Secondary);
+      buttons.push(historyButton);
+    }
+
     // Add buttons to an action row
-    return new ActionRowBuilder<ButtonBuilder>().addComponents(
-      verifyButton,
-      banButton,
-      threadButton
-    );
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
   }
 
   /**
@@ -717,6 +760,72 @@ export class NotificationManager implements INotificationManager {
       return !!result;
     } catch (error) {
       console.error('Failed to resolve verification thread:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle the history button interaction by sending a private ephemeral message with full detection history
+   * @param interaction The button interaction
+   * @param userId The Discord user ID whose history to show
+   * @returns Promise resolving to whether the history was successfully sent
+   */
+  public async handleHistoryButtonClick(
+    interaction: ButtonInteraction,
+    userId: string
+  ): Promise<boolean> {
+    try {
+      if (!interaction.guildId) {
+        await interaction.reply({
+          content: 'This command can only be used in a server.',
+          ephemeral: true,
+        });
+        return false;
+      }
+
+      // Get all detection events for this user in this server
+      const detectionEvents = await this.detectionEventsRepository.findByServerAndUser(
+        interaction.guildId,
+        userId
+      );
+
+      if (!detectionEvents || detectionEvents.length === 0) {
+        await interaction.reply({
+          content: 'No detection history found.',
+          ephemeral: true,
+        });
+        return true;
+      }
+
+      // Format the history using the utility class
+      const fileContent = DetectionHistoryFormatter.formatHistory(
+        userId,
+        detectionEvents,
+        interaction.guildId
+      );
+
+      // Create a Buffer from the file content
+      const buffer = Buffer.from(fileContent, 'utf-8');
+
+      // Send the file as an ephemeral message
+      await interaction.reply({
+        content: `Detection history for <@${userId}>:`,
+        files: [
+          {
+            name: `detection_history_${userId}.txt`,
+            attachment: buffer,
+          },
+        ],
+        ephemeral: true,
+      });
+
+      return true;
+    } catch (error) {
+      console.error('Failed to handle history button click:', error);
+      await interaction.reply({
+        content: 'Failed to fetch detection history. Please try again later.',
+        ephemeral: true,
+      });
       return false;
     }
   }

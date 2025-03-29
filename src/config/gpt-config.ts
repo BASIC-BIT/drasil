@@ -156,7 +156,9 @@ export const gptConfig: GPTServiceConfig = {
       discriminator: '2468',
       accountCreatedAt: getDaysAgoWithVariance(14), // 14 days old
       joinedServerAt: getDaysAgoWithVariance(1), // joined 1 day ago
-      recentMessages: ['Check out my portfolio at github.com/codinghelp. Any feedback appreciated!'],
+      recentMessages: [
+        'Check out my portfolio at github.com/codinghelp. Any feedback appreciated!',
+      ],
     },
     {
       username: 'xX_DarkShadow_Xx',
@@ -220,8 +222,10 @@ export function formatProfileExample(
   if (example.nickname) result += `Nickname: ${example.nickname}\n`;
   result += `Account age: ${accountAge}\n`;
   result += `Joined server: ${joinedServerDaysAgo}\n`;
-  if (example.recentMessages) result += `Recent messages: \n ${example.recentMessages
-    .map((message) => `\`${message}\``).join('\n')}\n`;
+  if (example.recentMessages)
+    result += `Recent messages: \n ${example.recentMessages
+      .map((message) => `\`${message}\``)
+      .join('\n')}\n`;
   result += `Classification: ${type}\n`;
 
   return result;

@@ -22,14 +22,14 @@ import { IUserModerationService } from './UserModerationService';
 export interface ISecurityActionService {
   /**
    * Initialize the service with server-specific configurations
-   * 
+   *
    * @param serverId The Discord server ID
    */
   initialize(serverId: string): Promise<void>;
 
   /**
    * Handle the response to a suspicious message
-   * 
+   *
    * @param member The guild member who sent the message
    * @param detectionResult The detection result from the orchestrator
    * @param sourceMessage The original message that triggered the detection
@@ -43,19 +43,16 @@ export interface ISecurityActionService {
 
   /**
    * Handle the response to a suspicious new join
-   * 
+   *
    * @param member The guild member who joined
    * @param detectionResult The detection result from the orchestrator
    * @returns Whether the action was successfully executed
    */
-  handleSuspiciousJoin(
-    member: GuildMember,
-    detectionResult: DetectionResult
-  ): Promise<boolean>;
+  handleSuspiciousJoin(member: GuildMember, detectionResult: DetectionResult): Promise<boolean>;
 
   /**
    * Create a verification thread for a member
-   * 
+   *
    * @param member The guild member
    * @param notificationMessage The notification message to update with action
    * @param actionPerformer The user who initiated the action
@@ -92,10 +89,10 @@ export class SecurityActionService implements ISecurityActionService {
     this.serverService = serverService;
     this.userModerationService = userModerationService;
   }
-  
+
   /**
    * Initialize the service with server-specific configurations
-   * 
+   *
    * @param serverId The Discord server ID
    */
   public async initialize(serverId: string): Promise<void> {
@@ -131,7 +128,7 @@ export class SecurityActionService implements ISecurityActionService {
 
   /**
    * Record a detection event in the database
-   * 
+   *
    * @param serverId The Discord server ID
    * @param userId The Discord user ID
    * @param detectionResult The detection result
@@ -152,19 +149,24 @@ export class SecurityActionService implements ISecurityActionService {
       user_id: userId,
       detection_type: detectionResult.triggerSource,
       confidence: detectionResult.confidence,
-      confidence_level: detectionResult.confidence >= 0.8 ? 'High' : detectionResult.confidence >= 0.5 ? 'Medium' : 'Low',
+      confidence_level:
+        detectionResult.confidence >= 0.8
+          ? 'High'
+          : detectionResult.confidence >= 0.5
+            ? 'Medium'
+            : 'Low',
       reasons: detectionResult.reasons,
       used_gpt: detectionResult.usedGPT,
       detected_at: new Date(),
       message_id: messageId,
       channel_id: channelId,
-      metadata: messageContent ? { content: messageContent } : undefined
+      metadata: messageContent ? { content: messageContent } : undefined,
     });
   }
 
   /**
    * Handle the response to a suspicious message
-   * 
+   *
    * @param member The guild member who sent the message
    * @param detectionResult The detection result from the orchestrator
    * @param sourceMessage The original message that triggered the detection
@@ -209,7 +211,10 @@ export class SecurityActionService implements ISecurityActionService {
       }
 
       // Get existing verification message ID if it exists
-      const existingMember = await this.serverMemberRepository.findByServerAndUser(member.guild.id, member.id);
+      const existingMember = await this.serverMemberRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
       const existingMessageId = existingMember?.verification_message_id;
 
       // Create or update notification
@@ -222,12 +227,12 @@ export class SecurityActionService implements ISecurityActionService {
 
       if (notificationMessage) {
         console.log(`Sent/Updated notification about ${member.user.tag}`);
-        
+
         // Store the verification message ID
         await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-          verification_message_id: notificationMessage.id
+          verification_message_id: notificationMessage.id,
         });
-        
+
         return true;
       } else {
         console.log(`Failed to send/update notification about ${member.user.tag}`);
@@ -241,7 +246,7 @@ export class SecurityActionService implements ISecurityActionService {
 
   /**
    * Handle the response to a suspicious new join
-   * 
+   *
    * @param member The guild member who joined
    * @param detectionResult The detection result from the orchestrator
    * @returns Whether the action was successfully executed
@@ -265,11 +270,7 @@ export class SecurityActionService implements ISecurityActionService {
       console.log(`Trigger source: ${detectionResult.triggerSource}`);
 
       // Record the detection event
-      await this.recordDetectionEvent(
-        member.guild.id,
-        member.id,
-        detectionResult
-      );
+      await this.recordDetectionEvent(member.guild.id, member.id, detectionResult);
 
       // Restrict the user using UserModerationService
       const restrictSuccess = await this.userModerationService.restrictUser(member);
@@ -281,7 +282,10 @@ export class SecurityActionService implements ISecurityActionService {
       }
 
       // Get existing verification message ID if it exists
-      const existingMember = await this.serverMemberRepository.findByServerAndUser(member.guild.id, member.id);
+      const existingMember = await this.serverMemberRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
       const existingMessageId = existingMember?.verification_message_id;
 
       // Create or update notification
@@ -296,15 +300,12 @@ export class SecurityActionService implements ISecurityActionService {
 
         // Store the verification message ID
         await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-          verification_message_id: notificationMessage.id
+          verification_message_id: notificationMessage.id,
         });
 
         // Automatically create a verification thread for new joins
-        await this.createVerificationThreadForMember(
-          member, 
-          notificationMessage
-        );
-        
+        await this.createVerificationThreadForMember(member, notificationMessage);
+
         return true;
       } else {
         console.log(`Failed to send/update notification about ${member.user.tag}`);
@@ -318,7 +319,7 @@ export class SecurityActionService implements ISecurityActionService {
 
   /**
    * Create a verification thread for a member
-   * 
+   *
    * @param member The guild member
    * @param notificationMessage The notification message to update with action
    * @param actionPerformer The user who initiated the action
@@ -333,7 +334,7 @@ export class SecurityActionService implements ISecurityActionService {
 
     if (thread) {
       console.log(`Created verification thread for ${member.user.tag}`);
-      
+
       // If we have a notification message and an action performer, log the action
       if (notificationMessage && actionPerformer) {
         await this.notificationManager.logActionToMessage(
@@ -344,7 +345,9 @@ export class SecurityActionService implements ISecurityActionService {
         );
       } else if (notificationMessage) {
         // Use "automatically created" message if no explicit performer
-        const actionMessage = actionPerformer ? 'created a verification thread' : 'automatically created a verification thread';
+        const actionMessage = actionPerformer
+          ? 'created a verification thread'
+          : 'automatically created a verification thread';
         await this.notificationManager.logActionToMessage(
           notificationMessage,
           actionMessage,
@@ -358,4 +361,4 @@ export class SecurityActionService implements ISecurityActionService {
       return null;
     }
   }
-} 
+}

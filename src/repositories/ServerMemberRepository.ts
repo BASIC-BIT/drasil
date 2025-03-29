@@ -179,12 +179,12 @@ export class ServerMemberRepository
         .from(this.tableName)
         .upsert(memberData, { onConflict: 'server_id,user_id' })
         .select()
-        .single();
+        .single<ServerMember>();
 
       if (error) throw error;
       if (!upserted) throw new Error('Failed to upsert server member: No data returned');
 
-      return upserted as ServerMember;
+      return upserted;
     } catch (error) {
       this.handleError(error as Error, 'upsertMember');
     }

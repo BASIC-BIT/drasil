@@ -345,7 +345,11 @@ export class Bot implements IBot {
         }
 
         case 'ban': {
-          const success = await this.userModerationService.banUser(member, 'Banned via admin panel button', interaction.user);
+          const success = await this.userModerationService.banUser(
+            member,
+            'Banned via admin panel button',
+            interaction.user
+          );
           if (success) {
             await interaction.reply({
               content: `🚫 User ${member.user.tag} has been banned.`,
@@ -366,7 +370,7 @@ export class Bot implements IBot {
             message,
             interaction.user
           );
-          
+
           if (thread) {
             await interaction.reply({
               content: `✅ Created a verification thread for ${member.user.tag}.`,
@@ -378,6 +382,11 @@ export class Bot implements IBot {
               ephemeral: true,
             });
           }
+          break;
+        }
+
+        case 'history': {
+          await this.notificationManager.handleHistoryButtonClick(interaction, userId);
           break;
         }
 
