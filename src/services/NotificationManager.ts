@@ -22,6 +22,7 @@ import { DetectionResult } from './DetectionOrchestrator';
 import { IVerificationThreadRepository } from '../repositories/VerificationThreadRepository';
 import { IUserService } from './UserService';
 import { IServerService } from './ServerService';
+import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 
 export interface NotificationButton {
   id: string;
@@ -52,15 +53,23 @@ export interface INotificationManager {
   setVerificationChannelId(channelId: string): void;
 
   /**
-   * Sends a notification to the admin channel about a suspicious user
+   * Gets the admin channel for notifications
+   * @returns The TextChannel for admin notifications, or undefined if not found
+   */
+  getAdminChannel(): Promise<TextChannel | undefined>;
+
+  /**
+   * Creates or updates a notification about a suspicious user
    * @param member The suspicious guild member
    * @param detectionResult The detection result
+   * @param existingMessageId Optional ID of an existing message to update
    * @param sourceMessage Optional message that triggered the detection
-   * @returns Promise resolving to the sent message or null if sending failed
+   * @returns Promise resolving to the sent/updated message or null if failed
    */
-  notifySuspiciousUser(
+  upsertSuspiciousUserNotification(
     member: GuildMember,
     detectionResult: DetectionResult,
+    existingMessageId?: string,
     sourceMessage?: Message
   ): Promise<Message | null>;
 
@@ -128,6 +137,7 @@ export class NotificationManager implements INotificationManager {
   private verificationThreadRepository: IVerificationThreadRepository;
   private userService: IUserService;
   private serverService: IServerService;
+  private detectionEventsRepository: IDetectionEventsRepository;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -135,13 +145,15 @@ export class NotificationManager implements INotificationManager {
     @inject(TYPES.VerificationThreadRepository)
     verificationThreadRepository: IVerificationThreadRepository,
     @inject(TYPES.UserService) userService: IUserService,
-    @inject(TYPES.ServerService) serverService: IServerService
+    @inject(TYPES.ServerService) serverService: IServerService,
+    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository
   ) {
     this.client = client;
     this.configService = configService;
     this.verificationThreadRepository = verificationThreadRepository;
     this.userService = userService;
     this.serverService = serverService;
+    this.detectionEventsRepository = detectionEventsRepository;
   }
 
   public async initialize(guildId: string): Promise<void> {
@@ -167,15 +179,42 @@ export class NotificationManager implements INotificationManager {
   }
 
   /**
-   * Sends a notification to the admin channel about a suspicious user
+   * Gets the admin channel for notifications
+   * @returns The TextChannel for admin notifications, or undefined if not found
+   */
+  public async getAdminChannel(): Promise<TextChannel | undefined> {
+    if (!this.adminChannelId) return undefined;
+
+    try {
+      const channel = await this.client.channels.fetch(this.adminChannelId);
+
+      if (!channel || !channel.isTextBased() || channel.isDMBased()) {
+        console.error(`Channel with ID ${this.adminChannelId} is not a text channel`);
+        return undefined;
+      }
+
+      return channel as TextChannel;
+    } catch (error) {
+      console.error(
+        `Failed to fetch admin channel with ID ${this.adminChannelId}:`,
+        error
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * Creates or updates a notification about a suspicious user
    * @param member The suspicious guild member
    * @param detectionResult The detection result
+   * @param existingMessageId Optional ID of an existing message to update
    * @param sourceMessage Optional message that triggered the detection
-   * @returns Promise resolving to the sent message or null if sending failed
+   * @returns Promise resolving to the sent/updated message or null if failed
    */
-  public async notifySuspiciousUser(
+  public async upsertSuspiciousUserNotification(
     member: GuildMember,
     detectionResult: DetectionResult,
+    existingMessageId?: string,
     sourceMessage?: Message
   ): Promise<Message | null> {
     if (!this.adminChannelId) {
@@ -188,21 +227,30 @@ export class NotificationManager implements INotificationManager {
       const channel = await this.getAdminChannel();
       if (!channel) return null;
 
-      // Create the embed with user information
-      const embed = this.createSuspiciousUserEmbed(member, detectionResult, sourceMessage);
+      // Create the base embed
+      const embed = await this.createSuspiciousUserEmbed(member, detectionResult, sourceMessage);
 
-      // Create buttons for admin actions
-      const actionRow = this.createActionRow(member.id);
+      // If we have an existing message, update it, otherwise create new
+      if (existingMessageId) {
+        try {
+          const existingMessage = await channel.messages.fetch(existingMessageId);
+          return await existingMessage.edit({
+            embeds: [embed],
+            components: [this.createActionRow(member.id)],
+          });
+        } catch (error) {
+          console.error('Failed to fetch existing message:', error);
+          // Continue with creating a new message
+        }
+      }
 
-      // Send the message to the admin channel
-      const message = await channel.send({
+      // Create a new message
+      return await channel.send({
         embeds: [embed],
-        components: [actionRow],
+        components: [this.createActionRow(member.id)],
       });
-
-      return message;
     } catch (error) {
-      console.error('Failed to send suspicious user notification:', error);
+      console.error('Failed to upsert suspicious user notification:', error);
       return null;
     }
   }
@@ -341,11 +389,11 @@ export class NotificationManager implements INotificationManager {
    * @param sourceMessage Optional message that triggered the detection
    * @returns An EmbedBuilder with user information
    */
-  private createSuspiciousUserEmbed(
+  private async createSuspiciousUserEmbed(
     member: GuildMember,
     detectionResult: DetectionResult,
     sourceMessage?: Message
-  ): EmbedBuilder {
+  ): Promise<EmbedBuilder> {
     const accountCreatedAt = new Date(member.user.createdTimestamp);
     const joinedServerAt = member.joinedAt;
 
@@ -389,10 +437,44 @@ export class NotificationManager implements INotificationManager {
       triggerInfo = 'Flagged upon joining server';
     }
 
-    return new EmbedBuilder()
+    // Get all detection events for this user in this server
+    const detectionEvents = await this.detectionEventsRepository.findByServerAndUser(
+      member.guild.id,
+      member.id
+    );
+
+    // Format detection history
+    let detectionHistory = '';
+    if (detectionEvents && detectionEvents.length > 0) {
+      detectionHistory = detectionEvents
+        .sort((a, b) => new Date(b.detected_at).getTime() - new Date(a.detected_at).getTime())
+        .map(event => {
+          const timestamp = Math.floor(new Date(event.detected_at).getTime() / 1000);
+          let entry = `• <t:${timestamp}:R>: ${event.detection_type}`;
+          if (event.message_id) {
+            entry += ` - [View Message](https://discord.com/channels/${member.guild.id}/${event.channel_id}/${event.message_id})`;
+          }
+          entry += ` (${(event.confidence * 100).toFixed(0)}% confidence)`;
+          return entry;
+        })
+        .join('\n');
+    }
+
+    // Get verification thread if it exists
+    const verificationThread = await this.verificationThreadRepository.findByServerAndUser(
+      member.guild.id,
+      member.id
+    );
+
+    // Create the embed
+    const embed = new EmbedBuilder()
       .setColor('#FF0000')
       .setTitle('Suspicious User Detected')
-      .setDescription(`<@${member.id}> has been flagged as suspicious.`)
+      .setDescription(
+        detectionEvents.length > 1 
+          ? `<@${member.id}> has been flagged as suspicious multiple times.`
+          : `<@${member.id}> has been flagged as suspicious.`
+      )
       .setThumbnail(member.user.displayAvatarURL())
       .addFields(
         { name: 'Username', value: member.user.tag, inline: true },
@@ -404,6 +486,29 @@ export class NotificationManager implements INotificationManager {
         { name: 'Reasons', value: reasonsFormatted || 'No specific reason provided', inline: false }
       )
       .setTimestamp();
+
+    // Add detection history if we have any
+    if (detectionHistory) {
+      embed.addFields({ 
+        name: 'Detection History', 
+        value: detectionHistory, 
+        inline: false 
+      });
+    }
+
+    // Add verification thread status if it exists
+    if (verificationThread) {
+      const threadStatus = verificationThread.status === 'resolved'
+        ? `${verificationThread.resolution} by <@${verificationThread.resolved_by}>`
+        : 'pending';
+      embed.addFields({
+        name: 'Verification Status',
+        value: `[Thread](https://discord.com/channels/${member.guild.id}/${verificationThread.thread_id}) status: ${threadStatus}`,
+        inline: false
+      });
+    }
+
+    return embed;
   }
 
   /**
@@ -434,28 +539,6 @@ export class NotificationManager implements INotificationManager {
       banButton,
       threadButton
     );
-  }
-
-  /**
-   * Helper method to get the admin channel
-   * @returns The TextChannel for admin notifications, or undefined if not found
-   */
-  private async getAdminChannel(): Promise<TextChannel | undefined> {
-    if (!this.adminChannelId) return undefined;
-
-    try {
-      const channel = await this.client.channels.fetch(this.adminChannelId);
-
-      if (!channel || !channel.isTextBased() || channel.isDMBased()) {
-        console.error(`Channel with ID ${this.adminChannelId} is not a text channel`);
-        return undefined;
-      }
-
-      return channel as TextChannel;
-    } catch (error) {
-      console.error(`Failed to fetch admin channel with ID ${this.adminChannelId}:`, error);
-      return undefined;
-    }
   }
 
   /**

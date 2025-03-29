@@ -81,6 +81,14 @@ export interface IVerificationThreadRepository {
    * @returns Array of stale verification threads
    */
   findStaleThreads(serverId: string, olderThanHours: number): Promise<VerificationThread[]>;
+
+  /**
+   * Find a verification thread by server and user IDs
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @returns The verification thread or null if not found
+   */
+  findByServerAndUser(serverId: string, userId: string): Promise<VerificationThread | null>;
 }
 
 /**
@@ -294,6 +302,35 @@ export class VerificationThreadRepository
       return (data as VerificationThread[]) || [];
     } catch (error) {
       this.handleError(error as Error, 'findStaleThreads');
+    }
+  }
+
+  /**
+   * Find a verification thread by server and user IDs
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @returns The verification thread or null if not found
+   */
+  async findByServerAndUser(serverId: string, userId: string): Promise<VerificationThread | null> {
+    try {
+      const { data, error } = await this.supabaseClient
+        .from(this.tableName)
+        .select('*')
+        .eq('server_id', serverId)
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      // Handle the specific "no rows" error as a valid "not found" case
+      if (error && error.code === 'PGRST116') {
+        return null;
+      } else if (error) {
+        throw error;
+      }
+      return (data as VerificationThread) || null;
+    } catch (error) {
+      this.handleError(error as Error, 'findByServerAndUser');
     }
   }
 }

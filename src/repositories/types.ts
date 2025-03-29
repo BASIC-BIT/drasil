@@ -73,7 +73,8 @@ export interface DetectionEvent {
   id: string; // UUID for the event
   server_id: string; // Discord server ID
   user_id: string; // Discord user ID
-  message_id?: string;
+  message_id?: string; // Discord message ID
+  channel_id?: string; // Discord channel ID where the message was sent
   detection_type: string;
   confidence: number;
   confidence_level: 'Low' | 'Medium' | 'High';

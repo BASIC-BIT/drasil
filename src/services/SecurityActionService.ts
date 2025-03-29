@@ -137,13 +137,15 @@ export class SecurityActionService implements ISecurityActionService {
    * @param detectionResult The detection result
    * @param messageContent Optional message content that triggered the detection
    * @param messageId Optional message ID that triggered the detection
+   * @param channelId Optional channel ID that triggered the detection
    */
   private async recordDetectionEvent(
     serverId: string,
     userId: string,
     detectionResult: DetectionResult,
     messageContent?: string,
-    messageId?: string
+    messageId?: string,
+    channelId?: string
   ): Promise<void> {
     await this.detectionEventsRepository.create({
       server_id: serverId,
@@ -155,6 +157,7 @@ export class SecurityActionService implements ISecurityActionService {
       used_gpt: detectionResult.usedGPT,
       detected_at: new Date(),
       message_id: messageId,
+      channel_id: channelId,
       metadata: messageContent ? { content: messageContent } : undefined
     });
   }
@@ -192,7 +195,8 @@ export class SecurityActionService implements ISecurityActionService {
         member.id,
         detectionResult,
         sourceMessage?.content,
-        sourceMessage?.id
+        sourceMessage?.id,
+        sourceMessage?.channelId
       );
 
       // Assign restricted role to the member
@@ -204,15 +208,20 @@ export class SecurityActionService implements ISecurityActionService {
         return false;
       }
 
-      // Send notification to admin channel
-      const notificationMessage = await this.notificationManager.notifySuspiciousUser(
+      // Get existing verification message ID if it exists
+      const existingMember = await this.serverMemberRepository.findByServerAndUser(member.guild.id, member.id);
+      const existingMessageId = existingMember?.verification_message_id;
+
+      // Create or update notification
+      const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
         member,
         detectionResult,
-        sourceMessage // Pass the source message for linking if available
+        existingMessageId,
+        sourceMessage
       );
 
       if (notificationMessage) {
-        console.log(`Sent notification to admin channel about ${member.user.tag}`);
+        console.log(`Sent/Updated notification about ${member.user.tag}`);
         
         // Store the verification message ID
         await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
@@ -221,7 +230,7 @@ export class SecurityActionService implements ISecurityActionService {
         
         return true;
       } else {
-        console.log(`Failed to send notification to admin channel about ${member.user.tag}`);
+        console.log(`Failed to send/update notification about ${member.user.tag}`);
         return false;
       }
     } catch (error) {
@@ -271,14 +280,19 @@ export class SecurityActionService implements ISecurityActionService {
         return false;
       }
 
-      // Send notification to admin channel
-      const notificationMessage = await this.notificationManager.notifySuspiciousUser(
+      // Get existing verification message ID if it exists
+      const existingMember = await this.serverMemberRepository.findByServerAndUser(member.guild.id, member.id);
+      const existingMessageId = existingMember?.verification_message_id;
+
+      // Create or update notification
+      const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
         member,
-        detectionResult
+        detectionResult,
+        existingMessageId
       );
 
       if (notificationMessage) {
-        console.log(`Sent notification to admin channel about ${member.user.tag}`);
+        console.log(`Sent/Updated notification about ${member.user.tag}`);
 
         // Store the verification message ID
         await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
@@ -293,7 +307,7 @@ export class SecurityActionService implements ISecurityActionService {
         
         return true;
       } else {
-        console.log(`Failed to send notification to admin channel about ${member.user.tag}`);
+        console.log(`Failed to send/update notification about ${member.user.tag}`);
         return false;
       }
     } catch (error) {

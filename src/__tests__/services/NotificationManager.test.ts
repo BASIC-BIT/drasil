@@ -48,7 +48,6 @@ jest.mock('../../config/ConfigService');
 
 describe('NotificationManager', () => {
   let notificationManager: INotificationManager;
-  let notificationManagerInstance: NotificationManager;
   let mockMember: MockGuildMember;
   let container: Container;
   let mockClient: any;
@@ -67,7 +66,6 @@ describe('NotificationManager', () => {
 
     // Get instances from container
     notificationManager = container.get<INotificationManager>(TYPES.NotificationManager);
-    notificationManagerInstance = notificationManager as NotificationManager; // To access private properties if needed
     mockClient = container.get<Client>(TYPES.DiscordClient);
     mockConfigService = container.get<IConfigService>(TYPES.ConfigService);
     mockVerificationThreadRepository = container.get<IVerificationThreadRepository>(
