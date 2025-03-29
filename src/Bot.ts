@@ -27,6 +27,7 @@ import { IDetectionEventsRepository } from './repositories/DetectionEventsReposi
 import { IUserRepository } from './repositories/UserRepository';
 import { IServerRepository } from './repositories/ServerRepository';
 import { IServerMemberRepository } from './repositories/ServerMemberRepository';
+import { ISecurityActionService } from './services/SecurityActionService';
 import { TYPES } from './di/symbols';
 
 // Load environment variables
@@ -60,6 +61,7 @@ export class Bot implements IBot {
   private userRepository: IUserRepository;
   private serverRepository: IServerRepository;
   private serverMemberRepository: IServerMemberRepository;
+  private securityActionService: ISecurityActionService;
   private commands: RESTPostAPIChatInputApplicationCommandsJSONBody[];
 
   constructor(
@@ -73,7 +75,8 @@ export class Bot implements IBot {
     @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
     @inject(TYPES.UserRepository) userRepository: IUserRepository,
     @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
-    @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository
+    @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
+    @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService
   ) {
     this.client = client;
     this.heuristicService = heuristicService;
@@ -86,6 +89,7 @@ export class Bot implements IBot {
     this.userRepository = userRepository;
     this.serverRepository = serverRepository;
     this.serverMemberRepository = serverMemberRepository;
+    this.securityActionService = securityActionService;
 
     // Define slash commands
     this.commands = [
@@ -360,14 +364,22 @@ export class Bot implements IBot {
         }
 
         case 'thread': {
-          thread = await this.createVerificationThread(member, interaction);
+          thread = await this.securityActionService.createVerificationThreadForMember(
+            member,
+            message,
+            interaction.user
+          );
+          
           if (thread) {
-            await this.notificationManager.logActionToMessage(
-              message,
-              'created a verification thread',
-              interaction.user,
-              thread
-            );
+            await interaction.reply({
+              content: `✅ Created a verification thread for ${member.user.tag}.`,
+              ephemeral: true,
+            });
+          } else {
+            await interaction.reply({
+              content: `❌ Failed to create a verification thread for ${member.user.tag}. Please check the bot's permissions and channel configuration.`,
+              ephemeral: true,
+            });
           }
           break;
         }
@@ -551,7 +563,12 @@ export class Bot implements IBot {
     member: GuildMember,
     interaction: ChatInputCommandInteraction | ButtonInteraction
   ): Promise<ThreadChannel | null> {
-    const thread = await this.notificationManager.createVerificationThread(member);
+    // Delegate thread creation to the SecurityActionService
+    const thread = await this.securityActionService.createVerificationThreadForMember(
+      member,
+      undefined, // No notification message to update
+      interaction.user // The user who requested the thread creation
+    );
 
     if (thread) {
       await interaction.reply({
@@ -606,36 +623,13 @@ export class Bot implements IBot {
         profileData
       );
 
-      // If suspicious, take action
-      if (detectionResult.label === 'SUSPICIOUS') {
-        console.log(`User flagged for spam: ${message.author.tag} (${userId})`);
-        console.log(`Message content: ${content}`);
-        console.log(`Detection confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-        console.log(`Reasons: ${detectionResult.reasons.join(', ')}`);
-        console.log(`Trigger source: ${detectionResult.triggerSource}`);
-
-        // Assign restricted role if user is in a guild
-        if (message.member) {
-          const restrictSuccess = await this.roleManager.assignRestrictedRole(message.member);
-          if (restrictSuccess) {
-            console.log(`Assigned restricted role to ${message.author.tag}`);
-          } else {
-            console.log(`Failed to assign restricted role to ${message.author.tag}`);
-          }
-
-          // Send notification to admin channel with the source message
-          const notificationMessage = await this.notificationManager.notifySuspiciousUser(
-            message.member,
-            detectionResult,
-            message // Pass the source message for linking
-          );
-
-          if (notificationMessage) {
-            console.log(`Sent notification to admin channel about ${message.author.tag}`);
-          } else {
-            console.log(`Failed to send notification to admin channel about ${message.author.tag}`);
-          }
-        }
+      // If suspicious, delegate to the SecurityActionService
+      if (detectionResult.label === 'SUSPICIOUS' && message.member) {
+        await this.securityActionService.handleSuspiciousMessage(
+          message.member,
+          detectionResult,
+          message
+        );
       }
     } catch (error) {
       console.error('Error detecting spam:', error);
@@ -664,49 +658,9 @@ export class Bot implements IBot {
         profileData
       );
 
-      // If suspicious, take action
+      // If suspicious, delegate to the SecurityActionService
       if (detectionResult.label === 'SUSPICIOUS') {
-        console.log(`New member flagged as suspicious: ${member.user.tag} (${member.id})`);
-        console.log(`Detection confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-        console.log(`Reasons: ${detectionResult.reasons.join(', ')}`);
-        console.log(`Trigger source: ${detectionResult.triggerSource}`);
-
-        // Assign restricted role
-        const restrictSuccess = await this.roleManager.assignRestrictedRole(member);
-        if (restrictSuccess) {
-          console.log(`Assigned restricted role to ${member.user.tag}`);
-        } else {
-          console.log(`Failed to assign restricted role to ${member.user.tag}`);
-        }
-
-        // Send notification to admin channel
-        const notificationMessage = await this.notificationManager.notifySuspiciousUser(
-          member,
-          detectionResult
-        );
-
-        if (notificationMessage) {
-          console.log(`Sent notification to admin channel about ${member.user.tag}`);
-
-          // Automatically create a verification thread for new joins
-          const thread = await this.notificationManager.createVerificationThread(member);
-
-          if (thread) {
-            console.log(`Created verification thread for ${member.user.tag}`);
-            // Log the action to the notification message
-            const botUser = this.client.user;
-            if (botUser) {
-              await this.notificationManager.logActionToMessage(
-                notificationMessage,
-                'automatically created a verification thread',
-                botUser,
-                thread
-              );
-            }
-          }
-        } else {
-          console.log(`Failed to send notification to admin channel about ${member.user.tag}`);
-        }
+        await this.securityActionService.handleSuspiciousJoin(member, detectionResult);
       }
     } catch (error) {
       console.error('Error handling new member:', error);
@@ -908,6 +862,7 @@ export class Bot implements IBot {
         // Initialize services with the server configuration
         await this.roleManager.initialize(guildId);
         await this.notificationManager.initialize(guildId);
+        await this.securityActionService.initialize(guildId);
 
         // Update the services with the configuration values
         if (config.restricted_role_id)

@@ -17,6 +17,7 @@ export const TYPES = {
   ConfigService: Symbol.for('ConfigService'),
   UserService: Symbol.for('UserService'),
   ServerService: Symbol.for('ServerService'),
+  SecurityActionService: Symbol.for('SecurityActionService'),
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),

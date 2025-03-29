@@ -89,28 +89,28 @@ export const gptConfig: GPTServiceConfig = {
       discriminator: '0001',
       accountCreatedAt: getDaysAgoWithVariance(1), // 1 day old
       joinedServerAt: getMinutesAgoWithVariance(30), // joined 30 minutes ago
-      recentMessage: 'Click here for FREE DISCORD NITRO: bit.ly/free-nitro-discord',
+      recentMessages: ['Click here for FREE DISCORD NITRO: bit.ly/free-nitro-discord'],
     },
     {
       username: 'Steam_Games_Free',
       discriminator: '9999',
       accountCreatedAt: getDaysAgoWithVariance(3), // 3 days old
       joinedServerAt: getMinutesAgoWithVariance(5, 2), // joined 5 minutes ago
-      recentMessage: 'Check my profile for free Steam games! Limited time offer!',
+      recentMessages: ['Check my profile for free Steam games! Limited time offer!'],
     },
     {
       username: 'xXDistributor_BotXx',
       nickname: '✅ Verified Gamer',
       accountCreatedAt: getDaysAgoWithVariance(2), // 2 days old
       joinedServerAt: getHoursAgoWithVariance(1), // joined 1 hour ago
-      recentMessage: '@everyone I am giving away free Discord Nitro to celebrate my birthday!',
+      recentMessages: ['@everyone I am giving away free Discord Nitro to celebrate my birthday!'],
     },
     {
       username: 'Melissa_bailey0847',
       nickname: 'Melissa_bailey',
       accountCreatedAt: getDaysAgoWithVariance(3), // 3 days old
       joinedServerAt: getDaysAgoWithVariance(2), // joined 2 days ago
-      recentMessage: 'https://t.me/Melissa_Bailey224',
+      recentMessages: ['https://t.me/Melissa_Bailey224'],
     },
   ],
 
@@ -121,14 +121,14 @@ export const gptConfig: GPTServiceConfig = {
       discriminator: '1984',
       accountCreatedAt: getDaysAgoWithVariance(15), // 15 days old
       joinedServerAt: getDaysAgoWithVariance(1), // joined 1 day ago
-      recentMessage: 'Hey guys, anyone into NFTs? I got some cool art to share, DM me.',
+      recentMessages: ['Hey guys, anyone into NFTs? I got some cool art to share, DM me.'],
     },
     {
       username: 'crypto_enthusiast',
       discriminator: '5544',
       accountCreatedAt: getDaysAgoWithVariance(20), // 20 days old
       joinedServerAt: getDaysAgoWithVariance(2), // joined 2 days ago
-      recentMessage: 'I made 5x returns using this trading strategy: tradinglink.co/strategy',
+      recentMessages: ['I made 5x returns using this trading strategy: tradinglink.co/strategy'],
     },
     {
       username: 'AlexGaming',
@@ -136,8 +136,9 @@ export const gptConfig: GPTServiceConfig = {
       nickname: 'Alex | Giveaway Soon',
       accountCreatedAt: getDaysAgoWithVariance(25), // 25 days old
       joinedServerAt: getHoursAgoWithVariance(12), // joined 12 hours ago
-      recentMessage:
+      recentMessages: [
         'Bored of playing alone? Join my community server, we have giveaways every week!',
+      ],
     },
   ],
 
@@ -148,14 +149,14 @@ export const gptConfig: GPTServiceConfig = {
       discriminator: '4321',
       accountCreatedAt: getDaysAgoWithVariance(10), // 10 days old
       joinedServerAt: getDaysAgoWithVariance(1), // joined today
-      recentMessage: "Hello! I'm looking for people to play with. Anyone here?",
+      recentMessages: ["Hello! I'm looking for people to play with. Anyone here?"],
     },
     {
       username: 'undrana_burta',
       discriminator: '2468',
       accountCreatedAt: getDaysAgoWithVariance(14), // 14 days old
       joinedServerAt: getDaysAgoWithVariance(1), // joined 1 day ago
-      recentMessage: 'Check out my portfolio at github.com/codinghelp. Any feedback appreciated!',
+      recentMessages: ['Check out my portfolio at github.com/codinghelp. Any feedback appreciated!'],
     },
     {
       username: 'xX_DarkShadow_Xx',
@@ -163,7 +164,7 @@ export const gptConfig: GPTServiceConfig = {
       nickname: '💀Shadow💀',
       accountCreatedAt: getDaysAgoWithVariance(21), // 21 days old
       joinedServerAt: getDaysAgoWithVariance(3), // joined 3 days ago
-      recentMessage: 'Does anyone know when the next Fortnite tournament is?',
+      recentMessages: ['Does anyone know when the next Fortnite tournament is?'],
     },
   ],
 
@@ -174,7 +175,7 @@ export const gptConfig: GPTServiceConfig = {
       discriminator: '1234',
       accountCreatedAt: getDaysAgoWithVariance(365), // 1 year old
       joinedServerAt: getDaysAgoWithVariance(30), // joined 30 days ago
-      recentMessage: 'Hey everyone! Anyone want to play some Minecraft later?',
+      recentMessages: ['Hey everyone! Anyone want to play some Minecraft later?'],
     },
     {
       username: 'CodingWizard',
@@ -182,14 +183,14 @@ export const gptConfig: GPTServiceConfig = {
       nickname: 'JavaScript Expert',
       accountCreatedAt: getDaysAgoWithVariance(180), // 180 days old
       joinedServerAt: getDaysAgoWithVariance(90), // joined 90 days ago
-      recentMessage: 'I just finished my new React project, check it out on GitHub!',
+      recentMessages: ['I just finished my new React project, check it out on GitHub!'],
     },
     {
       username: 'NewMember',
       discriminator: '4321',
       accountCreatedAt: getDaysAgoWithVariance(45), // 45 days old
       joinedServerAt: getDaysAgoWithVariance(1), // joined 1 day ago
-      recentMessage: 'Hi everyone! I am new here. This server looks great!',
+      recentMessages: ['Hi everyone! I am new here. This server looks great!'],
     },
   ],
 };
@@ -219,7 +220,8 @@ export function formatProfileExample(
   if (example.nickname) result += `Nickname: ${example.nickname}\n`;
   result += `Account age: ${accountAge}\n`;
   result += `Joined server: ${joinedServerDaysAgo}\n`;
-  if (example.recentMessage) result += `Recent message: "${example.recentMessage}"\n`;
+  if (example.recentMessages) result += `Recent messages: \n ${example.recentMessages
+    .map((message) => `\`${message}\``).join('\n')}\n`;
   result += `Classification: ${type}\n`;
 
   return result;

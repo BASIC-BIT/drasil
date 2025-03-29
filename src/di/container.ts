@@ -29,6 +29,7 @@ import { DetectionOrchestrator, IDetectionOrchestrator } from '../services/Detec
 import { ConfigService, IConfigService } from '../config/ConfigService';
 import { UserService, IUserService } from '../services/UserService';
 import { ServerService, IServerService } from '../services/ServerService';
+import { SecurityActionService, ISecurityActionService } from '../services/SecurityActionService';
 import { Bot, IBot } from '../Bot';
 
 // Initialize container
@@ -137,6 +138,11 @@ function configureServices(container: Container): void {
 
   // Add ServerService binding
   container.bind<IServerService>(TYPES.ServerService).to(ServerService).inSingletonScope();
+
+  // Add SecurityActionService binding
+  container.bind<ISecurityActionService>(TYPES.SecurityActionService)
+    .to(SecurityActionService)
+    .inSingletonScope();
 
   // Add Bot binding
   container.bind<IBot>(TYPES.Bot).to(Bot).inSingletonScope();
