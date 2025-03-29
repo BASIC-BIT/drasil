@@ -28,6 +28,7 @@ import { IUserRepository } from './repositories/UserRepository';
 import { IServerRepository } from './repositories/ServerRepository';
 import { IServerMemberRepository } from './repositories/ServerMemberRepository';
 import { ISecurityActionService } from './services/SecurityActionService';
+import { IUserModerationService } from './services/UserModerationService';
 import { TYPES } from './di/symbols';
 
 // Load environment variables
@@ -62,6 +63,7 @@ export class Bot implements IBot {
   private serverRepository: IServerRepository;
   private serverMemberRepository: IServerMemberRepository;
   private securityActionService: ISecurityActionService;
+  private userModerationService: IUserModerationService;
   private commands: RESTPostAPIChatInputApplicationCommandsJSONBody[];
 
   constructor(
@@ -76,7 +78,8 @@ export class Bot implements IBot {
     @inject(TYPES.UserRepository) userRepository: IUserRepository,
     @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
-    @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService
+    @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService,
+    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService
   ) {
     this.client = client;
     this.heuristicService = heuristicService;
@@ -90,6 +93,7 @@ export class Bot implements IBot {
     this.serverRepository = serverRepository;
     this.serverMemberRepository = serverMemberRepository;
     this.securityActionService = securityActionService;
+    this.userModerationService = userModerationService;
 
     // Define slash commands
     this.commands = [
@@ -305,61 +309,54 @@ export class Bot implements IBot {
     const customId = interaction.customId;
 
     try {
-      // Extract user ID and action from custom ID
+      // Extract action and user ID from the custom ID
       const [action, userId] = customId.split('_');
 
-      // Get the message this button is attached to
-      const message = interaction.message;
-      if (!message) {
-        await interaction.reply({
-          content: 'Could not find the associated message.',
-          ephemeral: true,
-        });
-        return;
-      }
-
       // Get the guild member
-      const guild = interaction.guild;
-      if (!guild) {
-        await interaction.reply({
-          content: 'This button can only be used in a server.',
-          ephemeral: true,
-        });
-        return;
-      }
-
-      const member = await guild.members.fetch(userId).catch(() => null);
+      const member = await interaction.guild?.members.fetch(userId);
       if (!member) {
         await interaction.reply({
-          content: 'Could not find this user in the server.',
+          content: 'Could not find the user in this server.',
           ephemeral: true,
         });
         return;
       }
 
+      // Get the message that contains the button
+      const message = interaction.message;
       let thread: ThreadChannel | null = null;
 
       // Handle the specific button action
       switch (action) {
         case 'verify': {
-          const success = await this.verifyUser(member, interaction);
+          const success = await this.userModerationService.verifyUser(member, interaction.user);
           if (success) {
-            await this.notificationManager.logActionToMessage(
-              message,
-              'verified the user',
-              interaction.user
-            );
+            await interaction.reply({
+              content: `✅ User ${member.user.tag} has been verified and the restricted role has been removed.`,
+              ephemeral: true,
+            });
+          } else {
+            await interaction.reply({
+              content: `❌ Failed to verify ${member.user.tag}. Please check the bot's permissions and role configuration.`,
+              ephemeral: true,
+            });
           }
           break;
         }
 
         case 'ban': {
-          await this.banUser(member, 'Banned via admin panel button', interaction);
-          await this.notificationManager.logActionToMessage(
-            message,
-            'banned the user',
-            interaction.user
-          );
+          const success = await this.userModerationService.banUser(member, 'Banned via admin panel button', interaction.user);
+          if (success) {
+            await interaction.reply({
+              content: `🚫 User ${member.user.tag} has been banned.`,
+              ephemeral: true,
+            });
+          } else {
+            await interaction.reply({
+              content: `❌ Failed to ban ${member.user.tag}. Please check the bot's permissions.`,
+              ephemeral: true,
+            });
+          }
           break;
         }
 
@@ -429,8 +426,19 @@ export class Bot implements IBot {
       return;
     }
 
-    // Verify the user - no need to log action for slash commands
-    await this.verifyUser(member, interaction);
+    // Verify the user
+    const success = await this.userModerationService.verifyUser(member, interaction.user);
+    if (success) {
+      await interaction.reply({
+        content: `✅ User ${member.user.tag} has been verified and the restricted role has been removed.`,
+        ephemeral: true,
+      });
+    } else {
+      await interaction.reply({
+        content: `❌ Failed to verify ${member.user.tag}. Please check the bot's permissions and role configuration.`,
+        ephemeral: true,
+      });
+    }
   }
 
   private async handleBanCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -467,7 +475,18 @@ export class Bot implements IBot {
     }
 
     // Ban the user
-    await this.banUser(member, reason, interaction);
+    const success = await this.userModerationService.banUser(member, reason, interaction.user);
+    if (success) {
+      await interaction.reply({
+        content: `🚫 User ${member.user.tag} has been banned. Reason: ${reason}`,
+        ephemeral: true,
+      });
+    } else {
+      await interaction.reply({
+        content: `❌ Failed to ban ${member.user.tag}. Please check the bot's permissions.`,
+        ephemeral: true,
+      });
+    }
   }
 
   private async handleCreateThreadCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -502,61 +521,6 @@ export class Bot implements IBot {
 
     // Create a verification thread
     await this.createVerificationThread(member, interaction);
-  }
-
-  private async verifyUser(
-    member: GuildMember,
-    interaction: ChatInputCommandInteraction | ButtonInteraction
-  ): Promise<boolean> {
-    // Get server configuration
-    const serverConfig = await this.configService.getServerConfig(member.guild.id);
-
-    // Check if restricted role is configured
-    if (!serverConfig.restricted_role_id) {
-      await interaction.reply({
-        content:
-          '❌ No restricted role configured. Please set up the restricted role first using:\n`/config key:restricted_role_id value:<role-id>`\n\nTo get a role ID, enable Developer Mode in Discord Settings -> Advanced, then right-click the role and select "Copy ID".',
-        ephemeral: true,
-      });
-      return false;
-    }
-
-    // Remove the restricted role
-    const success = await this.roleManager.removeRestrictedRole(member);
-
-    if (success) {
-      await interaction.reply({
-        content: `✅ User ${member.user.tag} has been verified and the restricted role has been removed.`,
-        ephemeral: true,
-      });
-      return true;
-    } else {
-      await interaction.reply({
-        content: `❌ Failed to remove restricted role from ${member.user.tag}. Please check the bot's permissions and role configuration.`,
-        ephemeral: true,
-      });
-      return false;
-    }
-  }
-
-  private async banUser(
-    member: GuildMember,
-    reason: string,
-    interaction: ChatInputCommandInteraction | ButtonInteraction
-  ): Promise<void> {
-    try {
-      await member.ban({ reason });
-      await interaction.reply({
-        content: `🚫 User ${member.user.tag} has been banned. Reason: ${reason}`,
-        ephemeral: true,
-      });
-    } catch (error) {
-      console.error('Failed to ban user:', error);
-      await interaction.reply({
-        content: `❌ Failed to ban ${member.user.tag}. Please check the bot's permissions.`,
-        ephemeral: true,
-      });
-    }
   }
 
   private async createVerificationThread(

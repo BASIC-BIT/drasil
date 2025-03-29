@@ -30,6 +30,7 @@ import { ConfigService, IConfigService } from '../config/ConfigService';
 import { UserService, IUserService } from '../services/UserService';
 import { ServerService, IServerService } from '../services/ServerService';
 import { SecurityActionService, ISecurityActionService } from '../services/SecurityActionService';
+import { UserModerationService, IUserModerationService } from '../services/UserModerationService';
 import { Bot, IBot } from '../Bot';
 
 // Initialize container
@@ -142,6 +143,11 @@ function configureServices(container: Container): void {
   // Add SecurityActionService binding
   container.bind<ISecurityActionService>(TYPES.SecurityActionService)
     .to(SecurityActionService)
+    .inSingletonScope();
+
+  // Add UserModerationService binding
+  container.bind<IUserModerationService>(TYPES.UserModerationService)
+    .to(UserModerationService)
     .inSingletonScope();
 
   // Add Bot binding

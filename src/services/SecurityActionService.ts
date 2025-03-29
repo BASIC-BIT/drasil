@@ -8,13 +8,13 @@
 import { injectable, inject } from 'inversify';
 import { GuildMember, Message, ThreadChannel, User } from 'discord.js';
 import { TYPES } from '../di/symbols';
-import { IRoleManager } from './RoleManager';
 import { INotificationManager } from './NotificationManager';
 import { DetectionResult } from './DetectionOrchestrator';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import { IUserService } from './UserService';
 import { IServerService } from './ServerService';
+import { IUserModerationService } from './UserModerationService';
 
 /**
  * Interface for the SecurityActionService
@@ -70,27 +70,27 @@ export interface ISecurityActionService {
 
 @injectable()
 export class SecurityActionService implements ISecurityActionService {
-  private roleManager: IRoleManager;
   private notificationManager: INotificationManager;
   private detectionEventsRepository: IDetectionEventsRepository;
   private serverMemberRepository: IServerMemberRepository;
   private userService: IUserService;
   private serverService: IServerService;
+  private userModerationService: IUserModerationService;
 
   constructor(
-    @inject(TYPES.RoleManager) roleManager: IRoleManager,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
     @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
     @inject(TYPES.UserService) userService: IUserService,
-    @inject(TYPES.ServerService) serverService: IServerService
+    @inject(TYPES.ServerService) serverService: IServerService,
+    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService
   ) {
-    this.roleManager = roleManager;
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
     this.serverMemberRepository = serverMemberRepository;
     this.userService = userService;
     this.serverService = serverService;
+    this.userModerationService = userModerationService;
   }
   
   /**
@@ -99,8 +99,8 @@ export class SecurityActionService implements ISecurityActionService {
    * @param serverId The Discord server ID
    */
   public async initialize(serverId: string): Promise<void> {
-    await this.roleManager.initialize(serverId);
     await this.notificationManager.initialize(serverId);
+    await this.userModerationService.initialize(serverId);
     console.log(`SecurityActionService initialized for server ${serverId}`);
   }
 
@@ -199,12 +199,12 @@ export class SecurityActionService implements ISecurityActionService {
         sourceMessage?.channelId
       );
 
-      // Assign restricted role to the member
-      const restrictSuccess = await this.roleManager.assignRestrictedRole(member);
+      // Restrict the user using UserModerationService
+      const restrictSuccess = await this.userModerationService.restrictUser(member);
       if (restrictSuccess) {
-        console.log(`Assigned restricted role to ${member.user.tag}`);
+        console.log(`Restricted user ${member.user.tag}`);
       } else {
-        console.log(`Failed to assign restricted role to ${member.user.tag}`);
+        console.log(`Failed to restrict user ${member.user.tag}`);
         return false;
       }
 
@@ -271,12 +271,12 @@ export class SecurityActionService implements ISecurityActionService {
         detectionResult
       );
 
-      // Assign restricted role
-      const restrictSuccess = await this.roleManager.assignRestrictedRole(member);
+      // Restrict the user using UserModerationService
+      const restrictSuccess = await this.userModerationService.restrictUser(member);
       if (restrictSuccess) {
-        console.log(`Assigned restricted role to ${member.user.tag}`);
+        console.log(`Restricted user ${member.user.tag}`);
       } else {
-        console.log(`Failed to assign restricted role to ${member.user.tag}`);
+        console.log(`Failed to restrict user ${member.user.tag}`);
         return false;
       }
 

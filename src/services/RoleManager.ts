@@ -1,17 +1,17 @@
-import { GuildMember, Role } from 'discord.js';
 import { injectable, inject } from 'inversify';
-import { IConfigService } from '../config/ConfigService';
+import { GuildMember, Role } from 'discord.js';
 import { TYPES } from '../di/symbols';
+import { IConfigService } from '../config/ConfigService';
 
 /**
- * Interface for the RoleManager service
+ * Interface for the RoleManager
  */
 export interface IRoleManager {
   /**
-   * Initialize the role manager with guild-specific settings
-   * @param guildId The Discord guild ID
+   * Initialize the service with server-specific configurations
+   * @param serverId The Discord server ID
    */
-  initialize(guildId: string): Promise<void>;
+  initialize(serverId: string): Promise<void>;
 
   /**
    * Sets the ID of the restricted role
@@ -34,26 +34,32 @@ export interface IRoleManager {
 
   /**
    * Removes the restricted role from a guild member
-   * @param member The guild member to verify (unrestrict)
+   * @param member The guild member to unrestrict
    * @returns Promise resolving to true if successful, false if the role couldn't be removed
    */
   removeRestrictedRole(member: GuildMember): Promise<boolean>;
 }
 
 /**
- * Service for managing user roles, particularly for restricting suspicious users
+ * Service for managing Discord roles
  */
 @injectable()
 export class RoleManager implements IRoleManager {
   private restrictedRoleId?: string;
   private configService: IConfigService;
 
-  constructor(@inject(TYPES.ConfigService) configService: IConfigService) {
+  constructor(
+    @inject(TYPES.ConfigService) configService: IConfigService
+  ) {
     this.configService = configService;
   }
 
-  public async initialize(guildId: string): Promise<void> {
-    const config = await this.configService.getServerConfig(guildId);
+  /**
+   * Initialize the service with server-specific configurations
+   * @param serverId The Discord server ID
+   */
+  public async initialize(serverId: string): Promise<void> {
+    const config = await this.configService.getServerConfig(serverId);
     if (config.restricted_role_id) {
       this.restrictedRoleId = config.restricted_role_id;
     }
@@ -73,6 +79,21 @@ export class RoleManager implements IRoleManager {
    */
   public getRestrictedRoleId(): string | undefined {
     return this.restrictedRoleId;
+  }
+
+  /**
+   * Helper function to find a role in a guild
+   * @param member The guild member (used to access the guild)
+   * @param roleId The role ID to find
+   * @returns The found role or null
+   */
+  private async findRole(member: GuildMember, roleId: string): Promise<Role | null> {
+    try {
+      return await member.guild.roles.fetch(roleId);
+    } catch (error) {
+      console.error('Failed to fetch role:', error);
+      return null;
+    }
   }
 
   /**
@@ -106,7 +127,7 @@ export class RoleManager implements IRoleManager {
 
   /**
    * Removes the restricted role from a guild member
-   * @param member The guild member to verify (unrestrict)
+   * @param member The guild member to unrestrict
    * @returns Promise resolving to true if successful, false if the role couldn't be removed
    */
   public async removeRestrictedRole(member: GuildMember): Promise<boolean> {
@@ -130,28 +151,6 @@ export class RoleManager implements IRoleManager {
     } catch (error) {
       console.error('Failed to remove restricted role:', error);
       return false;
-    }
-  }
-
-  /**
-   * Helper method to find a role in a guild by ID
-   * @param member The guild member (used to access the guild)
-   * @param roleId The role ID to look for
-   * @returns The role object if found, undefined otherwise
-   */
-  private async findRole(member: GuildMember, roleId: string): Promise<Role | undefined> {
-    const guild = member.guild;
-    const role = guild.roles.cache.get(roleId);
-
-    if (role) return role;
-
-    // If not in cache, fetch from API
-    try {
-      const fetchedRole = await guild.roles.fetch(roleId);
-      return fetchedRole || undefined;
-    } catch (error) {
-      console.error(`Failed to fetch role with ID ${roleId}:`, error);
-      return undefined;
     }
   }
 }

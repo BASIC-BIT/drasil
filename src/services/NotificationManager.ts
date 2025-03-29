@@ -410,6 +410,8 @@ export class NotificationManager implements INotificationManager {
     // Convert confidence to Low/Medium/High
     const confidencePercent = detectionResult.confidence * 100;
     let confidenceLevel: string;
+    let embedColor: number = 0xFF0000; // Default red for suspicious/unverified users
+
     if (confidencePercent <= 40) {
       confidenceLevel = '🟢 Low';
     } else if (confidencePercent <= 70) {
@@ -466,9 +468,18 @@ export class NotificationManager implements INotificationManager {
       member.id
     );
 
+    // Update embed color based on verification status if thread exists
+    if (verificationThread?.status === 'resolved') {
+      if (verificationThread.resolution === 'verified') {
+        embedColor = 0x00FF00; // Green for verified users
+      } else if (verificationThread.resolution === 'banned') {
+        embedColor = 0x000000; // Black for banned users
+      }
+    }
+
     // Create the embed
     const embed = new EmbedBuilder()
-      .setColor('#FF0000')
+      .setColor(embedColor)
       .setTitle('Suspicious User Detected')
       .setDescription(
         detectionEvents.length > 1 
