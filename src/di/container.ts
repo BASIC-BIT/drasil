@@ -32,6 +32,8 @@ import { ServerService, IServerService } from '../services/ServerService';
 import { SecurityActionService, ISecurityActionService } from '../services/SecurityActionService';
 import { UserModerationService, IUserModerationService } from '../services/UserModerationService';
 import { Bot, IBot } from '../Bot';
+import { IVerificationEventRepository, VerificationEventRepository } from '../repositories/VerificationEventRepository';
+import { IAdminActionRepository, AdminActionRepository } from '../repositories/AdminActionRepository';
 
 // Initialize container
 const container = new Container();
@@ -110,6 +112,14 @@ function configureRepositories(container: Container): void {
   container
     .bind<IVerificationThreadRepository>(TYPES.VerificationThreadRepository)
     .to(VerificationThreadRepository)
+    .inSingletonScope();
+
+  // New repositories
+  container.bind<IVerificationEventRepository>(TYPES.VerificationEventRepository)
+    .to(VerificationEventRepository)
+    .inSingletonScope();
+  container.bind<IAdminActionRepository>(TYPES.AdminActionRepository)
+    .to(AdminActionRepository)
     .inSingletonScope();
 
   // Add more repository bindings as they're refactored

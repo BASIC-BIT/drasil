@@ -40,4 +40,8 @@ export const TYPES = {
   // Discord modules
   CommandHandler: Symbol.for('CommandHandler'),
   EventHandler: Symbol.for('EventHandler'),
+
+  // New repositories
+  VerificationEventRepository: Symbol.for('VerificationEventRepository'),
+  AdminActionRepository: Symbol.for('AdminActionRepository'),
 };

@@ -101,3 +101,56 @@ export interface VerificationThread {
   resolved_by?: string; // Discord ID of the user who resolved the thread
   resolution?: 'verified' | 'banned' | 'ignored'; // Resolution outcome
 }
+
+export enum VerificationStatus {
+  PENDING = 'pending',
+  VERIFIED = 'verified',
+  REJECTED = 'rejected',
+  REOPENED = 'reopened'
+}
+
+export enum AdminActionType {
+  VERIFY = 'verify',
+  REJECT = 'reject',
+  BAN = 'ban',
+  REOPEN = 'reopen',
+  CREATE_THREAD = 'create_thread'
+}
+
+export interface VerificationEvent {
+  id: string;
+  server_id: string;
+  user_id: string;
+  detection_event_id?: string;
+  thread_id?: string;
+  message_id?: string;
+  status: VerificationStatus;
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string;
+  notes?: string;
+  metadata: Record<string, string | number | boolean | null>;
+}
+
+export interface AdminAction {
+  id: string;
+  server_id: string;
+  user_id: string;
+  admin_id: string;
+  verification_event_id: string;
+  detection_event_id?: string;
+  action_type: AdminActionType;
+  action_at: string;
+  previous_status?: VerificationStatus;
+  new_status?: VerificationStatus;
+  notes?: string;
+  metadata: Record<string, string | number | boolean | null>;
+}
+
+export interface VerificationEventWithActions extends VerificationEvent {
+  actions: AdminAction[];
+}
+
+export interface AdminActionCreate extends Omit<AdminAction, 'id' | 'created_at' | 'updated_at'> {
+  id?: string;
+}
