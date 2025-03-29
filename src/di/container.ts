@@ -27,7 +27,8 @@ import {
 } from '../repositories/VerificationThreadRepository';
 import { DetectionOrchestrator, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { ConfigService, IConfigService } from '../config/ConfigService';
-import { UserService } from '../services/UserService';
+import { UserService, IUserService } from '../services/UserService';
+import { ServerService, IServerService } from '../services/ServerService';
 import { Bot, IBot } from '../Bot';
 
 // Initialize container
@@ -133,6 +134,9 @@ function configureServices(container: Container): void {
 
   // Add UserService binding
   container.bind(TYPES.UserService).to(UserService).inSingletonScope();
+
+  // Add ServerService binding
+  container.bind<IServerService>(TYPES.ServerService).to(ServerService).inSingletonScope();
 
   // Add Bot binding
   container.bind<IBot>(TYPES.Bot).to(Bot).inSingletonScope();

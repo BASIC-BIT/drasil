@@ -115,6 +115,29 @@ export class Bot implements IBot {
         .setName('setupverification')
         .setDescription('Set up a dedicated verification channel for restricted users'),
       new SlashCommandBuilder()
+        .setName('listthreads')
+        .setDescription('List all open verification threads in this server'),
+      new SlashCommandBuilder()
+        .setName('resolvethread')
+        .setDescription('Mark a verification thread as resolved')
+        .addStringOption((option) =>
+          option
+            .setName('threadid')
+            .setDescription('The ID of the thread to resolve')
+            .setRequired(true)
+        )
+        .addStringOption((option) =>
+          option
+            .setName('resolution')
+            .setDescription('How the thread was resolved')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Verified', value: 'verified' },
+              { name: 'Banned', value: 'banned' },
+              { name: 'Ignored', value: 'ignored' }
+            )
+        ),
+      new SlashCommandBuilder()
         .setName('config')
         .setDescription('Configure server settings')
         .addStringOption((option) =>
@@ -256,6 +279,14 @@ export class Bot implements IBot {
 
       case 'config':
         await this.handleConfigCommand(interaction);
+        break;
+
+      case 'listthreads':
+        await this.handleListThreadsCommand(interaction);
+        break;
+
+      case 'resolvethread':
+        await this.handleResolveThreadCommand(interaction);
         break;
 
       default:
@@ -999,6 +1030,164 @@ export class Bot implements IBot {
       await interaction.reply({
         content: 'An error occurred while updating the configuration. Please try again later.',
         ephemeral: true,
+      });
+    }
+  }
+
+  /**
+   * Handle the /listthreads command
+   * @param interaction The slash command interaction
+   */
+  private async handleListThreadsCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+    // Check if the interaction is in a guild
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({
+        content: 'This command can only be used in a server.',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Check if the user has the required permissions
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member || !member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+      await interaction.reply({
+        content: 'You need Manage Messages permissions to list verification threads.',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Defer the reply as it might take a moment to fetch threads
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      // Get all open threads
+      const threadIds = await this.notificationManager.getOpenVerificationThreads(guild.id);
+
+      if (threadIds.length === 0) {
+        await interaction.editReply({
+          content: 'No open verification threads found in this server.',
+        });
+        return;
+      }
+
+      // Try to fetch the actual thread objects
+      const threadLinks: string[] = [];
+
+      for (const threadId of threadIds) {
+        try {
+          const thread = await guild.channels.fetch(threadId).catch(() => null);
+          if (thread && thread.isThread()) {
+            threadLinks.push(`<#${threadId}>`);
+          } else {
+            // Thread exists in DB but not on Discord
+            threadLinks.push(`Thread ${threadId} (unavailable)`);
+          }
+        } catch (error) {
+          console.error(`Failed to fetch thread ${threadId}:`, error);
+          threadLinks.push(`Thread ${threadId} (error fetching)`);
+        }
+      }
+
+      // Send a message with all thread links
+      await interaction.editReply({
+        content: `**Open Verification Threads (${threadLinks.length})**\n\n${threadLinks.join('\n')}`,
+      });
+    } catch (error) {
+      console.error('Error listing threads:', error);
+      await interaction.editReply({
+        content: 'An error occurred while listing verification threads.',
+      });
+    }
+  }
+
+  /**
+   * Handle the /resolvethread command
+   * @param interaction The slash command interaction
+   */
+  private async handleResolveThreadCommand(
+    interaction: ChatInputCommandInteraction
+  ): Promise<void> {
+    // Check if the interaction is in a guild
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({
+        content: 'This command can only be used in a server.',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Check if the user has the required permissions
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member || !member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+      await interaction.reply({
+        content: 'You need Manage Messages permissions to resolve verification threads.',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Get the thread ID and resolution
+    const threadId = interaction.options.getString('threadid');
+    const resolution = interaction.options.getString('resolution') as
+      | 'verified'
+      | 'banned'
+      | 'ignored';
+
+    if (!threadId || !resolution) {
+      await interaction.reply({
+        content: 'Thread ID and resolution are required.',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Defer the reply as it might take a moment to update
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      // Update the thread status in the database
+      const success = await this.notificationManager.resolveVerificationThread(
+        guild.id,
+        threadId,
+        resolution,
+        interaction.user.id
+      );
+
+      if (success) {
+        // Try to update the thread name to indicate resolution
+        try {
+          const thread = await guild.channels.fetch(threadId).catch(() => null);
+          if (thread && thread.isThread()) {
+            // Update the thread name to indicate resolution
+            const newName = `[${resolution.toUpperCase()}] ${thread.name}`;
+            await thread.setName(newName);
+
+            // Send a message in the thread
+            await (thread as ThreadChannel).send({
+              content: `This thread has been marked as **${resolution}** by <@${interaction.user.id}>.`,
+            });
+          }
+        } catch (error) {
+          console.error(`Failed to update thread ${threadId}:`, error);
+          // Continue anyway since we've already updated the database
+        }
+
+        await interaction.editReply({
+          content: `✅ Thread ${threadId} has been marked as ${resolution}.`,
+        });
+      } else {
+        await interaction.editReply({
+          content: `❌ Failed to resolve thread ${threadId}. The thread may not exist or is already resolved.`,
+        });
+      }
+    } catch (error) {
+      console.error('Error resolving thread:', error);
+      await interaction.editReply({
+        content: 'An error occurred while resolving the verification thread.',
       });
     }
   }

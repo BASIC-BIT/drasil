@@ -20,6 +20,8 @@ import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { DetectionResult } from './DetectionOrchestrator';
 import { IVerificationThreadRepository } from '../repositories/VerificationThreadRepository';
+import { IUserService } from './UserService';
+import { IServerService } from './ServerService';
 
 export interface NotificationButton {
   id: string;
@@ -124,16 +126,22 @@ export class NotificationManager implements INotificationManager {
   private client: Client;
   private configService: IConfigService;
   private verificationThreadRepository: IVerificationThreadRepository;
+  private userService: IUserService;
+  private serverService: IServerService;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
     @inject(TYPES.ConfigService) configService: IConfigService,
     @inject(TYPES.VerificationThreadRepository)
-    verificationThreadRepository: IVerificationThreadRepository
+    verificationThreadRepository: IVerificationThreadRepository,
+    @inject(TYPES.UserService) userService: IUserService,
+    @inject(TYPES.ServerService) serverService: IServerService
   ) {
     this.client = client;
     this.configService = configService;
     this.verificationThreadRepository = verificationThreadRepository;
+    this.userService = userService;
+    this.serverService = serverService;
   }
 
   public async initialize(guildId: string): Promise<void> {
@@ -214,6 +222,19 @@ export class NotificationManager implements INotificationManager {
     }
 
     try {
+      // Ensure the server exists
+      await this.serverService.getOrCreateServer(member.guild.id);
+
+      // Ensure the user exists
+      await this.userService.getOrCreateUser(member.id, member.user.username);
+
+      // Ensure the server member exists
+      await this.userService.getOrCreateMember(
+        member.guild.id,
+        member.id,
+        member.joinedAt?.toISOString()
+      );
+
       // Get the verification channel or fall back to admin channel
       const channel = this.verificationChannelId
         ? await this.getVerificationChannel()
@@ -355,11 +376,14 @@ export class NotificationManager implements INotificationManager {
     // Create trigger information
     let triggerInfo: string;
     if (detectionResult.triggerSource === 'message' && detectionResult.triggerContent) {
+      // Wrap trigger content in code blocks to prevent auto-linking
+      const safeContent = `\`${detectionResult.triggerContent}\``;
+      
       // If we have the source message, create a direct link to it
       if (sourceMessage) {
-        triggerInfo = `[Flagged for message](${sourceMessage.url}): "${detectionResult.triggerContent}"`;
+        triggerInfo = `[Flagged for message](${sourceMessage.url}): ${safeContent}`;
       } else {
-        triggerInfo = `Flagged for message: "${detectionResult.triggerContent}"`;
+        triggerInfo = `Flagged for message: ${safeContent}`;
       }
     } else {
       triggerInfo = 'Flagged upon joining server';

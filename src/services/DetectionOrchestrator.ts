@@ -11,6 +11,8 @@ import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepos
 import { IUserRepository } from '../repositories/UserRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
+import { IUserService } from './UserService';
+import { IServerService } from './ServerService';
 import { TYPES } from '../di/symbols';
 
 export interface DetectionResult {
@@ -66,6 +68,8 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
   private userRepository: IUserRepository;
   private serverRepository: IServerRepository;
   private serverMemberRepository: IServerMemberRepository;
+  private userService: IUserService;
+  private serverService: IServerService;
 
   // Threshold to determine when to use GPT (0.3-0.7 is borderline)
   private readonly BORDERLINE_LOWER = 0.3;
@@ -81,7 +85,9 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
     @inject(TYPES.UserRepository) userRepository: IUserRepository,
     @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
-    @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository
+    @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
+    @inject(TYPES.UserService) userService: IUserService,
+    @inject(TYPES.ServerService) serverService: IServerService
   ) {
     this.heuristicService = heuristicService;
     this.gptService = gptService;
@@ -89,6 +95,8 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     this.userRepository = userRepository;
     this.serverRepository = serverRepository;
     this.serverMemberRepository = serverMemberRepository;
+    this.userService = userService;
+    this.serverService = serverService;
   }
 
   /**
@@ -172,7 +180,10 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
             )
           : undefined,
         joinedServer: profileData.joinedServerAt,
-        messageHistory: profileData.recentMessage ? [profileData.recentMessage] : undefined,
+        messageHistory: [
+          ...(profileData.recentMessages ? profileData.recentMessages : []),
+          content, // Include the current message being analyzed
+        ],
       });
 
       if (gptAnalysis.result === 'SUSPICIOUS') {
@@ -279,6 +290,19 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     messageId?: string
   ): Promise<void> {
     try {
+      // First, ensure the server exists using the ServerService
+      await this.serverService.getOrCreateServer(serverId);
+
+      // Then, ensure the user exists using the UserService
+      await this.userService.getOrCreateUser(userId, result.profileData?.username);
+
+      // Ensure server_member record exists using the UserService
+      await this.userService.getOrCreateMember(
+        serverId,
+        userId,
+        result.profileData?.joinedServerAt?.toISOString()
+      );
+
       const confidenceLevel = this.getConfidenceLevel(result.confidence);
 
       // Create the detection event data

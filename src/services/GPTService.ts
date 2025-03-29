@@ -14,7 +14,7 @@ export interface UserProfileData {
   nickname?: string;
   accountCreatedAt?: Date;
   joinedServerAt?: Date;
-  recentMessage?: string;
+  recentMessages?: string[];
   // Add other relevant profile fields as needed
 }
 
@@ -106,7 +106,7 @@ export class GPTService implements IGPTService {
           ? new Date(Date.now() - userProfile.accountAge * 86400000)
           : undefined,
         joinedServerAt: userProfile.joinedServer,
-        recentMessage: userProfile.messageHistory?.[0],
+        recentMessages: userProfile.messageHistory || [],
       };
 
       // Call the classification method
@@ -208,7 +208,7 @@ export class GPTService implements IGPTService {
    * @returns A formatted prompt string with examples
    */
   private createPrompt(profileData: UserProfileData): string {
-    const { username, discriminator, nickname, accountCreatedAt, joinedServerAt, recentMessage } =
+    const { username, discriminator, nickname, accountCreatedAt, joinedServerAt, recentMessages } =
       profileData;
 
     // Format account creation and join dates if available
@@ -227,9 +227,9 @@ ${nickname ? `Nickname: ${nickname}` : ''}
 Account age: ${accountAge}
 Joined server: ${joinedServerDaysAgo}`;
 
-    // Add recent message if available
-    if (recentMessage) {
-      prompt += `\nRecent message: "${recentMessage}"`;
+    // Add recent messages if available
+    if (recentMessages && recentMessages.length > 0) {
+      prompt += `\nRecent messages: "${recentMessages.join('", "')}"`;
     }
 
     // Add few-shot examples from configuration

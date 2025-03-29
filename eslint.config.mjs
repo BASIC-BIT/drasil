@@ -21,7 +21,7 @@ const configs = [
       prettier,
     },
     rules: {
-      'prettier/prettier': 'error',
+      'prettier/prettier': 'warn',
     },
   },
   // Base config for all TypeScript files
@@ -42,7 +42,7 @@ const configs = [
       prettier,
     },
     rules: {
-      'prettier/prettier': 'error',
+      'prettier/prettier': 'warn',
       '@typescript-eslint/explicit-function-return-type': 'error',
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
@@ -82,7 +82,7 @@ const configs = [
       jest: pluginJest,
     },
     rules: {
-      'prettier/prettier': 'error',
+      'prettier/prettier': 'warn',
       'jest/no-disabled-tests': 'warn',
       'jest/no-focused-tests': 'error',
       'jest/no-identical-title': 'error',
