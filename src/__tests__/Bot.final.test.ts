@@ -12,7 +12,7 @@ import 'reflect-metadata';
 import { Container } from 'inversify';
 import { Bot, IBot } from '../Bot';
 import { TYPES } from '../di/symbols';
-import { createMocks } from './utils/test-container';
+import { createServiceTestContainer } from './utils/test-container';
 import { IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { IRoleManager } from '../services/RoleManager';
 import { INotificationManager } from '../services/NotificationManager';
@@ -28,7 +28,6 @@ describe('Bot', () => {
   let mockRoleManager: jest.Mocked<IRoleManager>;
   let mockNotificationManager: jest.Mocked<INotificationManager>;
   let container: Container;
-  let mocks: ReturnType<typeof createMocks>;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -38,36 +37,25 @@ describe('Bot', () => {
     process.env.SUPABASE_URL = 'test-url';
     process.env.SUPABASE_KEY = 'test-key';
 
-    // Setup container with all mocks
-    container = new Container();
-    mocks = createMocks();
-
-    // Bind all dependencies
-    container.bind(TYPES.DiscordClient).toConstantValue(mocks.mockDiscordClient);
-    container.bind(TYPES.HeuristicService).toConstantValue(mocks.mockHeuristicService);
-    container.bind(TYPES.GPTService).toConstantValue(mocks.mockGPTService);
-    container.bind(TYPES.DetectionOrchestrator).toConstantValue(mocks.mockDetectionOrchestrator);
-    container.bind(TYPES.RoleManager).toConstantValue(mocks.mockRoleManager);
-    container.bind(TYPES.NotificationManager).toConstantValue(mocks.mockNotificationManager);
-    container.bind(TYPES.ConfigService).toConstantValue(mocks.mockConfigService);
-    container.bind(TYPES.UserRepository).toConstantValue(mocks.mockUserRepository);
-    container.bind(TYPES.ServerRepository).toConstantValue(mocks.mockServerRepository);
-    container.bind(TYPES.ServerMemberRepository).toConstantValue(mocks.mockServerMemberRepository);
-    container
-      .bind(TYPES.DetectionEventsRepository)
-      .toConstantValue(mocks.mockDetectionEventsRepository);
-    container.bind(TYPES.SupabaseClient).toConstantValue(mocks.mockSupabaseClient);
-
-    // Bind the Bot class
-    container.bind<IBot>(TYPES.Bot).to(Bot);
+    // Setup container with Bot as the real service implementation
+    // and all other dependencies mocked
+    container = createServiceTestContainer(TYPES.Bot, Bot, {
+      // Customize any mocks if needed
+    });
 
     // Get bot instance and reference to mocked dependencies
     bot = container.get<IBot>(TYPES.Bot);
     botImpl = bot as Bot;
-    mockDetectionOrchestrator = mocks.mockDetectionOrchestrator;
-    mockConfigService = mocks.mockConfigService;
-    mockRoleManager = mocks.mockRoleManager;
-    mockNotificationManager = mocks.mockNotificationManager;
+    mockDetectionOrchestrator = container.get<IDetectionOrchestrator>(
+      TYPES.DetectionOrchestrator
+    ) as jest.Mocked<IDetectionOrchestrator>;
+    mockConfigService = container.get<IConfigService>(
+      TYPES.ConfigService
+    ) as jest.Mocked<IConfigService>;
+    mockRoleManager = container.get<IRoleManager>(TYPES.RoleManager) as jest.Mocked<IRoleManager>;
+    mockNotificationManager = container.get<INotificationManager>(
+      TYPES.NotificationManager
+    ) as jest.Mocked<INotificationManager>;
   });
 
   afterEach(() => {

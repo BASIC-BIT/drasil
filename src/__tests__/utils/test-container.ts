@@ -13,6 +13,7 @@ import { IUserRepository } from '../../repositories/UserRepository';
 import { IServerRepository } from '../../repositories/ServerRepository';
 import { IServerMemberRepository } from '../../repositories/ServerMemberRepository';
 import { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
+import { IVerificationThreadRepository } from '../../repositories/VerificationThreadRepository';
 import { Client, ClientUser } from 'discord.js';
 import { OpenAI } from 'openai';
 import { SupabaseClient } from '@supabase/supabase-js';
@@ -75,6 +76,8 @@ export function createMocks() {
     createVerificationThread: jest.fn().mockResolvedValue({}),
     logActionToMessage: jest.fn().mockResolvedValue(true),
     setupVerificationChannel: jest.fn().mockResolvedValue('mock-channel-id'),
+    getOpenVerificationThreads: jest.fn().mockResolvedValue([]),
+    resolveVerificationThread: jest.fn().mockResolvedValue(true),
   };
 
   const mockConfigService: jest.Mocked<IConfigService> = {
@@ -122,6 +125,22 @@ export function createMocks() {
       global_reputation_score: 100,
     }),
     findByReputationBelow: jest.fn().mockResolvedValue([]),
+    incrementSuspiciousServerCount: jest.fn().mockResolvedValue({
+      id: 'mock-user-id',
+      discord_id: 'mock-discord-id',
+      suspicious_server_count: 1,
+    }),
+    decrementSuspiciousServerCount: jest.fn().mockResolvedValue({
+      id: 'mock-user-id',
+      discord_id: 'mock-discord-id',
+      suspicious_server_count: 0,
+    }),
+    setFirstFlagged: jest.fn().mockResolvedValue({
+      id: 'mock-user-id',
+      discord_id: 'mock-discord-id',
+      first_flagged_at: new Date().toISOString(),
+    }),
+    findUsersFlaggedInMultipleServers: jest.fn().mockResolvedValue([]),
   };
 
   const mockServerRepository: jest.Mocked<IServerRepository> = {
@@ -171,6 +190,23 @@ export function createMocks() {
         user_id: userId,
         is_restricted: isRestricted,
       })),
+    updateVerificationStatus: jest
+      .fn()
+      .mockImplementation(async (serverId, userId, status, moderatorId) => ({
+        id: 'mock-member-id',
+        server_id: serverId,
+        user_id: userId,
+        verification_status: status,
+        verified_by: moderatorId || 'system',
+      })),
+    findByVerificationStatus: jest.fn().mockImplementation(async (serverId, status) => [
+      {
+        id: 'mock-member-id',
+        server_id: serverId,
+        user_id: 'mock-user-id',
+        verification_status: status,
+      },
+    ]),
   };
 
   const mockDetectionEventsRepository: jest.Mocked<IDetectionEventsRepository> = {
@@ -193,6 +229,75 @@ export function createMocks() {
       gptUsage: 0,
     }),
     cleanupOldEvents: jest.fn().mockResolvedValue(0),
+  };
+
+  const mockVerificationThreadRepository: jest.Mocked<IVerificationThreadRepository> = {
+    createThread: jest.fn().mockResolvedValue({
+      id: 'mock-thread-id',
+      thread_id: 'mock-discord-thread-id',
+      server_id: 'mock-server-id',
+      user_id: 'mock-user-id',
+      created_at: new Date().toISOString(),
+    }),
+    findByThreadId: jest.fn().mockResolvedValue({
+      id: 'mock-thread-id',
+      thread_id: 'mock-discord-thread-id',
+      server_id: 'mock-server-id',
+      user_id: 'mock-user-id',
+      created_at: new Date().toISOString(),
+    }),
+    findByServer: jest.fn().mockResolvedValue([
+      {
+        id: 'mock-thread-id',
+        thread_id: 'mock-discord-thread-id',
+        server_id: 'mock-server-id',
+        created_at: new Date().toISOString(),
+      },
+    ]),
+    updateThreadStatus: jest.fn().mockResolvedValue({
+      id: 'mock-thread-id',
+      thread_id: 'mock-discord-thread-id',
+      server_id: 'mock-server-id',
+      user_id: 'mock-user-id',
+      created_at: new Date().toISOString(),
+      resolved_at: new Date().toISOString(),
+    }),
+    findStaleThreads: jest.fn().mockResolvedValue([
+      {
+        id: 'mock-thread-id',
+        thread_id: 'mock-discord-thread-id',
+        server_id: 'mock-server-id',
+        user_id: 'mock-user-id',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]),
+    findById: jest.fn().mockResolvedValue({
+      id: 'mock-thread-id',
+      thread_id: 'mock-discord-thread-id',
+      server_id: 'mock-server-id',
+      user_id: 'mock-user-id',
+      created_at: new Date().toISOString(),
+    }),
+    findByUser: jest.fn().mockResolvedValue([
+      {
+        id: 'mock-thread-id',
+        thread_id: 'mock-discord-thread-id',
+        server_id: 'mock-server-id',
+        user_id: 'mock-user-id',
+        created_at: new Date().toISOString(),
+      },
+    ]),
+    findByStatus: jest.fn().mockResolvedValue([
+      {
+        id: 'mock-thread-id',
+        thread_id: 'mock-discord-thread-id',
+        server_id: 'mock-server-id',
+        user_id: 'mock-user-id',
+        status: 'open',
+        created_at: new Date().toISOString(),
+      },
+    ]),
   };
 
   // External dependencies
@@ -265,6 +370,7 @@ export function createMocks() {
     mockServerRepository,
     mockServerMemberRepository,
     mockDetectionEventsRepository,
+    mockVerificationThreadRepository,
 
     // External dependencies
     mockDiscordClient,
@@ -304,6 +410,9 @@ export function createTestContainer(
   container
     .bind(TYPES.DetectionEventsRepository)
     .toConstantValue(mocks.mockDetectionEventsRepository);
+  container
+    .bind(TYPES.VerificationThreadRepository)
+    .toConstantValue(mocks.mockVerificationThreadRepository);
 
   // Bind Bot
   container.bind(TYPES.Bot).toConstantValue({
@@ -369,6 +478,11 @@ export function createServiceTestContainer<T>(
     container
       .bind(TYPES.DetectionEventsRepository)
       .toConstantValue(mocks.mockDetectionEventsRepository);
+  }
+  if (serviceIdentifier !== TYPES.VerificationThreadRepository) {
+    container
+      .bind(TYPES.VerificationThreadRepository)
+      .toConstantValue(mocks.mockVerificationThreadRepository);
   }
 
   // Bind Bot

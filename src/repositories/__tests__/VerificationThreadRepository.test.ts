@@ -153,7 +153,7 @@ describe('VerificationThreadRepository', () => {
 
       // Mock Date.now() to return a consistent date for testing
       const mockDate = new Date('2023-01-02T00:00:00Z');
-      jest.spyOn(global, 'Date').mockImplementation(() => mockDate as unknown as string);
+      jest.spyOn(global, 'Date').mockImplementation(() => mockDate);
 
       const result = await repository.updateThreadStatus(
         mockThread.server_id,

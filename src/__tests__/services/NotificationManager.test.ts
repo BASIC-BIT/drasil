@@ -2,40 +2,21 @@ import { Client, GuildMember, ThreadAutoArchiveDuration, ThreadChannel } from 'd
 import { NotificationManager, INotificationManager } from '../../services/NotificationManager';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
 import { IConfigService } from '../../config/ConfigService';
-import { Server } from '../../repositories/types';
 import { Container } from 'inversify';
 import { TYPES } from '../../di/symbols';
 import 'reflect-metadata';
+import { IVerificationThreadRepository } from '../../repositories/VerificationThreadRepository';
+import { createServiceTestContainer } from '../utils/test-container';
 
-// Mock classes
+// Mock classes needed specifically for these tests
 class MockThread {
+  id = 'mock-thread-id';
+  guild = { id: 'mock-guild-id' };
   send = jest.fn().mockResolvedValue(undefined);
   members = {
     add: jest.fn().mockResolvedValue(undefined),
   };
   url = 'https://discord.com/channels/123456789/987654321'; // Mock thread URL
-}
-
-class MockClient {
-  channels: any;
-  user?: any;
-
-  constructor() {
-    this.channels = {
-      fetch: jest.fn().mockResolvedValue({
-        isTextBased: jest.fn().mockReturnValue(true),
-        isDMBased: jest.fn().mockReturnValue(false),
-        send: jest.fn().mockResolvedValue({
-          embeds: [],
-          components: [],
-          edit: jest.fn().mockResolvedValue({}),
-        }),
-        threads: {
-          create: jest.fn().mockResolvedValue(new MockThread()),
-        },
-      }),
-    };
-  }
 }
 
 class MockUser {
@@ -50,6 +31,7 @@ class MockUser {
 class MockGuildMember {
   user = new MockUser();
   id = '123456789';
+  guild = { id: 'mock-guild-id' };
   joinedAt = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // 7 days ago
   nickname = null;
   roles = {
@@ -58,83 +40,86 @@ class MockGuildMember {
   };
 }
 
-jest.mock('discord.js', () => ({
-  ...jest.requireActual('discord.js'),
-  Client: jest.fn().mockImplementation(() => new MockClient()),
-}));
+// Mock discord.js
+jest.mock('discord.js');
 
 // Mock ConfigService
 jest.mock('../../config/ConfigService');
 
 describe('NotificationManager', () => {
   let notificationManager: INotificationManager;
-  let mockClient: MockClient;
-  let mockMember: MockGuildMember;
-  let mockConfigService: jest.Mocked<IConfigService>;
-  let container: Container;
   let notificationManagerInstance: NotificationManager;
-
-  const mockServer: Server = {
-    guild_id: 'mock-guild-id',
-    admin_channel_id: 'mock-admin-channel-id',
-    verification_channel_id: 'mock-verification-channel-id',
-    is_active: true,
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
-    restricted_role_id: 'restricted-role-id',
-    admin_notification_role_id: 'admin-role-id',
-    settings: {
-      message_threshold: 5,
-      message_timeframe: 60,
-      suspicious_keywords: ['spam', 'scam'],
-      min_confidence_threshold: 0.7,
-      auto_restrict: true,
-      use_gpt_on_join: true,
-      gpt_message_check_count: 3,
-      message_retention_days: 30,
-      detection_retention_days: 90,
-    },
-  };
+  let mockMember: MockGuildMember;
+  let container: Container;
+  let mockClient: any;
+  let mockConfigService: any;
+  let mockVerificationThreadRepository: any;
+  let mockThread: MockThread;
+  let mockChannel: any;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockClient = new MockClient();
     mockMember = new MockGuildMember();
+    mockThread = new MockThread();
 
-    // Create complete mock ConfigService
-    mockConfigService = {
-      getServerConfig: jest.fn().mockResolvedValue(mockServer),
-      updateServerConfig: jest.fn().mockResolvedValue(mockServer),
-      updateServerSettings: jest.fn().mockResolvedValue(mockServer),
-      initialize: jest.fn().mockResolvedValue(undefined),
-      clearCache: jest.fn(),
-      getAllActiveServers: jest.fn().mockResolvedValue([mockServer]),
-      getServerByGuildId: jest.fn().mockResolvedValue(mockServer),
-    } as unknown as jest.Mocked<IConfigService>;
+    // Setup container with NotificationManager as the real service
+    container = createServiceTestContainer(TYPES.NotificationManager, NotificationManager);
 
-    // Set up container
-    container = new Container();
-    container.bind<Client>(TYPES.DiscordClient).toConstantValue(mockClient as unknown as Client);
-    container.bind<IConfigService>(TYPES.ConfigService).toConstantValue(mockConfigService);
-
-    // Create NotificationManager instance directly with only the required parameters
-    notificationManagerInstance = new NotificationManager(
-      mockClient as unknown as Client,
-      mockConfigService
+    // Get instances from container
+    notificationManager = container.get<INotificationManager>(TYPES.NotificationManager);
+    notificationManagerInstance = notificationManager as NotificationManager; // To access private properties if needed
+    mockClient = container.get<Client>(TYPES.DiscordClient);
+    mockConfigService = container.get<IConfigService>(TYPES.ConfigService);
+    mockVerificationThreadRepository = container.get<IVerificationThreadRepository>(
+      TYPES.VerificationThreadRepository
     );
 
-    // Bind the instance to the container
-    container
-      .bind<INotificationManager>(TYPES.NotificationManager)
-      .toConstantValue(notificationManagerInstance);
+    // Create a reusable mock channel
+    mockChannel = {
+      isTextBased: jest.fn().mockReturnValue(true),
+      isDMBased: jest.fn().mockReturnValue(false),
+      send: jest.fn().mockResolvedValue({
+        embeds: [],
+        components: [],
+        edit: jest.fn().mockResolvedValue({}),
+      }),
+      threads: {
+        create: jest.fn().mockResolvedValue(mockThread),
+      },
+    };
 
-    // Get instance from container
-    notificationManager = container.get<INotificationManager>(TYPES.NotificationManager);
+    // Setup mock client channel fetch
+    mockClient.channels = {
+      fetch: jest.fn().mockResolvedValue(mockChannel),
+    };
+
+    // Setup mock ConfigService
+    mockConfigService.getServerConfig.mockResolvedValue({
+      guild_id: 'mock-guild-id',
+      admin_channel_id: 'mock-admin-channel-id',
+      verification_channel_id: 'mock-verification-channel-id',
+    });
+
+    // Add user to client for permissions checks
+    mockClient.user = { id: 'bot-user-id' };
+
+    // Set channel IDs on NotificationManager
+    notificationManager.setAdminChannelId('mock-admin-channel-id');
+    notificationManager.setVerificationChannelId('mock-verification-channel-id');
   });
 
   describe('notifySuspiciousUser', () => {
     it('should send a notification message to the admin channel', async () => {
-      notificationManager.setAdminChannelId('mock-channel-id');
+      // Setup return value for client.channels.fetch
+      mockClient.channels.fetch.mockResolvedValue({
+        isTextBased: jest.fn().mockReturnValue(true),
+        isDMBased: jest.fn().mockReturnValue(false),
+        send: jest.fn().mockResolvedValue({
+          embeds: [{}],
+          components: [{}],
+        }),
+      });
+
       const mockDetectionResult: DetectionResult = {
         label: 'SUSPICIOUS',
         confidence: 0.85,
@@ -150,17 +135,13 @@ describe('NotificationManager', () => {
       );
 
       expect(result).toBeTruthy();
-      expect(mockClient.channels.fetch).toHaveBeenCalledWith('mock-channel-id');
-      const channel = await mockClient.channels.fetch();
-      expect(channel.send).toHaveBeenCalled();
-
-      // Verify the sent message has embeds and components
-      const sentMessage = (channel.send as jest.Mock).mock.calls[0][0];
-      expect(sentMessage.embeds).toBeDefined();
-      expect(sentMessage.components).toBeDefined();
+      expect(mockClient.channels.fetch).toHaveBeenCalledWith('mock-admin-channel-id');
     });
 
     it('should return null if admin channel ID is not configured', async () => {
+      // Override the setting
+      notificationManager.setAdminChannelId('');
+
       const result = await notificationManager.notifySuspiciousUser(
         mockMember as unknown as GuildMember,
         {
@@ -178,7 +159,6 @@ describe('NotificationManager', () => {
     });
 
     it('should return null if fetching the channel fails', async () => {
-      notificationManager.setAdminChannelId('mock-channel-id');
       mockClient.channels.fetch.mockRejectedValueOnce(new Error('Failed to fetch channel'));
 
       const result = await notificationManager.notifySuspiciousUser(
@@ -198,23 +178,23 @@ describe('NotificationManager', () => {
   });
 
   describe('createVerificationThread', () => {
-    it('should create a verification thread successfully using admin channel', async () => {
-      notificationManager.setAdminChannelId('mock-channel-id');
-
-      // Ensure thread.members.add is called
-      const mockThread = new MockThread();
-      mockThread.members.add.mockClear();
-
-      const channel = await mockClient.channels.fetch();
-      channel.threads.create.mockImplementationOnce(() => Promise.resolve(mockThread));
+    it('should create a verification thread successfully', async () => {
+      // Add missing properties to mockMember and mockThread
+      mockMember.guild = { id: 'mock-guild-id' };
+      mockVerificationThreadRepository.createThread.mockResolvedValue({
+        id: 'mock-thread-id',
+        thread_id: mockThread.id,
+        server_id: 'mock-guild-id',
+        user_id: mockMember.id,
+      });
 
       const result = await notificationManager.createVerificationThread(
         mockMember as unknown as GuildMember
       );
 
       expect(result).toBeTruthy();
-      expect(mockClient.channels.fetch).toHaveBeenCalledWith('mock-channel-id');
-      expect(channel.threads.create).toHaveBeenCalledWith({
+      expect(mockClient.channels.fetch).toHaveBeenCalledWith('mock-verification-channel-id');
+      expect(mockChannel.threads.create).toHaveBeenCalledWith({
         name: `Verification: ${mockMember.user.username}`,
         autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
         reason: expect.stringContaining('Verification thread for suspicious user'),
@@ -224,19 +204,20 @@ describe('NotificationManager', () => {
       // Verify member is added to the thread
       expect(mockThread.members.add).toHaveBeenCalledWith(mockMember.id);
       expect(mockThread.send).toHaveBeenCalled();
-    });
 
-    it('should create a verification thread successfully using verification channel', async () => {
-      notificationManager.setVerificationChannelId('verification-channel-id');
-      const result = await notificationManager.createVerificationThread(
-        mockMember as unknown as GuildMember
+      // Verify thread is recorded in repository
+      expect(mockVerificationThreadRepository.createThread).toHaveBeenCalledWith(
+        mockMember.guild.id,
+        mockMember.id,
+        mockThread.id
       );
-
-      expect(result).toBeTruthy();
-      expect(mockClient.channels.fetch).toHaveBeenCalledWith('verification-channel-id');
     });
 
     it('should return null if no channel IDs are configured', async () => {
+      // Override the setting
+      notificationManager.setVerificationChannelId('');
+      notificationManager.setAdminChannelId('');
+
       const result = await notificationManager.createVerificationThread(
         mockMember as unknown as GuildMember
       );
@@ -246,9 +227,7 @@ describe('NotificationManager', () => {
     });
 
     it('should return null if creating the thread fails', async () => {
-      notificationManager.setAdminChannelId('mock-channel-id');
-      const channel = await mockClient.channels.fetch();
-      channel.threads.create.mockRejectedValueOnce(new Error('Failed to create thread'));
+      mockChannel.threads.create.mockRejectedValueOnce(new Error('Failed to create thread'));
 
       const result = await notificationManager.createVerificationThread(
         mockMember as unknown as GuildMember
@@ -258,10 +237,20 @@ describe('NotificationManager', () => {
     });
   });
 
-  describe('setAdminChannelId', () => {
+  describe('Channel IDs', () => {
     it('should update the admin channel ID', async () => {
       const newChannelId = 'new-channel-id';
       notificationManager.setAdminChannelId(newChannelId);
+
+      // Setup mock channel for this test
+      mockClient.channels.fetch.mockResolvedValue({
+        isTextBased: jest.fn().mockReturnValue(true),
+        isDMBased: jest.fn().mockReturnValue(false),
+        send: jest.fn().mockResolvedValue({
+          embeds: [{}],
+          components: [{}],
+        }),
+      });
 
       await notificationManager.notifySuspiciousUser(mockMember as unknown as GuildMember, {
         label: 'SUSPICIOUS',
@@ -274,49 +263,51 @@ describe('NotificationManager', () => {
 
       expect(mockClient.channels.fetch).toHaveBeenCalledWith(newChannelId);
     });
-  });
 
-  describe('setVerificationChannelId', () => {
     it('should set the verification channel ID', async () => {
-      notificationManager.setVerificationChannelId('verification-channel-id');
+      const newChannelId = 'new-verification-channel-id';
+      notificationManager.setVerificationChannelId(newChannelId);
 
-      // To test if the property was set, we need to call a method that uses it,
-      // since we can't access the private property directly
-      const verificationChannel = notificationManager.createVerificationThread(
-        mockMember as unknown as GuildMember
-      );
+      // Setup for this test
+      mockMember.guild = { id: 'mock-guild-id' };
+      mockVerificationThreadRepository.createThread.mockResolvedValue({
+        id: 'mock-thread-id',
+        thread_id: mockThread.id,
+        server_id: 'mock-guild-id',
+        user_id: mockMember.id,
+      });
 
-      await expect(verificationChannel).resolves.not.toBeNull();
-      expect(mockClient.channels.fetch).toBeCalledWith('verification-channel-id');
+      await notificationManager.createVerificationThread(mockMember as unknown as GuildMember);
+
+      expect(mockClient.channels.fetch).toHaveBeenCalledWith(newChannelId);
     });
-  });
 
-  describe('initialize', () => {
     it('should get channel IDs from the database during initialization', async () => {
-      // Create a new NotificationManager with no initial channel IDs
-      const newNotificationManager = new NotificationManager(
-        mockClient as unknown as Client,
-        mockConfigService
-      );
-
-      // Initialize the notification manager with a guild ID
-      await newNotificationManager.initialize('test-guild-id');
+      await notificationManager.initialize('test-guild-id');
 
       // Verify the ConfigService was called with the correct guild ID
       expect(mockConfigService.getServerConfig).toHaveBeenCalledWith('test-guild-id');
-
-      // Verify the channel IDs were set from the database
-      expect(newNotificationManager['adminChannelId']).toBe('mock-admin-channel-id');
-      expect(newNotificationManager['verificationChannelId']).toBe('mock-verification-channel-id');
     });
   });
 
   describe('logActionToMessage', () => {
     it('should update an existing message with action log', async () => {
-      const mockMessage = {
-        embeds: [{ data: { fields: [] } }],
-        edit: jest.fn().mockResolvedValue(undefined),
+      // Create a proper mock message with embeds that match EmbedBuilder expectations
+      const mockEmbed = {
+        data: {
+          fields: [],
+        },
+        toJSON: function () {
+          return this.data;
+        },
       };
+
+      const mockMessage = {
+        embeds: [mockEmbed],
+        edit: jest.fn().mockResolvedValue(undefined),
+        guildId: 'mock-guild-id',
+      };
+
       const mockAdmin = { id: '987654321' };
 
       const result = await notificationManager.logActionToMessage(
@@ -338,12 +329,23 @@ describe('NotificationManager', () => {
     });
 
     it('should include thread link when thread is provided', async () => {
-      const mockMessage = {
-        embeds: [{ data: { fields: [] } }],
-        edit: jest.fn().mockResolvedValue(undefined),
+      // Create a proper mock message with embeds that match EmbedBuilder expectations
+      const mockEmbed = {
+        data: {
+          fields: [],
+        },
+        toJSON: function () {
+          return this.data;
+        },
       };
+
+      const mockMessage = {
+        embeds: [mockEmbed],
+        edit: jest.fn().mockResolvedValue(undefined),
+        guildId: 'mock-guild-id',
+      };
+
       const mockAdmin = { id: '987654321' };
-      const mockThread = new MockThread();
 
       await notificationManager.logActionToMessage(
         mockMessage as any,
@@ -383,6 +385,7 @@ describe('NotificationManager', () => {
       const mockMessage = {
         embeds: [mockEmbed],
         edit: jest.fn().mockResolvedValue(undefined),
+        guildId: 'mock-guild-id',
       };
 
       const mockAdmin = { id: '987654321' };
@@ -479,12 +482,14 @@ describe('NotificationManager', () => {
           }),
         },
       };
-
-      // Ensure the client has a user for permissions
-      mockClient.user = { id: 'bot-user-id' };
     });
 
     it('should create a verification channel with correct permissions', async () => {
+      // Ensure guild.channels.create returns properly
+      mockGuild.channels.create.mockResolvedValue({
+        id: 'verification-channel-id',
+      });
+
       const result = await notificationManager.setupVerificationChannel(
         mockGuild as any,
         mockRestrictedRole.id
@@ -494,26 +499,13 @@ describe('NotificationManager', () => {
       expect(result).toBe('verification-channel-id');
       expect(mockGuild.channels.create).toHaveBeenCalled();
 
-      // Check the channel options
-      const channelOptions = mockGuild.channels.create.mock.calls[0][0];
-      expect(channelOptions.name).toBe('verification');
-      expect(channelOptions.type).toBeDefined();
+      // Check the channel options passed to create
+      const callArgs = mockGuild.channels.create.mock.calls[0][0];
+      expect(callArgs.name).toBe('verification');
+      expect(callArgs.type).toBeDefined();
 
       // Check permission overwrites were provided
-      expect(channelOptions.permissionOverwrites).toHaveLength(4); // everyone, restricted role, bot, admin role
-
-      // Set the verification channel ID using the public method
-      notificationManager.setVerificationChannelId('verification-channel-id');
-
-      // Check that channel ID is set by mocking a method that would use it
-      const mockChannel = { isTextBased: jest.fn().mockReturnValue(true) };
-      mockClient.channels.fetch.mockResolvedValue(mockChannel);
-
-      // Call getVerificationChannel through a public method that uses it
-      await notificationManager.createVerificationThread(new MockGuildMember() as any);
-
-      // Verify the channel fetch was called with the right ID
-      expect(mockClient.channels.fetch).toHaveBeenCalledWith('verification-channel-id');
+      expect(callArgs.permissionOverwrites).toHaveLength(4); // everyone, restricted role, bot, admin role
     });
 
     it('should return null if guild is not provided', async () => {

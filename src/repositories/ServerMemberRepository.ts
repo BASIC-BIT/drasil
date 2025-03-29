@@ -105,6 +105,14 @@ export interface IServerMemberRepository {
     serverId: string,
     status: 'pending' | 'verified' | 'rejected'
   ): Promise<ServerMember[]>;
+
+  /**
+   * Increment a member's message count and update last_message_at timestamp
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @returns The updated server member
+   */
+  incrementMessageCount(serverId: string, userId: string): Promise<ServerMember | null>;
 }
 
 /**
@@ -404,6 +412,28 @@ export class ServerMemberRepository
       return (data as ServerMember[]) || [];
     } catch (error) {
       this.handleError(error as Error, 'findByVerificationStatus');
+    }
+  }
+
+  /**
+   * Increment a member's message count and update last_message_at timestamp
+   * @param serverId The Discord server ID
+   * @param userId The Discord user ID
+   * @returns The updated server member
+   */
+  async incrementMessageCount(serverId: string, userId: string): Promise<ServerMember | null> {
+    try {
+      const timestamp = new Date().toISOString();
+      const { data, error } = await this.supabaseClient.rpc('increment_member_message_count', {
+        p_server_id: serverId,
+        p_user_id: userId,
+        p_timestamp: timestamp,
+      });
+
+      if (error) throw error;
+      return (data as ServerMember) || null;
+    } catch (error) {
+      this.handleError(error as Error, 'incrementMessageCount');
     }
   }
 }
