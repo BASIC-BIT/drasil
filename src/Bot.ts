@@ -30,6 +30,10 @@ import { IServerMemberRepository } from './repositories/ServerMemberRepository';
 import { ISecurityActionService } from './services/SecurityActionService';
 import { IUserModerationService } from './services/UserModerationService';
 import { TYPES } from './di/symbols';
+import { IVerificationService } from './services/VerificationService';
+import { IAdminActionService } from './services/AdminActionService';
+import { VerificationStatus } from './repositories/types';
+import { VerificationHistoryFormatter } from './utils/VerificationHistoryFormatter';
 
 // Load environment variables
 dotenv.config();
@@ -65,6 +69,8 @@ export class Bot implements IBot {
   private securityActionService: ISecurityActionService;
   private userModerationService: IUserModerationService;
   private commands: RESTPostAPIChatInputApplicationCommandsJSONBody[];
+  private verificationService: IVerificationService;
+  private adminActionService: IAdminActionService;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -79,7 +85,9 @@ export class Bot implements IBot {
     @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
     @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService,
-    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService
+    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
+    @inject(TYPES.VerificationService) verificationService: IVerificationService,
+    @inject(TYPES.AdminActionService) adminActionService: IAdminActionService
   ) {
     this.client = client;
     this.heuristicService = heuristicService;
@@ -94,6 +102,8 @@ export class Bot implements IBot {
     this.serverMemberRepository = serverMemberRepository;
     this.securityActionService = securityActionService;
     this.userModerationService = userModerationService;
+    this.verificationService = verificationService;
+    this.adminActionService = adminActionService;
 
     // Define slash commands
     this.commands = [
@@ -306,101 +316,234 @@ export class Bot implements IBot {
   }
 
   private async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
-    const customId = interaction.customId;
+    const [action, targetUserId] = interaction.customId.split('_');
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: 'This button can only be used in a server.',
+        ephemeral: true
+      });
+      return;
+    }
+    const guildId = interaction.guildId;
 
     try {
-      // Extract action and user ID from the custom ID
-      const [action, userId] = customId.split('_');
-
-      // Get the guild member
-      const member = await interaction.guild?.members.fetch(userId);
-      if (!member) {
-        await interaction.reply({
-          content: 'Could not find the user in this server.',
-          ephemeral: true,
-        });
-        return;
-      }
-
-      // Get the message that contains the button
-      const message = interaction.message;
-      let thread: ThreadChannel | null = null;
-
-      // Handle the specific button action
       switch (action) {
-        case 'verify': {
-          const success = await this.userModerationService.verifyUser(member, interaction.user);
-          if (success) {
-            await interaction.reply({
-              content: `✅ User ${member.user.tag} has been verified and the restricted role has been removed.`,
-              ephemeral: true,
-            });
-          } else {
-            await interaction.reply({
-              content: `❌ Failed to verify ${member.user.tag}. Please check the bot's permissions and role configuration.`,
-              ephemeral: true,
-            });
-          }
+        case 'verify':
+          await this.handleVerifyButton(interaction, guildId, targetUserId);
           break;
-        }
-
-        case 'ban': {
-          const success = await this.userModerationService.banUser(
-            member,
-            'Banned via admin panel button',
-            interaction.user
-          );
-          if (success) {
-            await interaction.reply({
-              content: `🚫 User ${member.user.tag} has been banned.`,
-              ephemeral: true,
-            });
-          } else {
-            await interaction.reply({
-              content: `❌ Failed to ban ${member.user.tag}. Please check the bot's permissions.`,
-              ephemeral: true,
-            });
-          }
+        case 'ban':
+          await this.handleBanButton(interaction, guildId, targetUserId);
           break;
-        }
-
-        case 'thread': {
-          thread = await this.securityActionService.createVerificationThreadForMember(
-            member,
-            message,
-            interaction.user
-          );
-
-          if (thread) {
-            await interaction.reply({
-              content: `✅ Created a verification thread for ${member.user.tag}.`,
-              ephemeral: true,
-            });
-          } else {
-            await interaction.reply({
-              content: `❌ Failed to create a verification thread for ${member.user.tag}. Please check the bot's permissions and channel configuration.`,
-              ephemeral: true,
-            });
-          }
+        case 'thread':
+          await this.handleThreadButton(interaction, guildId, targetUserId);
           break;
-        }
-
-        case 'history': {
-          await this.notificationManager.handleHistoryButtonClick(interaction, userId);
+        case 'history':
+          await this.handleHistoryButton(interaction, guildId, targetUserId);
           break;
-        }
-
+        case 'reopen':
+          await this.handleReopenButton(interaction, guildId, targetUserId);
+          break;
         default:
           await interaction.reply({
-            content: `Unknown button action: ${action}`,
-            ephemeral: true,
+            content: 'Unknown button action',
+            ephemeral: true
           });
       }
     } catch (error) {
       console.error('Error handling button interaction:', error);
       await interaction.reply({
-        content: 'An error occurred while processing this button.',
-        ephemeral: true,
+        content: 'An error occurred while processing your request.',
+        ephemeral: true
+      });
+    }
+  }
+
+  private async handleVerifyButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      // Verify the user and update UI
+      await this.verificationService.verifyUser(
+        guildId,
+        userId,
+        interaction.user.id,
+        'Verified via button interaction'
+      );
+
+      // Update the notification message buttons
+      await this.notificationManager.updateNotificationButtons(
+        interaction.message as Message,
+        userId,
+        VerificationStatus.VERIFIED
+      );
+
+      await interaction.followUp({
+        content: `User <@${userId}> has been verified and can now access the server.`,
+        ephemeral: true
+      });
+    } catch (error) {
+      console.error('Error verifying user:', error);
+      await interaction.followUp({
+        content: 'An error occurred while verifying the user.',
+        ephemeral: true
+      });
+    }
+  }
+
+  private async handleBanButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      // Reject the verification and ban the user
+      await this.verificationService.rejectUser(
+        guildId,
+        userId,
+        interaction.user.id,
+        'Banned via button interaction'
+      );
+
+      // Ban the user
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId);
+      await member.ban({ reason: 'Banned by moderator during verification' });
+
+      // Update the notification message buttons
+      await this.notificationManager.updateNotificationButtons(
+        interaction.message as Message,
+        userId,
+        VerificationStatus.REJECTED
+      );
+
+      await interaction.followUp({
+        content: `User <@${userId}> has been banned from the server.`,
+        ephemeral: true
+      });
+    } catch (error) {
+      console.error('Error banning user:', error);
+      await interaction.followUp({
+        content: 'An error occurred while banning the user.',
+        ephemeral: true
+      });
+    }
+  }
+
+  private async handleThreadButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      const config = await this.configService.getServerConfig(guildId);
+      if (!config.verification_channel_id) {
+        throw new Error('No verification channel configured');
+      }
+
+      // Create the thread
+      const thread = await this.notificationManager.createVerificationThread(
+        config.verification_channel_id,
+        userId
+      );
+
+      // Get the active verification event
+      const verificationEvent = await this.verificationService.getActiveVerification(guildId, userId);
+      if (verificationEvent) {
+        // Attach thread to verification event
+        await this.verificationService.attachThreadToVerification(verificationEvent.id, thread.id);
+      }
+
+      await interaction.followUp({
+        content: `Created verification thread: ${thread.url}`,
+        ephemeral: true
+      });
+    } catch (error) {
+      console.error('Error creating verification thread:', error);
+      await interaction.followUp({
+        content: 'An error occurred while creating the verification thread.',
+        ephemeral: true
+      });
+    }
+  }
+
+  private async handleHistoryButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      // Get verification history with actions
+      const history = await this.verificationService.getVerificationHistory(guildId, userId);
+      
+      // Format history using our formatter
+      const formattedHistory = VerificationHistoryFormatter.formatForDiscord(history, userId);
+
+      // Send as a text file if it's too long
+      if (formattedHistory.length > 2000) {
+        const plainTextHistory = VerificationHistoryFormatter.formatForFile(history, userId);
+        const buffer = Buffer.from(plainTextHistory, 'utf-8');
+        await interaction.editReply({
+          content: 'Here is the complete verification history:',
+          files: [{
+            attachment: buffer,
+            name: `verification-history-${userId}.txt`
+          }]
+        });
+      } else {
+        await interaction.editReply({
+          content: formattedHistory
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching verification history:', error);
+      await interaction.editReply({
+        content: 'An error occurred while fetching the verification history.'
+      });
+    }
+  }
+
+  private async handleReopenButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      // Reopen the verification and update UI
+      await this.verificationService.reopenVerification(
+        guildId,
+        userId,
+        interaction.user.id,
+        'Reopened via button interaction'
+      );
+
+      // Update the notification message buttons
+      await this.notificationManager.updateNotificationButtons(
+        interaction.message as Message,
+        userId,
+        VerificationStatus.PENDING
+      );
+
+      await interaction.followUp({
+        content: `Verification for <@${userId}> has been reopened. The user has been restricted again.`,
+        ephemeral: true
+      });
+    } catch (error) {
+      console.error('Error reopening verification:', error);
+      await interaction.followUp({
+        content: 'An error occurred while reopening the verification.',
+        ephemeral: true
       });
     }
   }

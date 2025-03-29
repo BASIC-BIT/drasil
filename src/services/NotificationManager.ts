@@ -26,6 +26,9 @@ import { IServerService } from './ServerService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { DetectionEvent } from '../repositories/types';
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
+import { IVerificationService } from './VerificationService';
+import { IAdminActionService } from './AdminActionService';
+import { VerificationStatus } from '../repositories/types';
 
 export interface NotificationButton {
   id: string;
@@ -134,6 +137,9 @@ export interface INotificationManager {
    * @returns Promise resolving to whether the history was successfully sent
    */
   handleHistoryButtonClick(interaction: ButtonInteraction, userId: string): Promise<boolean>;
+
+  createAdminNotification(serverId: string, userId: string, detectionResult: DetectionResult): Promise<void>;
+  updateNotificationButtons(message: Message, userId: string, status: VerificationStatus): Promise<void>;
 }
 
 /**
@@ -149,6 +155,8 @@ export class NotificationManager implements INotificationManager {
   private userService: IUserService;
   private serverService: IServerService;
   private detectionEventsRepository: IDetectionEventsRepository;
+  private verificationService: IVerificationService;
+  private adminActionService: IAdminActionService;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -157,7 +165,9 @@ export class NotificationManager implements INotificationManager {
     verificationThreadRepository: IVerificationThreadRepository,
     @inject(TYPES.UserService) userService: IUserService,
     @inject(TYPES.ServerService) serverService: IServerService,
-    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository
+    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
+    @inject(TYPES.VerificationService) verificationService: IVerificationService,
+    @inject(TYPES.AdminActionService) adminActionService: IAdminActionService
   ) {
     this.client = client;
     this.configService = configService;
@@ -165,6 +175,8 @@ export class NotificationManager implements INotificationManager {
     this.userService = userService;
     this.serverService = serverService;
     this.detectionEventsRepository = detectionEventsRepository;
+    this.verificationService = verificationService;
+    this.adminActionService = adminActionService;
   }
 
   public async initialize(guildId: string): Promise<void> {
@@ -828,5 +840,131 @@ export class NotificationManager implements INotificationManager {
       });
       return false;
     }
+  }
+
+  async createAdminNotification(serverId: string, userId: string, detectionResult: DetectionResult): Promise<void> {
+    const config = await this.configService.getServerConfig(serverId);
+    if (!config.admin_channel_id) {
+      console.warn(`No admin channel configured for server ${serverId}`);
+      return;
+    }
+
+    const channel = await this.getAdminChannel();
+    if (!channel) {
+      console.error(`Could not find admin channel ${config.admin_channel_id}`);
+      return;
+    }
+
+    // Get the guild and member
+    const guild = await this.client.guilds.fetch(serverId);
+    const member = await guild.members.fetch(userId);
+
+    // Create the embed using the existing method
+    const embed = await this.createSuspiciousUserEmbed(member, detectionResult);
+    
+    // Create initial button row with all actions
+    const row = new ActionRowBuilder<ButtonBuilder>()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(`verify_${userId}`)
+          .setLabel('Verify User')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`ban_${userId}`)
+          .setLabel('Ban User')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId(`thread_${userId}`)
+          .setLabel('Create Thread')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`history_${userId}`)
+          .setLabel('View Full History')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+    const message = await channel.send({
+      content: config.admin_notification_role_id ? `<@&${config.admin_notification_role_id}>` : undefined,
+      embeds: [embed],
+      components: [row]
+    });
+
+    // Store the message ID in the verification event
+    const activeVerification = await this.verificationService.getActiveVerification(serverId, userId);
+    if (activeVerification) {
+      await this.verificationService.attachThreadToVerification(activeVerification.id, message.id);
+    }
+  }
+
+  async updateNotificationButtons(
+    message: Message,
+    userId: string,
+    status: VerificationStatus
+  ): Promise<void> {
+    let components: ActionRowBuilder<ButtonBuilder>[] = [];
+
+    switch (status) {
+      case VerificationStatus.VERIFIED:
+        // Keep history and add reopen button
+        components = [
+          new ActionRowBuilder<ButtonBuilder>()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId(`history_${userId}`)
+                .setLabel('View Full History')
+                .setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder()
+                .setCustomId(`reopen_${userId}`)
+                .setLabel('Reopen Verification')
+                .setStyle(ButtonStyle.Primary)
+            )
+        ];
+        break;
+
+      case VerificationStatus.REJECTED:
+        // Keep history and add reopen button
+        components = [
+          new ActionRowBuilder<ButtonBuilder>()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId(`history_${userId}`)
+                .setLabel('View Full History')
+                .setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder()
+                .setCustomId(`reopen_${userId}`)
+                .setLabel('Reopen Verification')
+                .setStyle(ButtonStyle.Primary)
+            )
+        ];
+        break;
+
+      case VerificationStatus.REOPENED:
+      case VerificationStatus.PENDING:
+        // Show all buttons
+        components = [
+          new ActionRowBuilder<ButtonBuilder>()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId(`verify_${userId}`)
+                .setLabel('Verify User')
+                .setStyle(ButtonStyle.Success),
+              new ButtonBuilder()
+                .setCustomId(`ban_${userId}`)
+                .setLabel('Ban User')
+                .setStyle(ButtonStyle.Danger),
+              new ButtonBuilder()
+                .setCustomId(`thread_${userId}`)
+                .setLabel('Create Thread')
+                .setStyle(ButtonStyle.Primary),
+              new ButtonBuilder()
+                .setCustomId(`history_${userId}`)
+                .setLabel('View Full History')
+                .setStyle(ButtonStyle.Secondary)
+            )
+        ];
+        break;
+    }
+
+    await message.edit({ components });
   }
 }
