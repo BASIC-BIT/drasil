@@ -34,6 +34,8 @@ import { UserModerationService, IUserModerationService } from '../services/UserM
 import { Bot, IBot } from '../Bot';
 import { IVerificationEventRepository, VerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { IAdminActionRepository, AdminActionRepository } from '../repositories/AdminActionRepository';
+import { IVerificationService, VerificationService } from '../services/VerificationService';
+import { IAdminActionService, AdminActionService } from '../services/AdminActionService';
 
 // Initialize container
 const container = new Container();
@@ -164,6 +166,15 @@ function configureServices(container: Container): void {
 
   // Add Bot binding
   container.bind<IBot>(TYPES.Bot).to(Bot).inSingletonScope();
+
+  // Add new service bindings
+  container.bind<IVerificationService>(TYPES.VerificationService)
+    .to(VerificationService)
+    .inSingletonScope();
+
+  container.bind<IAdminActionService>(TYPES.AdminActionService)
+    .to(AdminActionService)
+    .inSingletonScope();
 
   // Add more service bindings as they're refactored
 }

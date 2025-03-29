@@ -44,4 +44,8 @@ export const TYPES = {
   // New repositories
   VerificationEventRepository: Symbol.for('VerificationEventRepository'),
   AdminActionRepository: Symbol.for('AdminActionRepository'),
+
+  // New services
+  VerificationService: Symbol.for('VerificationService'),
+  AdminActionService: Symbol.for('AdminActionService'),
 };
