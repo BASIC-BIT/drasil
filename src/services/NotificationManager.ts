@@ -138,8 +138,16 @@ export interface INotificationManager {
    */
   handleHistoryButtonClick(interaction: ButtonInteraction, userId: string): Promise<boolean>;
 
-  createAdminNotification(serverId: string, userId: string, detectionResult: DetectionResult): Promise<void>;
-  updateNotificationButtons(message: Message, userId: string, status: VerificationStatus): Promise<void>;
+  createAdminNotification(
+    serverId: string,
+    userId: string,
+    detectionResult: DetectionResult
+  ): Promise<void>;
+  updateNotificationButtons(
+    message: Message,
+    userId: string,
+    status: VerificationStatus
+  ): Promise<void>;
 }
 
 /**
@@ -842,7 +850,11 @@ export class NotificationManager implements INotificationManager {
     }
   }
 
-  async createAdminNotification(serverId: string, userId: string, detectionResult: DetectionResult): Promise<void> {
+  async createAdminNotification(
+    serverId: string,
+    userId: string,
+    detectionResult: DetectionResult
+  ): Promise<void> {
     const config = await this.configService.getServerConfig(serverId);
     if (!config.admin_channel_id) {
       console.warn(`No admin channel configured for server ${serverId}`);
@@ -861,36 +873,40 @@ export class NotificationManager implements INotificationManager {
 
     // Create the embed using the existing method
     const embed = await this.createSuspiciousUserEmbed(member, detectionResult);
-    
+
     // Create initial button row with all actions
-    const row = new ActionRowBuilder<ButtonBuilder>()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId(`verify_${userId}`)
-          .setLabel('Verify User')
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId(`ban_${userId}`)
-          .setLabel('Ban User')
-          .setStyle(ButtonStyle.Danger),
-        new ButtonBuilder()
-          .setCustomId(`thread_${userId}`)
-          .setLabel('Create Thread')
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId(`history_${userId}`)
-          .setLabel('View Full History')
-          .setStyle(ButtonStyle.Secondary)
-      );
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`verify_${userId}`)
+        .setLabel('Verify User')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`ban_${userId}`)
+        .setLabel('Ban User')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`thread_${userId}`)
+        .setLabel('Create Thread')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`history_${userId}`)
+        .setLabel('View Full History')
+        .setStyle(ButtonStyle.Secondary)
+    );
 
     const message = await channel.send({
-      content: config.admin_notification_role_id ? `<@&${config.admin_notification_role_id}>` : undefined,
+      content: config.admin_notification_role_id
+        ? `<@&${config.admin_notification_role_id}>`
+        : undefined,
       embeds: [embed],
-      components: [row]
+      components: [row],
     });
 
     // Store the message ID in the verification event
-    const activeVerification = await this.verificationService.getActiveVerification(serverId, userId);
+    const activeVerification = await this.verificationService.getActiveVerification(
+      serverId,
+      userId
+    );
     if (activeVerification) {
       await this.verificationService.attachThreadToVerification(activeVerification.id, message.id);
     }
@@ -907,34 +923,32 @@ export class NotificationManager implements INotificationManager {
       case VerificationStatus.VERIFIED:
         // Keep history and add reopen button
         components = [
-          new ActionRowBuilder<ButtonBuilder>()
-            .addComponents(
-              new ButtonBuilder()
-                .setCustomId(`history_${userId}`)
-                .setLabel('View Full History')
-                .setStyle(ButtonStyle.Secondary),
-              new ButtonBuilder()
-                .setCustomId(`reopen_${userId}`)
-                .setLabel('Reopen Verification')
-                .setStyle(ButtonStyle.Primary)
-            )
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`history_${userId}`)
+              .setLabel('View Full History')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId(`reopen_${userId}`)
+              .setLabel('Reopen Verification')
+              .setStyle(ButtonStyle.Primary)
+          ),
         ];
         break;
 
       case VerificationStatus.REJECTED:
         // Keep history and add reopen button
         components = [
-          new ActionRowBuilder<ButtonBuilder>()
-            .addComponents(
-              new ButtonBuilder()
-                .setCustomId(`history_${userId}`)
-                .setLabel('View Full History')
-                .setStyle(ButtonStyle.Secondary),
-              new ButtonBuilder()
-                .setCustomId(`reopen_${userId}`)
-                .setLabel('Reopen Verification')
-                .setStyle(ButtonStyle.Primary)
-            )
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`history_${userId}`)
+              .setLabel('View Full History')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId(`reopen_${userId}`)
+              .setLabel('Reopen Verification')
+              .setStyle(ButtonStyle.Primary)
+          ),
         ];
         break;
 
@@ -942,25 +956,24 @@ export class NotificationManager implements INotificationManager {
       case VerificationStatus.PENDING:
         // Show all buttons
         components = [
-          new ActionRowBuilder<ButtonBuilder>()
-            .addComponents(
-              new ButtonBuilder()
-                .setCustomId(`verify_${userId}`)
-                .setLabel('Verify User')
-                .setStyle(ButtonStyle.Success),
-              new ButtonBuilder()
-                .setCustomId(`ban_${userId}`)
-                .setLabel('Ban User')
-                .setStyle(ButtonStyle.Danger),
-              new ButtonBuilder()
-                .setCustomId(`thread_${userId}`)
-                .setLabel('Create Thread')
-                .setStyle(ButtonStyle.Primary),
-              new ButtonBuilder()
-                .setCustomId(`history_${userId}`)
-                .setLabel('View Full History')
-                .setStyle(ButtonStyle.Secondary)
-            )
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`verify_${userId}`)
+              .setLabel('Verify User')
+              .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+              .setCustomId(`ban_${userId}`)
+              .setLabel('Ban User')
+              .setStyle(ButtonStyle.Danger),
+            new ButtonBuilder()
+              .setCustomId(`thread_${userId}`)
+              .setLabel('Create Thread')
+              .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+              .setCustomId(`history_${userId}`)
+              .setLabel('View Full History')
+              .setStyle(ButtonStyle.Secondary)
+          ),
         ];
         break;
     }

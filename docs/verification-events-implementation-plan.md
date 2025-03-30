@@ -116,16 +116,31 @@ COMMENT ON TABLE admin_actions IS 'Records all admin actions for audit and accou
 
 ```typescript
 export interface IVerificationEventRepository extends BaseRepository<VerificationEvent> {
-  findByUserAndServer(userId: string, serverId: string, options?: { limit?: number, offset?: number }): Promise<VerificationEvent[]>;
+  findByUserAndServer(
+    userId: string,
+    serverId: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<VerificationEvent[]>;
   findActiveByUserAndServer(userId: string, serverId: string): Promise<VerificationEvent | null>;
   findByDetectionEvent(detectionEventId: string): Promise<VerificationEvent[]>;
-  createFromDetection(detectionEventId: string, status: VerificationStatus): Promise<VerificationEvent>;
-  updateStatus(id: string, status: VerificationStatus, adminId?: string, notes?: string): Promise<VerificationEvent>;
+  createFromDetection(
+    detectionEventId: string,
+    status: VerificationStatus
+  ): Promise<VerificationEvent>;
+  updateStatus(
+    id: string,
+    status: VerificationStatus,
+    adminId?: string,
+    notes?: string
+  ): Promise<VerificationEvent>;
   getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]>;
 }
 
 @injectable()
-export class VerificationEventRepository extends SupabaseRepository<VerificationEvent> implements IVerificationEventRepository {
+export class VerificationEventRepository
+  extends SupabaseRepository<VerificationEvent>
+  implements IVerificationEventRepository
+{
   constructor(@inject(TYPES.SupabaseClient) supabase: SupabaseClient) {
     super(supabase, 'verification_events');
   }
@@ -138,15 +153,25 @@ export class VerificationEventRepository extends SupabaseRepository<Verification
 
 ```typescript
 export interface IAdminActionRepository extends BaseRepository<AdminAction> {
-  findByUserAndServer(userId: string, serverId: string, options?: { limit?: number, offset?: number }): Promise<AdminAction[]>;
-  findByAdmin(adminId: string, options?: { limit?: number, offset?: number }): Promise<AdminAction[]>;
+  findByUserAndServer(
+    userId: string,
+    serverId: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<AdminAction[]>;
+  findByAdmin(
+    adminId: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<AdminAction[]>;
   findByVerificationEvent(verificationEventId: string): Promise<AdminAction[]>;
   createAction(data: AdminActionCreate): Promise<AdminAction>;
   getActionHistory(userId: string, serverId: string): Promise<AdminAction[]>;
 }
 
 @injectable()
-export class AdminActionRepository extends SupabaseRepository<AdminAction> implements IAdminActionRepository {
+export class AdminActionRepository
+  extends SupabaseRepository<AdminAction>
+  implements IAdminActionRepository
+{
   constructor(@inject(TYPES.SupabaseClient) supabase: SupabaseClient) {
     super(supabase, 'admin_actions');
   }
@@ -161,19 +186,45 @@ export class AdminActionRepository extends SupabaseRepository<AdminAction> imple
 
 ```typescript
 export interface IVerificationService {
-  createVerificationEvent(serverId: string, userId: string, detectionEventId: string): Promise<VerificationEvent>;
+  createVerificationEvent(
+    serverId: string,
+    userId: string,
+    detectionEventId: string
+  ): Promise<VerificationEvent>;
   getActiveVerification(serverId: string, userId: string): Promise<VerificationEvent | null>;
-  verifyUser(serverId: string, userId: string, adminId: string, notes?: string): Promise<VerificationEvent>;
-  rejectUser(serverId: string, userId: string, adminId: string, notes?: string): Promise<VerificationEvent>;
-  reopenVerification(serverId: string, userId: string, adminId: string, notes?: string): Promise<VerificationEvent>;
-  getVerificationHistory(serverId: string, userId: string): Promise<Array<VerificationEventWithActions>>;
-  attachThreadToVerification(verificationEventId: string, threadId: string): Promise<VerificationEvent>;
+  verifyUser(
+    serverId: string,
+    userId: string,
+    adminId: string,
+    notes?: string
+  ): Promise<VerificationEvent>;
+  rejectUser(
+    serverId: string,
+    userId: string,
+    adminId: string,
+    notes?: string
+  ): Promise<VerificationEvent>;
+  reopenVerification(
+    serverId: string,
+    userId: string,
+    adminId: string,
+    notes?: string
+  ): Promise<VerificationEvent>;
+  getVerificationHistory(
+    serverId: string,
+    userId: string
+  ): Promise<Array<VerificationEventWithActions>>;
+  attachThreadToVerification(
+    verificationEventId: string,
+    threadId: string
+  ): Promise<VerificationEvent>;
 }
 
 @injectable()
 export class VerificationService implements IVerificationService {
   constructor(
-    @inject(TYPES.VerificationEventRepository) private verificationEventRepository: IVerificationEventRepository,
+    @inject(TYPES.VerificationEventRepository)
+    private verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.AdminActionRepository) private adminActionRepository: IAdminActionRepository,
     @inject(TYPES.UserRepository) private userRepository: IUserRepository,
     @inject(TYPES.ServerRepository) private serverRepository: IServerRepository,
@@ -190,9 +241,16 @@ export class VerificationService implements IVerificationService {
 ```typescript
 export interface IAdminActionService {
   recordAction(data: AdminActionCreate): Promise<AdminAction>;
-  getActionsByAdmin(adminId: string, options?: { limit?: number, offset?: number }): Promise<AdminAction[]>;
+  getActionsByAdmin(
+    adminId: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<AdminAction[]>;
   getActionsForUser(serverId: string, userId: string): Promise<AdminAction[]>;
-  getActionsByType(serverId: string, actionType: string, options?: { limit?: number, offset?: number }): Promise<AdminAction[]>;
+  getActionsByType(
+    serverId: string,
+    actionType: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<AdminAction[]>;
   formatActionSummary(action: AdminAction): string;
 }
 
@@ -222,7 +280,7 @@ Modify the NotificationManager class to:
 // In NotificationManager.ts
 async createAdminNotification(serverId: string, userId: string, detectionResult: DetectionResult): Promise<void> {
   // ... existing code ...
-  
+
   // Create buttons
   const row = new ActionRowBuilder<ButtonBuilder>()
     .addComponents(
@@ -243,7 +301,7 @@ async createAdminNotification(serverId: string, userId: string, detectionResult:
         .setLabel('View Full History')
         .setStyle(ButtonStyle.Secondary)
     );
-    
+
   // ... rest of the method ...
 }
 
@@ -251,7 +309,7 @@ async createAdminNotification(serverId: string, userId: string, detectionResult:
 // Updated to handle verified cases
 async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
   // ... existing code ...
-  
+
   if (action === 'verify') {
     // Verify the user
     await this.verificationService.verifyUser(
@@ -260,11 +318,11 @@ async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
       interaction.user.id,
       'Verified via button interaction'
     );
-    
+
     // Get message components and filter buttons
     const message = interaction.message as Message;
     const components = message.components;
-    
+
     // Keep only the history and reopen buttons
     const newRow = new ActionRowBuilder<ButtonBuilder>()
       .addComponents(
@@ -277,18 +335,18 @@ async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
           .setLabel('Reopen Verification')
           .setStyle(ButtonStyle.Primary)
       );
-    
+
     // Update the message with new components
     await interaction.update({
       components: [newRow]
     });
-    
+
     await interaction.followUp({
       content: `User <@${targetUserId}> has been verified and can now access the server.`,
       ephemeral: true
     });
   }
-  
+
   // Add handler for reopen action
   if (action === 'reopen') {
     await this.verificationService.reopenVerification(
@@ -297,7 +355,7 @@ async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
       interaction.user.id,
       'Reopened via button interaction'
     );
-    
+
     // Update UI to show all buttons again
     const row = new ActionRowBuilder<ButtonBuilder>()
       .addComponents(
@@ -318,17 +376,17 @@ async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
           .setLabel('View Full History')
           .setStyle(ButtonStyle.Secondary)
       );
-    
+
     await interaction.update({
       components: [row]
     });
-    
+
     await interaction.followUp({
       content: `Verification for <@${targetUserId}> has been reopened. The user has been restricted again.`,
       ephemeral: true
     });
   }
-  
+
   // ... rest of the method ...
 }
 ```
@@ -345,21 +403,21 @@ export function formatHistoryWithResolution(
   adminActions: AdminAction[]
 ): string {
   let output = '# User Detection and Verification History\n\n';
-  
+
   // Group events by date
   const eventsByDate = groupEventsByDate(detectionEvents, verificationEvents, adminActions);
-  
+
   // Format each date group
   for (const [date, events] of Object.entries(eventsByDate)) {
     output += `## ${date}\n\n`;
-    
+
     // Format events chronologically
     for (const event of events) {
       output += formatEvent(event);
       output += '\n\n';
     }
   }
-  
+
   return output;
 }
 
@@ -374,7 +432,7 @@ function formatEvent(event: any): string {
     // Admin action formatting
     return formatAdminAction(event);
   }
-  
+
   return '';
 }
 
@@ -395,7 +453,7 @@ export class Bot implements IBot {
   ) {
     // Initialization...
   }
-  
+
   // Update methods to use the new services...
 }
 ```
@@ -409,9 +467,9 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     // Existing dependencies...
     @inject(TYPES.VerificationService) private verificationService: IVerificationService
   ) {}
-  
+
   // Update methods to create verification events...
-  
+
   private async storeDetectionResult(
     serverId: string,
     userId: string,
@@ -419,18 +477,14 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     messageId?: string
   ): Promise<void> {
     // Existing code...
-    
+
     const detectionEvent = await this.detectionEventsRepository.create(detectionEvent);
-    
+
     // If suspicious, create a verification event
     if (isRestricted) {
-      await this.verificationService.createVerificationEvent(
-        serverId,
-        userId,
-        detectionEvent.id
-      );
+      await this.verificationService.createVerificationEvent(serverId, userId, detectionEvent.id);
     }
-    
+
     // Rest of existing code...
   }
 }
@@ -442,20 +496,24 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
 // In container.ts
 function configureRepositories(container: Container): void {
   // Existing repositories...
-  container.bind<IVerificationEventRepository>(TYPES.VerificationEventRepository)
+  container
+    .bind<IVerificationEventRepository>(TYPES.VerificationEventRepository)
     .to(VerificationEventRepository)
     .inSingletonScope();
-  container.bind<IAdminActionRepository>(TYPES.AdminActionRepository)
+  container
+    .bind<IAdminActionRepository>(TYPES.AdminActionRepository)
     .to(AdminActionRepository)
     .inSingletonScope();
 }
 
 function configureServices(container: Container): void {
   // Existing services...
-  container.bind<IVerificationService>(TYPES.VerificationService)
+  container
+    .bind<IVerificationService>(TYPES.VerificationService)
     .to(VerificationService)
     .inSingletonScope();
-  container.bind<IAdminActionService>(TYPES.AdminActionService)
+  container
+    .bind<IAdminActionService>(TYPES.AdminActionService)
     .to(AdminActionService)
     .inSingletonScope();
 }
@@ -467,11 +525,11 @@ function configureServices(container: Container): void {
 // In symbols.ts
 export const TYPES = {
   // Existing symbols...
-  
+
   // New repositories
   VerificationEventRepository: Symbol.for('VerificationEventRepository'),
   AdminActionRepository: Symbol.for('AdminActionRepository'),
-  
+
   // New services
   VerificationService: Symbol.for('VerificationService'),
   AdminActionService: Symbol.for('AdminActionService'),
@@ -488,26 +546,26 @@ Create comprehensive tests for the new repositories:
 describe('VerificationEventRepository', () => {
   let repository: IVerificationEventRepository;
   let supabase: SupabaseClient;
-  
+
   beforeEach(() => {
     // Setup mocks and repository instance
   });
-  
+
   afterEach(() => {
     // Clean up
     jest.clearAllMocks();
   });
-  
+
   describe('findByUserAndServer', () => {
     it('should return verification events for a user in a specific server', async () => {
       // Test implementation
     });
-    
+
     it('should handle error gracefully', async () => {
       // Test implementation
     });
   });
-  
+
   // Additional test cases...
 });
 
@@ -525,30 +583,30 @@ describe('VerificationService', () => {
   let mockAdminActionRepository: jest.Mocked<IAdminActionRepository>;
   let mockRoleManager: jest.Mocked<IRoleManager>;
   // Other mocks...
-  
+
   beforeEach(() => {
     // Setup mocks and service instance
   });
-  
+
   afterEach(() => {
     // Clean up
     jest.clearAllMocks();
   });
-  
+
   describe('verifyUser', () => {
     it('should verify a user and create an admin action', async () => {
       // Test implementation
     });
-    
+
     it('should update server member status', async () => {
       // Test implementation
     });
-    
+
     it('should handle errors gracefully', async () => {
       // Test implementation
     });
   });
-  
+
   // Additional test cases...
 });
 
@@ -563,25 +621,25 @@ Create integration tests that verify the entire workflow:
 describe('Verification Flow Integration', () => {
   let container: Container;
   let bot: IBot;
-  
+
   beforeEach(() => {
     // Setup test container with real implementations but mock external dependencies
     container = createServiceTestContainer(TYPES.Bot, Bot);
     bot = container.get<IBot>(TYPES.Bot);
   });
-  
+
   it('should create verification event when detecting suspicious user', async () => {
     // Test implementation
   });
-  
+
   it('should maintain history button when verifying user', async () => {
     // Test implementation
   });
-  
+
   it('should properly reopen verification', async () => {
     // Test implementation
   });
-  
+
   // Additional test cases...
 });
 ```
@@ -601,10 +659,10 @@ async function migrateExistingData(): Promise<void> {
   // Get all detection events with suspicious users
   const suspiciousDetectionEvents = await detectionEventsRepository.findMany({
     where: {
-      label: 'SUSPICIOUS'
-    }
+      label: 'SUSPICIOUS',
+    },
   });
-  
+
   // Create verification events for each detection event
   for (const detectionEvent of suspiciousDetectionEvents) {
     // Check if server member is still restricted
@@ -612,12 +670,12 @@ async function migrateExistingData(): Promise<void> {
       detectionEvent.server_id,
       detectionEvent.user_id
     );
-    
+
     // Determine verification status based on current restriction
-    const status = serverMember?.is_restricted 
-      ? VerificationStatus.PENDING 
+    const status = serverMember?.is_restricted
+      ? VerificationStatus.PENDING
       : VerificationStatus.VERIFIED;
-    
+
     // Create verification event
     await verificationEventRepository.create({
       server_id: detectionEvent.server_id,
@@ -626,9 +684,9 @@ async function migrateExistingData(): Promise<void> {
       status,
       created_at: detectionEvent.detected_at,
       updated_at: new Date(),
-      resolved_at: status === VerificationStatus.VERIFIED ? new Date() : undefined
+      resolved_at: status === VerificationStatus.VERIFIED ? new Date() : undefined,
     });
-    
+
     // If there was an admin action, record it
     if (detectionEvent.admin_action && detectionEvent.admin_action_by) {
       await adminActionRepository.create({
@@ -640,7 +698,7 @@ async function migrateExistingData(): Promise<void> {
         action_type: mapActionType(detectionEvent.admin_action),
         action_at: detectionEvent.admin_action_at || new Date(),
         previous_status: VerificationStatus.PENDING,
-        new_status: mapActionStatus(detectionEvent.admin_action)
+        new_status: mapActionStatus(detectionEvent.admin_action),
       });
     }
   }
@@ -650,18 +708,24 @@ async function migrateExistingData(): Promise<void> {
 function mapActionType(adminAction: string): string {
   // Map admin_action values to action_type values
   switch (adminAction) {
-    case 'Verified': return 'verify';
-    case 'Banned': return 'ban';
-    default: return 'unknown';
+    case 'Verified':
+      return 'verify';
+    case 'Banned':
+      return 'ban';
+    default:
+      return 'unknown';
   }
 }
 
 function mapActionStatus(adminAction: string): string {
   // Map admin_action values to status values
   switch (adminAction) {
-    case 'Verified': return VerificationStatus.VERIFIED;
-    case 'Banned': return VerificationStatus.REJECTED;
-    default: return VerificationStatus.PENDING;
+    case 'Verified':
+      return VerificationStatus.VERIFIED;
+    case 'Banned':
+      return VerificationStatus.REJECTED;
+    default:
+      return VerificationStatus.PENDING;
   }
 }
 ```
@@ -680,7 +744,7 @@ interface GlobalSettings {
 // Default to false initially
 const defaultGlobalSettings: GlobalSettings = {
   // Existing defaults...
-  useNewVerificationFlow: false
+  useNewVerificationFlow: false,
 };
 
 // In relevant services/repositories
@@ -728,12 +792,15 @@ if (this.configService.getGlobalSettings().useNewVerificationFlow) {
 ### Risks
 
 1. **Data Loss**: Existing verification statuses might be lost during migration.
+
    - **Mitigation**: Thorough testing of migration scripts and keeping the server_members status fields as a fallback.
 
 2. **Service Disruption**: Changes to the verification flow could disrupt ongoing moderations.
+
    - **Mitigation**: Use feature flags to roll out changes gradually and carefully schedule deployment.
 
 3. **Performance Impact**: New tables and queries might impact system performance.
+
    - **Mitigation**: Proper indexing, query optimization, and performance testing.
 
 4. **UI Regression**: Changes to button handling might break existing UI flows.

@@ -1,7 +1,10 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { Container } from 'inversify';
 import { TYPES } from '../../di/symbols';
-import { VerificationEventRepository, IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
+import {
+  VerificationEventRepository,
+  IVerificationEventRepository,
+} from '../../repositories/VerificationEventRepository';
 import { VerificationStatus } from '../../repositories/types';
 import { createTestContainer } from '../utils/test-container';
 import { PostgrestError } from '@supabase/postgrest-js';
@@ -14,7 +17,9 @@ describe('VerificationEventRepository', () => {
   beforeEach(() => {
     container = createTestContainer();
     repository = container.get<IVerificationEventRepository>(TYPES.VerificationEventRepository);
-    mockSupabase = container.get<SupabaseClient>(TYPES.SupabaseClient) as jest.Mocked<SupabaseClient>;
+    mockSupabase = container.get<SupabaseClient>(
+      TYPES.SupabaseClient
+    ) as jest.Mocked<SupabaseClient>;
   });
 
   afterEach(() => {
@@ -31,11 +36,16 @@ describe('VerificationEventRepository', () => {
           status: VerificationStatus.PENDING,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
-          metadata: {}
-        }
+          metadata: {},
+        },
       ];
 
-      mockSupabase.from().select().eq().eq().order()
+      mockSupabase
+        .from()
+        .select()
+        .eq()
+        .eq()
+        .order()
         .mockResolvedValue({ data: mockEvents, error: null });
 
       const result = await repository.findByUserAndServer('user1', 'server1');
@@ -47,10 +57,15 @@ describe('VerificationEventRepository', () => {
         code: 'ERROR',
         message: 'Database error',
         details: '',
-        hint: ''
+        hint: '',
       };
 
-      mockSupabase.from().select().eq().eq().order()
+      mockSupabase
+        .from()
+        .select()
+        .eq()
+        .eq()
+        .order()
         .mockResolvedValue({ data: null, error: mockError });
 
       const result = await repository.findByUserAndServer('user1', 'server1');
@@ -67,10 +82,18 @@ describe('VerificationEventRepository', () => {
         status: VerificationStatus.PENDING,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-        metadata: {}
+        metadata: {},
       };
 
-      mockSupabase.from().select().eq().eq().eq().order().limit().single()
+      mockSupabase
+        .from()
+        .select()
+        .eq()
+        .eq()
+        .eq()
+        .order()
+        .limit()
+        .single()
         .mockResolvedValue({ data: mockEvent, error: null });
 
       const result = await repository.findActiveByUserAndServer('user1', 'server1');
@@ -82,10 +105,18 @@ describe('VerificationEventRepository', () => {
         code: 'PGRST116',
         message: 'No rows returned',
         details: '',
-        hint: ''
+        hint: '',
       };
 
-      mockSupabase.from().select().eq().eq().eq().order().limit().single()
+      mockSupabase
+        .from()
+        .select()
+        .eq()
+        .eq()
+        .eq()
+        .order()
+        .limit()
+        .single()
         .mockResolvedValue({ data: null, error: mockError });
 
       const result = await repository.findActiveByUserAndServer('user1', 'server1');
@@ -97,7 +128,7 @@ describe('VerificationEventRepository', () => {
     it('should create a verification event from a detection event', async () => {
       const mockDetectionEvent = {
         server_id: 'server1',
-        user_id: 'user1'
+        user_id: 'user1',
       };
 
       const mockCreatedEvent = {
@@ -108,17 +139,24 @@ describe('VerificationEventRepository', () => {
         status: VerificationStatus.PENDING,
         created_at: expect.any(String),
         updated_at: expect.any(String),
-        metadata: {}
+        metadata: {},
       };
 
-      mockSupabase.from().select().eq().single()
+      mockSupabase
+        .from()
+        .select()
+        .eq()
+        .single()
         .mockResolvedValue({ data: mockDetectionEvent, error: null });
 
-      mockSupabase.from().insert().select().single()
+      mockSupabase
+        .from()
+        .insert()
+        .select()
+        .single()
         .mockResolvedValue({ data: mockCreatedEvent, error: null });
 
-      mockSupabase.from().update().eq()
-        .mockResolvedValue({ data: null, error: null });
+      mockSupabase.from().update().eq().mockResolvedValue({ data: null, error: null });
 
       const result = await repository.createFromDetection('detection1', VerificationStatus.PENDING);
       expect(result).toEqual(mockCreatedEvent);
@@ -129,14 +167,19 @@ describe('VerificationEventRepository', () => {
         code: 'PGRST116',
         message: 'No rows returned',
         details: '',
-        hint: ''
+        hint: '',
       };
 
-      mockSupabase.from().select().eq().single()
+      mockSupabase
+        .from()
+        .select()
+        .eq()
+        .single()
         .mockResolvedValue({ data: null, error: mockError });
 
-      await expect(repository.createFromDetection('detection1', VerificationStatus.PENDING))
-        .rejects.toThrow('Detection event detection1 not found');
+      await expect(
+        repository.createFromDetection('detection1', VerificationStatus.PENDING)
+      ).rejects.toThrow('Detection event detection1 not found');
     });
   });
 
@@ -151,13 +194,23 @@ describe('VerificationEventRepository', () => {
         updated_at: expect.any(String),
         resolved_at: expect.any(String),
         notes: 'Test note',
-        metadata: {}
+        metadata: {},
       };
 
-      mockSupabase.from().update().eq().select().single()
+      mockSupabase
+        .from()
+        .update()
+        .eq()
+        .select()
+        .single()
         .mockResolvedValue({ data: mockUpdatedEvent, error: null });
 
-      const result = await repository.updateStatus('1', VerificationStatus.VERIFIED, 'admin1', 'Test note');
+      const result = await repository.updateStatus(
+        '1',
+        VerificationStatus.VERIFIED,
+        'admin1',
+        'Test note'
+      );
       expect(result).toEqual(mockUpdatedEvent);
       expect(result.resolved_at).toBeDefined();
     });
@@ -167,14 +220,20 @@ describe('VerificationEventRepository', () => {
         code: 'PGRST116',
         message: 'No rows returned',
         details: '',
-        hint: ''
+        hint: '',
       };
 
-      mockSupabase.from().update().eq().select().single()
+      mockSupabase
+        .from()
+        .update()
+        .eq()
+        .select()
+        .single()
         .mockResolvedValue({ data: null, error: mockError });
 
-      await expect(repository.updateStatus('1', VerificationStatus.VERIFIED))
-        .rejects.toThrow('Verification event 1 not found');
+      await expect(repository.updateStatus('1', VerificationStatus.VERIFIED)).rejects.toThrow(
+        'Verification event 1 not found'
+      );
     });
   });
-}); 
+});

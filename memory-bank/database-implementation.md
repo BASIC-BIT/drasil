@@ -43,232 +43,170 @@ Supabase was selected as our database solution for several reasons:
 
 ## Database Schema
 
-### Current Tables
+### Current Implementation
 
-The following tables are currently implemented in the schema:
+The database schema is implemented in a single migration file (`20250327000000_initial_schema.sql`) as the project is pre-release. This consolidated approach simplifies schema management and provides a clear starting point for the database structure.
 
-```sql
--- Servers table (guild configuration)
-CREATE TABLE IF NOT EXISTS servers (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  guild_id TEXT UNIQUE NOT NULL,
-  restricted_role_id TEXT,
-  admin_channel_id TEXT,
-  verification_channel_id TEXT,
-  admin_notification_role_id TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  settings JSONB DEFAULT '{}'::JSONB,
-  is_active BOOLEAN DEFAULT TRUE
-);
+Key tables and their relationships:
 
-COMMENT ON TABLE servers IS 'Discord servers where the bot is installed';
-```
+1. **servers**:
+   - Primary key: guild_id (TEXT) - Using Discord guild ID directly
+   - Configuration fields for roles and channels
+   - JSONB settings for flexible configuration
+   - Timestamps for creation and updates
 
-### Planned Tables
+2. **users**:
+   - Primary key: discord_id (TEXT) - Using Discord user ID directly
+   - Global reputation tracking
+   - Account metadata and creation date
+   - Cross-server user information
 
-The following tables are defined in the schema but not yet fully utilized:
+3. **server_members**:
+   - Composite primary key (server_id, user_id)
+   - Foreign keys to servers and users
+   - Server-specific reputation and status
+   - Message and activity tracking
 
-```sql
--- Users table
-CREATE TABLE IF NOT EXISTS users (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  discord_id TEXT NOT NULL,
-  username TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  global_reputation_score REAL,
-  account_created_at TIMESTAMP WITH TIME ZONE,
-  metadata JSONB DEFAULT '{}'::JSONB,
-  UNIQUE(discord_id)
-);
+4. **detection_events**:
+   - UUID primary key
+   - Links to server and user
+   - Detection metadata and confidence scores
+   - Admin action tracking
+   - Circular reference to verification_events
 
-COMMENT ON TABLE users IS 'Discord users across all servers';
-COMMENT ON COLUMN users.global_reputation_score IS 'Cross-server reputation score (higher is more trusted)';
-```
+5. **verification_events**:
+   - UUID primary key
+   - Links to detection events
+   - Thread and message tracking
+   - Status management (pending, verified, rejected, reopened)
+   - Timestamps for lifecycle tracking
 
-```sql
--- Server members (users in specific servers)
-CREATE TABLE IF NOT EXISTS server_members (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  join_date TIMESTAMP WITH TIME ZONE,
-  reputation_score REAL DEFAULT 0.0,
-  is_restricted BOOLEAN DEFAULT FALSE,
-  last_verified_at TIMESTAMP WITH TIME ZONE,
-  last_message_at TIMESTAMP WITH TIME ZONE,
-  message_count INTEGER DEFAULT 0,
-  UNIQUE(server_id, user_id)
-);
+6. **admin_actions**:
+   - UUID primary key
+   - Links to verification events and detection events
+   - Admin attribution
+   - Action type and status changes
+   - Audit trail metadata
 
-CREATE INDEX idx_server_members_server ON server_members(server_id);
-CREATE INDEX idx_server_members_user ON server_members(user_id);
+### Security Implementation
 
-COMMENT ON TABLE server_members IS 'Mapping table for users in specific Discord servers';
-```
+- Row Level Security (RLS) enabled on all tables
+- Service role policies for full access
+- Proper foreign key constraints with CASCADE/SET NULL rules
+- UUID generation for internal IDs
 
-The following tables are planned for future implementation:
+### Performance Optimization
 
-```sql
--- Detection events
-CREATE TABLE IF NOT EXISTS detection_events (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  message_id TEXT,
-  detection_type TEXT NOT NULL,
-  confidence REAL,
-  confidence_level TEXT, -- 'Low', 'Medium', 'High'
-  reasons TEXT[],
-  used_gpt BOOLEAN DEFAULT FALSE,
-  detected_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  admin_action TEXT, -- 'Verified', 'Banned', 'Ignored'
-  admin_action_by TEXT, -- Discord ID of admin who took action
-  admin_action_at TIMESTAMP WITH TIME ZONE,
-  metadata JSONB DEFAULT '{}'::JSONB
-);
+- Strategic indexes on frequently queried columns
+- Composite indexes for common query patterns
+- Helper functions for common operations (e.g., get_recent_message_count)
+- JSONB for flexible metadata storage
 
-CREATE INDEX idx_detection_events_server ON detection_events(server_id);
-CREATE INDEX idx_detection_events_user ON detection_events(user_id);
-CREATE INDEX idx_detection_events_date ON detection_events(detected_at);
+### Planned Future Tables
 
-COMMENT ON TABLE detection_events IS 'Records of spam detection incidents';
-```
+The following tables are planned for future implementation to enhance the bot's capabilities:
 
-```sql
--- Messages (for suspicious users)
-CREATE TABLE IF NOT EXISTS messages (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  message_id TEXT NOT NULL,
-  content TEXT,
-  sent_at TIMESTAMP WITH TIME ZONE,
-  channel_id TEXT,
-  is_flagged BOOLEAN DEFAULT FALSE,
-  metadata JSONB DEFAULT '{}'::JSONB,
-  UNIQUE(server_id, message_id)
-);
+1. **messages**:
+   ```sql
+   CREATE TABLE IF NOT EXISTS messages (
+     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+     server_id TEXT REFERENCES servers(guild_id) ON DELETE CASCADE,
+     user_id TEXT REFERENCES users(discord_id) ON DELETE CASCADE,
+     message_id TEXT NOT NULL,
+     content TEXT,
+     sent_at TIMESTAMP WITH TIME ZONE,
+     channel_id TEXT,
+     is_flagged BOOLEAN DEFAULT FALSE,
+     metadata JSONB DEFAULT '{}'::JSONB,
+     UNIQUE(server_id, message_id)
+   );
+   ```
+   - Purpose: Store message content for flagged users
+   - Limited retention policy (7 days)
+   - Used for pattern analysis and training data
 
-CREATE INDEX idx_messages_server ON messages(server_id);
-CREATE INDEX idx_messages_user ON messages(user_id);
-CREATE INDEX idx_messages_date ON messages(sent_at);
+2. **analytics**:
+   ```sql
+   CREATE TABLE IF NOT EXISTS analytics (
+     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+     server_id TEXT REFERENCES servers(guild_id) ON DELETE CASCADE,
+     date DATE NOT NULL,
+     detection_count INTEGER DEFAULT 0,
+     verification_count INTEGER DEFAULT 0,
+     ban_count INTEGER DEFAULT 0,
+     verify_count INTEGER DEFAULT 0,
+     false_positive_count INTEGER DEFAULT 0,
+     gpt_call_count INTEGER DEFAULT 0,
+     message_count INTEGER DEFAULT 0,
+     join_count INTEGER DEFAULT 0,
+     metrics JSONB DEFAULT '{}'::JSONB,
+     UNIQUE(server_id, date)
+   );
+   ```
+   - Purpose: Track daily metrics per server
+   - Aggregated statistics for reporting
+   - Performance monitoring data
 
-COMMENT ON TABLE messages IS 'Message content for flagged users (limited retention)';
-```
+3. **server_relationships**:
+   ```sql
+   CREATE TABLE IF NOT EXISTS server_relationships (
+     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+     source_server_id TEXT REFERENCES servers(guild_id) ON DELETE CASCADE,
+     target_server_id TEXT REFERENCES servers(guild_id) ON DELETE CASCADE,
+     relationship_type TEXT NOT NULL, -- 'Trust', 'Distrust', 'Neutral'
+     trust_level INTEGER DEFAULT 0,
+     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+     created_by TEXT, -- Discord ID of admin who created relationship
+     UNIQUE(source_server_id, target_server_id)
+   );
+   ```
+   - Purpose: Enable cross-server trust networks
+   - Share reputation data between trusted servers
+   - Collaborative spam prevention
 
-```sql
--- Verification threads
-CREATE TABLE IF NOT EXISTS verification_threads (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  thread_id TEXT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  closed_at TIMESTAMP WITH TIME ZONE,
-  outcome TEXT, -- 'Verified', 'Banned', 'Timeout', 'Abandoned'
-  admin_id TEXT,
-  notes TEXT,
-  metadata JSONB DEFAULT '{}'::JSONB,
-  UNIQUE(server_id, thread_id)
-);
+4. **training_data**:
+   ```sql
+   CREATE TABLE IF NOT EXISTS training_data (
+     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+     server_id TEXT REFERENCES servers(guild_id) ON DELETE CASCADE,
+     user_id TEXT REFERENCES users(discord_id),
+     content TEXT,
+     context JSONB,
+     label TEXT, -- 'SPAM', 'NOT_SPAM', 'UNCERTAIN'
+     labeled_by TEXT,
+     labeled_at TIMESTAMP WITH TIME ZONE,
+     collected_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+     quality_score INTEGER, -- 1-5, higher is better training data
+     metadata JSONB DEFAULT '{}'::JSONB
+   );
+   ```
+   - Purpose: Collect data for model training
+   - Store labeled examples for future AI improvements
+   - Quality scoring for training data
 
-CREATE INDEX idx_verification_threads_server ON verification_threads(server_id);
-CREATE INDEX idx_verification_threads_user ON verification_threads(user_id);
+5. **gpt_usage**:
+   ```sql
+   CREATE TABLE IF NOT EXISTS gpt_usage (
+     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+     server_id TEXT REFERENCES servers(guild_id) ON DELETE CASCADE,
+     user_id TEXT REFERENCES users(discord_id),
+     timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+     model TEXT NOT NULL,
+     prompt_tokens INTEGER NOT NULL,
+     completion_tokens INTEGER NOT NULL,
+     total_tokens INTEGER NOT NULL,
+     purpose TEXT, -- 'UserClassification', 'MessageAnalysis', etc.
+     success BOOLEAN DEFAULT TRUE,
+     latency_ms INTEGER,
+     metadata JSONB DEFAULT '{}'::JSONB
+   );
+   ```
+   - Purpose: Track GPT API usage and costs
+   - Monitor performance and latency
+   - Optimize token usage
 
-COMMENT ON TABLE verification_threads IS 'Verification threads for suspicious users';
-```
-
-```sql
--- Analytics
-CREATE TABLE IF NOT EXISTS analytics (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
-  date DATE NOT NULL,
-  detection_count INTEGER DEFAULT 0,
-  verification_count INTEGER DEFAULT 0,
-  ban_count INTEGER DEFAULT 0,
-  verify_count INTEGER DEFAULT 0,
-  false_positive_count INTEGER DEFAULT 0,
-  gpt_call_count INTEGER DEFAULT 0,
-  message_count INTEGER DEFAULT 0,
-  join_count INTEGER DEFAULT 0,
-  metrics JSONB DEFAULT '{}'::JSONB,
-  UNIQUE(server_id, date)
-);
-
-CREATE INDEX idx_analytics_server ON analytics(server_id);
-CREATE INDEX idx_analytics_date ON analytics(date);
-
-COMMENT ON TABLE analytics IS 'Daily aggregated metrics per server';
-```
-
-```sql
--- Server trust network
-CREATE TABLE IF NOT EXISTS server_relationships (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  source_server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
-  target_server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
-  relationship_type TEXT NOT NULL, -- 'Trust', 'Distrust', 'Neutral'
-  trust_level INTEGER DEFAULT 0,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  created_by TEXT, -- Discord ID of admin who created relationship
-  UNIQUE(source_server_id, target_server_id)
-);
-
-CREATE INDEX idx_server_relationships_source ON server_relationships(source_server_id);
-CREATE INDEX idx_server_relationships_target ON server_relationships(target_server_id);
-
-COMMENT ON TABLE server_relationships IS 'Trust relationships between servers';
-```
-
-```sql
--- Training data
-CREATE TABLE IF NOT EXISTS training_data (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id),
-  content TEXT,
-  context JSONB,
-  label TEXT, -- 'SPAM', 'NOT_SPAM', 'UNCERTAIN'
-  labeled_by TEXT,
-  labeled_at TIMESTAMP WITH TIME ZONE,
-  collected_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  quality_score INTEGER, -- 1-5, higher is better training data
-  metadata JSONB DEFAULT '{}'::JSONB
-);
-
-CREATE INDEX idx_training_data_server ON training_data(server_id);
-CREATE INDEX idx_training_data_label ON training_data(label);
-CREATE INDEX idx_training_data_quality ON training_data(quality_score);
-
-COMMENT ON TABLE training_data IS 'Collected data for future model training';
-```
-
-```sql
--- GPT usage tracking
-CREATE TABLE gpt_usage (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id),
-  timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  model TEXT NOT NULL,
-  prompt_tokens INTEGER NOT NULL,
-  completion_tokens INTEGER NOT NULL,
-  total_tokens INTEGER NOT NULL,
-  purpose TEXT, -- 'UserClassification', 'MessageAnalysis', etc.
-  success BOOLEAN DEFAULT TRUE,
-  latency_ms INTEGER,
-  metadata JSONB DEFAULT '{}'::JSONB
-);
-
-CREATE INDEX idx_gpt_usage_server ON gpt_usage(server_id);
-CREATE INDEX idx_gpt_usage_date ON gpt_usage(timestamp);
-
-COMMENT ON TABLE gpt_usage IS 'Tracks GPT API usage for cost analysis';
-```
+These planned tables will be implemented in future migrations as the bot's features expand. Each addition will follow the same security and performance optimization patterns established in the current schema.
 
 ## Implementation Plan
 

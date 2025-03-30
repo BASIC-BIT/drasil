@@ -3,20 +3,30 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { TYPES } from '../di/symbols';
 import { SupabaseRepository } from './SupabaseRepository';
 import { AdminAction, AdminActionCreate } from './types';
-import { RepositoryError } from './errors';
+import { RepositoryError } from './SupabaseRepository';
 
 export interface IAdminActionRepository {
-  findByUserAndServer(userId: string, serverId: string, options?: { limit?: number; offset?: number }): Promise<AdminAction[]>;
-  findByAdmin(adminId: string, options?: { limit?: number; offset?: number }): Promise<AdminAction[]>;
+  findByUserAndServer(
+    userId: string,
+    serverId: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<AdminAction[]>;
+  findByAdmin(
+    adminId: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<AdminAction[]>;
   findByVerificationEvent(verificationEventId: string): Promise<AdminAction[]>;
   createAction(data: AdminActionCreate): Promise<AdminAction>;
   getActionHistory(userId: string, serverId: string): Promise<AdminAction[]>;
 }
 
 @injectable()
-export class AdminActionRepository extends SupabaseRepository<AdminAction> implements IAdminActionRepository {
-  constructor(@inject(TYPES.SupabaseClient) supabase: SupabaseClient) {
-    super(supabase, 'admin_actions');
+export class AdminActionRepository
+  extends SupabaseRepository<AdminAction>
+  implements IAdminActionRepository
+{
+  constructor(@inject(TYPES.SupabaseClient) supabaseClient: SupabaseClient) {
+    super('admin_actions', supabaseClient);
   }
 
   async findByUserAndServer(
@@ -25,7 +35,7 @@ export class AdminActionRepository extends SupabaseRepository<AdminAction> imple
     options: { limit?: number; offset?: number } = {}
   ): Promise<AdminAction[]> {
     try {
-      let query = this.supabase
+      let query = this.supabaseClient
         .from(this.tableName)
         .select('*')
         .eq('user_id', userId)
@@ -42,12 +52,15 @@ export class AdminActionRepository extends SupabaseRepository<AdminAction> imple
       const { data, error } = await query;
 
       if (error) {
-        throw new RepositoryError(`Error finding admin actions for user ${userId} in server ${serverId}`, error);
+        throw new RepositoryError(
+          `Error finding admin actions for user ${userId} in server ${serverId}`,
+          error
+        );
       }
 
       return data as AdminAction[];
     } catch (error) {
-      this.handleError(error);
+      this.handleError(error as Error, 'findByUserAndServer');
       return [];
     }
   }
@@ -57,7 +70,7 @@ export class AdminActionRepository extends SupabaseRepository<AdminAction> imple
     options: { limit?: number; offset?: number } = {}
   ): Promise<AdminAction[]> {
     try {
-      let query = this.supabase
+      let query = this.supabaseClient
         .from(this.tableName)
         .select('*')
         .eq('admin_id', adminId)
@@ -78,26 +91,29 @@ export class AdminActionRepository extends SupabaseRepository<AdminAction> imple
 
       return data as AdminAction[];
     } catch (error) {
-      this.handleError(error);
+      this.handleError(error as Error, 'findByAdmin');
       return [];
     }
   }
 
   async findByVerificationEvent(verificationEventId: string): Promise<AdminAction[]> {
     try {
-      const { data, error } = await this.supabase
+      const { data, error } = await this.supabaseClient
         .from(this.tableName)
         .select('*')
         .eq('verification_event_id', verificationEventId)
         .order('action_at', { ascending: false });
 
       if (error) {
-        throw new RepositoryError(`Error finding admin actions for verification event ${verificationEventId}`, error);
+        throw new RepositoryError(
+          `Error finding admin actions for verification event ${verificationEventId}`,
+          error
+        );
       }
 
       return data as AdminAction[];
     } catch (error) {
-      this.handleError(error);
+      this.handleError(error as Error, 'findByVerificationEvent');
       return [];
     }
   }
@@ -107,10 +123,10 @@ export class AdminActionRepository extends SupabaseRepository<AdminAction> imple
       const actionData = {
         ...data,
         action_at: new Date().toISOString(),
-        metadata: data.metadata || {}
+        metadata: data.metadata || {},
       };
 
-      const { data: createdAction, error } = await this.supabase
+      const { data: createdAction, error } = await this.supabaseClient
         .from(this.tableName)
         .insert(actionData)
         .select()
@@ -126,7 +142,7 @@ export class AdminActionRepository extends SupabaseRepository<AdminAction> imple
 
       return createdAction as AdminAction;
     } catch (error) {
-      this.handleError(error);
+      this.handleError(error as Error, 'createAction');
       throw error;
     }
   }
@@ -134,4 +150,4 @@ export class AdminActionRepository extends SupabaseRepository<AdminAction> imple
   async getActionHistory(userId: string, serverId: string): Promise<AdminAction[]> {
     return this.findByUserAndServer(userId, serverId, { limit: 100 });
   }
-} 
+}

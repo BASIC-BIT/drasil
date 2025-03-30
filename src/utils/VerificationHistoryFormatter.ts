@@ -23,12 +23,10 @@ export class VerificationHistoryFormatter {
     includeMarkdown: boolean
   ): string {
     const timestamp = new Date(event.created_at).toLocaleString();
-    let output = includeMarkdown
-      ? `## ${timestamp}\n`
-      : `=== ${timestamp} ===\n`;
+    let output = includeMarkdown ? `## ${timestamp}\n` : `=== ${timestamp} ===\n`;
 
     output += `Status: ${event.status}\n`;
-    
+
     if (event.thread_id) {
       output += `Thread: <#${event.thread_id}>\n`;
     }
@@ -92,4 +90,4 @@ export class VerificationHistoryFormatter {
   static formatForFile(events: VerificationEventWithActions[], userId: string): string {
     return this.formatHistory(events, userId, false);
   }
-} 
+}

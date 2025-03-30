@@ -1,7 +1,10 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { Container } from 'inversify';
 import { TYPES } from '../../di/symbols';
-import { AdminActionRepository, IAdminActionRepository } from '../../repositories/AdminActionRepository';
+import {
+  AdminActionRepository,
+  IAdminActionRepository,
+} from '../../repositories/AdminActionRepository';
 import { AdminActionType, VerificationStatus } from '../../repositories/types';
 import { createTestContainer } from '../utils/test-container';
 import { PostgrestError } from '@supabase/postgrest-js';
@@ -14,7 +17,9 @@ describe('AdminActionRepository', () => {
   beforeEach(() => {
     container = createTestContainer();
     repository = container.get<IAdminActionRepository>(TYPES.AdminActionRepository);
-    mockSupabase = container.get<SupabaseClient>(TYPES.SupabaseClient) as jest.Mocked<SupabaseClient>;
+    mockSupabase = container.get<SupabaseClient>(
+      TYPES.SupabaseClient
+    ) as jest.Mocked<SupabaseClient>;
   });
 
   afterEach(() => {
@@ -34,11 +39,16 @@ describe('AdminActionRepository', () => {
           action_at: new Date().toISOString(),
           previous_status: VerificationStatus.PENDING,
           new_status: VerificationStatus.VERIFIED,
-          metadata: {}
-        }
+          metadata: {},
+        },
       ];
 
-      mockSupabase.from().select().eq().eq().order()
+      mockSupabase
+        .from()
+        .select()
+        .eq()
+        .eq()
+        .order()
         .mockResolvedValue({ data: mockActions, error: null });
 
       const result = await repository.findByUserAndServer('user1', 'server1');
@@ -50,10 +60,15 @@ describe('AdminActionRepository', () => {
         code: 'ERROR',
         message: 'Database error',
         details: '',
-        hint: ''
+        hint: '',
       };
 
-      mockSupabase.from().select().eq().eq().order()
+      mockSupabase
+        .from()
+        .select()
+        .eq()
+        .eq()
+        .order()
         .mockResolvedValue({ data: null, error: mockError });
 
       const result = await repository.findByUserAndServer('user1', 'server1');
@@ -72,11 +87,15 @@ describe('AdminActionRepository', () => {
           verification_event_id: 'verification1',
           action_type: AdminActionType.VERIFY,
           action_at: new Date().toISOString(),
-          metadata: {}
-        }
+          metadata: {},
+        },
       ];
 
-      mockSupabase.from().select().eq().order()
+      mockSupabase
+        .from()
+        .select()
+        .eq()
+        .order()
         .mockResolvedValue({ data: mockActions, error: null });
 
       const result = await repository.findByAdmin('admin1');
@@ -88,11 +107,10 @@ describe('AdminActionRepository', () => {
         code: 'ERROR',
         message: 'Database error',
         details: '',
-        hint: ''
+        hint: '',
       };
 
-      mockSupabase.from().select().eq().order()
-        .mockResolvedValue({ data: null, error: mockError });
+      mockSupabase.from().select().eq().order().mockResolvedValue({ data: null, error: mockError });
 
       const result = await repository.findByAdmin('admin1');
       expect(result).toEqual([]);
@@ -110,11 +128,15 @@ describe('AdminActionRepository', () => {
           verification_event_id: 'verification1',
           action_type: AdminActionType.VERIFY,
           action_at: new Date().toISOString(),
-          metadata: {}
-        }
+          metadata: {},
+        },
       ];
 
-      mockSupabase.from().select().eq().order()
+      mockSupabase
+        .from()
+        .select()
+        .eq()
+        .order()
         .mockResolvedValue({ data: mockActions, error: null });
 
       const result = await repository.findByVerificationEvent('verification1');
@@ -126,11 +148,10 @@ describe('AdminActionRepository', () => {
         code: 'ERROR',
         message: 'Database error',
         details: '',
-        hint: ''
+        hint: '',
       };
 
-      mockSupabase.from().select().eq().order()
-        .mockResolvedValue({ data: null, error: mockError });
+      mockSupabase.from().select().eq().order().mockResolvedValue({ data: null, error: mockError });
 
       const result = await repository.findByVerificationEvent('verification1');
       expect(result).toEqual([]);
@@ -149,10 +170,14 @@ describe('AdminActionRepository', () => {
         action_at: expect.any(String),
         previous_status: VerificationStatus.PENDING,
         new_status: VerificationStatus.VERIFIED,
-        metadata: {}
+        metadata: {},
       };
 
-      mockSupabase.from().insert().select().single()
+      mockSupabase
+        .from()
+        .insert()
+        .select()
+        .single()
         .mockResolvedValue({ data: mockAction, error: null });
 
       const result = await repository.createAction({
@@ -163,7 +188,7 @@ describe('AdminActionRepository', () => {
         action_type: AdminActionType.VERIFY,
         previous_status: VerificationStatus.PENDING,
         new_status: VerificationStatus.VERIFIED,
-        metadata: {}
+        metadata: {},
       });
 
       expect(result).toEqual(mockAction);
@@ -174,20 +199,26 @@ describe('AdminActionRepository', () => {
         code: 'ERROR',
         message: 'Database error',
         details: '',
-        hint: ''
+        hint: '',
       };
 
-      mockSupabase.from().insert().select().single()
+      mockSupabase
+        .from()
+        .insert()
+        .select()
+        .single()
         .mockResolvedValue({ data: null, error: mockError });
 
-      await expect(repository.createAction({
-        server_id: 'server1',
-        user_id: 'user1',
-        admin_id: 'admin1',
-        verification_event_id: 'verification1',
-        action_type: AdminActionType.VERIFY,
-        metadata: {}
-      })).rejects.toThrow('Error creating admin action');
+      await expect(
+        repository.createAction({
+          server_id: 'server1',
+          user_id: 'user1',
+          admin_id: 'admin1',
+          verification_event_id: 'verification1',
+          action_type: AdminActionType.VERIFY,
+          metadata: {},
+        })
+      ).rejects.toThrow('Error creating admin action');
     });
   });
-}); 
+});

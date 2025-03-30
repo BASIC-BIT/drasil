@@ -6,27 +6,53 @@ import { IUserRepository } from '../repositories/UserRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IRoleManager } from './RoleManager';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
-import { 
-  VerificationEvent, 
-  VerificationEventWithActions, 
-  VerificationStatus, 
-  AdminActionType 
+import {
+  VerificationEvent,
+  VerificationEventWithActions,
+  VerificationStatus,
+  AdminActionType,
 } from '../repositories/types';
 
 export interface IVerificationService {
-  createVerificationEvent(serverId: string, userId: string, detectionEventId: string): Promise<VerificationEvent>;
+  createVerificationEvent(
+    serverId: string,
+    userId: string,
+    detectionEventId: string
+  ): Promise<VerificationEvent>;
   getActiveVerification(serverId: string, userId: string): Promise<VerificationEvent | null>;
-  verifyUser(serverId: string, userId: string, adminId: string, notes?: string): Promise<VerificationEvent>;
-  rejectUser(serverId: string, userId: string, adminId: string, notes?: string): Promise<VerificationEvent>;
-  reopenVerification(serverId: string, userId: string, adminId: string, notes?: string): Promise<VerificationEvent>;
-  getVerificationHistory(serverId: string, userId: string): Promise<Array<VerificationEventWithActions>>;
-  attachThreadToVerification(verificationEventId: string, threadId: string): Promise<VerificationEvent>;
+  verifyUser(
+    serverId: string,
+    userId: string,
+    adminId: string,
+    notes?: string
+  ): Promise<VerificationEvent>;
+  rejectUser(
+    serverId: string,
+    userId: string,
+    adminId: string,
+    notes?: string
+  ): Promise<VerificationEvent>;
+  reopenVerification(
+    serverId: string,
+    userId: string,
+    adminId: string,
+    notes?: string
+  ): Promise<VerificationEvent>;
+  getVerificationHistory(
+    serverId: string,
+    userId: string
+  ): Promise<Array<VerificationEventWithActions>>;
+  attachThreadToVerification(
+    verificationEventId: string,
+    threadId: string
+  ): Promise<VerificationEvent>;
 }
 
 @injectable()
 export class VerificationService implements IVerificationService {
   constructor(
-    @inject(TYPES.VerificationEventRepository) private verificationEventRepository: IVerificationEventRepository,
+    @inject(TYPES.VerificationEventRepository)
+    private verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.AdminActionRepository) private adminActionRepository: IAdminActionRepository,
     @inject(TYPES.UserRepository) private userRepository: IUserRepository,
     @inject(TYPES.ServerRepository) private serverRepository: IServerRepository,
@@ -89,7 +115,7 @@ export class VerificationService implements IVerificationService {
       new_status: VerificationStatus.VERIFIED,
       notes,
       action_at: new Date().toISOString(),
-      metadata: {}
+      metadata: {},
     });
 
     // Remove restricted role
@@ -129,7 +155,7 @@ export class VerificationService implements IVerificationService {
       new_status: VerificationStatus.REJECTED,
       notes,
       action_at: new Date().toISOString(),
-      metadata: {}
+      metadata: {},
     });
 
     // Keep the restricted role in place for rejected users
@@ -146,7 +172,11 @@ export class VerificationService implements IVerificationService {
     notes?: string
   ): Promise<VerificationEvent> {
     // Find the most recent verification event, regardless of status
-    const verificationEvents = await this.verificationEventRepository.findByUserAndServer(userId, serverId, { limit: 1 });
+    const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
+      userId,
+      serverId,
+      { limit: 1 }
+    );
     if (!verificationEvents.length) {
       throw new Error('No verification event found');
     }
@@ -170,7 +200,7 @@ export class VerificationService implements IVerificationService {
       new_status: VerificationStatus.PENDING,
       notes,
       action_at: new Date().toISOString(),
-      metadata: {}
+      metadata: {},
     });
 
     // Reassign restricted role
@@ -186,15 +216,18 @@ export class VerificationService implements IVerificationService {
     serverId: string,
     userId: string
   ): Promise<Array<VerificationEventWithActions>> {
-    const verificationEvents = await this.verificationEventRepository.getVerificationHistory(userId, serverId);
-    
+    const verificationEvents = await this.verificationEventRepository.getVerificationHistory(
+      userId,
+      serverId
+    );
+
     // For each verification event, get its associated admin actions
     const verificationEventsWithActions = await Promise.all(
       verificationEvents.map(async (event) => {
         const actions = await this.adminActionRepository.findByVerificationEvent(event.id);
         return {
           ...event,
-          actions
+          actions,
         };
       })
     );
@@ -202,7 +235,10 @@ export class VerificationService implements IVerificationService {
     return verificationEventsWithActions;
   }
 
-  async attachThreadToVerification(verificationEventId: string, threadId: string): Promise<VerificationEvent> {
+  async attachThreadToVerification(
+    verificationEventId: string,
+    threadId: string
+  ): Promise<VerificationEvent> {
     const verificationEvent = await this.verificationEventRepository.findById(verificationEventId);
     if (!verificationEvent) {
       throw new Error('Verification event not found');
@@ -210,9 +246,9 @@ export class VerificationService implements IVerificationService {
 
     const updatedEvent = await this.verificationEventRepository.update(verificationEventId, {
       ...verificationEvent,
-      thread_id: threadId
+      thread_id: threadId,
     });
 
     return updatedEvent;
   }
-} 
+}

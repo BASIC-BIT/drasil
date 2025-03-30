@@ -10,6 +10,11 @@ export interface GlobalSettings {
   autoSetupVerificationChannels: boolean;
 
   /**
+   * Whether to use the new verification flow with dedicated events table
+   */
+  useNewVerificationFlow: boolean;
+
+  /**
    * Default settings for new servers
    */
   defaultServerSettings: {
@@ -37,6 +42,7 @@ class GlobalConfig {
     // Initialize with default settings
     this.settings = {
       autoSetupVerificationChannels: true, // Default to true for convenience
+      useNewVerificationFlow: false, // Default to false for gradual rollout
       defaultServerSettings: {
         messageThreshold: 5,
         messageTimeframe: 10,
@@ -55,6 +61,9 @@ class GlobalConfig {
     // Override with environment variables if provided
     if (process.env.AUTO_SETUP_VERIFICATION_CHANNELS === 'false') {
       this.settings.autoSetupVerificationChannels = false;
+    }
+    if (process.env.USE_NEW_VERIFICATION_FLOW === 'true') {
+      this.settings.useNewVerificationFlow = true;
     }
   }
 

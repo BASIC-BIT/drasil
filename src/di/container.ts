@@ -32,8 +32,14 @@ import { ServerService, IServerService } from '../services/ServerService';
 import { SecurityActionService, ISecurityActionService } from '../services/SecurityActionService';
 import { UserModerationService, IUserModerationService } from '../services/UserModerationService';
 import { Bot, IBot } from '../Bot';
-import { IVerificationEventRepository, VerificationEventRepository } from '../repositories/VerificationEventRepository';
-import { IAdminActionRepository, AdminActionRepository } from '../repositories/AdminActionRepository';
+import {
+  IVerificationEventRepository,
+  VerificationEventRepository,
+} from '../repositories/VerificationEventRepository';
+import {
+  IAdminActionRepository,
+  AdminActionRepository,
+} from '../repositories/AdminActionRepository';
 import { IVerificationService, VerificationService } from '../services/VerificationService';
 import { IAdminActionService, AdminActionService } from '../services/AdminActionService';
 
@@ -117,10 +123,12 @@ function configureRepositories(container: Container): void {
     .inSingletonScope();
 
   // New repositories
-  container.bind<IVerificationEventRepository>(TYPES.VerificationEventRepository)
+  container
+    .bind<IVerificationEventRepository>(TYPES.VerificationEventRepository)
     .to(VerificationEventRepository)
     .inSingletonScope();
-  container.bind<IAdminActionRepository>(TYPES.AdminActionRepository)
+  container
+    .bind<IAdminActionRepository>(TYPES.AdminActionRepository)
     .to(AdminActionRepository)
     .inSingletonScope();
 
@@ -168,11 +176,13 @@ function configureServices(container: Container): void {
   container.bind<IBot>(TYPES.Bot).to(Bot).inSingletonScope();
 
   // Add new service bindings
-  container.bind<IVerificationService>(TYPES.VerificationService)
+  container
+    .bind<IVerificationService>(TYPES.VerificationService)
     .to(VerificationService)
     .inSingletonScope();
 
-  container.bind<IAdminActionService>(TYPES.AdminActionService)
+  container
+    .bind<IAdminActionService>(TYPES.AdminActionService)
     .to(AdminActionService)
     .inSingletonScope();
 

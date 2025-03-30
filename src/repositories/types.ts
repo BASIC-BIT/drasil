@@ -106,7 +106,7 @@ export enum VerificationStatus {
   PENDING = 'pending',
   VERIFIED = 'verified',
   REJECTED = 'rejected',
-  REOPENED = 'reopened'
+  REOPENED = 'reopened',
 }
 
 export enum AdminActionType {
@@ -114,7 +114,7 @@ export enum AdminActionType {
   REJECT = 'reject',
   BAN = 'ban',
   REOPEN = 'reopen',
-  CREATE_THREAD = 'create_thread'
+  CREATE_THREAD = 'create_thread',
 }
 
 export interface VerificationEvent {

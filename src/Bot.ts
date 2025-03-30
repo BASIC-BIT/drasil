@@ -320,7 +320,7 @@ export class Bot implements IBot {
     if (!interaction.guildId) {
       await interaction.reply({
         content: 'This button can only be used in a server.',
-        ephemeral: true
+        ephemeral: true,
       });
       return;
     }
@@ -346,14 +346,14 @@ export class Bot implements IBot {
         default:
           await interaction.reply({
             content: 'Unknown button action',
-            ephemeral: true
+            ephemeral: true,
           });
       }
     } catch (error) {
       console.error('Error handling button interaction:', error);
       await interaction.reply({
         content: 'An error occurred while processing your request.',
-        ephemeral: true
+        ephemeral: true,
       });
     }
   }
@@ -383,13 +383,13 @@ export class Bot implements IBot {
 
       await interaction.followUp({
         content: `User <@${userId}> has been verified and can now access the server.`,
-        ephemeral: true
+        ephemeral: true,
       });
     } catch (error) {
       console.error('Error verifying user:', error);
       await interaction.followUp({
         content: 'An error occurred while verifying the user.',
-        ephemeral: true
+        ephemeral: true,
       });
     }
   }
@@ -424,13 +424,13 @@ export class Bot implements IBot {
 
       await interaction.followUp({
         content: `User <@${userId}> has been banned from the server.`,
-        ephemeral: true
+        ephemeral: true,
       });
     } catch (error) {
       console.error('Error banning user:', error);
       await interaction.followUp({
         content: 'An error occurred while banning the user.',
-        ephemeral: true
+        ephemeral: true,
       });
     }
   }
@@ -443,19 +443,26 @@ export class Bot implements IBot {
     await interaction.deferUpdate();
 
     try {
-      const config = await this.configService.getServerConfig(guildId);
-      if (!config.verification_channel_id) {
-        throw new Error('No verification channel configured');
+      // Get the guild and member
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      
+      if (!member) {
+        throw new Error('Could not find member in guild');
       }
 
       // Create the thread
-      const thread = await this.notificationManager.createVerificationThread(
-        config.verification_channel_id,
-        userId
-      );
+      const thread = await this.notificationManager.createVerificationThread(member);
+      
+      if (!thread) {
+        throw new Error('Failed to create verification thread');
+      }
 
       // Get the active verification event
-      const verificationEvent = await this.verificationService.getActiveVerification(guildId, userId);
+      const verificationEvent = await this.verificationService.getActiveVerification(
+        guildId,
+        userId
+      );
       if (verificationEvent) {
         // Attach thread to verification event
         await this.verificationService.attachThreadToVerification(verificationEvent.id, thread.id);
@@ -463,13 +470,13 @@ export class Bot implements IBot {
 
       await interaction.followUp({
         content: `Created verification thread: ${thread.url}`,
-        ephemeral: true
+        ephemeral: true,
       });
     } catch (error) {
       console.error('Error creating verification thread:', error);
       await interaction.followUp({
         content: 'An error occurred while creating the verification thread.',
-        ephemeral: true
+        ephemeral: true,
       });
     }
   }
@@ -484,7 +491,7 @@ export class Bot implements IBot {
     try {
       // Get verification history with actions
       const history = await this.verificationService.getVerificationHistory(guildId, userId);
-      
+
       // Format history using our formatter
       const formattedHistory = VerificationHistoryFormatter.formatForDiscord(history, userId);
 
@@ -494,20 +501,22 @@ export class Bot implements IBot {
         const buffer = Buffer.from(plainTextHistory, 'utf-8');
         await interaction.editReply({
           content: 'Here is the complete verification history:',
-          files: [{
-            attachment: buffer,
-            name: `verification-history-${userId}.txt`
-          }]
+          files: [
+            {
+              attachment: buffer,
+              name: `verification-history-${userId}.txt`,
+            },
+          ],
         });
       } else {
         await interaction.editReply({
-          content: formattedHistory
+          content: formattedHistory,
         });
       }
     } catch (error) {
       console.error('Error fetching verification history:', error);
       await interaction.editReply({
-        content: 'An error occurred while fetching the verification history.'
+        content: 'An error occurred while fetching the verification history.',
       });
     }
   }
@@ -537,13 +546,13 @@ export class Bot implements IBot {
 
       await interaction.followUp({
         content: `Verification for <@${userId}> has been reopened. The user has been restricted again.`,
-        ephemeral: true
+        ephemeral: true,
       });
     } catch (error) {
       console.error('Error reopening verification:', error);
       await interaction.followUp({
         content: 'An error occurred while reopening the verification.',
-        ephemeral: true
+        ephemeral: true,
       });
     }
   }

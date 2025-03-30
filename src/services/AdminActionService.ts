@@ -3,13 +3,25 @@ import { TYPES } from '../di/symbols';
 import { IAdminActionRepository } from '../repositories/AdminActionRepository';
 import { IUserRepository } from '../repositories/UserRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
-import { AdminAction, AdminActionCreate, AdminActionType, VerificationStatus } from '../repositories/types';
+import {
+  AdminAction,
+  AdminActionCreate,
+  AdminActionType,
+  VerificationStatus,
+} from '../repositories/types';
 
 export interface IAdminActionService {
   recordAction(data: AdminActionCreate): Promise<AdminAction>;
-  getActionsByAdmin(adminId: string, options?: { limit?: number; offset?: number }): Promise<AdminAction[]>;
+  getActionsByAdmin(
+    adminId: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<AdminAction[]>;
   getActionsForUser(serverId: string, userId: string): Promise<AdminAction[]>;
-  getActionsByType(serverId: string, actionType: string, options?: { limit?: number; offset?: number }): Promise<AdminAction[]>;
+  getActionsByType(
+    serverId: string,
+    actionType: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<AdminAction[]>;
   formatActionSummary(action: AdminAction): string;
 }
 
@@ -25,7 +37,7 @@ export class AdminActionService implements IAdminActionService {
     // Ensure server and user exist
     const [server, user] = await Promise.all([
       this.serverRepository.findById(data.server_id),
-      this.userRepository.findById(data.user_id)
+      this.userRepository.findById(data.user_id),
     ]);
 
     if (!server) {
@@ -55,8 +67,12 @@ export class AdminActionService implements IAdminActionService {
     actionType: string,
     options?: { limit?: number; offset?: number }
   ): Promise<AdminAction[]> {
-    const actions = await this.adminActionRepository.findByUserAndServer(serverId, serverId, options);
-    return actions.filter(action => action.action_type === actionType);
+    const actions = await this.adminActionRepository.findByUserAndServer(
+      serverId,
+      serverId,
+      options
+    );
+    return actions.filter((action) => action.action_type === actionType);
   }
 
   formatActionSummary(action: AdminAction): string {
@@ -96,4 +112,4 @@ export class AdminActionService implements IAdminActionService {
 
     return summary;
   }
-} 
+}
