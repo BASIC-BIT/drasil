@@ -378,12 +378,23 @@ export class Bot implements IBot {
         'Verified via button interaction'
       );
 
-      // Update the notification message buttons
+      // Log the verification action to the original message embed (updates text and color)
+      await this.notificationManager.logActionToMessage(
+        interaction.message as Message,
+        'verified the user', // Action text
+        interaction.user, // Admin user who clicked
+        undefined // No thread involved in verification itself
+      );
+
+      // Update the buttons to show History and Reopen
       await this.notificationManager.updateNotificationButtons(
         interaction.message as Message,
         userId,
         VerificationStatus.VERIFIED
       );
+
+      // Lock and archive the thread if it exists
+      await this.manageThreadState(guildId, userId, true, true); // Lock and Archive on Verify
 
       await interaction.followUp({
         content: `User <@${userId}> has been verified and can now access the server.`,
@@ -427,6 +438,9 @@ export class Bot implements IBot {
         userId,
         VerificationStatus.REJECTED
       );
+
+      // Lock and archive the thread if it exists
+      await this.manageThreadState(guildId, userId, true, true); // Lock and Archive on Ban
 
       await interaction.followUp({
         content: `User <@${userId}> has been banned from the server.`,
@@ -558,6 +572,9 @@ export class Bot implements IBot {
         userId,
         VerificationStatus.PENDING // Set back to PENDING
       );
+
+      // Unlock and unarchive the thread if it exists
+      await this.manageThreadState(guildId, userId, false, false); // Unlock and Unarchive on Reopen
 
       await interaction.followUp({
         content: `Verification for <@${userId}> has been reopened. The user has been restricted again.`,
@@ -1282,6 +1299,67 @@ export class Bot implements IBot {
       await interaction.editReply({
         content: 'An error occurred while resolving the verification thread.',
       });
+    }
+  }
+
+  // Helper function to manage thread state
+  private async manageThreadState(
+    guildId: string,
+    userId: string,
+    shouldLock: boolean,
+    shouldArchive: boolean
+  ): Promise<void> {
+    try {
+      // Use getActiveVerification to find the relevant event
+      const verificationEvent = await this.verificationService.getActiveVerification(
+        guildId,
+        userId
+      );
+
+      // If verifying/banning and no *active* event found, check the *most recent* resolved one
+      // This handles cases where the button is clicked after the event is already technically resolved
+      let eventToCheck = verificationEvent;
+      if (!eventToCheck && (shouldArchive || shouldLock)) {
+        const history = await this.verificationService.getVerificationHistory(
+          await this.client.guilds.fetch(guildId).then((g) => g.members.fetch(userId))
+        );
+        if (history.length > 0) {
+          eventToCheck = history[0]; // Get the most recent one from history
+        }
+      }
+
+      if (!eventToCheck || !eventToCheck.thread_id) {
+        console.log(
+          `No suitable verification thread found for user ${userId} in guild ${guildId} to manage state.`
+        );
+        return;
+      }
+
+      const thread = await this.client.channels.fetch(eventToCheck.thread_id).catch(() => null);
+      if (!thread || !thread.isThread()) {
+        console.warn(`Could not fetch thread ${eventToCheck.thread_id} to manage state.`);
+        return;
+      }
+
+      const threadChannel = thread as ThreadChannel;
+
+      if (threadChannel.locked !== shouldLock) {
+        await threadChannel.setLocked(shouldLock, `Verification status change`);
+        console.log(`Set thread ${threadChannel.id} locked state to ${shouldLock}`);
+      }
+
+      // Only change archive state if necessary
+      if (threadChannel.archived !== shouldArchive) {
+        if (shouldArchive && !threadChannel.archived) {
+          await threadChannel.setArchived(true, `Verification resolved`);
+          console.log(`Archived thread ${threadChannel.id}`);
+        } else if (!shouldArchive && threadChannel.archived) {
+          await threadChannel.setArchived(false, `Verification reopened`);
+          console.log(`Unarchived thread ${threadChannel.id}`);
+        }
+      }
+    } catch (error) {
+      console.error(`Error managing thread state for user ${userId} in guild ${guildId}:`, error);
     }
   }
 }

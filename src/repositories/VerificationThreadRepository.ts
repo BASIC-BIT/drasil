@@ -45,7 +45,7 @@ export interface IVerificationThreadRepository {
    */
   findByStatus(
     serverId: string,
-    status: 'open' | 'resolved' | 'abandoned'
+    status: 'pending' | 'verified' | 'rejected' | 'abandoned'
   ): Promise<VerificationThread[]>;
 
   /**
@@ -69,7 +69,7 @@ export interface IVerificationThreadRepository {
   updateThreadStatus(
     serverId: string,
     threadId: string,
-    status: 'open' | 'resolved' | 'abandoned',
+    status: 'pending' | 'verified' | 'rejected' | 'abandoned',
     resolvedBy?: string,
     resolution?: 'verified' | 'banned' | 'ignored'
   ): Promise<VerificationThread | null>;
@@ -178,7 +178,7 @@ export class VerificationThreadRepository
    */
   async findByStatus(
     serverId: string,
-    status: 'open' | 'resolved' | 'abandoned'
+    status: 'pending' | 'verified' | 'rejected' | 'abandoned'
   ): Promise<VerificationThread[]> {
     try {
       const { data, error } = await this.supabaseClient
@@ -208,13 +208,14 @@ export class VerificationThreadRepository
     threadId: string
   ): Promise<VerificationThread> {
     try {
-      const thread = {
-        server_id: serverId,
-        user_id: userId,
-        thread_id: threadId,
-        created_at: new Date().toISOString(),
-        status: 'open',
-      };
+      const thread: Omit<VerificationThread, 'id' | 'resolved_at' | 'resolved_by' | 'resolution'> =
+        {
+          server_id: serverId,
+          user_id: userId,
+          thread_id: threadId,
+          created_at: new Date().toISOString(),
+          status: 'pending',
+        };
 
       const { data, error } = await this.supabaseClient
         .from(this.tableName)
@@ -243,7 +244,7 @@ export class VerificationThreadRepository
   async updateThreadStatus(
     serverId: string,
     threadId: string,
-    status: 'open' | 'resolved' | 'abandoned',
+    status: 'pending' | 'verified' | 'rejected' | 'abandoned',
     resolvedBy?: string,
     resolution?: 'verified' | 'banned' | 'ignored'
   ): Promise<VerificationThread | null> {
@@ -252,8 +253,8 @@ export class VerificationThreadRepository
         status,
       };
 
-      // If the thread is being resolved, set the resolved_at timestamp and other fields
-      if (status === 'resolved') {
+      // If the thread is moving to a final state, set the resolved_at timestamp and other fields
+      if (status === 'verified' || status === 'rejected' || status === 'abandoned') {
         updateData.resolved_at = new Date().toISOString();
         if (resolvedBy) updateData.resolved_by = resolvedBy;
         if (resolution) updateData.resolution = resolution;

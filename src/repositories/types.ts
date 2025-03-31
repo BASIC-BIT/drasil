@@ -107,7 +107,7 @@ export interface VerificationThread {
   user_id: string; // Discord user ID
   thread_id: string; // Discord thread ID
   created_at: string | Date; // When the thread was created
-  status: 'open' | 'resolved' | 'abandoned'; // Current thread status
+  status: 'pending' | 'verified' | 'rejected' | 'abandoned'; // Current thread status
   resolved_at?: string | Date; // When the thread was resolved
   resolved_by?: string; // Discord ID of the user who resolved the thread
   resolution?: 'verified' | 'banned' | 'ignored'; // Resolution outcome

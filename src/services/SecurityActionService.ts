@@ -88,7 +88,8 @@ export class SecurityActionService implements ISecurityActionService {
     @inject(TYPES.ServerService) serverService: IServerService,
     @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
     @inject(TYPES.VerificationService) verificationService: IVerificationService,
-    @inject(TYPES.VerificationEventRepository) verificationEventRepository: IVerificationEventRepository,
+    @inject(TYPES.VerificationEventRepository)
+    verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.DiscordClient) client: Client
   ) {
     this.notificationManager = notificationManager;
@@ -219,45 +220,100 @@ export class SecurityActionService implements ISecurityActionService {
         sourceMessage?.channelId
       );
 
-      // 3. Create the VerificationEvent (this also restricts the user)
-      let verificationEvent: VerificationEvent | null = null;
-      try {
-        verificationEvent = await this.verificationService.createVerificationEvent(
-          member,
-          detectionEvent.id
-        );
-        console.log(`Restricted user ${member.user.tag} and created verification event ${verificationEvent.id}`);
-      } catch (error) {
-         console.error(`Failed to restrict user or create verification event for ${member.user.tag}:`, error);
-         return false; // Stop if restriction/event creation fails
-      }
-
-      // 4. Upsert the notification message in the admin channel
-      const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
-        member,
-        detectionResult,
-        undefined, // Always create a new message for a new event
-        sourceMessage
+      // 3. Check for an existing active verification event
+      const activeVerificationEvent = await this.verificationService.getActiveVerification(
+        member.guild.id,
+        member.id
       );
 
-      // 5. Update the Verification Event with the message ID
-      if (notificationMessage && verificationEvent) {
-          try {
-              await this.verificationEventRepository.update(verificationEvent.id, {
-                  notification_message_id: notificationMessage.id,
-              });
-              console.log(`Sent notification and linked message ${notificationMessage.id} to verification ${verificationEvent.id}`);
-              return true;
-          } catch(updateError) {
-              console.error(`Sent notification for ${member.user.tag}, but failed to link message ID ${notificationMessage.id} to verification ${verificationEvent.id}:`, updateError);
-              // Depending on policy, maybe return true (notification sent) or false (linking failed)
-              return true; // Let's say notification sent is good enough
-          }
-      } else {
-        console.warn(`Failed to send notification message for user ${member.user.tag}, verification event ${verificationEvent?.id}`);
-        return false;
-      }
+      if (activeVerificationEvent) {
+        // --- Active verification exists ---
+        console.log(
+          `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Reusing notification.`
+        );
 
+        // Update the existing notification
+        const existingMessageId = activeVerificationEvent.notification_message_id;
+        const updatedMessage = await this.notificationManager.upsertSuspiciousUserNotification(
+          member,
+          detectionResult, // Use the latest detection result
+          existingMessageId ?? undefined, // Pass existing ID if available
+          sourceMessage
+        );
+
+        // If we updated successfully AND the original event was missing a message ID, update it now.
+        if (updatedMessage && !existingMessageId) {
+          try {
+            await this.verificationEventRepository.update(activeVerificationEvent.id, {
+              notification_message_id: updatedMessage.id,
+            });
+            console.log(
+              `Linked new/updated message ${updatedMessage.id} to existing verification ${activeVerificationEvent.id}`
+            );
+          } catch (updateError) {
+            console.error(
+              `Failed to link new/updated message ${updatedMessage.id} to existing verification ${activeVerificationEvent.id}:`,
+              updateError
+            );
+          }
+        }
+        return !!updatedMessage; // Return success based on notification update
+      } else {
+        // --- No active verification exists ---
+        console.log(
+          `No active verification found for user ${member.user.tag}. Creating new event.`
+        );
+
+        // Create a NEW VerificationEvent (this also restricts the user)
+        let newVerificationEvent: VerificationEvent | null = null;
+        try {
+          newVerificationEvent = await this.verificationService.createVerificationEvent(
+            member,
+            detectionEvent.id // Link the current detection event
+          );
+          console.log(
+            `Restricted user ${member.user.tag} and created verification event ${newVerificationEvent.id}`
+          );
+        } catch (error) {
+          console.error(
+            `Failed to restrict user or create verification event for ${member.user.tag}:`,
+            error
+          );
+          return false; // Stop if restriction/event creation fails
+        }
+
+        // Create a NEW notification message
+        const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
+          member,
+          detectionResult,
+          undefined, // No existing message ID
+          sourceMessage
+        );
+
+        // Update the NEW Verification Event with the message ID
+        if (notificationMessage && newVerificationEvent) {
+          try {
+            await this.verificationEventRepository.update(newVerificationEvent.id, {
+              notification_message_id: notificationMessage.id,
+            });
+            console.log(
+              `Sent notification and linked message ${notificationMessage.id} to verification ${newVerificationEvent.id}`
+            );
+            return true;
+          } catch (updateError) {
+            console.error(
+              `Sent notification for ${member.user.tag}, but failed to link message ID ${notificationMessage.id} to verification ${newVerificationEvent.id}:`,
+              updateError
+            );
+            return true; // Notification sent is good enough
+          }
+        } else {
+          console.warn(
+            `Failed to send notification message for user ${member.user.tag}, verification event ${newVerificationEvent?.id}`
+          );
+          return false;
+        }
+      }
     } catch (error) {
       console.error(`Failed to handle suspicious message for ${member?.user?.tag}:`, error);
       return false;
@@ -275,7 +331,7 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     detectionResult: DetectionResult
   ): Promise<boolean> {
-     try {
+    try {
       // 1. Ensure entities exist
       await this.ensureEntitiesExist(
         member.guild.id,
@@ -295,48 +351,100 @@ export class SecurityActionService implements ISecurityActionService {
         // No source message for join event
       );
 
-      // 3. Create the VerificationEvent (this also restricts the user)
-      let verificationEvent: VerificationEvent | null = null;
-       try {
-         verificationEvent = await this.verificationService.createVerificationEvent(
-           member,
-           detectionEvent.id
-         );
-         console.log(`Restricted user ${member.user.tag} and created verification event ${verificationEvent.id}`);
-       } catch (error) {
-          console.error(`Failed to restrict user or create verification event for ${member.user.tag}:`, error);
-          return false; // Stop if restriction/event creation fails
-       }
-
-
-      // 4. Upsert the notification message in the admin channel
-      const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
-        member,
-        detectionResult
-        // Always create a new message for a new event
+      // 3. Check for an existing active verification event
+      const activeVerificationEvent = await this.verificationService.getActiveVerification(
+        member.guild.id,
+        member.id
       );
 
-       // 5. Update the Verification Event with the message ID
-       if (notificationMessage && verificationEvent) {
-           try {
-               await this.verificationEventRepository.update(verificationEvent.id, {
-                   notification_message_id: notificationMessage.id,
-               });
-               console.log(`Sent notification and linked message ${notificationMessage.id} to verification ${verificationEvent.id}`);
+      if (activeVerificationEvent) {
+        // --- Active verification exists ---
+        console.log(
+          `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Reusing notification.`
+        );
 
-               // Optionally create thread automatically here if needed
-               // await this.createVerificationThreadForMember(member, notificationMessage);
+        // Update the existing notification
+        const existingMessageId = activeVerificationEvent.notification_message_id;
+        const updatedMessage = await this.notificationManager.upsertSuspiciousUserNotification(
+          member,
+          detectionResult, // Use the latest detection result
+          existingMessageId ?? undefined // Pass existing ID if available
+          // No source message for join
+        );
 
-               return true;
-           } catch(updateError) {
-               console.error(`Sent notification for ${member.user.tag}, but failed to link message ID ${notificationMessage.id} to verification ${verificationEvent.id}:`, updateError);
-               return true; // Notification sent is good enough
-           }
-       } else {
-         console.warn(`Failed to send notification message for user ${member.user.tag}, verification event ${verificationEvent?.id}`);
-         return false;
-       }
+        // If we updated successfully AND the original event was missing a message ID, update it now.
+        if (updatedMessage && !existingMessageId) {
+          try {
+            await this.verificationEventRepository.update(activeVerificationEvent.id, {
+              notification_message_id: updatedMessage.id,
+            });
+            console.log(
+              `Linked new/updated message ${updatedMessage.id} to existing verification ${activeVerificationEvent.id}`
+            );
+          } catch (updateError) {
+            console.error(
+              `Failed to link new/updated message ${updatedMessage.id} to existing verification ${activeVerificationEvent.id}:`,
+              updateError
+            );
+          }
+        }
+        return !!updatedMessage; // Return success based on notification update
+      } else {
+        // --- No active verification exists ---
+        console.log(
+          `No active verification found for user ${member.user.tag}. Creating new event.`
+        );
 
+        // Create a NEW VerificationEvent (this also restricts the user)
+        let newVerificationEvent: VerificationEvent | null = null;
+        try {
+          newVerificationEvent = await this.verificationService.createVerificationEvent(
+            member,
+            detectionEvent.id // Link the current detection event
+          );
+          console.log(
+            `Restricted user ${member.user.tag} and created verification event ${newVerificationEvent.id}`
+          );
+        } catch (error) {
+          console.error(
+            `Failed to restrict user or create verification event for ${member.user.tag}:`,
+            error
+          );
+          return false; // Stop if restriction/event creation fails
+        }
+
+        // Create a NEW notification message
+        const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
+          member,
+          detectionResult,
+          undefined // No existing message ID
+          // No source message for join
+        );
+
+        // Update the NEW Verification Event with the message ID
+        if (notificationMessage && newVerificationEvent) {
+          try {
+            await this.verificationEventRepository.update(newVerificationEvent.id, {
+              notification_message_id: notificationMessage.id,
+            });
+            console.log(
+              `Sent notification and linked message ${notificationMessage.id} to verification ${newVerificationEvent.id}`
+            );
+            return true;
+          } catch (updateError) {
+            console.error(
+              `Sent notification for ${member.user.tag}, but failed to link message ID ${notificationMessage.id} to verification ${newVerificationEvent.id}:`,
+              updateError
+            );
+            return true; // Notification sent is good enough
+          }
+        } else {
+          console.warn(
+            `Failed to send notification message for user ${member.user.tag}, verification event ${newVerificationEvent?.id}`
+          );
+          return false;
+        }
+      }
     } catch (error) {
       console.error(`Failed to handle suspicious join for ${member?.user?.tag}:`, error);
       return false;
@@ -372,7 +480,8 @@ export class SecurityActionService implements ISecurityActionService {
       } else if (notificationMessage) {
         // Default to bot user if no performer specified
         const performer = actionPerformer || this.client.user;
-        if (performer) { // Check if bot user exists
+        if (performer) {
+          // Check if bot user exists
           await this.notificationManager.logActionToMessage(
             notificationMessage,
             'created a verification thread',
