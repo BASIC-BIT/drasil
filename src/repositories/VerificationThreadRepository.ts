@@ -100,7 +100,7 @@ export class VerificationThreadRepository
   implements IVerificationThreadRepository
 {
   constructor(@inject(TYPES.SupabaseClient) supabaseClient: SupabaseClient) {
-    super('verification_threads', supabaseClient);
+    super('verification_events', supabaseClient);
   }
 
   /**

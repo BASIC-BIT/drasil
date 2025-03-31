@@ -246,11 +246,6 @@ export interface IAdminActionService {
     options?: { limit?: number; offset?: number }
   ): Promise<AdminAction[]>;
   getActionsForUser(serverId: string, userId: string): Promise<AdminAction[]>;
-  getActionsByType(
-    serverId: string,
-    actionType: string,
-    options?: { limit?: number; offset?: number }
-  ): Promise<AdminAction[]>;
   formatActionSummary(action: AdminAction): string;
 }
 

@@ -3,12 +3,7 @@ import { TYPES } from '../di/symbols';
 import { IAdminActionRepository } from '../repositories/AdminActionRepository';
 import { IUserRepository } from '../repositories/UserRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
-import {
-  AdminAction,
-  AdminActionCreate,
-  AdminActionType,
-  VerificationStatus,
-} from '../repositories/types';
+import { AdminAction, AdminActionCreate, AdminActionType } from '../repositories/types';
 
 export interface IAdminActionService {
   recordAction(data: AdminActionCreate): Promise<AdminAction>;
@@ -17,11 +12,6 @@ export interface IAdminActionService {
     options?: { limit?: number; offset?: number }
   ): Promise<AdminAction[]>;
   getActionsForUser(serverId: string, userId: string): Promise<AdminAction[]>;
-  getActionsByType(
-    serverId: string,
-    actionType: string,
-    options?: { limit?: number; offset?: number }
-  ): Promise<AdminAction[]>;
   formatActionSummary(action: AdminAction): string;
 }
 
@@ -60,19 +50,6 @@ export class AdminActionService implements IAdminActionService {
 
   async getActionsForUser(serverId: string, userId: string): Promise<AdminAction[]> {
     return this.adminActionRepository.findByUserAndServer(userId, serverId);
-  }
-
-  async getActionsByType(
-    serverId: string,
-    actionType: string,
-    options?: { limit?: number; offset?: number }
-  ): Promise<AdminAction[]> {
-    const actions = await this.adminActionRepository.findByUserAndServer(
-      serverId,
-      serverId,
-      options
-    );
-    return actions.filter((action) => action.action_type === actionType);
   }
 
   formatActionSummary(action: AdminAction): string {

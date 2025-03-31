@@ -24,6 +24,8 @@ export interface IVerificationEventRepository {
     notes?: string
   ): Promise<VerificationEvent>;
   getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]>;
+  findById(id: string): Promise<VerificationEvent | null>;
+  update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent>;
 }
 
 @injectable()
@@ -31,8 +33,11 @@ export class VerificationEventRepository
   extends SupabaseRepository<VerificationEvent>
   implements IVerificationEventRepository
 {
+  protected readonly supabaseClient: SupabaseClient;
+
   constructor(@inject(TYPES.SupabaseClient) supabaseClient: SupabaseClient) {
     super('verification_events', supabaseClient);
+    this.supabaseClient = supabaseClient;
   }
 
   async findByUserAndServer(
@@ -209,15 +214,12 @@ export class VerificationEventRepository
         status,
         updated_at: now,
         notes: notes || undefined,
-        metadata: {
-          admin_id: adminId || null,
-          resolved_by: adminId || null,
-        },
       };
 
-      // If the status is final (verified or rejected), set resolved_at
+      // If the status is final (verified or rejected), set resolved_at and resolved_by
       if (status === VerificationStatus.VERIFIED || status === VerificationStatus.REJECTED) {
         updateData.resolved_at = now;
+        updateData.resolved_by = adminId || null;
       }
 
       const { data, error } = await this.supabaseClient
@@ -244,5 +246,48 @@ export class VerificationEventRepository
 
   async getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]> {
     return this.findByUserAndServer(userId, serverId, { limit: 100 });
+  }
+
+  async findById(id: string): Promise<VerificationEvent | null> {
+    try {
+      const { data, error } = await this.supabaseClient
+        .from(this.tableName)
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (error) {
+        throw new RepositoryError(`Error finding verification event ${id}`, error);
+      }
+
+      return data as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error as Error, 'findById');
+      return null;
+    }
+  }
+
+  async update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent> {
+    try {
+      const { data: updatedData, error } = await this.supabaseClient
+        .from(this.tableName)
+        .update(data)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) {
+        throw new RepositoryError(`Error updating verification event ${id}`, error);
+      }
+
+      if (!updatedData) {
+        throw new RepositoryError(`Verification event ${id} not found`);
+      }
+
+      return updatedData as VerificationEvent;
+    } catch (error) {
+      this.handleError(error as Error, 'update');
+      throw error;
+    }
   }
 }

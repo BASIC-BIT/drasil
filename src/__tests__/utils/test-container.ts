@@ -168,12 +168,19 @@ export function createMocks() {
     findByServer: jest.fn().mockResolvedValue([]),
     findByUser: jest.fn().mockResolvedValue([]),
     findRestrictedMembers: jest.fn().mockResolvedValue([]),
-    upsertMember: jest.fn().mockImplementation(async (serverId, userId, data) => ({
-      id: 'mock-member-id',
-      server_id: serverId,
-      user_id: userId,
-      ...data,
-    })),
+    upsertMember: jest.fn().mockImplementation(async (serverId, userId, data) => {
+      const member: Partial<ServerMember> = {
+        server_id: serverId,
+        user_id: userId,
+        join_date: new Date().toISOString(),
+        reputation_score: 0,
+        is_restricted: data.is_restricted || false,
+        last_status_change: new Date().toISOString(),
+        ...data,
+      };
+      delete member.verification_status;
+      return Promise.resolve(member as ServerMember);
+    }),
     updateReputationScore: jest.fn().mockResolvedValue({
       id: 'mock-member-id',
       reputation_score: 100,
@@ -182,23 +189,25 @@ export function createMocks() {
       id: 'mock-member-id',
       message_count: 1,
     }),
-    updateRestrictionStatus: jest
-      .fn()
-      .mockImplementation(async (serverId, userId, isRestricted) => ({
-        id: 'mock-member-id',
+    updateRestrictionStatus: jest.fn().mockImplementation(async (serverId, userId, isRestricted, reason, modId) => {
+      const member: Partial<ServerMember> = {
         server_id: serverId,
         user_id: userId,
         is_restricted: isRestricted,
-      })),
-    updateVerificationStatus: jest
-      .fn()
-      .mockImplementation(async (serverId, userId, status, moderatorId) => ({
-        id: 'mock-member-id',
-        server_id: serverId,
-        user_id: userId,
-        verification_status: status,
-        verified_by: moderatorId || 'system',
-      })),
+        restriction_reason: reason,
+        moderator_id: modId,
+        last_status_change: new Date().toISOString(),
+      };
+      delete member.verification_status;
+      return Promise.resolve(member as ServerMember);
+    }),
+    updateVerificationStatus: jest.fn().mockImplementation(async (serverId, userId, status, moderatorId) => ({
+      id: 'mock-member-id',
+      server_id: serverId,
+      user_id: userId,
+      verification_status: status,
+      verified_by: moderatorId || 'system',
+    })),
     findByVerificationStatus: jest.fn().mockImplementation(async (serverId, status) => [
       {
         id: 'mock-member-id',

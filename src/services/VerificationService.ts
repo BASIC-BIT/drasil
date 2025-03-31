@@ -6,6 +6,7 @@ import { IUserRepository } from '../repositories/UserRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IRoleManager } from './RoleManager';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
+import { GuildMember } from 'discord.js';
 import {
   VerificationEvent,
   VerificationEventWithActions,
@@ -15,33 +16,18 @@ import {
 
 export interface IVerificationService {
   createVerificationEvent(
-    serverId: string,
-    userId: string,
+    member: GuildMember,
     detectionEventId: string
   ): Promise<VerificationEvent>;
   getActiveVerification(serverId: string, userId: string): Promise<VerificationEvent | null>;
-  verifyUser(
-    serverId: string,
-    userId: string,
-    adminId: string,
-    notes?: string
-  ): Promise<VerificationEvent>;
-  rejectUser(
-    serverId: string,
-    userId: string,
-    adminId: string,
-    notes?: string
-  ): Promise<VerificationEvent>;
+  verifyUser(member: GuildMember, adminId: string, notes?: string): Promise<VerificationEvent>;
+  rejectUser(member: GuildMember, adminId: string, notes?: string): Promise<VerificationEvent>;
   reopenVerification(
-    serverId: string,
-    userId: string,
+    member: GuildMember,
     adminId: string,
     notes?: string
   ): Promise<VerificationEvent>;
-  getVerificationHistory(
-    serverId: string,
-    userId: string
-  ): Promise<Array<VerificationEventWithActions>>;
+  getVerificationHistory(member: GuildMember): Promise<Array<VerificationEventWithActions>>;
   attachThreadToVerification(
     verificationEventId: string,
     threadId: string
@@ -61,8 +47,7 @@ export class VerificationService implements IVerificationService {
   ) {}
 
   async createVerificationEvent(
-    serverId: string,
-    userId: string,
+    member: GuildMember,
     detectionEventId: string
   ): Promise<VerificationEvent> {
     // Create the verification event
@@ -72,10 +57,14 @@ export class VerificationService implements IVerificationService {
     );
 
     // Update server member status
-    await this.serverMemberRepository.updateRestrictionStatus(serverId, userId, true);
+    await this.serverMemberRepository.updateRestrictionStatus(
+      member.guild.id,
+      member.user.id,
+      true
+    );
 
     // Assign restricted role
-    await this.roleManager.assignRestrictedRole(serverId, userId);
+    await this.roleManager.assignRestrictedRole(member);
 
     return verificationEvent;
   }
@@ -85,13 +74,12 @@ export class VerificationService implements IVerificationService {
   }
 
   async verifyUser(
-    serverId: string,
-    userId: string,
+    member: GuildMember,
     adminId: string,
     notes?: string
   ): Promise<VerificationEvent> {
     // Get active verification event
-    const activeVerification = await this.getActiveVerification(serverId, userId);
+    const activeVerification = await this.getActiveVerification(member.guild.id, member.user.id);
     if (!activeVerification) {
       throw new Error('No active verification event found');
     }
@@ -106,8 +94,8 @@ export class VerificationService implements IVerificationService {
 
     // Record admin action
     await this.adminActionRepository.createAction({
-      server_id: serverId,
-      user_id: userId,
+      server_id: member.guild.id,
+      user_id: member.user.id,
       admin_id: adminId,
       verification_event_id: activeVerification.id,
       action_type: AdminActionType.VERIFY,
@@ -119,21 +107,24 @@ export class VerificationService implements IVerificationService {
     });
 
     // Remove restricted role
-    await this.roleManager.removeRestrictedRole(serverId, userId);
+    await this.roleManager.removeRestrictedRole(member);
 
     // Update server member status
-    await this.serverMemberRepository.updateRestrictionStatus(serverId, userId, false);
+    await this.serverMemberRepository.updateRestrictionStatus(
+      member.guild.id,
+      member.user.id,
+      false
+    );
 
     return updatedVerification;
   }
 
   async rejectUser(
-    serverId: string,
-    userId: string,
+    member: GuildMember,
     adminId: string,
     notes?: string
   ): Promise<VerificationEvent> {
-    const activeVerification = await this.getActiveVerification(serverId, userId);
+    const activeVerification = await this.getActiveVerification(member.guild.id, member.user.id);
     if (!activeVerification) {
       throw new Error('No active verification event found');
     }
@@ -146,8 +137,8 @@ export class VerificationService implements IVerificationService {
     );
 
     await this.adminActionRepository.createAction({
-      server_id: serverId,
-      user_id: userId,
+      server_id: member.guild.id,
+      user_id: member.user.id,
       admin_id: adminId,
       verification_event_id: activeVerification.id,
       action_type: AdminActionType.REJECT,
@@ -160,21 +151,24 @@ export class VerificationService implements IVerificationService {
 
     // Keep the restricted role in place for rejected users
     // Update server member status to reflect rejection
-    await this.serverMemberRepository.updateRestrictionStatus(serverId, userId, true);
+    await this.serverMemberRepository.updateRestrictionStatus(
+      member.guild.id,
+      member.user.id,
+      true
+    );
 
     return updatedVerification;
   }
 
   async reopenVerification(
-    serverId: string,
-    userId: string,
+    member: GuildMember,
     adminId: string,
     notes?: string
   ): Promise<VerificationEvent> {
     // Find the most recent verification event, regardless of status
     const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
-      userId,
-      serverId,
+      member.user.id,
+      member.guild.id,
       { limit: 1 }
     );
     if (!verificationEvents.length) {
@@ -191,8 +185,8 @@ export class VerificationService implements IVerificationService {
 
     // Record admin action
     await this.adminActionRepository.createAction({
-      server_id: serverId,
-      user_id: userId,
+      server_id: member.guild.id,
+      user_id: member.user.id,
       admin_id: adminId,
       verification_event_id: newVerification.id,
       action_type: AdminActionType.REOPEN,
@@ -204,21 +198,22 @@ export class VerificationService implements IVerificationService {
     });
 
     // Reassign restricted role
-    await this.roleManager.assignRestrictedRole(serverId, userId);
+    await this.roleManager.assignRestrictedRole(member);
 
     // Update server member status
-    await this.serverMemberRepository.updateRestrictionStatus(serverId, userId, true);
+    await this.serverMemberRepository.updateRestrictionStatus(
+      member.guild.id,
+      member.user.id,
+      true
+    );
 
     return newVerification;
   }
 
-  async getVerificationHistory(
-    serverId: string,
-    userId: string
-  ): Promise<Array<VerificationEventWithActions>> {
+  async getVerificationHistory(member: GuildMember): Promise<Array<VerificationEventWithActions>> {
     const verificationEvents = await this.verificationEventRepository.getVerificationHistory(
-      userId,
-      serverId
+      member.user.id,
+      member.guild.id
     );
 
     // For each verification event, get its associated admin actions

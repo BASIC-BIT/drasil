@@ -13,6 +13,8 @@ export interface Server {
   admin_notification_role_id?: string; // ID of role to ping for notifications
   created_at?: string; // Creation timestamp
   updated_at?: string; // Last update timestamp
+  created_by?: string; // Discord ID of who created the record
+  updated_by?: string; // Discord ID of who last updated the record
   settings?: ServerSettings; // JSON blob for flexible settings
   is_active: boolean; // Whether the bot is active in this server
 }
@@ -40,7 +42,9 @@ export interface User {
   username?: string; // Discord username
   created_at?: string; // Creation timestamp
   updated_at?: string; // Last update timestamp
-  global_reputation_score?: number; // Cross-server reputation score
+  created_by?: string; // Discord ID of who created the record
+  updated_by?: string; // Discord ID of who last updated the record
+  global_reputation_score?: number; // Cross-server reputation score (-1.0 to 1.0)
   account_created_at?: string; // When the Discord account was created
   metadata?: Record<string, unknown>; // Additional metadata
   suspicious_server_count?: number; // Number of servers where the user has been flagged
@@ -54,16 +58,24 @@ export interface ServerMember {
   server_id: string; // Discord server ID (primary key with user_id)
   user_id: string; // Discord user ID (primary key with server_id)
   join_date?: string; // When the user joined the server
-  reputation_score?: number; // Server-specific reputation score
+  reputation_score?: number; // Server-specific reputation score (-1.0 to 1.0)
   is_restricted?: boolean; // Whether user is currently restricted
   last_verified_at?: string; // Last time user was verified
   last_message_at?: string; // Last time user sent a message
   message_count?: number; // Total message count in server
-  verification_status?: 'pending' | 'verified' | 'rejected'; // Current verification status
   restriction_reason?: string; // Reason why the user was restricted
   last_status_change?: string; // When the status was last changed
   moderator_id?: string; // Discord ID of the moderator who changed the status
-  verification_message_id?: string; // Discord message ID of the verification/warning message
+  created_by?: string; // Discord ID of who created the record
+  updated_by?: string; // Discord ID of who last updated the record
+}
+
+export enum DetectionType {
+  MESSAGE_FREQUENCY = 'message_frequency',
+  SUSPICIOUS_CONTENT = 'suspicious_content',
+  GPT_ANALYSIS = 'gpt_analysis',
+  NEW_ACCOUNT = 'new_account',
+  PATTERN_MATCH = 'pattern_match',
 }
 
 /**
@@ -75,16 +87,15 @@ export interface DetectionEvent {
   user_id: string; // Discord user ID
   message_id?: string; // Discord message ID
   channel_id?: string; // Discord channel ID where the message was sent
-  detection_type: string;
-  confidence: number;
-  confidence_level: 'Low' | 'Medium' | 'High';
+  detection_type: DetectionType;
+  confidence: number; // 0.0 to 1.0
   reasons: string[];
-  used_gpt: boolean;
   detected_at: string | Date;
   admin_action?: 'Verified' | 'Banned' | 'Ignored';
   admin_action_by?: string;
   admin_action_at?: string | Date;
   metadata?: Record<string, unknown>;
+  latest_verification_event_id?: string; // UUID of the latest verification event
 }
 
 /**
@@ -123,11 +134,12 @@ export interface VerificationEvent {
   user_id: string;
   detection_event_id?: string;
   thread_id?: string;
-  message_id?: string;
+  notification_message_id?: string;
   status: VerificationStatus;
   created_at: string;
   updated_at: string;
   resolved_at?: string;
+  resolved_by?: string | null;
   notes?: string;
   metadata: Record<string, string | number | boolean | null>;
 }

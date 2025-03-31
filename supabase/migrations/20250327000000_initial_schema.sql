@@ -3,6 +3,30 @@
 -- Enable UUID extension if not already enabled
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Create custom enum types
+CREATE TYPE verification_status AS ENUM (
+  'pending',
+  'verified',
+  'rejected',
+  'reopened'
+);
+
+CREATE TYPE admin_action_type AS ENUM (
+  'verify',
+  'reject',
+  'ban',
+  'reopen',
+  'create_thread'
+);
+
+CREATE TYPE detection_type AS ENUM (
+  'message_frequency',
+  'suspicious_content',
+  'gpt_analysis',
+  'new_account',
+  'pattern_match'
+);
+
 -- Servers table (guild configuration)
 CREATE TABLE IF NOT EXISTS servers (
   guild_id TEXT PRIMARY KEY, -- Using Discord guild ID directly as primary key
@@ -12,12 +36,16 @@ CREATE TABLE IF NOT EXISTS servers (
   admin_notification_role_id TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  created_by TEXT, -- Discord ID of who created the record
+  updated_by TEXT, -- Discord ID of who last updated the record
   settings JSONB DEFAULT '{}'::JSONB,
   is_active BOOLEAN DEFAULT TRUE
 );
 
 COMMENT ON TABLE servers IS 'Discord servers where the bot is installed';
 COMMENT ON COLUMN servers.settings IS 'JSON blob for flexible configuration storage (heuristic thresholds, GPT settings, etc.)';
+COMMENT ON COLUMN servers.created_by IS 'Discord ID of who created the record';
+COMMENT ON COLUMN servers.updated_by IS 'Discord ID of who last updated the record';
 
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
@@ -25,6 +53,8 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  created_by TEXT, -- Discord ID of who created the record
+  updated_by TEXT, -- Discord ID of who last updated the record
   global_reputation_score REAL,
   account_created_at TIMESTAMP WITH TIME ZONE,
   metadata JSONB DEFAULT '{}'::JSONB
@@ -32,6 +62,8 @@ CREATE TABLE IF NOT EXISTS users (
 
 COMMENT ON TABLE users IS 'Discord users across all servers';
 COMMENT ON COLUMN users.global_reputation_score IS 'Cross-server reputation score (higher is more trusted)';
+COMMENT ON COLUMN users.created_by IS 'Discord ID of who created the record';
+COMMENT ON COLUMN users.updated_by IS 'Discord ID of who last updated the record';
 
 -- Server members (users in specific servers)
 CREATE TABLE IF NOT EXISTS server_members (
@@ -43,21 +75,30 @@ CREATE TABLE IF NOT EXISTS server_members (
   last_verified_at TIMESTAMP WITH TIME ZONE,
   last_message_at TIMESTAMP WITH TIME ZONE,
   message_count INTEGER DEFAULT 0,
+  verification_status verification_status DEFAULT 'pending',
+  last_status_change TIMESTAMP WITH TIME ZONE,
+  created_by TEXT, -- Discord ID of who created the record
+  updated_by TEXT, -- Discord ID of who last updated the record
   PRIMARY KEY (server_id, user_id)
+-- Commenting out this constraint for now - it's not important at the moment
+--  CONSTRAINT chk_reputation_range CHECK (reputation_score >= -1.0 AND reputation_score <= 1.0)
 );
 
 CREATE INDEX IF NOT EXISTS idx_server_members_server ON server_members(server_id);
 CREATE INDEX IF NOT EXISTS idx_server_members_user ON server_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_server_members_user_server_status ON server_members(user_id, server_id, is_restricted);
 
 COMMENT ON TABLE server_members IS 'Mapping table for users in specific Discord servers';
 COMMENT ON COLUMN server_members.reputation_score IS 'Server-specific reputation score';
+COMMENT ON COLUMN server_members.created_by IS 'Discord ID of who created the record';
+COMMENT ON COLUMN server_members.updated_by IS 'Discord ID of who last updated the record';
 
 -- Detection events table
 CREATE TABLE IF NOT EXISTS detection_events (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   server_id TEXT REFERENCES servers(guild_id) ON DELETE CASCADE,
   user_id TEXT REFERENCES users(discord_id) ON DELETE CASCADE,
-  detection_type TEXT NOT NULL, -- 'message_frequency', 'suspicious_content', 'gpt_analysis', etc.
+  detection_type detection_type NOT NULL,
   confidence REAL NOT NULL, -- 0.0 to 1.0
   detected_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   message_id TEXT,
@@ -69,12 +110,16 @@ CREATE TABLE IF NOT EXISTS detection_events (
   admin_action_by TEXT, -- Discord ID of admin who took action
   admin_action_at TIMESTAMP WITH TIME ZONE,
   latest_verification_event_id UUID -- Will be linked after verification_events table is created
+-- Commenting out this constraint for now - it's not important at the moment
+--  CONSTRAINT chk_confidence_range CHECK (confidence >= 0.0 AND confidence <= 1.0)
 );
 
 CREATE INDEX IF NOT EXISTS idx_detection_events_server ON detection_events(server_id);
 CREATE INDEX IF NOT EXISTS idx_detection_events_user ON detection_events(user_id);
 CREATE INDEX IF NOT EXISTS idx_detection_events_type ON detection_events(detection_type);
 CREATE INDEX IF NOT EXISTS idx_detection_events_detected_at ON detection_events(detected_at);
+CREATE INDEX IF NOT EXISTS idx_detection_events_user_server_type ON detection_events(user_id, server_id, detection_type);
+CREATE INDEX IF NOT EXISTS idx_detection_events_detected_at_range ON detection_events USING BRIN(detected_at);
 
 COMMENT ON TABLE detection_events IS 'Records of suspicious activity detections';
 COMMENT ON COLUMN detection_events.confidence IS 'Confidence score of the detection (0.0 to 1.0)';
@@ -98,7 +143,7 @@ BEGIN
   FROM detection_events
   WHERE user_id = p_user_id
     AND server_id = p_server_id
-    AND detection_type = 'message'
+    AND detection_type = 'message_frequency'
     AND detected_at >= NOW() - (p_timeframe_seconds || ' seconds')::INTERVAL;
     
   RETURN message_count;
@@ -114,11 +159,12 @@ CREATE TABLE IF NOT EXISTS verification_events (
   user_id TEXT REFERENCES users(discord_id) ON DELETE CASCADE,
   detection_event_id UUID REFERENCES detection_events(id) ON DELETE SET NULL,
   thread_id TEXT,
-  message_id TEXT,
-  status TEXT NOT NULL, -- 'pending', 'verified', 'rejected', 'reopened'
+  notification_message_id TEXT,
+  status verification_status NOT NULL DEFAULT 'pending',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   resolved_at TIMESTAMP WITH TIME ZONE,
+  resolved_by TEXT, -- Discord ID of the admin who resolved this verification event
   notes TEXT,
   metadata JSONB DEFAULT '{}'::JSONB
 );
@@ -131,10 +177,10 @@ CREATE TABLE IF NOT EXISTS admin_actions (
   admin_id TEXT NOT NULL, -- Discord ID of admin who took action
   verification_event_id UUID REFERENCES verification_events(id) ON DELETE CASCADE,
   detection_event_id UUID REFERENCES detection_events(id) ON DELETE SET NULL,
-  action_type TEXT NOT NULL, -- 'verify', 'reject', 'ban', 'reopen', 'create_thread', etc.
+  action_type admin_action_type NOT NULL,
   action_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  previous_status TEXT, -- Status before this action
-  new_status TEXT, -- Status after this action
+  previous_status verification_status,
+  new_status verification_status,
   notes TEXT,
   metadata JSONB DEFAULT '{}'::JSONB
 );
@@ -151,6 +197,8 @@ CREATE INDEX IF NOT EXISTS idx_verification_events_server ON verification_events
 CREATE INDEX IF NOT EXISTS idx_verification_events_user ON verification_events(user_id);
 CREATE INDEX IF NOT EXISTS idx_verification_events_detection ON verification_events(detection_event_id);
 CREATE INDEX IF NOT EXISTS idx_verification_events_status ON verification_events(status);
+CREATE INDEX IF NOT EXISTS idx_verification_events_user_server_status ON verification_events(user_id, server_id, status);
+CREATE INDEX IF NOT EXISTS idx_verification_events_created_at_range ON verification_events USING BRIN(created_at);
 
 -- Add indexes for admin actions
 CREATE INDEX IF NOT EXISTS idx_admin_actions_server ON admin_actions(server_id);
@@ -163,7 +211,7 @@ CREATE INDEX IF NOT EXISTS idx_admin_actions_detection ON admin_actions(detectio
 COMMENT ON TABLE verification_events IS 'Tracks verification events for suspicious users';
 COMMENT ON COLUMN verification_events.status IS 'Current status of the verification event: pending, verified, rejected, reopened';
 COMMENT ON COLUMN verification_events.thread_id IS 'Discord thread ID if a verification thread was created';
-COMMENT ON COLUMN verification_events.message_id IS 'Discord message ID of the verification notification';
+COMMENT ON COLUMN verification_events.notification_message_id IS 'Discord message ID of the verification notification';
 COMMENT ON COLUMN verification_events.resolved_at IS 'When the verification was resolved (verified or rejected)';
 COMMENT ON COLUMN verification_events.notes IS 'Optional notes about the verification';
 

@@ -366,10 +366,14 @@ export class Bot implements IBot {
     await interaction.deferUpdate();
 
     try {
-      // Verify the user and update UI
+      // Get the guild member
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId);
+      if (!member) throw new Error('Member not found');
+
+      // Verify the user using VerificationService
       await this.verificationService.verifyUser(
-        guildId,
-        userId,
+        member, // Pass the GuildMember object
         interaction.user.id,
         'Verified via button interaction'
       );
@@ -402,18 +406,20 @@ export class Bot implements IBot {
     await interaction.deferUpdate();
 
     try {
-      // Reject the verification and ban the user
+      // Get the guild member
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId);
+      if (!member) throw new Error('Member not found');
+
+      // Reject the verification using VerificationService
       await this.verificationService.rejectUser(
-        guildId,
-        userId,
+        member, // Pass the GuildMember object
         interaction.user.id,
         'Banned via button interaction'
       );
 
-      // Ban the user
-      const guild = await this.client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId);
-      await member.ban({ reason: 'Banned by moderator during verification' });
+      // Ban the user via Discord API (VerificationService doesn't ban)
+      await member.ban({ reason: 'Banned by moderator during verification (button)' });
 
       // Update the notification message buttons
       await this.notificationManager.updateNotificationButtons(
@@ -446,14 +452,14 @@ export class Bot implements IBot {
       // Get the guild and member
       const guild = await this.client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId).catch(() => null);
-      
+
       if (!member) {
         throw new Error('Could not find member in guild');
       }
 
       // Create the thread
       const thread = await this.notificationManager.createVerificationThread(member);
-      
+
       if (!thread) {
         throw new Error('Failed to create verification thread');
       }
@@ -489,8 +495,13 @@ export class Bot implements IBot {
     await interaction.deferReply({ ephemeral: true });
 
     try {
-      // Get verification history with actions
-      const history = await this.verificationService.getVerificationHistory(guildId, userId);
+      // Get the guild member
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId);
+      if (!member) throw new Error('Member not found');
+
+      // Get verification history with actions using the member object
+      const history = await this.verificationService.getVerificationHistory(member);
 
       // Format history using our formatter
       const formattedHistory = VerificationHistoryFormatter.formatForDiscord(history, userId);
@@ -529,10 +540,14 @@ export class Bot implements IBot {
     await interaction.deferUpdate();
 
     try {
-      // Reopen the verification and update UI
+      // Get the guild member
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId);
+      if (!member) throw new Error('Member not found');
+
+      // Reopen the verification using VerificationService
       await this.verificationService.reopenVerification(
-        guildId,
-        userId,
+        member, // Pass the GuildMember object
         interaction.user.id,
         'Reopened via button interaction'
       );
@@ -541,7 +556,7 @@ export class Bot implements IBot {
       await this.notificationManager.updateNotificationButtons(
         interaction.message as Message,
         userId,
-        VerificationStatus.PENDING
+        VerificationStatus.PENDING // Set back to PENDING
       );
 
       await interaction.followUp({
@@ -862,8 +877,7 @@ export class Bot implements IBot {
           await message.reply(
             `Test result: ${newAccountResult.label}\n` +
               `Confidence: ${(newAccountResult.confidence * 100).toFixed(2)}%\n` +
-              `Reason: ${newAccountResult.reasons.join(', ')}\n` +
-              `Used GPT: ${newAccountResult.usedGPT}`
+              `Reason: ${newAccountResult.reasons.join(', ')}\n`
           );
           break;
 
@@ -881,8 +895,7 @@ export class Bot implements IBot {
             `Test message: "${spamMessage}"\n` +
               `Result: ${spamResult.label}\n` +
               `Confidence: ${(spamResult.confidence * 100).toFixed(2)}%\n` +
-              `Reason: ${spamResult.reasons.join(', ')}\n` +
-              `Used GPT: ${spamResult.usedGPT}`
+              `Reason: ${spamResult.reasons.join(', ')}\n`
           );
           break;
 

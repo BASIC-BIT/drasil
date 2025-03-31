@@ -9,15 +9,16 @@ import { IHeuristicService } from './HeuristicService';
 import { IGPTService, UserProfileData } from './GPTService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { TYPES } from '../di/symbols';
+import { meetsConfidenceLevel } from '../utils/confidence';
 
 export interface DetectionResult {
   label: 'OK' | 'SUSPICIOUS';
   confidence: number;
-  usedGPT: boolean;
   reasons: string[];
   triggerSource: 'message' | 'join';
   triggerContent: string;
   profileData?: UserProfileData;
+  detectionEventId?: string;
 }
 
 /**
@@ -96,8 +97,8 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
   ): Promise<DetectionResult> {
     // First, check recent detection history
     const recentEvents = await this.detectionEventsRepository.findByServerAndUser(serverId, userId);
-    const recentSuspiciousEvents = recentEvents.filter(
-      (event) => event.confidence_level === 'High'
+    const recentSuspiciousEvents = recentEvents.filter((event) =>
+      meetsConfidenceLevel(event.confidence, 'High')
     );
 
     // Calculate initial suspicion score based on heuristics
@@ -177,7 +178,6 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       result = {
         label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
         confidence: Math.abs(suspicionScore - 0.5) * 2,
-        usedGPT: true,
         reasons: reasons,
         triggerSource: 'message',
         triggerContent: content,
@@ -187,7 +187,6 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       result = {
         label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
         confidence: Math.abs(suspicionScore - 0.5) * 2,
-        usedGPT: false,
         reasons: reasons,
         triggerSource: 'message',
         triggerContent: content,
@@ -239,7 +238,6 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     return {
       label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
       confidence: Math.abs(suspicionScore - 0.5) * 2,
-      usedGPT: true,
       reasons: reasons,
       triggerSource: 'join',
       triggerContent: 'Server Join',

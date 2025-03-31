@@ -61,7 +61,6 @@ export interface IDetectionEventsRepository {
     banned: number;
     ignored: number;
     pending: number;
-    gptUsage: number;
   }>;
 
   /**
@@ -225,7 +224,6 @@ export class DetectionEventsRepository
     banned: number;
     ignored: number;
     pending: number;
-    gptUsage: number;
   }> {
     try {
       const { data, error } = await this.supabaseClient
@@ -244,7 +242,6 @@ export class DetectionEventsRepository
         banned: events.filter((e) => e.admin_action === 'Banned').length,
         ignored: events.filter((e) => e.admin_action === 'Ignored').length,
         pending: events.filter((e) => !e.admin_action).length,
-        gptUsage: events.filter((e) => e.used_gpt).length,
       };
     } catch (error: unknown) {
       if (error instanceof Error || this.isPostgrestError(error)) {
@@ -256,7 +253,6 @@ export class DetectionEventsRepository
         banned: 0,
         ignored: 0,
         pending: 0,
-        gptUsage: 0,
       };
     }
   }

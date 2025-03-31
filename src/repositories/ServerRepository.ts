@@ -9,6 +9,13 @@ import { TYPES } from '../di/symbols';
  */
 export interface IServerRepository {
   /**
+   * Find a server by ID
+   * @param id The server ID
+   * @returns The server configuration or null if not found
+   */
+  findById(id: string): Promise<Server | null>;
+
+  /**
    * Find a server by Discord guild ID
    * @param guildId The Discord guild ID
    * @returns The server configuration or null if not found
@@ -53,6 +60,31 @@ export interface IServerRepository {
 export class ServerRepository extends SupabaseRepository<Server> implements IServerRepository {
   constructor(@inject(TYPES.SupabaseClient) supabaseClient: SupabaseClient) {
     super('servers', supabaseClient);
+  }
+
+  /**
+   * Find a server by ID
+   * @param id The server ID
+   * @returns The server configuration or null if not found
+   */
+  async findById(id: string): Promise<Server | null> {
+    try {
+      const { data, error } = await this.supabaseClient
+        .from(this.tableName)
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      // Handle the specific "no rows" error as a valid "not found" case
+      if (error && error.code === 'PGRST116') {
+        return null;
+      } else if (error) {
+        throw error;
+      }
+      return (data as Server) || null;
+    } catch (error) {
+      this.handleError(error as Error, 'findById');
+    }
   }
 
   /**

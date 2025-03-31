@@ -9,6 +9,13 @@ import { TYPES } from '../di/symbols';
  */
 export interface IUserRepository {
   /**
+   * Find a user by ID
+   * @param id The user ID
+   * @returns The user data or null if not found
+   */
+  findById(id: string): Promise<User | null>;
+
+  /**
    * Find a user by Discord ID
    * @param discordId The Discord user ID
    * @returns The user data or null if not found
@@ -75,6 +82,31 @@ export interface IUserRepository {
 export class UserRepository extends SupabaseRepository<User> implements IUserRepository {
   constructor(@inject(TYPES.SupabaseClient) supabaseClient: SupabaseClient) {
     super('users', supabaseClient);
+  }
+
+  /**
+   * Find a user by ID
+   * @param id The user ID
+   * @returns The user data or null if not found
+   */
+  async findById(id: string): Promise<User | null> {
+    try {
+      const { data, error } = await this.supabaseClient
+        .from(this.tableName)
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      // Handle the specific "no rows" error as a valid "not found" case
+      if (error && error.code === 'PGRST116') {
+        return null;
+      } else if (error) {
+        throw error;
+      }
+      return (data as User) || null;
+    } catch (error) {
+      this.handleError(error as Error, 'findById');
+    }
   }
 
   /**

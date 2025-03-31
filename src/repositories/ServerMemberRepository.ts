@@ -81,32 +81,6 @@ export interface IServerMemberRepository {
   ): Promise<ServerMember | null>;
 
   /**
-   * Update member's verification status
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @param status The new verification status
-   * @param moderatorId Optional Discord ID of the moderator
-   * @returns The updated server member
-   */
-  updateVerificationStatus(
-    serverId: string,
-    userId: string,
-    status: 'pending' | 'verified' | 'rejected',
-    moderatorId?: string
-  ): Promise<ServerMember | null>;
-
-  /**
-   * Find members by verification status
-   * @param serverId The Discord server ID
-   * @param status The verification status to filter by
-   * @returns Array of server members with the specified status
-   */
-  findByVerificationStatus(
-    serverId: string,
-    status: 'pending' | 'verified' | 'rejected'
-  ): Promise<ServerMember[]>;
-
-  /**
    * Increment a member's message count and update last_message_at timestamp
    * @param serverId The Discord server ID
    * @param userId The Discord user ID
@@ -297,121 +271,27 @@ export class ServerMemberRepository
     moderatorId?: string
   ): Promise<ServerMember | null> {
     try {
-      const updateData: Partial<ServerMember> = {
+      const now = new Date().toISOString();
+      const updateData: Partial<ServerMember> & { last_status_change: string } = {
         is_restricted: isRestricted,
-        last_status_change: new Date().toISOString(),
+        last_status_change: now,
+        restriction_reason: reason || undefined,
+        moderator_id: moderatorId || undefined,
+        updated_by: moderatorId || undefined,
       };
 
-      // Only set these if they're provided
-      if (reason) {
-        updateData.restriction_reason = reason;
-      }
-
-      if (moderatorId) {
-        updateData.moderator_id = moderatorId;
-      }
-
-      // If the user is being unrestricted, update the verification timestamp
-      if (!isRestricted) {
-        updateData.last_verified_at = new Date().toISOString();
-        updateData.verification_status = 'verified';
-      } else {
-        // If restricting, set status to pending
-        updateData.verification_status = 'pending';
-      }
-
-      const { data, error } = await this.supabaseClient
+      const { data: updated, error } = await this.supabaseClient
         .from(this.tableName)
         .update(updateData)
         .eq('server_id', serverId)
         .eq('user_id', userId)
         .select()
-        .single();
-
-      if (error && error.code === 'PGRST116') {
-        return null;
-      } else if (error) {
-        throw error;
-      }
-      return (data as ServerMember) || null;
-    } catch (error) {
-      this.handleError(error as Error, 'updateRestrictionStatus');
-    }
-  }
-
-  /**
-   * Update member's verification status
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @param status The new verification status
-   * @param moderatorId Optional Discord ID of the moderator
-   * @returns The updated server member
-   */
-  async updateVerificationStatus(
-    serverId: string,
-    userId: string,
-    status: 'pending' | 'verified' | 'rejected',
-    moderatorId?: string
-  ): Promise<ServerMember | null> {
-    try {
-      const updateData: Partial<ServerMember> = {
-        verification_status: status,
-        last_status_change: new Date().toISOString(),
-      };
-
-      if (moderatorId) {
-        updateData.moderator_id = moderatorId;
-      }
-
-      // If the user is being verified, update the verification timestamp and remove restriction
-      if (status === 'verified') {
-        updateData.last_verified_at = new Date().toISOString();
-        updateData.is_restricted = false;
-      } else if (status === 'rejected') {
-        // If rejected, ensure they are restricted
-        updateData.is_restricted = true;
-      }
-
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .update(updateData)
-        .eq('server_id', serverId)
-        .eq('user_id', userId)
-        .select()
-        .single();
-
-      if (error && error.code === 'PGRST116') {
-        return null;
-      } else if (error) {
-        throw error;
-      }
-      return (data as ServerMember) || null;
-    } catch (error) {
-      this.handleError(error as Error, 'updateVerificationStatus');
-    }
-  }
-
-  /**
-   * Find members by verification status
-   * @param serverId The Discord server ID
-   * @param status The verification status to filter by
-   * @returns Array of server members with the specified status
-   */
-  async findByVerificationStatus(
-    serverId: string,
-    status: 'pending' | 'verified' | 'rejected'
-  ): Promise<ServerMember[]> {
-    try {
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('server_id', serverId)
-        .eq('verification_status', status);
+        .single<ServerMember>();
 
       if (error) throw error;
-      return (data as ServerMember[]) || [];
+      return updated || null;
     } catch (error) {
-      this.handleError(error as Error, 'findByVerificationStatus');
+      this.handleError(error as Error, 'updateRestrictionStatus');
     }
   }
 

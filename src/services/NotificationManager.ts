@@ -21,10 +21,11 @@ import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { DetectionResult } from './DetectionOrchestrator';
 import { IVerificationThreadRepository } from '../repositories/VerificationThreadRepository';
+import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { IUserService } from './UserService';
 import { IServerService } from './ServerService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
-import { DetectionEvent } from '../repositories/types';
+import { DetectionEvent, VerificationEvent } from '../repositories/types';
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
 import { IVerificationService } from './VerificationService';
 import { IAdminActionService } from './AdminActionService';
@@ -138,11 +139,6 @@ export interface INotificationManager {
    */
   handleHistoryButtonClick(interaction: ButtonInteraction, userId: string): Promise<boolean>;
 
-  createAdminNotification(
-    serverId: string,
-    userId: string,
-    detectionResult: DetectionResult
-  ): Promise<void>;
   updateNotificationButtons(
     message: Message,
     userId: string,
@@ -160,6 +156,7 @@ export class NotificationManager implements INotificationManager {
   private client: Client;
   private configService: IConfigService;
   private verificationThreadRepository: IVerificationThreadRepository;
+  private verificationEventRepository: IVerificationEventRepository;
   private userService: IUserService;
   private serverService: IServerService;
   private detectionEventsRepository: IDetectionEventsRepository;
@@ -171,6 +168,8 @@ export class NotificationManager implements INotificationManager {
     @inject(TYPES.ConfigService) configService: IConfigService,
     @inject(TYPES.VerificationThreadRepository)
     verificationThreadRepository: IVerificationThreadRepository,
+    @inject(TYPES.VerificationEventRepository)
+    verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.UserService) userService: IUserService,
     @inject(TYPES.ServerService) serverService: IServerService,
     @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
@@ -180,6 +179,7 @@ export class NotificationManager implements INotificationManager {
     this.client = client;
     this.configService = configService;
     this.verificationThreadRepository = verificationThreadRepository;
+    this.verificationEventRepository = verificationEventRepository;
     this.userService = userService;
     this.serverService = serverService;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -847,68 +847,6 @@ export class NotificationManager implements INotificationManager {
         ephemeral: true,
       });
       return false;
-    }
-  }
-
-  async createAdminNotification(
-    serverId: string,
-    userId: string,
-    detectionResult: DetectionResult
-  ): Promise<void> {
-    const config = await this.configService.getServerConfig(serverId);
-    if (!config.admin_channel_id) {
-      console.warn(`No admin channel configured for server ${serverId}`);
-      return;
-    }
-
-    const channel = await this.getAdminChannel();
-    if (!channel) {
-      console.error(`Could not find admin channel ${config.admin_channel_id}`);
-      return;
-    }
-
-    // Get the guild and member
-    const guild = await this.client.guilds.fetch(serverId);
-    const member = await guild.members.fetch(userId);
-
-    // Create the embed using the existing method
-    const embed = await this.createSuspiciousUserEmbed(member, detectionResult);
-
-    // Create initial button row with all actions
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`verify_${userId}`)
-        .setLabel('Verify User')
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId(`ban_${userId}`)
-        .setLabel('Ban User')
-        .setStyle(ButtonStyle.Danger),
-      new ButtonBuilder()
-        .setCustomId(`thread_${userId}`)
-        .setLabel('Create Thread')
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`history_${userId}`)
-        .setLabel('View Full History')
-        .setStyle(ButtonStyle.Secondary)
-    );
-
-    const message = await channel.send({
-      content: config.admin_notification_role_id
-        ? `<@&${config.admin_notification_role_id}>`
-        : undefined,
-      embeds: [embed],
-      components: [row],
-    });
-
-    // Store the message ID in the verification event
-    const activeVerification = await this.verificationService.getActiveVerification(
-      serverId,
-      userId
-    );
-    if (activeVerification) {
-      await this.verificationService.attachThreadToVerification(activeVerification.id, message.id);
     }
   }
 

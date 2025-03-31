@@ -9,6 +9,7 @@ The project is currently focused on implementing the core functionality of the D
 ### Completed
 
 - ✅ **Database Schema Consolidation**:
+
   - Combined all migrations into a single initial schema file
   - Simplified database setup process
   - Proper foreign key relationships and constraints
@@ -17,6 +18,7 @@ The project is currently focused on implementing the core functionality of the D
   - Clear documentation and comments
 
 - ✅ **Service Architecture Improvements**:
+
   - Moved entity existence checks to SecurityActionService
   - Simplified UserReputationService to focus solely on reputation management
   - Removed entity management from DetectionOrchestrator

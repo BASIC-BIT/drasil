@@ -50,24 +50,28 @@ The database schema is implemented in a single migration file (`20250327000000_i
 Key tables and their relationships:
 
 1. **servers**:
+
    - Primary key: guild_id (TEXT) - Using Discord guild ID directly
    - Configuration fields for roles and channels
    - JSONB settings for flexible configuration
    - Timestamps for creation and updates
 
 2. **users**:
+
    - Primary key: discord_id (TEXT) - Using Discord user ID directly
    - Global reputation tracking
    - Account metadata and creation date
    - Cross-server user information
 
 3. **server_members**:
+
    - Composite primary key (server_id, user_id)
    - Foreign keys to servers and users
    - Server-specific reputation and status
    - Message and activity tracking
 
 4. **detection_events**:
+
    - UUID primary key
    - Links to server and user
    - Detection metadata and confidence scores
@@ -75,6 +79,7 @@ Key tables and their relationships:
    - Circular reference to verification_events
 
 5. **verification_events**:
+
    - UUID primary key
    - Links to detection events
    - Thread and message tracking
@@ -107,6 +112,7 @@ Key tables and their relationships:
 The following tables are planned for future implementation to enhance the bot's capabilities:
 
 1. **messages**:
+
    ```sql
    CREATE TABLE IF NOT EXISTS messages (
      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -121,11 +127,13 @@ The following tables are planned for future implementation to enhance the bot's 
      UNIQUE(server_id, message_id)
    );
    ```
+
    - Purpose: Store message content for flagged users
    - Limited retention policy (7 days)
    - Used for pattern analysis and training data
 
 2. **analytics**:
+
    ```sql
    CREATE TABLE IF NOT EXISTS analytics (
      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -143,11 +151,13 @@ The following tables are planned for future implementation to enhance the bot's 
      UNIQUE(server_id, date)
    );
    ```
+
    - Purpose: Track daily metrics per server
    - Aggregated statistics for reporting
    - Performance monitoring data
 
 3. **server_relationships**:
+
    ```sql
    CREATE TABLE IF NOT EXISTS server_relationships (
      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -161,11 +171,13 @@ The following tables are planned for future implementation to enhance the bot's 
      UNIQUE(source_server_id, target_server_id)
    );
    ```
+
    - Purpose: Enable cross-server trust networks
    - Share reputation data between trusted servers
    - Collaborative spam prevention
 
 4. **training_data**:
+
    ```sql
    CREATE TABLE IF NOT EXISTS training_data (
      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -181,6 +193,7 @@ The following tables are planned for future implementation to enhance the bot's 
      metadata JSONB DEFAULT '{}'::JSONB
    );
    ```
+
    - Purpose: Collect data for model training
    - Store labeled examples for future AI improvements
    - Quality scoring for training data

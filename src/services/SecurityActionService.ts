@@ -6,7 +6,7 @@
  * - Coordinates between RoleManager and NotificationManager
  */
 import { injectable, inject } from 'inversify';
-import { GuildMember, Message, ThreadChannel, User } from 'discord.js';
+import { GuildMember, Message, ThreadChannel, User, Client } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import { INotificationManager } from './NotificationManager';
 import { DetectionResult } from './DetectionOrchestrator';
@@ -15,6 +15,9 @@ import { IServerMemberRepository } from '../repositories/ServerMemberRepository'
 import { IUserService } from './UserService';
 import { IServerService } from './ServerService';
 import { IUserModerationService } from './UserModerationService';
+import { DetectionType, DetectionEvent, VerificationEvent } from '../repositories/types';
+import { IVerificationService } from './VerificationService';
+import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 
 /**
  * Interface for the SecurityActionService
@@ -73,6 +76,9 @@ export class SecurityActionService implements ISecurityActionService {
   private userService: IUserService;
   private serverService: IServerService;
   private userModerationService: IUserModerationService;
+  private verificationService: IVerificationService;
+  private verificationEventRepository: IVerificationEventRepository;
+  private client: Client;
 
   constructor(
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
@@ -80,7 +86,10 @@ export class SecurityActionService implements ISecurityActionService {
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
     @inject(TYPES.UserService) userService: IUserService,
     @inject(TYPES.ServerService) serverService: IServerService,
-    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService
+    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
+    @inject(TYPES.VerificationService) verificationService: IVerificationService,
+    @inject(TYPES.VerificationEventRepository) verificationEventRepository: IVerificationEventRepository,
+    @inject(TYPES.DiscordClient) client: Client
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -88,6 +97,9 @@ export class SecurityActionService implements ISecurityActionService {
     this.userService = userService;
     this.serverService = serverService;
     this.userModerationService = userModerationService;
+    this.verificationService = verificationService;
+    this.verificationEventRepository = verificationEventRepository;
+    this.client = client;
   }
 
   /**
@@ -127,6 +139,20 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   /**
+   * Maps a trigger source to a DetectionType
+   * @param triggerSource The source of the detection
+   * @returns The corresponding DetectionType
+   */
+  private mapTriggerSourceToDetectionType(triggerSource: 'message' | 'join'): DetectionType {
+    switch (triggerSource) {
+      case 'message':
+        return DetectionType.SUSPICIOUS_CONTENT;
+      case 'join':
+        return DetectionType.NEW_ACCOUNT;
+    }
+  }
+
+  /**
    * Record a detection event in the database
    *
    * @param serverId The Discord server ID
@@ -135,6 +161,7 @@ export class SecurityActionService implements ISecurityActionService {
    * @param messageContent Optional message content that triggered the detection
    * @param messageId Optional message ID that triggered the detection
    * @param channelId Optional channel ID that triggered the detection
+   * @returns The created DetectionEvent
    */
   private async recordDetectionEvent(
     serverId: string,
@@ -143,20 +170,13 @@ export class SecurityActionService implements ISecurityActionService {
     messageContent?: string,
     messageId?: string,
     channelId?: string
-  ): Promise<void> {
-    await this.detectionEventsRepository.create({
+  ): Promise<DetectionEvent> {
+    return this.detectionEventsRepository.create({
       server_id: serverId,
       user_id: userId,
-      detection_type: detectionResult.triggerSource,
+      detection_type: this.mapTriggerSourceToDetectionType(detectionResult.triggerSource),
       confidence: detectionResult.confidence,
-      confidence_level:
-        detectionResult.confidence >= 0.8
-          ? 'High'
-          : detectionResult.confidence >= 0.5
-            ? 'Medium'
-            : 'Low',
       reasons: detectionResult.reasons,
-      used_gpt: detectionResult.usedGPT,
       detected_at: new Date(),
       message_id: messageId,
       channel_id: channelId,
@@ -178,7 +198,7 @@ export class SecurityActionService implements ISecurityActionService {
     sourceMessage?: Message
   ): Promise<boolean> {
     try {
-      // Ensure all required entities exist first
+      // 1. Ensure entities exist
       await this.ensureEntitiesExist(
         member.guild.id,
         member.id,
@@ -186,13 +206,11 @@ export class SecurityActionService implements ISecurityActionService {
         member.joinedAt?.toISOString()
       );
 
-      console.log(`User flagged for spam: ${member.user.tag} (${member.id})`);
-      console.log(`Detection confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-      console.log(`Reasons: ${detectionResult.reasons.join(', ')}`);
-      console.log(`Trigger source: ${detectionResult.triggerSource}`);
+      console.log(`Suspicious message detected for: ${member.user.tag} (${member.id})`);
+      console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
 
-      // Record the detection event
-      await this.recordDetectionEvent(
+      // 2. Record the DetectionEvent
+      const detectionEvent = await this.recordDetectionEvent(
         member.guild.id,
         member.id,
         detectionResult,
@@ -201,45 +219,47 @@ export class SecurityActionService implements ISecurityActionService {
         sourceMessage?.channelId
       );
 
-      // Restrict the user using UserModerationService
-      const restrictSuccess = await this.userModerationService.restrictUser(member);
-      if (restrictSuccess) {
-        console.log(`Restricted user ${member.user.tag}`);
-      } else {
-        console.log(`Failed to restrict user ${member.user.tag}`);
-        return false;
+      // 3. Create the VerificationEvent (this also restricts the user)
+      let verificationEvent: VerificationEvent | null = null;
+      try {
+        verificationEvent = await this.verificationService.createVerificationEvent(
+          member,
+          detectionEvent.id
+        );
+        console.log(`Restricted user ${member.user.tag} and created verification event ${verificationEvent.id}`);
+      } catch (error) {
+         console.error(`Failed to restrict user or create verification event for ${member.user.tag}:`, error);
+         return false; // Stop if restriction/event creation fails
       }
 
-      // Get existing verification message ID if it exists
-      const existingMember = await this.serverMemberRepository.findByServerAndUser(
-        member.guild.id,
-        member.id
-      );
-      const existingMessageId = existingMember?.verification_message_id;
-
-      // Create or update notification
+      // 4. Upsert the notification message in the admin channel
       const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
         member,
         detectionResult,
-        existingMessageId,
+        undefined, // Always create a new message for a new event
         sourceMessage
       );
 
-      if (notificationMessage) {
-        console.log(`Sent/Updated notification about ${member.user.tag}`);
-
-        // Store the verification message ID
-        await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-          verification_message_id: notificationMessage.id,
-        });
-
-        return true;
+      // 5. Update the Verification Event with the message ID
+      if (notificationMessage && verificationEvent) {
+          try {
+              await this.verificationEventRepository.update(verificationEvent.id, {
+                  notification_message_id: notificationMessage.id,
+              });
+              console.log(`Sent notification and linked message ${notificationMessage.id} to verification ${verificationEvent.id}`);
+              return true;
+          } catch(updateError) {
+              console.error(`Sent notification for ${member.user.tag}, but failed to link message ID ${notificationMessage.id} to verification ${verificationEvent.id}:`, updateError);
+              // Depending on policy, maybe return true (notification sent) or false (linking failed)
+              return true; // Let's say notification sent is good enough
+          }
       } else {
-        console.log(`Failed to send/update notification about ${member.user.tag}`);
+        console.warn(`Failed to send notification message for user ${member.user.tag}, verification event ${verificationEvent?.id}`);
         return false;
       }
+
     } catch (error) {
-      console.error('Failed to handle suspicious message:', error);
+      console.error(`Failed to handle suspicious message for ${member?.user?.tag}:`, error);
       return false;
     }
   }
@@ -255,8 +275,8 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     detectionResult: DetectionResult
   ): Promise<boolean> {
-    try {
-      // Ensure all required entities exist first
+     try {
+      // 1. Ensure entities exist
       await this.ensureEntitiesExist(
         member.guild.id,
         member.id,
@@ -264,55 +284,61 @@ export class SecurityActionService implements ISecurityActionService {
         member.joinedAt?.toISOString()
       );
 
-      console.log(`New member flagged as suspicious: ${member.user.tag} (${member.id})`);
-      console.log(`Detection confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-      console.log(`Reasons: ${detectionResult.reasons.join(', ')}`);
-      console.log(`Trigger source: ${detectionResult.triggerSource}`);
+      console.log(`Suspicious join detected for: ${member.user.tag} (${member.id})`);
+      console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
 
-      // Record the detection event
-      await this.recordDetectionEvent(member.guild.id, member.id, detectionResult);
-
-      // Restrict the user using UserModerationService
-      const restrictSuccess = await this.userModerationService.restrictUser(member);
-      if (restrictSuccess) {
-        console.log(`Restricted user ${member.user.tag}`);
-      } else {
-        console.log(`Failed to restrict user ${member.user.tag}`);
-        return false;
-      }
-
-      // Get existing verification message ID if it exists
-      const existingMember = await this.serverMemberRepository.findByServerAndUser(
+      // 2. Record the DetectionEvent
+      const detectionEvent = await this.recordDetectionEvent(
         member.guild.id,
-        member.id
+        member.id,
+        detectionResult
+        // No source message for join event
       );
-      const existingMessageId = existingMember?.verification_message_id;
 
-      // Create or update notification
+      // 3. Create the VerificationEvent (this also restricts the user)
+      let verificationEvent: VerificationEvent | null = null;
+       try {
+         verificationEvent = await this.verificationService.createVerificationEvent(
+           member,
+           detectionEvent.id
+         );
+         console.log(`Restricted user ${member.user.tag} and created verification event ${verificationEvent.id}`);
+       } catch (error) {
+          console.error(`Failed to restrict user or create verification event for ${member.user.tag}:`, error);
+          return false; // Stop if restriction/event creation fails
+       }
+
+
+      // 4. Upsert the notification message in the admin channel
       const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
         member,
-        detectionResult,
-        existingMessageId
+        detectionResult
+        // Always create a new message for a new event
       );
 
-      if (notificationMessage) {
-        console.log(`Sent/Updated notification about ${member.user.tag}`);
+       // 5. Update the Verification Event with the message ID
+       if (notificationMessage && verificationEvent) {
+           try {
+               await this.verificationEventRepository.update(verificationEvent.id, {
+                   notification_message_id: notificationMessage.id,
+               });
+               console.log(`Sent notification and linked message ${notificationMessage.id} to verification ${verificationEvent.id}`);
 
-        // Store the verification message ID
-        await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-          verification_message_id: notificationMessage.id,
-        });
+               // Optionally create thread automatically here if needed
+               // await this.createVerificationThreadForMember(member, notificationMessage);
 
-        // Automatically create a verification thread for new joins
-        await this.createVerificationThreadForMember(member, notificationMessage);
+               return true;
+           } catch(updateError) {
+               console.error(`Sent notification for ${member.user.tag}, but failed to link message ID ${notificationMessage.id} to verification ${verificationEvent.id}:`, updateError);
+               return true; // Notification sent is good enough
+           }
+       } else {
+         console.warn(`Failed to send notification message for user ${member.user.tag}, verification event ${verificationEvent?.id}`);
+         return false;
+       }
 
-        return true;
-      } else {
-        console.log(`Failed to send/update notification about ${member.user.tag}`);
-        return false;
-      }
     } catch (error) {
-      console.error('Failed to handle suspicious join:', error);
+      console.error(`Failed to handle suspicious join for ${member?.user?.tag}:`, error);
       return false;
     }
   }
@@ -333,9 +359,9 @@ export class SecurityActionService implements ISecurityActionService {
     const thread = await this.notificationManager.createVerificationThread(member);
 
     if (thread) {
-      console.log(`Created verification thread for ${member.user.tag}`);
+      console.log(`Created verification thread for ${member.user.tag}: ${thread.id}`);
 
-      // If we have a notification message and an action performer, log the action
+      // Log action if possible
       if (notificationMessage && actionPerformer) {
         await this.notificationManager.logActionToMessage(
           notificationMessage,
@@ -344,17 +370,28 @@ export class SecurityActionService implements ISecurityActionService {
           thread
         );
       } else if (notificationMessage) {
-        // Use "automatically created" message if no explicit performer
-        const actionMessage = actionPerformer
-          ? 'created a verification thread'
-          : 'automatically created a verification thread';
-        await this.notificationManager.logActionToMessage(
-          notificationMessage,
-          actionMessage,
-          actionPerformer || member.client.user,
-          thread
-        );
+        // Default to bot user if no performer specified
+        const performer = actionPerformer || this.client.user;
+        if (performer) { // Check if bot user exists
+          await this.notificationManager.logActionToMessage(
+            notificationMessage,
+            'created a verification thread',
+            performer,
+            thread
+          );
+        }
       }
+
+      // Link thread ID to verification event (Optional - depends on if needed)
+      // const activeVerification = await this.verificationService.getActiveVerification(member.guild.id, member.id);
+      // if (activeVerification) {
+      //   try {
+      //      await this.verificationEventRepository.update(activeVerification.id, { thread_id: thread.id });
+      //   } catch (err) {
+      //      console.error(`Failed to link thread ${thread.id} to verification event ${activeVerification.id}`);
+      //   }
+      // }
+
       return thread;
     } else {
       console.log(`Failed to create verification thread for ${member.user.tag}`);
