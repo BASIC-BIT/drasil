@@ -132,7 +132,7 @@ export interface VerificationEvent {
   id: string;
   server_id: string;
   user_id: string;
-  detection_event_id?: string;
+  detection_event_id?: string | null;
   thread_id?: string;
   notification_message_id?: string;
   status: VerificationStatus;

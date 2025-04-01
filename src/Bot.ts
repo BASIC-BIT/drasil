@@ -32,8 +32,9 @@ import { IUserModerationService } from './services/UserModerationService';
 import { TYPES } from './di/symbols';
 import { IVerificationService } from './services/VerificationService';
 import { IAdminActionService } from './services/AdminActionService';
-import { VerificationStatus } from './repositories/types';
+import { VerificationStatus, VerificationEvent } from './repositories/types';
 import { VerificationHistoryFormatter } from './utils/VerificationHistoryFormatter';
+import 'reflect-metadata';
 
 // Load environment variables
 dotenv.config();
@@ -483,10 +484,33 @@ export class Bot implements IBot {
         guildId,
         userId
       );
+
+      let updatedEvent: VerificationEvent | null = null;
       if (verificationEvent) {
         // Attach thread to verification event
-        await this.verificationService.attachThreadToVerification(verificationEvent.id, thread.id);
+        updatedEvent = await this.verificationService.attachThreadToVerification(
+          verificationEvent.id,
+          thread.id
+        );
+      } else {
+        console.warn(`No active verification event found for user ${userId} after creating thread ${thread.id}. Cannot link thread.`);
+        // Optionally handle this case, e.g., create a new event here if needed
       }
+
+      // Log the action to the message embed (adds the thread link field)
+      await this.notificationManager.logActionToMessage(
+          interaction.message as Message,
+          'created a verification thread',
+          interaction.user,
+          thread
+      );
+
+      // Update the buttons (this will remove the Create Thread button)
+      await this.notificationManager.updateNotificationButtons(
+          interaction.message as Message,
+          userId,
+          updatedEvent?.status || VerificationStatus.PENDING // Use updated status or default to PENDING
+      );
 
       await interaction.followUp({
         content: `Created verification thread: ${thread.url}`,

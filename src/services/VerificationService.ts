@@ -179,8 +179,10 @@ export class VerificationService implements IVerificationService {
 
     // Create a new verification event with PENDING status
     const newVerification = await this.verificationEventRepository.createFromDetection(
-      lastVerification.detection_event_id || '',
-      VerificationStatus.PENDING
+      lastVerification.detection_event_id || null,
+      VerificationStatus.PENDING,
+      lastVerification.server_id,
+      lastVerification.user_id
     );
 
     // Record admin action

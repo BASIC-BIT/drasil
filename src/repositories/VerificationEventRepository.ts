@@ -14,8 +14,10 @@ export interface IVerificationEventRepository {
   findActiveByUserAndServer(userId: string, serverId: string): Promise<VerificationEvent | null>;
   findByDetectionEvent(detectionEventId: string): Promise<VerificationEvent[]>;
   createFromDetection(
-    detectionEventId: string,
-    status: VerificationStatus
+    detectionEventId: string | null,
+    status: VerificationStatus,
+    serverId?: string,
+    userId?: string
   ): Promise<VerificationEvent>;
   updateStatus(
     id: string,
@@ -131,49 +133,69 @@ export class VerificationEventRepository
   }
 
   async createFromDetection(
-    detectionEventId: string,
-    status: VerificationStatus
+    detectionEventId: string | null,
+    status: VerificationStatus,
+    serverId?: string,
+    userId?: string
   ): Promise<VerificationEvent> {
     try {
-      // First, get the detection event to get server_id and user_id
-      const { data: detectionEvent, error: detectionError } = await this.supabaseClient
-        .from('detection_events')
-        .select('server_id, user_id')
-        .eq('id', detectionEventId)
-        .single();
+      let fetchedServerId: string | null = null;
+      let fetchedUserId: string | null = null;
 
-      if (detectionError) {
-        throw new RepositoryError(
-          `Error finding detection event ${detectionEventId}`,
-          detectionError
-        );
+      if (detectionEventId) {
+        const { data: detectionEvent, error: detectionError } = await this.supabaseClient
+          .from('detection_events')
+          .select('server_id, user_id')
+          .eq('id', detectionEventId)
+          .single();
+
+        if (detectionError) {
+          throw new RepositoryError(
+            `Error finding detection event ${detectionEventId}`,
+            detectionError
+          );
+        }
+
+        if (!detectionEvent) {
+          throw new RepositoryError(`Detection event ${detectionEventId} not found`);
+        }
+
+        if (!detectionEvent.server_id || !detectionEvent.user_id) {
+          throw new RepositoryError(
+            `Detection event ${detectionEventId} is missing required fields (server_id or user_id)`
+          );
+        }
+        fetchedServerId = detectionEvent.server_id;
+        fetchedUserId = detectionEvent.user_id;
       }
 
-      if (!detectionEvent) {
-        throw new RepositoryError(`Detection event ${detectionEventId} not found`);
-      }
+      const finalServerId = fetchedServerId ?? serverId;
+      const finalUserId = fetchedUserId ?? userId;
 
-      // Validate required fields
-      if (!detectionEvent.server_id || !detectionEvent.user_id) {
+      if (!finalServerId || !finalUserId) {
         throw new RepositoryError(
-          `Detection event ${detectionEventId} is missing required fields (server_id or user_id)`
+          'Cannot create verification event: Missing server_id or user_id context.'
         );
       }
 
       const now = new Date().toISOString();
-      const verificationEvent: Partial<VerificationEvent> = {
-        server_id: detectionEvent.server_id,
-        user_id: detectionEvent.user_id,
+      const newEventData: Omit<VerificationEvent, 'id' | 'updated_at'> & { updated_at?: string } = {
+        server_id: finalServerId,
+        user_id: finalUserId,
         detection_event_id: detectionEventId,
         status,
         created_at: now,
-        updated_at: now,
         metadata: {},
+        thread_id: undefined,
+        notification_message_id: undefined,
+        resolved_at: undefined,
+        resolved_by: undefined,
+        notes: undefined,
       };
 
       const { data, error } = await this.supabaseClient
         .from(this.tableName)
-        .insert(verificationEvent)
+        .insert(newEventData)
         .select()
         .single();
 
@@ -185,14 +207,15 @@ export class VerificationEventRepository
         throw new RepositoryError('No data returned when creating verification event');
       }
 
-      // Update the detection event with the new verification event ID
-      const { error: updateError } = await this.supabaseClient
-        .from('detection_events')
-        .update({ latest_verification_event_id: data.id })
-        .eq('id', detectionEventId);
+      if (detectionEventId && data) {
+        const { error: updateError } = await this.supabaseClient
+          .from('detection_events')
+          .update({ latest_verification_event_id: data.id })
+          .eq('id', detectionEventId);
 
-      if (updateError) {
-        console.error('Error updating detection event with verification event ID:', updateError);
+        if (updateError) {
+          console.error('Error updating detection event with verification event ID:', updateError);
+        }
       }
 
       return data as VerificationEvent;
@@ -216,7 +239,6 @@ export class VerificationEventRepository
         notes: notes || undefined,
       };
 
-      // If the status is final (verified or rejected), set resolved_at and resolved_by
       if (status === VerificationStatus.VERIFIED || status === VerificationStatus.REJECTED) {
         updateData.resolved_at = now;
         updateData.resolved_by = adminId || null;

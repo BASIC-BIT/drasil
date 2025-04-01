@@ -440,8 +440,8 @@ export class NotificationManager implements INotificationManager {
         updatedEmbed.addFields({ name: 'Action Log', value: actionLogContent, inline: false });
       }
 
-      // Update the message with the new embed
-      await message.edit({ embeds: [updatedEmbed], components: [] });
+      // Update the message embed. Let button updates be handled separately.
+      await message.edit({ embeds: [updatedEmbed] });
       return true;
     } catch (error) {
       console.error('Failed to log action to message:', error);
