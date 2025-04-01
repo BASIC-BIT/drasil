@@ -68,7 +68,9 @@ Key tables and their relationships:
    - Composite primary key (server_id, user_id)
    - Foreign keys to servers and users
    - Server-specific reputation and status
+   - Verification status tracking (pending, verified, rejected)
    - Message and activity tracking
+   - Restriction status for access control
 
 4. **detection_events**:
 
@@ -90,7 +92,9 @@ Key tables and their relationships:
    - UUID primary key
    - Links to verification events and detection events
    - Admin attribution
-   - Action type and status changes
+   - Action type (verify, reject, ban, reopen) and status changes
+   - Tracks the verification lifecycle and provides audit history
+   - Tracks the verification lifecycle and provides audit history
    - Audit trail metadata
 
 ### Security Implementation
@@ -291,7 +295,7 @@ The database implementation is divided into several chunks, each focusing on a s
 ### Chunk H3: Detection History & Flagging
 
 - ✅ Detection events repository
-  - ✅ Create detection_events table
+  - ✅ Create detection_events table 
   - ✅ Implement methods to record detection outcomes
   - ✅ Add proper error handling with PostgrestError
   - ✅ Add comprehensive test coverage
@@ -329,11 +333,19 @@ The database implementation is divided into several chunks, each focusing on a s
   - ✅ Create unit tests with proper mocking
   - ✅ Add integration tests for full detection flow
 - 🔄 Thread & verification tracking
-  - ⏳ Create verification_threads table
+  - ✅ Create verification_events table
+  - ✅ Implement VerificationEventRepository
+  - ✅ Add methods for tracking verification status
+  - ✅ Add comprehensive test coverage
   - 🔄 Track verification outcomes
   - 🔄 Store thread references
-  - ⏳ Create unit tests with cleanup hooks
+  - ✅ Create unit tests with cleanup hooks
   - 🔄 Add integration tests for verification flow
+- 🔄 Admin action tracking
+  - ✅ Create admin_actions table
+  - ✅ Implement AdminActionRepository with tests
+  - 🔄 Add methods for tracking admin actions on verification events
+  - 🔄 Integrate with verification flow
 
 ### Chunk H4: Message & Context Storage
 

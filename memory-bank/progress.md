@@ -244,7 +244,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 
 - 🆕 Extend Existing Tables for Flag Functionality
 
-  - 🔄 Server Member Flag Columns
+  - ✅ Server Member Flag Columns
     - is_restricted (boolean): Current restriction status
     - verification_status (enum): 'pending', 'verified', 'rejected'
     - restriction_reason (text): Why the user was restricted
@@ -264,10 +264,13 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 
 - 🔄 Verification thread tracking
 
-  - ⏳ Create verification_threads table
+  - ✅ Create verification_events table
+  - ✅ Implement VerificationEventRepository
+  - ✅ Implement AdminActionRepository
   - 🔄 Track verification outcomes
   - 🔄 Store thread references
-  - ⏳ Tests for verification flow
+  - ✅ Unit tests with cleanup hooks
+  - 🔄 Integration tests for verification flow
 
 - 🔄 Performance optimization
 
@@ -430,11 +433,13 @@ The Discord Anti-Spam Bot is currently in active development with several key co
    - ✅ Enhanced error handling and logging
    - ⏳ No data migration strategy for schema changes
 
-7. **Dependency Injection Testing Challenges**:
-   - Some tests need updating to work with InversifyJS
-   - Issues with accessing private methods in tests
-   - Need for more mocking utilities
-   - More comprehensive integration tests needed
+7. **Dependency Injection Testing Challenges** (IMPROVED):
+   - ✅ Created test utilities for InversifyJS testing
+   - ✅ Implemented proper type assertions for private property access
+   - ✅ Added dynamic field handling with expect.any()
+   - ✅ Improved mock implementations for complex objects
+   - 🔄 Need more comprehensive integration tests
+   - 🔄 Need better test isolation strategies
 
 ## Next Milestone Goals
 

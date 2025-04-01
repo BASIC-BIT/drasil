@@ -154,6 +154,36 @@ The central orchestrator that:
 - Sets up verification channels with proper permissions
 - Marked as @injectable() and receives Discord client via constructor
 
+#### VerificationService (VerificationService.ts)
+
+- Implements IVerificationService interface
+- Manages the verification lifecycle for suspicious users
+- Creates and updates verification events in the database
+- Provides methods for verifying, rejecting, and reopening verifications
+- Tracks verification history and status changes
+- Coordinates with RoleManager for role assignments
+- Integrates with AdminActionRepository for audit trail
+- Marked as @injectable() and receives repository dependencies via constructor
+
+#### AdminActionService (AdminActionService.ts)
+
+- Implements IAdminActionService interface
+- Records administrative actions taken on users (verify, reject, ban, reopen)
+- Provides methods to retrieve action history by admin or user
+- Formats action summaries for display in notifications
+- Creates audit trail for moderation accountability
+- Marked as @injectable() and receives repository dependencies via constructor
+
+#### UserModerationService (UserModerationService.ts)
+
+- Implements IUserModerationService interface
+- Coordinates user restriction and verification workflows
+- Manages restricted role assignment and removal
+- Updates verification status in the database
+- Handles user banning and moderation actions
+- Integrates with VerificationService for status tracking
+- Marked as @injectable() and receives service dependencies via constructor
+
 ## Key Design Patterns
 
 ### 1. Dependency Injection with InversifyJS
@@ -273,17 +303,65 @@ Message Received → Bot.ts → DetectionOrchestrator
 
 ### 2. User Verification Flow
 
+```mermaid
+sequenceDiagram
+    participant B as Bot.ts
+    participant SAS as SecurityActionService
+    participant VS as VerificationService
+    participant NM as NotificationManager
+    participant RM as RoleManager
+    participant AAR as AdminActionRepository
+    participant VER as VerificationEventRepository
+    participant SMR as ServerMemberRepository
+
+    alt Suspicious Join/Message
+        B->>SAS: handleSuspiciousJoin/Message(member, result)
+        SAS->>VS: startVerification(member, result.detectionEventId)
+        VS->>VER: create(status='pending', detection_event_id)
+        VS->>SMR: update(is_restricted=true, verification_status='pending')
+        VS->>RM: assignRestrictedRole(member)
+        VS->>NM: sendAdminNotification(member, result)
+        NM-->>B: Returns notification message
+        SAS->>NM: createVerificationThread(member) # Optional, can also be triggered by button
+        NM-->>SAS: Returns thread
+        SAS->>VS: attachThreadToVerification(eventId, threadId)
+        VS->>VER: update(thread_id=threadId)
+    end
+
+    alt Admin Clicks Verify Button
+        B->>VS: verifyUser(member, adminId)
+        VS->>VER: update(status='verified', resolved_by=adminId)
+        VS->>AAR: create(action='verify', admin_id=adminId)
+        VS->>SMR: update(is_restricted=false, verification_status='verified')
+        VS->>RM: removeRestrictedRole(member)
+        B->>NM: logActionToMessage(message, 'verified', admin)
+        B->>NM: updateNotificationButtons(message, userId, 'verified')
+        B->>B: manageThreadState(lock=true, archive=true)
+    end
+
+    alt Admin Clicks Ban Button
+        B->>VS: rejectUser(member, adminId)
+        VS->>VER: update(status='rejected', resolved_by=adminId)
+        VS->>AAR: create(action='reject', admin_id=adminId)
+        VS->>SMR: update(verification_status='rejected') # Restriction might remain or ban happens
+        B->>B: member.ban() # Direct Discord action
+        B->>AAR: create(action='ban', admin_id=adminId) # Log ban separately
+        B->>NM: updateNotificationButtons(message, userId, 'rejected')
+        B->>B: manageThreadState(lock=true, archive=true)
+    end
+
+     alt Admin Clicks Reopen Button
+        B->>VS: reopenVerification(member, adminId)
+        VS->>VER: update(status='reopened') # Or create new PENDING event? TBD by service logic
+        VS->>AAR: create(action='reopen', admin_id=adminId)
+        VS->>SMR: update(is_restricted=true, verification_status='pending') # Re-restrict
+        VS->>RM: assignRestrictedRole(member) # Re-assign role
+        B->>NM: updateNotificationButtons(message, userId, 'pending')
+        B->>B: manageThreadState(lock=false, archive=false) # Unlock/Unarchive
+    end
 ```
-New Member → Bot.ts
-├── Extract Profile Data
-├── DetectionOrchestrator.detectNewJoin
-│   ├── GPTService (Always used for new joins)
-│   └── Record Detection Event
-└── If Suspicious:
-    ├── RoleManager (Assign Restricted Role)
-    ├── NotificationManager (Send Admin Notification)
-    └── Create Verification Thread
-```
+
+This diagram shows the complete verification flow, including the roles of VerificationService, AdminActionService, and related repositories in managing the verification lifecycle.
 
 ### 3. Configuration Flow
 

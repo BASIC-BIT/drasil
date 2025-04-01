@@ -190,6 +190,9 @@ The system currently implements:
    - **RoleManager**: Restricted role assignment and removal
    - **NotificationManager**: Admin notifications and verification threads
    - **UserService**: Handles user operations across servers
+   - **VerificationService**: Manages verification lifecycle and status tracking
+   - **AdminActionService**: Records and tracks admin moderation actions
+   - **UserModerationService**: Coordinates user restriction and verification workflows
 
 5. **Configuration**:
 
@@ -394,13 +397,15 @@ The system currently implements:
      - ❌ Implement flag history and status tracking
      - ❌ Create unit tests with transaction rollbacks
    - 🆕 Extend Existing Tables for Flag Functionality
-     - 🔄 Add flag columns to server_members table (is_restricted, verification_status, etc.)
+     - ✅ Add flag columns to server_members table (is_restricted, verification_status, etc.)
      - 🔄 Add reputation columns to users table (global_reputation_score, suspicious_server_count)
      - 🔄 Update repository methods to support flag operations
      - 🔄 Add migration for new columns
      - 🔄 Add tests for flag-related operations
    - 🔄 Thread & verification tracking
-     - ⏳ Create verification_threads table
+     - ✅ Create verification_events table
+     - ✅ Implement VerificationEventRepository
+     - ✅ Implement AdminActionRepository
      - 🔄 Track verification outcomes
      - 🔄 Store thread references
      - 🔄 Add integration tests for verification flow
