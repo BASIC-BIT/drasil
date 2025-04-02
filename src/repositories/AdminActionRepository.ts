@@ -1,9 +1,8 @@
 import { injectable, inject } from 'inversify';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { TYPES } from '../di/symbols';
-import { SupabaseRepository } from './SupabaseRepository';
+import { SupabaseRepository, RepositoryError } from './BaseRepository';
 import { AdminAction, AdminActionCreate } from './types';
-import { RepositoryError } from './SupabaseRepository';
 
 export interface IAdminActionRepository {
   findByUserAndServer(

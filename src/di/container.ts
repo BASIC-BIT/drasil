@@ -24,7 +24,6 @@ import {
 import { DetectionOrchestrator, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { ConfigService, IConfigService } from '../config/ConfigService';
 import { UserService } from '../services/UserService';
-import { ServerService, IServerService } from '../services/ServerService';
 import { SecurityActionService, ISecurityActionService } from '../services/SecurityActionService';
 import { UserModerationService, IUserModerationService } from '../services/UserModerationService';
 import { Bot, IBot } from '../Bot';
@@ -36,7 +35,6 @@ import {
   IAdminActionRepository,
   AdminActionRepository,
 } from '../repositories/AdminActionRepository';
-import { IVerificationService, VerificationService } from '../services/VerificationService';
 import { IAdminActionService, AdminActionService } from '../services/AdminActionService';
 
 // Initialize container
@@ -148,9 +146,6 @@ function configureServices(container: Container): void {
   // Add UserService binding
   container.bind(TYPES.UserService).to(UserService).inSingletonScope();
 
-  // Add ServerService binding
-  container.bind<IServerService>(TYPES.ServerService).to(ServerService).inSingletonScope();
-
   // Add SecurityActionService binding
   container
     .bind<ISecurityActionService>(TYPES.SecurityActionService)
@@ -165,12 +160,6 @@ function configureServices(container: Container): void {
 
   // Add Bot binding
   container.bind<IBot>(TYPES.Bot).to(Bot).inSingletonScope();
-
-  // Add new service bindings
-  container
-    .bind<IVerificationService>(TYPES.VerificationService)
-    .to(VerificationService)
-    .inSingletonScope();
 
   container
     .bind<IAdminActionService>(TYPES.AdminActionService)

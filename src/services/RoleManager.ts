@@ -8,24 +8,6 @@ import { IConfigService } from '../config/ConfigService';
  */
 export interface IRoleManager {
   /**
-   * Initialize the service with server-specific configurations
-   * @param serverId The Discord server ID
-   */
-  initialize(serverId: string): Promise<void>;
-
-  /**
-   * Sets the ID of the restricted role
-   * @param roleId The Discord role ID for restricting users
-   */
-  setRestrictedRoleId(roleId: string): void;
-
-  /**
-   * Gets the current restricted role ID
-   * @returns The current restricted role ID or undefined if not set
-   */
-  getRestrictedRoleId(): string | undefined;
-
-  /**
    * Assigns the restricted role to a guild member
    * @param member The guild member to restrict
    * @returns Promise resolving to true if successful, false if the role couldn't be assigned
@@ -45,38 +27,10 @@ export interface IRoleManager {
  */
 @injectable()
 export class RoleManager implements IRoleManager {
-  private restrictedRoleId?: string;
   private configService: IConfigService;
 
   constructor(@inject(TYPES.ConfigService) configService: IConfigService) {
     this.configService = configService;
-  }
-
-  /**
-   * Initialize the service with server-specific configurations
-   * @param serverId The Discord server ID
-   */
-  public async initialize(serverId: string): Promise<void> {
-    const config = await this.configService.getServerConfig(serverId);
-    if (config.restricted_role_id) {
-      this.restrictedRoleId = config.restricted_role_id;
-    }
-  }
-
-  /**
-   * Sets the ID of the restricted role
-   * @param roleId The Discord role ID for restricting users
-   */
-  public setRestrictedRoleId(roleId: string): void {
-    this.restrictedRoleId = roleId;
-  }
-
-  /**
-   * Gets the current restricted role ID
-   * @returns The current restricted role ID or undefined if not set
-   */
-  public getRestrictedRoleId(): string | undefined {
-    return this.restrictedRoleId;
   }
 
   /**
@@ -100,6 +54,7 @@ export class RoleManager implements IRoleManager {
    * @returns Promise resolving to true if successful, false if the role couldn't be assigned
    */
   public async assignRestrictedRole(member: GuildMember): Promise<boolean> {
+    const restrictedRoleId = this.configService.getRes();
     if (!this.restrictedRoleId) {
       console.error('No restricted role ID configured');
       return false;

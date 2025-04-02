@@ -1,24 +1,16 @@
-import { GuildMember, User, TextChannel } from 'discord.js';
+import { GuildMember, User } from 'discord.js';
 import { injectable, inject } from 'inversify';
 import { TYPES } from '../di/symbols';
-import { IConfigService } from '../config/ConfigService';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
-import { IVerificationService } from './VerificationService';
-import { AdminActionType, VerificationEvent } from '../repositories/types';
+import { AdminActionType, VerificationStatus } from '../repositories/types';
 
 /**
  * Interface for the UserModerationService
  */
 export interface IUserModerationService {
-  /**
-   * Initialize the service with server-specific configurations
-   * @param serverId The Discord server ID
-   */
-  initialize(serverId: string): Promise<void>;
-
   /**
    * Restricts a user by assigning the restricted role and updating their verification status
    * @param member The guild member to restrict
@@ -49,39 +41,22 @@ export interface IUserModerationService {
  */
 @injectable()
 export class UserModerationService implements IUserModerationService {
-  private configService: IConfigService;
   private serverMemberRepository: IServerMemberRepository;
   private notificationManager: INotificationManager;
   private roleManager: IRoleManager;
   private verificationEventRepository: IVerificationEventRepository;
-  private verificationService: IVerificationService;
 
   constructor(
-    @inject(TYPES.ConfigService) configService: IConfigService,
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
     @inject(TYPES.RoleManager) roleManager: IRoleManager,
     @inject(TYPES.VerificationEventRepository)
-    verificationEventRepository: IVerificationEventRepository,
-    @inject(TYPES.VerificationService) verificationService: IVerificationService
+    verificationEventRepository: IVerificationEventRepository
   ) {
-    this.configService = configService;
     this.serverMemberRepository = serverMemberRepository;
     this.notificationManager = notificationManager;
     this.roleManager = roleManager;
     this.verificationEventRepository = verificationEventRepository;
-    this.verificationService = verificationService;
-  }
-
-  /**
-   * Initialize the service with server-specific configurations
-   * @param serverId The Discord server ID
-   */
-  public async initialize(serverId: string): Promise<void> {
-    const config = await this.configService.getServerConfig(serverId);
-    if (config.restricted_role_id) {
-      this.roleManager.setRestrictedRoleId(config.restricted_role_id);
-    }
   }
 
   /**
@@ -95,11 +70,8 @@ export class UserModerationService implements IUserModerationService {
       const success = await this.roleManager.assignRestrictedRole(member);
 
       if (success) {
-        // Update the member\'s restriction status in the DB
-        // NOTE: Verification status is now handled by VerificationEvent creation
         await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
           is_restricted: true,
-          // verification_status: VerificationStatus.PENDING, // Removed this line
         });
         return true;
       }
@@ -119,78 +91,28 @@ export class UserModerationService implements IUserModerationService {
    */
   public async verifyUser(member: GuildMember, moderator: User): Promise<boolean> {
     try {
-      // 1. Use VerificationService to handle status update, role removal, and action logging
-      await this.verificationService.verifyUser(
-        member,
-        moderator.id,
-        'Verified via UserModerationService command'
-      );
-
-      // 2. Find the most RECENT verification event (could be the one just verified or an older PENDING one if verify failed)
-      // We search by user/server and take the latest, regardless of status initially.
-      const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
+      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
         member.id,
-        member.guild.id,
-        { limit: 1 } // Get the most recent one
+        member.guild.id
       );
-      const latestVerificationEvent = verificationEvents.length > 0 ? verificationEvents[0] : null;
 
-      // 3. Log action to the notification message if found
-      if (latestVerificationEvent && latestVerificationEvent.notification_message_id) {
-        const channel = await this.notificationManager.getAdminChannel();
-        if (channel instanceof TextChannel) {
-          try {
-            const message = await channel.messages.fetch(
-              latestVerificationEvent.notification_message_id
-            );
-            if (message) {
-              let thread = undefined;
-              if (latestVerificationEvent.thread_id) {
-                const fetchedThread = await channel.threads
-                  .fetch(latestVerificationEvent.thread_id)
-                  .catch(() => undefined);
-                if (fetchedThread && fetchedThread.isThread()) {
-                  thread = fetchedThread;
-                }
-              }
-              // Log to the specific message associated with this event
-              await this.notificationManager.logActionToMessage(
-                message,
-                AdminActionType.VERIFY,
-                moderator,
-                thread
-              );
-            } else {
-              console.warn(
-                `Could not find notification message ${latestVerificationEvent.notification_message_id} to log verification for ${member.user.tag}`
-              );
-            }
-          } catch (error) {
-            console.error(
-              'Failed to fetch or update notification message for verification:',
-              error
-            );
-          }
-        } else {
-          console.warn('Admin channel not found or not a text channel for logging verification.');
-        }
-      } else {
-        console.warn(
-          `Could not find verification event with notification message ID for user ${member.user.tag} during verification logging.`
-        );
+      if (!verificationEvent) {
+        throw new Error('No active verification event found');
       }
+
+      await this.verificationEventRepository.update(verificationEvent.id, {
+        status: VerificationStatus.VERIFIED,
+      });
+
+      await this.notificationManager.logActionToMessage(
+        verificationEvent,
+        AdminActionType.VERIFY,
+        moderator
+      );
 
       return true; // Verification process initiated successfully
     } catch (error) {
       console.error(`Failed to verify user ${member?.user?.tag} via command:`, error);
-      // Check if the error is because there was no active verification
-      if (error instanceof Error && error.message.includes('No active verification event found')) {
-        console.log(
-          `Attempted to verify ${member?.user?.tag} via command, but no active verification event was found.`
-        );
-        // Decide if this should return true or false. Let's return false as the state wasn't PENDING.
-        return false;
-      }
       return false;
     }
   }
@@ -204,80 +126,26 @@ export class UserModerationService implements IUserModerationService {
    */
   public async banUser(member: GuildMember, reason: string, moderator: User): Promise<boolean> {
     try {
-      // 1. Use VerificationService to handle status update (BANNED), keep role, log action
-      // We attempt this first, even if there's no active event, to log the intent if possible.
-      let latestVerificationEvent: VerificationEvent | null = null;
-      try {
-        await this.verificationService.rejectUser(
-          member,
-          moderator.id,
-          `Banned via UserModerationService command (Reason: ${reason})`
-        );
-        // If rejection was successful, find the event that was just updated (it should be the most recent)
-        const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
-          member.id,
-          member.guild.id,
-          { limit: 1 }
-        );
-        latestVerificationEvent = verificationEvents.length > 0 ? verificationEvents[0] : null;
-      } catch (error) {
-        console.warn(
-          `Failed to update verification status to REJECTED for ${member.user.tag} during ban command:`,
-          error
-        );
-        // Continue with ban even if status update fails, but try to find the latest event anyway for logging
-        const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
-          member.id,
-          member.guild.id,
-          { limit: 1 }
-        );
-        latestVerificationEvent = verificationEvents.length > 0 ? verificationEvents[0] : null;
+      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+
+      if (!verificationEvent) {
+        throw new Error('No active verification event found');
       }
 
-      // 2. Ban the member via Discord API (do this regardless of verification status update success)
+      await this.verificationEventRepository.update(verificationEvent.id, {
+        status: VerificationStatus.BANNED,
+      });
+
       await member.ban({ reason });
-      console.log(`Banned user ${member.user.tag} (Reason: ${reason})`);
 
-      // 3. Log action to the notification message if found
-      if (latestVerificationEvent && latestVerificationEvent.notification_message_id) {
-        const channel = await this.notificationManager.getAdminChannel();
-        if (channel instanceof TextChannel) {
-          try {
-            const message = await channel.messages.fetch(
-              latestVerificationEvent.notification_message_id
-            );
-            if (message) {
-              let thread = undefined;
-              if (latestVerificationEvent.thread_id) {
-                const fetchedThread = await channel.threads
-                  .fetch(latestVerificationEvent.thread_id)
-                  .catch(() => undefined);
-                if (fetchedThread && fetchedThread.isThread()) {
-                  thread = fetchedThread;
-                }
-              }
-              await this.notificationManager.logActionToMessage(
-                message,
-                AdminActionType.BAN,
-                moderator,
-                thread
-              );
-            } else {
-              console.warn(
-                `Could not find notification message ${latestVerificationEvent.notification_message_id} to log ban for ${member.user.tag}`
-              );
-            }
-          } catch (error) {
-            console.error('Failed to fetch or update notification message for ban:', error);
-          }
-        } else {
-          console.warn('Admin channel not found or not a text channel for logging ban.');
-        }
-      } else {
-        console.warn(
-          `Could not find verification event with notification message ID for user ${member.user.tag} during ban logging.`
-        );
-      }
+      await this.notificationManager.logActionToMessage(
+        verificationEvent,
+        AdminActionType.BAN,
+        moderator
+      );
 
       return true; // Ban succeeded, even if logging/status updates had issues
     } catch (error) {

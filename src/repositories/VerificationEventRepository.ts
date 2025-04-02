@@ -1,9 +1,8 @@
 import { injectable, inject } from 'inversify';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { TYPES } from '../di/symbols';
-import { SupabaseRepository } from './SupabaseRepository';
+import { SupabaseRepository, RepositoryError } from './BaseRepository';
 import { VerificationEvent, VerificationStatus } from './types';
-import { RepositoryError } from './SupabaseRepository';
 
 export interface IVerificationEventRepository {
   findByUserAndServer(
@@ -239,7 +238,7 @@ export class VerificationEventRepository
         notes: notes || undefined,
       };
 
-      if (status === VerificationStatus.VERIFIED || status === VerificationStatus.REJECTED) {
+      if (status === VerificationStatus.VERIFIED || status === VerificationStatus.BANNED) {
         updateData.resolved_at = now;
         updateData.resolved_by = adminId || null;
       }

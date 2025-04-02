@@ -16,7 +16,6 @@ export const TYPES = {
   NotificationManager: Symbol.for('NotificationManager'),
   ConfigService: Symbol.for('ConfigService'),
   UserService: Symbol.for('UserService'),
-  ServerService: Symbol.for('ServerService'),
   SecurityActionService: Symbol.for('SecurityActionService'),
   UserModerationService: Symbol.for('UserModerationService'),
 
@@ -39,12 +38,11 @@ export const TYPES = {
   // Discord modules
   CommandHandler: Symbol.for('CommandHandler'),
   EventHandler: Symbol.for('EventHandler'),
+  InteractionHandler: Symbol.for('InteractionHandler'),
 
   // New repositories
   VerificationEventRepository: Symbol.for('VerificationEventRepository'),
   AdminActionRepository: Symbol.for('AdminActionRepository'),
 
-  // New services
-  VerificationService: Symbol.for('VerificationService'),
   AdminActionService: Symbol.for('AdminActionService'),
 };

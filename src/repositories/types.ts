@@ -91,11 +91,7 @@ export interface DetectionEvent {
   confidence: number; // 0.0 to 1.0
   reasons: string[];
   detected_at: string | Date;
-  admin_action?: 'Verified' | 'Banned' | 'Ignored';
-  admin_action_by?: string;
-  admin_action_at?: string | Date;
   metadata?: Record<string, unknown>;
-  latest_verification_event_id?: string; // UUID of the latest verification event
 }
 
 export enum VerificationStatus {
@@ -134,7 +130,6 @@ export interface AdminAction {
   user_id: string;
   admin_id: string;
   verification_event_id: string;
-  detection_event_id?: string;
   action_type: AdminActionType;
   action_at: string;
   previous_status: VerificationStatus;

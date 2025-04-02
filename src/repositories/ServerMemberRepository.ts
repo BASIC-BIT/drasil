@@ -1,6 +1,6 @@
 import { injectable, inject } from 'inversify';
 import { SupabaseClient } from '@supabase/supabase-js';
-import { SupabaseRepository } from './SupabaseRepository';
+import { SupabaseRepository } from './BaseRepository';
 import { ServerMember } from './types';
 import { TYPES } from '../di/symbols';
 
@@ -87,6 +87,15 @@ export interface IServerMemberRepository {
    * @returns The updated server member
    */
   incrementMessageCount(serverId: string, userId: string): Promise<ServerMember | null>;
+
+  /**
+   * Get an existing server member or create a new one
+   * @param serverId The server UUID
+   * @param userId The user UUID
+   * @param joinDate The date the user joined the server (optional)
+   * @returns The server member data
+   */
+  getOrCreateMember(serverId: string, userId: string, joinDate?: string): Promise<ServerMember>;
 }
 
 /**
@@ -311,9 +320,34 @@ export class ServerMemberRepository
       });
 
       if (error) throw error;
-      return (data as ServerMember) || null;
+      return data as ServerMember;
     } catch (error) {
       this.handleError(error as Error, 'incrementMessageCount');
     }
+  }
+
+  /**
+   * Get an existing server member or create a new one
+   * @param serverId The server UUID
+   * @param userId The user UUID
+   * @param joinDate The date the user joined the server (optional)
+   * @returns The server member data
+   */
+  async getOrCreateMember(
+    serverId: string,
+    userId: string,
+    joinDate?: string
+  ): Promise<ServerMember> {
+    const member = await this.findByServerAndUser(serverId, userId);
+
+    if (member) return member;
+
+    // Create new member
+    return await this.upsertMember(serverId, userId, {
+      join_date: joinDate || new Date().toISOString(),
+      message_count: 0,
+      is_restricted: false,
+      reputation_score: 50, // Default neutral score
+    });
   }
 }

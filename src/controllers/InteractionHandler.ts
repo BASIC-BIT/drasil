@@ -1,17 +1,12 @@
-import {
-  Client,
-  Message,
-  ButtonInteraction,
-  ThreadChannel,
-} from 'discord.js';
+import { Client, Message, ButtonInteraction, ThreadChannel } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject } from 'inversify';
 import { INotificationManager } from '../services/NotificationManager';
 import { TYPES } from '../di/symbols';
-import { IVerificationService } from '../services/VerificationService';
-import { VerificationStatus, VerificationEvent } from '../repositories/types';
+import { VerificationStatus } from '../repositories/types';
 import { VerificationHistoryFormatter } from '../utils/VerificationHistoryFormatter';
 import 'reflect-metadata';
+import { IUserModerationService } from '../services/UserModerationService';
 
 // Load environment variables
 dotenv.config();
@@ -30,16 +25,15 @@ export interface IInteractionHandler {
 export class InteractionHandler implements IInteractionHandler {
   private client: Client;
   private notificationManager: INotificationManager;
-  private verificationService: IVerificationService;
-
+  private userModerationService: IUserModerationService;
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
-    @inject(TYPES.VerificationService) verificationService: IVerificationService
+    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
-    this.verificationService = verificationService;
+    this.userModerationService = userModerationService;
   }
 
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
@@ -96,22 +90,9 @@ export class InteractionHandler implements IInteractionHandler {
       // Get the guild member
       const guild = await this.client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId);
-      if (!member) throw new Error('Member not found');
 
-      // Verify the user using VerificationService
-      await this.verificationService.verifyUser(
-        member, // Pass the GuildMember object
-        interaction.user.id,
-        'Verified via button interaction'
-      );
-
-      // Log the verification action to the original message embed (updates text and color)
-      await this.notificationManager.logActionToMessage(
-        interaction.message as Message,
-        'verified the user', // Action text
-        interaction.user, // Admin user who clicked
-        undefined // No thread involved in verification itself
-      );
+      // Verify the user using UserModerationService
+      await this.userModerationService.verifyUser(member, interaction.user);
 
       // Update the buttons to show History and Reopen
       await this.notificationManager.updateNotificationButtons(
@@ -147,20 +128,17 @@ export class InteractionHandler implements IInteractionHandler {
       // Get the guild member
       const guild = await this.client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId);
-      if (!member) throw new Error('Member not found');
 
-      // Reject the verification using VerificationService
-      await this.verificationService.updateBannedUser(
-        member, // Pass the GuildMember object
-        interaction.user.id
+      // Reject the verification using UserModerationService
+      await this.userModerationService.banUser(
+        member,
+        'Banned by moderator during verification (button)',
+        interaction.user
       );
-
-      // Ban the user via Discord API (VerificationService doesn't ban)
-      await member.ban({ reason: 'Banned by moderator during verification (button)' });
 
       // Update the notification message buttons
       await this.notificationManager.updateNotificationButtons(
-        interaction.message as Message,
+        interaction.message,
         userId,
         VerificationStatus.BANNED
       );
@@ -208,7 +186,10 @@ export class InteractionHandler implements IInteractionHandler {
       }
 
       // Create the thread
-      const thread = await this.notificationManager.createVerificationThread(member, verificationEvent);
+      const thread = await this.notificationManager.createVerificationThread(
+        member,
+        verificationEvent
+      );
 
       if (!thread) {
         throw new Error('Failed to create verification thread');
@@ -293,7 +274,7 @@ export class InteractionHandler implements IInteractionHandler {
       if (!member) throw new Error('Member not found');
 
       // Reopen the verification using VerificationService
-      await this.verificationService.reopenVerification(
+      await this.userModerationService.reopenVerification(
         member, // Pass the GuildMember object
         interaction.user.id,
         'Reopened via button interaction'
@@ -319,67 +300,6 @@ export class InteractionHandler implements IInteractionHandler {
         content: 'An error occurred while reopening the verification.',
         ephemeral: true,
       });
-    }
-  }
-
-  // Helper function to manage thread state
-  private async manageThreadState(
-    guildId: string,
-    userId: string,
-    shouldLock: boolean,
-    shouldArchive: boolean
-  ): Promise<void> {
-    try {
-      // Use getActiveVerification to find the relevant event
-      const verificationEvent = await this.verificationService.getActiveVerification(
-        guildId,
-        userId
-      );
-
-      // If verifying/banning and no *active* event found, check the *most recent* resolved one
-      // This handles cases where the button is clicked after the event is already technically resolved
-      let eventToCheck = verificationEvent;
-      if (!eventToCheck && (shouldArchive || shouldLock)) {
-        const history = await this.verificationService.getVerificationHistory(
-          await this.client.guilds.fetch(guildId).then((g) => g.members.fetch(userId))
-        );
-        if (history.length > 0) {
-          eventToCheck = history[0]; // Get the most recent one from history
-        }
-      }
-
-      if (!eventToCheck || !eventToCheck.thread_id) {
-        console.log(
-          `No suitable verification thread found for user ${userId} in guild ${guildId} to manage state.`
-        );
-        return;
-      }
-
-      const thread = await this.client.channels.fetch(eventToCheck.thread_id).catch(() => null);
-      if (!thread || !thread.isThread()) {
-        console.warn(`Could not fetch thread ${eventToCheck.thread_id} to manage state.`);
-        return;
-      }
-
-      const threadChannel = thread as ThreadChannel;
-
-      if (threadChannel.locked !== shouldLock) {
-        await threadChannel.setLocked(shouldLock, `Verification status change`);
-        console.log(`Set thread ${threadChannel.id} locked state to ${shouldLock}`);
-      }
-
-      // Only change archive state if necessary
-      if (threadChannel.archived !== shouldArchive) {
-        if (shouldArchive && !threadChannel.archived) {
-          await threadChannel.setArchived(true, `Verification resolved`);
-          console.log(`Archived thread ${threadChannel.id}`);
-        } else if (!shouldArchive && threadChannel.archived) {
-          await threadChannel.setArchived(false, `Verification reopened`);
-          console.log(`Unarchived thread ${threadChannel.id}`);
-        }
-      }
-    } catch (error) {
-      console.error(`Error managing thread state for user ${userId} in guild ${guildId}:`, error);
     }
   }
 }

@@ -24,13 +24,6 @@ import { IVerificationEventRepository } from '../repositories/VerificationEventR
  */
 export interface ISecurityActionService {
   /**
-   * Initialize the service with server-specific configurations
-   *
-   * @param serverId The Discord server ID
-   */
-  initialize(serverId: string): Promise<void>;
-
-  /**
    * Handle the response to a suspicious message
    *
    * @param member The guild member who sent the message
@@ -52,20 +45,6 @@ export interface ISecurityActionService {
    * @returns Whether the action was successfully executed
    */
   handleSuspiciousJoin(member: GuildMember, detectionResult: DetectionResult): Promise<boolean>;
-
-  /**
-   * Create a verification thread for a member
-   *
-   * @param member The guild member
-   * @param notificationMessage The notification message to update with action
-   * @param actionPerformer The user who initiated the action
-   * @returns The created thread or null if creation failed
-   */
-  createVerificationThreadForMember(
-    member: GuildMember,
-    notificationMessage?: Message,
-    actionPerformer?: User
-  ): Promise<ThreadChannel | null>;
 }
 
 @injectable()

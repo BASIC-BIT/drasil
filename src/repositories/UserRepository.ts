@@ -1,6 +1,6 @@
 import { injectable, inject } from 'inversify';
 import { SupabaseClient } from '@supabase/supabase-js';
-import { SupabaseRepository } from './SupabaseRepository';
+import { SupabaseRepository } from './BaseRepository';
 import { User } from './types';
 import { TYPES } from '../di/symbols';
 
@@ -73,6 +73,14 @@ export interface IUserRepository {
    * @returns Array of users flagged in multiple servers
    */
   findUsersFlaggedInMultipleServers(threshold?: number): Promise<User[]>;
+
+  /**
+   * Get an existing user by Discord ID or create a new one
+   * @param discordId The Discord user ID
+   * @param username The Discord username (optional)
+   * @returns The user data
+   */
+  getOrCreateUser(discordId: string, username?: string): Promise<User>;
 }
 
 /**
@@ -332,5 +340,36 @@ export class UserRepository extends SupabaseRepository<User> implements IUserRep
     } catch (error) {
       this.handleError(error as Error, 'findUsersFlaggedInMultipleServers');
     }
+  }
+
+  /**
+   * Get an existing user by Discord ID or create a new one
+   * @param discordId The Discord user ID
+   * @param username The Discord username (optional)
+   * @returns The user data
+   */
+  async getOrCreateUser(discordId: string, username?: string): Promise<User> {
+    const user = await this.findByDiscordId(discordId);
+
+    if (user) {
+      // Update username if it changed
+      if (username && user.username !== username) {
+        return await this.upsertByDiscordId(discordId, {
+          ...user,
+          username,
+        });
+      }
+      return user;
+    }
+
+    // Create new user
+    return await this.upsertByDiscordId(discordId, {
+      discord_id: discordId,
+      username: username || 'Unknown User',
+      global_reputation_score: 100, // Default reputation score
+      // Use actual timestamp for new users
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
   }
 }

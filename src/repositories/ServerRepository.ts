@@ -1,6 +1,6 @@
 import { injectable, inject } from 'inversify';
 import { SupabaseClient } from '@supabase/supabase-js';
-import { SupabaseRepository } from './SupabaseRepository';
+import { SupabaseRepository } from './BaseRepository';
 import { Server, ServerSettings } from './types';
 import { TYPES } from '../di/symbols';
 
@@ -51,6 +51,13 @@ export interface IServerRepository {
    * @returns Array of active servers
    */
   findAllActive(): Promise<Server[]>;
+
+  /**
+   * Get an existing server by Discord guild ID or create a new one
+   * @param guildId The Discord guild ID
+   * @returns The server data
+   */
+  getOrCreateServer(guildId: string): Promise<Server>;
 }
 
 /**
@@ -228,5 +235,26 @@ export class ServerRepository extends SupabaseRepository<Server> implements ISer
     } catch (error) {
       this.handleError(error as Error, 'findAllActive');
     }
+  }
+
+  /**
+   * Get an existing server by Discord guild ID or create a new one
+   * @param guildId The Discord guild ID
+   * @returns The server data
+   */
+  public async getOrCreateServer(guildId: string): Promise<Server> {
+    const server = await this.findByGuildId(guildId);
+
+    if (server) {
+      return server;
+    }
+
+    // Create new server with default settings
+    return await this.upsertByGuildId(guildId, {
+      guild_id: guildId,
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
   }
 }

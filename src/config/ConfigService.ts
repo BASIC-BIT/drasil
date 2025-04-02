@@ -4,8 +4,7 @@ import { Server, ServerSettings } from '../repositories/types';
 import { isSupabaseConfigured } from './supabase';
 import { globalConfig } from './GlobalConfig';
 import { TYPES } from '../di/symbols';
-import { SupabaseClient } from '@supabase/supabase-js';
-
+import { Client, Role, TextChannel } from 'discord.js';
 /**
  * Interface for the ConfigService
  */
@@ -44,6 +43,27 @@ export interface IConfigService {
    * Clear the server cache
    */
   clearCache(): void;
+
+  /**
+   * Get the admin channel for a server
+   * @param guildId The Discord guild ID
+   * @returns The admin channel
+   */
+  getAdminChannel(guildId: string): Promise<TextChannel | undefined>;
+
+  /**
+   * Get the verification channel for a server
+   * @param guildId The Discord guild ID
+   * @returns The verification channel
+   */
+  getVerificationChannel(guildId: string): Promise<TextChannel | undefined>;
+
+  /**
+   * Get the restricted role for a server
+   * @param guildId The Discord guild ID
+   * @returns The restricted role
+   */
+  getRestrictedRole(guildId: string): Promise<Role | null>;
 }
 
 /**
@@ -54,12 +74,14 @@ export interface IConfigService {
 export class ConfigService implements IConfigService {
   private serverRepository: IServerRepository;
   private serverCache: Map<string, Server> = new Map();
+  private discordClient: Client;
 
   constructor(
     @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
-    @inject(TYPES.SupabaseClient) private supabaseClient: SupabaseClient
+    @inject(TYPES.DiscordClient) discordClient: Client
   ) {
     this.serverRepository = serverRepository;
+    this.discordClient = discordClient;
   }
 
   /**
@@ -84,6 +106,47 @@ export class ConfigService implements IConfigService {
     } else {
       console.warn('Supabase is not configured. Using environment variables for configuration.');
     }
+  }
+
+  /**
+   * Get the admin channel for a server
+   * @param guildId The Discord guild ID
+   * @returns The admin channel
+   */
+  async getAdminChannel(guildId: string): Promise<TextChannel | undefined> {
+    const server = await this.getServerConfig(guildId);
+    if (!server.admin_channel_id) {
+      return undefined;
+    }
+    const channel = await this.discordClient.channels.fetch(server.admin_channel_id);
+    if (!channel) {
+      return undefined;
+    }
+    return channel as TextChannel;
+  }
+
+  /**
+   * Get the verification channel for a server
+   * @param guildId The Discord guild ID
+   * @returns The verification channel
+   */
+  async getVerificationChannel(guildId: string): Promise<TextChannel | undefined> {
+    const server = await this.getServerConfig(guildId);
+    if (!server.verification_channel_id) {
+      return undefined;
+    }
+    const channel = await this.discordClient.channels.fetch(server.verification_channel_id);
+    return channel as TextChannel;
+  }
+
+  public async getRestrictedRole(guildId: string): Promise<Role | null> {
+    const server = await this.getServerConfig(guildId);
+    if (!server.restricted_role_id) {
+      return null;
+    }
+    const guild = await this.discordClient.guilds.fetch(guildId);
+    const role = await guild.roles.fetch(server.restricted_role_id);
+    return role;
   }
 
   /**

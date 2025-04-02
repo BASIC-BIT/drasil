@@ -23,6 +23,8 @@ const configs = [
     rules: {
       'prettier/prettier': 'warn',
       '@typescript-eslint/no-unnecessary-condition': 'warn',
+      '@typescript-eslint/no-floating-promises': 'warn',
+      'no-duplicate-imports': 'warn',
     },
   },
   // Base config for all TypeScript files
@@ -49,6 +51,8 @@ const configs = [
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/no-non-null-assertion': 'error',
       '@typescript-eslint/no-unnecessary-condition': 'warn',
+      '@typescript-eslint/no-floating-promises': 'warn',
+      'no-duplicate-imports': 'warn',
     },
   },
   // Base JavaScript recommended config
@@ -94,6 +98,8 @@ const configs = [
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/no-unnecessary-condition': 'warn',
+      '@typescript-eslint/no-floating-promises': 'warn',
+      'no-duplicate-imports': 'warn',
     },
   },
 ];

@@ -4,6 +4,11 @@
 
 The project is currently focused on implementing the core functionality of the Discord Anti-Spam Bot, with recent work on database schema consolidation and service architecture improvements.
 
+### Things on the developers mind right now
+
+- Our service architecture is very confusing. We should solidify on very specific approaches about how services call other services...
+- Considering when, in the service layer, we should call another service vs a repository... Handling side effects and such
+
 ## Recent Milestones
 
 ### Completed

@@ -9,7 +9,6 @@ import {
   Message,
   User,
   ThreadChannel,
-  TextChannel,
   Guild,
   ThreadAutoArchiveDuration,
   ChannelType,
@@ -21,11 +20,18 @@ import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { DetectionResult } from './DetectionOrchestrator';
 import { IUserService } from './UserService';
-import { IServerService } from './ServerService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
-import { DetectionEvent, VerificationStatus, AdminActionType, VerificationEvent } from '../repositories/types';
+import {
+  DetectionEvent,
+  VerificationStatus,
+  AdminActionType,
+  VerificationEvent,
+} from '../repositories/types';
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
+import { IUserRepository } from '../repositories/UserRepository';
+import { IServerRepository } from '../repositories/ServerRepository';
+import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 
 export interface NotificationButton {
   id: string;
@@ -37,30 +43,6 @@ export interface NotificationButton {
  * Interface for NotificationManager service
  */
 export interface INotificationManager {
-  /**
-   * Initializes the notification manager with server configuration
-   * @param guildId The Discord guild ID
-   */
-  initialize(guildId: string): Promise<void>;
-
-  /**
-   * Sets the ID of the admin summary channel
-   * @param channelId The Discord channel ID for admin notifications
-   */
-  setAdminChannelId(channelId: string): void;
-
-  /**
-   * Sets the ID of the verification channel
-   * @param channelId The Discord channel ID for verification threads
-   */
-  setVerificationChannelId(channelId: string): void;
-
-  /**
-   * Gets the admin channel for notifications
-   * @returns The TextChannel for admin notifications, or undefined if not found
-   */
-  getAdminChannel(): Promise<TextChannel | undefined>;
-
   /**
    * Creates or updates a notification about a suspicious user
    * @param member The suspicious guild member
@@ -88,13 +70,13 @@ export interface INotificationManager {
 
   /**
    * Log an admin action to the notification message
-   * @param message The original notification message
+   * @param verificationEvent The verification event
    * @param actionTaken The action that was taken
    * @param admin The admin who took the action
    * @param thread Optional verification thread that was created
    */
   logActionToMessage(
-    message: Message,
+    verificationEvent: VerificationEvent,
     actionTaken: AdminActionType,
     admin: User,
     thread?: ThreadChannel
@@ -107,13 +89,6 @@ export interface INotificationManager {
    * @returns The ID of the created channel or null if creation failed
    */
   setupVerificationChannel(guild: Guild, restrictedRoleId: string): Promise<string | null>;
-
-  /**
-   * Get a list of all open verification threads
-   * @param serverId The Discord server ID
-   * @returns Array of open thread IDs
-   */
-  getOpenVerificationThreads(serverId: string): Promise<string[]>;
 
   /**
    * Resolve a verification thread
@@ -146,77 +121,40 @@ export interface INotificationManager {
 }
 
 /**
- * Service for managing notifications to admin/summary channels
+ * Service for managing notifications to admin/summary channels.
+ * This service does NOT update user status on discord, or update the database
+ * With the only exception of updating the thread_id in the verification event.
  */
 @injectable()
 export class NotificationManager implements INotificationManager {
-  private adminChannelId: string | undefined;
-  private verificationChannelId: string | undefined;
   private client: Client;
   private configService: IConfigService;
   private userService: IUserService;
-  private serverService: IServerService;
   private detectionEventsRepository: IDetectionEventsRepository;
   private verificationEventRepository: IVerificationEventRepository;
+  private userRepository: IUserRepository;
+  private serverRepository: IServerRepository;
+  private serverMemberRepository: IServerMemberRepository;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
     @inject(TYPES.ConfigService) configService: IConfigService,
     @inject(TYPES.UserService) userService: IUserService,
-    @inject(TYPES.ServerService) serverService: IServerService,
     @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
-    @inject(TYPES.VerificationEventRepository) verificationEventRepository: IVerificationEventRepository
+    @inject(TYPES.VerificationEventRepository)
+    verificationEventRepository: IVerificationEventRepository,
+    @inject(TYPES.UserRepository) userRepository: IUserRepository,
+    @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
+    @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository
   ) {
     this.client = client;
     this.configService = configService;
     this.userService = userService;
-    this.serverService = serverService;
     this.detectionEventsRepository = detectionEventsRepository;
     this.verificationEventRepository = verificationEventRepository;
-  }
-
-  public async initialize(guildId: string): Promise<void> {
-    const config = await this.configService.getServerConfig(guildId);
-    this.adminChannelId = config.admin_channel_id || this.adminChannelId;
-    this.verificationChannelId = config.verification_channel_id || this.verificationChannelId;
-  }
-
-  /**
-   * Sets the ID of the admin summary channel
-   * @param channelId The Discord channel ID for admin notifications
-   */
-  public setAdminChannelId(channelId: string): void {
-    this.adminChannelId = channelId;
-  }
-
-  /**
-   * Sets the ID of the verification channel
-   * @param channelId The Discord channel ID for verification threads
-   */
-  public setVerificationChannelId(channelId: string): void {
-    this.verificationChannelId = channelId;
-  }
-
-  /**
-   * Gets the admin channel for notifications
-   * @returns The TextChannel for admin notifications, or undefined if not found
-   */
-  public async getAdminChannel(): Promise<TextChannel | undefined> {
-    if (!this.adminChannelId) return undefined;
-
-    try {
-      const channel = await this.client.channels.fetch(this.adminChannelId);
-
-      if (!channel || !channel.isTextBased() || channel.isDMBased()) {
-        console.error(`Channel with ID ${this.adminChannelId} is not a text channel`);
-        return undefined;
-      }
-
-      return channel as TextChannel;
-    } catch (error) {
-      console.error(`Failed to fetch admin channel with ID ${this.adminChannelId}:`, error);
-      return undefined;
-    }
+    this.userRepository = userRepository;
+    this.serverRepository = serverRepository;
+    this.serverMemberRepository = serverMemberRepository;
   }
 
   /**
@@ -233,16 +171,13 @@ export class NotificationManager implements INotificationManager {
     verificationEvent: VerificationEvent,
     sourceMessage?: Message
   ): Promise<Message | null> {
-    if (!this.adminChannelId) {
+    const adminChannel = await this.configService.getAdminChannel(member.guild.id);
+    if (!adminChannel) {
       console.error('No admin channel ID configured');
       return null;
     }
 
     try {
-      // Get the admin channel
-      const channel = await this.getAdminChannel();
-      if (!channel) return null;
-
       // Create the base embed
       const embed = await this.createSuspiciousUserEmbed(
         member,
@@ -266,20 +201,17 @@ export class NotificationManager implements INotificationManager {
 
       // If we have an existing message, update it, otherwise create new
       if (verificationEvent.notification_message_id) {
-        try {
-          const existingMessage = await channel.messages.fetch(verificationEvent.notification_message_id);
-          return await existingMessage.edit({
-            embeds: [embed],
-            components: [actionRow], // Use the conditionally created action row
-          });
-        } catch (error) {
-          console.error('Failed to fetch existing message:', error);
-          // Continue with creating a new message
-        }
+        const existingMessage = await adminChannel.messages.fetch(
+          verificationEvent.notification_message_id
+        );
+        return await existingMessage.edit({
+          embeds: [embed],
+          components: [actionRow], // Use the conditionally created action row
+        });
       }
 
       // Create a new message
-      return await channel.send({
+      return await adminChannel.send({
         embeds: [embed],
         components: [actionRow], // Use the conditionally created action row
       });
@@ -299,33 +231,28 @@ export class NotificationManager implements INotificationManager {
     verificationEvent: VerificationEvent
   ): Promise<ThreadChannel | null> {
     // Try verification channel first, fall back to admin channel if not configured
-    const channelId = this.verificationChannelId || this.adminChannelId;
+    const channel =
+      (await this.configService.getVerificationChannel(member.guild.id)) ||
+      (await this.configService.getAdminChannel(member.guild.id));
 
-    if (!channelId) {
+    if (!channel) {
       console.error('No verification or admin channel ID configured');
       return null;
     }
 
     try {
       // Ensure the server exists
-      await this.serverService.getOrCreateServer(member.guild.id);
+      await this.serverRepository.getOrCreateServer(member.guild.id);
 
       // Ensure the user exists
-      await this.userService.getOrCreateUser(member.id, member.user.username);
+      await this.userRepository.getOrCreateUser(member.id, member.user.username);
 
       // Ensure the server member exists
-      await this.userService.getOrCreateMember(
+      await this.serverMemberRepository.getOrCreateMember(
         member.guild.id,
         member.id,
         member.joinedAt?.toISOString()
       );
-
-      // Get the verification channel or fall back to admin channel
-      const channel = this.verificationChannelId
-        ? await this.getVerificationChannel()
-        : await this.getAdminChannel();
-
-      if (!channel) return null;
 
       // Create a thread for verification
       const threadName = `Verification: ${member.user.username}`;
@@ -364,12 +291,18 @@ export class NotificationManager implements INotificationManager {
    * @param thread Optional verification thread that was created
    */
   public async logActionToMessage(
-    message: Message,
+    verificationEvent: VerificationEvent,
     actionTaken: AdminActionType,
     admin: User,
     thread?: ThreadChannel
   ): Promise<boolean> {
     try {
+      if (!verificationEvent.notification_message_id) {
+        throw new Error('No notification message ID found for verification event');
+      }
+
+      const message = await this.getMessageForVerificationEvent(verificationEvent);
+
       // Get the existing embed
       const existingEmbed = message.embeds[0];
 
@@ -436,6 +369,21 @@ export class NotificationManager implements INotificationManager {
       console.error('Failed to log action to message:', error);
       return false;
     }
+  }
+
+  private async getMessageForVerificationEvent(
+    verificationEvent: VerificationEvent
+  ): Promise<Message> {
+    if (!verificationEvent.notification_message_id) {
+      throw new Error('No notification message ID found for verification event');
+    }
+    const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
+
+    if (!adminChannel) {
+      throw new Error('No admin channel found for verification event');
+    }
+
+    return await adminChannel.messages.fetch(verificationEvent.notification_message_id);
   }
 
   /**
@@ -535,7 +483,7 @@ export class NotificationManager implements INotificationManager {
     // Update embed color based on verification status if thread exists
     if (verificationEvent.status === VerificationStatus.VERIFIED) {
       embedColor = 0x00ff00; // Green for verified users
-    } else if (verificationEvent.status === VerificationStatus.REJECTED) {
+    } else if (verificationEvent.status === VerificationStatus.BANNED) {
       embedColor = 0x000000; // Black for banned users
     }
 
@@ -573,7 +521,7 @@ export class NotificationManager implements INotificationManager {
     if (verificationEvent.thread_id) {
       const threadStatus =
         verificationEvent.status === VerificationStatus.VERIFIED ||
-        verificationEvent.status === VerificationStatus.REJECTED
+        verificationEvent.status === VerificationStatus.BANNED
           ? `${verificationEvent.status} by <@${verificationEvent.resolved_by}>`
           : 'pending'; // Use 'pending' for unresolved states
       embed.addFields({
@@ -632,31 +580,6 @@ export class NotificationManager implements INotificationManager {
 
     // Add buttons to an action row
     return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
-  }
-
-  /**
-   * Helper method to get the verification channel
-   * @returns The TextChannel for verification threads, or undefined if not found
-   */
-  private async getVerificationChannel(): Promise<TextChannel | undefined> {
-    if (!this.verificationChannelId) return undefined;
-
-    try {
-      const channel = await this.client.channels.fetch(this.verificationChannelId);
-
-      if (!channel || !channel.isTextBased() || channel.isDMBased()) {
-        console.error(`Channel with ID ${this.verificationChannelId} is not a text channel`);
-        return undefined;
-      }
-
-      return channel as TextChannel;
-    } catch (error) {
-      console.error(
-        `Failed to fetch verification channel with ID ${this.verificationChannelId}:`,
-        error
-      );
-      return undefined;
-    }
   }
 
   /**
@@ -748,8 +671,9 @@ export class NotificationManager implements INotificationManager {
 
       const verificationChannel = await guild.channels.create(channelOptions);
 
-      // Store the channel ID
-      this.verificationChannelId = verificationChannel.id;
+      await this.configService.updateServerConfig(guild.id, {
+        verification_channel_id: verificationChannel.id,
+      });
 
       return verificationChannel.id;
     } catch (error) {
@@ -832,8 +756,7 @@ export class NotificationManager implements INotificationManager {
    */
   async resolveVerificationThread(
     threadId: string,
-    resolution: VerificationStatus,
-    resolvedBy: string
+    resolution: VerificationStatus
   ): Promise<boolean> {
     try {
       const thread = await this.client.channels.fetch(threadId);
@@ -845,7 +768,7 @@ export class NotificationManager implements INotificationManager {
         await thread.send({
           content: `This thread has been resolved. If you have any questions, please contact a moderator.`,
         });
-      } else if (resolution === VerificationStatus.) {
+      } else if (resolution === VerificationStatus.BANNED) {
         await thread.send({
           content: `This thread has been rejected. If you have any questions, please contact a moderator.`,
         });
@@ -885,7 +808,7 @@ export class NotificationManager implements INotificationManager {
         ];
         break;
 
-      case VerificationStatus.REJECTED:
+      case VerificationStatus.BANNED:
         // Keep history and add reopen button
         components = [
           new ActionRowBuilder<ButtonBuilder>().addComponents(

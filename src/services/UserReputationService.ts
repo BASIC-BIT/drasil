@@ -14,7 +14,7 @@ export interface IUserReputationService {
    * @param userId The Discord user ID
    * @param result The detection result
    */
-  handleDetectionResult(serverId: string, userId: string, result: DetectionResult): Promise<void>;
+  updateReputationScores(serverId: string, userId: string, result: DetectionResult): Promise<void>;
 }
 
 @injectable()
@@ -23,26 +23,10 @@ export class UserReputationService implements IUserReputationService {
     @inject(TYPES.UserRepository) private userRepository: IUserRepository,
     @inject(TYPES.ServerMemberRepository) private serverMemberRepository: IServerMemberRepository
   ) {}
-
-  /**
-   * Handle the implications of a detection result on a user's reputation and status
-   */
-  public async handleDetectionResult(
-    serverId: string,
-    userId: string,
-    result: DetectionResult
-  ): Promise<void> {
-    try {
-      await this.updateReputationScores(serverId, userId, result);
-    } catch (error) {
-      console.error('Failed to handle detection result:', error);
-    }
-  }
-
   /**
    * Updates user and server member reputation scores based on the detection result
    */
-  private async updateReputationScores(
+  public async updateReputationScores(
     serverId: string,
     userId: string,
     result: DetectionResult

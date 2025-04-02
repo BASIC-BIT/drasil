@@ -1,5 +1,5 @@
 import { injectable, inject } from 'inversify';
-import { SupabaseRepository } from './SupabaseRepository';
+import { SupabaseRepository } from './BaseRepository';
 import { DetectionEvent } from './types';
 import { TYPES } from '../di/symbols';
 import { PostgrestError, SupabaseClient } from '@supabase/supabase-js';
@@ -43,25 +43,6 @@ export interface IDetectionEventsRepository {
     action: 'Verified' | 'Banned' | 'Ignored',
     adminId: string
   ): Promise<DetectionEvent | null>;
-
-  /**
-   * Get detection statistics for a server within a date range
-   * @param serverId The Discord server ID
-   * @param startDate Start date for statistics
-   * @param endDate End date for statistics
-   * @returns Statistics object
-   */
-  getServerStats(
-    serverId: string,
-    startDate: Date,
-    endDate: Date
-  ): Promise<{
-    total: number;
-    verified: number;
-    banned: number;
-    ignored: number;
-    pending: number;
-  }>;
 
   /**
    * Clean up old detection events based on retention policy
@@ -204,56 +185,6 @@ export class DetectionEventsRepository
         this.handleError(error, 'recordAdminAction');
       }
       return null;
-    }
-  }
-
-  /**
-   * Get detection statistics for a server within a date range
-   * @param serverId The Discord server ID
-   * @param startDate Start date for statistics
-   * @param endDate End date for statistics
-   * @returns Statistics object
-   */
-  async getServerStats(
-    serverId: string,
-    startDate: Date,
-    endDate: Date
-  ): Promise<{
-    total: number;
-    verified: number;
-    banned: number;
-    ignored: number;
-    pending: number;
-  }> {
-    try {
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('server_id', serverId)
-        .gte('detected_at', startDate.toISOString())
-        .lte('detected_at', endDate.toISOString());
-
-      if (error) throw error;
-
-      const events = data as DetectionEvent[];
-      return {
-        total: events.length,
-        verified: events.filter((e) => e.admin_action === 'Verified').length,
-        banned: events.filter((e) => e.admin_action === 'Banned').length,
-        ignored: events.filter((e) => e.admin_action === 'Ignored').length,
-        pending: events.filter((e) => !e.admin_action).length,
-      };
-    } catch (error: unknown) {
-      if (error instanceof Error || this.isPostgrestError(error)) {
-        this.handleError(error, 'getServerStats');
-      }
-      return {
-        total: 0,
-        verified: 0,
-        banned: 0,
-        ignored: 0,
-        pending: 0,
-      };
     }
   }
 
