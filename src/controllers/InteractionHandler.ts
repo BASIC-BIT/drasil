@@ -109,20 +109,28 @@ export class InteractionHandler implements IInteractionHandler {
       const guild = await this.client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId);
 
+      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+        userId,
+        guildId
+      );
+
+      if (!verificationEvent) {
+        throw new Error('No active verification event found');
+      }
+
       // Verify the user using UserModerationService
       await this.userModerationService.verifyUser(member, interaction.user);
 
       // Update the buttons to show History and Reopen
       await this.notificationManager.updateNotificationButtons(
         interaction.message as Message,
-        userId,
+        verificationEvent,
         VerificationStatus.VERIFIED
       );
 
       // Lock and archive the thread if it exists
       await this.threadManager.resolveVerificationThread(
-        guildId,
-        userId,
+        verificationEvent,
         VerificationStatus.VERIFIED,
         interaction.user.id
       ); // Lock and Archive on Verify
@@ -152,6 +160,15 @@ export class InteractionHandler implements IInteractionHandler {
       const guild = await this.client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId);
 
+      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+        userId,
+        guildId
+      );
+
+      if (!verificationEvent) {
+        throw new Error('No active verification event found');
+      }
+
       // Reject the verification using UserModerationService
       await this.userModerationService.banUser(
         member,
@@ -162,14 +179,13 @@ export class InteractionHandler implements IInteractionHandler {
       // Update the notification message buttons
       await this.notificationManager.updateNotificationButtons(
         interaction.message,
-        userId,
+        verificationEvent,
         VerificationStatus.BANNED
       );
 
       // Lock and archive the thread if it exists
       await this.threadManager.resolveVerificationThread(
-        guildId,
-        userId,
+        verificationEvent,
         VerificationStatus.BANNED,
         interaction.user.id
       ); // Lock and Archive on Ban
@@ -223,8 +239,8 @@ export class InteractionHandler implements IInteractionHandler {
       // Update the buttons (this will remove the Create Thread button)
       await this.notificationManager.updateNotificationButtons(
         interaction.message as Message,
-        userId,
-        verificationEvent.status
+        verificationEvent,
+        VerificationStatus.PENDING
       );
 
       await interaction.followUp({
@@ -305,14 +321,16 @@ export class InteractionHandler implements IInteractionHandler {
       // TODO: We unlock the thread, but what actually updates the status? Is this a user moderation service concern?
       // Remind ourselves that the handler/controller layer should focus on user interaction concerns
       // Should we have a whole "display" layer, separate from our service layer (which is our business logic)?
-      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+      const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
         userId,
         guildId
       );
 
-      if (!verificationEvent) {
+      if (verificationEvents.length === 0) {
         throw new Error('No active verification event found');
       }
+
+      const verificationEvent = verificationEvents[0];
 
       // Reopen the verification using VerificationService
       await this.securityActionService.reopenVerification(verificationEvent, interaction.user);
@@ -320,12 +338,9 @@ export class InteractionHandler implements IInteractionHandler {
       // Update the notification message buttons
       await this.notificationManager.updateNotificationButtons(
         interaction.message as Message,
-        userId,
+        verificationEvent,
         VerificationStatus.PENDING // Set back to PENDING
       );
-
-      // Unlock and unarchive the thread if it exists
-      await this.threadManager.reopenVerificationThread(guildId, verificationEvent.id); // Unlock and Unarchive on Reopen
 
       await interaction.followUp({
         content: `Verification for <@${userId}> has been reopened. The user has been restricted again.`,

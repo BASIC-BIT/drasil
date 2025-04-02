@@ -85,8 +85,8 @@ export interface INotificationManager {
 
   updateNotificationButtons(
     message: Message,
-    userId: string,
-    status: VerificationStatus
+    verificationEvent: VerificationEvent,
+    newStatus: VerificationStatus
   ): Promise<void>;
 }
 
@@ -640,22 +640,22 @@ export class NotificationManager implements INotificationManager {
 
   async updateNotificationButtons(
     message: Message,
-    userId: string,
-    status: VerificationStatus
+    verificationEvent: VerificationEvent,
+    newStatus: VerificationStatus
   ): Promise<void> {
     let components: ActionRowBuilder<ButtonBuilder>[] = [];
 
-    switch (status) {
+    switch (newStatus) {
       case VerificationStatus.VERIFIED:
         // Keep history and add reopen button
         components = [
           new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
-              .setCustomId(`history_${userId}`)
+              .setCustomId(`history_${verificationEvent.user_id}`)
               .setLabel('View Full History')
               .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
-              .setCustomId(`reopen_${userId}`)
+              .setCustomId(`reopen_${verificationEvent.user_id}`)
               .setLabel('Reopen Verification')
               .setStyle(ButtonStyle.Primary)
           ),
@@ -667,11 +667,11 @@ export class NotificationManager implements INotificationManager {
         components = [
           new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
-              .setCustomId(`history_${userId}`)
+              .setCustomId(`history_${verificationEvent.user_id}`)
               .setLabel('View Full History')
               .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
-              .setCustomId(`reopen_${userId}`)
+              .setCustomId(`reopen_${verificationEvent.user_id}`)
               .setLabel('Reopen Verification')
               .setStyle(ButtonStyle.Primary)
           ),
@@ -683,24 +683,32 @@ export class NotificationManager implements INotificationManager {
         components = [
           new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
-              .setCustomId(`verify_${userId}`)
+              .setCustomId(`verify_${verificationEvent.user_id}`)
               .setLabel('Verify User')
               .setStyle(ButtonStyle.Success),
             new ButtonBuilder()
-              .setCustomId(`ban_${userId}`)
+              .setCustomId(`ban_${verificationEvent.user_id}`)
               .setLabel('Ban User')
               .setStyle(ButtonStyle.Danger),
             new ButtonBuilder()
-              .setCustomId(`thread_${userId}`)
-              .setLabel('Create Thread')
-              .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-              .setCustomId(`history_${userId}`)
+              .setCustomId(`history_${verificationEvent.user_id}`)
               .setLabel('View Full History')
               .setStyle(ButtonStyle.Secondary)
           ),
         ];
         break;
+    }
+
+    // Add create thread button if pending and no thread exists
+    if (newStatus === VerificationStatus.PENDING && !verificationEvent.thread_id) {
+      components.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`thread_${verificationEvent.user_id}`)
+            .setLabel('Create Thread')
+            .setStyle(ButtonStyle.Primary)
+        )
+      );
     }
 
     await message.edit({ components });

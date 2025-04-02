@@ -408,17 +408,21 @@ export class SecurityActionService implements ISecurityActionService {
     verificationEvent: VerificationEvent,
     moderator: User
   ): Promise<boolean> {
-    await this.threadManager.reopenVerificationThread(
-      verificationEvent.server_id,
-      verificationEvent.id
-    );
+    await this.threadManager.reopenVerificationThread(verificationEvent);
 
     // TODO: Fetch server member better?
     const guild = await this.client.guilds.fetch(verificationEvent.server_id);
     const member = await guild.members.fetch(verificationEvent.user_id);
 
+    // Update the verification event to pending
+    await this.verificationEventRepository.update(verificationEvent.id, {
+      status: VerificationStatus.PENDING,
+    });
+
+    // Re-restrict the user
     await this.userModerationService.restrictUser(member);
 
+    // Log the action to the message
     await this.notificationManager.logActionToMessage(
       verificationEvent,
       AdminActionType.REOPEN,

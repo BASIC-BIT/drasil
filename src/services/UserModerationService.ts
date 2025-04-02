@@ -15,6 +15,7 @@ export interface IUserModerationService {
   /**
    * Restricts a user by assigning the restricted role and updating their verification status
    * @param member The guild member to restrict
+   * @param moderator The user who performed the restriction
    * @returns Promise resolving to true if successful, false if the restriction failed
    */
   restrictUser(member: GuildMember): Promise<boolean>;
@@ -66,21 +67,32 @@ export class UserModerationService implements IUserModerationService {
   /**
    * Restricts a user by assigning the restricted role and updating their verification status
    * @param member The guild member to restrict
+   * @param moderator The user who performed the restriction
    * @returns Promise resolving to true if successful, false if the restriction failed
    */
   public async restrictUser(member: GuildMember): Promise<boolean> {
     try {
-      // Assign the role using RoleManager
-      const success = await this.roleManager.assignRestrictedRole(member);
+      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+        member.id,
+        member.guild.id
+      );
 
-      if (success) {
-        await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-          is_restricted: true,
-        });
-        return true;
+      if (!verificationEvent) {
+        throw new Error('No active verification event found');
       }
 
-      return false;
+      await this.verificationEventRepository.update(verificationEvent.id, {
+        status: VerificationStatus.PENDING,
+      });
+
+      // Assign the role using RoleManager
+      await this.roleManager.assignRestrictedRole(member);
+
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        is_restricted: true,
+      });
+
+      return true;
     } catch (error) {
       console.error('Failed to restrict user:', error);
       return false;
@@ -106,6 +118,12 @@ export class UserModerationService implements IUserModerationService {
 
       await this.verificationEventRepository.update(verificationEvent.id, {
         status: VerificationStatus.VERIFIED,
+      });
+
+      await this.roleManager.removeRestrictedRole(member);
+
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        is_restricted: false,
       });
 
       await this.notificationManager.logActionToMessage(
@@ -144,6 +162,16 @@ export class UserModerationService implements IUserModerationService {
       });
 
       await member.ban({ reason });
+
+      // TODO: is the user actually restricted if they're banned? lol
+      // Maybe like a "user state?"
+      // I've looked at this before, this is_restricted thing is
+      // data duplication and not really.... great
+      // But it also feels weird to have to look up active verification events
+      // To determine restriction...
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        is_restricted: true,
+      });
 
       await this.notificationManager.logActionToMessage(
         verificationEvent,

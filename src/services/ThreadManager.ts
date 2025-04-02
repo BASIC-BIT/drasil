@@ -24,26 +24,23 @@ export interface IThreadManager {
 
   /**
    * Resolve a verification thread
-   * @param serverId The Discord server ID
-   * @param threadId The Discord thread ID
+   * @param verificationEvent The verification event
    * @param resolution The resolution of the thread (verified, banned, ignored)
    * @param resolvedBy The Discord ID of the user who resolved the thread
    * @returns Whether the thread was successfully resolved
    */
   resolveVerificationThread(
-    serverId: string,
-    threadId: string,
+    verificationEvent: VerificationEvent,
     resolution: VerificationStatus,
     resolvedBy: string
   ): Promise<boolean>;
 
   /**
    * Reopens a verification thread
-   * @param serverId The Discord server ID
-   * @param threadId The Discord thread ID
+   * @param verificationEvent The verification event
    * @returns Whether the thread was successfully reopened
    */
-  reopenVerificationThread(serverId: string, threadId: string): Promise<boolean>;
+  reopenVerificationThread(verificationEvent: VerificationEvent): Promise<boolean>;
 }
 
 /**
@@ -145,12 +142,26 @@ export class ThreadManager implements IThreadManager {
    * @returns Whether the thread was successfully resolved
    */
   async resolveVerificationThread(
-    threadId: string,
+    verificationEvent: VerificationEvent,
     resolution: VerificationStatus
   ): Promise<boolean> {
     try {
-      const thread = await this.client.channels.fetch(threadId);
+      if (!verificationEvent.thread_id) {
+        // No thread but that's okay
+        return false;
+      }
+
+      const verificationChannel = await this.configService.getVerificationChannel(
+        verificationEvent.server_id
+      );
+      if (!verificationChannel) {
+        throw new Error('No verification channel ID configured');
+      }
+
+      const thread = await verificationChannel.threads.fetch(verificationEvent.thread_id);
+
       if (!thread || !thread.isThread()) {
+        // No thread but that's okay
         return false;
       }
 
@@ -180,10 +191,22 @@ export class ThreadManager implements IThreadManager {
    * @param threadId The Discord thread ID
    * @returns Whether the thread was successfully reopened
    */
-  async reopenVerificationThread(serverId: string, threadId: string): Promise<boolean> {
+  async reopenVerificationThread(verificationEvent: VerificationEvent): Promise<boolean> {
     try {
-      const thread = await this.client.channels.fetch(threadId);
+      if (!verificationEvent.thread_id) {
+        // No thread but that's okay
+        return false;
+      }
+
+      const channel = await this.configService.getVerificationChannel(verificationEvent.server_id);
+
+      if (!channel) {
+        throw new Error('No verification channel ID configured');
+      }
+
+      const thread = await channel.threads.fetch(verificationEvent.thread_id);
       if (!thread || !thread.isThread()) {
+        // No thread but that's okay
         return false;
       }
 
