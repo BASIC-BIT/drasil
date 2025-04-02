@@ -10,12 +10,13 @@ import { IGPTService, UserProfileData } from './GPTService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { TYPES } from '../di/symbols';
 import { meetsConfidenceLevel } from '../utils/confidence';
+import { DetectionType } from '../repositories/types';
 
 export interface DetectionResult {
   label: 'OK' | 'SUSPICIOUS';
   confidence: number;
   reasons: string[];
-  triggerSource: 'message' | 'join';
+  triggerSource: DetectionType;
   triggerContent: string;
   profileData?: UserProfileData;
   detectionEventId?: string;
@@ -49,13 +50,12 @@ export interface IDetectionOrchestrator {
    * @param profileData User profile data for analysis
    * @returns A DetectionResult with the final label and metadata
    */
-  detectNewJoin(
-    serverId: string,
-    userId: string,
-    profileData: UserProfileData
-  ): Promise<DetectionResult>;
+  detectNewJoin(profileData: UserProfileData): Promise<DetectionResult>;
 }
 
+/**
+ * DetectionOrchestrator - Handles incoming events, deciding if they're spam
+ */
 @injectable()
 export class DetectionOrchestrator implements IDetectionOrchestrator {
   private heuristicService: IHeuristicService;
@@ -93,7 +93,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     serverId: string,
     userId: string,
     content: string,
-    profileData?: UserProfileData
+    profileData: UserProfileData
   ): Promise<DetectionResult> {
     // First, check recent detection history
     const recentEvents = await this.detectionEventsRepository.findByServerAndUser(serverId, userId);
@@ -138,6 +138,9 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       reasons.push('Recently joined server');
     }
 
+    // TODO: We update this inline here but don't update the database? Is this a problem?
+    profileData.recentMessages = [...profileData.recentMessages, content];
+
     // Determine if we should use GPT
     // Use GPT if:
     // 1. The user is new (either to Discord or to the server) OR
@@ -150,22 +153,9 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
 
     let result: DetectionResult;
 
-    if (shouldUseGPT && profileData) {
+    if (shouldUseGPT) {
       // Use the analyzeProfile method that conforms to the IGPTService interface
-      const gptAnalysis = await this.gptService.analyzeProfile({
-        userId,
-        username: profileData.username,
-        accountAge: profileData.accountCreatedAt
-          ? Math.floor(
-              (Date.now() - profileData.accountCreatedAt.getTime()) / (1000 * 60 * 60 * 24)
-            )
-          : undefined,
-        joinedServer: profileData.joinedServerAt,
-        messageHistory: [
-          ...(profileData.recentMessages ? profileData.recentMessages : []),
-          content, // Include the current message being analyzed
-        ],
-      });
+      const gptAnalysis = await this.gptService.analyzeProfile(profileData);
 
       if (gptAnalysis.result === 'SUSPICIOUS') {
         suspicionScore = 0.9;
@@ -179,7 +169,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
         confidence: Math.abs(suspicionScore - 0.5) * 2,
         reasons: reasons,
-        triggerSource: 'message',
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
         triggerContent: content,
         profileData: profileData,
       };
@@ -188,7 +178,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
         confidence: Math.abs(suspicionScore - 0.5) * 2,
         reasons: reasons,
-        triggerSource: 'message',
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
         triggerContent: content,
       };
     }
@@ -204,20 +194,9 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
    * @param profileData User profile data for analysis
    * @returns A DetectionResult with the final label and metadata
    */
-  public async detectNewJoin(
-    serverId: string,
-    userId: string,
-    profileData: UserProfileData
-  ): Promise<DetectionResult> {
+  public async detectNewJoin(profileData: UserProfileData): Promise<DetectionResult> {
     // Use the analyzeProfile method from the interface
-    const gptAnalysis = await this.gptService.analyzeProfile({
-      userId,
-      username: profileData.username,
-      accountAge: profileData.accountCreatedAt
-        ? Math.floor((Date.now() - profileData.accountCreatedAt.getTime()) / (1000 * 60 * 60 * 24))
-        : undefined,
-      joinedServer: profileData.joinedServerAt,
-    });
+    const gptAnalysis = await this.gptService.analyzeProfile(profileData);
 
     // Calculate suspicion score
     let suspicionScore = 0;
@@ -239,7 +218,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
       confidence: Math.abs(suspicionScore - 0.5) * 2,
       reasons: reasons,
-      triggerSource: 'join',
+      triggerSource: DetectionType.NEW_ACCOUNT,
       triggerContent: 'Server Join',
       profileData: profileData,
     };

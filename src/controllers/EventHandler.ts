@@ -158,11 +158,7 @@ export class EventHandler implements IEventHandler {
       const profileData = this.extractUserProfileData(member);
 
       // Run detection on new join
-      const detectionResult = await this.detectionOrchestrator.detectNewJoin(
-        member.guild.id,
-        member.id,
-        profileData
-      );
+      const detectionResult = await this.detectionOrchestrator.detectNewJoin(profileData);
 
       // If suspicious, delegate to the SecurityActionService
       if (detectionResult.label === 'SUSPICIOUS') {

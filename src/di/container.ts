@@ -23,7 +23,6 @@ import {
 } from '../repositories/DetectionEventsRepository';
 import { DetectionOrchestrator, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { ConfigService, IConfigService } from '../config/ConfigService';
-import { UserService } from '../services/UserService';
 import { SecurityActionService, ISecurityActionService } from '../services/SecurityActionService';
 import { UserModerationService, IUserModerationService } from '../services/UserModerationService';
 import { Bot, IBot } from '../Bot';
@@ -36,7 +35,10 @@ import {
   AdminActionRepository,
 } from '../repositories/AdminActionRepository';
 import { IAdminActionService, AdminActionService } from '../services/AdminActionService';
-
+import { InteractionHandler, IInteractionHandler } from '../controllers/InteractionHandler';
+import { CommandHandler, ICommandHandler } from '../controllers/CommandHandler';
+import { IEventHandler, EventHandler } from '../controllers/EventHandler';
+import { ThreadManager, IThreadManager } from '../services/ThreadManager';
 // Initialize container
 const container = new Container();
 
@@ -143,9 +145,6 @@ function configureServices(container: Container): void {
   container.bind<IDetectionOrchestrator>(TYPES.DetectionOrchestrator).to(DetectionOrchestrator);
   container.bind<IConfigService>(TYPES.ConfigService).to(ConfigService);
 
-  // Add UserService binding
-  container.bind(TYPES.UserService).to(UserService).inSingletonScope();
-
   // Add SecurityActionService binding
   container
     .bind<ISecurityActionService>(TYPES.SecurityActionService)
@@ -161,12 +160,24 @@ function configureServices(container: Container): void {
   // Add Bot binding
   container.bind<IBot>(TYPES.Bot).to(Bot).inSingletonScope();
 
+  // Add CommandHandler binding
+  container.bind<ICommandHandler>(TYPES.CommandHandler).to(CommandHandler).inSingletonScope();
+
+  // Add InteractionHandler binding
+  container
+    .bind<IInteractionHandler>(TYPES.InteractionHandler)
+    .to(InteractionHandler)
+    .inSingletonScope();
+
+  // Add EventHandler binding
+  container.bind<IEventHandler>(TYPES.EventHandler).to(EventHandler).inSingletonScope();
+
   container
     .bind<IAdminActionService>(TYPES.AdminActionService)
     .to(AdminActionService)
     .inSingletonScope();
 
-  // Add more service bindings as they're refactored
+  container.bind<IThreadManager>(TYPES.ThreadManager).to(ThreadManager).inSingletonScope();
 }
 
 export { container };

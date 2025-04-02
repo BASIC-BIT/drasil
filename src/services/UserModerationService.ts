@@ -6,6 +6,7 @@ import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { AdminActionType, VerificationStatus } from '../repositories/types';
+import { IAdminActionService } from './AdminActionService';
 
 /**
  * Interface for the UserModerationService
@@ -45,18 +46,21 @@ export class UserModerationService implements IUserModerationService {
   private notificationManager: INotificationManager;
   private roleManager: IRoleManager;
   private verificationEventRepository: IVerificationEventRepository;
+  private adminActionService: IAdminActionService;
 
   constructor(
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
     @inject(TYPES.RoleManager) roleManager: IRoleManager,
     @inject(TYPES.VerificationEventRepository)
-    verificationEventRepository: IVerificationEventRepository
+    verificationEventRepository: IVerificationEventRepository,
+    @inject(TYPES.AdminActionService) adminActionService: IAdminActionService
   ) {
     this.serverMemberRepository = serverMemberRepository;
     this.notificationManager = notificationManager;
     this.roleManager = roleManager;
     this.verificationEventRepository = verificationEventRepository;
+    this.adminActionService = adminActionService;
   }
 
   /**

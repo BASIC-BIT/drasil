@@ -10,7 +10,6 @@ import {
   User,
   ThreadChannel,
   Guild,
-  ThreadAutoArchiveDuration,
   ChannelType,
   PermissionFlagsBits,
   GuildChannelCreateOptions,
@@ -19,19 +18,15 @@ import {
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { DetectionResult } from './DetectionOrchestrator';
-import { IUserService } from './UserService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import {
   DetectionEvent,
   VerificationStatus,
   AdminActionType,
   VerificationEvent,
+  DetectionType,
 } from '../repositories/types';
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
-import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
-import { IUserRepository } from '../repositories/UserRepository';
-import { IServerRepository } from '../repositories/ServerRepository';
-import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 
 export interface NotificationButton {
   id: string;
@@ -59,16 +54,6 @@ export interface INotificationManager {
   ): Promise<Message | null>;
 
   /**
-   * Creates a thread for a suspicious user in the verification channel
-   * @param member The suspicious guild member
-   * @returns Promise resolving to the created thread or null if creation failed
-   */
-  createVerificationThread(
-    member: GuildMember,
-    verificationEvent: VerificationEvent
-  ): Promise<ThreadChannel | null>;
-
-  /**
    * Log an admin action to the notification message
    * @param verificationEvent The verification event
    * @param actionTaken The action that was taken
@@ -91,21 +76,6 @@ export interface INotificationManager {
   setupVerificationChannel(guild: Guild, restrictedRoleId: string): Promise<string | null>;
 
   /**
-   * Resolve a verification thread
-   * @param serverId The Discord server ID
-   * @param threadId The Discord thread ID
-   * @param resolution The resolution of the thread (verified, banned, ignored)
-   * @param resolvedBy The Discord ID of the user who resolved the thread
-   * @returns Whether the thread was successfully resolved
-   */
-  resolveVerificationThread(
-    serverId: string,
-    threadId: string,
-    resolution: VerificationStatus,
-    resolvedBy: string
-  ): Promise<boolean>;
-
-  /**
    * Handle the history button interaction by sending a private ephemeral message with full detection history
    * @param interaction The button interaction
    * @param userId The Discord user ID whose history to show
@@ -121,40 +91,24 @@ export interface INotificationManager {
 }
 
 /**
- * Service for managing notifications to admin/summary channels.
- * This service does NOT update user status on discord, or update the database
- * With the only exception of updating the thread_id in the verification event.
+ * Service for managing notifications to admin/summary channels
+ * It is NOT intended to perform any action secondary actions
+ * STRICTLY only for calling the discord client to manage messages
  */
 @injectable()
 export class NotificationManager implements INotificationManager {
   private client: Client;
   private configService: IConfigService;
-  private userService: IUserService;
   private detectionEventsRepository: IDetectionEventsRepository;
-  private verificationEventRepository: IVerificationEventRepository;
-  private userRepository: IUserRepository;
-  private serverRepository: IServerRepository;
-  private serverMemberRepository: IServerMemberRepository;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
     @inject(TYPES.ConfigService) configService: IConfigService,
-    @inject(TYPES.UserService) userService: IUserService,
-    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
-    @inject(TYPES.VerificationEventRepository)
-    verificationEventRepository: IVerificationEventRepository,
-    @inject(TYPES.UserRepository) userRepository: IUserRepository,
-    @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
-    @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository
+    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository
   ) {
     this.client = client;
     this.configService = configService;
-    this.userService = userService;
     this.detectionEventsRepository = detectionEventsRepository;
-    this.verificationEventRepository = verificationEventRepository;
-    this.userRepository = userRepository;
-    this.serverRepository = serverRepository;
-    this.serverMemberRepository = serverMemberRepository;
   }
 
   /**
@@ -217,68 +171,6 @@ export class NotificationManager implements INotificationManager {
       });
     } catch (error) {
       console.error('Failed to upsert suspicious user notification:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Creates a thread for a suspicious user in the verification channel
-   * @param member The suspicious guild member
-   * @returns Promise resolving to the created thread or null if creation failed
-   */
-  public async createVerificationThread(
-    member: GuildMember,
-    verificationEvent: VerificationEvent
-  ): Promise<ThreadChannel | null> {
-    // Try verification channel first, fall back to admin channel if not configured
-    const channel =
-      (await this.configService.getVerificationChannel(member.guild.id)) ||
-      (await this.configService.getAdminChannel(member.guild.id));
-
-    if (!channel) {
-      console.error('No verification or admin channel ID configured');
-      return null;
-    }
-
-    try {
-      // Ensure the server exists
-      await this.serverRepository.getOrCreateServer(member.guild.id);
-
-      // Ensure the user exists
-      await this.userRepository.getOrCreateUser(member.id, member.user.username);
-
-      // Ensure the server member exists
-      await this.serverMemberRepository.getOrCreateMember(
-        member.guild.id,
-        member.id,
-        member.joinedAt?.toISOString()
-      );
-
-      // Create a thread for verification
-      const threadName = `Verification: ${member.user.username}`;
-      const thread = await channel.threads.create({
-        name: threadName,
-        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-        reason: `Verification thread for suspicious user: ${member.user.tag}`,
-        type: 11, // PrivateThread
-      });
-
-      // Add the member to the private thread so they can see it
-      await thread.members.add(member.id);
-
-      // Send an initial message to the thread
-      await thread.send({
-        content: `# Verification for <@${member.id}>\n\nHello <@${member.id}>, your account has been automatically flagged for verification.\n\nTo help us verify your account, please answer these questions:\n\n1. How did you find our community?\n2. What interests you here?\n\nOnce you respond, a moderator will review your answers and grant you full access to the server if everything checks out.`,
-      });
-
-      // Store thread in the database
-      await this.verificationEventRepository.update(verificationEvent.id, {
-        thread_id: thread.id,
-      });
-
-      return thread;
-    } catch (error) {
-      console.error('Failed to create verification thread:', error);
       return null;
     }
   }
@@ -430,7 +322,10 @@ export class NotificationManager implements INotificationManager {
 
     // Create trigger information
     let triggerInfo: string;
-    if (detectionResult.triggerSource === 'message' && detectionResult.triggerContent) {
+    if (
+      detectionResult.triggerSource === DetectionType.SUSPICIOUS_CONTENT &&
+      detectionResult.triggerContent
+    ) {
       // Wrap trigger content in code blocks to prevent auto-linking
       const safeContent = `\`${detectionResult.triggerContent}\``;
 
@@ -592,11 +487,6 @@ export class NotificationManager implements INotificationManager {
     guild: Guild,
     restrictedRoleId: string
   ): Promise<string | null> {
-    if (!guild) {
-      console.error('Guild is required to set up verification channel');
-      return null;
-    }
-
     if (!restrictedRoleId) {
       console.error('Restricted role ID is required to set up verification channel');
       return null;
@@ -744,42 +634,6 @@ export class NotificationManager implements INotificationManager {
         content: 'Failed to fetch detection history. Please try again later.',
         ephemeral: true,
       });
-      return false;
-    }
-  }
-
-  /**
-   * Look up a thread on the discord client close it, and lock it
-   * @param threadId The Discord thread ID
-   * @param resolution The resolution of the thread (verified, banned, ignored)
-   * @returns Whether the thread was successfully resolved
-   */
-  async resolveVerificationThread(
-    threadId: string,
-    resolution: VerificationStatus
-  ): Promise<boolean> {
-    try {
-      const thread = await this.client.channels.fetch(threadId);
-      if (!thread || !thread.isThread()) {
-        return false;
-      }
-
-      if (resolution === VerificationStatus.VERIFIED) {
-        await thread.send({
-          content: `This thread has been resolved. If you have any questions, please contact a moderator.`,
-        });
-      } else if (resolution === VerificationStatus.BANNED) {
-        await thread.send({
-          content: `This thread has been rejected. If you have any questions, please contact a moderator.`,
-        });
-      }
-
-      await thread.setArchived(true);
-      await thread.setLocked(true);
-
-      return true;
-    } catch (error) {
-      console.error('Failed to resolve verification thread:', error);
       return false;
     }
   }

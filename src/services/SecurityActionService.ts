@@ -1,24 +1,21 @@
-/**
- * SecurityActionService: Handles security responses to detection results
- * - Receives detection results from DetectionOrchestrator
- * - Ensures core entities exist in database
- * - Handles the appropriate actions (assigning roles, sending notifications, etc.)
- * - Coordinates between RoleManager and NotificationManager
- */
 import { injectable, inject } from 'inversify';
-import { GuildMember, Message, ThreadChannel, User, Client } from 'discord.js';
+import { GuildMember, Message, Client, User } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import { INotificationManager } from './NotificationManager';
 import { DetectionResult } from './DetectionOrchestrator';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
-import { IUserService } from './UserService';
-import { IServerService } from './ServerService';
-import { IUserModerationService } from './UserModerationService';
-import { DetectionType, DetectionEvent, VerificationEvent } from '../repositories/types';
-import { IVerificationService } from './VerificationService';
+import {
+  DetectionEvent,
+  VerificationEvent,
+  VerificationStatus,
+  AdminActionType,
+} from '../repositories/types';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
-
+import { IServerRepository } from '../repositories/ServerRepository';
+import { IUserRepository } from '../repositories/UserRepository';
+import { IThreadManager } from './ThreadManager';
+import { IUserModerationService } from './UserModerationService';
 /**
  * Interface for the SecurityActionService
  */
@@ -45,52 +42,52 @@ export interface ISecurityActionService {
    * @returns Whether the action was successfully executed
    */
   handleSuspiciousJoin(member: GuildMember, detectionResult: DetectionResult): Promise<boolean>;
+
+  /**
+   * Reopens a verification event, and re-restricts the user (or unbans them?)
+   * @param verificationEvent The verification event to reopen
+   * @returns Whether the thread was successfully reopened
+   */
+  reopenVerification(verificationEvent: VerificationEvent, moderator: User): Promise<boolean>;
 }
 
+/**
+ * SecurityActionService - Coordinates calls to various services based upon actions that occurred
+ * This is the service to put all that fancy business logic
+ */
 @injectable()
 export class SecurityActionService implements ISecurityActionService {
   private notificationManager: INotificationManager;
   private detectionEventsRepository: IDetectionEventsRepository;
   private serverMemberRepository: IServerMemberRepository;
-  private userService: IUserService;
-  private serverService: IServerService;
-  private userModerationService: IUserModerationService;
-  private verificationService: IVerificationService;
   private verificationEventRepository: IVerificationEventRepository;
+  private userRepository: IUserRepository;
+  private serverRepository: IServerRepository;
+  private threadManager: IThreadManager;
+  private userModerationService: IUserModerationService;
   private client: Client;
 
   constructor(
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
     @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
-    @inject(TYPES.UserService) userService: IUserService,
-    @inject(TYPES.ServerService) serverService: IServerService,
-    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
-    @inject(TYPES.VerificationService) verificationService: IVerificationService,
     @inject(TYPES.VerificationEventRepository)
     verificationEventRepository: IVerificationEventRepository,
+    @inject(TYPES.UserRepository) userRepository: IUserRepository,
+    @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
+    @inject(TYPES.ThreadManager) threadManager: IThreadManager,
+    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
     @inject(TYPES.DiscordClient) client: Client
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
     this.serverMemberRepository = serverMemberRepository;
-    this.userService = userService;
-    this.serverService = serverService;
-    this.userModerationService = userModerationService;
-    this.verificationService = verificationService;
     this.verificationEventRepository = verificationEventRepository;
+    this.userRepository = userRepository;
+    this.serverRepository = serverRepository;
+    this.threadManager = threadManager;
+    this.userModerationService = userModerationService;
     this.client = client;
-  }
-
-  /**
-   * Initialize the service with server-specific configurations
-   *
-   * @param serverId The Discord server ID
-   */
-  public async initialize(serverId: string): Promise<void> {
-    await this.notificationManager.initialize(serverId);
-    await this.userModerationService.initialize(serverId);
-    console.log(`SecurityActionService initialized for server ${serverId}`);
   }
 
   /**
@@ -105,30 +102,16 @@ export class SecurityActionService implements ISecurityActionService {
   ): Promise<void> {
     try {
       // First, ensure the server exists
-      await this.serverService.getOrCreateServer(serverId);
+      await this.serverRepository.getOrCreateServer(serverId);
 
       // Then, ensure the user exists
-      await this.userService.getOrCreateUser(userId, username);
+      await this.userRepository.getOrCreateUser(userId, username);
 
       // Finally, ensure server_member record exists
-      await this.userService.getOrCreateMember(serverId, userId, joinedAt);
+      await this.serverMemberRepository.getOrCreateMember(serverId, userId, joinedAt);
     } catch (error) {
       console.error('Failed to ensure entities exist:', error);
       throw error;
-    }
-  }
-
-  /**
-   * Maps a trigger source to a DetectionType
-   * @param triggerSource The source of the detection
-   * @returns The corresponding DetectionType
-   */
-  private mapTriggerSourceToDetectionType(triggerSource: 'message' | 'join'): DetectionType {
-    switch (triggerSource) {
-      case 'message':
-        return DetectionType.SUSPICIOUS_CONTENT;
-      case 'join':
-        return DetectionType.NEW_ACCOUNT;
     }
   }
 
@@ -154,7 +137,7 @@ export class SecurityActionService implements ISecurityActionService {
     return this.detectionEventsRepository.create({
       server_id: serverId,
       user_id: userId,
-      detection_type: this.mapTriggerSourceToDetectionType(detectionResult.triggerSource),
+      detection_type: detectionResult.triggerSource,
       confidence: detectionResult.confidence,
       reasons: detectionResult.reasons,
       detected_at: new Date(),
@@ -200,10 +183,11 @@ export class SecurityActionService implements ISecurityActionService {
       );
 
       // 3. Check for an existing active verification event
-      const activeVerificationEvent = await this.verificationService.getActiveVerification(
-        member.guild.id,
-        member.id
-      );
+      const activeVerificationEvent =
+        await this.verificationEventRepository.findActiveByUserAndServer(
+          member.id,
+          member.guild.id
+        );
 
       if (activeVerificationEvent) {
         // --- Active verification exists ---
@@ -212,30 +196,13 @@ export class SecurityActionService implements ISecurityActionService {
         );
 
         // Update the existing notification
-        const existingMessageId = activeVerificationEvent.notification_message_id;
         const updatedMessage = await this.notificationManager.upsertSuspiciousUserNotification(
           member,
           detectionResult, // Use the latest detection result
-          existingMessageId ?? undefined, // Pass existing ID if available
+          activeVerificationEvent,
           sourceMessage
         );
 
-        // If we updated successfully AND the original event was missing a message ID, update it now.
-        if (updatedMessage && !existingMessageId) {
-          try {
-            await this.verificationEventRepository.update(activeVerificationEvent.id, {
-              notification_message_id: updatedMessage.id,
-            });
-            console.log(
-              `Linked new/updated message ${updatedMessage.id} to existing verification ${activeVerificationEvent.id}`
-            );
-          } catch (updateError) {
-            console.error(
-              `Failed to link new/updated message ${updatedMessage.id} to existing verification ${activeVerificationEvent.id}:`,
-              updateError
-            );
-          }
-        }
         return !!updatedMessage; // Return success based on notification update
       } else {
         // --- No active verification exists ---
@@ -246,9 +213,9 @@ export class SecurityActionService implements ISecurityActionService {
         // Create a NEW VerificationEvent (this also restricts the user)
         let newVerificationEvent: VerificationEvent | null = null;
         try {
-          newVerificationEvent = await this.verificationService.createVerificationEvent(
-            member,
-            detectionEvent.id // Link the current detection event
+          newVerificationEvent = await this.verificationEventRepository.createFromDetection(
+            detectionEvent.id,
+            VerificationStatus.PENDING
           );
           console.log(
             `Restricted user ${member.user.tag} and created verification event ${newVerificationEvent.id}`
@@ -265,7 +232,7 @@ export class SecurityActionService implements ISecurityActionService {
         const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
           member,
           detectionResult,
-          undefined, // No existing message ID
+          newVerificationEvent,
           sourceMessage
         );
 
@@ -331,10 +298,11 @@ export class SecurityActionService implements ISecurityActionService {
       );
 
       // 3. Check for an existing active verification event
-      const activeVerificationEvent = await this.verificationService.getActiveVerification(
-        member.guild.id,
-        member.id
-      );
+      const activeVerificationEvent =
+        await this.verificationEventRepository.findActiveByUserAndServer(
+          member.id,
+          member.guild.id
+        );
 
       if (activeVerificationEvent) {
         // --- Active verification exists ---
@@ -343,16 +311,15 @@ export class SecurityActionService implements ISecurityActionService {
         );
 
         // Update the existing notification
-        const existingMessageId = activeVerificationEvent.notification_message_id;
         const updatedMessage = await this.notificationManager.upsertSuspiciousUserNotification(
           member,
           detectionResult, // Use the latest detection result
-          existingMessageId ?? undefined // Pass existing ID if available
+          activeVerificationEvent
           // No source message for join
         );
 
         // If we updated successfully AND the original event was missing a message ID, update it now.
-        if (updatedMessage && !existingMessageId) {
+        if (updatedMessage && !activeVerificationEvent.notification_message_id) {
           try {
             await this.verificationEventRepository.update(activeVerificationEvent.id, {
               notification_message_id: updatedMessage.id,
@@ -377,9 +344,9 @@ export class SecurityActionService implements ISecurityActionService {
         // Create a NEW VerificationEvent (this also restricts the user)
         let newVerificationEvent: VerificationEvent | null = null;
         try {
-          newVerificationEvent = await this.verificationService.createVerificationEvent(
-            member,
-            detectionEvent.id // Link the current detection event
+          newVerificationEvent = await this.verificationEventRepository.createFromDetection(
+            detectionEvent.id,
+            VerificationStatus.PENDING
           );
           console.log(
             `Restricted user ${member.user.tag} and created verification event ${newVerificationEvent.id}`
@@ -396,7 +363,7 @@ export class SecurityActionService implements ISecurityActionService {
         const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
           member,
           detectionResult,
-          undefined // No existing message ID
+          newVerificationEvent
           // No source message for join
         );
 
@@ -428,5 +395,36 @@ export class SecurityActionService implements ISecurityActionService {
       console.error(`Failed to handle suspicious join for ${member?.user?.tag}:`, error);
       return false;
     }
+  }
+
+  // TODO: check if this is deoing everything it needs to... kinda a lot of concerns?
+  /**
+   * Reopens a verification event, and re-restricts the user (or unbans them?)
+   * @param verificationEvent The verification event to reopen
+   * @param moderator The moderator who is reopening the verification event
+   * @returns Whether the action was successfully executed
+   */
+  public async reopenVerification(
+    verificationEvent: VerificationEvent,
+    moderator: User
+  ): Promise<boolean> {
+    await this.threadManager.reopenVerificationThread(
+      verificationEvent.server_id,
+      verificationEvent.id
+    );
+
+    // TODO: Fetch server member better?
+    const guild = await this.client.guilds.fetch(verificationEvent.server_id);
+    const member = await guild.members.fetch(verificationEvent.user_id);
+
+    await this.userModerationService.restrictUser(member);
+
+    await this.notificationManager.logActionToMessage(
+      verificationEvent,
+      AdminActionType.REOPEN,
+      moderator
+    );
+
+    return true;
   }
 }

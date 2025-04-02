@@ -40,6 +40,8 @@ export const TYPES = {
   EventHandler: Symbol.for('EventHandler'),
   InteractionHandler: Symbol.for('InteractionHandler'),
 
+  ThreadManager: Symbol.for('ThreadManager'),
+
   // New repositories
   VerificationEventRepository: Symbol.for('VerificationEventRepository'),
   AdminActionRepository: Symbol.for('AdminActionRepository'),

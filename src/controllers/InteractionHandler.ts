@@ -1,4 +1,4 @@
-import { Client, Message, ButtonInteraction, ThreadChannel } from 'discord.js';
+import { Client, Message, ButtonInteraction } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject } from 'inversify';
 import { INotificationManager } from '../services/NotificationManager';
@@ -7,7 +7,10 @@ import { VerificationStatus } from '../repositories/types';
 import { VerificationHistoryFormatter } from '../utils/VerificationHistoryFormatter';
 import 'reflect-metadata';
 import { IUserModerationService } from '../services/UserModerationService';
-
+import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
+import { IThreadManager } from '../services/ThreadManager';
+import { IAdminActionRepository } from '../repositories/AdminActionRepository';
+import { ISecurityActionService } from '../services/SecurityActionService';
 // Load environment variables
 dotenv.config();
 
@@ -26,14 +29,29 @@ export class InteractionHandler implements IInteractionHandler {
   private client: Client;
   private notificationManager: INotificationManager;
   private userModerationService: IUserModerationService;
+  private securityActionService: ISecurityActionService;
+  // TODO: Handlers calling a repository is a smell, and should be improved
+  private verificationEventRepository: IVerificationEventRepository;
+  private threadManager: IThreadManager;
+  private adminActionRepository: IAdminActionRepository;
+
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
-    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService
+    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
+    @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService,
+    @inject(TYPES.VerificationEventRepository)
+    verificationEventRepository: IVerificationEventRepository,
+    @inject(TYPES.ThreadManager) threadManager: IThreadManager,
+    @inject(TYPES.AdminActionRepository) adminActionRepository: IAdminActionRepository
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
     this.userModerationService = userModerationService;
+    this.securityActionService = securityActionService;
+    this.verificationEventRepository = verificationEventRepository;
+    this.threadManager = threadManager;
+    this.adminActionRepository = adminActionRepository;
   }
 
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
@@ -102,7 +120,12 @@ export class InteractionHandler implements IInteractionHandler {
       );
 
       // Lock and archive the thread if it exists
-      await this.manageThreadState(guildId, userId, true, true); // Lock and Archive on Verify
+      await this.threadManager.resolveVerificationThread(
+        guildId,
+        userId,
+        VerificationStatus.VERIFIED,
+        interaction.user.id
+      ); // Lock and Archive on Verify
 
       await interaction.followUp({
         content: `User <@${userId}> has been verified and can now access the server.`,
@@ -144,7 +167,12 @@ export class InteractionHandler implements IInteractionHandler {
       );
 
       // Lock and archive the thread if it exists
-      await this.manageThreadState(guildId, userId, true, true); // Lock and Archive on Ban
+      await this.threadManager.resolveVerificationThread(
+        guildId,
+        userId,
+        VerificationStatus.BANNED,
+        interaction.user.id
+      ); // Lock and Archive on Ban
 
       await interaction.followUp({
         content: `User <@${userId}> has been banned from the server.`,
@@ -176,9 +204,9 @@ export class InteractionHandler implements IInteractionHandler {
       }
 
       // Get the active verification event
-      const verificationEvent = await this.verificationService.getActiveVerification(
-        guildId,
-        userId
+      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+        userId,
+        guildId
       );
 
       if (!verificationEvent) {
@@ -186,10 +214,7 @@ export class InteractionHandler implements IInteractionHandler {
       }
 
       // Create the thread
-      const thread = await this.notificationManager.createVerificationThread(
-        member,
-        verificationEvent
-      );
+      const thread = await this.threadManager.createVerificationThread(member, verificationEvent);
 
       if (!thread) {
         throw new Error('Failed to create verification thread');
@@ -223,20 +248,29 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferReply({ ephemeral: true });
 
     try {
-      // Get the guild member
-      const guild = await this.client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId);
-      if (!member) throw new Error('Member not found');
-
       // Get verification history with actions using the member object
-      const history = await this.verificationService.getVerificationHistory(member);
+      const history = await this.verificationEventRepository.findByUserAndServer(userId, guildId);
+
+      // TODO: This is part of the reason why we don't put repositories in handlers, this is strictly a service concern
+      const historyWithActions = await Promise.all(
+        history.map(async (event) => ({
+          ...event,
+          actions: await this.adminActionRepository.findByVerificationEvent(event.id),
+        }))
+      );
 
       // Format history using our formatter
-      const formattedHistory = VerificationHistoryFormatter.formatForDiscord(history, userId);
+      const formattedHistory = VerificationHistoryFormatter.formatForDiscord(
+        historyWithActions,
+        userId
+      );
 
       // Send as a text file if it's too long
       if (formattedHistory.length > 2000) {
-        const plainTextHistory = VerificationHistoryFormatter.formatForFile(history, userId);
+        const plainTextHistory = VerificationHistoryFormatter.formatForFile(
+          historyWithActions,
+          userId
+        );
         const buffer = Buffer.from(plainTextHistory, 'utf-8');
         await interaction.editReply({
           content: 'Here is the complete verification history:',
@@ -268,17 +302,20 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
-      // Get the guild member
-      const guild = await this.client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId);
-      if (!member) throw new Error('Member not found');
+      // TODO: We unlock the thread, but what actually updates the status? Is this a user moderation service concern?
+      // Remind ourselves that the handler/controller layer should focus on user interaction concerns
+      // Should we have a whole "display" layer, separate from our service layer (which is our business logic)?
+      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+        userId,
+        guildId
+      );
+
+      if (!verificationEvent) {
+        throw new Error('No active verification event found');
+      }
 
       // Reopen the verification using VerificationService
-      await this.userModerationService.reopenVerification(
-        member, // Pass the GuildMember object
-        interaction.user.id,
-        'Reopened via button interaction'
-      );
+      await this.securityActionService.reopenVerification(verificationEvent, interaction.user);
 
       // Update the notification message buttons
       await this.notificationManager.updateNotificationButtons(
@@ -288,7 +325,7 @@ export class InteractionHandler implements IInteractionHandler {
       );
 
       // Unlock and unarchive the thread if it exists
-      await this.manageThreadState(guildId, userId, false, false); // Unlock and Unarchive on Reopen
+      await this.threadManager.reopenVerificationThread(guildId, verificationEvent.id); // Unlock and Unarchive on Reopen
 
       await interaction.followUp({
         content: `Verification for <@${userId}> has been reopened. The user has been restricted again.`,

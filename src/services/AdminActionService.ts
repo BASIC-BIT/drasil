@@ -15,6 +15,9 @@ export interface IAdminActionService {
   formatActionSummary(action: AdminAction): string;
 }
 
+/**
+ * AdminActionService - Handles auditing of actions taken by admins
+ */
 @injectable()
 export class AdminActionService implements IAdminActionService {
   constructor(
