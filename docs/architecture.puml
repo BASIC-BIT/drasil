@@ -85,11 +85,6 @@ package "Repositories" {
     class ServerRepository extends SupabaseRepository implements IServerRepository <<REPO>>
     ServerRepository --> DB_S : interacts with
     ServerRepository ..> SupabaseClient : uses
-
-    interface IVerificationThreadRepository <<REPO>>
-    class VerificationThreadRepository extends SupabaseRepository implements IVerificationThreadRepository <<REPO>>
-    VerificationThreadRepository --> DB_VT : interacts with
-    VerificationThreadRepository ..> SupabaseClient : uses
 }
 
 package "Utils" <<UTIL>> {
@@ -126,7 +121,6 @@ package "Services" {
     class NotificationManager implements INotificationManager <<SERVICE>> {
         - client: Client
         - configService: IConfigService
-        - verificationThreadRepository: IVerificationThreadRepository
         - verificationEventRepository: IVerificationEventRepository
         - userService: IUserService
         - serverService: IServerService
@@ -136,7 +130,6 @@ package "Services" {
     }
     NotificationManager ..> Client
     NotificationManager ..> IConfigService
-    NotificationManager ..> IVerificationThreadRepository
     NotificationManager ..> IVerificationEventRepository
     NotificationManager ..> IUserService
     NotificationManager ..> IServerService

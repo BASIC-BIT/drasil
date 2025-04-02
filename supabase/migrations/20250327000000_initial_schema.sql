@@ -7,8 +7,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TYPE verification_status AS ENUM (
   'pending',
   'verified',
-  'rejected',
-  'reopened'
+  'rejected'
 );
 
 CREATE TYPE admin_action_type AS ENUM (

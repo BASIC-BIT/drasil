@@ -20,15 +20,12 @@ import {
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { DetectionResult } from './DetectionOrchestrator';
-import { IVerificationThreadRepository } from '../repositories/VerificationThreadRepository';
-import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { IUserService } from './UserService';
 import { IServerService } from './ServerService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
-import { DetectionEvent, VerificationThread, VerificationStatus } from '../repositories/types';
+import { DetectionEvent, VerificationStatus, AdminActionType, VerificationEvent } from '../repositories/types';
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
-import { IVerificationService } from './VerificationService';
-import { IAdminActionService } from './AdminActionService';
+import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 
 export interface NotificationButton {
   id: string;
@@ -68,14 +65,14 @@ export interface INotificationManager {
    * Creates or updates a notification about a suspicious user
    * @param member The suspicious guild member
    * @param detectionResult The detection result
-   * @param existingMessageId Optional ID of an existing message to update
+   * @param verificationEvent The verification event
    * @param sourceMessage Optional message that triggered the detection
    * @returns Promise resolving to the sent/updated message or null if failed
    */
   upsertSuspiciousUserNotification(
     member: GuildMember,
     detectionResult: DetectionResult,
-    existingMessageId?: string,
+    verificationEvent: VerificationEvent,
     sourceMessage?: Message
   ): Promise<Message | null>;
 
@@ -84,7 +81,10 @@ export interface INotificationManager {
    * @param member The suspicious guild member
    * @returns Promise resolving to the created thread or null if creation failed
    */
-  createVerificationThread(member: GuildMember): Promise<ThreadChannel | null>;
+  createVerificationThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent
+  ): Promise<ThreadChannel | null>;
 
   /**
    * Log an admin action to the notification message
@@ -95,7 +95,7 @@ export interface INotificationManager {
    */
   logActionToMessage(
     message: Message,
-    actionTaken: string,
+    actionTaken: AdminActionType,
     admin: User,
     thread?: ThreadChannel
   ): Promise<boolean>;
@@ -126,7 +126,7 @@ export interface INotificationManager {
   resolveVerificationThread(
     serverId: string,
     threadId: string,
-    resolution: 'verified' | 'banned' | 'ignored',
+    resolution: VerificationStatus,
     resolvedBy: string
   ): Promise<boolean>;
 
@@ -154,36 +154,25 @@ export class NotificationManager implements INotificationManager {
   private verificationChannelId: string | undefined;
   private client: Client;
   private configService: IConfigService;
-  private verificationThreadRepository: IVerificationThreadRepository;
-  private verificationEventRepository: IVerificationEventRepository;
   private userService: IUserService;
   private serverService: IServerService;
   private detectionEventsRepository: IDetectionEventsRepository;
-  private verificationService: IVerificationService;
-  private adminActionService: IAdminActionService;
+  private verificationEventRepository: IVerificationEventRepository;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
     @inject(TYPES.ConfigService) configService: IConfigService,
-    @inject(TYPES.VerificationThreadRepository)
-    verificationThreadRepository: IVerificationThreadRepository,
-    @inject(TYPES.VerificationEventRepository)
-    verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.UserService) userService: IUserService,
     @inject(TYPES.ServerService) serverService: IServerService,
     @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
-    @inject(TYPES.VerificationService) verificationService: IVerificationService,
-    @inject(TYPES.AdminActionService) adminActionService: IAdminActionService
+    @inject(TYPES.VerificationEventRepository) verificationEventRepository: IVerificationEventRepository
   ) {
     this.client = client;
     this.configService = configService;
-    this.verificationThreadRepository = verificationThreadRepository;
-    this.verificationEventRepository = verificationEventRepository;
     this.userService = userService;
     this.serverService = serverService;
     this.detectionEventsRepository = detectionEventsRepository;
-    this.verificationService = verificationService;
-    this.adminActionService = adminActionService;
+    this.verificationEventRepository = verificationEventRepository;
   }
 
   public async initialize(guildId: string): Promise<void> {
@@ -241,7 +230,7 @@ export class NotificationManager implements INotificationManager {
   public async upsertSuspiciousUserNotification(
     member: GuildMember,
     detectionResult: DetectionResult,
-    existingMessageId?: string,
+    verificationEvent: VerificationEvent,
     sourceMessage?: Message
   ): Promise<Message | null> {
     if (!this.adminChannelId) {
@@ -255,16 +244,15 @@ export class NotificationManager implements INotificationManager {
       if (!channel) return null;
 
       // Create the base embed
-      const embed = await this.createSuspiciousUserEmbed(member, detectionResult, sourceMessage);
+      const embed = await this.createSuspiciousUserEmbed(
+        member,
+        detectionResult,
+        verificationEvent,
+        sourceMessage
+      );
 
       // Get detection events
       const detectionEvents = await this.detectionEventsRepository.findByServerAndUser(
-        member.guild.id,
-        member.id
-      );
-
-      // Check if a verification thread already exists for this user
-      const verificationThread = await this.verificationThreadRepository.findByServerAndUser(
         member.guild.id,
         member.id
       );
@@ -273,13 +261,13 @@ export class NotificationManager implements INotificationManager {
       const actionRow = this.createActionRow(
         member.id,
         detectionEvents,
-        verificationThread ?? undefined
+        verificationEvent.thread_id !== undefined
       );
 
       // If we have an existing message, update it, otherwise create new
-      if (existingMessageId) {
+      if (verificationEvent.notification_message_id) {
         try {
-          const existingMessage = await channel.messages.fetch(existingMessageId);
+          const existingMessage = await channel.messages.fetch(verificationEvent.notification_message_id);
           return await existingMessage.edit({
             embeds: [embed],
             components: [actionRow], // Use the conditionally created action row
@@ -306,7 +294,10 @@ export class NotificationManager implements INotificationManager {
    * @param member The suspicious guild member
    * @returns Promise resolving to the created thread or null if creation failed
    */
-  public async createVerificationThread(member: GuildMember): Promise<ThreadChannel | null> {
+  public async createVerificationThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent
+  ): Promise<ThreadChannel | null> {
     // Try verification channel first, fall back to admin channel if not configured
     const channelId = this.verificationChannelId || this.adminChannelId;
 
@@ -354,7 +345,9 @@ export class NotificationManager implements INotificationManager {
       });
 
       // Store thread in the database
-      await this.verificationThreadRepository.createThread(member.guild.id, member.id, thread.id);
+      await this.verificationEventRepository.update(verificationEvent.id, {
+        thread_id: thread.id,
+      });
 
       return thread;
     } catch (error) {
@@ -372,14 +365,13 @@ export class NotificationManager implements INotificationManager {
    */
   public async logActionToMessage(
     message: Message,
-    actionTaken: string,
+    actionTaken: AdminActionType,
     admin: User,
     thread?: ThreadChannel
   ): Promise<boolean> {
     try {
       // Get the existing embed
       const existingEmbed = message.embeds[0];
-      if (!existingEmbed) return false;
 
       // Create a new embed based on the existing one
       const updatedEmbed = EmbedBuilder.from(existingEmbed);
@@ -392,7 +384,7 @@ export class NotificationManager implements INotificationManager {
       let actionLogContent = `• <@${admin.id}> ${actionTaken} <t:${timestamp}:R>`;
 
       // If a thread was created, update the log entry and add/update a dedicated thread link field
-      if (thread && actionTaken.includes('created a verification thread')) {
+      if (thread && actionTaken === AdminActionType.CREATE_THREAD) {
         actionLogContent = `• <@${admin.id}> created a verification thread <t:${timestamp}:R>`; // Keep log simple
         const threadField = {
           name: 'Verification Thread',
@@ -413,18 +405,15 @@ export class NotificationManager implements INotificationManager {
       }
 
       // Update the thread status if it's a verification or ban action
-      if (message.guildId && (actionTaken.includes('verified') || actionTaken.includes('banned'))) {
-        const resolution = actionTaken.includes('verified')
-          ? ('verified' as const)
-          : ('banned' as const);
-
-        // Update thread status in database
-        if (thread) {
-          await this.resolveVerificationThread(message.guildId, thread.id, resolution, admin.id);
-        }
-
+      if (message.guildId && actionTaken === AdminActionType.VERIFY) {
         // Update embed color based on resolution
-        updatedEmbed.setColor(resolution === 'verified' ? 0x00ff00 : 0x000000);
+        updatedEmbed.setColor(0x00ff00);
+      }
+
+      // Update the thread status if it's a verification or ban action
+      if (message.guildId && actionTaken === AdminActionType.BAN) {
+        // Update embed color based on resolution
+        updatedEmbed.setColor(0x000000);
       }
 
       if (actionLogField) {
@@ -459,6 +448,7 @@ export class NotificationManager implements INotificationManager {
   private async createSuspiciousUserEmbed(
     member: GuildMember,
     detectionResult: DetectionResult,
+    verificationEvent: VerificationEvent,
     sourceMessage?: Message
   ): Promise<EmbedBuilder> {
     const accountCreatedAt = new Date(member.user.createdTimestamp);
@@ -514,7 +504,7 @@ export class NotificationManager implements INotificationManager {
 
     // Format detection history
     let detectionHistory = '';
-    if (detectionEvents && detectionEvents.length > 0) {
+    if (detectionEvents.length > 0) {
       // Sort events by date, most recent first
       const sortedEvents = detectionEvents.sort(
         (a, b) => new Date(b.detected_at).getTime() - new Date(a.detected_at).getTime()
@@ -542,24 +532,11 @@ export class NotificationManager implements INotificationManager {
       }
     }
 
-    // Get verification thread if it exists
-    const verificationThread = await this.verificationThreadRepository.findByServerAndUser(
-      member.guild.id,
-      member.id
-    );
-
     // Update embed color based on verification status if thread exists
-    if (
-      verificationThread &&
-      (verificationThread.status === 'verified' ||
-        verificationThread.status === 'rejected' ||
-        verificationThread.status === 'abandoned')
-    ) {
-      if (verificationThread.resolution === 'verified') {
-        embedColor = 0x00ff00; // Green for verified users
-      } else if (verificationThread.resolution === 'banned') {
-        embedColor = 0x000000; // Black for banned users
-      }
+    if (verificationEvent.status === VerificationStatus.VERIFIED) {
+      embedColor = 0x00ff00; // Green for verified users
+    } else if (verificationEvent.status === VerificationStatus.REJECTED) {
+      embedColor = 0x000000; // Black for banned users
     }
 
     // Create the embed
@@ -593,16 +570,15 @@ export class NotificationManager implements INotificationManager {
     }
 
     // Add verification thread status if it exists
-    if (verificationThread) {
+    if (verificationEvent.thread_id) {
       const threadStatus =
-        verificationThread.status === 'verified' ||
-        verificationThread.status === 'rejected' ||
-        verificationThread.status === 'abandoned'
-          ? `${verificationThread.resolution} by <@${verificationThread.resolved_by}>`
+        verificationEvent.status === VerificationStatus.VERIFIED ||
+        verificationEvent.status === VerificationStatus.REJECTED
+          ? `${verificationEvent.status} by <@${verificationEvent.resolved_by}>`
           : 'pending'; // Use 'pending' for unresolved states
       embed.addFields({
         name: 'Verification Status',
-        value: `[Thread](https://discord.com/channels/${member.guild.id}/${verificationThread.thread_id}) status: ${threadStatus}`,
+        value: `[Thread](https://discord.com/channels/${member.guild.id}/${verificationEvent.thread_id}) status: ${threadStatus}`,
         inline: false,
       });
     }
@@ -613,14 +589,14 @@ export class NotificationManager implements INotificationManager {
   /**
    * Creates an action row with admin action buttons
    * @param userId The ID of the user the actions apply to
-   * @param detectionEvents Optional array of detection events to determine if history button is needed
-   * @param verificationThread Optional verification thread to conditionally add 'Create Thread' button
+   * @param detectionEvents Array of detection events to determine if history button is needed
+   * @param hasThread Whether a verification thread exists for the user
    * @returns An ActionRowBuilder with buttons
    */
   private createActionRow(
     userId: string,
-    detectionEvents?: DetectionEvent[],
-    verificationThread?: VerificationThread
+    detectionEvents: DetectionEvent[],
+    hasThread: boolean
   ): ActionRowBuilder<ButtonBuilder> {
     // Create action buttons with user ID in the custom ID
     const verifyButton = new ButtonBuilder()
@@ -637,7 +613,7 @@ export class NotificationManager implements INotificationManager {
     const buttons = [verifyButton, banButton];
 
     // Add thread button ONLY if no verification event was found OR if the event exists but has no thread_id yet
-    if (!verificationThread || !verificationThread.thread_id) {
+    if (!hasThread) {
       const threadButton = new ButtonBuilder()
         .setCustomId(`thread_${userId}`)
         .setLabel('Create Thread')
@@ -646,7 +622,7 @@ export class NotificationManager implements INotificationManager {
     }
 
     // Add view history button if we have more than 5 detection events
-    if (detectionEvents && detectionEvents.length > 5) {
+    if (detectionEvents.length > 5) {
       const historyButton = new ButtonBuilder()
         .setCustomId(`history_${userId}`)
         .setLabel('View Full History')
@@ -783,82 +759,6 @@ export class NotificationManager implements INotificationManager {
   }
 
   /**
-   * Get a list of all open verification threads
-   * @param serverId The Discord server ID
-   * @returns Array of open thread IDs
-   */
-  public async getOpenVerificationThreads(serverId: string): Promise<string[]> {
-    try {
-      // Find threads with 'pending' status, as 'open' is not valid
-      const threads = await this.verificationThreadRepository.findByStatus(serverId, 'pending');
-      return threads.map((thread) => thread.thread_id);
-    } catch (error) {
-      console.error('Failed to get open verification threads:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Resolve a verification thread
-   * @param serverId The Discord server ID
-   * @param threadId The Discord thread ID
-   * @param resolution The resolution of the thread (verified, banned, ignored)
-   * @param resolvedBy The Discord ID of the user who resolved the thread
-   * @returns Whether the thread was successfully resolved
-   */
-  public async resolveVerificationThread(
-    serverId: string,
-    threadId: string,
-    resolution: 'verified' | 'banned' | 'ignored',
-    resolvedBy: string
-  ): Promise<boolean> {
-    try {
-      // Map resolution to final database status
-      // Treat 'banned' as 'rejected' for status purposes
-      // Treat 'ignored' as keeping the status 'pending' (or its current state if not pending)
-      let finalStatus: 'pending' | 'verified' | 'rejected' | 'abandoned' | undefined = undefined;
-
-      if (resolution === 'verified') {
-        finalStatus = 'verified';
-      } else if (resolution === 'banned') {
-        finalStatus = 'rejected'; // Treat ban as rejection in terms of verification status
-      } else if (resolution === 'ignored') {
-        // If ignored, we don't necessarily change the status from pending/current
-        // Fetch current status first
-        const currentThread = await this.verificationThreadRepository.findByThreadId(
-          serverId,
-          threadId
-        );
-        if (currentThread) {
-          finalStatus = currentThread.status; // Keep current status
-        } else {
-          // Should not happen, but default to pending if thread fetch fails
-          finalStatus = 'pending';
-        }
-      }
-
-      // Only proceed if we determined a valid final status
-      if (!finalStatus) {
-        console.error(`Could not determine final status for resolution: ${resolution}`);
-        return false;
-      }
-
-      const result = await this.verificationThreadRepository.updateThreadStatus(
-        serverId,
-        threadId,
-        finalStatus, // Use the determined final status
-        resolvedBy,
-        resolution
-      );
-
-      return !!result;
-    } catch (error) {
-      console.error('Failed to resolve verification thread:', error);
-      return false;
-    }
-  }
-
-  /**
    * Handle the history button interaction by sending a private ephemeral message with full detection history
    * @param interaction The button interaction
    * @param userId The Discord user ID whose history to show
@@ -883,7 +783,7 @@ export class NotificationManager implements INotificationManager {
         userId
       );
 
-      if (!detectionEvents || detectionEvents.length === 0) {
+      if (detectionEvents.length === 0) {
         await interaction.reply({
           content: 'No detection history found.',
           ephemeral: true,
@@ -920,6 +820,43 @@ export class NotificationManager implements INotificationManager {
         content: 'Failed to fetch detection history. Please try again later.',
         ephemeral: true,
       });
+      return false;
+    }
+  }
+
+  /**
+   * Look up a thread on the discord client close it, and lock it
+   * @param threadId The Discord thread ID
+   * @param resolution The resolution of the thread (verified, banned, ignored)
+   * @returns Whether the thread was successfully resolved
+   */
+  async resolveVerificationThread(
+    threadId: string,
+    resolution: VerificationStatus,
+    resolvedBy: string
+  ): Promise<boolean> {
+    try {
+      const thread = await this.client.channels.fetch(threadId);
+      if (!thread || !thread.isThread()) {
+        return false;
+      }
+
+      if (resolution === VerificationStatus.VERIFIED) {
+        await thread.send({
+          content: `This thread has been resolved. If you have any questions, please contact a moderator.`,
+        });
+      } else if (resolution === VerificationStatus.) {
+        await thread.send({
+          content: `This thread has been rejected. If you have any questions, please contact a moderator.`,
+        });
+      }
+
+      await thread.setArchived(true);
+      await thread.setLocked(true);
+
+      return true;
+    } catch (error) {
+      console.error('Failed to resolve verification thread:', error);
       return false;
     }
   }
@@ -964,7 +901,6 @@ export class NotificationManager implements INotificationManager {
         ];
         break;
 
-      case VerificationStatus.REOPENED:
       case VerificationStatus.PENDING:
         // Show all buttons
         components = [

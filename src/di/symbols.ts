@@ -27,7 +27,6 @@ export const TYPES = {
   UserRepository: Symbol.for('UserRepository'),
   ServerMemberRepository: Symbol.for('ServerMemberRepository'),
   DetectionEventsRepository: Symbol.for('DetectionEventsRepository'),
-  VerificationThreadRepository: Symbol.for('VerificationThreadRepository'),
 
   // External dependencies
   DiscordClient: Symbol.for('DiscordClient'),

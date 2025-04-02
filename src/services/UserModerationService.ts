@@ -7,7 +7,7 @@ import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { IVerificationService } from './VerificationService';
-import { VerificationEvent } from '../repositories/types';
+import { AdminActionType, VerificationEvent } from '../repositories/types';
 
 /**
  * Interface for the UserModerationService
@@ -156,7 +156,7 @@ export class UserModerationService implements IUserModerationService {
               // Log to the specific message associated with this event
               await this.notificationManager.logActionToMessage(
                 message,
-                'verified the user (via command)',
+                AdminActionType.VERIFY,
                 moderator,
                 thread
               );
@@ -204,7 +204,7 @@ export class UserModerationService implements IUserModerationService {
    */
   public async banUser(member: GuildMember, reason: string, moderator: User): Promise<boolean> {
     try {
-      // 1. Use VerificationService to handle status update (REJECTED), keep role, log action
+      // 1. Use VerificationService to handle status update (BANNED), keep role, log action
       // We attempt this first, even if there's no active event, to log the intent if possible.
       let latestVerificationEvent: VerificationEvent | null = null;
       try {
@@ -258,7 +258,7 @@ export class UserModerationService implements IUserModerationService {
               }
               await this.notificationManager.logActionToMessage(
                 message,
-                `banned the user (Reason: ${reason}) (via command)`,
+                AdminActionType.BAN,
                 moderator,
                 thread
               );

@@ -22,6 +22,7 @@ const configs = [
     },
     rules: {
       'prettier/prettier': 'warn',
+      '@typescript-eslint/no-unnecessary-condition': 'warn',
     },
   },
   // Base config for all TypeScript files
@@ -47,6 +48,7 @@ const configs = [
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/no-non-null-assertion': 'error',
+      '@typescript-eslint/no-unnecessary-condition': 'warn',
     },
   },
   // Base JavaScript recommended config
@@ -91,6 +93,7 @@ const configs = [
       'no-console': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/explicit-function-return-type': 'off',
+      '@typescript-eslint/no-unnecessary-condition': 'warn',
     },
   },
 ];

@@ -21,7 +21,7 @@ export interface IVerificationService {
   ): Promise<VerificationEvent>;
   getActiveVerification(serverId: string, userId: string): Promise<VerificationEvent | null>;
   verifyUser(member: GuildMember, adminId: string, notes?: string): Promise<VerificationEvent>;
-  rejectUser(member: GuildMember, adminId: string, notes?: string): Promise<VerificationEvent>;
+  updateBannedUser(member: GuildMember, adminId: string): Promise<VerificationEvent>;
   reopenVerification(
     member: GuildMember,
     adminId: string,
@@ -119,7 +119,7 @@ export class VerificationService implements IVerificationService {
     return updatedVerification;
   }
 
-  async rejectUser(
+  public async updateBannedUser(
     member: GuildMember,
     adminId: string,
     notes?: string
@@ -131,7 +131,7 @@ export class VerificationService implements IVerificationService {
 
     const updatedVerification = await this.verificationEventRepository.updateStatus(
       activeVerification.id,
-      VerificationStatus.REJECTED,
+      VerificationStatus.BANNED,
       adminId,
       notes
     );
@@ -141,9 +141,9 @@ export class VerificationService implements IVerificationService {
       user_id: member.user.id,
       admin_id: adminId,
       verification_event_id: activeVerification.id,
-      action_type: AdminActionType.REJECT,
+      action_type: AdminActionType.BAN,
       previous_status: activeVerification.status,
-      new_status: VerificationStatus.REJECTED,
+      new_status: VerificationStatus.BANNED,
       notes,
       action_at: new Date().toISOString(),
       metadata: {},

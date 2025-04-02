@@ -21,10 +21,6 @@ import {
   DetectionEventsRepository,
   IDetectionEventsRepository,
 } from '../repositories/DetectionEventsRepository';
-import {
-  VerificationThreadRepository,
-  IVerificationThreadRepository,
-} from '../repositories/VerificationThreadRepository';
 import { DetectionOrchestrator, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { ConfigService, IConfigService } from '../config/ConfigService';
 import { UserService } from '../services/UserService';
@@ -115,11 +111,6 @@ function configureRepositories(container: Container): void {
   container
     .bind<IDetectionEventsRepository>(TYPES.DetectionEventsRepository)
     .to(DetectionEventsRepository)
-    .inSingletonScope();
-
-  container
-    .bind<IVerificationThreadRepository>(TYPES.VerificationThreadRepository)
-    .to(VerificationThreadRepository)
     .inSingletonScope();
 
   // New repositories

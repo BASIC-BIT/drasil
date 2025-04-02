@@ -12,9 +12,9 @@ export interface UserProfileData {
   username: string;
   discriminator?: string;
   nickname?: string;
-  accountCreatedAt?: Date;
-  joinedServerAt?: Date;
-  recentMessages?: string[];
+  accountCreatedAt: Date;
+  joinedServerAt: Date;
+  recentMessages: string[];
   // Add other relevant profile fields as needed
 }
 
@@ -27,15 +27,7 @@ export interface IGPTService {
    * @param userProfile Object containing user information
    * @returns Object with result, confidence and reasons
    */
-  analyzeProfile(userProfile: {
-    userId: string;
-    username: string;
-    accountAge?: number;
-    joinedServer?: Date;
-    messageHistory?: string[];
-    avatarUrl?: string;
-    isBot?: boolean;
-  }): Promise<{
+  analyzeProfile(userProfile: UserProfileData): Promise<{
     result: 'OK' | 'SUSPICIOUS';
     confidence: number;
     reasons: string[];
@@ -85,32 +77,14 @@ export class GPTService implements IGPTService {
    * @param userProfile Object containing user information
    * @returns Object with result, confidence and reasons
    */
-  public async analyzeProfile(userProfile: {
-    userId: string;
-    username: string;
-    accountAge?: number;
-    joinedServer?: Date;
-    messageHistory?: string[];
-    avatarUrl?: string;
-    isBot?: boolean;
-  }): Promise<{
+  public async analyzeProfile(userProfile: UserProfileData): Promise<{
     result: 'OK' | 'SUSPICIOUS';
     confidence: number;
     reasons: string[];
   }> {
     try {
-      // Convert the user profile data to the format expected by the OpenAI API
-      const profileData: UserProfileData = {
-        username: userProfile.username,
-        accountCreatedAt: userProfile.accountAge
-          ? new Date(Date.now() - userProfile.accountAge * 86400000)
-          : undefined,
-        joinedServerAt: userProfile.joinedServer,
-        recentMessages: userProfile.messageHistory || [],
-      };
-
       // Call the classification method
-      const classification = await this.classifyUserProfile(profileData);
+      const classification = await this.classifyUserProfile(userProfile);
 
       // Extract confidence and reasons (mock implementation - would be enhanced with actual GPT output parsing)
       const confidence = classification === 'SUSPICIOUS' ? 0.8 : 0.2;
@@ -141,10 +115,10 @@ export class GPTService implements IGPTService {
    * @param profileData The user profile data to analyze
    * @returns Promise resolving to "OK" or "SUSPICIOUS"
    */
-  private async classifyUserProfile(profileData: UserProfileData): Promise<string> {
+  private async classifyUserProfile(userProfile: UserProfileData): Promise<string> {
     try {
       // Create a structured prompt for GPT with few-shot examples
-      const prompt = this.createPrompt(profileData);
+      const prompt = this.createPrompt(userProfile);
 
       console.log('Sending request to OpenAI with prompt:', prompt.substring(0, 400) + '...');
 

@@ -98,26 +98,10 @@ export interface DetectionEvent {
   latest_verification_event_id?: string; // UUID of the latest verification event
 }
 
-/**
- * Represents a verification thread for a suspicious user
- */
-export interface VerificationThread {
-  id: string; // UUID for the thread record
-  server_id: string; // Discord server ID
-  user_id: string; // Discord user ID
-  thread_id: string; // Discord thread ID
-  created_at: string | Date; // When the thread was created
-  status: 'pending' | 'verified' | 'rejected' | 'abandoned'; // Current thread status
-  resolved_at?: string | Date; // When the thread was resolved
-  resolved_by?: string; // Discord ID of the user who resolved the thread
-  resolution?: 'verified' | 'banned' | 'ignored'; // Resolution outcome
-}
-
 export enum VerificationStatus {
   PENDING = 'pending',
   VERIFIED = 'verified',
-  REJECTED = 'rejected',
-  REOPENED = 'reopened',
+  BANNED = 'banned',
 }
 
 export enum AdminActionType {
@@ -153,8 +137,8 @@ export interface AdminAction {
   detection_event_id?: string;
   action_type: AdminActionType;
   action_at: string;
-  previous_status?: VerificationStatus;
-  new_status?: VerificationStatus;
+  previous_status: VerificationStatus;
+  new_status: VerificationStatus;
   notes?: string;
   metadata: Record<string, string | number | boolean | null>;
 }

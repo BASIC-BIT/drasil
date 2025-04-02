@@ -15,19 +15,19 @@ import {
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject } from 'inversify';
-import { IHeuristicService } from './services/HeuristicService';
-import { UserProfileData } from './services/GPTService';
-import { IDetectionOrchestrator } from './services/DetectionOrchestrator';
-import { IRoleManager } from './services/RoleManager';
-import { INotificationManager } from './services/NotificationManager';
-import { IConfigService } from './config/ConfigService';
-import { globalConfig } from './config/GlobalConfig';
-import { ISecurityActionService } from './services/SecurityActionService';
-import { IUserModerationService } from './services/UserModerationService';
-import { TYPES } from './di/symbols';
-import { IVerificationService } from './services/VerificationService';
-import { VerificationStatus, VerificationEvent } from './repositories/types';
-import { VerificationHistoryFormatter } from './utils/VerificationHistoryFormatter';
+import { IHeuristicService } from '../services/HeuristicService';
+import { UserProfileData } from '../services/GPTService';
+import { IDetectionOrchestrator } from '../services/DetectionOrchestrator';
+import { IRoleManager } from '../services/RoleManager';
+import { INotificationManager } from '../services/NotificationManager';
+import { IConfigService } from '../config/ConfigService';
+import { globalConfig } from '../config/GlobalConfig';
+import { ISecurityActionService } from '../services/SecurityActionService';
+import { IUserModerationService } from '../services/UserModerationService';
+import { TYPES } from '../di/symbols';
+import { IVerificationService } from '../services/VerificationService';
+import { VerificationStatus, VerificationEvent } from '../repositories/types';
+import { VerificationHistoryFormatter } from '../utils/VerificationHistoryFormatter';
 import 'reflect-metadata';
 
 // Load environment variables
@@ -36,20 +36,15 @@ dotenv.config();
 /**
  * Interface for the Bot class
  */
-export interface IBot {
+export interface ICommandHandler {
   /**
-   * Start the bot and connect to Discord
+   * Register the commands for the bot
    */
-  startBot(): Promise<void>;
-
-  /**
-   * Clean up resources and disconnect from Discord
-   */
-  destroy(): Promise<void>;
+  registerCommands(): Promise<void>;
 }
 
 @injectable()
-export class Bot implements IBot {
+export class CommandHandler implements ICommandHandler {
   private client: Client;
   private heuristicService: IHeuristicService;
   private detectionOrchestrator: IDetectionOrchestrator;
@@ -151,55 +146,9 @@ export class Bot implements IBot {
           option.setName('value').setDescription('The value to set').setRequired(true)
         ),
     ].map((command) => command.toJSON());
-
-    // Set up event handlers
-    this.client.on('ready', this.handleReady.bind(this));
-    this.client.on('messageCreate', this.handleMessage.bind(this));
-    this.client.on('guildMemberAdd', this.handleGuildMemberAdd.bind(this));
-    this.client.on('interactionCreate', this.handleInteraction.bind(this));
-    this.client.on('guildCreate', this.handleGuildCreate.bind(this));
   }
 
-  /**
-   * Start the bot and connect to Discord
-   */
-  public async startBot(): Promise<void> {
-    const token = process.env.DISCORD_TOKEN;
-    if (!token) {
-      throw new Error('DISCORD_TOKEN environment variable not set');
-    }
-    await this.client.login(token);
-    console.log('Bot started and logged in!');
-  }
-
-  /**
-   * Clean up resources and disconnect from Discord
-   */
-  public async destroy(): Promise<void> {
-    if (this.client) {
-      await this.client.destroy();
-    }
-  }
-
-  private async handleReady(): Promise<void> {
-    if (!this.client.user) {
-      console.error('Client user not available');
-      return;
-    }
-
-    console.log(`Logged in as ${this.client.user.tag}!`);
-
-    // Initialize services
-    await this.configService.initialize();
-
-    // Initialize servers
-    await this.initializeServers();
-
-    // Register slash commands
-    await this.registerCommands();
-  }
-
-  private async registerCommands(): Promise<void> {
+  public async registerCommands(): Promise<void> {
     const token = process.env.DISCORD_TOKEN;
 
     if (!token) {
@@ -448,25 +397,37 @@ export class Bot implements IBot {
         throw new Error('Could not find member in guild');
       }
 
+      // Create the thread
+      const thread = await this.notificationManager.createVerificationThread(member);
+
+      if (!thread) {
+        throw new Error('Failed to create verification thread');
+      }
+
       // Get the active verification event
       const verificationEvent = await this.verificationService.getActiveVerification(
         guildId,
         userId
       );
 
-
-
-      // Create the thread
-      const thread = await this.notificationManager.createVerificationThread(member, verificationEvent);
-
-      if (!thread) {
-        throw new Error('Failed to create verification thread');
+      let updatedEvent: VerificationEvent | null = null;
+      if (verificationEvent) {
+        // Attach thread to verification event
+        updatedEvent = await this.verificationService.attachThreadToVerification(
+          verificationEvent.id,
+          thread.id
+        );
+      } else {
+        console.warn(
+          `No active verification event found for user ${userId} after creating thread ${thread.id}. Cannot link thread.`
+        );
+        // Optionally handle this case, e.g., create a new event here if needed
       }
 
       // Log the action to the message embed (adds the thread link field)
       await this.notificationManager.logActionToMessage(
         interaction.message as Message,
-        AdminActionType.CREATE_THREAD,
+        'created a verification thread',
         interaction.user,
         thread
       );

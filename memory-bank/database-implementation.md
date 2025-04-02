@@ -295,7 +295,7 @@ The database implementation is divided into several chunks, each focusing on a s
 ### Chunk H3: Detection History & Flagging
 
 - ✅ Detection events repository
-  - ✅ Create detection_events table 
+  - ✅ Create detection_events table
   - ✅ Implement methods to record detection outcomes
   - ✅ Add proper error handling with PostgrestError
   - ✅ Add comprehensive test coverage
