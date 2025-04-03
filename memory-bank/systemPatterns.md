@@ -232,6 +232,7 @@ Data access is abstracted through repositories, providing a clean separation bet
   - Handle potential Prisma errors (e.g., `PrismaClientKnownRequestError`).
 
 This pattern provides:
+
 - Centralized data access logic.
 - Simplified testing by allowing repository interfaces to be mocked.
 - Type safety provided by Prisma Client.

@@ -34,7 +34,10 @@ export class UserRepository implements IUserRepository {
     console.error(`Repository error during ${operation}:`, error);
 
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      throw new RepositoryError(`Database error during ${operation}: ${error.message} (Code: ${error.code})`, error);
+      throw new RepositoryError(
+        `Database error during ${operation}: ${error.message} (Code: ${error.code})`,
+        error
+      );
     } else if (error instanceof Error) {
       throw new RepositoryError(`Unexpected error during ${operation}: ${error.message}`, error);
     } else {
@@ -256,7 +259,11 @@ export class UserRepository implements IUserRepository {
   /**
    * Get an existing user by Discord ID or create a new one
    */
-  async getOrCreateUser(discordId: string, username?: string, accountCreatedAt?: Date): Promise<User> {
+  async getOrCreateUser(
+    discordId: string,
+    username?: string,
+    accountCreatedAt?: Date
+  ): Promise<User> {
     try {
       const user = await this.prisma.users.findUnique({
         where: { discord_id: discordId },
@@ -269,16 +276,16 @@ export class UserRepository implements IUserRepository {
           updateData.username = username;
         }
         if (accountCreatedAt && user.account_created_at?.getTime() !== accountCreatedAt.getTime()) {
-           updateData.account_created_at = accountCreatedAt;
+          updateData.account_created_at = accountCreatedAt;
         }
 
         if (Object.keys(updateData).length > 0) {
-           updateData.updated_at = new Date();
-           const updatedUser = await this.prisma.users.update({
-             where: { discord_id: discordId },
-             data: updateData,
-           });
-           return updatedUser as User;
+          updateData.updated_at = new Date();
+          const updatedUser = await this.prisma.users.update({
+            where: { discord_id: discordId },
+            data: updateData,
+          });
+          return updatedUser as User;
         }
         return user as User;
       } else {

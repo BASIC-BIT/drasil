@@ -272,7 +272,8 @@ The detailed development roadmap is tracked in the progress.md file.
 - Node.js
 - Discord.js
 - OpenAI API
-- Supabase (PostgreSQL)
+- Prisma Client (ORM for PostgreSQL)
+- Supabase (PostgreSQL Database Hosting)
 - **InversifyJS** for dependency injection
 - Jest for testing
 

@@ -6,6 +6,9 @@
   "directories": {
     "doc": "docs"
   },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
+  },
   "scripts": {
     "start": "ts-node src/index.ts",
     "dev": "ts-node-dev --respawn src/index.ts",
@@ -23,7 +26,8 @@
     "prisma:db:pull": "prisma db pull",
     "prisma:studio": "prisma studio",
     "prisma:format": "prisma format",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "db:reset:local": "npx supabase db reset --local && node scripts/create-prisma-user.js && prisma migrate reset && npm run db:seed"
   },
   "keywords": [
     "discord",
@@ -51,6 +55,7 @@
     "globals": "^16.0.0",
     "jest": "^29.5.0",
     "jest-mock-extended": "^4.0.0-beta1",
+    "pg": "^8.14.1",
     "prettier": "^3.5.3",
     "prisma": "^6.5.0",
     "ts-jest": "^29.3.0",

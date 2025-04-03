@@ -30,7 +30,10 @@ export class AdminActionRepository implements IAdminActionRepository {
     console.error(`Repository error during ${operation}:`, error);
 
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      throw new RepositoryError(`Database error during ${operation}: ${error.message} (Code: ${error.code})`, error);
+      throw new RepositoryError(
+        `Database error during ${operation}: ${error.message} (Code: ${error.code})`,
+        error
+      );
     } else if (error instanceof Error) {
       throw new RepositoryError(`Unexpected error during ${operation}: ${error.message}`, error);
     } else {

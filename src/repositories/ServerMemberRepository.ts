@@ -48,7 +48,10 @@ export class ServerMemberRepository implements IServerMemberRepository {
     console.error(`Repository error during ${operation}:`, error);
 
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      throw new RepositoryError(`Database error during ${operation}: ${error.message} (Code: ${error.code})`, error);
+      throw new RepositoryError(
+        `Database error during ${operation}: ${error.message} (Code: ${error.code})`,
+        error
+      );
     } else if (error instanceof Error) {
       throw new RepositoryError(`Unexpected error during ${operation}: ${error.message}`, error);
     } else {
@@ -63,7 +66,8 @@ export class ServerMemberRepository implements IServerMemberRepository {
     try {
       const member = await this.prisma.server_members.findUnique({
         where: {
-          server_id_user_id: { // Use the composite key defined in schema.prisma (@@id([server_id, user_id]))
+          server_id_user_id: {
+            // Use the composite key defined in schema.prisma (@@id([server_id, user_id]))
             server_id: serverId,
             user_id: userId,
           },
@@ -189,7 +193,9 @@ export class ServerMemberRepository implements IServerMemberRepository {
       return updatedMember as ServerMember | null;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-        console.warn(`Attempted to update reputation for non-existent member: Server ${serverId}, User ${userId}`);
+        console.warn(
+          `Attempted to update reputation for non-existent member: Server ${serverId}, User ${userId}`
+        );
         return null;
       }
       this.handleError(error, 'updateReputationScore');
@@ -229,7 +235,9 @@ export class ServerMemberRepository implements IServerMemberRepository {
       return updatedMember as ServerMember | null;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-        console.warn(`Attempted to update restriction status for non-existent member: Server ${serverId}, User ${userId}`);
+        console.warn(
+          `Attempted to update restriction status for non-existent member: Server ${serverId}, User ${userId}`
+        );
         return null;
       }
       this.handleError(error, 'updateRestrictionStatus');
@@ -259,7 +267,9 @@ export class ServerMemberRepository implements IServerMemberRepository {
       return updatedMember as ServerMember | null;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-        console.warn(`Attempted to increment message count for non-existent member: Server ${serverId}, User ${userId}`);
+        console.warn(
+          `Attempted to increment message count for non-existent member: Server ${serverId}, User ${userId}`
+        );
         return null;
       }
       this.handleError(error, 'incrementMessageCount');
@@ -269,26 +279,30 @@ export class ServerMemberRepository implements IServerMemberRepository {
   /**
    * Get an existing server member or create a new one
    */
-  async getOrCreateMember(serverId: string, userId: string, joinDate?: Date): Promise<ServerMember> {
+  async getOrCreateMember(
+    serverId: string,
+    userId: string,
+    joinDate?: Date
+  ): Promise<ServerMember> {
     // Remove unnecessary try/catch as called methods handle errors
     const member = await this.findByServerAndUser(serverId, userId);
 
-      if (member) {
-        // Optionally update join_date if provided and different
-        if (joinDate && member.join_date?.getTime() !== joinDate.getTime()) {
-           return await this.upsertMember(serverId, userId, { join_date: joinDate });
-        }
-        return member;
+    if (member) {
+      // Optionally update join_date if provided and different
+      if (joinDate && member.join_date?.getTime() !== joinDate.getTime()) {
+        return await this.upsertMember(serverId, userId, { join_date: joinDate });
       }
+      return member;
+    }
 
-      // Create new member
-      return await this.upsertMember(serverId, userId, {
-        join_date: joinDate || new Date(),
-        message_count: 0,
-        is_restricted: false,
-        reputation_score: 0, // Default neutral score (matches schema default)
-        verification_status: VerificationStatus.PENDING, // Use enum member
-      });
+    // Create new member
+    return await this.upsertMember(serverId, userId, {
+      join_date: joinDate || new Date(),
+      message_count: 0,
+      is_restricted: false,
+      reputation_score: 0, // Default neutral score (matches schema default)
+      verification_status: VerificationStatus.PENDING, // Use enum member
+    });
     // Errors from findByServerAndUser or upsertMember are already handled internally
   }
 }

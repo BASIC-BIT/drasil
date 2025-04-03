@@ -8,7 +8,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "./dist",
-    "rootDir": "./src",
+    // "rootDir": "./src", // Removed to allow including files outside src like prisma/seed.ts
     "resolveJsonModule": true,
     "moduleResolution": "node",
     "experimentalDecorators": true,

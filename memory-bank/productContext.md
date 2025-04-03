@@ -351,7 +351,7 @@ All roles and channels are optionally configurable during onboarding, with clear
 
 - Discord API for message monitoring and actions
 - OpenAI API for content analysis
-- Supabase for persistent storage
+- Prisma Client (ORM) for persistent storage via Supabase PostgreSQL
 - Potential future integrations with other anti-spam services
 
 ## Success Metrics
@@ -424,7 +424,7 @@ The bot's effectiveness will be measured by:
 - TypeScript for type safety and developer experience
 - Discord.js for Discord API interaction
 - OpenAI SDK for GPT integration
-- Supabase for data persistence
+- Prisma Client for data persistence (using Supabase PostgreSQL)
 - **InversifyJS for dependency injection**
   - Enables flexible component composition
   - Simplifies testing through dependency mocking

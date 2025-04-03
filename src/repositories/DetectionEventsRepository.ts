@@ -34,7 +34,10 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
     console.error(`Repository error during ${operation}:`, error);
 
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      throw new RepositoryError(`Database error during ${operation}: ${error.message} (Code: ${error.code})`, error);
+      throw new RepositoryError(
+        `Database error during ${operation}: ${error.message} (Code: ${error.code})`,
+        error
+      );
     } else if (error instanceof Error) {
       throw new RepositoryError(`Unexpected error during ${operation}: ${error.message}`, error);
     } else {
@@ -61,8 +64,15 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
    */
   async create(data: Partial<DetectionEvent>): Promise<DetectionEvent> {
     try {
-      if (!data.server_id || !data.user_id || !data.detection_type || data.confidence === undefined) {
-        throw new Error('server_id, user_id, detection_type, and confidence are required to create a detection event');
+      if (
+        !data.server_id ||
+        !data.user_id ||
+        !data.detection_type ||
+        data.confidence === undefined
+      ) {
+        throw new Error(
+          'server_id, user_id, detection_type, and confidence are required to create a detection event'
+        );
       }
 
       const eventData: Prisma.detection_eventsCreateInput = {

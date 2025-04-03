@@ -15,7 +15,7 @@ const configs = [
       globals: {
         ...globals.node,
       },
-      sourceType: 'module',
+      sourceType: 'commonjs', // Use commonjs for .js config/script files
     },
     plugins: {
       prettier,
@@ -25,6 +25,20 @@ const configs = [
       '@typescript-eslint/no-unnecessary-condition': 'warn',
       '@typescript-eslint/no-floating-promises': 'warn',
       'no-duplicate-imports': 'warn',
+    },
+  },
+  // Config for Node.js scripts in scripts/ directory
+  {
+    files: ['scripts/**/*.js'],
+    languageOptions: {
+      globals: {
+        ...globals.node, // Enable Node.js global variables
+      },
+      sourceType: 'commonjs', // Specify CommonJS module system
+    },
+    rules: {
+      // Add any script-specific rule overrides here if needed
+      'prettier/prettier': 'warn',
     },
   },
   // Base config for all TypeScript files

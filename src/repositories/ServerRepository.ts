@@ -33,7 +33,10 @@ export class ServerRepository implements IServerRepository {
 
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       // Handle specific Prisma errors if needed, e.g., P2025 for not found
-      throw new RepositoryError(`Database error during ${operation}: ${error.message} (Code: ${error.code})`, error);
+      throw new RepositoryError(
+        `Database error during ${operation}: ${error.message} (Code: ${error.code})`,
+        error
+      );
     } else if (error instanceof Error) {
       throw new RepositoryError(`Unexpected error during ${operation}: ${error.message}`, error);
     } else {

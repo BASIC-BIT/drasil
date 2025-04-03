@@ -15,7 +15,7 @@ export interface IVerificationEventRepository {
   createFromDetection(
     detectionEventId: string | null,
     serverId: string, // Explicitly require server/user IDs
-    userId: string,   // Explicitly require server/user IDs
+    userId: string, // Explicitly require server/user IDs
     status: VerificationStatus
   ): Promise<VerificationEvent>;
   updateStatus(
@@ -40,7 +40,10 @@ export class VerificationEventRepository implements IVerificationEventRepository
     console.error(`Repository error during ${operation}:`, error);
 
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      throw new RepositoryError(`Database error during ${operation}: ${error.message} (Code: ${error.code})`, error);
+      throw new RepositoryError(
+        `Database error during ${operation}: ${error.message} (Code: ${error.code})`,
+        error
+      );
     } else if (error instanceof Error) {
       throw new RepositoryError(`Unexpected error during ${operation}: ${error.message}`, error);
     } else {
@@ -120,7 +123,9 @@ export class VerificationEventRepository implements IVerificationEventRepository
   ): Promise<VerificationEvent> {
     try {
       if (!serverId || !userId) {
-        throw new RepositoryError('serverId and userId are required to create a verification event');
+        throw new RepositoryError(
+          'serverId and userId are required to create a verification event'
+        );
       }
 
       const newEventData: Prisma.verification_eventsCreateInput = {

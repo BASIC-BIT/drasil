@@ -44,7 +44,6 @@ The bot currently implements the following heuristic checks:
    npm start
    ```
 
-
 ## Available Scripts
 
 This project uses npm scripts for common development tasks:

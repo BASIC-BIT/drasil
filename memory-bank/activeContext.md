@@ -311,6 +311,7 @@ The system currently implements:
    - Type-safe configuration access
 
 8. **Repository Testing Strategy**:
+
    - **Current Status**: Repository unit tests are currently missing.
    - **Future Strategy**: Implement unit tests using Prisma mocking strategies (e.g., `jest-mock-extended`).
    - Test both success and error paths.
