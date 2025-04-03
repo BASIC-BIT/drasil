@@ -115,7 +115,10 @@ export class UserModerationService implements IUserModerationService {
         throw new Error('No active verification event found');
       }
 
+      // Set status and resolution details
       verificationEvent.status = VerificationStatus.VERIFIED;
+      verificationEvent.resolved_by = moderator.id;
+      verificationEvent.resolved_at = new Date();
       await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
 
       await this.roleManager.removeRestrictedRole(member);
@@ -155,7 +158,10 @@ export class UserModerationService implements IUserModerationService {
         throw new Error('No active verification event found');
       }
 
+      // Set status and resolution details
       verificationEvent.status = VerificationStatus.BANNED;
+      verificationEvent.resolved_by = moderator.id;
+      verificationEvent.resolved_at = new Date();
       await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
 
       await member.ban({ reason });

@@ -236,6 +236,9 @@ export class SecurityActionService implements ISecurityActionService {
           return false; // Stop if restriction/event creation fails
         }
 
+        //Restrict the user
+        await this.userModerationService.restrictUser(member);
+
         // Create a NEW notification message
         const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
           member,

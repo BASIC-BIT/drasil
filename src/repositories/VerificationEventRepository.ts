@@ -18,12 +18,6 @@ export interface IVerificationEventRepository {
     userId: string, // Explicitly require server/user IDs
     status: VerificationStatus
   ): Promise<VerificationEvent>;
-  updateStatus(
-    id: string,
-    status: VerificationStatus,
-    adminId?: string,
-    notes?: string
-  ): Promise<VerificationEvent | null>; // Return null if not found
   getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]>;
   findById(id: string): Promise<VerificationEvent | null>;
   update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent | null>; // Return null if not found
@@ -165,43 +159,6 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
-  async updateStatus(
-    id: string,
-    status: VerificationStatus,
-    adminId?: string,
-    notes?: string
-  ): Promise<VerificationEvent | null> {
-    try {
-      const now = new Date();
-      const updateData: Prisma.verification_eventsUpdateInput = {
-        status: status as verification_status, // Cast to Prisma enum
-        updated_at: now,
-        notes: notes,
-      };
-
-      if (status === VerificationStatus.VERIFIED || status === VerificationStatus.BANNED) {
-        updateData.resolved_at = now;
-        updateData.resolved_by = adminId;
-      } else {
-        // Ensure resolved fields are nullified if status changes back to pending
-        updateData.resolved_at = null;
-        updateData.resolved_by = null;
-      }
-
-      const updatedEvent = await this.prisma.verification_events.update({
-        where: { id },
-        data: updateData,
-      });
-      return updatedEvent as VerificationEvent | null; // Cast needed if type differs
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-        console.warn(`Attempted to update status for non-existent verification event: ${id}`);
-        return null;
-      }
-      this.handleError(error, 'updateStatus');
-    }
-  }
-
   async getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]> {
     // Re-implement using findByUserAndServer
     return this.findByUserAndServer(userId, serverId, { limit: 100 });
@@ -209,15 +166,34 @@ export class VerificationEventRepository implements IVerificationEventRepository
 
   async update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent | null> {
     try {
+      const now = new Date();
       // Map partial VerificationEvent to Prisma update input
       const updateData: Prisma.verification_eventsUpdateInput = {
+        // Existing fields
         thread_id: data.thread_id,
         notification_message_id: data.notification_message_id,
         notes: data.notes,
         metadata: (data.metadata as Prisma.InputJsonValue) ?? undefined, // Handle potential null/undefined
-        updated_at: new Date(), // Always update timestamp
-        // Add other updatable fields from VerificationEvent if needed
+        updated_at: now, // Always update timestamp
       };
+
+      // Handle status and resolution fields if provided
+      if (data.status !== undefined) {
+        updateData.status = data.status as verification_status; // Cast to Prisma enum
+
+        if (
+          data.status === VerificationStatus.VERIFIED ||
+          data.status === VerificationStatus.BANNED
+        ) {
+          // Set resolution fields if status is resolved
+          updateData.resolved_at = data.resolved_at instanceof Date ? data.resolved_at : now; // Use provided date or now
+          updateData.resolved_by = data.resolved_by; // Use provided admin ID
+        } else if (data.status === VerificationStatus.PENDING) {
+          // Nullify resolution fields if status is pending
+          updateData.resolved_at = null;
+          updateData.resolved_by = null;
+        }
+      }
 
       const updatedEvent = await this.prisma.verification_events.update({
         where: { id },
