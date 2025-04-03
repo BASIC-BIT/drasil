@@ -108,7 +108,8 @@ export class SecurityActionService implements ISecurityActionService {
       await this.userRepository.getOrCreateUser(userId, username);
 
       // Finally, ensure server_member record exists
-      await this.serverMemberRepository.getOrCreateMember(serverId, userId, joinedAt);
+      // Pass Date object directly, or undefined if null
+      await this.serverMemberRepository.getOrCreateMember(serverId, userId, joinedAt ? new Date(joinedAt) : undefined);
     } catch (error) {
       console.error('Failed to ensure entities exist:', error);
       throw error;
@@ -213,8 +214,11 @@ export class SecurityActionService implements ISecurityActionService {
         // Create a NEW VerificationEvent (this also restricts the user)
         let newVerificationEvent: VerificationEvent | null = null;
         try {
+          // Add missing serverId and userId arguments
           newVerificationEvent = await this.verificationEventRepository.createFromDetection(
             detectionEvent.id,
+            member.guild.id, // serverId
+            member.id,       // userId
             VerificationStatus.PENDING
           );
           console.log(
@@ -348,8 +352,11 @@ export class SecurityActionService implements ISecurityActionService {
         // Create a NEW VerificationEvent (this also restricts the user)
         let newVerificationEvent: VerificationEvent | null = null;
         try {
+          // Add missing serverId and userId arguments
           newVerificationEvent = await this.verificationEventRepository.createFromDetection(
             detectionEvent.id,
+            member.guild.id, // serverId
+            member.id,       // userId
             VerificationStatus.PENDING
           );
           console.log(

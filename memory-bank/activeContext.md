@@ -132,14 +132,16 @@ The project is currently focused on implementing the core functionality of the D
   - Improved data validation before database operations
   - Documented best practices in supabase-error-handling.md
 
-- ✅ **Database Repository Implementation**:
-  - Implemented ServerRepository with tests
-  - Implemented UserRepository with tests
-  - Implemented ServerMemberRepository with tests
-  - Comprehensive test coverage for all repositories
+- ✅ **Database Repository Implementation (Supabase Client)**:
+  - Implemented ServerRepository with tests (Note: Tests later found to be missing)
+  - Implemented UserRepository with tests (Note: Tests later found to be missing)
+  - Implemented ServerMemberRepository with tests (Note: Tests later found to be missing)
+  - Comprehensive test coverage for all repositories (Note: Documentation inaccurate, tests missing)
   - Fixed method chaining issues in Supabase mocks
   - Added proper error handling for all database operations
   - Added proper cleanup in test lifecycle hooks
+- ✅ **Prisma Migration**: Migrated all repositories (`ServerRepository`, `UserRepository`, `ServerMemberRepository`, `DetectionEventsRepository`, `VerificationEventRepository`, `AdminActionRepository`) to use Prisma Client instead of Supabase Client. Updated DI container.
+- ✅ **Prisma Migration**: Migrated all repositories (`ServerRepository`, `UserRepository`, `ServerMemberRepository`, `DetectionEventsRepository`, `VerificationEventRepository`, `AdminActionRepository`) to use Prisma Client instead of Supabase Client. Updated DI container.
 
 ### In Progress
 
@@ -211,13 +213,13 @@ The system currently implements:
      - Updates services in real-time
      - Eliminates need for environment variables
 
-6. **Data Access**:
-   - **Repository Pattern**: Abstraction for data operations
-   - **Supabase Integration**: PostgreSQL database access
-   - **Server Configuration**: Persistent storage for settings
-   - **User Repository**: Manages Discord users across servers
-   - **Server Member Repository**: Manages user data in specific servers
-   - **User Service**: Coordinates operations between repositories
+6. **Data Access (Prisma)**:
+   - **Repository Pattern**: Abstraction for data operations, implemented using Prisma Client.
+   - **Prisma Client**: ORM managing database connections and queries to Supabase PostgreSQL.
+   - **Server Configuration**: Persistent storage for settings via `ServerRepository`.
+   - **User Repository**: Manages Discord users across servers.
+   - **Server Member Repository**: Manages user data in specific servers.
+   - **Detection/Verification/Admin Repositories**: Manage related event/action data.
 
 ## Active Decisions & Considerations
 
@@ -309,22 +311,16 @@ The system currently implements:
    - Type-safe configuration access
 
 8. **Repository Testing Strategy**:
+   - **Current Status**: Repository unit tests are currently missing.
+   - **Future Strategy**: Implement unit tests using Prisma mocking strategies (e.g., `jest-mock-extended`).
+   - Test both success and error paths.
+   - Use InversifyJS test utilities (once implemented/found) for dependency injection mocking.
 
-   - Mock Supabase client for unit testing
-   - Properly mock method chaining for Supabase operations
-   - Use `mockResolvedValue` for async responses
-   - Add comprehensive cleanup in test lifecycle hooks
-   - Test both success and error cases for all operations
-   - Use `expect.objectContaining()` for dynamic fields like timestamps
-   - Separate mock setups for multiple operations in the same test
-
-9. **Repository Pattern Implementation**:
-   - Clear separation of concerns between repositories
-   - DetectionOrchestrator responsible for ensuring entities exist
-   - Entity-specific repositories focused on their own domain
-   - Improved error handling and logging for debugging
-   - Proper foreign key relationships maintained
-   - Simplified code with clear responsibilities
+9. **Repository Pattern Implementation (Prisma)**:
+   - Repositories implement interfaces (e.g., `IServerRepository`).
+   - Repositories inject and use `PrismaClient`.
+   - Clear separation of concerns maintained.
+   - Error handling uses `RepositoryError` wrapper around Prisma errors.
 
 ### Open Questions & Considerations
 
@@ -388,12 +384,13 @@ The system currently implements:
 
    - ✅ Document Supabase error handling best practices
    - ✅ Document server configuration command
-   - ✅ Document InversifyJS testing approach
-   - 🔄 Update README with setup instructions
-   - 🔄 Document database schema and migrations
-   - 🔄 Create admin guide for bot configuration
-   - 🔄 Document environment variables and configuration options
-   - 🔄 Create developer guide for extending the bot
+   - ✅ Document InversifyJS testing approach (Note: Needs review based on actual test setup)
+   - ✅ Updated Memory Bank (`techContext.md`, `systemPatterns.md`) for Prisma migration.
+   - 🔄 Update README with setup instructions (including Prisma).
+   - 🔄 Document database schema (`prisma/schema.prisma`) and migration process (`prisma migrate dev`).
+   - 🔄 Create admin guide for bot configuration.
+   - 🔄 Document environment variables (`DATABASE_URL`).
+   - 🔄 Create developer guide for extending the bot (including Prisma usage).
 
 4. **Alpha Release Critical Components**:
    - ❌ User flags repository (Cancelled - integrating into existing tables)

@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 /**
  * TypeScript types for database entities
  */
@@ -56,15 +57,17 @@ export interface User {
 export interface ServerMember {
   server_id: string; // Discord server ID (primary key with user_id)
   user_id: string; // Discord user ID (primary key with server_id)
-  join_date: string | null; // When the user joined the server
+  join_date: Date | null; // When the user joined the server (Use Date type)
   reputation_score?: number; // Server-specific reputation score (-1.0 to 1.0)
   is_restricted?: boolean; // Whether user is currently restricted
   last_verified_at: string | null; // Last time user was verified
   last_message_at: string | null; // Last time user sent a message
   message_count?: number; // Total message count in server
-  restriction_reason: string | null; // Reason why the user was restricted
-  last_status_change: string | null; // When the status was last changed
-  moderator_id: string | null; // Discord ID of the moderator who changed the status
+  verification_status?: VerificationStatus; // Add missing status field (use enum from below)
+  last_status_change: Date | null; // When the status was last changed (Use Date type)
+  // Remove fields not present in the database schema
+  // restriction_reason: string | null;
+  // moderator_id: string | null;
   created_by: string | null; // Discord ID of who created the record
   updated_by: string | null; // Discord ID of who last updated the record
 }
@@ -84,6 +87,7 @@ export interface DetectionEvent {
   id: string; // UUID for the event
   server_id: string; // Discord server ID
   user_id: string; // Discord user ID
+  thread_id: string | null; // Discord thread ID if applicable
   message_id: string | null; // Discord message ID
   channel_id: string | null; // Discord channel ID where the message was sent
   detection_type: DetectionType;
@@ -115,12 +119,12 @@ export interface VerificationEvent {
   thread_id: string | null;
   notification_message_id: string | null;
   status: VerificationStatus;
-  created_at: string;
-  updated_at: string;
-  resolved_at: string | null;
+  created_at: Date; // Use Date type
+  updated_at: Date; // Use Date type
+  resolved_at: Date | null; // Use Date type
   resolved_by: string | null;
   notes: string | null;
-  metadata: Record<string, string | number | boolean | null>;
+  metadata: Prisma.JsonValue | null; // Align with Prisma JSON type
 }
 
 export interface AdminAction {
@@ -130,17 +134,19 @@ export interface AdminAction {
   admin_id: string;
   verification_event_id: string;
   action_type: AdminActionType;
-  action_at: string;
+  action_at: Date; // Use Date type
   previous_status: VerificationStatus;
   new_status: VerificationStatus;
   notes: string | null;
-  metadata: Record<string, string | number | boolean | null>;
+  metadata: Prisma.JsonValue | null; // Align with Prisma JSON type
 }
 
 export interface VerificationEventWithActions extends VerificationEvent {
   actions: AdminAction[];
 }
 
-export interface AdminActionCreate extends Omit<AdminAction, 'id' | 'created_at' | 'updated_at'> {
-  id: string | null;
+export interface AdminActionCreate extends Omit<AdminAction, 'id' | 'action_at' | 'metadata'> {
+  // Omit fields handled automatically or differently on create
+  detection_event_id?: string | null; // Add optional field
+  metadata?: Prisma.JsonValue | null; // Allow metadata on create
 }

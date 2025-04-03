@@ -44,6 +44,29 @@ The bot currently implements the following heuristic checks:
    npm start
    ```
 
+
+## Available Scripts
+
+This project uses npm scripts for common development tasks:
+
+- `npm start`: Runs the bot using `ts-node` (for development).
+- `npm run dev`: Runs the bot using `ts-node-dev` which automatically restarts on file changes.
+- `npm test`: Runs the Jest test suite.
+- `npm run test:watch`: Runs Jest in watch mode.
+- `npm run build`: Compiles TypeScript code to JavaScript in the `dist/` directory.
+- `npm run build:watch`: Compiles TypeScript in watch mode.
+- `npm run clean`: Removes the `dist/` directory.
+- `npm run lint`: Lints the codebase using ESLint and attempts to fix issues.
+- `npm run format`: Formats the codebase using Prettier.
+- `npm run format:check`: Checks formatting without making changes.
+- `npm run check`: Runs both `format:check` and `lint`.
+- `npm run prisma:generate`: Generates the Prisma Client based on the schema.
+- `npm run prisma:migrate:dev`: Creates and applies database migrations based on schema changes (for development).
+- `npm run prisma:db:pull`: Introspects the database and updates the Prisma schema.
+- `npm run prisma:studio`: Opens the Prisma Studio GUI to view and edit database data.
+- `npm run prisma:format`: Formats the `prisma/schema.prisma` file.
+- `npm run db:seed`: Executes the seed script (`prisma/seed.ts`) to populate the database.
+
 ## Usage
 
 - Invite the bot to your server.

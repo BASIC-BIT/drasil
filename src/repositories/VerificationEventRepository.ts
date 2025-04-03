@@ -1,8 +1,8 @@
 import { injectable, inject } from 'inversify';
-import { SupabaseClient } from '@supabase/supabase-js';
+import { Prisma, PrismaClient, verification_status } from '@prisma/client'; // Import Prisma types
 import { TYPES } from '../di/symbols';
-import { SupabaseRepository, RepositoryError } from './BaseRepository';
-import { VerificationEvent, VerificationStatus } from './types';
+import { RepositoryError } from './BaseRepository';
+import { VerificationEvent, VerificationStatus } from './types'; // Use local enum
 
 export interface IVerificationEventRepository {
   findByUserAndServer(
@@ -14,6 +14,8 @@ export interface IVerificationEventRepository {
   findByDetectionEvent(detectionEventId: string): Promise<VerificationEvent[]>;
   createFromDetection(
     detectionEventId: string | null,
+    serverId: string, // Explicitly require server/user IDs
+    userId: string,   // Explicitly require server/user IDs
     status: VerificationStatus
   ): Promise<VerificationEvent>;
   updateStatus(
@@ -21,22 +23,40 @@ export interface IVerificationEventRepository {
     status: VerificationStatus,
     adminId?: string,
     notes?: string
-  ): Promise<VerificationEvent>;
+  ): Promise<VerificationEvent | null>; // Return null if not found
   getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]>;
   findById(id: string): Promise<VerificationEvent | null>;
-  update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent>;
+  update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent | null>; // Return null if not found
 }
 
 @injectable()
-export class VerificationEventRepository
-  extends SupabaseRepository<VerificationEvent>
-  implements IVerificationEventRepository
-{
-  protected readonly supabaseClient: SupabaseClient;
+export class VerificationEventRepository implements IVerificationEventRepository {
+  constructor(@inject(TYPES.PrismaClient) private prisma: PrismaClient) {}
 
-  constructor(@inject(TYPES.SupabaseClient) supabaseClient: SupabaseClient) {
-    super('verification_events', supabaseClient);
-    this.supabaseClient = supabaseClient;
+  /**
+   * Handle errors from Prisma operations
+   */
+  private handleError(error: unknown, operation: string): never {
+    console.error(`Repository error during ${operation}:`, error);
+
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      throw new RepositoryError(`Database error during ${operation}: ${error.message} (Code: ${error.code})`, error);
+    } else if (error instanceof Error) {
+      throw new RepositoryError(`Unexpected error during ${operation}: ${error.message}`, error);
+    } else {
+      throw new RepositoryError(`Unknown error during ${operation}`, error);
+    }
+  }
+
+  async findById(id: string): Promise<VerificationEvent | null> {
+    try {
+      const event = await this.prisma.verification_events.findUnique({
+        where: { id },
+      });
+      return event as VerificationEvent | null; // Cast needed if type differs
+    } catch (error) {
+      this.handleError(error, 'findById');
+    }
   }
 
   async findByUserAndServer(
@@ -45,33 +65,18 @@ export class VerificationEventRepository
     options: { limit?: number; offset?: number } = {}
   ): Promise<VerificationEvent[]> {
     try {
-      let query = this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('user_id', userId)
-        .eq('server_id', serverId)
-        .order('created_at', { ascending: false });
-
-      if (options.limit !== undefined) {
-        query = query.limit(options.limit);
-      }
-      if (options.offset !== undefined) {
-        query = query.range(options.offset, options.offset + (options.limit || 10) - 1);
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
-        throw new RepositoryError(
-          `Error finding verification events for user ${userId} in server ${serverId}`,
-          error
-        );
-      }
-
-      return data as VerificationEvent[];
+      const events = await this.prisma.verification_events.findMany({
+        where: {
+          user_id: userId,
+          server_id: serverId,
+        },
+        orderBy: { created_at: 'desc' },
+        take: options.limit,
+        skip: options.offset,
+      });
+      return (events as VerificationEvent[]) || []; // Cast needed if type differs
     } catch (error) {
-      this.handleError(error as Error, 'findByUserAndServer');
-      return [];
+      this.handleError(error, 'findByUserAndServer');
     }
   }
 
@@ -80,136 +85,78 @@ export class VerificationEventRepository
     serverId: string
   ): Promise<VerificationEvent | null> {
     try {
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('user_id', userId)
-        .eq('server_id', serverId)
-        .eq('status', VerificationStatus.PENDING)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
-
-      if (error) {
-        if (error.code === 'PGRST116') {
-          return null;
-        }
-        throw new RepositoryError(
-          `Error finding active verification event for user ${userId} in server ${serverId}`,
-          error
-        );
-      }
-
-      return data as VerificationEvent;
+      const event = await this.prisma.verification_events.findFirst({
+        where: {
+          user_id: userId,
+          server_id: serverId,
+          status: VerificationStatus.PENDING, // Use local enum
+        },
+        orderBy: { created_at: 'desc' },
+      });
+      return event as VerificationEvent | null; // Cast needed if type differs
     } catch (error) {
-      this.handleError(error as Error, 'findActiveByUserAndServer');
-      return null;
+      this.handleError(error, 'findActiveByUserAndServer');
     }
   }
 
   async findByDetectionEvent(detectionEventId: string): Promise<VerificationEvent[]> {
     try {
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('detection_event_id', detectionEventId)
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        throw new RepositoryError(
-          `Error finding verification events for detection event ${detectionEventId}`,
-          error
-        );
-      }
-
-      return data as VerificationEvent[];
+      const events = await this.prisma.verification_events.findMany({
+        where: { detection_event_id: detectionEventId },
+        orderBy: { created_at: 'desc' },
+      });
+      return (events as VerificationEvent[]) || []; // Cast needed if type differs
     } catch (error) {
-      this.handleError(error as Error, 'findByDetectionEvent');
-      return [];
+      this.handleError(error, 'findByDetectionEvent');
     }
   }
 
+  // Modified: Requires serverId and userId explicitly now
   async createFromDetection(
     detectionEventId: string | null,
+    serverId: string,
+    userId: string,
     status: VerificationStatus
   ): Promise<VerificationEvent> {
     try {
-      let fetchedServerId: string | null = null;
-      let fetchedUserId: string | null = null;
-
-      if (detectionEventId) {
-        const { data: detectionEvent, error: detectionError } = await this.supabaseClient
-          .from('detection_events')
-          .select('server_id, user_id')
-          .eq('id', detectionEventId)
-          .single();
-
-        if (detectionError) {
-          throw new RepositoryError(
-            `Error finding detection event ${detectionEventId}`,
-            detectionError
-          );
-        }
-
-        if (!detectionEvent.server_id || !detectionEvent.user_id) {
-          throw new RepositoryError(
-            `Detection event ${detectionEventId} is missing required fields (server_id or user_id)`
-          );
-        }
-        fetchedServerId = detectionEvent.server_id;
-        fetchedUserId = detectionEvent.user_id;
+      if (!serverId || !userId) {
+        throw new RepositoryError('serverId and userId are required to create a verification event');
       }
 
-      if (!fetchedServerId || !fetchedUserId) {
-        throw new RepositoryError(
-          'Cannot create verification event: Missing server_id or user_id context.'
-        );
-      }
-
-      const now = new Date().toISOString();
-      const newEventData: Omit<VerificationEvent, 'id' | 'updated_at'> & { updated_at?: string } = {
-        server_id: fetchedServerId,
-        user_id: fetchedUserId,
-        detection_event_id: detectionEventId,
-        status,
-        created_at: now,
-        metadata: {},
-        thread_id: null,
-        notification_message_id: null,
-        resolved_at: null,
-        resolved_by: null,
-        notes: null,
+      const newEventData: Prisma.verification_eventsCreateInput = {
+        servers: { connect: { guild_id: serverId } },
+        users: { connect: { discord_id: userId } },
+        detection_events_verification_events_detection_event_idTodetection_events: detectionEventId
+          ? { connect: { id: detectionEventId } }
+          : undefined,
+        status: status as verification_status, // Cast to Prisma enum
+        metadata: Prisma.JsonNull,
+        // created_at, updated_at handled by default
       };
 
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .insert(newEventData)
-        .select()
-        .single();
+      const created = await this.prisma.verification_events.create({
+        data: newEventData,
+      });
 
-      if (error) {
-        throw new RepositoryError('Error creating verification event', error);
-      }
-
-      if (!data) {
-        throw new RepositoryError('No data returned when creating verification event');
-      }
-
-      if (detectionEventId && data) {
-        const { error: updateError } = await this.supabaseClient
-          .from('detection_events')
-          .update({ latest_verification_event_id: data.id })
-          .eq('id', detectionEventId);
-
-        if (updateError) {
-          console.error('Error updating detection event with verification event ID:', updateError);
+      // Update the related detection event if applicable
+      if (detectionEventId && created) {
+        try {
+          await this.prisma.detection_events.update({
+            where: { id: detectionEventId },
+            data: { latest_verification_event_id: created.id },
+          });
+        } catch (updateError) {
+          // Log error but don't fail the verification creation
+          console.error(
+            `Failed to link verification event ${created.id} to detection event ${detectionEventId}:`,
+            updateError
+          );
         }
       }
 
-      return data as VerificationEvent;
+      return created as VerificationEvent; // Cast needed if type differs
     } catch (error) {
-      this.handleError(error as Error, 'createFromDetection');
-      throw error;
+      this.handleError(error, 'createFromDetection');
     }
   }
 
@@ -218,86 +165,66 @@ export class VerificationEventRepository
     status: VerificationStatus,
     adminId?: string,
     notes?: string
-  ): Promise<VerificationEvent> {
+  ): Promise<VerificationEvent | null> {
     try {
-      const now = new Date().toISOString();
-      const updateData: Partial<VerificationEvent> = {
-        status,
+      const now = new Date();
+      const updateData: Prisma.verification_eventsUpdateInput = {
+        status: status as verification_status, // Cast to Prisma enum
         updated_at: now,
-        notes: notes || undefined,
+        notes: notes,
       };
 
       if (status === VerificationStatus.VERIFIED || status === VerificationStatus.BANNED) {
         updateData.resolved_at = now;
-        updateData.resolved_by = adminId || null;
+        updateData.resolved_by = adminId;
+      } else {
+        // Ensure resolved fields are nullified if status changes back to pending
+        updateData.resolved_at = null;
+        updateData.resolved_by = null;
       }
 
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .update(updateData)
-        .eq('id', id)
-        .select()
-        .single();
-
-      if (error) {
-        throw new RepositoryError(`Error updating verification event ${id}`, error);
-      }
-
-      if (!data) {
-        throw new RepositoryError(`Verification event ${id} not found`);
-      }
-
-      return data as VerificationEvent;
+      const updatedEvent = await this.prisma.verification_events.update({
+        where: { id },
+        data: updateData,
+      });
+      return updatedEvent as VerificationEvent | null; // Cast needed if type differs
     } catch (error) {
-      this.handleError(error as Error, 'updateStatus');
-      throw error;
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        console.warn(`Attempted to update status for non-existent verification event: ${id}`);
+        return null;
+      }
+      this.handleError(error, 'updateStatus');
     }
   }
 
   async getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]> {
+    // Re-implement using findByUserAndServer
     return this.findByUserAndServer(userId, serverId, { limit: 100 });
   }
 
-  async findById(id: string): Promise<VerificationEvent | null> {
+  async update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent | null> {
     try {
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('id', id)
-        .single();
+      // Map partial VerificationEvent to Prisma update input
+      const updateData: Prisma.verification_eventsUpdateInput = {
+        thread_id: data.thread_id,
+        notification_message_id: data.notification_message_id,
+        notes: data.notes,
+        metadata: (data.metadata as Prisma.InputJsonValue) ?? undefined, // Handle potential null/undefined
+        updated_at: new Date(), // Always update timestamp
+        // Add other updatable fields from VerificationEvent if needed
+      };
 
-      if (error) {
-        throw new RepositoryError(`Error finding verification event ${id}`, error);
-      }
-
-      return data as VerificationEvent | null;
+      const updatedEvent = await this.prisma.verification_events.update({
+        where: { id },
+        data: updateData,
+      });
+      return updatedEvent as VerificationEvent | null; // Cast needed if type differs
     } catch (error) {
-      this.handleError(error as Error, 'findById');
-      return null;
-    }
-  }
-
-  async update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent> {
-    try {
-      const { data: updatedData, error } = await this.supabaseClient
-        .from(this.tableName)
-        .update(data)
-        .eq('id', id)
-        .select()
-        .single();
-
-      if (error) {
-        throw new RepositoryError(`Error updating verification event ${id}`, error);
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        console.warn(`Attempted to update non-existent verification event: ${id}`);
+        return null;
       }
-
-      if (!updatedData) {
-        throw new RepositoryError(`Verification event ${id} not found`);
-      }
-
-      return updatedData as VerificationEvent;
-    } catch (error) {
-      this.handleError(error as Error, 'update');
-      throw error;
+      this.handleError(error, 'update');
     }
   }
 }

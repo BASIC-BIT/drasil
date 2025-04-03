@@ -103,7 +103,7 @@ export class ThreadManager implements IThreadManager {
       await this.serverMemberRepository.getOrCreateMember(
         member.guild.id,
         member.id,
-        member.joinedAt?.toISOString()
+        member.joinedAt ?? undefined // Pass Date object or undefined
       );
 
       // Create a thread for verification

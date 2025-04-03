@@ -43,7 +43,7 @@ The Discord Anti-Spam Bot follows a modular, service-oriented architecture with 
 The central configuration point for InversifyJS dependency injection:
 
 - Configures the InversifyJS container with all dependencies
-- Binds external dependencies (Discord client, OpenAI, Supabase)
+- Binds external dependencies (Discord client, OpenAI, PrismaClient)
 - Registers repositories in singleton scope
 - Registers services in singleton or transient scope as appropriate
 - Returns the configured container for use in the application
@@ -66,28 +66,23 @@ The central orchestrator that:
 
 ### 3. Repository Pattern
 
-#### BaseRepository (BaseRepository.ts)
+#### Repository Interfaces (e.g., IServerRepository)
 
-- Interface and abstract class defining common CRUD operations (findById, findMany, create, update, delete)
-- Provides a consistent contract for all repositories
-- Enables type-safe database operations with generics
+- Define the contract for data access operations specific to an entity.
+- Ensure consistency and allow for dependency injection.
 
-#### SupabaseRepository (SupabaseRepository.ts)
+#### Repository Implementations (e.g., ServerRepository.ts)
 
-- Extends AbstractBaseRepository with Supabase-specific implementation
-- Handles PostgrestError with custom RepositoryError class
-- Implements all CRUD operations using Supabase client
-- Provides additional utility methods like count()
-- Marked as @injectable() for dependency injection
-- Receives SupabaseClient via @inject() decorator
+- Implement the corresponding repository interface.
+- Directly inject and use `PrismaClient` for database operations.
+- Handle Prisma-specific errors and map them to `RepositoryError` if needed.
+- Marked as `@injectable()` for dependency injection.
+- Receive `PrismaClient` via `@inject(TYPES.PrismaClient)` decorator in the constructor.
 
-#### ServerRepository (ServerRepository.ts)
+#### BaseRepository.ts
 
-- Extends SupabaseRepository for server-specific operations
-- Provides methods like findByGuildId, upsertByGuildId, updateSettings, setActive, findAllActive
-- Manages server configuration persistence in the database
-- Implements IServerRepository interface
-- Marked as @injectable() for dependency injection
+- Contains the `RepositoryError` class for consistent error handling.
+- (The `IBaseRepository` interface and `AbstractBaseRepository` class are no longer strictly necessary as Prisma Client provides strong typing, but interfaces like `IServerRepository` are still used for DI contracts).
 
 ### 4. Service Layer
 
@@ -194,7 +189,7 @@ Services are now integrated with full dependency injection using InversifyJS. Th
 - Symbol-based dependency identification
 - Constructor injection for dependencies
 - Proper scoping (singleton vs transient) for services
-- External dependency injection (Discord, OpenAI, Supabase)
+- External dependency injection (Discord, OpenAI, PrismaClient)
 - Testable architecture with mock injections
 
 Example:
@@ -225,20 +220,21 @@ const bot = container.get<IBot>(TYPES.Bot);
 await bot.startBot();
 ```
 
-### 2. Repository Pattern
+### 2. Repository Pattern (with Prisma)
 
-Data access is abstracted through repositories, providing a clean separation between business logic and data storage. The implementation follows a three-layer approach:
+Data access is abstracted through repositories, providing a clean separation between business logic and data storage.
 
-1. **BaseRepository**: Interface and abstract class defining the contract
-2. **SupabaseRepository**: Generic implementation for Supabase
-3. **ServerRepository**: Specific implementation for server entities
+- **Interfaces (e.g., `IServerRepository`)**: Define the contract for data operations required by services.
+- **Implementations (e.g., `ServerRepository.ts`)**:
+  - Implement the repository interface.
+  - Inject `PrismaClient` via the constructor.
+  - Use `PrismaClient` methods (`findUnique`, `create`, `update`, `findMany`, etc.) to interact with the database.
+  - Handle potential Prisma errors (e.g., `PrismaClientKnownRequestError`).
 
 This pattern provides:
-
-- Swappable data sources
-- Centralized data access logic
-- Simplified testing through mocking
-- Type safety with generics
+- Centralized data access logic.
+- Simplified testing by allowing repository interfaces to be mocked.
+- Type safety provided by Prisma Client.
 
 ### 3. Service Pattern
 

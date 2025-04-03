@@ -1,8 +1,8 @@
 import { injectable, inject } from 'inversify';
-import { SupabaseClient } from '@supabase/supabase-js';
+import { Prisma, PrismaClient, admin_action_type, verification_status } from '@prisma/client'; // Import Prisma types
 import { TYPES } from '../di/symbols';
-import { SupabaseRepository, RepositoryError } from './BaseRepository';
-import { AdminAction, AdminActionCreate } from './types';
+import { RepositoryError } from './BaseRepository';
+import { AdminAction, AdminActionCreate } from './types'; // Use local types
 
 export interface IAdminActionRepository {
   findByUserAndServer(
@@ -20,12 +20,22 @@ export interface IAdminActionRepository {
 }
 
 @injectable()
-export class AdminActionRepository
-  extends SupabaseRepository<AdminAction>
-  implements IAdminActionRepository
-{
-  constructor(@inject(TYPES.SupabaseClient) supabaseClient: SupabaseClient) {
-    super('admin_actions', supabaseClient);
+export class AdminActionRepository implements IAdminActionRepository {
+  constructor(@inject(TYPES.PrismaClient) private prisma: PrismaClient) {}
+
+  /**
+   * Handle errors from Prisma operations
+   */
+  private handleError(error: unknown, operation: string): never {
+    console.error(`Repository error during ${operation}:`, error);
+
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      throw new RepositoryError(`Database error during ${operation}: ${error.message} (Code: ${error.code})`, error);
+    } else if (error instanceof Error) {
+      throw new RepositoryError(`Unexpected error during ${operation}: ${error.message}`, error);
+    } else {
+      throw new RepositoryError(`Unknown error during ${operation}`, error);
+    }
   }
 
   async findByUserAndServer(
@@ -34,33 +44,18 @@ export class AdminActionRepository
     options: { limit?: number; offset?: number } = {}
   ): Promise<AdminAction[]> {
     try {
-      let query = this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('user_id', userId)
-        .eq('server_id', serverId)
-        .order('action_at', { ascending: false });
-
-      if (options.limit !== undefined) {
-        query = query.limit(options.limit);
-      }
-      if (options.offset !== undefined) {
-        query = query.range(options.offset, options.offset + (options.limit || 10) - 1);
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
-        throw new RepositoryError(
-          `Error finding admin actions for user ${userId} in server ${serverId}`,
-          error
-        );
-      }
-
-      return data as AdminAction[];
+      const actions = await this.prisma.admin_actions.findMany({
+        where: {
+          user_id: userId,
+          server_id: serverId,
+        },
+        orderBy: { action_at: 'desc' },
+        take: options.limit,
+        skip: options.offset,
+      });
+      return (actions as AdminAction[]) || []; // Cast needed if type differs
     } catch (error) {
-      this.handleError(error as Error, 'findByUserAndServer');
-      return [];
+      this.handleError(error, 'findByUserAndServer');
     }
   }
 
@@ -69,84 +64,64 @@ export class AdminActionRepository
     options: { limit?: number; offset?: number } = {}
   ): Promise<AdminAction[]> {
     try {
-      let query = this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('admin_id', adminId)
-        .order('action_at', { ascending: false });
-
-      if (options.limit !== undefined) {
-        query = query.limit(options.limit);
-      }
-      if (options.offset !== undefined) {
-        query = query.range(options.offset, options.offset + (options.limit || 10) - 1);
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
-        throw new RepositoryError(`Error finding admin actions for admin ${adminId}`, error);
-      }
-
-      return data as AdminAction[];
+      const actions = await this.prisma.admin_actions.findMany({
+        where: { admin_id: adminId },
+        orderBy: { action_at: 'desc' },
+        take: options.limit,
+        skip: options.offset,
+      });
+      return (actions as AdminAction[]) || []; // Cast needed if type differs
     } catch (error) {
-      this.handleError(error as Error, 'findByAdmin');
-      return [];
+      this.handleError(error, 'findByAdmin');
     }
   }
 
   async findByVerificationEvent(verificationEventId: string): Promise<AdminAction[]> {
     try {
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('verification_event_id', verificationEventId)
-        .order('action_at', { ascending: false });
-
-      if (error) {
-        throw new RepositoryError(
-          `Error finding admin actions for verification event ${verificationEventId}`,
-          error
-        );
-      }
-
-      return data as AdminAction[];
+      const actions = await this.prisma.admin_actions.findMany({
+        where: { verification_event_id: verificationEventId },
+        orderBy: { action_at: 'desc' },
+      });
+      return (actions as AdminAction[]) || []; // Cast needed if type differs
     } catch (error) {
-      this.handleError(error as Error, 'findByVerificationEvent');
-      return [];
+      this.handleError(error, 'findByVerificationEvent');
     }
   }
 
   async createAction(data: AdminActionCreate): Promise<AdminAction> {
     try {
-      const actionData = {
-        ...data,
-        action_at: new Date().toISOString(),
-        metadata: data.metadata || {},
+      // Map AdminActionCreate to Prisma input type
+      const actionData: Prisma.admin_actionsCreateInput = {
+        admin_id: data.admin_id,
+        action_type: data.action_type as admin_action_type, // Cast to Prisma enum
+        previous_status: data.previous_status as verification_status | null, // Cast to Prisma enum
+        new_status: data.new_status as verification_status | null, // Cast to Prisma enum
+        notes: data.notes,
+        metadata: (data.metadata as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+        // Connect relations
+        servers: data.server_id ? { connect: { guild_id: data.server_id } } : undefined,
+        users: data.user_id ? { connect: { discord_id: data.user_id } } : undefined,
+        verification_events: data.verification_event_id
+          ? { connect: { id: data.verification_event_id } }
+          : undefined,
+        detection_events: data.detection_event_id
+          ? { connect: { id: data.detection_event_id } }
+          : undefined,
+        // action_at handled by default
       };
 
-      const { data: createdAction, error } = await this.supabaseClient
-        .from(this.tableName)
-        .insert(actionData)
-        .select()
-        .single();
+      const createdAction = await this.prisma.admin_actions.create({
+        data: actionData,
+      });
 
-      if (error) {
-        throw new RepositoryError('Error creating admin action', error);
-      }
-
-      if (!createdAction) {
-        throw new RepositoryError('No data returned when creating admin action');
-      }
-
-      return createdAction as AdminAction;
+      return createdAction as AdminAction; // Cast needed if type differs
     } catch (error) {
-      this.handleError(error as Error, 'createAction');
-      throw error;
+      this.handleError(error, 'createAction');
     }
   }
 
   async getActionHistory(userId: string, serverId: string): Promise<AdminAction[]> {
+    // Re-implement using findByUserAndServer
     return this.findByUserAndServer(userId, serverId, { limit: 100 });
   }
 }

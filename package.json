@@ -17,7 +17,13 @@
     "lint": "eslint . --ext .ts,.js,.mjs --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md,mjs}\"",
     "format:check": "prettier --check \"**/*.{ts,js,json,md,mjs}\"",
-    "check": "npm run format:check && npm run lint"
+    "check": "npm run format:check && npm run lint",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:db:pull": "prisma db pull",
+    "prisma:studio": "prisma studio",
+    "prisma:format": "prisma format",
+    "db:seed": "prisma db seed"
   },
   "keywords": [
     "discord",
@@ -33,6 +39,7 @@
     "@babel/preset-typescript": "^7.27.0",
     "@eslint/js": "^9.23.0",
     "@jest/globals": "^29.7.0",
+    "@prisma/client": "^6.5.0",
     "@types/jest": "^29.5.14",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
@@ -45,6 +52,7 @@
     "jest": "^29.5.0",
     "jest-mock-extended": "^4.0.0-beta1",
     "prettier": "^3.5.3",
+    "prisma": "^6.5.0",
     "ts-jest": "^29.3.0",
     "ts-node": "^10.9.1",
     "ts-node-dev": "^2.0.0",

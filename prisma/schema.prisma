@@ -1,0 +1,182 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model admin_actions {
+  id                    String               @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  server_id             String?
+  user_id               String?
+  admin_id              String
+  verification_event_id String?              @db.Uuid
+  detection_event_id    String?              @db.Uuid
+  action_type           admin_action_type
+  action_at             DateTime?            @default(now()) @db.Timestamptz(6)
+  previous_status       verification_status?
+  new_status            verification_status?
+  notes                 String?
+  metadata              Json?                @default("{}")
+  detection_events      detection_events?    @relation(fields: [detection_event_id], references: [id], onUpdate: NoAction)
+  servers               servers?             @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
+  users                 users?               @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
+  verification_events   verification_events? @relation(fields: [verification_event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([admin_id], map: "idx_admin_actions_admin")
+  @@index([detection_event_id], map: "idx_admin_actions_detection")
+  @@index([server_id], map: "idx_admin_actions_server")
+  @@index([user_id], map: "idx_admin_actions_user")
+  @@index([verification_event_id], map: "idx_admin_actions_verification")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model detection_events {
+  id                                                                                     String                @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  server_id                                                                              String?
+  user_id                                                                                String?
+  detection_type                                                                         detection_type
+  confidence                                                                             Float                 @db.Real
+  detected_at                                                                            DateTime?             @default(now()) @db.Timestamptz(6)
+  message_id                                                                             String?
+  channel_id                                                                             String?
+  thread_id                                                                              String?
+  reasons                                                                                String[]
+  metadata                                                                               Json?                 @default("{}")
+  admin_action                                                                           String?
+  admin_action_by                                                                        String?
+  admin_action_at                                                                        DateTime?             @db.Timestamptz(6)
+  latest_verification_event_id                                                           String?               @db.Uuid
+  admin_actions                                                                          admin_actions[]
+  servers                                                                                servers?              @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
+  users                                                                                  users?                @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
+  verification_events_detection_events_latest_verification_event_idToverification_events verification_events?  @relation("detection_events_latest_verification_event_idToverification_events", fields: [latest_verification_event_id], references: [id], onUpdate: NoAction, map: "fk_detection_events_verification")
+  verification_events_verification_events_detection_event_idTodetection_events           verification_events[] @relation("verification_events_detection_event_idTodetection_events")
+
+  @@index([detected_at], map: "idx_detection_events_detected_at")
+  @@index([detected_at], map: "idx_detection_events_detected_at_range", type: Brin)
+  @@index([server_id], map: "idx_detection_events_server")
+  @@index([detection_type], map: "idx_detection_events_type")
+  @@index([user_id], map: "idx_detection_events_user")
+  @@index([user_id, server_id, detection_type], map: "idx_detection_events_user_server_type")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model server_members {
+  server_id           String
+  user_id             String
+  join_date           DateTime?            @db.Timestamptz(6)
+  reputation_score    Float?               @default(0.0) @db.Real
+  is_restricted       Boolean?             @default(false)
+  last_verified_at    DateTime?            @db.Timestamptz(6)
+  last_message_at     DateTime?            @db.Timestamptz(6)
+  message_count       Int?                 @default(0)
+  verification_status verification_status? @default(pending)
+  last_status_change  DateTime?            @db.Timestamptz(6)
+  created_by          String?
+  updated_by          String?
+  servers             servers              @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
+  users               users                @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([server_id, user_id])
+  @@index([server_id], map: "idx_server_members_server")
+  @@index([user_id], map: "idx_server_members_user")
+  @@index([user_id, server_id, is_restricted], map: "idx_server_members_user_server_status")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model servers {
+  guild_id                   String                @id
+  restricted_role_id         String?
+  admin_channel_id           String?
+  verification_channel_id    String?
+  admin_notification_role_id String?
+  created_at                 DateTime?             @default(now()) @db.Timestamptz(6)
+  updated_at                 DateTime?             @default(now()) @db.Timestamptz(6)
+  updated_by                 String?
+  settings                   Json?                 @default("{}")
+  is_active                  Boolean?              @default(true)
+  admin_actions              admin_actions[]
+  detection_events           detection_events[]
+  server_members             server_members[]
+  verification_events        verification_events[]
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model users {
+  discord_id              String                @id
+  username                String?
+  created_at              DateTime?             @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime?             @default(now()) @db.Timestamptz(6)
+  created_by              String?
+  updated_by              String?
+  global_reputation_score Float?                @db.Real
+  suspicious_server_count Int?                  @default(0)
+  first_flagged_at        DateTime?             @db.Timestamptz(6)
+  account_created_at      DateTime?             @db.Timestamptz(6)
+  metadata                Json?                 @default("{}")
+  admin_actions           admin_actions[]
+  detection_events        detection_events[]
+  server_members          server_members[]
+  verification_events     verification_events[]
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model verification_events {
+  id                                                                                  String              @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  server_id                                                                           String?
+  user_id                                                                             String?
+  detection_event_id                                                                  String?             @db.Uuid
+  thread_id                                                                           String?
+  notification_message_id                                                             String?
+  status                                                                              verification_status @default(pending)
+  created_at                                                                          DateTime?           @default(now()) @db.Timestamptz(6)
+  updated_at                                                                          DateTime?           @default(now()) @db.Timestamptz(6)
+  resolved_at                                                                         DateTime?           @db.Timestamptz(6)
+  resolved_by                                                                         String?
+  notes                                                                               String?
+  metadata                                                                            Json?               @default("{}")
+  admin_actions                                                                       admin_actions[]
+  detection_events_detection_events_latest_verification_event_idToverification_events detection_events[]  @relation("detection_events_latest_verification_event_idToverification_events")
+  detection_events_verification_events_detection_event_idTodetection_events           detection_events?   @relation("verification_events_detection_event_idTodetection_events", fields: [detection_event_id], references: [id], onUpdate: NoAction)
+  servers                                                                             servers?            @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
+  users                                                                               users?              @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([created_at], map: "idx_verification_events_created_at_range", type: Brin)
+  @@index([detection_event_id], map: "idx_verification_events_detection")
+  @@index([server_id], map: "idx_verification_events_server")
+  @@index([status], map: "idx_verification_events_status")
+  @@index([user_id], map: "idx_verification_events_user")
+  @@index([user_id, server_id, status], map: "idx_verification_events_user_server_status")
+}
+
+enum admin_action_type {
+  verify
+  reject
+  ban
+  reopen
+  create_thread
+}
+
+enum detection_type {
+  message_frequency
+  suspicious_content
+  gpt_analysis
+  new_account
+  pattern_match
+}
+
+enum verification_status {
+  pending
+  verified
+  banned
+}

@@ -1,148 +1,82 @@
 import { injectable, inject } from 'inversify';
-import { SupabaseClient } from '@supabase/supabase-js';
-import { SupabaseRepository } from './BaseRepository';
-import { ServerMember } from './types';
+import { Prisma, PrismaClient, verification_status } from '@prisma/client';
+import { ServerMember, VerificationStatus } from './types'; // Import VerificationStatus enum
 import { TYPES } from '../di/symbols';
+import { RepositoryError } from './BaseRepository'; // Keep using RepositoryError
 
 /**
- * Interface for the ServerMemberRepository
+ * Interface for the ServerMemberRepository (Remains the same)
  */
 export interface IServerMemberRepository {
-  /**
-   * Find a server member by server ID and user ID
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @returns The server member or null if not found
-   */
   findByServerAndUser(serverId: string, userId: string): Promise<ServerMember | null>;
-
-  /**
-   * Create or update a server member
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @param data The server member data to upsert
-   * @returns The created or updated server member
-   */
   upsertMember(
     serverId: string,
     userId: string,
     data: Partial<ServerMember>
   ): Promise<ServerMember>;
-
-  /**
-   * Find all members in a server
-   * @param serverId The Discord server ID
-   * @returns Array of server members
-   */
   findByServer(serverId: string): Promise<ServerMember[]>;
-
-  /**
-   * Find all memberships for a specific user across all servers
-   * @param userId The Discord user ID
-   * @returns Array of server members
-   */
   findByUser(userId: string): Promise<ServerMember[]>;
-
-  /**
-   * Find all restricted members in a server
-   * @param serverId The Discord server ID
-   * @returns Array of restricted server members
-   */
   findRestrictedMembers(serverId: string): Promise<ServerMember[]>;
-
-  /**
-   * Update a member's reputation score
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @param score The new reputation score
-   * @returns The updated server member
-   */
   updateReputationScore(
     serverId: string,
     userId: string,
     score: number
   ): Promise<ServerMember | null>;
-
-  /**
-   * Update member's restriction status
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @param isRestricted Whether the user is restricted
-   * @param reason Optional reason for restriction
-   * @param moderatorId Optional Discord ID of the moderator
-   * @returns The updated server member
-   */
   updateRestrictionStatus(
     serverId: string,
     userId: string,
     isRestricted: boolean,
+    verificationStatus: verification_status, // Use Prisma enum type
     reason?: string,
     moderatorId?: string
   ): Promise<ServerMember | null>;
-
-  /**
-   * Increment a member's message count and update last_message_at timestamp
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @returns The updated server member
-   */
   incrementMessageCount(serverId: string, userId: string): Promise<ServerMember | null>;
-
-  /**
-   * Get an existing server member or create a new one
-   * @param serverId The server UUID
-   * @param userId The user UUID
-   * @param joinDate The date the user joined the server (optional)
-   * @returns The server member data
-   */
-  getOrCreateMember(serverId: string, userId: string, joinDate?: string): Promise<ServerMember>;
+  getOrCreateMember(serverId: string, userId: string, joinDate?: Date): Promise<ServerMember>; // Use Date for joinDate
 }
 
 /**
- * Repository for managing server members (users in specific servers)
+ * Repository for managing server members (users in specific servers) using Prisma
  */
 @injectable()
-export class ServerMemberRepository
-  extends SupabaseRepository<ServerMember>
-  implements IServerMemberRepository
-{
-  constructor(@inject(TYPES.SupabaseClient) supabaseClient: SupabaseClient) {
-    super('server_members', supabaseClient);
+export class ServerMemberRepository implements IServerMemberRepository {
+  constructor(@inject(TYPES.PrismaClient) private prisma: PrismaClient) {}
+
+  /**
+   * Handle errors from Prisma operations
+   */
+  private handleError(error: unknown, operation: string): never {
+    console.error(`Repository error during ${operation}:`, error);
+
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      throw new RepositoryError(`Database error during ${operation}: ${error.message} (Code: ${error.code})`, error);
+    } else if (error instanceof Error) {
+      throw new RepositoryError(`Unexpected error during ${operation}: ${error.message}`, error);
+    } else {
+      throw new RepositoryError(`Unknown error during ${operation}`, error);
+    }
   }
 
   /**
-   * Find a server member by server ID and user ID
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @returns The server member or null if not found
+   * Find a server member by server ID (guild_id) and user ID (discord_id)
    */
   async findByServerAndUser(serverId: string, userId: string): Promise<ServerMember | null> {
     try {
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('server_id', serverId)
-        .eq('user_id', userId)
-        .single();
-
-      // Handle the specific "no rows" error as a valid "not found" case
-      if (error && error.code === 'PGRST116') {
-        return null;
-      } else if (error) {
-        throw error;
-      }
-      return (data as ServerMember) || null;
+      const member = await this.prisma.server_members.findUnique({
+        where: {
+          server_id_user_id: { // Use the composite key defined in schema.prisma (@@id([server_id, user_id]))
+            server_id: serverId,
+            user_id: userId,
+          },
+        },
+      });
+      return member as ServerMember | null; // Cast needed if ServerMember type differs slightly
     } catch (error) {
-      this.handleError(error as Error, 'findByServerAndUser');
+      this.handleError(error, 'findByServerAndUser');
     }
   }
 
   /**
    * Create or update a server member
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @param data The server member data to upsert
-   * @returns The created or updated server member
    */
   async upsertMember(
     serverId: string,
@@ -150,93 +84,92 @@ export class ServerMemberRepository
     data: Partial<ServerMember>
   ): Promise<ServerMember> {
     try {
-      // Include the server_id and user_id in the data
       const memberData = {
         server_id: serverId,
         user_id: userId,
-        ...data,
+        join_date: data.join_date,
+        reputation_score: data.reputation_score,
+        is_restricted: data.is_restricted,
+        last_verified_at: data.last_verified_at,
+        last_message_at: data.last_message_at,
+        message_count: data.message_count,
+        verification_status: data.verification_status,
+        last_status_change: data.last_status_change,
+        created_by: data.created_by,
+        updated_by: data.updated_by,
       };
 
-      // Use upsert operation with server_id and user_id as the composite primary key
-      const { data: upserted, error } = await this.supabaseClient
-        .from(this.tableName)
-        .upsert(memberData, { onConflict: 'server_id,user_id' })
-        .select()
-        .single<ServerMember>();
+      const upserted = await this.prisma.server_members.upsert({
+        where: {
+          server_id_user_id: {
+            server_id: serverId,
+            user_id: userId,
+          },
+        },
+        create: {
+          ...memberData,
+          // Ensure required fields for create are present
+          server_id: serverId,
+          user_id: userId,
+        },
+        update: {
+          ...memberData,
+        },
+      });
 
-      if (error) throw error;
-      if (!upserted) throw new Error('Failed to upsert server member: No data returned');
-
-      return upserted;
+      return upserted as ServerMember; // Cast needed if ServerMember type differs slightly
     } catch (error) {
-      this.handleError(error as Error, 'upsertMember');
+      this.handleError(error, 'upsertMember');
     }
   }
 
   /**
    * Find all members in a server
-   * @param serverId The Discord server ID
-   * @returns Array of server members
    */
   async findByServer(serverId: string): Promise<ServerMember[]> {
     try {
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('server_id', serverId);
-
-      if (error) throw error;
-      return (data as ServerMember[]) || [];
+      const members = await this.prisma.server_members.findMany({
+        where: { server_id: serverId },
+      });
+      return (members as ServerMember[]) || []; // Cast needed if ServerMember type differs slightly
     } catch (error) {
-      this.handleError(error as Error, 'findByServer');
+      this.handleError(error, 'findByServer');
     }
   }
 
   /**
    * Find all memberships for a specific user across all servers
-   * @param userId The Discord user ID
-   * @returns Array of server members
    */
   async findByUser(userId: string): Promise<ServerMember[]> {
     try {
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('user_id', userId);
-
-      if (error) throw error;
-      return (data as ServerMember[]) || [];
+      const members = await this.prisma.server_members.findMany({
+        where: { user_id: userId },
+      });
+      return (members as ServerMember[]) || []; // Cast needed if ServerMember type differs slightly
     } catch (error) {
-      this.handleError(error as Error, 'findByUser');
+      this.handleError(error, 'findByUser');
     }
   }
 
   /**
    * Find all restricted members in a server
-   * @param serverId The Discord server ID
-   * @returns Array of restricted server members
    */
   async findRestrictedMembers(serverId: string): Promise<ServerMember[]> {
     try {
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .select('*')
-        .eq('server_id', serverId)
-        .eq('is_restricted', true);
-
-      if (error) throw error;
-      return (data as ServerMember[]) || [];
+      const members = await this.prisma.server_members.findMany({
+        where: {
+          server_id: serverId,
+          is_restricted: true,
+        },
+      });
+      return (members as ServerMember[]) || []; // Cast needed if ServerMember type differs slightly
     } catch (error) {
-      this.handleError(error as Error, 'findRestrictedMembers');
+      this.handleError(error, 'findRestrictedMembers');
     }
   }
 
   /**
    * Update a member's reputation score
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @param score The new reputation score
-   * @returns The updated server member
    */
   async updateReputationScore(
     serverId: string,
@@ -244,110 +177,118 @@ export class ServerMemberRepository
     score: number
   ): Promise<ServerMember | null> {
     try {
-      const { data, error } = await this.supabaseClient
-        .from(this.tableName)
-        .update({ reputation_score: score })
-        .eq('server_id', serverId)
-        .eq('user_id', userId)
-        .select()
-        .single();
-
-      if (error && error.code === 'PGRST116') {
-        return null;
-      } else if (error) {
-        throw error;
-      }
-      return (data as ServerMember) || null;
+      const updatedMember = await this.prisma.server_members.update({
+        where: {
+          server_id_user_id: {
+            server_id: serverId,
+            user_id: userId,
+          },
+        },
+        data: { reputation_score: score },
+      });
+      return updatedMember as ServerMember | null;
     } catch (error) {
-      this.handleError(error as Error, 'updateReputationScore');
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        console.warn(`Attempted to update reputation for non-existent member: Server ${serverId}, User ${userId}`);
+        return null;
+      }
+      this.handleError(error, 'updateReputationScore');
     }
   }
 
   /**
    * Update member's restriction status
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @param isRestricted Whether the user is restricted
-   * @param reason Optional reason for restriction
-   * @param moderatorId Optional Discord ID of the moderator
-   * @returns The updated server member
    */
   async updateRestrictionStatus(
     serverId: string,
     userId: string,
     isRestricted: boolean,
-    reason?: string,
+    verificationStatus: verification_status, // Use Prisma enum type
+    reason?: string, // Note: restriction_reason field doesn't exist in schema.prisma
     moderatorId?: string
   ): Promise<ServerMember | null> {
     try {
-      const now = new Date().toISOString();
-      const updateData: Partial<ServerMember> & { last_status_change: string } = {
+      const now = new Date();
+      const updateData: Prisma.server_membersUpdateInput = {
         is_restricted: isRestricted,
+        verification_status: verificationStatus,
         last_status_change: now,
-        restriction_reason: reason || undefined,
-        moderator_id: moderatorId || undefined,
-        updated_by: moderatorId || undefined,
+        // restriction_reason: reason, // Field missing in schema
+        updated_by: moderatorId,
       };
 
-      const { data: updated, error } = await this.supabaseClient
-        .from(this.tableName)
-        .update(updateData)
-        .eq('server_id', serverId)
-        .eq('user_id', userId)
-        .select()
-        .single<ServerMember>();
-
-      if (error) throw error;
-      return updated || null;
+      const updatedMember = await this.prisma.server_members.update({
+        where: {
+          server_id_user_id: {
+            server_id: serverId,
+            user_id: userId,
+          },
+        },
+        data: updateData,
+      });
+      return updatedMember as ServerMember | null;
     } catch (error) {
-      this.handleError(error as Error, 'updateRestrictionStatus');
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        console.warn(`Attempted to update restriction status for non-existent member: Server ${serverId}, User ${userId}`);
+        return null;
+      }
+      this.handleError(error, 'updateRestrictionStatus');
     }
   }
 
   /**
    * Increment a member's message count and update last_message_at timestamp
-   * @param serverId The Discord server ID
-   * @param userId The Discord user ID
-   * @returns The updated server member
    */
   async incrementMessageCount(serverId: string, userId: string): Promise<ServerMember | null> {
     try {
-      const timestamp = new Date().toISOString();
-      const { data, error } = await this.supabaseClient.rpc('increment_member_message_count', {
-        p_server_id: serverId,
-        p_user_id: userId,
-        p_timestamp: timestamp,
+      // Replace RPC call with Prisma update using atomic increment
+      const updatedMember = await this.prisma.server_members.update({
+        where: {
+          server_id_user_id: {
+            server_id: serverId,
+            user_id: userId,
+          },
+        },
+        data: {
+          message_count: {
+            increment: 1,
+          },
+          last_message_at: new Date(),
+        },
       });
-
-      if (error) throw error;
-      return data as ServerMember;
+      return updatedMember as ServerMember | null;
     } catch (error) {
-      this.handleError(error as Error, 'incrementMessageCount');
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        console.warn(`Attempted to increment message count for non-existent member: Server ${serverId}, User ${userId}`);
+        return null;
+      }
+      this.handleError(error, 'incrementMessageCount');
     }
   }
 
   /**
    * Get an existing server member or create a new one
-   * @param serverId The server UUID
-   * @param userId The user UUID
-   * @param joinDate The date the user joined the server (optional)
-   * @returns The server member data
    */
-  async getOrCreateMember(
-    serverId: string,
-    userId: string,
-    joinDate?: string
-  ): Promise<ServerMember> {
+  async getOrCreateMember(serverId: string, userId: string, joinDate?: Date): Promise<ServerMember> {
+    // Remove unnecessary try/catch as called methods handle errors
     const member = await this.findByServerAndUser(serverId, userId);
 
-    if (member) return member;
+      if (member) {
+        // Optionally update join_date if provided and different
+        if (joinDate && member.join_date?.getTime() !== joinDate.getTime()) {
+           return await this.upsertMember(serverId, userId, { join_date: joinDate });
+        }
+        return member;
+      }
 
-    // Create new member
-    return await this.upsertMember(serverId, userId, {
-      join_date: joinDate || new Date().toISOString(),
-      message_count: 0,
-      is_restricted: false,
-      reputation_score: 50, // Default neutral score
-    });
+      // Create new member
+      return await this.upsertMember(serverId, userId, {
+        join_date: joinDate || new Date(),
+        message_count: 0,
+        is_restricted: false,
+        reputation_score: 0, // Default neutral score (matches schema default)
+        verification_status: VerificationStatus.PENDING, // Use enum member
+      });
+    // Errors from findByServerAndUser or upsertMember are already handled internally
   }
 }

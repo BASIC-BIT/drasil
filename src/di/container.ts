@@ -2,7 +2,8 @@ import 'reflect-metadata';
 import { Container } from 'inversify';
 import { Client, GatewayIntentBits } from 'discord.js';
 import { OpenAI } from 'openai';
-import { SupabaseClient, createClient } from '@supabase/supabase-js';
+// import { SupabaseClient, createClient } from '@supabase/supabase-js'; // Remove Supabase client
+import { PrismaClient } from '@prisma/client'; // Import Prisma client
 
 import { TYPES } from './symbols';
 
@@ -81,17 +82,12 @@ function configureExternalDependencies(container: Container): void {
     })
   );
 
-  // Supabase client
-  const supabaseUrl = process.env.SUPABASE_URL || '';
-  const supabaseKey = process.env.SUPABASE_KEY || '';
+  // Prisma Client
+  // Instantiate Prisma Client (typically a singleton)
+  const prismaClient = new PrismaClient();
+  container.bind<PrismaClient>(TYPES.PrismaClient).toConstantValue(prismaClient);
 
-  container.bind<SupabaseClient>(TYPES.SupabaseClient).toConstantValue(
-    createClient(supabaseUrl, supabaseKey, {
-      auth: {
-        persistSession: false,
-      },
-    })
-  );
+  // Removed Supabase client binding
 }
 
 /**

@@ -206,6 +206,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ Creation of required entities
   - ✅ Proper error propagation
   - ✅ Enhanced logging and debugging
+- ✅ **Prisma Migration**: Migrated data access layer from Supabase JS Client to Prisma Client.
 - 🔄 Moderation logs and action tracking
 - 🔄 Cross-server data sharing
 

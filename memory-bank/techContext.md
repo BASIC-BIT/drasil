@@ -28,17 +28,17 @@ This document details the technical implementation of the Discord Anti-Spam Bot,
   - Error handling for API responses
   - Temperature and token control
 
-- **Supabase JS Client**: PostgreSQL database client:
+- **Prisma Client**: Type-safe Node.js & TypeScript ORM for PostgreSQL:
 
-  - Type-safe database operations
-  - Row-level security support
-  - Real-time capabilities (not currently used)
-  - PostgrestError handling
+  - Auto-generated database client based on `prisma/schema.prisma`
+  - Type-safe database queries
+  - Manages database connections (via Supavisor pooler)
+  - Handles migrations (`prisma migrate dev`)
 
 - **dotenv**: Environment variable management:
   - Loads variables from .env file
   - Secure storage of sensitive credentials
-  - Used for Discord token, OpenAI API key, and Supabase credentials
+  - Used for Discord token, OpenAI API key, and Database connection URL
 
 ### Dependency Injection
 
@@ -56,15 +56,15 @@ This document details the technical implementation of the Discord Anti-Spam Bot,
 
 - **Jest**: Testing framework for unit and integration tests
 - **ts-jest**: TypeScript integration for Jest
-- **InversifyJS Testing Utilities**:
-  - createTestContainer(): Creates container with all dependencies mocked
-  - createServiceTestContainer(): Creates container with real service implementation
-  - createMocks(): Creates mock implementations for all services and repositories
+- **InversifyJS Testing Utilities**: (Note: Documentation indicates these exist, but `src/__tests__/utils` is currently empty. Test setup needs review/implementation).
+  - `createTestContainer()`: Intended to create container with mocks.
+  - `createServiceTestContainer()`: Intended to create container with real service implementation.
+  - `createMocks()`: Intended to create mock implementations.
+- **Repository Testing**: Currently, repository-specific unit tests are missing. Future tests will require a Prisma mocking strategy (e.g., `jest-mock-extended` or integrated mocking).
 - **Custom Mocks**:
-  - `__mocks__/discord.js.ts`: Mocks Discord client and interactions
-  - `__mocks__/openai.ts`: Mocks OpenAI API responses
-  - `__mocks__/supabase.ts`: Mocks database operations
-  - `config/__mocks__/supabase.ts`: Mocks Supabase client configuration
+  - `__mocks__/discord.js.ts`: Mocks Discord client and interactions.
+  - `__mocks__/openai.ts`: Mocks OpenAI API responses.
+  - (Supabase mocks are no longer needed).
 
 ### Development Tools
 
@@ -79,8 +79,9 @@ This document details the technical implementation of the Discord Anti-Spam Bot,
 
 - `DISCORD_TOKEN`: Bot authentication token from Discord Developer Portal
 - `OPENAI_API_KEY`: API key for OpenAI services
-- `SUPABASE_URL`: URL for Supabase instance
-- `SUPABASE_KEY`: Anonymous key for Supabase access
+- `DATABASE_URL`: Connection string for the PostgreSQL database (used by Prisma)
+// - `SUPABASE_URL`: (No longer directly used by repositories)
+// - `SUPABASE_KEY`: (No longer directly used by repositories)
 - `NODE_ENV`: Environment setting (development, production)
 
 ### Local Development Setup
@@ -165,14 +166,11 @@ function configureExternalDependencies(container: Container): void {
     })
   );
 
-  // Supabase client
-  container.bind<SupabaseClient>(TYPES.SupabaseClient).toConstantValue(
-    createClient(supabaseUrl, supabaseKey, {
-      auth: {
-        persistSession: false,
-      },
-    })
-  );
+  // Prisma Client
+  const prismaClient = new PrismaClient();
+  container.bind<PrismaClient>(TYPES.PrismaClient).toConstantValue(prismaClient);
+
+  // Removed Supabase client binding
 }
 ```
 
@@ -211,13 +209,14 @@ export const TYPES = {
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),
-  SupabaseRepository: Symbol.for('SupabaseRepository'),
+  // SupabaseRepository: Symbol.for('SupabaseRepository'), // Removed
   // Additional symbols...
 
   // External dependencies
   DiscordClient: Symbol.for('DiscordClient'),
   OpenAI: Symbol.for('OpenAI'),
-  SupabaseClient: Symbol.for('SupabaseClient'),
+  // SupabaseClient: Symbol.for('SupabaseClient'), // Removed
+  PrismaClient: Symbol.for('PrismaClient'), // Added
 };
 ```
 
@@ -408,36 +407,31 @@ The bot implements a hybrid spam detection approach combining multiple technique
   - Falls back to "OK" classification on error
   - Includes detailed error information in development
 
-### Supabase
+### Prisma & Supabase PostgreSQL
 
+- **ORM**: Prisma Client is used as the Object-Relational Mapper.
+- **Database**: Supabase PostgreSQL instance.
+- **Connection**: Prisma connects via the Supavisor connection pooler using the `DATABASE_URL` environment variable.
 - **Client Initialization**:
 
   ```typescript
   // In container.ts
-  container.bind<SupabaseClient>(TYPES.SupabaseClient).toConstantValue(
-    createClient(supabaseUrl, supabaseKey, {
-      auth: {
-        persistSession: false, // We don't need auth features for the bot
-      },
-    })
-  );
+  const prismaClient = new PrismaClient();
+  container.bind<PrismaClient>(TYPES.PrismaClient).toConstantValue(prismaClient);
   ```
 
-- **Database Schema**:
-
-  - `servers`: Guild configuration storage
-  - `users`: Cross-server user tracking (planned)
-  - `server_members`: User-server relationship (planned)
+- **Database Schema Definition**:
+  - Defined in `prisma/schema.prisma`.
+  - Introspected from the existing database using `prisma db pull`.
 
 - **Repository Pattern**:
-
-  - `BaseRepository`: Interface for common operations
-  - `SupabaseRepository`: Generic implementation
-  - `ServerRepository`: Server-specific operations
+  - Repositories implement interfaces (e.g., `IServerRepository`).
+  - Repositories now directly use the injected `PrismaClient` for database operations.
+  - The generic `SupabaseRepository` base class is no longer used.
 
 - **Row-Level Security**:
-  - Enabled on all tables
-  - Service role has full access
+  - RLS policies are defined in the database (via Supabase migrations).
+  - Prisma operations are executed using the dedicated `prisma` database user, which bypasses RLS (`bypassrls`). Ensure this user has appropriate direct grants if RLS bypass is ever removed.
 
 ## Testing Strategy with InversifyJS
 
@@ -576,9 +570,13 @@ describe('InversifyJS Container Configuration', () => {
 - Graceful handling of service disruptions
 - Optimized database queries
 
-## Database Schema
+## Database Schema (Managed by Prisma)
 
-### Current Tables
+### Schema Definition
+- The authoritative schema definition is now located in `prisma/schema.prisma`.
+- This schema was generated by introspecting the existing database tables created by the initial Supabase migration.
+
+### Current Tables (as defined in `prisma/schema.prisma`)
 
 - **servers**:
 
