@@ -230,10 +230,11 @@ export class ConfigService implements IConfigService {
     // Create an in-memory server object
     return {
       guild_id: guildId,
-      restricted_role_id: undefined,
-      admin_channel_id: undefined,
-      verification_channel_id: undefined,
-      admin_notification_role_id: undefined,
+      restricted_role_id: null,
+      admin_channel_id: null,
+      verification_channel_id: null,
+      admin_notification_role_id: null,
+      updated_by: null,
       is_active: true,
       settings: defaultSettings,
       created_at: new Date().toISOString(),
@@ -310,8 +311,8 @@ export class ConfigService implements IConfigService {
     const currentConfig = await this.getServerConfig(guildId);
 
     // Merge existing settings with new ones
-    const updatedSettings = {
-      ...(currentConfig.settings || {}),
+    const updatedSettings: ServerSettings = {
+      ...currentConfig.settings,
       ...settings,
     };
 

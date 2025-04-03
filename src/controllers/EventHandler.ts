@@ -1,4 +1,4 @@
-import { Client, Message, GuildMember, Interaction, Guild } from 'discord.js';
+import { Client, Message, GuildMember, Interaction, Guild, MessageFlags } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject } from 'inversify';
 import { UserProfileData } from '../services/GPTService';
@@ -85,7 +85,7 @@ export class EventHandler implements IEventHandler {
       if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: 'An error occurred while processing this interaction.',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
     }

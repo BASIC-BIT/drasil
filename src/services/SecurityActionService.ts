@@ -239,9 +239,11 @@ export class SecurityActionService implements ISecurityActionService {
         // Update the NEW Verification Event with the message ID
         if (notificationMessage && newVerificationEvent) {
           try {
-            await this.verificationEventRepository.update(newVerificationEvent.id, {
-              notification_message_id: notificationMessage.id,
-            });
+            newVerificationEvent.notification_message_id = notificationMessage.id;
+            await this.verificationEventRepository.update(
+              newVerificationEvent.id,
+              newVerificationEvent
+            );
             console.log(
               `Sent notification and linked message ${notificationMessage.id} to verification ${newVerificationEvent.id}`
             );
@@ -321,9 +323,11 @@ export class SecurityActionService implements ISecurityActionService {
         // If we updated successfully AND the original event was missing a message ID, update it now.
         if (updatedMessage && !activeVerificationEvent.notification_message_id) {
           try {
-            await this.verificationEventRepository.update(activeVerificationEvent.id, {
-              notification_message_id: updatedMessage.id,
-            });
+            activeVerificationEvent.notification_message_id = updatedMessage.id;
+            await this.verificationEventRepository.update(
+              activeVerificationEvent.id,
+              activeVerificationEvent
+            );
             console.log(
               `Linked new/updated message ${updatedMessage.id} to existing verification ${activeVerificationEvent.id}`
             );
@@ -370,9 +374,11 @@ export class SecurityActionService implements ISecurityActionService {
         // Update the NEW Verification Event with the message ID
         if (notificationMessage && newVerificationEvent) {
           try {
-            await this.verificationEventRepository.update(newVerificationEvent.id, {
-              notification_message_id: notificationMessage.id,
-            });
+            newVerificationEvent.notification_message_id = notificationMessage.id;
+            await this.verificationEventRepository.update(
+              newVerificationEvent.id,
+              newVerificationEvent
+            );
             console.log(
               `Sent notification and linked message ${notificationMessage.id} to verification ${newVerificationEvent.id}`
             );
@@ -415,9 +421,8 @@ export class SecurityActionService implements ISecurityActionService {
     const member = await guild.members.fetch(verificationEvent.user_id);
 
     // Update the verification event to pending
-    await this.verificationEventRepository.update(verificationEvent.id, {
-      status: VerificationStatus.PENDING,
-    });
+    verificationEvent.status = VerificationStatus.PENDING;
+    await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
 
     // Re-restrict the user
     await this.userModerationService.restrictUser(member);

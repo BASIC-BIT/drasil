@@ -8,6 +8,7 @@ import {
   ChatInputCommandInteraction,
   RESTPostAPIChatInputApplicationCommandsJSONBody,
   PermissionFlagsBits,
+  MessageFlags,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject } from 'inversify';
@@ -152,7 +153,7 @@ export class CommandHandler implements ICommandHandler {
       default:
         await interaction.reply({
           content: `Unknown command: ${commandName}`,
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
     }
   }
@@ -163,7 +164,7 @@ export class CommandHandler implements ICommandHandler {
     if (!targetUser) {
       await interaction.reply({
         content: 'You must specify a user to ban.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -176,7 +177,7 @@ export class CommandHandler implements ICommandHandler {
     if (!guild) {
       await interaction.reply({
         content: 'This command can only be used in a server.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -185,7 +186,7 @@ export class CommandHandler implements ICommandHandler {
     if (!member) {
       await interaction.reply({
         content: `Could not find user ${targetUser.tag} in this server.`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -195,12 +196,12 @@ export class CommandHandler implements ICommandHandler {
     if (success) {
       await interaction.reply({
         content: `🚫 User ${member.user.tag} has been banned. Reason: ${reason}`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     } else {
       await interaction.reply({
         content: `❌ Failed to ban ${member.user.tag}. Please check the bot's permissions.`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   }
@@ -319,7 +320,7 @@ export class CommandHandler implements ICommandHandler {
     if (!guild) {
       await interaction.reply({
         content: 'This command can only be used in a server.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -329,13 +330,13 @@ export class CommandHandler implements ICommandHandler {
     if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
       await interaction.reply({
         content: 'You need administrator permissions to set up the verification channel.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
     // Defer the reply as the channel creation might take a moment
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     // Get the restricted role ID
     // Get the server configuration
@@ -387,7 +388,7 @@ export class CommandHandler implements ICommandHandler {
     if (!guild) {
       await interaction.reply({
         content: 'This command can only be used in a server.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -397,7 +398,7 @@ export class CommandHandler implements ICommandHandler {
     if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
       await interaction.reply({
         content: 'You need administrator permissions to configure the bot.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -416,7 +417,7 @@ export class CommandHandler implements ICommandHandler {
     if (!validKeys.includes(key)) {
       await interaction.reply({
         content: `Invalid configuration key: ${key}. Valid keys are: ${validKeys.join(', ')}`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -430,13 +431,13 @@ export class CommandHandler implements ICommandHandler {
       // Respond to the user
       await interaction.reply({
         content: `✅ Configuration updated successfully!\n\`${key}\` has been set to \`${value}\``,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
       console.error(`Failed to update configuration for guild ${guild.id}:`, error);
       await interaction.reply({
         content: 'An error occurred while updating the configuration. Please try again later.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   }

@@ -14,6 +14,7 @@ import {
   PermissionFlagsBits,
   GuildChannelCreateOptions,
   ButtonInteraction,
+  MessageFlags,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
@@ -84,7 +85,6 @@ export interface INotificationManager {
   handleHistoryButtonClick(interaction: ButtonInteraction, userId: string): Promise<boolean>;
 
   updateNotificationButtons(
-    message: Message,
     verificationEvent: VerificationEvent,
     newStatus: VerificationStatus
   ): Promise<void>;
@@ -586,7 +586,7 @@ export class NotificationManager implements INotificationManager {
       if (!interaction.guildId) {
         await interaction.reply({
           content: 'This command can only be used in a server.',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return false;
       }
@@ -600,7 +600,7 @@ export class NotificationManager implements INotificationManager {
       if (detectionEvents.length === 0) {
         await interaction.reply({
           content: 'No detection history found.',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return true;
       }
@@ -624,7 +624,7 @@ export class NotificationManager implements INotificationManager {
             attachment: buffer,
           },
         ],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
 
       return true;
@@ -632,18 +632,21 @@ export class NotificationManager implements INotificationManager {
       console.error('Failed to handle history button click:', error);
       await interaction.reply({
         content: 'Failed to fetch detection history. Please try again later.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return false;
     }
   }
 
   async updateNotificationButtons(
-    message: Message,
     verificationEvent: VerificationEvent,
     newStatus: VerificationStatus
   ): Promise<void> {
     let components: ActionRowBuilder<ButtonBuilder>[] = [];
+
+    if (!verificationEvent.notification_message_id) {
+      throw new Error('No notification message ID found for verification event');
+    }
 
     switch (newStatus) {
       case VerificationStatus.VERIFIED:
@@ -710,6 +713,14 @@ export class NotificationManager implements INotificationManager {
         )
       );
     }
+
+    const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
+
+    if (!adminChannel) {
+      throw new Error('No admin channel found for verification event');
+    }
+
+    const message = await adminChannel.messages.fetch(verificationEvent.notification_message_id);
 
     await message.edit({ components });
   }

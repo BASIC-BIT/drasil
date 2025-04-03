@@ -124,9 +124,8 @@ export class ThreadManager implements IThreadManager {
       });
 
       // Store thread in the database
-      await this.verificationEventRepository.update(verificationEvent.id, {
-        thread_id: thread.id,
-      });
+      verificationEvent.thread_id = thread.id;
+      await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
 
       return thread;
     } catch (error) {

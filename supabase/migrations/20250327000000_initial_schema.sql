@@ -7,7 +7,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TYPE verification_status AS ENUM (
   'pending',
   'verified',
-  'rejected'
+  'banned'
 );
 
 CREATE TYPE admin_action_type AS ENUM (
@@ -35,7 +35,6 @@ CREATE TABLE IF NOT EXISTS servers (
   admin_notification_role_id TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  created_by TEXT, -- Discord ID of who created the record
   updated_by TEXT, -- Discord ID of who last updated the record
   settings JSONB DEFAULT '{}'::JSONB,
   is_active BOOLEAN DEFAULT TRUE
@@ -43,7 +42,6 @@ CREATE TABLE IF NOT EXISTS servers (
 
 COMMENT ON TABLE servers IS 'Discord servers where the bot is installed';
 COMMENT ON COLUMN servers.settings IS 'JSON blob for flexible configuration storage (heuristic thresholds, GPT settings, etc.)';
-COMMENT ON COLUMN servers.created_by IS 'Discord ID of who created the record';
 COMMENT ON COLUMN servers.updated_by IS 'Discord ID of who last updated the record';
 
 -- Users table

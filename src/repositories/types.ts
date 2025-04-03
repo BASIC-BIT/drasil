@@ -7,15 +7,14 @@
  */
 export interface Server {
   guild_id: string; // Discord guild/server ID (primary key)
-  restricted_role_id?: string; // ID of role used for restricted users
-  admin_channel_id?: string; // ID of admin notification channel
-  verification_channel_id?: string; // ID of verification channel
-  admin_notification_role_id?: string; // ID of role to ping for notifications
-  created_at?: string; // Creation timestamp
-  updated_at?: string; // Last update timestamp
-  created_by?: string; // Discord ID of who created the record
-  updated_by?: string; // Discord ID of who last updated the record
-  settings?: ServerSettings; // JSON blob for flexible settings
+  restricted_role_id: string | null; // ID of role used for restricted users
+  admin_channel_id: string | null; // ID of admin notification channel
+  verification_channel_id: string | null; // ID of verification channel
+  admin_notification_role_id: string | null; // ID of role to ping for notifications
+  created_at: string | null; // Creation timestamp
+  updated_at: string | null; // Last update timestamp
+  updated_by: string | null; // Discord ID of who last updated the record
+  settings: ServerSettings; // JSON blob for flexible settings
   is_active: boolean; // Whether the bot is active in this server
 }
 
@@ -25,7 +24,7 @@ export interface Server {
 export interface ServerSettings {
   message_threshold?: number; // Number of messages before triggering detection
   message_timeframe?: number; // Timeframe in seconds for message threshold
-  suspicious_keywords?: string[]; // Keywords that trigger detection
+  suspicious_keywords: string[] | null; // Keywords that trigger detection
   min_confidence_threshold?: number; // Minimum confidence for GPT detection
   auto_restrict?: boolean; // Whether to automatically restrict users
   use_gpt_on_join?: boolean; // Whether to use GPT for join verification
@@ -39,16 +38,16 @@ export interface ServerSettings {
  */
 export interface User {
   discord_id: string; // Discord user ID (primary key)
-  username?: string; // Discord username
-  created_at?: string; // Creation timestamp
-  updated_at?: string; // Last update timestamp
-  created_by?: string; // Discord ID of who created the record
-  updated_by?: string; // Discord ID of who last updated the record
+  username: string | null; // Discord username
+  created_at: string | null; // Creation timestamp
+  updated_at: string | null; // Last update timestamp
+  created_by: string | null; // Discord ID of who created the record
+  updated_by: string | null; // Discord ID of who last updated the record
   global_reputation_score?: number; // Cross-server reputation score (-1.0 to 1.0)
-  account_created_at?: string; // When the Discord account was created
+  account_created_at: string | null; // When the Discord account was created
   metadata?: Record<string, unknown>; // Additional metadata
   suspicious_server_count?: number; // Number of servers where the user has been flagged
-  first_flagged_at?: string; // When the user was first flagged in any server
+  first_flagged_at: string | null; // When the user was first flagged in any server
 }
 
 /**
@@ -57,17 +56,17 @@ export interface User {
 export interface ServerMember {
   server_id: string; // Discord server ID (primary key with user_id)
   user_id: string; // Discord user ID (primary key with server_id)
-  join_date?: string; // When the user joined the server
+  join_date: string | null; // When the user joined the server
   reputation_score?: number; // Server-specific reputation score (-1.0 to 1.0)
   is_restricted?: boolean; // Whether user is currently restricted
-  last_verified_at?: string; // Last time user was verified
-  last_message_at?: string; // Last time user sent a message
+  last_verified_at: string | null; // Last time user was verified
+  last_message_at: string | null; // Last time user sent a message
   message_count?: number; // Total message count in server
-  restriction_reason?: string; // Reason why the user was restricted
-  last_status_change?: string; // When the status was last changed
-  moderator_id?: string; // Discord ID of the moderator who changed the status
-  created_by?: string; // Discord ID of who created the record
-  updated_by?: string; // Discord ID of who last updated the record
+  restriction_reason: string | null; // Reason why the user was restricted
+  last_status_change: string | null; // When the status was last changed
+  moderator_id: string | null; // Discord ID of the moderator who changed the status
+  created_by: string | null; // Discord ID of who created the record
+  updated_by: string | null; // Discord ID of who last updated the record
 }
 
 export enum DetectionType {
@@ -85,8 +84,8 @@ export interface DetectionEvent {
   id: string; // UUID for the event
   server_id: string; // Discord server ID
   user_id: string; // Discord user ID
-  message_id?: string; // Discord message ID
-  channel_id?: string; // Discord channel ID where the message was sent
+  message_id: string | null; // Discord message ID
+  channel_id: string | null; // Discord channel ID where the message was sent
   detection_type: DetectionType;
   confidence: number; // 0.0 to 1.0
   reasons: string[];
@@ -112,15 +111,15 @@ export interface VerificationEvent {
   id: string;
   server_id: string;
   user_id: string;
-  detection_event_id?: string | null;
-  thread_id?: string;
-  notification_message_id?: string;
+  detection_event_id: string | null;
+  thread_id: string | null;
+  notification_message_id: string | null;
   status: VerificationStatus;
   created_at: string;
   updated_at: string;
-  resolved_at?: string;
-  resolved_by?: string | null;
-  notes?: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  notes: string | null;
   metadata: Record<string, string | number | boolean | null>;
 }
 
@@ -134,7 +133,7 @@ export interface AdminAction {
   action_at: string;
   previous_status: VerificationStatus;
   new_status: VerificationStatus;
-  notes?: string;
+  notes: string | null;
   metadata: Record<string, string | number | boolean | null>;
 }
 
@@ -143,5 +142,5 @@ export interface VerificationEventWithActions extends VerificationEvent {
 }
 
 export interface AdminActionCreate extends Omit<AdminAction, 'id' | 'created_at' | 'updated_at'> {
-  id?: string;
+  id: string | null;
 }

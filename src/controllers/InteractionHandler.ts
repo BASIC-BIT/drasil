@@ -1,4 +1,4 @@
-import { Client, Message, ButtonInteraction } from 'discord.js';
+import { Client, ButtonInteraction, MessageFlags } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject } from 'inversify';
 import { INotificationManager } from '../services/NotificationManager';
@@ -59,7 +59,7 @@ export class InteractionHandler implements IInteractionHandler {
     if (!interaction.guildId) {
       await interaction.reply({
         content: 'This button can only be used in a server.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -85,14 +85,14 @@ export class InteractionHandler implements IInteractionHandler {
         default:
           await interaction.reply({
             content: 'Unknown button action',
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
       }
     } catch (error) {
       console.error('Error handling button interaction:', error);
       await interaction.reply({
         content: 'An error occurred while processing your request.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   }
@@ -123,7 +123,6 @@ export class InteractionHandler implements IInteractionHandler {
 
       // Update the buttons to show History and Reopen
       await this.notificationManager.updateNotificationButtons(
-        interaction.message as Message,
         verificationEvent,
         VerificationStatus.VERIFIED
       );
@@ -137,13 +136,13 @@ export class InteractionHandler implements IInteractionHandler {
 
       await interaction.followUp({
         content: `User <@${userId}> has been verified and can now access the server.`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
       console.error('Error verifying user:', error);
       await interaction.followUp({
         content: 'An error occurred while verifying the user.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   }
@@ -178,7 +177,6 @@ export class InteractionHandler implements IInteractionHandler {
 
       // Update the notification message buttons
       await this.notificationManager.updateNotificationButtons(
-        interaction.message,
         verificationEvent,
         VerificationStatus.BANNED
       );
@@ -192,13 +190,13 @@ export class InteractionHandler implements IInteractionHandler {
 
       await interaction.followUp({
         content: `User <@${userId}> has been banned from the server.`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
       console.error('Error banning user:', error);
       await interaction.followUp({
         content: 'An error occurred while banning the user.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   }
@@ -232,26 +230,31 @@ export class InteractionHandler implements IInteractionHandler {
       // Create the thread
       const thread = await this.threadManager.createVerificationThread(member, verificationEvent);
 
+      // Update the buttons to hide the Create Thread button
+      await this.notificationManager.updateNotificationButtons(
+        verificationEvent,
+        VerificationStatus.PENDING
+      );
+
       if (!thread) {
         throw new Error('Failed to create verification thread');
       }
 
       // Update the buttons (this will remove the Create Thread button)
       await this.notificationManager.updateNotificationButtons(
-        interaction.message as Message,
         verificationEvent,
         VerificationStatus.PENDING
       );
 
       await interaction.followUp({
         content: `Created verification thread: ${thread.url}`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
       console.error('Error creating verification thread:', error);
       await interaction.followUp({
         content: 'An error occurred while creating the verification thread.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   }
@@ -261,7 +264,7 @@ export class InteractionHandler implements IInteractionHandler {
     guildId: string,
     userId: string
   ): Promise<void> {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
       // Get verification history with actions using the member object
@@ -337,20 +340,19 @@ export class InteractionHandler implements IInteractionHandler {
 
       // Update the notification message buttons
       await this.notificationManager.updateNotificationButtons(
-        interaction.message as Message,
         verificationEvent,
         VerificationStatus.PENDING // Set back to PENDING
       );
 
       await interaction.followUp({
         content: `Verification for <@${userId}> has been reopened. The user has been restricted again.`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
       console.error('Error reopening verification:', error);
       await interaction.followUp({
         content: 'An error occurred while reopening the verification.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   }

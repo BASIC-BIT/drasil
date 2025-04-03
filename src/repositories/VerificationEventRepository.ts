@@ -14,9 +14,7 @@ export interface IVerificationEventRepository {
   findByDetectionEvent(detectionEventId: string): Promise<VerificationEvent[]>;
   createFromDetection(
     detectionEventId: string | null,
-    status: VerificationStatus,
-    serverId?: string,
-    userId?: string
+    status: VerificationStatus
   ): Promise<VerificationEvent>;
   updateStatus(
     id: string,
@@ -133,9 +131,7 @@ export class VerificationEventRepository
 
   async createFromDetection(
     detectionEventId: string | null,
-    status: VerificationStatus,
-    serverId?: string,
-    userId?: string
+    status: VerificationStatus
   ): Promise<VerificationEvent> {
     try {
       let fetchedServerId: string | null = null;
@@ -155,10 +151,6 @@ export class VerificationEventRepository
           );
         }
 
-        if (!detectionEvent) {
-          throw new RepositoryError(`Detection event ${detectionEventId} not found`);
-        }
-
         if (!detectionEvent.server_id || !detectionEvent.user_id) {
           throw new RepositoryError(
             `Detection event ${detectionEventId} is missing required fields (server_id or user_id)`
@@ -168,10 +160,7 @@ export class VerificationEventRepository
         fetchedUserId = detectionEvent.user_id;
       }
 
-      const finalServerId = fetchedServerId ?? serverId;
-      const finalUserId = fetchedUserId ?? userId;
-
-      if (!finalServerId || !finalUserId) {
+      if (!fetchedServerId || !fetchedUserId) {
         throw new RepositoryError(
           'Cannot create verification event: Missing server_id or user_id context.'
         );
@@ -179,17 +168,17 @@ export class VerificationEventRepository
 
       const now = new Date().toISOString();
       const newEventData: Omit<VerificationEvent, 'id' | 'updated_at'> & { updated_at?: string } = {
-        server_id: finalServerId,
-        user_id: finalUserId,
+        server_id: fetchedServerId,
+        user_id: fetchedUserId,
         detection_event_id: detectionEventId,
         status,
         created_at: now,
         metadata: {},
-        thread_id: undefined,
-        notification_message_id: undefined,
-        resolved_at: undefined,
-        resolved_by: undefined,
-        notes: undefined,
+        thread_id: null,
+        notification_message_id: null,
+        resolved_at: null,
+        resolved_by: null,
+        notes: null,
       };
 
       const { data, error } = await this.supabaseClient
