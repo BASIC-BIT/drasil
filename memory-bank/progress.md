@@ -44,6 +44,11 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 - ✅ Better error handling and propagation
 - ✅ Improved logging and debugging capabilities
 - ✅ Clearer service boundaries and responsibilities
+- ✅ **Event-Driven Architecture Refactoring (Phase 1 & 2)**:
+  - Implemented `EventBus` and event definitions.
+  - Refactored `SecurityActionService` and `UserModerationService` to publish events.
+  - Created and integrated subscribers (`RestrictionSubscriber`, `NotificationSubscriber`, `RoleUpdateSubscriber`, `ActionLogSubscriber`, `ServerMemberStatusSubscriber`) to handle side effects.
+  - Decoupled core workflows (suspicious user handling, verification, banning).
 
 ## What Works
 

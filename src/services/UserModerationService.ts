@@ -5,8 +5,10 @@ import { IServerMemberRepository } from '../repositories/ServerMemberRepository'
 import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
-import { AdminActionType, VerificationStatus } from '../repositories/types';
+import { VerificationStatus } from '../repositories/types'; // Removed AdminActionType
 import { IAdminActionService } from './AdminActionService';
+import { IEventBus } from '../events/EventBus'; // Added EventBus import
+import { EventNames } from '../events/events'; // Added EventNames import
 
 /**
  * Interface for the UserModerationService
@@ -15,7 +17,6 @@ export interface IUserModerationService {
   /**
    * Restricts a user by assigning the restricted role and updating their verification status
    * @param member The guild member to restrict
-   * @param moderator The user who performed the restriction
    * @returns Promise resolving to true if successful, false if the restriction failed
    */
   restrictUser(member: GuildMember): Promise<boolean>;
@@ -44,10 +45,11 @@ export interface IUserModerationService {
 @injectable()
 export class UserModerationService implements IUserModerationService {
   private serverMemberRepository: IServerMemberRepository;
-  private notificationManager: INotificationManager;
-  private roleManager: IRoleManager;
+  private notificationManager: INotificationManager; // Keep for now, might be replaced by events later
+  private roleManager: IRoleManager; // Keep for now, might be replaced by events later
   private verificationEventRepository: IVerificationEventRepository;
-  private adminActionService: IAdminActionService;
+  private adminActionService: IAdminActionService; // Keep for now, might be replaced by events later
+  private eventBus: IEventBus; // Added EventBus
 
   constructor(
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
@@ -55,19 +57,20 @@ export class UserModerationService implements IUserModerationService {
     @inject(TYPES.RoleManager) roleManager: IRoleManager,
     @inject(TYPES.VerificationEventRepository)
     verificationEventRepository: IVerificationEventRepository,
-    @inject(TYPES.AdminActionService) adminActionService: IAdminActionService
+    @inject(TYPES.AdminActionService) adminActionService: IAdminActionService,
+    @inject(TYPES.EventBus) eventBus: IEventBus // Inject EventBus
   ) {
     this.serverMemberRepository = serverMemberRepository;
     this.notificationManager = notificationManager;
     this.roleManager = roleManager;
     this.verificationEventRepository = verificationEventRepository;
     this.adminActionService = adminActionService;
+    this.eventBus = eventBus; // Assign EventBus
   }
 
   /**
    * Restricts a user by assigning the restricted role and updating their verification status
    * @param member The guild member to restrict
-   * @param moderator The user who performed the restriction
    * @returns Promise resolving to true if successful, false if the restriction failed
    */
   public async restrictUser(member: GuildMember): Promise<boolean> {
@@ -78,22 +81,40 @@ export class UserModerationService implements IUserModerationService {
       );
 
       if (!verificationEvent) {
-        throw new Error('No active verification event found');
+        // If no active event, we might still need to restrict based on other logic,
+        // but for now, let's assume restriction happens only with an active event.
+        // Alternatively, create a new PENDING event here? Needs clarification.
+        console.warn(
+          `RestrictUser called for ${member.user.tag} but no active verification event found.`
+        );
+        // Let's try assigning the role anyway, assuming the intent is restriction.
+        // return false;
+      } else {
+        // Update existing event status if needed (e.g., if it was reopened)
+        if (verificationEvent.status !== VerificationStatus.PENDING) {
+          verificationEvent.status = VerificationStatus.PENDING;
+          await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
+        }
       }
 
-      verificationEvent.status = VerificationStatus.PENDING;
-      await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
-
       // Assign the role using RoleManager
-      await this.roleManager.assignRestrictedRole(member);
+      const roleAssigned = await this.roleManager.assignRestrictedRole(member);
+      if (!roleAssigned) {
+        console.error(`Failed to assign restricted role to ${member.user.tag}`);
+        return false; // Fail if role assignment fails
+      }
 
+      // Update server member record
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
         is_restricted: true,
+        verification_status: VerificationStatus.PENDING, // Ensure status matches
+        last_status_change: new Date(),
       });
 
+      console.log(`Successfully restricted user ${member.user.tag}`);
       return true;
     } catch (error) {
-      console.error('Failed to restrict user:', error);
+      console.error(`Failed to restrict user ${member.user.tag}:`, error);
       return false;
     }
   }
@@ -112,30 +133,40 @@ export class UserModerationService implements IUserModerationService {
       );
 
       if (!verificationEvent) {
-        throw new Error('No active verification event found');
+        throw new Error('No active verification event found to verify');
       }
 
       // Set status and resolution details
       verificationEvent.status = VerificationStatus.VERIFIED;
       verificationEvent.resolved_by = moderator.id;
       verificationEvent.resolved_at = new Date();
-      await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
-
-      await this.roleManager.removeRestrictedRole(member);
-
-      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-        is_restricted: false,
-      });
-
-      await this.notificationManager.logActionToMessage(
-        verificationEvent,
-        AdminActionType.VERIFY,
-        moderator
+      const updatedEvent = await this.verificationEventRepository.update(
+        verificationEvent.id,
+        verificationEvent
       );
 
-      return true; // Verification process initiated successfully
+      if (!updatedEvent) {
+        throw new Error(
+          `Failed to update verification event ${verificationEvent.id} status to VERIFIED.`
+        );
+      }
+
+      // Publish UserVerified event instead of direct calls
+      this.eventBus.publish(EventNames.UserVerified, {
+        userId: member.id,
+        serverId: member.guild.id,
+        moderatorId: moderator.id,
+        verificationEventId: verificationEvent.id,
+      });
+
+      // Side effects (role removal, status update, logging) are now handled by subscribers listening to UserVerified event.
+
+      console.log(
+        `User ${member.user.tag} verification process completed, UserVerified event published.`
+      );
+      return true; // Verification process completed successfully
     } catch (error) {
-      console.error(`Failed to verify user ${member?.user?.tag} via command:`, error);
+      console.error(`Failed to verify user ${member?.user?.tag}:`, error);
       return false;
     }
   }
@@ -154,37 +185,52 @@ export class UserModerationService implements IUserModerationService {
         member.guild.id
       );
 
-      if (!verificationEvent) {
-        throw new Error('No active verification event found');
+      // Allow banning even if no active verification event exists
+      // if (!verificationEvent) {
+      //   throw new Error('No active verification event found to ban');
+      // }
+
+      // Update verification event status if it exists
+      if (verificationEvent) {
+        verificationEvent.status = VerificationStatus.BANNED;
+        verificationEvent.resolved_by = moderator.id;
+        verificationEvent.resolved_at = new Date();
+        const updatedEvent = await this.verificationEventRepository.update(
+          verificationEvent.id,
+          verificationEvent
+        );
+        if (!updatedEvent) {
+          console.warn(
+            `Failed to update verification event ${verificationEvent.id} status to BANNED, but proceeding with ban.`
+          );
+        }
       }
 
-      // Set status and resolution details
-      verificationEvent.status = VerificationStatus.BANNED;
-      verificationEvent.resolved_by = moderator.id;
-      verificationEvent.resolved_at = new Date();
-      await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
-
+      // Perform the ban
       await member.ban({ reason });
+      console.log(`Banned user ${member.user.tag}. Reason: ${reason}`);
 
-      // TODO: is the user actually restricted if they're banned? lol
-      // Maybe like a "user state?"
-      // I've looked at this before, this is_restricted thing is
-      // data duplication and not really.... great
-      // But it also feels weird to have to look up active verification events
-      // To determine restriction...
+      // Update server member status
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-        is_restricted: true,
+        verification_status: VerificationStatus.BANNED,
+        is_restricted: true, // Keep restricted flag? Or remove member record? Needs clarification. Let's keep restricted for now.
+        last_status_change: new Date(),
       });
 
-      await this.notificationManager.logActionToMessage(
-        verificationEvent,
-        AdminActionType.BAN,
-        moderator
-      );
+      // Publish UserBanned event
+      this.eventBus.publish(EventNames.UserBanned, {
+        userId: member.id,
+        serverId: member.guild.id,
+        moderatorId: moderator.id,
+        reason: reason,
+        verificationEventId: verificationEvent?.id || 'N/A', // Pass ID if event existed
+      });
 
-      return true; // Ban succeeded, even if logging/status updates had issues
+      // Side effects (status update, logging) are now handled by subscribers listening to UserBanned event.
+
+      return true; // Ban succeeded
     } catch (error) {
-      console.error(`Failed to ban user ${member?.user?.tag} via command:`, error);
+      console.error(`Failed to ban user ${member?.user?.tag}:`, error);
       return false;
     }
   }

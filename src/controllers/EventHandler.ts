@@ -9,6 +9,11 @@ import { globalConfig } from '../config/GlobalConfig';
 import { ISecurityActionService } from '../services/SecurityActionService';
 import { TYPES } from '../di/symbols';
 import { IInteractionHandler } from './InteractionHandler';
+import { RestrictionSubscriber } from '../events/subscribers/RestrictionSubscriber'; // Import subscriber
+import { NotificationSubscriber } from '../events/subscribers/NotificationSubscriber'; // Import subscriber
+import { RoleUpdateSubscriber } from '../events/subscribers/RoleUpdateSubscriber'; // Import subscriber
+import { ActionLogSubscriber } from '../events/subscribers/ActionLogSubscriber'; // Import subscriber
+import { ServerMemberStatusSubscriber } from '../events/subscribers/ServerMemberStatusSubscriber'; // Import subscriber
 import { ICommandHandler } from './CommandHandler';
 
 // Load environment variables
@@ -30,6 +35,11 @@ export class EventHandler implements IEventHandler {
   private securityActionService: ISecurityActionService;
   private commandHandler: ICommandHandler;
   private interactionHandler: IInteractionHandler;
+  private restrictionSubscriber: RestrictionSubscriber; // Add property for subscriber
+  private notificationSubscriber: NotificationSubscriber; // Add property for subscriber
+  private roleUpdateSubscriber: RoleUpdateSubscriber; // Add property for subscriber
+  private actionLogSubscriber: ActionLogSubscriber; // Add property for subscriber
+  private serverMemberStatusSubscriber: ServerMemberStatusSubscriber; // Add property for subscriber
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -38,7 +48,13 @@ export class EventHandler implements IEventHandler {
     @inject(TYPES.ConfigService) configService: IConfigService,
     @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService,
     @inject(TYPES.CommandHandler) commandHandler: ICommandHandler,
-    @inject(TYPES.InteractionHandler) interactionHandler: IInteractionHandler
+    @inject(TYPES.InteractionHandler) interactionHandler: IInteractionHandler,
+    @inject(TYPES.RestrictionSubscriber) restrictionSubscriber: RestrictionSubscriber, // Inject subscriber
+    @inject(TYPES.NotificationSubscriber) notificationSubscriber: NotificationSubscriber, // Inject subscriber
+    @inject(TYPES.RoleUpdateSubscriber) roleUpdateSubscriber: RoleUpdateSubscriber, // Inject subscriber
+    @inject(TYPES.ActionLogSubscriber) actionLogSubscriber: ActionLogSubscriber, // Inject subscriber
+    @inject(TYPES.ServerMemberStatusSubscriber)
+    serverMemberStatusSubscriber: ServerMemberStatusSubscriber // Inject subscriber
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -47,6 +63,11 @@ export class EventHandler implements IEventHandler {
     this.securityActionService = securityActionService;
     this.commandHandler = commandHandler;
     this.interactionHandler = interactionHandler;
+    this.restrictionSubscriber = restrictionSubscriber; // Assign subscriber
+    this.notificationSubscriber = notificationSubscriber; // Assign subscriber
+    this.roleUpdateSubscriber = roleUpdateSubscriber; // Assign subscriber
+    this.actionLogSubscriber = actionLogSubscriber; // Assign subscriber
+    this.serverMemberStatusSubscriber = serverMemberStatusSubscriber; // Assign subscriber
   }
 
   public async setupEventHandlers(): Promise<void> {

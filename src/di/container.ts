@@ -40,6 +40,12 @@ import { InteractionHandler, IInteractionHandler } from '../controllers/Interact
 import { CommandHandler, ICommandHandler } from '../controllers/CommandHandler';
 import { IEventHandler, EventHandler } from '../controllers/EventHandler';
 import { ThreadManager, IThreadManager } from '../services/ThreadManager';
+import { EventBus, IEventBus } from '../events/EventBus'; // Moved import
+import { RestrictionSubscriber } from '../events/subscribers/RestrictionSubscriber'; // Import Subscriber
+import { NotificationSubscriber } from '../events/subscribers/NotificationSubscriber'; // Import Subscriber
+import { RoleUpdateSubscriber } from '../events/subscribers/RoleUpdateSubscriber'; // Import Subscriber
+import { ActionLogSubscriber } from '../events/subscribers/ActionLogSubscriber'; // Import Subscriber
+import { ServerMemberStatusSubscriber } from '../events/subscribers/ServerMemberStatusSubscriber'; // Import Subscriber
 // Initialize container
 const container = new Container();
 
@@ -174,6 +180,31 @@ function configureServices(container: Container): void {
     .inSingletonScope();
 
   container.bind<IThreadManager>(TYPES.ThreadManager).to(ThreadManager).inSingletonScope();
+
+  // Event Bus
+  container.bind<IEventBus>(TYPES.EventBus).to(EventBus).inSingletonScope();
+
+  // Subscribers (bind them so they can be injected and instantiated)
+  container
+    .bind<RestrictionSubscriber>(TYPES.RestrictionSubscriber)
+    .to(RestrictionSubscriber)
+    .inSingletonScope();
+  container
+    .bind<NotificationSubscriber>(TYPES.NotificationSubscriber)
+    .to(NotificationSubscriber)
+    .inSingletonScope();
+  container
+    .bind<RoleUpdateSubscriber>(TYPES.RoleUpdateSubscriber)
+    .to(RoleUpdateSubscriber)
+    .inSingletonScope();
+  container
+    .bind<ActionLogSubscriber>(TYPES.ActionLogSubscriber)
+    .to(ActionLogSubscriber)
+    .inSingletonScope();
+  container
+    .bind<ServerMemberStatusSubscriber>(TYPES.ServerMemberStatusSubscriber)
+    .to(ServerMemberStatusSubscriber)
+    .inSingletonScope();
 }
 
 export { container };

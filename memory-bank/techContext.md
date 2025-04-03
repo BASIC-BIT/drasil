@@ -40,6 +40,8 @@ This document details the technical implementation of the Discord Anti-Spam Bot,
   - Secure storage of sensitive credentials
   - Used for Discord token, OpenAI API key, and Database connection URL
 
+- **Node.js EventEmitter**: Used as the basis for the internal `EventBus` for decoupling services.
+
 ### Dependency Injection
 
 - **InversifyJS**: Full-featured IoC container:
@@ -51,6 +53,7 @@ This document details the technical implementation of the Discord Anti-Spam Bot,
   - Container configuration in src/di/container.ts
   - Symbol definitions in src/di/symbols.ts
   - Testable architecture with mock injections
+  - Manages singleton instances of `EventBus` and event `Subscribers`.
 
 ### Testing Tools
 
@@ -61,6 +64,10 @@ This document details the technical implementation of the Discord Anti-Spam Bot,
   - `createServiceTestContainer()`: Intended to create container with real service implementation.
   - `createMocks()`: Intended to create mock implementations.
 - **Repository Testing**: Currently, repository-specific unit tests are missing. Future tests will require a Prisma mocking strategy (e.g., `jest-mock-extended` or integrated mocking).
+- **Event Testing**: Requires testing that:
+  - Services publish the correct events with the correct payloads.
+  - Subscribers react correctly to events and perform the intended side effects.
+  - Integration tests verify the end-to-end event flow.
 - **Custom Mocks**:
   - `__mocks__/discord.js.ts`: Mocks Discord client and interactions.
   - `__mocks__/openai.ts`: Mocks OpenAI API responses.
@@ -433,8 +440,8 @@ The bot implements a hybrid spam detection approach combining multiple technique
   - **Handling Nullable Fields**: Prisma maps database `NULL` to JavaScript `null`. When checking for the absence of optional fields returned by Prisma, prefer truthiness checks (`if (value)`) or explicit null checks (`value !== null`) over checks like `value !== undefined`, as the latter can lead to logical errors when the value is `null`.
 
 - **Row-Level Security**:
- - RLS policies are defined in the database (via Supabase migrations).
- - Prisma operations are executed using the dedicated `prisma` database user, which bypasses RLS (`bypassrls`). Ensure this user has appropriate direct grants if RLS bypass is ever removed.
+- RLS policies are defined in the database (via Supabase migrations).
+- Prisma operations are executed using the dedicated `prisma` database user, which bypasses RLS (`bypassrls`). Ensure this user has appropriate direct grants if RLS bypass is ever removed.
 
 ## Testing Strategy with InversifyJS
 

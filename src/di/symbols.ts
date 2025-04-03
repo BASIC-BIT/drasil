@@ -48,4 +48,12 @@ export const TYPES = {
   AdminActionRepository: Symbol.for('AdminActionRepository'),
 
   AdminActionService: Symbol.for('AdminActionService'),
+  EventBus: Symbol.for('EventBus'),
+
+  // Subscribers
+  RestrictionSubscriber: Symbol.for('RestrictionSubscriber'),
+  NotificationSubscriber: Symbol.for('NotificationSubscriber'),
+  RoleUpdateSubscriber: Symbol.for('RoleUpdateSubscriber'),
+  ActionLogSubscriber: Symbol.for('ActionLogSubscriber'),
+  ServerMemberStatusSubscriber: Symbol.for('ServerMemberStatusSubscriber'),
 };

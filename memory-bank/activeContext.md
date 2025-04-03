@@ -143,6 +143,14 @@ The project is currently focused on implementing the core functionality of the D
 - ✅ **Prisma Migration**: Migrated all repositories (`ServerRepository`, `UserRepository`, `ServerMemberRepository`, `DetectionEventsRepository`, `VerificationEventRepository`, `AdminActionRepository`) to use Prisma Client instead of Supabase Client. Updated DI container.
 - ✅ **Prisma Migration**: Migrated all repositories (`ServerRepository`, `UserRepository`, `ServerMemberRepository`, `DetectionEventsRepository`, `VerificationEventRepository`, `AdminActionRepository`) to use Prisma Client instead of Supabase Client. Updated DI container.
 - ✅ **Notification Button Fix**: Fixed bug where "Create Thread" button was missing on initial verification notifications due to incorrect null check (`!== undefined` vs truthiness check) for `thread_id` in `NotificationManager.ts`.
+- ✅ **Event-Driven Architecture Refactoring (Phase 1 & 2)**:
+  - Implemented `EventBus` using Node.js `EventEmitter`.
+  - Defined core events (`VerificationStarted`, `UserVerified`, `UserBanned`) with typed payloads.
+  - Integrated `EventBus` into DI container.
+  - Refactored `SecurityActionService` and `UserModerationService` to publish events.
+  - Created subscribers (`RestrictionSubscriber`, `NotificationSubscriber`, `RoleUpdateSubscriber`, `ActionLogSubscriber`, `ServerMemberStatusSubscriber`) to handle side effects.
+  - Injected subscribers into `EventHandler` for instantiation.
+  - Removed direct service calls for handled side effects.
 
 ### In Progress
 
@@ -166,7 +174,7 @@ The project is currently focused on implementing the core functionality of the D
 
 ## Current Architecture State
 
-The system currently implements:
+The system uses InversifyJS for dependency injection and is transitioning towards an Event-Driven Architecture (EDA) for decoupling core workflows. Key components include:
 
 1. **Dependency Injection with InversifyJS**:
 
@@ -221,6 +229,11 @@ The system currently implements:
    - **User Repository**: Manages Discord users across servers.
    - **Server Member Repository**: Manages user data in specific servers.
    - **Detection/Verification/Admin Repositories**: Manage related event/action data.
+7. **Eventing System**:
+   - **EventBus**: Central singleton for publishing and subscribing to internal events.
+   - **Events**: Strongly-typed definitions for events and payloads (`src/events/events.ts`).
+   - **Subscribers**: Dedicated classes handling side effects triggered by events (`src/events/subscribers/`).
+
 
 ## Active Decisions & Considerations
 
@@ -323,6 +336,9 @@ The system currently implements:
    - Repositories inject and use `PrismaClient`.
    - Clear separation of concerns maintained.
    - Error handling uses `RepositoryError` wrapper around Prisma errors.
+10. **Event-Driven Flow**:
+   - Core actions (user restriction, notification, role updates, status changes, logging) are triggered by events like `VerificationStarted`, `UserVerified`, `UserBanned`.
+   - Services publish events; dedicated subscribers handle the resulting side effects.
 
 ### Open Questions & Considerations
 
@@ -388,11 +404,12 @@ The system currently implements:
    - ✅ Document server configuration command
    - ✅ Document InversifyJS testing approach (Note: Needs review based on actual test setup)
    - ✅ Updated Memory Bank (`techContext.md`, `systemPatterns.md`) for Prisma migration.
+   - 🔄 Update Memory Bank (`systemPatterns.md`, `techContext.md`, `activeContext.md`, `progress.md`) for EDA refactoring.
    - 🔄 Update README with setup instructions (including Prisma).
    - 🔄 Document database schema (`prisma/schema.prisma`) and migration process (`prisma migrate dev`).
    - 🔄 Create admin guide for bot configuration.
    - 🔄 Document environment variables (`DATABASE_URL`).
-   - 🔄 Create developer guide for extending the bot (including Prisma usage).
+   - 🔄 Create developer guide for extending the bot (including Prisma and EDA usage).
 
 4. **Alpha Release Critical Components**:
    - ❌ User flags repository (Cancelled - integrating into existing tables)

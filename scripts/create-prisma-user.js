@@ -66,9 +66,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE prisma IN SCHEMA public GRANT ALL ON SEQUENCES
 
 async function setupPrismaUser() {
   if (!prismaDbPassword) {
-    console.error(
-      'Error: PRISMA_DB_PASSWORD environment variable is not set in your .env file.'
-    );
+    console.error('Error: PRISMA_DB_PASSWORD environment variable is not set in your .env file.');
     process.exit(1);
   }
 

@@ -20,6 +20,13 @@ The Discord Anti-Spam Bot follows a modular, service-oriented architecture with 
 │   ├── di/                    # Dependency injection
 │   │   ├── container.ts      # InversifyJS container config
 │   │   └── symbols.ts        # InversifyJS symbol definitions
+│   ├── events/                # Event definitions and EventBus
+│   │   ├── events.ts         # Event names and payload interfaces
+│   │   └── EventBus.ts       # EventBus implementation
+│   │   └── subscribers/      # Event subscriber classes
+│   │       ├── RestrictionSubscriber.ts
+│   │       ├── NotificationSubscriber.ts
+│   │       └── ... (other subscribers)
 │   ├── repositories/          # Data access layer
 │   │   ├── types.ts          # Database entity types
 │   │   ├── BaseRepository.ts # Base repository interface
@@ -84,7 +91,13 @@ The central orchestrator that:
 - Contains the `RepositoryError` class for consistent error handling.
 - (The `IBaseRepository` interface and `AbstractBaseRepository` class are no longer strictly necessary as Prisma Client provides strong typing, but interfaces like `IServerRepository` are still used for DI contracts).
 
-### 4. Service Layer
+### 4. Event Bus & Subscribers (src/events/)
+
+- **EventBus (EventBus.ts)**: Simple pub/sub implementation using Node.js `EventEmitter`. Injected as a singleton.
+- **Events (events.ts)**: Defines event names (constants) and strongly-typed payload interfaces (`EventMap`).
+- **Subscribers (subscribers/)**: Classes that listen for specific events and trigger side effects (e.g., `RestrictionSubscriber`, `NotificationSubscriber`). Instantiated via DI container.
+
+### 5. Service Layer
 
 #### ConfigService (ConfigService.ts)
 
@@ -172,11 +185,10 @@ The central orchestrator that:
 #### UserModerationService (UserModerationService.ts)
 
 - Implements IUserModerationService interface
-- Coordinates user restriction and verification workflows
-- Manages restricted role assignment and removal
-- Updates verification status in the database
-- Handles user banning and moderation actions
-- Integrates with VerificationService for status tracking
+- Coordinates user restriction and verification workflows (partially refactored to events)
+- Handles user banning (publishes `UserBanned` event)
+- Handles user verification (publishes `UserVerified` event)
+- Handles reopening verification (TODO: Refactor to events)
 - Marked as @injectable() and receives service dependencies via constructor
 
 ## Key Design Patterns
@@ -249,15 +261,14 @@ Business logic is encapsulated in focused service classes with single responsibi
 - **ConfigService**: Configuration management
 - **UserService**: User and server membership management
 
-### 4. Event-Driven Architecture
+### 4. Event-Driven Architecture (Internal)
 
-The system is driven by Discord events that trigger specific workflows:
+Core workflows are being refactored to use an internal event bus (`src/events/EventBus.ts`) for decoupling services:
 
-- **messageCreate**: Triggers message analysis workflow
-- **guildMemberAdd**: Triggers new join analysis workflow
-- **interactionCreate**: Handles slash commands and button interactions
-- **guildCreate**: Sets up new servers when the bot joins
-- **ready**: Initializes services and registers commands
+- **Events**: Defined with strong types (`src/events/events.ts`) (e.g., `VerificationStarted`, `UserVerified`, `UserBanned`).
+- **Publishers**: Services publish events after completing their primary task (e.g., `SecurityActionService` publishes `VerificationStarted`).
+- **Subscribers**: Dedicated classes (`src/events/subscribers/`) listen for events and handle specific side effects (e.g., `RestrictionSubscriber` handles role assignment, `NotificationSubscriber` handles sending notifications).
+- **Decoupling**: Reduces direct service-to-service calls for secondary actions, improving maintainability.
 
 ### 5. Command Pattern
 
@@ -286,79 +297,63 @@ This pattern is implemented in the getServerConfig method, which:
 
 ## Data Flow Patterns
 
-### 1. Message Processing Flow
-
-```
-Message Received → Bot.ts → DetectionOrchestrator
-├── HeuristicService (Quick Check)
-└── GPTService (Deep Analysis if user is new or borderline suspicious)
-→ Final Decision → Action (via Bot.ts)
-   ├── Record Detection Event
-   ├── Assign Restricted Role (if suspicious)
-   └── Send Admin Notification (if suspicious)
-```
-
-### 2. User Verification Flow
+### 1. Suspicious User Detection & Initial Handling Flow (Event-Driven)
 
 ```mermaid
 sequenceDiagram
-    participant B as Bot.ts
-    participant SAS as SecurityActionService
-    participant VS as VerificationService
-    participant NM as NotificationManager
-    participant RM as RoleManager
-    participant AAR as AdminActionRepository
-    participant VER as VerificationEventRepository
-    participant SMR as ServerMemberRepository
+    participant Discord
+    participant EventHandler
+    participant SecurityActionService
+    participant VerificationEventRepo
+    participant EventBus
+    participant RestrictionSubscriber
+    participant NotificationSubscriber
+    participant UserModerationService
+    participant NotificationManager
 
-    alt Suspicious Join/Message
-        B->>SAS: handleSuspiciousJoin/Message(member, result)
-        SAS->>VS: startVerification(member, result.detectionEventId)
-        VS->>VER: create(status='pending', detection_event_id)
-        VS->>SMR: update(is_restricted=true, verification_status='pending')
-        VS->>RM: assignRestrictedRole(member)
-        VS->>NM: sendAdminNotification(member, result)
-        NM-->>B: Returns notification message
-        SAS->>NM: createVerificationThread(member) # Optional, can also be triggered by button
-        NM-->>SAS: Returns thread
-        SAS->>VS: attachThreadToVerification(eventId, threadId)
-        VS->>VER: update(thread_id=threadId)
-    end
-
-    alt Admin Clicks Verify Button
-        B->>VS: verifyUser(member, adminId)
-        VS->>VER: update(status='verified', resolved_by=adminId)
-        VS->>AAR: create(action='verify', admin_id=adminId)
-        VS->>SMR: update(is_restricted=false, verification_status='verified')
-        VS->>RM: removeRestrictedRole(member)
-        B->>NM: logActionToMessage(message, 'verified', admin)
-        B->>NM: updateNotificationButtons(message, userId, 'verified')
-        B->>B: manageThreadState(lock=true, archive=true)
-    end
-
-    alt Admin Clicks Ban Button
-        B->>VS: rejectUser(member, adminId)
-        VS->>VER: update(status='rejected', resolved_by=adminId)
-        VS->>AAR: create(action='reject', admin_id=adminId)
-        VS->>SMR: update(verification_status='rejected') # Restriction might remain or ban happens
-        B->>B: member.ban() # Direct Discord action
-        B->>AAR: create(action='ban', admin_id=adminId) # Log ban separately
-        B->>NM: updateNotificationButtons(message, userId, 'rejected')
-        B->>B: manageThreadState(lock=true, archive=true)
-    end
-
-     alt Admin Clicks Reopen Button
-        B->>VS: reopenVerification(member, adminId)
-        VS->>VER: update(status='reopened') # Or create new PENDING event? TBD by service logic
-        VS->>AAR: create(action='reopen', admin_id=adminId)
-        VS->>SMR: update(is_restricted=true, verification_status='pending') # Re-restrict
-        VS->>RM: assignRestrictedRole(member) # Re-assign role
-        B->>NM: updateNotificationButtons(message, userId, 'pending')
-        B->>B: manageThreadState(lock=false, archive=false) # Unlock/Unarchive
-    end
+    Discord->>EventHandler: messageCreate / guildMemberAdd
+    EventHandler->>SecurityActionService: handleSuspiciousMessage / handleSuspiciousJoin
+    SecurityActionService->>VerificationEventRepo: createFromDetection(...)
+    VerificationEventRepo-->>SecurityActionService: newVerificationEvent
+    SecurityActionService->>EventBus: publish(VerificationStarted, payload)
+    EventBus->>RestrictionSubscriber: handleVerificationStarted(payload)
+    RestrictionSubscriber->>UserModerationService: restrictUser(member)
+    EventBus->>NotificationSubscriber: handleVerificationStarted(payload)
+    NotificationSubscriber->>NotificationManager: upsertSuspiciousUserNotification(...)
+    NotificationSubscriber->>VerificationEventRepo: update(notification_message_id)
 ```
 
-This diagram shows the complete verification flow, including the roles of VerificationService, AdminActionService, and related repositories in managing the verification lifecycle.
+### 2. User Verification/Ban Flow (Event-Driven)
+
+```mermaid
+sequenceDiagram
+    participant InteractionHandler
+    participant UserModerationService
+    participant VerificationEventRepo
+    participant EventBus
+    participant RoleUpdateSubscriber
+    participant ActionLogSubscriber
+    participant ServerMemberStatusSubscriber
+    participant RoleManager
+    participant NotificationManager
+    participant ServerMemberRepo
+
+    InteractionHandler->>UserModerationService: verifyUser / banUser
+    UserModerationService->>VerificationEventRepo: update(status='verified'/'banned')
+    VerificationEventRepo-->>UserModerationService: updatedEvent
+    UserModerationService->>EventBus: publish(UserVerified / UserBanned, payload)
+
+    EventBus->>RoleUpdateSubscriber: handleUserVerified(payload)
+    RoleUpdateSubscriber->>RoleManager: removeRestrictedRole(member)
+
+    EventBus->>ActionLogSubscriber: handleUserVerified / handleUserBanned
+    ActionLogSubscriber->>NotificationManager: logActionToMessage(...)
+
+    EventBus->>ServerMemberStatusSubscriber: handleUserVerified / handleUserBanned
+    ServerMemberStatusSubscriber->>ServerMemberRepo: upsertMember(status='verified'/'banned')
+```
+
+*Note: The old diagram showing direct calls between services like `VS->RM` is now outdated for these flows.*
 
 ### 3. Configuration Flow
 

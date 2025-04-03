@@ -33,6 +33,7 @@ This file captures important patterns, preferences, and project intelligence tha
   - Command pattern for slash commands and button interactions
   - Factory methods for creating complex objects
   - Builder pattern for Discord embeds and components
+  - Internal Event-Driven Architecture (EDA) for decoupling services (using EventBus and Subscribers)
 
 ## Development Workflow
 
