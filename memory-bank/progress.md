@@ -134,6 +134,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ Ban User button (danger style)
   - ✅ Create Thread button (primary style)
   - ✅ Custom ID format with encoded user ID
+  - ✅ Fixed "Create Thread" button visibility on initial notifications
 
 - ✅ Action logging
 

@@ -64,6 +64,7 @@ This file captures important patterns, preferences, and project intelligence tha
   - Use generics for type-safe collections
   - Leverage union types for state representation
   - Use optional chaining and nullish coalescing
+  - **Checking Nullable Prisma Fields**: When checking for the presence/absence of optional fields returned by Prisma (which maps database `NULL` to JavaScript `null`), prefer truthiness checks (`if (value)`) or explicit null checks (`value !== null`) over checks like `value !== undefined`. The latter can lead to logical errors as `null !== undefined` evaluates to `true`.
 
 - **Testing Approach**:
   - Mock external dependencies (Discord, OpenAI, Prisma Client)

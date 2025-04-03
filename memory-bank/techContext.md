@@ -430,10 +430,11 @@ The bot implements a hybrid spam detection approach combining multiple technique
   - Repositories implement interfaces (e.g., `IServerRepository`).
   - Repositories now directly use the injected `PrismaClient` for database operations.
   - The generic `SupabaseRepository` base class is no longer used.
+  - **Handling Nullable Fields**: Prisma maps database `NULL` to JavaScript `null`. When checking for the absence of optional fields returned by Prisma, prefer truthiness checks (`if (value)`) or explicit null checks (`value !== null`) over checks like `value !== undefined`, as the latter can lead to logical errors when the value is `null`.
 
 - **Row-Level Security**:
-  - RLS policies are defined in the database (via Supabase migrations).
-  - Prisma operations are executed using the dedicated `prisma` database user, which bypasses RLS (`bypassrls`). Ensure this user has appropriate direct grants if RLS bypass is ever removed.
+ - RLS policies are defined in the database (via Supabase migrations).
+ - Prisma operations are executed using the dedicated `prisma` database user, which bypasses RLS (`bypassrls`). Ensure this user has appropriate direct grants if RLS bypass is ever removed.
 
 ## Testing Strategy with InversifyJS
 

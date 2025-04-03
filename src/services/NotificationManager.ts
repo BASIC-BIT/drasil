@@ -150,7 +150,7 @@ export class NotificationManager implements INotificationManager {
       const actionRow = this.createActionRow(
         member.id,
         detectionEvents,
-        verificationEvent.thread_id !== undefined
+        !!verificationEvent.thread_id // Check for truthiness (not null/undefined)
       );
 
       // If we have an existing message, update it, otherwise create new

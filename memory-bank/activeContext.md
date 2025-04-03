@@ -142,6 +142,7 @@ The project is currently focused on implementing the core functionality of the D
   - Added proper cleanup in test lifecycle hooks
 - ✅ **Prisma Migration**: Migrated all repositories (`ServerRepository`, `UserRepository`, `ServerMemberRepository`, `DetectionEventsRepository`, `VerificationEventRepository`, `AdminActionRepository`) to use Prisma Client instead of Supabase Client. Updated DI container.
 - ✅ **Prisma Migration**: Migrated all repositories (`ServerRepository`, `UserRepository`, `ServerMemberRepository`, `DetectionEventsRepository`, `VerificationEventRepository`, `AdminActionRepository`) to use Prisma Client instead of Supabase Client. Updated DI container.
+- ✅ **Notification Button Fix**: Fixed bug where "Create Thread" button was missing on initial verification notifications due to incorrect null check (`!== undefined` vs truthiness check) for `thread_id` in `NotificationManager.ts`.
 
 ### In Progress
 
