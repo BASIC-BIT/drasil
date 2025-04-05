@@ -36,6 +36,7 @@ This document details the technical implementation of the Discord Anti-Spam Bot,
   - Handles migrations (`prisma migrate dev`)
 
 - **dotenv**: Environment variable management:
+
   - Loads variables from .env file
   - Secure storage of sensitive credentials
   - Used for Discord token, OpenAI API key, and Database connection URL

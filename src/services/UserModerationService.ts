@@ -1,4 +1,4 @@
-import { GuildMember, User } from 'discord.js';
+import { GuildMember, User, Client } from 'discord.js'; // Added Client
 import { injectable, inject } from 'inversify';
 import { TYPES } from '../di/symbols';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
@@ -8,7 +8,11 @@ import { IVerificationEventRepository } from '../repositories/VerificationEventR
 import { VerificationStatus } from '../repositories/types'; // Removed AdminActionType
 import { IAdminActionService } from './AdminActionService';
 import { IEventBus } from '../events/EventBus'; // Added EventBus import
-import { EventNames } from '../events/events'; // Added EventNames import
+import {
+  EventNames,
+  AdminVerifyUserRequestedPayload, // Added
+  AdminBanUserRequestedPayload, // Added
+} from '../events/events'; // Added EventNames import
 
 /**
  * Interface for the UserModerationService
@@ -50,6 +54,7 @@ export class UserModerationService implements IUserModerationService {
   private verificationEventRepository: IVerificationEventRepository;
   private adminActionService: IAdminActionService; // Keep for now, might be replaced by events later
   private eventBus: IEventBus; // Added EventBus
+  private client: Client; // Added Client
 
   constructor(
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
@@ -58,7 +63,8 @@ export class UserModerationService implements IUserModerationService {
     @inject(TYPES.VerificationEventRepository)
     verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.AdminActionService) adminActionService: IAdminActionService,
-    @inject(TYPES.EventBus) eventBus: IEventBus // Inject EventBus
+    @inject(TYPES.EventBus) eventBus: IEventBus, // Inject EventBus
+    @inject(TYPES.DiscordClient) client: Client // Inject Client
   ) {
     this.serverMemberRepository = serverMemberRepository;
     this.notificationManager = notificationManager;
@@ -66,6 +72,22 @@ export class UserModerationService implements IUserModerationService {
     this.verificationEventRepository = verificationEventRepository;
     this.adminActionService = adminActionService;
     this.eventBus = eventBus; // Assign EventBus
+    this.client = client; // Assign Client
+    this.subscribe(); // Call subscribe method
+  }
+
+  /**
+   * Subscribes to relevant events on the EventBus
+   */
+  private subscribe(): void {
+    this.eventBus.subscribe(
+      EventNames.AdminVerifyUserRequested,
+      this.handleAdminVerifyRequest.bind(this)
+    );
+    this.eventBus.subscribe(
+      EventNames.AdminBanUserRequested,
+      this.handleAdminBanRequest.bind(this)
+    );
   }
 
   /**
@@ -120,6 +142,7 @@ export class UserModerationService implements IUserModerationService {
   }
 
   /**
+   * (Now primarily internal - triggered by AdminVerifyUserRequested event)
    * Removes the restricted role from a guild member and updates their verification status
    * @param member The guild member to verify (unrestrict)
    * @param moderator The user who performed the verification
@@ -166,12 +189,13 @@ export class UserModerationService implements IUserModerationService {
       );
       return true; // Verification process completed successfully
     } catch (error) {
-      console.error(`Failed to verify user ${member?.user?.tag}:`, error);
+      console.error(`Failed to verify user ${member.user.tag}:`, error);
       return false;
     }
   }
 
   /**
+   * (Now primarily internal - triggered by AdminBanUserRequested event)
    * Bans a user from the guild
    * @param member The guild member to ban
    * @param reason The reason for the ban
@@ -230,8 +254,91 @@ export class UserModerationService implements IUserModerationService {
 
       return true; // Ban succeeded
     } catch (error) {
-      console.error(`Failed to ban user ${member?.user?.tag}:`, error);
+      console.error(`Failed to ban user ${member.user.tag}:`, error);
       return false;
+    }
+  }
+
+  // --- Event Handlers ---
+
+  /**
+   * Handles the request to verify a user.
+   */
+  private async handleAdminVerifyRequest(payload: AdminVerifyUserRequestedPayload): Promise<void> {
+    console.log(
+      `UserModerationService: Handling ${EventNames.AdminVerifyUserRequested} for user ${payload.targetUserId}`
+    );
+    try {
+      const guild = await this.client.guilds.fetch(payload.serverId);
+      if (!guild) {
+        console.error(`UserModerationService: Guild ${payload.serverId} not found.`);
+        return;
+      }
+      const member = await guild.members.fetch(payload.targetUserId);
+      if (!member) {
+        console.error(
+          `UserModerationService: Member ${payload.targetUserId} not found in guild ${payload.serverId}.`
+        );
+        return;
+      }
+      const moderator = await this.client.users.fetch(payload.adminId);
+      if (!moderator) {
+        console.error(`UserModerationService: Moderator ${payload.adminId} not found.`);
+        return;
+      }
+
+      // Call the internal verification logic
+      await this.verifyUser(member, moderator);
+
+      // TODO: Optionally reply to interaction if payload.interactionId exists?
+      // This might be better handled by a dedicated InteractionReplySubscriber
+    } catch (error) {
+      console.error(
+        `UserModerationService: Error handling ${EventNames.AdminVerifyUserRequested} for user ${payload.targetUserId}:`,
+        error
+      );
+      // TODO: Optionally reply to interaction with error?
+    }
+  }
+
+  /**
+   * Handles the request to ban a user.
+   */
+  private async handleAdminBanRequest(payload: AdminBanUserRequestedPayload): Promise<void> {
+    console.log(
+      `UserModerationService: Handling ${EventNames.AdminBanUserRequested} for user ${payload.targetUserId}`
+    );
+    try {
+      const guild = await this.client.guilds.fetch(payload.serverId);
+      if (!guild) {
+        console.error(`UserModerationService: Guild ${payload.serverId} not found.`);
+        return;
+      }
+      const member = await guild.members.fetch(payload.targetUserId);
+      if (!member) {
+        // User might already be gone, but we can still log the intent maybe?
+        // For now, just log and return. The ban event won't fire.
+        console.warn(
+          `UserModerationService: Member ${payload.targetUserId} not found in guild ${payload.serverId} for ban request.`
+        );
+        return;
+      }
+      const moderator = await this.client.users.fetch(payload.adminId);
+      if (!moderator) {
+        console.error(`UserModerationService: Moderator ${payload.adminId} not found.`);
+        return;
+      }
+
+      // Call the internal ban logic
+      await this.banUser(member, payload.reason, moderator);
+
+      // TODO: Optionally reply to interaction if payload.interactionId exists?
+    } catch (error) {
+      console.error(
+        `UserModerationService: Error handling ${EventNames.AdminBanUserRequested} for user ${payload.targetUserId}:`,
+        error
+      );
+      // TODO: Optionally reply to interaction with error?
     }
   }
 }

@@ -9,8 +9,8 @@ This file captures important patterns, preferences, and project intelligence tha
   - `src/services/` contains core business logic services
   - `src/repositories/` implements the data access layer
   - `src/config/` manages configuration and environment variables
-  - `src/__tests__/` contains test files mirroring the source structure
-  - `src/__mocks__/` contains mock implementations for testing
+  - `src/__tests__/` contains test files mirroring the source structure (currently intentionally missing)
+  - `src/__mocks__/` contains mock implementations for testing (currently intentionally missing)
   - `supabase/migrations/` contains the initial database schema migration (future migrations managed by Prisma).
   - `prisma/schema.prisma` defines the database schema for Prisma ORM.
 

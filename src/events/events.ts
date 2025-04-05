@@ -2,16 +2,21 @@
 
 import { DetectionResult } from '../services/DetectionOrchestrator';
 import { AdminAction, VerificationEvent } from '../repositories/types';
+import { Message } from 'discord.js'; // Added import
 
 // Event Names (using constants for type safety)
 export const EventNames = {
   UserDetectedSuspicious: 'userDetectedSuspicious',
   VerificationStarted: 'verificationStarted',
   UserVerified: 'userVerified',
+  AdditionalSuspicionDetected: 'additionalSuspicionDetected',
   UserBanned: 'userBanned',
+  VerificationReopened: 'verificationReopened',
   VerificationThreadCreated: 'verificationThreadCreated',
   AdminActionRecorded: 'adminActionRecorded',
+  AdminVerifyUserRequested: 'adminVerifyUserRequested',
   // Add more events as needed
+  AdminBanUserRequested: 'adminBanUserRequested',
 } as const;
 
 // Type for valid event names
@@ -24,6 +29,7 @@ export interface UserDetectedSuspiciousPayload {
   serverId: string;
   detectionResult: DetectionResult;
   sourceMessageId?: string;
+  channelId?: string; // Added optional channelId
   detectionEventId: string; // Include the ID of the created detection event
 }
 
@@ -47,7 +53,23 @@ export interface UserBannedPayload {
   serverId: string;
   moderatorId: string;
   reason: string;
-  verificationEventId: string;
+  verificationEventId?: string; // Made optional as ban might not be related to verification
+}
+
+export interface AdditionalSuspicionDetectedPayload {
+  userId: string;
+  serverId: string;
+  detectionEventId: string; // ID of the *new* detection event
+  detectionResult: DetectionResult; // The *new* detection result
+  existingVerificationEvent: VerificationEvent; // The verification event that was already active
+  sourceMessage?: Message; // Optional source message for context
+}
+
+export interface VerificationReopenedPayload {
+  verificationEventId: string; // ID of the verification event being reopened
+  userId: string;
+  serverId: string;
+  moderatorId: string; // Discord ID of the moderator reopening
 }
 
 export interface VerificationThreadCreatedPayload {
@@ -68,7 +90,29 @@ export interface EventMap {
   [EventNames.VerificationStarted]: VerificationStartedPayload;
   [EventNames.UserVerified]: UserVerifiedPayload;
   [EventNames.UserBanned]: UserBannedPayload;
+  [EventNames.AdditionalSuspicionDetected]: AdditionalSuspicionDetectedPayload; // Added mapping
+  [EventNames.VerificationReopened]: VerificationReopenedPayload; // Added mapping
   [EventNames.VerificationThreadCreated]: VerificationThreadCreatedPayload;
   [EventNames.AdminActionRecorded]: AdminActionRecordedPayload;
+  [EventNames.AdminVerifyUserRequested]: AdminVerifyUserRequestedPayload; // Added mapping
+  [EventNames.AdminBanUserRequested]: AdminBanUserRequestedPayload; // Added mapping
   // Add mappings for other events
 }
+
+export interface AdminVerifyUserRequestedPayload {
+  targetUserId: string;
+  serverId: string;
+  adminId: string;
+  interactionId?: string; // Optional: ID of the interaction for potential follow-up replies
+  verificationEventId?: string; // Optional: If triggered from a specific verification context
+}
+
+export interface AdminBanUserRequestedPayload {
+  targetUserId: string;
+  serverId: string;
+  adminId: string;
+  reason: string;
+  interactionId?: string; // Optional: ID of the interaction
+  verificationEventId?: string; // Optional: If triggered from a specific verification context
+}
+// Removed misplaced mappings from here

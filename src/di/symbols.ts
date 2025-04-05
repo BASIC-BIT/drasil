@@ -37,6 +37,7 @@ export const TYPES = {
   GlobalConfig: Symbol.for('GlobalConfig'),
 
   // Discord modules
+  VerificationReopenSubscriber: Symbol.for('VerificationReopenSubscriber'),
   CommandHandler: Symbol.for('CommandHandler'),
   EventHandler: Symbol.for('EventHandler'),
   InteractionHandler: Symbol.for('InteractionHandler'),
@@ -56,4 +57,5 @@ export const TYPES = {
   RoleUpdateSubscriber: Symbol.for('RoleUpdateSubscriber'),
   ActionLogSubscriber: Symbol.for('ActionLogSubscriber'),
   ServerMemberStatusSubscriber: Symbol.for('ServerMemberStatusSubscriber'),
+  DetectionResultHandlerSubscriber: Symbol.for('DetectionResultHandlerSubscriber'),
 };

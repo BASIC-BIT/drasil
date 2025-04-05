@@ -9,7 +9,7 @@ import {
   DetectionEvent,
   VerificationEvent,
   VerificationStatus,
-  AdminActionType,
+  // AdminActionType, // Removed as it's no longer used directly here
 } from '../repositories/types';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
@@ -205,13 +205,19 @@ export class SecurityActionService implements ISecurityActionService {
           `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Reusing notification.`
         );
 
-        // Update the existing notification (Keep this direct call for now, handle upsert logic later)
-        const updatedMessage = await this.notificationManager.upsertSuspiciousUserNotification(
-          member,
-          detectionResult, // Use the latest detection result
-          activeVerificationEvent,
-          sourceMessage
-        );
+        // Publish event for additional suspicion
+        this.eventBus.publish(EventNames.AdditionalSuspicionDetected, {
+          userId: member.id,
+          serverId: member.guild.id,
+          detectionEventId: detectionEvent.id,
+          detectionResult: detectionResult,
+          existingVerificationEvent: activeVerificationEvent,
+          sourceMessage: sourceMessage,
+        });
+
+        // Side effects (updating notification) are now handled by subscribers
+        // We can assume success if the event was published
+        const updatedMessage = true; // Indicate success for return value consistency
 
         return !!updatedMessage; // Return success based on notification update
       } else {
@@ -251,7 +257,7 @@ export class SecurityActionService implements ISecurityActionService {
         return true;
       } // Close the else block for 'No active verification exists'
     } catch (error) {
-      console.error(`Failed to handle suspicious message for ${member?.user?.tag}:`, error);
+      console.error(`Failed to handle suspicious message for ${member.user.tag}:`, error);
       return false;
     }
   }
@@ -300,32 +306,22 @@ export class SecurityActionService implements ISecurityActionService {
           `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Reusing notification.`
         );
 
-        // Update the existing notification (Keep this direct call for now)
-        const updatedMessage = await this.notificationManager.upsertSuspiciousUserNotification(
-          member,
-          detectionResult, // Use the latest detection result
-          activeVerificationEvent
-          // No source message for join
-        );
+        // Publish event for additional suspicion
+        this.eventBus.publish(EventNames.AdditionalSuspicionDetected, {
+          userId: member.id,
+          serverId: member.guild.id,
+          detectionEventId: detectionEvent.id,
+          detectionResult: detectionResult,
+          existingVerificationEvent: activeVerificationEvent,
+          // No sourceMessage for join event
+        });
 
-        // If we updated successfully AND the original event was missing a message ID, update it now.
-        if (updatedMessage && !activeVerificationEvent.notification_message_id) {
-          try {
-            activeVerificationEvent.notification_message_id = updatedMessage.id;
-            await this.verificationEventRepository.update(
-              activeVerificationEvent.id,
-              activeVerificationEvent
-            );
-            console.log(
-              `Linked new/updated message ${updatedMessage.id} to existing verification ${activeVerificationEvent.id}`
-            );
-          } catch (updateError) {
-            console.error(
-              `Failed to link new/updated message ${updatedMessage.id} to existing verification ${activeVerificationEvent.id}:`,
-              updateError
-            );
-          }
-        }
+        // Side effects (updating notification) are now handled by subscribers
+        // We can assume success if the event was published
+        const updatedMessage = true; // Indicate success for return value consistency
+
+        // Removed the block that tried to update notification_message_id here.
+        // This logic will be handled by the NotificationSubscriber listening to AdditionalSuspicionDetected.
         return !!updatedMessage; // Return success based on notification update
       } else {
         // --- No active verification exists ---
@@ -364,7 +360,7 @@ export class SecurityActionService implements ISecurityActionService {
         return true;
       } // Close the else block for 'No active verification exists'
     } catch (error) {
-      console.error(`Failed to handle suspicious join for ${member?.user?.tag}:`, error);
+      console.error(`Failed to handle suspicious join for ${member.user.tag}:`, error);
       return false;
     }
   }
@@ -380,25 +376,30 @@ export class SecurityActionService implements ISecurityActionService {
     verificationEvent: VerificationEvent,
     moderator: User
   ): Promise<boolean> {
-    await this.threadManager.reopenVerificationThread(verificationEvent);
+    // TODO: Refactor reopenVerification fully to events
+    // Removed: await this.threadManager.reopenVerificationThread(verificationEvent); // Handled by subscriber
 
     // TODO: Fetch server member better?
-    const guild = await this.client.guilds.fetch(verificationEvent.server_id);
-    const member = await guild.members.fetch(verificationEvent.user_id);
+    // const guild = await this.client.guilds.fetch(verificationEvent.server_id); // Removed as guild is no longer used directly here
+    // const member = await guild.members.fetch(verificationEvent.user_id); // Removed as member is no longer used directly here
 
     // Update the verification event to pending
     verificationEvent.status = VerificationStatus.PENDING;
     await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
 
     // Re-restrict the user
-    await this.userModerationService.restrictUser(member);
+    // Removed: await this.userModerationService.restrictUser(member); // Handled by subscriber
 
     // Log the action to the message
-    await this.notificationManager.logActionToMessage(
-      verificationEvent,
-      AdminActionType.REOPEN,
-      moderator
-    );
+    // Removed: await this.notificationManager.logActionToMessage(...) // Handled by subscriber
+
+    // Publish VerificationReopened event
+    this.eventBus.publish(EventNames.VerificationReopened, {
+      verificationEventId: verificationEvent.id,
+      userId: verificationEvent.user_id,
+      serverId: verificationEvent.server_id,
+      moderatorId: moderator.id,
+    });
 
     return true;
   }

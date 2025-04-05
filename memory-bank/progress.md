@@ -2,7 +2,7 @@
 
 ## Project Status Overview
 
-The Discord Anti-Spam Bot is currently in active development with several key components implemented and functioning. This document tracks the current state of the project, what's working, and what remains to be built.
+The Discord Anti-Spam Bot is currently in active development with several key components implemented and functioning. The architecture is being actively refactored towards a more robust Event-Driven Architecture (EDA). This document tracks the current state of the project, what's working, and what remains to be built.
 
 ## Recently Completed
 
@@ -31,53 +31,54 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - Better adherence to Single Responsibility Principle
 - ✅ Streamlined DetectionOrchestrator
   - Focused purely on detection logic
-  - Removed user/reputation management code
+  - Removed user/reputation management code (prior to EDA refactor)
   - Clearer responsibility boundaries
   - Improved maintainability
 
-### Service Flow Improvements
+### Service Flow Improvements (EDA Refactoring)
 
-- ✅ Implemented clear, unidirectional data flow:
-  1. DetectionOrchestrator: Detection logic
-  2. SecurityActionService: Entity verification and security actions
-  3. UserReputationService: Reputation updates
-- ✅ Better error handling and propagation
-- ✅ Improved logging and debugging capabilities
-- ✅ Clearer service boundaries and responsibilities
-- ✅ **Event-Driven Architecture Refactoring (Phase 1 & 2)**:
-  - Implemented `EventBus` and event definitions.
-  - Refactored `SecurityActionService` and `UserModerationService` to publish events.
-  - Created and integrated subscribers (`RestrictionSubscriber`, `NotificationSubscriber`, `RoleUpdateSubscriber`, `ActionLogSubscriber`, `ServerMemberStatusSubscriber`) to handle side effects.
+- ✅ **Event-Driven Architecture Refactoring (Phase 1 & 2 - Core Side Effects)**:
+  - Implemented `EventBus` and core event definitions (`VerificationStarted`, `UserVerified`, `UserBanned`).
+  - Refactored `SecurityActionService` and `UserModerationService` to publish result events.
+  - Created and integrated subscribers (`RestrictionSubscriber`, `NotificationSubscriber`, `RoleUpdateSubscriber`, `ActionLogSubscriber`, `ServerMemberStatusSubscriber`) to handle side effects triggered by result events.
   - Decoupled core workflows (suspicious user handling, verification, banning).
+- ✅ **Event-Driven Architecture Refactoring (Phase 3 - Detection & Moderation Triggers)**:
+  - Refactored `DetectionOrchestrator` to create `DetectionEvent` records & return ID.
+  - Refactored `EventHandler` to publish `UserDetectedSuspicious` event.
+  - Created `DetectionResultHandlerSubscriber` to handle `UserDetectedSuspicious` and call `SecurityActionService`.
+  - Defined and handled `AdditionalSuspicionDetected` event via `NotificationSubscriber`.
+  - Defined and handled `VerificationReopened` event via `VerificationReopenSubscriber`.
+  - Defined `AdminVerifyUserRequested` & `AdminBanUserRequested` events.
+  - Refactored `InteractionHandler` & `CommandHandler` to publish admin request events.
+  - Refactored `UserModerationService` to subscribe to admin request events.
+- ✅ Better error handling and propagation within core services.
+- ✅ Improved logging and debugging capabilities.
+- ✅ Clearer service boundaries and responsibilities established through event decoupling.
 
 ## What Works
 
 ### Core Bot Functionality
 
 - ✅ Discord client initialization with required intents
-- ✅ Event handling for messages, member joins, interactions, and guild joins
-- ✅ Slash command registration and processing
-- ✅ Button interaction handling with action logging
+- ✅ Event handling for messages, member joins, interactions, and guild joins (now publishing events for core flows)
+- ✅ Slash command registration and processing (now publishing events for moderation commands)
+- ✅ Button interaction handling with action logging (now publishing events for moderation buttons)
 - ✅ Error handling and graceful degradation
 - ✅ Server configuration initialization on startup
 
 ### Detection Mechanisms
 
 - ✅ Heuristic detection service
-
   - ✅ Message frequency analysis (>5 messages in 10 seconds)
   - ✅ Suspicious keyword detection (nitro scam, free discord nitro, etc.)
   - ✅ Efficient message history tracking with time window filtering
   - ✅ Clear API for integration with orchestrator
-
 - ✅ GPT-powered analysis
-
   - ✅ Integration with OpenAI's gpt-4o-mini model
   - ✅ Structured prompt formatting with user profile data
   - ✅ Categorized few-shot examples for better classification
   - ✅ Error handling with fallback to safe defaults
   - ✅ Configurable temperature and token limits
-
 - ✅ Combined detection orchestration
   - ✅ Smart routing between heuristics and GPT
   - ✅ Account age and server join date analysis
@@ -85,6 +86,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ Confidence calculation for admin transparency
   - ✅ Reason tracking for decision explanation
   - ✅ Different workflows for messages vs. new joins
+  - ✅ Creates `DetectionEvent` record and returns ID.
 
 ### Dependency Injection Architecture
 
@@ -94,60 +96,56 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ Interface definitions for all services
   - ✅ @injectable() and @inject() decorators
   - ✅ Singleton and transient service registration
-  - ✅ External dependency injection (Discord, OpenAI, Supabase)
+  - ✅ External dependency injection (Discord, OpenAI, PrismaClient)
   - ✅ Dedicated test utilities for InversifyJS testing
   - ✅ Container integration tests
+  - ✅ Registration of all core services, repositories, controllers, and subscribers.
 
-### User Management
+### User Management & Moderation (Event-Driven Flows)
 
-- ✅ Role management
-
-  - ✅ Restricted role assignment for suspicious users
-  - ✅ Role removal for verified users
+- ✅ Role management (via `RoleManager`, triggered by `RoleUpdateSubscriber`)
+  - ✅ Restricted role assignment for suspicious users (via `RestrictionSubscriber` -> `UserModerationService.restrictUser`)
+  - ✅ Role removal for verified users (via `RoleUpdateSubscriber` -> `RoleManager.removeRestrictedRole`)
   - ✅ Role lookup with caching for performance
   - ✅ Database-backed role configuration
-
 - ✅ Verification system
-
   - ✅ Dedicated verification channel setup
-  - ✅ Private thread creation for suspicious users
+  - ✅ Private thread creation for suspicious users (via `NotificationManager`, triggered by `NotificationSubscriber`)
   - ✅ Permission management for restricted visibility
   - ✅ Verification instructions and prompts
+- ✅ Admin commands & Interactions (Triggering Events)
+  - ✅ `/ban` command publishes `AdminBanUserRequested`
+  - ✅ `Verify User` button publishes `AdminVerifyUserRequested`
+  - ✅ `Ban User` button publishes `AdminBanUserRequested`
+  - ✅ `/config` command for server configuration management
+  - ✅ `/setupverification` command for channel configuration
+  - ✅ `/ping` command for bot status check
+  - ✅ `Create Thread` button calls `ThreadManager` (potential future event refactor)
+  - ✅ `History` button calls repository (TODO: Refactor to service/event)
+  - ✅ `Reopen` button calls `SecurityActionService` (publishes `VerificationReopened`)
 
-- ✅ Admin commands
-  - ✅ /verify command to remove restricted role
-  - ✅ /ban command to ban users with reason
-  - ✅ /createthread command for manual thread creation
-  - ✅ /setupverification command for channel configuration
-  - ✅ /ping command for bot status check
-  - ✅ /config command for server configuration management
+### Admin Interface (Triggered by Events)
 
-### Admin Interface
-
-- ✅ Enhanced notification formatting
-
+- ✅ Enhanced notification formatting (via `NotificationManager`, triggered by `NotificationSubscriber`)
   - ✅ Detailed user embeds with profile information
   - ✅ Confidence level display (Low/Medium/High)
   - ✅ Formatted timestamps with both absolute and relative times
   - ✅ Bullet-point reason lists for clarity
   - ✅ Trigger source information (message or join)
   - ✅ Message content or join information
-
-- ✅ Interactive buttons for moderation actions
-
+- ✅ Interactive buttons for moderation actions (handled by `InteractionHandler`, publish events)
   - ✅ Verify User button (success style)
   - ✅ Ban User button (danger style)
   - ✅ Create Thread button (primary style)
+  - ✅ History button
+  - ✅ Reopen button
   - ✅ Custom ID format with encoded user ID
   - ✅ Fixed "Create Thread" button visibility on initial notifications
-
-- ✅ Action logging
-
+- ✅ Action logging (via `NotificationManager`, triggered by `ActionLogSubscriber`)
   - ✅ Updates to original notification messages
   - ✅ Admin attribution with mention
   - ✅ Timestamp of action
   - ✅ Thread links when applicable
-
 - ✅ Verification channel
   - ✅ Dedicated channel with restricted visibility
   - ✅ Private threads for individual users
@@ -157,20 +155,16 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 ### Configuration System
 
 - ✅ Configuration management
-
-  - ✅ Critical API keys via environment variables (Discord token, OpenAI API key)
+  - ✅ Critical API keys via environment variables (Discord token, OpenAI API key, DB URL)
   - ✅ Server-specific configuration via database (role IDs, channel IDs)
   - ✅ `/config` command for updating server-specific settings
   - ✅ Real-time configuration updates without bot restart
   - ✅ Database-stored channel and role IDs
-
 - ✅ Server-specific configuration
-
   - ✅ Cache-first approach for performance
   - ✅ Default configuration creation
   - ✅ Settings update methods
   - ✅ JSON storage for flexible settings
-
 - ✅ Global configuration
   - ✅ Default server settings
   - ✅ Suspicious keyword defaults
@@ -182,14 +176,9 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 - ✅ **Prisma Client Setup**: Configured Prisma Client for database interaction.
 - ✅ **Initial Database Schema**: Defined in `prisma/schema.prisma` and managed via `prisma migrate`.
 - ✅ **Repository Pattern Implementation (Prisma)**:
-  - ✅ Repository interfaces defined (e.g., `IServerRepository`).
+  - ✅ Repository interfaces defined.
   - ✅ Repositories implement interfaces using injected `PrismaClient`.
-  - ✅ ServerRepository implementation migrated.
-  - ✅ UserRepository implementation migrated.
-  - ✅ ServerMemberRepository implementation migrated.
-  - ✅ DetectionEventsRepository implementation migrated.
-  - ✅ VerificationEventRepository implementation migrated.
-  - ✅ AdminActionRepository implementation migrated.
+  - ✅ Repositories for `servers`, `users`, `server_members`, `detection_events`, `verification_events`, `admin_actions` implemented.
 - ✅ Server configuration persistence
 - ✅ Server configuration command implementation
 - ✅ User repository implementation
@@ -200,281 +189,128 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 - ✅ Server member repository implementation
   - ✅ Member CRUD operations
   - ✅ Message count tracking
-  - ✅ Restriction status management
+  - ✅ Restriction status management (updated via `ServerMemberStatusSubscriber`)
   - ⏳ Comprehensive test coverage (Note: Repository tests currently missing)
 - ✅ Detection events repository implementation
-  - ✅ Event recording and querying
+  - ✅ Event recording and querying (now done by `DetectionOrchestrator`)
   - ✅ Proper error handling
-  - ✅ Integration with DetectionOrchestrator
   - ⏳ Comprehensive test coverage (Note: Repository tests currently missing)
-  - ✅ Proper separation of concerns
-  - ✅ Clear responsibility boundaries
 - ✅ Detection orchestrator service
   - ✅ Integration with multiple repositories
-  - ✅ Creation of required entities
+  - ✅ Creation of required entities (server, user, detection_event)
   - ✅ Proper error propagation
   - ✅ Enhanced logging and debugging
 - ✅ **Prisma Migration**: Migrated data access layer from Supabase JS Client to Prisma Client.
-- 🔄 Moderation logs and action tracking
+- 🔄 Moderation logs and action tracking (partially done via `AdminActionService` & `ActionLogSubscriber`)
 - 🔄 Cross-server data sharing
 
 ## What's In Progress
 
 ### Persistence & Logging
 
-- 🔄 User profile tracking and updates
-
-- ⏳ Message history persistence
-
-  - ⏳ Message storage schema design
-  - ⏳ Message repository implementation
-  - ⏳ Retention policy enforcement
-
-- ⏳ Moderation action logging
-
-  - ⏳ Action log schema design
-  - ⏳ Action repository implementation
-  - ⏳ Admin attribution and timestamps
-
-- ⏳ Analytics and reporting
-  - ⏳ Detection statistics collection
-  - ⏳ False positive/negative tracking
-  - ⏳ Server activity monitoring
-  - ⏳ Performance metrics
+- 🔄 User profile tracking and updates (Basic structure exists, needs refinement for cross-server)
+- ⏳ Message history persistence (Schema/Repo needed)
+- ⏳ Moderation action logging (Core exists, needs comprehensive coverage/querying)
+- ⏳ Analytics and reporting (Data collection needed)
 
 ### Alpha Release Priorities
 
-- ❌ User flags repository (Cancelled - integrating into existing tables)
-
-  - ❌ Create user_flags table
-  - ❌ Methods for flag management
-  - ❌ Flag history and status tracking
-  - ❌ Unit tests with transaction rollbacks
-
 - 🆕 Extend Existing Tables for Flag Functionality
-
-  - ✅ Server Member Flag Columns
-    - is_restricted (boolean): Current restriction status
-    - verification_status (enum): 'pending', 'verified', 'rejected'
-    - restriction_reason (text): Why the user was restricted
-    - last_status_change (timestamp): When status last changed
-    - moderator_id (text): Who changed the status
-  - 🔄 User Reputation Columns
-    - global_reputation_score (integer): Cross-server reputation
-    - suspicious_server_count (integer): Number of servers flagged in
-    - first_flagged_at (timestamp): First time flagged anywhere
-  - 🔄 Repository Method Updates
-    - Add flag management methods to ServerMemberRepository
-    - Add reputation management methods to UserRepository
-    - Update tests for new functionality
-  - 🔄 Migration creation
-    - Create SQL migration for new columns
-    - Add indexes for performance
-
+  - ✅ Server Member Flag Columns added.
+  - 🔄 User Reputation Columns (Schema defined, logic pending).
+  - 🔄 Repository Method Updates (Partially done for status, reputation pending).
+  - 🔄 Migration creation (Partially done).
+  - 🔄 Add tests for flag-related operations.
 - 🔄 Verification thread tracking
-
-  - ✅ Create verification_events table
-  - ✅ Implement VerificationEventRepository
-  - ✅ Implement AdminActionRepository
-  - 🔄 Track verification outcomes
-  - 🔄 Store thread references
-  - ✅ Unit tests with cleanup hooks
-  - 🔄 Integration tests for verification flow
-
+  - ✅ Create `verification_events` table.
+  - ✅ Implement `VerificationEventRepository`.
+  - ✅ Implement `AdminActionRepository`.
+  - ✅ Track verification outcomes (via event status).
+  - ✅ Store thread references (via `ThreadManager` -> Repo).
+  - ✅ Unit tests with cleanup hooks.
+  - 🔄 Integration tests for verification flow.
 - 🔄 Performance optimization
-
-  - ⏳ Rate limiting for OpenAI API calls
-  - ⏳ Message queue for high-traffic servers
-  - ⏳ Memory usage optimization
-  - ⏳ Stress testing under load
-
+  - ⏳ Rate limiting for OpenAI API calls.
+  - ⏳ Message queue for high-traffic servers.
+  - ⏳ Memory usage optimization.
+  - ⏳ Stress testing under load.
 - 🔄 User experience improvements
-  - ⏳ Button timeout handling
-  - ⏳ Visual indication of button expiration
-  - ⏳ Enhanced verification instructions
-  - ⏳ Improved admin action feedback
+  - ⏳ Button timeout handling.
+  - ⏳ Visual indication of button expiration.
+  - ⏳ Enhanced verification instructions.
+  - ⏳ Improved admin action feedback (consider `InteractionReplySubscriber`).
 
 ### Advanced Features
 
 - ⏳ Cross-server reputation system
-
-  - ⏳ Global user tracking
-  - ⏳ Reputation score calculation
-  - ⏳ Trust network implementation
-  - ⏳ Privacy controls and opt-out options
-
 - ⏳ Custom fine-tuned AI model
-
-  - ⏳ Training data collection
-  - ⏳ Model fine-tuning pipeline
-  - ⏳ Model evaluation framework
-  - ⏳ Version management and updates
-
 - ⏳ Advanced behavioral analytics
-  - ⏳ User behavior pattern recognition
-  - ⏳ Message content analysis
-  - ⏳ Temporal pattern detection
-  - ⏳ Network analysis of user interactions
 
 ### Deployment & Operations
 
 - ⏳ Production deployment setup
-
-  - ⏳ Hosting environment configuration
-  - ⏳ Environment variable management
-  - ⏳ Deployment automation
-
 - ⏳ Monitoring and alerting
-
-  - ⏳ Error tracking and notification
-  - ⏳ Performance monitoring
-  - ⏳ Usage statistics collection
-  - ⏳ Health checks and status page
-
 - ⏳ Scaling infrastructure
-  - ⏳ Database connection pooling
-  - ⏳ Horizontal scaling for multiple instances
-  - ⏳ Load balancing for high-traffic servers
-  - ⏳ Caching strategies for performance
 
 ### User Experience Enhancements
 
 - ⏳ Web dashboard for configuration
-
-  - ⏳ Server settings management
-  - ⏳ User management interface
-  - ⏳ Analytics and reporting views
-  - ⏳ Authentication and authorization
-
 - ⏳ Enhanced admin controls
-
-  - ⏳ Bulk moderation actions
-  - ⏳ Custom verification workflows
-  - ⏳ Threshold customization
-  - ⏳ Notification preferences
-
 - ⏳ Server-specific customization
-  - ⏳ Custom detection rules
-  - ⏳ Custom verification messages
-  - ⏳ Role and permission management
-  - ⏳ Integration with server-specific features
 
 ## Current Metrics
 
 ### Code Coverage
 
-- Unit tests: Present for core services and repositories
-  - HeuristicService
-  - GPTService
-  - DetectionOrchestrator
-  - ConfigService
-  - ServerRepository
-  - UserRepository (100% coverage)
-  - ServerMemberRepository (100% coverage)
-- Integration tests: Limited
-  - Bot.integration.test.ts
-  - container.integration.test.ts
-- End-to-end tests: Not implemented
+- Unit tests: Present for some core services and repositories. Needs significant expansion, especially for repositories and event flows.
+- Integration tests: Limited (`Bot.integration.test.ts`, `container.integration.test.ts`). Needs expansion for EDA flows.
+- End-to-end tests: Not implemented.
 
 ### Performance
 
-- Message processing time: Not measured
-- GPT API response time: Not measured
-- Database operation time: Not measured
-- Memory usage: Not measured
+- Not measured.
 
 ### Stability
 
-- Core functionality: Implemented with error handling
-- Edge cases: Some handling implemented
-- Error handling: Comprehensive in most areas
-- Graceful degradation: Implemented for critical services
+- Core functionality: Implemented with error handling. EDA refactoring aims to improve robustness.
+- Edge cases: Some handling implemented, more needed.
+- Error handling: Comprehensive in most areas, needs review within event subscriber chains.
+- Graceful degradation: Implemented for critical services.
 
 ## Known Issues
 
-1. **Test Coverage** (FIXED):
-
-   - ✅ Fixed DetectionEventsRepository test error handling
-   - ✅ Improved mock setup for Supabase operations
-   - ✅ Added proper PostgrestError handling in tests
-   - ✅ Updated test assertions to match actual error messages
-   - ✅ Fixed InversifyJS testing issues:
-     - ✅ Proper type assertions for accessing private properties
-     - ✅ Handling dynamically generated fields with `expect.any(String)`
-     - ✅ Using public methods for verification instead of accessing private properties
-     - ✅ Mock implementation improvements for complex objects
-     - ✅ Container configuration with all required dependencies
-     - ✅ Constructor parameter improvements to match implementation
-     - ✅ Removing unused imports causing lint errors
-
-2. **Button Interaction Timeout**:
-
-   - Discord buttons expire after 15 minutes
-   - No visual indication of expiration
-   - Potential confusion for admins with old notifications
-
-3. **GPT API Usage**:
-
-   - No sophisticated rate limiting for API calls
-   - Potential for quota exhaustion in high-traffic servers
-   - No fallback for API outages beyond defaulting to "OK"
-
-4. **Large Server Performance**:
-
-   - Not tested with very large servers (10,000+ members)
-   - Potential memory issues with message history tracking
-   - Database connection limits not configured
-
-5. **Configuration Management** (IMPROVED):
-
-   - ✅ Implemented `/config` command for server-specific settings
-   - ✅ Removed dependency on environment variables for server configuration
-   - ✅ Added database persistence for configuration values
-   - No web interface for configuration management
-   - Limited validation of configuration values
-
-6. **Database Implementation** (IMPROVED):
-
-   - ✅ Initial schema created and successfully utilized
-   - ✅ User, ServerMember, and DetectionEvents repositories implemented
-   - ✅ Proper separation of concerns between repositories
-   - ✅ Clear entity creation responsibilities
-   - ✅ Enhanced error handling and logging
-   - ✅ Data migration strategy defined: Use `prisma migrate dev`.
-
-7. **Dependency Injection Testing Challenges** (IMPROVED):
-   - ✅ Created test utilities for InversifyJS testing
-   - ✅ Implemented proper type assertions for private property access
-   - ✅ Added dynamic field handling with expect.any()
-   - ✅ Improved mock implementations for complex objects
-   - 🔄 Need more comprehensive integration tests
-   - 🔄 Need better test isolation strategies
+1.  **Test Coverage**: Significantly lacking, especially for repositories and new event-driven flows.
+2.  **Button Interaction Timeout**: Buttons expire after 15 minutes without visual indication.
+3.  **GPT API Usage**: No rate limiting or sophisticated error handling/retry logic.
+4.  **Large Server Performance**: Not tested under high load.
+5.  **Configuration Management**: No web UI, limited validation.
+6.  **Interaction Replies**: No standardized way for subscribers to reply to the original interaction (e.g., confirm ban processed).
+7.  **Error Handling in Subscribers**: Need strategy for handling errors within subscriber chains.
+8.  **`VerificationService` Role**: Needs review for potential redundancy.
+9.  **History Button Logic**: Currently calls repositories directly from handler (needs refactor).
 
 ## Next Milestone Goals
 
 ### Short-term (Next 2 Weeks)
 
-1. Complete user and server member repositories
-2. Implement moderation action logging
-3. Add cross-server reputation tracking
-4. Improve test coverage for database operations
-5. Create comprehensive documentation
+1.  **Testing**: Add integration tests for core EDA flows (`UserDetectedSuspicious`, `AdminVerifyUserRequested`, `AdminBanUserRequested`). Add repository tests using Prisma mocking.
+2.  **Documentation**: Complete Memory Bank updates (`progress.md`, README, guides). Document schema and migration process.
+3.  **Alpha Polish**: Address button timeouts, improve admin feedback (potentially `InteractionReplySubscriber`). Implement basic user reputation columns/logic.
 
 ### Medium-term (1-2 Months)
 
-1. Enhance cross-server reputation system
-2. Create basic web dashboard for configuration
-3. Implement performance monitoring and optimization
-4. Add sophisticated rate limiting for external APIs
-5. Develop deployment automation and monitoring
+1.  Enhance cross-server reputation system.
+2.  Create basic web dashboard for configuration.
+3.  Implement performance monitoring and optimization (rate limiting, etc.).
+4.  Develop deployment automation and monitoring.
 
 ### Long-term (3+ Months)
 
-1. Develop custom fine-tuned AI model
-2. Create comprehensive analytics and reporting
-3. Implement advanced behavioral detection
-4. Add payment integration for premium features
-5. Build cross-platform integration capabilities
+1.  Develop custom fine-tuned AI model.
+2.  Create comprehensive analytics and reporting.
+3.  Implement advanced behavioral detection.
+4.  Add payment integration for premium features.
+5.  Build cross-platform integration capabilities.
 
 ## Deployment Status
 
@@ -484,11 +320,12 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 
 ## Documentation Status
 
-- README: Updated with InversifyJS testing information
-- API Documentation: Not started
-- Admin Guide: Not started
-- Developer Guide: Not started
-- Database Schema: Initial migration only
+- README: Needs update for Prisma/EDA.
+- Memory Bank: Updated for EDA Phase 3 (`eda-events.md`, `systemPatterns.md`, `activeContext.md`). `progress.md` updated now.
+- API Documentation: Not started.
+- Admin Guide: Not started.
+- Developer Guide: Not started.
+- Database Schema: Documented in `prisma/schema.prisma`. Migration process needs documentation.
 
 ## Contribution Status
 

@@ -46,6 +46,8 @@ import { NotificationSubscriber } from '../events/subscribers/NotificationSubscr
 import { RoleUpdateSubscriber } from '../events/subscribers/RoleUpdateSubscriber'; // Import Subscriber
 import { ActionLogSubscriber } from '../events/subscribers/ActionLogSubscriber'; // Import Subscriber
 import { ServerMemberStatusSubscriber } from '../events/subscribers/ServerMemberStatusSubscriber'; // Import Subscriber
+import { VerificationReopenSubscriber } from '../events/subscribers/VerificationReopenSubscriber'; // Import new subscriber
+import { DetectionResultHandlerSubscriber } from '../events/subscribers/DetectionResultHandlerSubscriber'; // Import new subscriber
 // Initialize container
 const container = new Container();
 
@@ -204,6 +206,14 @@ function configureServices(container: Container): void {
   container
     .bind<ServerMemberStatusSubscriber>(TYPES.ServerMemberStatusSubscriber)
     .to(ServerMemberStatusSubscriber)
+    .inSingletonScope();
+  container
+    .bind<VerificationReopenSubscriber>(TYPES.VerificationReopenSubscriber)
+    .to(VerificationReopenSubscriber)
+    .inSingletonScope();
+  container
+    .bind<DetectionResultHandlerSubscriber>(TYPES.DetectionResultHandlerSubscriber)
+    .to(DetectionResultHandlerSubscriber)
     .inSingletonScope();
 }
 

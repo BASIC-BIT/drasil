@@ -209,23 +209,20 @@ export function formatProfileExample(
   index: number,
   type: 'OK' | 'SUSPICIOUS'
 ): string {
-  const accountAge = example.accountCreatedAt
-    ? `${Math.floor((Date.now() - example.accountCreatedAt.getTime()) / DAY_IN_MS)} days`
-    : 'unknown';
+  const accountAge = `${Math.floor((Date.now() - example.accountCreatedAt.getTime()) / DAY_IN_MS)} days`;
 
-  const joinedServerDaysAgo = example.joinedServerAt
-    ? `${Math.floor((Date.now() - example.joinedServerAt.getTime()) / DAY_IN_MS)} days ago`
-    : 'unknown';
+  const joinedServerDaysAgo = `${Math.floor((Date.now() - example.joinedServerAt.getTime()) / DAY_IN_MS)} days ago`;
 
   let result = `\nExample ${index + 1} (${type}):\n`;
   result += `Username: ${example.username}${example.discriminator ? `#${example.discriminator}` : ''}\n`;
   if (example.nickname) result += `Nickname: ${example.nickname}\n`;
   result += `Account age: ${accountAge}\n`;
   result += `Joined server: ${joinedServerDaysAgo}\n`;
-  if (example.recentMessages)
+  if (example.recentMessages.length > 0) {
     result += `Recent messages: \n ${example.recentMessages
       .map((message) => `\`${message}\``)
       .join('\n')}\n`;
+  }
   result += `Classification: ${type}\n`;
 
   return result;

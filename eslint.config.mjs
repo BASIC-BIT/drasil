@@ -9,7 +9,7 @@ import prettier from 'eslint-plugin-prettier';
 const configs = [
   // Config for JavaScript config files
   {
-    files: ['*.js', '*.mjs', '*.cjs', '.*.js', '.*.mjs', '.*.cjs'],
+    files: ['*.js', '*.cjs', '.*.js', '.*.mjs', '.*.cjs'],
     ignores: ['dist/**', 'build/**'],
     languageOptions: {
       globals: {
@@ -22,8 +22,6 @@ const configs = [
     },
     rules: {
       'prettier/prettier': 'warn',
-      '@typescript-eslint/no-unnecessary-condition': 'warn',
-      '@typescript-eslint/no-floating-promises': 'warn',
       'no-duplicate-imports': 'warn',
     },
   },
@@ -35,6 +33,9 @@ const configs = [
         ...globals.node, // Enable Node.js global variables
       },
       sourceType: 'commonjs', // Specify CommonJS module system
+    },
+    plugins: {
+      prettier,
     },
     rules: {
       // Add any script-specific rule overrides here if needed

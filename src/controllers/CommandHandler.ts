@@ -17,9 +17,11 @@ import { UserProfileData } from '../services/GPTService';
 import { IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { INotificationManager } from '../services/NotificationManager';
 import { IConfigService } from '../config/ConfigService';
-import { IUserModerationService } from '../services/UserModerationService';
+// import { IUserModerationService } from '../services/UserModerationService'; // Removed
 import { TYPES } from '../di/symbols';
 import 'reflect-metadata';
+import { IEventBus } from '../events/EventBus'; // Added
+import { EventNames } from '../events/events'; // Added
 
 // Load environment variables
 dotenv.config();
@@ -52,8 +54,9 @@ export class CommandHandler implements ICommandHandler {
   private detectionOrchestrator: IDetectionOrchestrator;
   private notificationManager: INotificationManager;
   private configService: IConfigService;
-  private userModerationService: IUserModerationService;
+  // private userModerationService: IUserModerationService; // Removed
   private commands: RESTPostAPIChatInputApplicationCommandsJSONBody[];
+  private eventBus: IEventBus; // Added
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -61,14 +64,16 @@ export class CommandHandler implements ICommandHandler {
     @inject(TYPES.DetectionOrchestrator) detectionOrchestrator: IDetectionOrchestrator,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
     @inject(TYPES.ConfigService) configService: IConfigService,
-    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService
+    // @inject(TYPES.UserModerationService) userModerationService: IUserModerationService // Removed
+    @inject(TYPES.EventBus) eventBus: IEventBus // Added
   ) {
     this.client = client;
     this.heuristicService = heuristicService;
     this.detectionOrchestrator = detectionOrchestrator;
     this.notificationManager = notificationManager;
     this.configService = configService;
-    this.userModerationService = userModerationService;
+    // this.userModerationService = userModerationService; // Removed
+    this.eventBus = eventBus; // Added
 
     // Define slash commands
     this.commands = [
@@ -191,19 +196,21 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
-    // Ban the user
-    const success = await this.userModerationService.banUser(member, reason, interaction.user);
-    if (success) {
-      await interaction.reply({
-        content: `🚫 User ${member.user.tag} has been banned. Reason: ${reason}`,
-        flags: MessageFlags.Ephemeral,
-      });
-    } else {
-      await interaction.reply({
-        content: `❌ Failed to ban ${member.user.tag}. Please check the bot's permissions.`,
-        flags: MessageFlags.Ephemeral,
-      });
-    }
+    // Publish event instead of calling service directly
+    this.eventBus.publish(EventNames.AdminBanUserRequested, {
+      targetUserId: targetUser.id,
+      serverId: guild.id,
+      adminId: interaction.user.id,
+      reason: reason,
+      interactionId: interaction.id,
+      // No verificationEventId from direct command
+    });
+
+    // Reply indicating the request was received
+    await interaction.reply({
+      content: `Ban request for ${targetUser.tag} received. Processing...`,
+      flags: MessageFlags.Ephemeral,
+    });
   }
 
   /**

@@ -8,6 +8,8 @@ import { injectable, inject } from 'inversify';
 import { IHeuristicService } from './HeuristicService';
 import { IGPTService, UserProfileData } from './GPTService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
+import { IUserRepository } from '../repositories/UserRepository'; // Added
+import { IServerRepository } from '../repositories/ServerRepository'; // Added
 import { TYPES } from '../di/symbols';
 import { meetsConfidenceLevel } from '../utils/confidence';
 import { DetectionType } from '../repositories/types';
@@ -50,7 +52,11 @@ export interface IDetectionOrchestrator {
    * @param profileData User profile data for analysis
    * @returns A DetectionResult with the final label and metadata
    */
-  detectNewJoin(profileData: UserProfileData): Promise<DetectionResult>;
+  detectNewJoin(
+    serverId: string, // Added serverId
+    userId: string, // Added userId
+    profileData: UserProfileData
+  ): Promise<DetectionResult>;
 }
 
 /**
@@ -61,6 +67,8 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
   private heuristicService: IHeuristicService;
   private gptService: IGPTService;
   private detectionEventsRepository: IDetectionEventsRepository;
+  private userRepository: IUserRepository; // Added
+  private serverRepository: IServerRepository; // Added
 
   // Threshold to determine when to use GPT (0.3-0.7 is borderline)
   private readonly BORDERLINE_LOWER = 0.3;
@@ -73,11 +81,36 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
   constructor(
     @inject(TYPES.HeuristicService) heuristicService: IHeuristicService,
     @inject(TYPES.GPTService) gptService: IGPTService,
-    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository
+    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
+    @inject(TYPES.UserRepository) userRepository: IUserRepository, // Added
+    @inject(TYPES.ServerRepository) serverRepository: IServerRepository // Added
   ) {
     this.heuristicService = heuristicService;
     this.gptService = gptService;
     this.detectionEventsRepository = detectionEventsRepository;
+    this.userRepository = userRepository; // Added
+    this.serverRepository = serverRepository; // Added
+  }
+  /**
+   * Ensures user and server entities exist in the database.
+   * Necessary before creating a DetectionEvent due to foreign key constraints.
+   */
+  private async ensureEntitiesExist(
+    serverId: string,
+    userId: string,
+    username?: string
+  ): Promise<void> {
+    try {
+      // Ensure server exists
+      await this.serverRepository.getOrCreateServer(serverId);
+      // Ensure user exists
+      await this.userRepository.getOrCreateUser(userId, username);
+      // Note: ServerMember is handled by SecurityActionService later if needed
+    } catch (error) {
+      console.error('DetectionOrchestrator: Failed to ensure entities exist:', error);
+      // Decide if we should throw or just log. Throwing might be safer.
+      throw new Error('Failed to ensure prerequisite entities exist for detection event.');
+    }
   }
 
   /**
@@ -95,6 +128,9 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     content: string,
     profileData: UserProfileData
   ): Promise<DetectionResult> {
+    // Ensure server and user exist before proceeding
+    await this.ensureEntitiesExist(serverId, userId, profileData.username);
+
     // First, check recent detection history
     const recentEvents = await this.detectionEventsRepository.findByServerAndUser(serverId, userId);
     const recentSuspiciousEvents = recentEvents.filter((event) =>
@@ -120,11 +156,11 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     }
 
     // Check if user is new (if profile data available)
-    const isNewAccount = profileData?.accountCreatedAt
+    const isNewAccount = profileData.accountCreatedAt
       ? this.isNewAccount(profileData.accountCreatedAt)
       : false;
 
-    const isNewServerMember = profileData?.joinedServerAt
+    const isNewServerMember = profileData.joinedServerAt
       ? this.isNewServerMember(profileData.joinedServerAt)
       : false;
 
@@ -183,6 +219,19 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       };
     }
 
+    // Create the detection event record
+    const createdEvent = await this.detectionEventsRepository.create({
+      server_id: serverId,
+      user_id: userId,
+      detection_type: result.triggerSource,
+      confidence: result.confidence,
+      reasons: result.reasons,
+      detected_at: new Date(),
+      // message_id and channel_id are not needed here; context is available later via event payload
+      metadata: { content: content }, // Store original content
+    });
+
+    result.detectionEventId = createdEvent.id; // Add the event ID to the result
     return result;
   }
 
@@ -194,7 +243,14 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
    * @param profileData User profile data for analysis
    * @returns A DetectionResult with the final label and metadata
    */
-  public async detectNewJoin(profileData: UserProfileData): Promise<DetectionResult> {
+  public async detectNewJoin(
+    serverId: string, // Added serverId
+    userId: string, // Added userId
+    profileData: UserProfileData
+  ): Promise<DetectionResult> {
+    // Ensure server and user exist before proceeding
+    await this.ensureEntitiesExist(serverId, userId, profileData.username); // Use params
+
     // Use the analyzeProfile method from the interface
     const gptAnalysis = await this.gptService.analyzeProfile(profileData);
 
@@ -214,7 +270,8 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       suspicionScore += 0.7;
     }
 
-    return {
+    // Assign initial result to a variable
+    const initialResult: DetectionResult = {
       label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
       confidence: Math.abs(suspicionScore - 0.5) * 2,
       reasons: reasons,
@@ -222,6 +279,21 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       triggerContent: 'Server Join',
       profileData: profileData,
     };
+
+    // Create the detection event record using the correct variables
+    const createdEvent = await this.detectionEventsRepository.create({
+      server_id: serverId, // Use param
+      user_id: userId, // Use param
+      detection_type: initialResult.triggerSource,
+      confidence: initialResult.confidence,
+      reasons: initialResult.reasons,
+      detected_at: new Date(),
+      // No message_id or channel_id for join events
+      metadata: { join: true }, // Indicate this was a join event
+    });
+
+    initialResult.detectionEventId = createdEvent.id; // Add the event ID to the result
+    return initialResult; // Return the modified result
   }
 
   /**

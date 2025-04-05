@@ -9,6 +9,8 @@ import { getFormattedExamples } from '../config/gpt-config';
 import { TYPES } from '../di/symbols';
 
 export interface UserProfileData {
+  serverId?: string; // Added optional serverId
+  userId?: string; // Added optional userId
   username: string;
   discriminator?: string;
   nickname?: string;

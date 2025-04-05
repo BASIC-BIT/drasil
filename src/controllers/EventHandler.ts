@@ -6,7 +6,7 @@ import { IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { INotificationManager } from '../services/NotificationManager';
 import { IConfigService } from '../config/ConfigService';
 import { globalConfig } from '../config/GlobalConfig';
-import { ISecurityActionService } from '../services/SecurityActionService';
+// import { ISecurityActionService } from '../services/SecurityActionService'; // No longer needed here
 import { TYPES } from '../di/symbols';
 import { IInteractionHandler } from './InteractionHandler';
 import { RestrictionSubscriber } from '../events/subscribers/RestrictionSubscriber'; // Import subscriber
@@ -15,6 +15,8 @@ import { RoleUpdateSubscriber } from '../events/subscribers/RoleUpdateSubscriber
 import { ActionLogSubscriber } from '../events/subscribers/ActionLogSubscriber'; // Import subscriber
 import { ServerMemberStatusSubscriber } from '../events/subscribers/ServerMemberStatusSubscriber'; // Import subscriber
 import { ICommandHandler } from './CommandHandler';
+import { IEventBus } from '../events/EventBus'; // Added EventBus import
+import { EventNames } from '../events/events'; // Added EventNames import
 
 // Load environment variables
 dotenv.config();
@@ -32,7 +34,7 @@ export class EventHandler implements IEventHandler {
   private detectionOrchestrator: IDetectionOrchestrator;
   private notificationManager: INotificationManager;
   private configService: IConfigService;
-  private securityActionService: ISecurityActionService;
+  // private securityActionService: ISecurityActionService; // Removed
   private commandHandler: ICommandHandler;
   private interactionHandler: IInteractionHandler;
   private restrictionSubscriber: RestrictionSubscriber; // Add property for subscriber
@@ -40,13 +42,14 @@ export class EventHandler implements IEventHandler {
   private roleUpdateSubscriber: RoleUpdateSubscriber; // Add property for subscriber
   private actionLogSubscriber: ActionLogSubscriber; // Add property for subscriber
   private serverMemberStatusSubscriber: ServerMemberStatusSubscriber; // Add property for subscriber
+  private eventBus: IEventBus; // Added EventBus property
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
     @inject(TYPES.DetectionOrchestrator) detectionOrchestrator: IDetectionOrchestrator,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
     @inject(TYPES.ConfigService) configService: IConfigService,
-    @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService,
+    // @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService, // Removed injection
     @inject(TYPES.CommandHandler) commandHandler: ICommandHandler,
     @inject(TYPES.InteractionHandler) interactionHandler: IInteractionHandler,
     @inject(TYPES.RestrictionSubscriber) restrictionSubscriber: RestrictionSubscriber, // Inject subscriber
@@ -54,13 +57,14 @@ export class EventHandler implements IEventHandler {
     @inject(TYPES.RoleUpdateSubscriber) roleUpdateSubscriber: RoleUpdateSubscriber, // Inject subscriber
     @inject(TYPES.ActionLogSubscriber) actionLogSubscriber: ActionLogSubscriber, // Inject subscriber
     @inject(TYPES.ServerMemberStatusSubscriber)
-    serverMemberStatusSubscriber: ServerMemberStatusSubscriber // Inject subscriber
+    serverMemberStatusSubscriber: ServerMemberStatusSubscriber, // Inject subscriber
+    @inject(TYPES.EventBus) eventBus: IEventBus // Inject EventBus
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
     this.notificationManager = notificationManager;
     this.configService = configService;
-    this.securityActionService = securityActionService;
+    // this.securityActionService = securityActionService; // Removed assignment
     this.commandHandler = commandHandler;
     this.interactionHandler = interactionHandler;
     this.restrictionSubscriber = restrictionSubscriber; // Assign subscriber
@@ -68,6 +72,7 @@ export class EventHandler implements IEventHandler {
     this.roleUpdateSubscriber = roleUpdateSubscriber; // Assign subscriber
     this.actionLogSubscriber = actionLogSubscriber; // Assign subscriber
     this.serverMemberStatusSubscriber = serverMemberStatusSubscriber; // Assign subscriber
+    this.eventBus = eventBus; // Assign EventBus
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -151,11 +156,23 @@ export class EventHandler implements IEventHandler {
       );
 
       // If suspicious, delegate to the SecurityActionService
-      if (detectionResult.label === 'SUSPICIOUS' && message.member) {
-        await this.securityActionService.handleSuspiciousMessage(
-          message.member,
-          detectionResult,
-          message
+      if (
+        detectionResult.label === 'SUSPICIOUS' &&
+        message.member &&
+        detectionResult.detectionEventId
+      ) {
+        // Publish event instead of calling service directly
+        this.eventBus.publish(EventNames.UserDetectedSuspicious, {
+          userId: userId,
+          serverId: serverId || 'DM', // Handle potential DM case? Or should DMs be ignored earlier?
+          detectionResult: detectionResult,
+          sourceMessageId: message.id, // Pass message ID
+          detectionEventId: detectionResult.detectionEventId, // Pass the created event ID
+          channelId: message.channelId, // Pass channel ID
+        });
+      } else if (detectionResult.label === 'SUSPICIOUS' && !detectionResult.detectionEventId) {
+        console.warn(
+          `EventHandler: Suspicious message detected for ${userId} but detectionEventId is missing from result.`
         );
       }
     } catch (error) {
@@ -179,11 +196,25 @@ export class EventHandler implements IEventHandler {
       const profileData = this.extractUserProfileData(member);
 
       // Run detection on new join
-      const detectionResult = await this.detectionOrchestrator.detectNewJoin(profileData);
+      const detectionResult = await this.detectionOrchestrator.detectNewJoin(
+        member.guild.id, // Pass serverId
+        member.id, // Pass userId
+        profileData
+      );
 
-      // If suspicious, delegate to the SecurityActionService
-      if (detectionResult.label === 'SUSPICIOUS') {
-        await this.securityActionService.handleSuspiciousJoin(member, detectionResult);
+      // If suspicious, publish event instead of calling service directly
+      if (detectionResult.label === 'SUSPICIOUS' && detectionResult.detectionEventId) {
+        this.eventBus.publish(EventNames.UserDetectedSuspicious, {
+          userId: member.id,
+          serverId: member.guild.id,
+          detectionResult: detectionResult,
+          // No sourceMessageId for join event
+          detectionEventId: detectionResult.detectionEventId, // Pass the created event ID
+        });
+      } else if (detectionResult.label === 'SUSPICIOUS' && !detectionResult.detectionEventId) {
+        console.warn(
+          `EventHandler: Suspicious join detected for ${member.id} but detectionEventId is missing from result.`
+        );
       }
     } catch (error) {
       console.error('Error handling new member:', error);
@@ -195,13 +226,16 @@ export class EventHandler implements IEventHandler {
    * Only includes data directly available through Discord.js API
    */
   private extractUserProfileData(member: GuildMember): UserProfileData {
+    // Ensure serverId and userId are included for detectNewJoin context
     return {
+      serverId: member.guild.id, // Added serverId
+      userId: member.id, // Added userId
       username: member.user.username,
       discriminator: member.user.discriminator,
       nickname: member.nickname || undefined,
       accountCreatedAt: new Date(member.user.createdTimestamp),
       joinedServerAt: member.joinedAt ? new Date(member.joinedAt) : new Date(),
-      recentMessages: [],
+      recentMessages: [], // This might need adjustment based on how it's used
     };
   }
 
