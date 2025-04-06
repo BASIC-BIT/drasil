@@ -19,30 +19,23 @@ This bot uses:
 - **Restricted Role**: Automate partial lockdown of flagged users
 - **Verification Threads**: Quickly confirm or deny suspicious accounts
 
+## Development
+
+### Getting Started
+
+1. Clone the repo
+2. Install npm dependencies `npm i --legacy-peer-deps`
+3. `cp .env.example .env` and fill out required fields
+4. `npx supabase start`
+5. `npm run db:reset:local`
+6. `npm run dev`
+
 ### Heuristic Spam Detection
 
 The bot currently implements the following heuristic checks:
 
 - **Message Frequency**: Flags users who send more than 5 messages within 10 seconds
 - **Suspicious Keywords**: Detects common scam phrases like "free discord nitro", "claim your prize", etc.
-
-## Getting Started
-
-1. **Clone** this repository:
-   ```bash
-   git clone https://github.com/YourUsername/ai-discord-antispam.git
-   ```
-2. **Install dependencies**:
-   ```bash
-   cd discord-anti-spam-bot
-   npm install
-   ```
-3. **Configure environment**:
-   - Create a `.env` file and provide your `DISCORD_TOKEN`, `OPENAI_API_KEY`, etc.
-4. **Run the bot**:
-   ```bash
-   npm start
-   ```
 
 ## Available Scripts
 
@@ -100,10 +93,6 @@ This project uses npm scripts for common development tasks:
 
 The bot automatically registers the following slash commands during startup:
 
-- `/ping` - Check if the bot is online
-- `/verify @user` - Remove the restricted role from a user
-- `/ban @user [reason]` - Ban a user from the server with an optional reason
-- `/createthread @user` - Create a verification thread for a user
 - `/config key:value value:value` - Configure server-specific settings
 
 Slash commands are automatically registered when the bot starts up. There's no need for manual registration.
@@ -147,120 +136,6 @@ When a user is flagged as suspicious, the bot will:
 - Automatic CAPTCHA on suspected members?
 - Generally improve button interactions - add a confirmation prompt to the ban button, prevent creation of multiple threads, and add change how interactions are handled once it's already been handled (if we press Verify, then Ban, what happens?)
 
-## Testing with InversifyJS
-
-This project uses InversifyJS for dependency injection, which makes it highly testable. The test structure follows best practices for testing with dependency injection.
-
-### Test Utilities
-
-The project includes several test utilities for working with InversifyJS:
-
-- `createTestContainer()`: Creates a container with all dependencies mocked
-- `createServiceTestContainer()`: Creates a container with a real service implementation but mocked dependencies
-- `createMocks()`: Creates mock implementations for all services and repositories
-
-### Running Tests
-
-```bash
-# Run all tests
-npm test
-
-# Run tests with coverage
-npm run test:coverage
-
-# Run a specific test
-npm test -- -t "UserService"
-```
-
-### Writing Tests
-
-When writing tests for components that use dependency injection, follow these patterns:
-
-#### Testing Services
-
-```typescript
-import { createServiceTestContainer } from './utils/test-container';
-import { TYPES } from '../di/symbols';
-import { YourService } from '../services/YourService';
-
-describe('YourService', () => {
-  let container: Container;
-  let service: YourService;
-
-  beforeEach(() => {
-    // Create container with real service but mocked dependencies
-    container = createServiceTestContainer(TYPES.YourService, YourService);
-
-    // Get service from container
-    service = container.get<YourService>(TYPES.YourService);
-  });
-
-  it('should do something', async () => {
-    // Test your service
-    const result = await service.doSomething();
-    expect(result).toBe(expectedValue);
-  });
-});
-```
-
-#### Testing with Custom Mocks
-
-```typescript
-import { createServiceTestContainer, createMocks } from './utils/test-container';
-import { TYPES } from '../di/symbols';
-
-describe('YourComponent', () => {
-  let container: Container;
-  let component: YourComponent;
-  let mocks: ReturnType<typeof createMocks>;
-
-  beforeEach(() => {
-    // Get default mocks
-    mocks = createMocks();
-
-    // Customize mock behavior
-    mocks.mockDependency.someMethod.mockResolvedValue(customValue);
-
-    // Create container with custom mocks
-    container = createServiceTestContainer(TYPES.YourComponent, YourComponent, {
-      mockDependency: mocks.mockDependency,
-    });
-
-    // Get component from container
-    component = container.get<YourComponent>(TYPES.YourComponent);
-  });
-
-  it('should use the custom mock', async () => {
-    // Test with custom mock
-    const result = await component.methodThatUsesDependency();
-    expect(result).toBe(expectedCustomValue);
-    expect(mocks.mockDependency.someMethod).toHaveBeenCalled();
-  });
-});
-```
-
-### Integration Tests
-
-Integration tests verify that multiple components work together correctly. The `container.integration.test.ts` file demonstrates how to test that the InversifyJS container is properly configured:
-
-```typescript
-import { configureContainer } from '../di/container';
-import { TYPES } from '../di/symbols';
-
-describe('Container Integration', () => {
-  let container: Container;
-
-  beforeEach(() => {
-    container = configureContainer();
-  });
-
-  it('should resolve all dependencies', () => {
-    // Test that all dependencies can be resolved
-    const component = container.get(TYPES.YourComponent);
-    expect(component).toBeDefined();
-  });
-});
-
 ## Contributing 🤝
 
 Feel free to open pull requests or fork the project. All contributions are welcome—bug fixes, new features, documentation improvements, or suggestions.
@@ -273,4 +148,3 @@ Licensed under the [MIT License](LICENSE.md).
 
 Open an issue or reach out in the discussions tab. We love hearing from the community!
 Thanks for helping keep Discord communities safe and spam-free.
-```

@@ -128,11 +128,17 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     content: string,
     profileData: UserProfileData
   ): Promise<DetectionResult> {
+    console.log(`[DEBUG DetectionOrchestrator] detectMessage START for user ${userId}`);
+    try { // Add outer try block
     // Ensure server and user exist before proceeding
+    console.log(`[DEBUG DetectionOrchestrator] detectMessage - Calling ensureEntitiesExist...`);
     await this.ensureEntitiesExist(serverId, userId, profileData.username);
+    console.log(`[DEBUG DetectionOrchestrator] detectMessage - ensureEntitiesExist DONE.`);
 
     // First, check recent detection history
+    console.log(`[DEBUG DetectionOrchestrator] detectMessage - Calling findByServerAndUser...`);
     const recentEvents = await this.detectionEventsRepository.findByServerAndUser(serverId, userId);
+    console.log(`[DEBUG DetectionOrchestrator] detectMessage - findByServerAndUser DONE.`);
     const recentSuspiciousEvents = recentEvents.filter((event) =>
       meetsConfidenceLevel(event.confidence, 'High')
     );
@@ -191,7 +197,10 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
 
     if (shouldUseGPT) {
       // Use the analyzeProfile method that conforms to the IGPTService interface
+      console.log(`[DEBUG DetectionOrchestrator] detectMessage - Calling gptService.analyzeProfile...`);
       const gptAnalysis = await this.gptService.analyzeProfile(profileData);
+      console.log(`[DEBUG DetectionOrchestrator] detectMessage - gptService.analyzeProfile DONE.`);
+      console.log('[DEBUG DetectionOrchestrator] detectMessage - GPT Analysis Result:', gptAnalysis);
 
       if (gptAnalysis.result === 'SUSPICIOUS') {
         suspicionScore = 0.9;
@@ -220,6 +229,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     }
 
     // Create the detection event record
+    console.log(`[DEBUG DetectionOrchestrator] detectMessage - Calling detectionEventsRepository.create...`);
     const createdEvent = await this.detectionEventsRepository.create({
       server_id: serverId,
       user_id: userId,
@@ -230,9 +240,18 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       // message_id and channel_id are not needed here; context is available later via event payload
       metadata: { content: content }, // Store original content
     });
+    console.log(`[DEBUG DetectionOrchestrator] detectMessage - detectionEventsRepository.create DONE.`);
 
     result.detectionEventId = createdEvent.id; // Add the event ID to the result
+    console.log('[DEBUG DetectionOrchestrator] detectMessage - Final Result:', result);
     return result;
+  } catch (error) { // Add outer catch block
+      console.error(`[DEBUG DetectionOrchestrator] detectMessage - ERROR for user ${userId}:`, error);
+      // Rethrow or handle appropriately - rethrowing ensures the caller knows about the failure
+      throw error;
+    } finally {
+      console.log(`[DEBUG DetectionOrchestrator] detectMessage END for user ${userId}`);
+    }
   }
 
   /**
@@ -248,11 +267,18 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     userId: string, // Added userId
     profileData: UserProfileData
   ): Promise<DetectionResult> {
+    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin START for user ${userId}`);
+    try { // Add outer try block
     // Ensure server and user exist before proceeding
+    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin - Calling ensureEntitiesExist...`);
     await this.ensureEntitiesExist(serverId, userId, profileData.username); // Use params
+    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin - ensureEntitiesExist DONE.`);
 
     // Use the analyzeProfile method from the interface
+    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin - Calling gptService.analyzeProfile...`);
     const gptAnalysis = await this.gptService.analyzeProfile(profileData);
+    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin - gptService.analyzeProfile DONE.`);
+    console.log('[DEBUG DetectionOrchestrator] detectNewJoin - GPT Analysis Result:', gptAnalysis);
 
     // Calculate suspicion score
     let suspicionScore = 0;
@@ -281,6 +307,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     };
 
     // Create the detection event record using the correct variables
+    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin - Calling detectionEventsRepository.create...`);
     const createdEvent = await this.detectionEventsRepository.create({
       server_id: serverId, // Use param
       user_id: userId, // Use param
@@ -291,9 +318,18 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       // No message_id or channel_id for join events
       metadata: { join: true }, // Indicate this was a join event
     });
+    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin - detectionEventsRepository.create DONE.`);
 
     initialResult.detectionEventId = createdEvent.id; // Add the event ID to the result
+    console.log('[DEBUG DetectionOrchestrator] detectNewJoin - Final Result:', initialResult);
     return initialResult; // Return the modified result
+  } catch (error) { // Add outer catch block
+      console.error(`[DEBUG DetectionOrchestrator] detectNewJoin - ERROR for user ${userId}:`, error);
+      // Rethrow or handle appropriately
+      throw error;
+    } finally {
+      console.log(`[DEBUG DetectionOrchestrator] detectNewJoin END for user ${userId}`);
+    }
   }
 
   /**

@@ -1,5 +1,5 @@
 {
-  "name": "discord-anti-spam-bot",
+  "name": "drasil",
   "version": "1.0.0",
   "description": "A Discord bot that leverages GPT-based analysis and heuristic checks to proactively detect and mitigate spammers and scammers in Discord servers.",
   "main": "dist/index.js",

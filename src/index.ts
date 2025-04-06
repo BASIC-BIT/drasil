@@ -17,6 +17,16 @@ async function bootstrap(): Promise<void> {
     // Create and configure the container
     const container = configureContainer();
 
+
+    // Explicitly get singleton subscribers to ensure they are instantiated and subscribe early
+    container.get(TYPES.RestrictionSubscriber);
+    container.get(TYPES.NotificationSubscriber);
+    container.get(TYPES.RoleUpdateSubscriber);
+    container.get(TYPES.ActionLogSubscriber);
+    container.get(TYPES.ServerMemberStatusSubscriber);
+    container.get(TYPES.VerificationReopenSubscriber);
+    container.get(TYPES.DetectionResultHandlerSubscriber);
+
     // Get the bot instance from the container
     const bot = container.get<IBot>(TYPES.Bot);
 

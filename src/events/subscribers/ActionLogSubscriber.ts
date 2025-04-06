@@ -30,20 +30,20 @@ export class ActionLogSubscriber {
     console.log(
       `ActionLogSubscriber: Handling ${EventNames.UserVerified} for user ${payload.userId}`
     );
-    await this.logAction(payload.verificationEventId, AdminActionType.VERIFY, payload.moderatorId);
+    await this.logAction(AdminActionType.VERIFY, payload.moderatorId, payload.verificationEventId);
   }
 
   private async handleUserBanned(payload: UserBannedPayload): Promise<void> {
     console.log(
       `ActionLogSubscriber: Handling ${EventNames.UserBanned} for user ${payload.userId}`
     );
-    await this.logAction(payload.verificationEventId, AdminActionType.BAN, payload.moderatorId);
+    await this.logAction(AdminActionType.BAN, payload.moderatorId, payload.verificationEventId);
   }
 
   private async logAction(
-    verificationEventId: string,
     actionType: AdminActionType,
-    moderatorId: string
+    moderatorId: string,
+    verificationEventId?: string
   ): Promise<void> {
     if (!verificationEventId || verificationEventId === 'N/A') {
       console.warn(
