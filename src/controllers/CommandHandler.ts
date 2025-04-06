@@ -107,6 +107,19 @@ export class CommandHandler implements ICommandHandler {
         .addStringOption((option) =>
           option.setName('value').setDescription('The value to set').setRequired(true)
         ),
+      new SlashCommandBuilder() // Added flaguser command
+        .setName('flaguser')
+        .setDescription('Manually flag a user as suspicious and start verification.')
+        .addUserOption((option) =>
+          option.setName('user').setDescription('The user to flag').setRequired(true)
+        )
+        .addStringOption((option) =>
+          option
+            .setName('reason')
+            .setDescription('Optional reason for flagging')
+            .setRequired(false)
+        )
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // Require Admin perms
     ].map((command) => command.toJSON());
   }
 
@@ -153,6 +166,10 @@ export class CommandHandler implements ICommandHandler {
 
       case 'config':
         await this.handleConfigCommand(interaction);
+        break;
+
+      case 'flaguser': // Added case for flaguser
+        await this.handleFlagUserCommand(interaction);
         break;
 
       default:
@@ -448,4 +465,50 @@ export class CommandHandler implements ICommandHandler {
       });
     }
   }
+
+  /**
+   * Handle the /flaguser command to manually flag a user
+   * @param interaction The slash command interaction
+   */
+  private async handleFlagUserCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+    // Check if the interaction is in a guild
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({
+        content: 'This command can only be used in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    // Double-check permissions (though defaultMemberPermissions should handle this)
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({
+        content: 'You need administrator permissions to use this command.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    // Get the target user
+    const targetUser = interaction.options.getUser('user', true);
+    const reason = interaction.options.getString('reason'); // Optional
+
+    // Publish the event
+    this.eventBus.publish(EventNames.AdminFlagUserRequested, {
+      targetUserId: targetUser.id,
+      serverId: guild.id,
+      adminId: interaction.user.id,
+      reason: reason ?? undefined, // Pass reason if provided
+      interactionId: interaction.id,
+    });
+
+    // Reply indicating the request was received
+    await interaction.reply({
+      content: `Flag request for ${targetUser.tag} received. Initiating verification process...`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
 }
+

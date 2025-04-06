@@ -48,6 +48,7 @@ import { ActionLogSubscriber } from '../events/subscribers/ActionLogSubscriber';
 import { ServerMemberStatusSubscriber } from '../events/subscribers/ServerMemberStatusSubscriber'; // Import Subscriber
 import { VerificationReopenSubscriber } from '../events/subscribers/VerificationReopenSubscriber'; // Import new subscriber
 import { DetectionResultHandlerSubscriber } from '../events/subscribers/DetectionResultHandlerSubscriber'; // Import new subscriber
+import { AdminFlagUserSubscriber } from '../events/subscribers/AdminFlagUserSubscriber'; // Import new subscriber
 import {
   ISubscriberInitializer,
   SubscriberInitializer,
@@ -218,6 +219,10 @@ function configureServices(container: Container): void {
   container
     .bind<DetectionResultHandlerSubscriber>(TYPES.DetectionResultHandlerSubscriber)
     .to(DetectionResultHandlerSubscriber)
+    .inSingletonScope();
+  container
+    .bind<AdminFlagUserSubscriber>(TYPES.AdminFlagUserSubscriber)
+    .to(AdminFlagUserSubscriber)
     .inSingletonScope();
 
   // Initializers

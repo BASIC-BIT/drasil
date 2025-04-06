@@ -17,6 +17,7 @@ export const EventNames = {
   AdminVerifyUserRequested: 'adminVerifyUserRequested',
   // Add more events as needed
   AdminBanUserRequested: 'adminBanUserRequested',
+  AdminFlagUserRequested: 'adminFlagUserRequested', // Added
 } as const;
 
 // Type for valid event names
@@ -97,6 +98,7 @@ export interface EventMap {
   [EventNames.AdminVerifyUserRequested]: AdminVerifyUserRequestedPayload; // Added mapping
   [EventNames.AdminBanUserRequested]: AdminBanUserRequestedPayload; // Added mapping
   // Add mappings for other events
+  [EventNames.AdminFlagUserRequested]: AdminFlagUserRequestedPayload;
 }
 
 export interface AdminVerifyUserRequestedPayload {
@@ -116,3 +118,12 @@ export interface AdminBanUserRequestedPayload {
   verificationEventId?: string; // Optional: If triggered from a specific verification context
 }
 // Removed misplaced mappings from here
+
+export interface AdminFlagUserRequestedPayload {
+  targetUserId: string;
+  serverId: string;
+  adminId: string;
+  reason?: string; // Optional reason provided by admin
+  interactionId: string; // ID of the interaction for potential follow-up replies
+}
+
