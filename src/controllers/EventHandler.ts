@@ -155,7 +155,6 @@ export class EventHandler implements IEventHandler {
         profileData
       );
 
-      console.log('[DEBUG EventHandler] handleMessage - Received Detection Result:', detectionResult);
       // If suspicious, delegate to the SecurityActionService
       if (
         detectionResult.label === 'SUSPICIOUS' &&
@@ -163,8 +162,8 @@ export class EventHandler implements IEventHandler {
         detectionResult.detectionEventId
       ) {
         // Publish event instead of calling service directly
-        console.log('[DEBUG EventHandler] handleMessage - Publishing UserDetectedSuspicious...');
-        try { // Add try
+        try {
+          // Add try
           this.eventBus.publish(EventNames.UserDetectedSuspicious, {
             userId: userId,
             serverId: serverId || 'DM', // Handle potential DM case? Or should DMs be ignored earlier?
@@ -173,9 +172,11 @@ export class EventHandler implements IEventHandler {
             detectionEventId: detectionResult.detectionEventId, // Pass the created event ID
             channelId: message.channelId, // Pass channel ID
           });
-          console.log('[DEBUG EventHandler] handleMessage - Published UserDetectedSuspicious successfully.'); // Add success log
-        } catch (publishError) { // Add catch
-          console.error('[DEBUG EventHandler] handleMessage - ERROR publishing UserDetectedSuspicious:', publishError);
+        } catch (publishError) {
+          console.error(
+            '[DEBUG EventHandler] handleMessage - ERROR publishing UserDetectedSuspicious:',
+            publishError
+          );
         }
       } else if (detectionResult.label === 'SUSPICIOUS' && !detectionResult.detectionEventId) {
         console.warn(
@@ -209,11 +210,10 @@ export class EventHandler implements IEventHandler {
         profileData
       );
 
-      console.log('[DEBUG EventHandler] handleGuildMemberAdd - Received Detection Result:', detectionResult);
       // If suspicious, publish event instead of calling service directly
       if (detectionResult.label === 'SUSPICIOUS' && detectionResult.detectionEventId) {
-        console.log('[DEBUG EventHandler] handleGuildMemberAdd - Publishing UserDetectedSuspicious...');
-        try { // Add try
+        try {
+          // Add try
           this.eventBus.publish(EventNames.UserDetectedSuspicious, {
             userId: member.id,
             serverId: member.guild.id,
@@ -221,9 +221,11 @@ export class EventHandler implements IEventHandler {
             // No sourceMessageId for join event
             detectionEventId: detectionResult.detectionEventId, // Pass the created event ID
           });
-          console.log('[DEBUG EventHandler] handleGuildMemberAdd - Published UserDetectedSuspicious successfully.'); // Add success log
-        } catch (publishError) { // Add catch
-          console.error('[DEBUG EventHandler] handleGuildMemberAdd - ERROR publishing UserDetectedSuspicious:', publishError);
+        } catch (publishError) {
+          console.error(
+            '[DEBUG EventHandler] handleGuildMemberAdd - ERROR publishing UserDetectedSuspicious:',
+            publishError
+          );
         }
       } else if (detectionResult.label === 'SUSPICIOUS' && !detectionResult.detectionEventId) {
         console.warn(

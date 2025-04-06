@@ -54,6 +54,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 - ✅ Better error handling and propagation within core services.
 - ✅ Improved logging and debugging capabilities.
 - ✅ Clearer service boundaries and responsibilities established through event decoupling.
+- ✅ **Eager Subscriber Loading**: Implemented `SubscriberInitializer` pattern to ensure event subscribers are instantiated eagerly during bootstrap, fixing issues with missed events due to lazy loading.
 
 ## What Works
 
@@ -99,7 +100,8 @@ The Discord Anti-Spam Bot is currently in active development with several key co
   - ✅ External dependency injection (Discord, OpenAI, PrismaClient)
   - ✅ Dedicated test utilities for InversifyJS testing
   - ✅ Container integration tests
-  - ✅ Registration of all core services, repositories, controllers, and subscribers.
+  - ✅ Registration of all core services, repositories, controllers, subscribers, and initializers.
+  - ✅ Eager loading of subscribers via `SubscriberInitializer` pattern in bootstrap.
 
 ### User Management & Moderation (Event-Driven Flows)
 
@@ -321,7 +323,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 ## Documentation Status
 
 - README: Needs update for Prisma/EDA.
-- Memory Bank: Updated for EDA Phase 3 (`eda-events.md`, `systemPatterns.md`, `activeContext.md`). `progress.md` updated now.
+- Memory Bank: Updated for EDA Phase 3 and Eager Subscriber Loading (`eda-events.md`, `systemPatterns.md`, `activeContext.md`, `techContext.md`, `progress.md`).
 - API Documentation: Not started.
 - Admin Guide: Not started.
 - Developer Guide: Not started.

@@ -167,6 +167,7 @@ The project is currently focused on solidifying the internal architecture using 
   - Added proper cleanup in test lifecycle hooks
 - ✅ **Prisma Migration**: Migrated all repositories (`ServerRepository`, `UserRepository`, `ServerMemberRepository`, `DetectionEventsRepository`, `VerificationEventRepository`, `AdminActionRepository`) to use Prisma Client instead of Supabase Client. Updated DI container.
 - ✅ **Notification Button Fix**: Fixed bug where "Create Thread" button was missing on initial verification notifications due to incorrect null check (`!== undefined` vs truthiness check) for `thread_id` in `NotificationManager.ts`.
+- ✅ **Eager Subscriber Loading**: Implemented `SubscriberInitializer` pattern to ensure event subscribers are instantiated eagerly during bootstrap, fixing issues with missed events due to lazy loading.
 
 ### In Progress
 
@@ -201,6 +202,7 @@ The system uses InversifyJS for dependency injection and an Event-Driven Archite
     - `@inject()` decorators for constructor parameters
     - Singleton scope for most services, repositories, and subscribers
     - Testable architecture with mock injections
+    - Eager loading of subscribers via `SubscriberInitializer` pattern
 
 2.  **Bot Core (Bot.ts & Controllers)**:
 
@@ -301,7 +303,7 @@ The system uses InversifyJS for dependency injection and an Event-Driven Archite
     - ✅ Document server configuration command
     - ✅ Document InversifyJS testing approach (Note: Needs review based on actual test setup)
     - ✅ Updated Memory Bank (`techContext.md`, `systemPatterns.md`) for Prisma migration.
-    - ✅ Updated Memory Bank (`eda-events.md`, `systemPatterns.md`, `activeContext.md`) for EDA refactoring (Phases 1-3).
+    - ✅ Updated Memory Bank (`eda-events.md`, `systemPatterns.md`, `activeContext.md`, `techContext.md`) for EDA refactoring (Phases 1-3) and Eager Subscriber Loading.
     - 🔄 Update `progress.md` to reflect completed EDA work.
     - 🔄 Update README with setup instructions (including Prisma).
     - 🔄 Document database schema (`prisma/schema.prisma`) and migration process (`prisma migrate dev`).

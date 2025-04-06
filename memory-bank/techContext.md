@@ -251,7 +251,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
 
 ### Application Bootstrap
 
-The application is started by resolving the Bot from the container:
+The application is started by resolving necessary singletons from the container:
 
 ```typescript
 // src/index.ts
@@ -259,6 +259,14 @@ import 'reflect-metadata';
 import { container } from './di/container';
 import { TYPES } from './di/symbols';
 import { IBot } from './Bot';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+import { ISubscriberInitializer } from './initializers/SubscriberInitializer'; // Import Initializer
+
+// Create and configure the container
+const container = configureContainer();
+
+// Explicitly get the SubscriberInitializer to force instantiation of all subscribers
+container.get<ISubscriberInitializer>(TYPES.SubscriberInitializer);
 
 // Get the bot instance from the container
 const bot = container.get<IBot>(TYPES.Bot);
@@ -267,11 +275,10 @@ const bot = container.get<IBot>(TYPES.Bot);
 bot.startBot().catch(console.error);
 
 // Handle termination signals
-process.on('SIGINT', async () => {
-  await bot.destroy();
-  process.exit(0);
-});
+// ... (setupGracefulShutdown)
 ```
+
+**Eager Loading:** To ensure singleton services like event subscribers are instantiated immediately at startup (rather than lazily), a dedicated `SubscriberInitializer` service is used. This service injects all required subscribers. By resolving the `SubscriberInitializer` during bootstrap, InversifyJS is forced to create instances of all its dependencies (the subscribers), ensuring they are ready to handle events.
 
 ## Spam Detection Strategies
 

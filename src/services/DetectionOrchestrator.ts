@@ -128,129 +128,124 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     content: string,
     profileData: UserProfileData
   ): Promise<DetectionResult> {
-    console.log(`[DEBUG DetectionOrchestrator] detectMessage START for user ${userId}`);
-    try { // Add outer try block
-    // Ensure server and user exist before proceeding
-    console.log(`[DEBUG DetectionOrchestrator] detectMessage - Calling ensureEntitiesExist...`);
-    await this.ensureEntitiesExist(serverId, userId, profileData.username);
-    console.log(`[DEBUG DetectionOrchestrator] detectMessage - ensureEntitiesExist DONE.`);
+    try {
+      // Add outer try block
+      // Ensure server and user exist before proceeding
+      await this.ensureEntitiesExist(serverId, userId, profileData.username);
 
-    // First, check recent detection history
-    console.log(`[DEBUG DetectionOrchestrator] detectMessage - Calling findByServerAndUser...`);
-    const recentEvents = await this.detectionEventsRepository.findByServerAndUser(serverId, userId);
-    console.log(`[DEBUG DetectionOrchestrator] detectMessage - findByServerAndUser DONE.`);
-    const recentSuspiciousEvents = recentEvents.filter((event) =>
-      meetsConfidenceLevel(event.confidence, 'High')
-    );
+      // First, check recent detection history
+      const recentEvents = await this.detectionEventsRepository.findByServerAndUser(
+        serverId,
+        userId
+      );
+      const recentSuspiciousEvents = recentEvents.filter((event) =>
+        meetsConfidenceLevel(event.confidence, 'High')
+      );
 
-    // Calculate initial suspicion score based on heuristics
-    let suspicionScore = 0;
-    let reasons: string[] = [];
+      // Calculate initial suspicion score based on heuristics
+      let suspicionScore = 0;
+      let reasons: string[] = [];
 
-    // If user has recent suspicious events, increase initial suspicion
-    if (recentSuspiciousEvents.length > 0) {
-      suspicionScore += 0.4; // Start with 40% suspicion
-      reasons.push('Recent suspicious activity');
-    }
-
-    // Run heuristic checks on the message content
-    const heuristicResult = this.heuristicService.analyzeMessage(userId, content, serverId);
-
-    if (heuristicResult.result === 'SUSPICIOUS') {
-      suspicionScore += 0.5;
-      reasons = [...reasons, ...heuristicResult.reasons];
-    }
-
-    // Check if user is new (if profile data available)
-    const isNewAccount = profileData.accountCreatedAt
-      ? this.isNewAccount(profileData.accountCreatedAt)
-      : false;
-
-    const isNewServerMember = profileData.joinedServerAt
-      ? this.isNewServerMember(profileData.joinedServerAt)
-      : false;
-
-    if (isNewAccount) {
-      suspicionScore += 0.2;
-      reasons.push('New Discord account');
-    }
-
-    if (isNewServerMember) {
-      suspicionScore += 0.1;
-      reasons.push('Recently joined server');
-    }
-
-    // TODO: We update this inline here but don't update the database? Is this a problem?
-    profileData.recentMessages = [...profileData.recentMessages, content];
-
-    // Determine if we should use GPT
-    // Use GPT if:
-    // 1. The user is new (either to Discord or to the server) OR
-    // 2. The suspicion score is borderline (not clearly OK or clearly SUSPICIOUS)
-    const shouldUseGPT =
-      (isNewAccount ||
-        isNewServerMember ||
-        (suspicionScore >= this.BORDERLINE_LOWER && suspicionScore <= this.BORDERLINE_UPPER)) &&
-      profileData !== undefined;
-
-    let result: DetectionResult;
-
-    if (shouldUseGPT) {
-      // Use the analyzeProfile method that conforms to the IGPTService interface
-      console.log(`[DEBUG DetectionOrchestrator] detectMessage - Calling gptService.analyzeProfile...`);
-      const gptAnalysis = await this.gptService.analyzeProfile(profileData);
-      console.log(`[DEBUG DetectionOrchestrator] detectMessage - gptService.analyzeProfile DONE.`);
-      console.log('[DEBUG DetectionOrchestrator] detectMessage - GPT Analysis Result:', gptAnalysis);
-
-      if (gptAnalysis.result === 'SUSPICIOUS') {
-        suspicionScore = 0.9;
-        reasons = [...reasons, ...gptAnalysis.reasons];
-      } else {
-        suspicionScore = Math.max(0, suspicionScore - 0.3);
-        reasons.push('GPT analysis indicates user is likely legitimate');
+      // If user has recent suspicious events, increase initial suspicion
+      if (recentSuspiciousEvents.length > 0) {
+        suspicionScore += 0.4; // Start with 40% suspicion
+        reasons.push('Recent suspicious activity');
       }
 
-      result = {
-        label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
-        confidence: Math.abs(suspicionScore - 0.5) * 2,
-        reasons: reasons,
-        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
-        triggerContent: content,
-        profileData: profileData,
-      };
-    } else {
-      result = {
-        label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
-        confidence: Math.abs(suspicionScore - 0.5) * 2,
-        reasons: reasons,
-        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
-        triggerContent: content,
-      };
-    }
+      // Run heuristic checks on the message content
+      const heuristicResult = this.heuristicService.analyzeMessage(userId, content, serverId);
 
-    // Create the detection event record
-    console.log(`[DEBUG DetectionOrchestrator] detectMessage - Calling detectionEventsRepository.create...`);
-    const createdEvent = await this.detectionEventsRepository.create({
-      server_id: serverId,
-      user_id: userId,
-      detection_type: result.triggerSource,
-      confidence: result.confidence,
-      reasons: result.reasons,
-      detected_at: new Date(),
-      // message_id and channel_id are not needed here; context is available later via event payload
-      metadata: { content: content }, // Store original content
-    });
-    console.log(`[DEBUG DetectionOrchestrator] detectMessage - detectionEventsRepository.create DONE.`);
+      if (heuristicResult.result === 'SUSPICIOUS') {
+        suspicionScore += 0.5;
+        reasons = [...reasons, ...heuristicResult.reasons];
+      }
 
-    result.detectionEventId = createdEvent.id; // Add the event ID to the result
-    console.log('[DEBUG DetectionOrchestrator] detectMessage - Final Result:', result);
-    return result;
-  } catch (error) { // Add outer catch block
-      console.error(`[DEBUG DetectionOrchestrator] detectMessage - ERROR for user ${userId}:`, error);
+      // Check if user is new (if profile data available)
+      const isNewAccount = profileData.accountCreatedAt
+        ? this.isNewAccount(profileData.accountCreatedAt)
+        : false;
+
+      const isNewServerMember = profileData.joinedServerAt
+        ? this.isNewServerMember(profileData.joinedServerAt)
+        : false;
+
+      if (isNewAccount) {
+        suspicionScore += 0.2;
+        reasons.push('New Discord account');
+      }
+
+      if (isNewServerMember) {
+        suspicionScore += 0.1;
+        reasons.push('Recently joined server');
+      }
+
+      // TODO: We update this inline here but don't update the database? Is this a problem?
+      profileData.recentMessages = [...profileData.recentMessages, content];
+
+      // Determine if we should use GPT
+      // Use GPT if:
+      // 1. The user is new (either to Discord or to the server) OR
+      // 2. The suspicion score is borderline (not clearly OK or clearly SUSPICIOUS)
+      const shouldUseGPT =
+        (isNewAccount ||
+          isNewServerMember ||
+          (suspicionScore >= this.BORDERLINE_LOWER && suspicionScore <= this.BORDERLINE_UPPER)) &&
+        profileData !== undefined;
+
+      let result: DetectionResult;
+
+      if (shouldUseGPT) {
+        // Use the analyzeProfile method that conforms to the IGPTService interface
+        const gptAnalysis = await this.gptService.analyzeProfile(profileData);
+
+        if (gptAnalysis.result === 'SUSPICIOUS') {
+          suspicionScore = 0.9;
+          reasons = [...reasons, ...gptAnalysis.reasons];
+        } else {
+          suspicionScore = Math.max(0, suspicionScore - 0.3);
+          reasons.push('GPT analysis indicates user is likely legitimate');
+        }
+
+        result = {
+          label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
+          confidence: Math.abs(suspicionScore - 0.5) * 2,
+          reasons: reasons,
+          triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+          triggerContent: content,
+          profileData: profileData,
+        };
+      } else {
+        result = {
+          label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
+          confidence: Math.abs(suspicionScore - 0.5) * 2,
+          reasons: reasons,
+          triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+          triggerContent: content,
+        };
+      }
+
+      // Create the detection event record
+      const createdEvent = await this.detectionEventsRepository.create({
+        server_id: serverId,
+        user_id: userId,
+        detection_type: result.triggerSource,
+        confidence: result.confidence,
+        reasons: result.reasons,
+        detected_at: new Date(),
+        // message_id and channel_id are not needed here; context is available later via event payload
+        metadata: { content: content }, // Store original content
+      });
+
+      result.detectionEventId = createdEvent.id; // Add the event ID to the result
+      return result;
+    } catch (error) {
+      // Add outer catch block
+      console.error(
+        `[DEBUG DetectionOrchestrator] detectMessage - ERROR for user ${userId}:`,
+        error
+      );
       // Rethrow or handle appropriately - rethrowing ensures the caller knows about the failure
       throw error;
-    } finally {
-      console.log(`[DEBUG DetectionOrchestrator] detectMessage END for user ${userId}`);
     }
   }
 
@@ -267,68 +262,62 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     userId: string, // Added userId
     profileData: UserProfileData
   ): Promise<DetectionResult> {
-    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin START for user ${userId}`);
-    try { // Add outer try block
-    // Ensure server and user exist before proceeding
-    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin - Calling ensureEntitiesExist...`);
-    await this.ensureEntitiesExist(serverId, userId, profileData.username); // Use params
-    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin - ensureEntitiesExist DONE.`);
+    try {
+      // Add outer try block
+      // Ensure server and user exist before proceeding
+      await this.ensureEntitiesExist(serverId, userId, profileData.username); // Use params
 
-    // Use the analyzeProfile method from the interface
-    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin - Calling gptService.analyzeProfile...`);
-    const gptAnalysis = await this.gptService.analyzeProfile(profileData);
-    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin - gptService.analyzeProfile DONE.`);
-    console.log('[DEBUG DetectionOrchestrator] detectNewJoin - GPT Analysis Result:', gptAnalysis);
+      // Use the analyzeProfile method from the interface
+      const gptAnalysis = await this.gptService.analyzeProfile(profileData);
 
-    // Calculate suspicion score
-    let suspicionScore = 0;
-    let reasons: string[] = [...gptAnalysis.reasons];
+      // Calculate suspicion score
+      let suspicionScore = 0;
+      let reasons: string[] = [...gptAnalysis.reasons];
 
-    // Check if account is new
-    const isNewAccount = this.isNewAccount(profileData.accountCreatedAt);
-    if (isNewAccount) {
-      suspicionScore += 0.4;
-      reasons.push('New Discord account');
-    }
+      // Check if account is new
+      const isNewAccount = this.isNewAccount(profileData.accountCreatedAt);
+      if (isNewAccount) {
+        suspicionScore += 0.4;
+        reasons.push('New Discord account');
+      }
 
-    // Use the GPT analysis result
-    if (gptAnalysis.result === 'SUSPICIOUS') {
-      suspicionScore += 0.7;
-    }
+      // Use the GPT analysis result
+      if (gptAnalysis.result === 'SUSPICIOUS') {
+        suspicionScore += 0.7;
+      }
 
-    // Assign initial result to a variable
-    const initialResult: DetectionResult = {
-      label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
-      confidence: Math.abs(suspicionScore - 0.5) * 2,
-      reasons: reasons,
-      triggerSource: DetectionType.NEW_ACCOUNT,
-      triggerContent: 'Server Join',
-      profileData: profileData,
-    };
+      // Assign initial result to a variable
+      const initialResult: DetectionResult = {
+        label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
+        confidence: Math.abs(suspicionScore - 0.5) * 2,
+        reasons: reasons,
+        triggerSource: DetectionType.NEW_ACCOUNT,
+        triggerContent: 'Server Join',
+        profileData: profileData,
+      };
 
-    // Create the detection event record using the correct variables
-    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin - Calling detectionEventsRepository.create...`);
-    const createdEvent = await this.detectionEventsRepository.create({
-      server_id: serverId, // Use param
-      user_id: userId, // Use param
-      detection_type: initialResult.triggerSource,
-      confidence: initialResult.confidence,
-      reasons: initialResult.reasons,
-      detected_at: new Date(),
-      // No message_id or channel_id for join events
-      metadata: { join: true }, // Indicate this was a join event
-    });
-    console.log(`[DEBUG DetectionOrchestrator] detectNewJoin - detectionEventsRepository.create DONE.`);
+      // Create the detection event record using the correct variables
+      const createdEvent = await this.detectionEventsRepository.create({
+        server_id: serverId, // Use param
+        user_id: userId, // Use param
+        detection_type: initialResult.triggerSource,
+        confidence: initialResult.confidence,
+        reasons: initialResult.reasons,
+        detected_at: new Date(),
+        // No message_id or channel_id for join events
+        metadata: { join: true }, // Indicate this was a join event
+      });
 
-    initialResult.detectionEventId = createdEvent.id; // Add the event ID to the result
-    console.log('[DEBUG DetectionOrchestrator] detectNewJoin - Final Result:', initialResult);
-    return initialResult; // Return the modified result
-  } catch (error) { // Add outer catch block
-      console.error(`[DEBUG DetectionOrchestrator] detectNewJoin - ERROR for user ${userId}:`, error);
+      initialResult.detectionEventId = createdEvent.id; // Add the event ID to the result
+      return initialResult; // Return the modified result
+    } catch (error) {
+      // Add outer catch block
+      console.error(
+        `[DEBUG DetectionOrchestrator] detectNewJoin - ERROR for user ${userId}:`,
+        error
+      );
       // Rethrow or handle appropriately
       throw error;
-    } finally {
-      console.log(`[DEBUG DetectionOrchestrator] detectNewJoin END for user ${userId}`);
     }
   }
 

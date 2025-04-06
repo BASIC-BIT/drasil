@@ -170,7 +170,6 @@ export class SecurityActionService implements ISecurityActionService {
     detectionResult: DetectionResult,
     sourceMessage?: Message
   ): Promise<boolean> {
-    console.log(`[DEBUG SecurityActionService] handleSuspiciousMessage invoked for user ${member.id}`);
     try {
       // 1. Ensure entities exist
       await this.ensureEntitiesExist(
@@ -274,7 +273,6 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     detectionResult: DetectionResult
   ): Promise<boolean> {
-    console.log(`[DEBUG SecurityActionService] handleSuspiciousJoin invoked for user ${member.id}`);
     try {
       // 1. Ensure entities exist
       await this.ensureEntitiesExist(

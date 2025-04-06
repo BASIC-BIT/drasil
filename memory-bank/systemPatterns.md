@@ -43,6 +43,8 @@ The Discord Anti-Spam Bot follows a modular, service-oriented architecture with 
 │   │   ├── EventHandler.ts
 │   │   └── InteractionHandler.ts
 │   ├── Bot.ts               # Main bot class
+│   ├── initializers/        # Eager loading initializers
+│   │   └── SubscriberInitializer.ts # Ensures subscribers are loaded
 │   └── index.ts             # Application entry point
 ├── docs/                    # Legacy documentation (being migrated to memory-bank)
 ├── memory-bank/            # Project documentation and context
@@ -250,8 +252,8 @@ export class DetectionResultHandlerSubscriber {
 
 // In index.ts
 const container = configureContainer();
-// Instantiate subscribers by getting them (if singleton) or letting container manage
-container.get<DetectionResultHandlerSubscriber>(TYPES.DetectionResultHandlerSubscriber);
+// Instantiate initializer to force eager loading of subscribers
+container.get<ISubscriberInitializer>(TYPES.SubscriberInitializer);
 const bot = container.get<IBot>(TYPES.Bot);
 await bot.startBot();
 ```
@@ -284,6 +286,15 @@ Slash commands and button interactions follow the command pattern, now primarily
 ### 6. Caching Strategy
 
 The ConfigService implements a cache-first approach for server configurations.
+
+### 7. Eager Subscriber Initialization Pattern
+
+To ensure singleton event subscribers are instantiated immediately at startup (rather than lazily loaded) and can register their listeners before any events are fired, a dedicated initializer service (`SubscriberInitializer`) is used:
+
+- The `SubscriberInitializer` injects all necessary subscribers in its constructor.
+- It is bound as a singleton in the DI container.
+- The main application bootstrap (`index.ts`) explicitly resolves (`container.get()`) the `SubscriberInitializer`.
+- This single `get()` call triggers the instantiation of the initializer, which in turn forces InversifyJS to instantiate all injected subscribers, running their constructors and subscription logic.
 
 ## Data Flow Patterns
 
@@ -390,8 +401,9 @@ Application Start → index.ts
 │   ├── Configure External Dependencies
 │   ├── Configure Repositories
 │   └── Configure Services & Subscribers
+├── Resolve Initializer (container.get<ISubscriberInitializer>(TYPES.SubscriberInitializer))
+│   └── (This forces instantiation of all injected Subscribers)
 ├── Resolve Bot Instance (container.get<IBot>(TYPES.Bot))
-├── Resolve Subscribers (e.g., container.get<DetectionResultHandlerSubscriber>(...))
 └── Start Bot (bot.startBot())
 ```
 

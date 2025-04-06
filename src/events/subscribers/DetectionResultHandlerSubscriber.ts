@@ -28,12 +28,10 @@ export class DetectionResultHandlerSubscriber {
   private async handleUserDetectedSuspicious(
     payload: UserDetectedSuspiciousPayload
   ): Promise<void> {
-    console.log(`[DEBUG DetectionResultHandlerSubscriber] Received ${EventNames.UserDetectedSuspicious} for user ${payload.userId}`);
     console.log(
       `DetectionResultHandlerSubscriber: Handling ${EventNames.UserDetectedSuspicious} for user ${payload.userId}`
     );
     try {
-      console.log('[DEBUG DetectionResultHandlerSubscriber] Fetching guild and member...');
       // Fetch guild and member
       const guild = await this.client.guilds.fetch(payload.serverId);
       if (!guild) {
@@ -47,10 +45,8 @@ export class DetectionResultHandlerSubscriber {
         );
         return;
       }
-      console.log('[DEBUG DetectionResultHandlerSubscriber] Fetched guild and member successfully.');
 
       // Fetch the source message if applicable
-      console.log('[DEBUG DetectionResultHandlerSubscriber] Attempting to fetch source message (if applicable)...');
       let sourceMessage;
       if (
         payload.sourceMessageId &&
@@ -69,18 +65,15 @@ export class DetectionResultHandlerSubscriber {
           );
         }
       }
-      console.log('[DEBUG DetectionResultHandlerSubscriber] Finished attempting to fetch source message.');
 
       // Call the appropriate SecurityActionService method based on the trigger source
       if (payload.detectionResult.triggerSource === DetectionType.SUSPICIOUS_CONTENT) {
-        console.log('[DEBUG DetectionResultHandlerSubscriber] Calling securityActionService.handleSuspiciousMessage...');
         await this.securityActionService.handleSuspiciousMessage(
           member,
           payload.detectionResult,
           sourceMessage // Pass fetched message or undefined
         );
       } else if (payload.detectionResult.triggerSource === DetectionType.NEW_ACCOUNT) {
-        console.log('[DEBUG DetectionResultHandlerSubscriber] Calling securityActionService.handleSuspiciousJoin...');
         await this.securityActionService.handleSuspiciousJoin(member, payload.detectionResult);
       } else {
         console.warn(
