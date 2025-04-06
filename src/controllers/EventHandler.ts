@@ -143,7 +143,8 @@ export class EventHandler implements IEventHandler {
       let profileData: UserProfileData | undefined;
 
       // Only collect profile data if we have access to the user and guild member
-      if (message.member && message.author) {
+      // message.author is guaranteed non-null by the check on line 122
+      if (message.member) {
         profileData = this.extractUserProfileData(message.member);
       }
 

@@ -29,17 +29,11 @@ export class RestrictionSubscriber {
     );
     try {
       const guild = await this.client.guilds.fetch(payload.serverId);
-      if (!guild) {
-        console.error(`RestrictionSubscriber: Guild ${payload.serverId} not found.`);
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
       const member = await guild.members.fetch(payload.userId);
-      if (!member) {
-        console.error(
-          `RestrictionSubscriber: Member ${payload.userId} not found in guild ${payload.serverId}.`
-        );
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
 
       const success = await this.userModerationService.restrictUser(member);
       if (success) {

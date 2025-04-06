@@ -85,6 +85,7 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
         message_id: data.message_id,
         channel_id: data.channel_id,
         thread_id: data.thread_id,
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- metadata can be undefined
         metadata: (data.metadata as Prisma.InputJsonValue) ?? Prisma.JsonNull,
         // detected_at is handled by default
       };
@@ -113,7 +114,8 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
           detected_at: 'desc',
         },
       });
-      return (events as DetectionEvent[]) || []; // Cast needed if type differs
+      // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
+      return events as DetectionEvent[];
     } catch (error) {
       this.handleError(error, 'findByServerAndUser');
     }
@@ -129,7 +131,8 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
         orderBy: { detected_at: 'desc' },
         take: limit,
       });
-      return (events as DetectionEvent[]) || []; // Cast needed if type differs
+      // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
+      return events as DetectionEvent[];
     } catch (error) {
       this.handleError(error, 'findRecentByServer');
     }

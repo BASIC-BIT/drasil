@@ -49,23 +49,15 @@ export class VerificationReopenSubscriber {
 
       // Fetch guild, member, and moderator
       const guild = await this.client.guilds.fetch(payload.serverId);
-      if (!guild) {
-        console.error(`VerificationReopenSubscriber: Guild ${payload.serverId} not found.`);
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
       const member = await guild.members.fetch(payload.userId);
-      if (!member) {
-        console.error(
-          `VerificationReopenSubscriber: Member ${payload.userId} not found in guild ${payload.serverId}.`
-        );
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
       // Restore fetching the moderator User object
       const moderator = await this.client.users.fetch(payload.moderatorId);
-      if (!moderator) {
-        console.error(`VerificationReopenSubscriber: Moderator ${payload.moderatorId} not found.`);
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
 
       // 1. Reopen the thread
       await this.threadManager.reopenVerificationThread(verificationEvent);

@@ -27,18 +27,12 @@ export class RoleUpdateSubscriber {
     );
     try {
       const guild = await this.client.guilds.fetch(payload.serverId);
-      if (!guild) {
-        console.error(`RoleUpdateSubscriber: Guild ${payload.serverId} not found.`);
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
       const member = await guild.members.fetch(payload.userId);
-      if (!member) {
-        // User might have left after verification but before event processing
-        console.warn(
-          `RoleUpdateSubscriber: Member ${payload.userId} not found in guild ${payload.serverId} during verification role removal.`
-        );
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // The warning message inside the original if block is still relevant if the fetch fails,
+      // but it will be logged by the catch block instead.
 
       const success = await this.roleManager.removeRestrictedRole(member);
       if (success) {

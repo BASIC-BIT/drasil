@@ -135,7 +135,8 @@ export class ServerMemberRepository implements IServerMemberRepository {
       const members = await this.prisma.server_members.findMany({
         where: { server_id: serverId },
       });
-      return (members as ServerMember[]) || []; // Cast needed if ServerMember type differs slightly
+      // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
+      return members as ServerMember[];
     } catch (error) {
       this.handleError(error, 'findByServer');
     }
@@ -149,7 +150,8 @@ export class ServerMemberRepository implements IServerMemberRepository {
       const members = await this.prisma.server_members.findMany({
         where: { user_id: userId },
       });
-      return (members as ServerMember[]) || []; // Cast needed if ServerMember type differs slightly
+      // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
+      return members as ServerMember[];
     } catch (error) {
       this.handleError(error, 'findByUser');
     }
@@ -166,7 +168,8 @@ export class ServerMemberRepository implements IServerMemberRepository {
           is_restricted: true,
         },
       });
-      return (members as ServerMember[]) || []; // Cast needed if ServerMember type differs slightly
+      // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
+      return members as ServerMember[];
     } catch (error) {
       this.handleError(error, 'findRestrictedMembers');
     }

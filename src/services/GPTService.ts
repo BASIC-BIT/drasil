@@ -148,7 +148,9 @@ export class GPTService implements IGPTService {
       }
 
       // Safer extraction of classification with more validation
-      if (!response || !response.choices || !response.choices.length) {
+      // If the API call fails, an error is thrown and caught.
+      // If it succeeds, 'response' and 'response.choices' are guaranteed by the SDK type.
+      if (!response.choices.length) {
         console.error('Unexpected API response structure:', response);
         return 'OK'; // Default to OK if response format is unexpected
       }
@@ -188,13 +190,11 @@ export class GPTService implements IGPTService {
       profileData;
 
     // Format account creation and join dates if available
-    const accountAge = accountCreatedAt
-      ? `${Math.floor((Date.now() - accountCreatedAt.getTime()) / (1000 * 60 * 60 * 24))} days`
-      : 'unknown';
+    // accountCreatedAt is guaranteed by UserProfileData type, ternary is unnecessary
+    const accountAge = `${Math.floor((Date.now() - accountCreatedAt.getTime()) / (1000 * 60 * 60 * 24))} days`;
 
-    const joinedServerDaysAgo = joinedServerAt
-      ? `${Math.floor((Date.now() - joinedServerAt.getTime()) / (1000 * 60 * 60 * 24))} days ago`
-      : 'unknown';
+    // joinedServerAt is guaranteed by UserProfileData type, ternary is unnecessary
+    const joinedServerDaysAgo = `${Math.floor((Date.now() - joinedServerAt.getTime()) / (1000 * 60 * 60 * 24))} days ago`;
 
     // Create the structured prompt focusing only on available Discord data
     let prompt = `Please analyze this Discord user profile:
@@ -204,7 +204,9 @@ Account age: ${accountAge}
 Joined server: ${joinedServerDaysAgo}`;
 
     // Add recent messages if available
-    if (recentMessages && recentMessages.length > 0) {
+    // recentMessages is guaranteed to be an array by UserProfileData type,
+    // so the truthiness check `recentMessages &&` is unnecessary.
+    if (recentMessages.length > 0) {
       prompt += `\nRecent messages: "${recentMessages.join('", "')}"`;
     }
 

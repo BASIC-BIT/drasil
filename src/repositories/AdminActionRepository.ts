@@ -56,7 +56,8 @@ export class AdminActionRepository implements IAdminActionRepository {
         take: options.limit,
         skip: options.offset,
       });
-      return (actions as AdminAction[]) || []; // Cast needed if type differs
+      // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
+      return actions as AdminAction[];
     } catch (error) {
       this.handleError(error, 'findByUserAndServer');
     }
@@ -73,7 +74,8 @@ export class AdminActionRepository implements IAdminActionRepository {
         take: options.limit,
         skip: options.offset,
       });
-      return (actions as AdminAction[]) || []; // Cast needed if type differs
+      // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
+      return actions as AdminAction[];
     } catch (error) {
       this.handleError(error, 'findByAdmin');
     }
@@ -85,7 +87,8 @@ export class AdminActionRepository implements IAdminActionRepository {
         where: { verification_event_id: verificationEventId },
         orderBy: { action_at: 'desc' },
       });
-      return (actions as AdminAction[]) || []; // Cast needed if type differs
+      // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
+      return actions as AdminAction[];
     } catch (error) {
       this.handleError(error, 'findByVerificationEvent');
     }
@@ -100,6 +103,7 @@ export class AdminActionRepository implements IAdminActionRepository {
         previous_status: data.previous_status as verification_status | null, // Cast to Prisma enum
         new_status: data.new_status as verification_status | null, // Cast to Prisma enum
         notes: data.notes,
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- metadata can be null or undefined
         metadata: (data.metadata as Prisma.InputJsonValue) ?? Prisma.JsonNull,
         // Connect relations
         servers: data.server_id ? { connect: { guild_id: data.server_id } } : undefined,

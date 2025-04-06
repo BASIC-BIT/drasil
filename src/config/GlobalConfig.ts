@@ -35,7 +35,7 @@ export interface GlobalSettings {
  * Global configuration singleton
  */
 class GlobalConfig {
-  private static instance: GlobalConfig;
+  private static readonly instance: GlobalConfig = new GlobalConfig();
   private settings: GlobalSettings;
 
   private constructor() {
@@ -67,10 +67,8 @@ class GlobalConfig {
     }
   }
 
+  // Instance is now created eagerly above
   public static getInstance(): GlobalConfig {
-    if (!GlobalConfig.instance) {
-      GlobalConfig.instance = new GlobalConfig();
-    }
     return GlobalConfig.instance;
   }
 

@@ -126,12 +126,12 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     serverId: string,
     userId: string,
     content: string,
-    profileData: UserProfileData
+    profileData?: UserProfileData // Make optional to match caller
   ): Promise<DetectionResult> {
     try {
       // Add outer try block
       // Ensure server and user exist before proceeding
-      await this.ensureEntitiesExist(serverId, userId, profileData.username);
+      await this.ensureEntitiesExist(serverId, userId, profileData?.username); // Use optional chaining
 
       // First, check recent detection history
       const recentEvents = await this.detectionEventsRepository.findByServerAndUser(
@@ -161,11 +161,12 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       }
 
       // Check if user is new (if profile data available)
-      const isNewAccount = profileData.accountCreatedAt
+      // Check if profileData exists before accessing properties
+      const isNewAccount = profileData?.accountCreatedAt
         ? this.isNewAccount(profileData.accountCreatedAt)
         : false;
 
-      const isNewServerMember = profileData.joinedServerAt
+      const isNewServerMember = profileData?.joinedServerAt
         ? this.isNewServerMember(profileData.joinedServerAt)
         : false;
 
@@ -180,7 +181,9 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       }
 
       // TODO: We update this inline here but don't update the database? Is this a problem?
-      profileData.recentMessages = [...profileData.recentMessages, content];
+      if (profileData) {
+        profileData.recentMessages = [...profileData.recentMessages, content];
+      }
 
       // Determine if we should use GPT
       // Use GPT if:

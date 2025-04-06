@@ -1,5 +1,5 @@
 import { injectable, inject } from 'inversify';
-import { Prisma, PrismaClient } from '@prisma/client'; // Import PrismaClient and generated types
+import { Prisma, PrismaClient } from '@prisma/client'; // Import Prisma types
 import { Server, ServerSettings } from './types'; // Keep existing domain types
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository'; // Keep using RepositoryError for consistency
@@ -99,7 +99,9 @@ export class ServerRepository implements IServerRepository {
         guild_id: guildId,
         is_active: data.is_active ?? true,
         // Cast settings to unknown then JsonValue for Prisma input
-        settings: (data.settings as unknown as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+        // data.settings should always be an object based on the Server interface,
+        // so the ?? fallback is unnecessary.
+        settings: data.settings as unknown as Prisma.InputJsonValue,
         restricted_role_id: data.restricted_role_id,
         admin_channel_id: data.admin_channel_id,
         verification_channel_id: data.verification_channel_id,
@@ -140,7 +142,9 @@ export class ServerRepository implements IServerRepository {
       if (!server) return null;
 
       // Merge existing settings with new ones
-      const currentSettings = (server.settings || {}) as ServerSettings;
+      // server.settings is guaranteed to be an object by the Server interface,
+      // so the `|| {}` fallback is unnecessary.
+      const currentSettings = server.settings as ServerSettings;
       const updatedSettings = {
         ...currentSettings,
         ...settings,
@@ -209,14 +213,16 @@ export class ServerRepository implements IServerRepository {
       });
       // Cast settings field correctly for each server in the array
       // Cast settings field correctly for each server in the array
-      return (
-        servers.map(
-          (server) =>
-            ({
-              ...server,
-              settings: (server.settings as unknown as ServerSettings | null) ?? null,
-            }) as Server
-        ) || []
+      // findMany always returns an array, and map on an array always returns an array.
+      // Arrays are truthy, so the `|| []` is unnecessary.
+      return servers.map(
+        (
+          server: (typeof servers)[number] // Infer type from array element
+        ) =>
+          ({
+            ...server,
+            settings: (server.settings as unknown as ServerSettings | null) ?? null,
+          }) as Server
       );
     } catch (error) {
       this.handleError(error, 'findAllActive');

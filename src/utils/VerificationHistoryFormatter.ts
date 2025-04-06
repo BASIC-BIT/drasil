@@ -73,7 +73,8 @@ export class VerificationHistoryFormatter {
     output += ` at ${timestamp}`;
 
     if (action.previous_status !== action.new_status) {
-      output += `\n  Status changed from ${action.previous_status || 'none'} to ${action.new_status}`;
+      // action.previous_status is always a truthy enum string, so `|| 'none'` is unnecessary.
+      output += `\n  Status changed from ${action.previous_status} to ${action.new_status}`;
     }
 
     if (action.notes) {

@@ -34,17 +34,11 @@ export class DetectionResultHandlerSubscriber {
     try {
       // Fetch guild and member
       const guild = await this.client.guilds.fetch(payload.serverId);
-      if (!guild) {
-        console.error(`DetectionResultHandlerSubscriber: Guild ${payload.serverId} not found.`);
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
       const member = await guild.members.fetch(payload.userId);
-      if (!member) {
-        console.error(
-          `DetectionResultHandlerSubscriber: Member ${payload.userId} not found in guild ${payload.serverId}.`
-        );
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
 
       // Fetch the source message if applicable
       let sourceMessage;

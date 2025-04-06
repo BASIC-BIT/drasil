@@ -71,7 +71,8 @@ export class VerificationEventRepository implements IVerificationEventRepository
         take: options.limit,
         skip: options.offset,
       });
-      return (events as VerificationEvent[]) || []; // Cast needed if type differs
+      // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
+      return events as VerificationEvent[];
     } catch (error) {
       this.handleError(error, 'findByUserAndServer');
     }
@@ -102,7 +103,8 @@ export class VerificationEventRepository implements IVerificationEventRepository
         where: { detection_event_id: detectionEventId },
         orderBy: { created_at: 'desc' },
       });
-      return (events as VerificationEvent[]) || []; // Cast needed if type differs
+      // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
+      return events as VerificationEvent[];
     } catch (error) {
       this.handleError(error, 'findByDetectionEvent');
     }
@@ -138,7 +140,9 @@ export class VerificationEventRepository implements IVerificationEventRepository
       });
 
       // Update the related detection event if applicable
-      if (detectionEventId && created) {
+      // If prisma.create fails, it throws an error caught by the outer try/catch.
+      // If it succeeds, 'created' is guaranteed to be truthy.
+      if (detectionEventId) {
         try {
           await this.prisma.detection_events.update({
             where: { id: detectionEventId },
@@ -173,6 +177,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
         thread_id: data.thread_id,
         notification_message_id: data.notification_message_id,
         notes: data.notes,
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- data.metadata can be null or undefined
         metadata: (data.metadata as Prisma.InputJsonValue) ?? undefined, // Handle potential null/undefined
         updated_at: now, // Always update timestamp
       };
@@ -188,6 +193,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
           // Set resolution fields if status is resolved
           updateData.resolved_at = data.resolved_at instanceof Date ? data.resolved_at : now; // Use provided date or now
           updateData.resolved_by = data.resolved_by; // Use provided admin ID
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- This check is necessary
         } else if (data.status === VerificationStatus.PENDING) {
           // Nullify resolution fields if status is pending
           updateData.resolved_at = null;

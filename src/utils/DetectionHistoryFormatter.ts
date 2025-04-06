@@ -38,7 +38,9 @@ export class DetectionHistoryFormatter {
       content += `Type: ${event.detection_type}\n`;
       content += `Confidence: ${(event.confidence * 100).toFixed(0)}%\n`;
 
-      if (event.reasons && event.reasons.length > 0) {
+      // event.reasons is guaranteed to be an array by DetectionEvent type,
+      // so the truthiness check `event.reasons &&` is unnecessary.
+      if (event.reasons.length > 0) {
         content += `Reasons: ${event.reasons.join(', ')}\n`;
       }
 

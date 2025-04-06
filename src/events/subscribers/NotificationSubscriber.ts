@@ -43,17 +43,11 @@ export class NotificationSubscriber {
     try {
       // Fetch member details - needed for the notification content
       const guild = await this.client.guilds.fetch(payload.serverId);
-      if (!guild) {
-        console.error(`NotificationSubscriber: Guild ${payload.serverId} not found.`);
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
       const member = await guild.members.fetch(payload.userId);
-      if (!member) {
-        console.error(
-          `NotificationSubscriber: Member ${payload.userId} not found in guild ${payload.serverId}.`
-        );
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
 
       // Send/Update the notification message using data from the payload
       const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
@@ -63,24 +57,27 @@ export class NotificationSubscriber {
       );
 
       // Link the message ID back to the VerificationEvent
+
+      // Link the message ID back to the VerificationEvent if both exist
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Check is necessary before accessing properties
       if (notificationMessage && payload.verificationEvent) {
         try {
-          // Only update if the ID is not already set or different
-          if (payload.verificationEvent.notification_message_id !== notificationMessage.id) {
-            await this.verificationEventRepository.update(payload.verificationEvent.id, {
-              notification_message_id: notificationMessage.id,
-            });
-            console.log(
-              `NotificationSubscriber: Linked message ${notificationMessage.id} to verification ${payload.verificationEvent.id}`
-            );
-          }
+          // Update the verification event with the message ID
+          await this.verificationEventRepository.update(payload.verificationEvent.id, {
+            notification_message_id: notificationMessage.id,
+          });
+          console.log(
+            `NotificationSubscriber: Linked message ${notificationMessage.id} to verification ${payload.verificationEvent.id}`
+          );
         } catch (updateError) {
           console.error(
             `NotificationSubscriber: Failed to link message ID ${notificationMessage.id} to verification ${payload.verificationEvent.id}:`,
             updateError
           );
         }
-      } else if (!notificationMessage) {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Check is necessary before accessing properties
+      } else if (!notificationMessage && payload.verificationEvent) {
+        // Log error if message sending failed but we had a verification event
         console.error(
           `NotificationSubscriber: Failed to send/update notification for verification ${payload.verificationEvent.id}`
         );
@@ -103,17 +100,11 @@ export class NotificationSubscriber {
     try {
       // Fetch member details
       const guild = await this.client.guilds.fetch(payload.serverId);
-      if (!guild) {
-        console.error(`NotificationSubscriber: Guild ${payload.serverId} not found.`);
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
       const member = await guild.members.fetch(payload.userId);
-      if (!member) {
-        console.error(
-          `NotificationSubscriber: Member ${payload.userId} not found in guild ${payload.serverId}.`
-        );
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
 
       // Update the existing notification message
       const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
@@ -124,19 +115,19 @@ export class NotificationSubscriber {
       );
 
       // Link the message ID back to the existing VerificationEvent
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- notificationMessage can be null
       if (notificationMessage && payload.existingVerificationEvent) {
         try {
           // Only update if the ID is not already set or different
-          if (
-            payload.existingVerificationEvent.notification_message_id !== notificationMessage.id
-          ) {
-            await this.verificationEventRepository.update(payload.existingVerificationEvent.id, {
-              notification_message_id: notificationMessage.id,
-            });
-            console.log(
-              `NotificationSubscriber: Linked/Updated message ${notificationMessage.id} to existing verification ${payload.existingVerificationEvent.id}`
-            );
-          }
+          // Linter believes the !== check is always true. Removing the condition
+          // and always performing the update. This is generally safe as the
+          // update should be idempotent for this field.
+          await this.verificationEventRepository.update(payload.existingVerificationEvent.id, {
+            notification_message_id: notificationMessage.id,
+          });
+          console.log(
+            `NotificationSubscriber: Linked/Updated message ${notificationMessage.id} to existing verification ${payload.existingVerificationEvent.id}`
+          );
         } catch (updateError) {
           console.error(
             `NotificationSubscriber: Failed to link/update message ID ${notificationMessage.id} to existing verification ${payload.existingVerificationEvent.id}:`,

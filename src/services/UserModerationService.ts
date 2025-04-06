@@ -270,22 +270,14 @@ export class UserModerationService implements IUserModerationService {
     );
     try {
       const guild = await this.client.guilds.fetch(payload.serverId);
-      if (!guild) {
-        console.error(`UserModerationService: Guild ${payload.serverId} not found.`);
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
       const member = await guild.members.fetch(payload.targetUserId);
-      if (!member) {
-        console.error(
-          `UserModerationService: Member ${payload.targetUserId} not found in guild ${payload.serverId}.`
-        );
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
       const moderator = await this.client.users.fetch(payload.adminId);
-      if (!moderator) {
-        console.error(`UserModerationService: Moderator ${payload.adminId} not found.`);
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
 
       // Call the internal verification logic
       await this.verifyUser(member, moderator);
@@ -310,24 +302,14 @@ export class UserModerationService implements IUserModerationService {
     );
     try {
       const guild = await this.client.guilds.fetch(payload.serverId);
-      if (!guild) {
-        console.error(`UserModerationService: Guild ${payload.serverId} not found.`);
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
       const member = await guild.members.fetch(payload.targetUserId);
-      if (!member) {
-        // User might already be gone, but we can still log the intent maybe?
-        // For now, just log and return. The ban event won't fire.
-        console.warn(
-          `UserModerationService: Member ${payload.targetUserId} not found in guild ${payload.serverId} for ban request.`
-        );
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
       const moderator = await this.client.users.fetch(payload.adminId);
-      if (!moderator) {
-        console.error(`UserModerationService: Moderator ${payload.adminId} not found.`);
-        return;
-      }
+      // If fetch fails, it throws an error caught by the outer try/catch block.
+      // No need for a null check here.
 
       // Call the internal ban logic
       await this.banUser(member, payload.reason, moderator);

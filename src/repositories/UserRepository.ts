@@ -79,6 +79,7 @@ export class UserRepository implements IUserRepository {
         account_created_at: data.account_created_at,
         suspicious_server_count: data.suspicious_server_count,
         first_flagged_at: data.first_flagged_at,
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- metadata can be undefined
         metadata: (data.metadata as Prisma.InputJsonValue) ?? Prisma.JsonNull,
         // created_at is handled by default
         updated_at: new Date(),
@@ -139,7 +140,8 @@ export class UserRepository implements IUserRepository {
           },
         },
       });
-      return (users as User[]) || []; // Cast needed if User type differs slightly
+      // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
+      return users as User[];
     } catch (error) {
       this.handleError(error, 'findByReputationBelow');
     }
@@ -250,7 +252,8 @@ export class UserRepository implements IUserRepository {
           },
         },
       });
-      return (users as User[]) || []; // Cast needed if User type differs slightly
+      // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
+      return users as User[];
     } catch (error) {
       this.handleError(error, 'findUsersFlaggedInMultipleServers');
     }
