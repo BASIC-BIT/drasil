@@ -18,6 +18,7 @@ export const EventNames = {
   // Add more events as needed
   AdminBanUserRequested: 'adminBanUserRequested',
   AdminFlagUserRequested: 'adminFlagUserRequested', // Added
+  UserReportSubmitted: 'userReportSubmitted',
 } as const;
 
 // Type for valid event names
@@ -99,6 +100,7 @@ export interface EventMap {
   [EventNames.AdminBanUserRequested]: AdminBanUserRequestedPayload; // Added mapping
   // Add mappings for other events
   [EventNames.AdminFlagUserRequested]: AdminFlagUserRequestedPayload;
+  [EventNames.UserReportSubmitted]: UserReportSubmittedPayload;
 }
 
 export interface AdminVerifyUserRequestedPayload {
@@ -127,3 +129,10 @@ export interface AdminFlagUserRequestedPayload {
   interactionId: string; // ID of the interaction for potential follow-up replies
 }
 
+export interface UserReportSubmittedPayload {
+  targetUserInput: string; // Changed from targetUserId to reflect raw input
+  serverId: string;
+  reporterId: string; // User who submitted the report
+  reason?: string; // Optional reason provided by reporter
+  interactionId: string; // ID of the modal submission interaction
+}

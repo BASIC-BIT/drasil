@@ -9,6 +9,12 @@ import {
   RESTPostAPIChatInputApplicationCommandsJSONBody,
   PermissionFlagsBits,
   MessageFlags,
+  ActionRowBuilder, // Added
+  ButtonBuilder, // Added
+  ButtonStyle, // Added
+  ChannelType, // Added
+  EmbedBuilder, // Added
+  TextChannel, // Added
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject } from 'inversify';
@@ -114,10 +120,18 @@ export class CommandHandler implements ICommandHandler {
           option.setName('user').setDescription('The user to flag').setRequired(true)
         )
         .addStringOption((option) =>
+          option.setName('reason').setDescription('Optional reason for flagging').setRequired(false)
+        )
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // Require Admin perms
+      new SlashCommandBuilder() // Added setupreportbutton command
+        .setName('setupreportbutton')
+        .setDescription('Sends the message containing the "Report User" button to a channel.')
+        .addChannelOption((option) =>
           option
-            .setName('reason')
-            .setDescription('Optional reason for flagging')
-            .setRequired(false)
+            .setName('channel')
+            .setDescription('The channel to send the report button message to.')
+            .addChannelTypes(ChannelType.GuildText) // Only allow text channels
+            .setRequired(true)
         )
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // Require Admin perms
     ].map((command) => command.toJSON());
@@ -170,6 +184,10 @@ export class CommandHandler implements ICommandHandler {
 
       case 'flaguser': // Added case for flaguser
         await this.handleFlagUserCommand(interaction);
+        break;
+
+      case 'setupreportbutton': // Added case for setupreportbutton
+        await this.handleSetupReportButtonCommand(interaction);
         break;
 
       default:
@@ -510,5 +528,85 @@ export class CommandHandler implements ICommandHandler {
       flags: MessageFlags.Ephemeral,
     });
   }
-}
 
+  /**
+   * Handle the /setupreportbutton command
+   * @param interaction The slash command interaction
+   */
+  private async handleSetupReportButtonCommand(
+    interaction: ChatInputCommandInteraction
+  ): Promise<void> {
+    // Check if the interaction is in a guild
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({
+        content: 'This command can only be used in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    // Double-check permissions
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({
+        content: 'You need administrator permissions to use this command.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    // Get the target channel
+    const channel = interaction.options.getChannel('channel', true);
+
+    // Ensure it's a text channel (though the option restricts this)
+    if (channel.type !== ChannelType.GuildText) {
+      await interaction.reply({
+        content: 'The specified channel must be a text channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const targetChannel = channel as TextChannel;
+
+    // Create the embed
+    const embed = new EmbedBuilder()
+      .setColor(0x0099ff)
+      .setTitle('Report a User')
+      .setDescription(
+        'If you see a user violating server rules or engaging in suspicious activity, ' +
+          'please use the button below to submit a report. ' +
+          'Your report will be reviewed by the moderation team.'
+      )
+      .setFooter({ text: 'Your reports help keep the community safe!' });
+
+    // Create the button
+    const reportButton = new ButtonBuilder()
+      .setCustomId('report_user_initiate') // Unique ID for the button interaction
+      .setLabel('Report User')
+      .setStyle(ButtonStyle.Danger) // Use Danger style for reporting
+      .setEmoji('⚠️'); // Optional emoji
+
+    // Create an action row for the button
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(reportButton);
+
+    try {
+      // Send the message to the target channel
+      await targetChannel.send({ embeds: [embed], components: [row] });
+
+      // Confirm to the admin
+      await interaction.reply({
+        content: `✅ Report button message sent successfully to ${channel}.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error('Failed to send report button message:', error);
+      await interaction.reply({
+        content:
+          '❌ Failed to send the message. Please ensure the bot has permissions to send messages in that channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+}

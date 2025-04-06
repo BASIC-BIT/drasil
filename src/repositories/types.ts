@@ -78,6 +78,7 @@ export enum DetectionType {
   GPT_ANALYSIS = 'gpt_analysis',
   NEW_ACCOUNT = 'new_account',
   PATTERN_MATCH = 'pattern_match',
+  USER_REPORT = 'user_report',
 }
 
 /**

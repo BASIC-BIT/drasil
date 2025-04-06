@@ -1,7 +1,11 @@
 import { inject, injectable } from 'inversify';
 import { TYPES } from '../../di/symbols';
 import { IEventBus } from '../EventBus';
-import { EventNames, AdminFlagUserRequestedPayload, UserDetectedSuspiciousPayload } from '../events';
+import {
+  EventNames,
+  AdminFlagUserRequestedPayload,
+  UserDetectedSuspiciousPayload,
+} from '../events';
 import { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import { DetectionResult } from '../../services/DetectionOrchestrator'; // Removed DetectionSource
 import { IUserRepository } from '../../repositories/UserRepository';
@@ -37,8 +41,7 @@ export class AdminFlagUserSubscriber implements IAdminFlagUserSubscriber {
     payload: AdminFlagUserRequestedPayload
   ): Promise<void> {
     console.log('[AdminFlagUserSubscriber] Handling AdminFlagUserRequested event:', payload);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { targetUserId, serverId, adminId, reason, interactionId } = payload;
+    const { targetUserId, serverId, adminId, reason } = payload;
 
     try {
       // 1. Ensure Server, User, and ServerMember exist (create if necessary)
@@ -77,11 +80,12 @@ export class AdminFlagUserSubscriber implements IAdminFlagUserSubscriber {
       };
       this.eventBus.publish(EventNames.UserDetectedSuspicious, suspiciousPayload);
 
-      console.log(`[AdminFlagUserSubscriber] Published ${EventNames.UserDetectedSuspicious} for user ${targetUserId}`);
+      console.log(
+        `[AdminFlagUserSubscriber] Published ${EventNames.UserDetectedSuspicious} for user ${targetUserId}`
+      );
 
       // Optionally, reply to the interaction if needed (might require InteractionReplySubscriber)
       // Example: this.eventBus.publish(EventNames.InteractionReplyRequested, { interactionId, content: 'User flagged successfully.', ephemeral: true });
-
     } catch (error) {
       console.error('[AdminFlagUserSubscriber] Error handling AdminFlagUserRequested:', error);
       // Optionally, notify the admin via interaction reply about the failure

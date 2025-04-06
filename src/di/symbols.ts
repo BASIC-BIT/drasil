@@ -59,6 +59,7 @@ export const TYPES = {
   ServerMemberStatusSubscriber: Symbol.for('ServerMemberStatusSubscriber'),
   DetectionResultHandlerSubscriber: Symbol.for('DetectionResultHandlerSubscriber'),
   AdminFlagUserSubscriber: Symbol.for('AdminFlagUserSubscriber'),
+  UserReportSubscriber: Symbol.for('UserReportSubscriber'),
 
   // Initializers
   SubscriberInitializer: Symbol.for('SubscriberInitializer'),

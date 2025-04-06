@@ -103,6 +103,9 @@ export class EventHandler implements IEventHandler {
         await this.commandHandler.handleSlashCommand(interaction);
       } else if (interaction.isButton()) {
         await this.interactionHandler.handleButtonInteraction(interaction);
+      } else if (interaction.isModalSubmit()) {
+        // Added check for modal submit
+        await this.interactionHandler.handleModalSubmit(interaction);
       }
     } catch (error) {
       console.error('Error handling interaction:', error);

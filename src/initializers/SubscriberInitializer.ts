@@ -8,6 +8,7 @@ import { ServerMemberStatusSubscriber } from '../events/subscribers/ServerMember
 import { VerificationReopenSubscriber } from '../events/subscribers/VerificationReopenSubscriber';
 import { DetectionResultHandlerSubscriber } from '../events/subscribers/DetectionResultHandlerSubscriber';
 import { AdminFlagUserSubscriber } from '../events/subscribers/AdminFlagUserSubscriber';
+import { UserReportSubscriber } from '../events/subscribers/UserReportSubscriber';
 
 /**
  * Interface for the Subscriber Initializer service.
@@ -32,6 +33,7 @@ export class SubscriberInitializer implements ISubscriberInitializer {
     @inject(TYPES.DetectionResultHandlerSubscriber)
     _detectionResultHandlerSubscriber: DetectionResultHandlerSubscriber, // Added comma
     @inject(TYPES.AdminFlagUserSubscriber) _adminFlagUserSubscriber: AdminFlagUserSubscriber,
+    @inject(TYPES.UserReportSubscriber) _userReportSubscriber: UserReportSubscriber
     /* eslint-enable no-unused-vars */
   ) {
     // The constructor body can be empty. The dependencies are resolved upon instantiation.

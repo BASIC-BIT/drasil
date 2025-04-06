@@ -1,4 +1,15 @@
-import { Client, ButtonInteraction, MessageFlags } from 'discord.js';
+import {
+  Client,
+  ButtonInteraction,
+  MessageFlags,
+  ModalBuilder, // Added
+  TextInputBuilder, // Added
+  TextInputStyle, // Added
+  ActionRowBuilder, // Added
+  // UserSelectMenuBuilder, // Removed - Cannot be used in Modals
+  ModalSubmitInteraction, // Added
+  // Interaction, // Removed - Unused
+} from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject } from 'inversify';
 import { INotificationManager } from '../services/NotificationManager';
@@ -24,6 +35,11 @@ export interface IInteractionHandler {
    * Handle a button interaction
    */
   handleButtonInteraction(interaction: ButtonInteraction): Promise<void>;
+
+  /**
+   * Handle a modal submission interaction
+   */
+  handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void>; // Added
 }
 
 @injectable()
@@ -87,11 +103,17 @@ export class InteractionHandler implements IInteractionHandler {
         case 'reopen':
           await this.handleReopenButton(interaction, guildId, targetUserId);
           break;
+        case 'report_user_initiate': // Added case for report button
+          await this.handleReportUserInitiate(interaction);
+          break;
         default:
-          await interaction.reply({
-            content: 'Unknown button action',
-            flags: MessageFlags.Ephemeral,
-          });
+          // Try splitting only if it's not the report button
+          if (action !== 'report_user_initiate') {
+            await interaction.reply({
+              content: 'Unknown button action',
+              flags: MessageFlags.Ephemeral,
+            });
+          }
       }
     } catch (error) {
       console.error('Error handling button interaction:', error);
@@ -369,6 +391,106 @@ export class InteractionHandler implements IInteractionHandler {
         content: 'An error occurred while reopening the verification.',
         flags: MessageFlags.Ephemeral,
       });
+    }
+  }
+
+  private async handleReportUserInitiate(interaction: ButtonInteraction): Promise<void> {
+    // Create the modal
+    const modal = new ModalBuilder()
+      .setCustomId('report_user_modal_submit') // Unique ID for the modal submission
+      .setTitle('Report a User');
+
+    // Create the target user input field
+    const targetUserInput = new TextInputBuilder()
+      .setCustomId('report_target_user_input') // Changed ID
+      .setLabel('User ID or Tag to Report')
+      .setPlaceholder('Enter the User ID (e.g., 123456789012345678) or Tag (e.g., username#1234)')
+      .setStyle(TextInputStyle.Short) // Use Short style for ID/Tag
+      .setRequired(true);
+    const targetUserRow = new ActionRowBuilder<TextInputBuilder>().addComponents(targetUserInput);
+
+    // Create the reason text input
+    const reasonInput = new TextInputBuilder()
+      .setCustomId('report_reason')
+      .setLabel('Reason for Report (Optional)')
+      .setStyle(TextInputStyle.Paragraph) // Allow multi-line input
+      .setPlaceholder('Please provide details about why you are reporting this user.')
+      .setRequired(false); // Make reason optional
+
+    const reasonRow = new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput);
+
+    // Add components to the modal
+    modal.addComponents(targetUserRow, reasonRow); // Use the correct row
+
+    // Show the modal to the user
+    await interaction.showModal(modal);
+  }
+
+  public async handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+    if (interaction.customId !== 'report_user_modal_submit') {
+      // If it's not our report modal, ignore it (or handle other modals)
+      // You might want a more robust routing system if you have many modals
+      console.log(
+        `[InteractionHandler] Ignoring unknown modal submission: ${interaction.customId}`
+      );
+      // Reply ephemerally that the modal isn't recognized, or just do nothing
+      // await interaction.reply({ content: 'Unknown modal submission.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: 'This action can only be performed in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    try {
+      // Extract data from the modal components using field custom IDs
+      const targetUserInputString = interaction.fields.getTextInputValue(
+        'report_target_user_input'
+      );
+      const reason = interaction.fields.getTextInputValue('report_reason');
+
+      // Basic validation - check if the input string is not empty
+      if (!targetUserInputString) {
+        await interaction.reply({
+          content: 'Error: You must provide the User ID or Tag of the user to report.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      // NOTE: We are passing the raw input string. The subscriber will need to resolve this.
+      // A more robust solution might try to resolve the user here first.
+      this.eventBus.publish(EventNames.UserReportSubmitted, {
+        targetUserInput: targetUserInputString, // Pass the raw input string
+        serverId: interaction.guildId,
+        reporterId: interaction.user.id,
+        reason: reason || undefined, // Pass reason if provided
+        interactionId: interaction.id,
+      });
+
+      // Confirm submission to the user who reported
+      await interaction.reply({
+        content: `✅ Thank you for your report regarding user input "${targetUserInputString}". It has been submitted for review.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error('[InteractionHandler] Error handling report modal submission:', error);
+      // Avoid replying again if already replied
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: 'An error occurred while submitting your report. Please try again later.',
+          flags: MessageFlags.Ephemeral,
+        });
+      } else {
+        await interaction.followUp({
+          content: 'An error occurred while submitting your report. Please try again later.',
+          flags: MessageFlags.Ephemeral,
+        });
+      }
     }
   }
 }
