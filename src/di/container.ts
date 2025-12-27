@@ -2,7 +2,6 @@ import 'reflect-metadata';
 import { Container } from 'inversify';
 import { Client, GatewayIntentBits } from 'discord.js';
 import { OpenAI } from 'openai';
-// import { SupabaseClient, createClient } from '@supabase/supabase-js'; // Remove Supabase client
 import { PrismaClient } from '@prisma/client'; // Import Prisma client
 
 import { TYPES } from './symbols';
@@ -40,20 +39,6 @@ import { InteractionHandler, IInteractionHandler } from '../controllers/Interact
 import { CommandHandler, ICommandHandler } from '../controllers/CommandHandler';
 import { IEventHandler, EventHandler } from '../controllers/EventHandler';
 import { ThreadManager, IThreadManager } from '../services/ThreadManager';
-import { EventBus, IEventBus } from '../events/EventBus'; // Moved import
-import { RestrictionSubscriber } from '../events/subscribers/RestrictionSubscriber'; // Import Subscriber
-import { NotificationSubscriber } from '../events/subscribers/NotificationSubscriber'; // Import Subscriber
-import { RoleUpdateSubscriber } from '../events/subscribers/RoleUpdateSubscriber'; // Import Subscriber
-import { ActionLogSubscriber } from '../events/subscribers/ActionLogSubscriber'; // Import Subscriber
-import { ServerMemberStatusSubscriber } from '../events/subscribers/ServerMemberStatusSubscriber'; // Import Subscriber
-import { VerificationReopenSubscriber } from '../events/subscribers/VerificationReopenSubscriber'; // Import new subscriber
-import { DetectionResultHandlerSubscriber } from '../events/subscribers/DetectionResultHandlerSubscriber'; // Import new subscriber
-import { AdminFlagUserSubscriber } from '../events/subscribers/AdminFlagUserSubscriber'; // Import new subscriber
-import { UserReportSubscriber } from '../events/subscribers/UserReportSubscriber'; // Import new subscriber
-import {
-  ISubscriberInitializer,
-  SubscriberInitializer,
-} from '../initializers/SubscriberInitializer'; // Import Initializer
 // Initialize container
 const container = new Container();
 
@@ -74,7 +59,7 @@ export function configureContainer(): Container {
 }
 
 /**
- * Configure external dependencies like Discord, OpenAI, and Supabase clients
+ * Configure external dependencies like Discord and OpenAI clients
  */
 function configureExternalDependencies(container: Container): void {
   // Discord client
@@ -101,7 +86,7 @@ function configureExternalDependencies(container: Container): void {
   const prismaClient = new PrismaClient();
   container.bind<PrismaClient>(TYPES.PrismaClient).toConstantValue(prismaClient);
 
-  // Removed Supabase client binding
+  // Supabase client removed; Prisma is used for persistence
 }
 
 /**
@@ -188,53 +173,6 @@ function configureServices(container: Container): void {
     .inSingletonScope();
 
   container.bind<IThreadManager>(TYPES.ThreadManager).to(ThreadManager).inSingletonScope();
-
-  // Event Bus
-  container.bind<IEventBus>(TYPES.EventBus).to(EventBus).inSingletonScope();
-
-  // Subscribers (bind them so they can be injected and instantiated)
-  container
-    .bind<RestrictionSubscriber>(TYPES.RestrictionSubscriber)
-    .to(RestrictionSubscriber)
-    .inSingletonScope();
-  container
-    .bind<NotificationSubscriber>(TYPES.NotificationSubscriber)
-    .to(NotificationSubscriber)
-    .inSingletonScope();
-  container
-    .bind<RoleUpdateSubscriber>(TYPES.RoleUpdateSubscriber)
-    .to(RoleUpdateSubscriber)
-    .inSingletonScope();
-  container
-    .bind<ActionLogSubscriber>(TYPES.ActionLogSubscriber)
-    .to(ActionLogSubscriber)
-    .inSingletonScope();
-  container
-    .bind<ServerMemberStatusSubscriber>(TYPES.ServerMemberStatusSubscriber)
-    .to(ServerMemberStatusSubscriber)
-    .inSingletonScope();
-  container
-    .bind<VerificationReopenSubscriber>(TYPES.VerificationReopenSubscriber)
-    .to(VerificationReopenSubscriber)
-    .inSingletonScope();
-  container
-    .bind<DetectionResultHandlerSubscriber>(TYPES.DetectionResultHandlerSubscriber)
-    .to(DetectionResultHandlerSubscriber)
-    .inSingletonScope();
-  container
-    .bind<AdminFlagUserSubscriber>(TYPES.AdminFlagUserSubscriber)
-    .to(AdminFlagUserSubscriber)
-    .inSingletonScope();
-  container
-    .bind<UserReportSubscriber>(TYPES.UserReportSubscriber)
-    .to(UserReportSubscriber)
-    .inSingletonScope();
-
-  // Initializers
-  container
-    .bind<ISubscriberInitializer>(TYPES.SubscriberInitializer)
-    .to(SubscriberInitializer)
-    .inSingletonScope();
 }
 
 export { container };

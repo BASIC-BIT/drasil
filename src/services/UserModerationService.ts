@@ -1,18 +1,13 @@
-import { GuildMember, User, Client } from 'discord.js'; // Added Client
+import { GuildMember, User } from 'discord.js';
 import { injectable, inject } from 'inversify';
 import { TYPES } from '../di/symbols';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
-import { VerificationStatus } from '../repositories/types'; // Removed AdminActionType
+import { AdminActionType, VerificationStatus } from '../repositories/types';
 import { IAdminActionService } from './AdminActionService';
-import { IEventBus } from '../events/EventBus'; // Added EventBus import
-import {
-  EventNames,
-  AdminVerifyUserRequestedPayload, // Added
-  AdminBanUserRequestedPayload, // Added
-} from '../events/events'; // Added EventNames import
+import { IThreadManager } from './ThreadManager';
 
 /**
  * Interface for the UserModerationService
@@ -53,8 +48,7 @@ export class UserModerationService implements IUserModerationService {
   private roleManager: IRoleManager; // Keep for now, might be replaced by events later
   private verificationEventRepository: IVerificationEventRepository;
   private adminActionService: IAdminActionService; // Keep for now, might be replaced by events later
-  private eventBus: IEventBus; // Added EventBus
-  private client: Client; // Added Client
+  private threadManager: IThreadManager;
 
   constructor(
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
@@ -63,31 +57,14 @@ export class UserModerationService implements IUserModerationService {
     @inject(TYPES.VerificationEventRepository)
     verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.AdminActionService) adminActionService: IAdminActionService,
-    @inject(TYPES.EventBus) eventBus: IEventBus, // Inject EventBus
-    @inject(TYPES.DiscordClient) client: Client // Inject Client
+    @inject(TYPES.ThreadManager) threadManager: IThreadManager
   ) {
     this.serverMemberRepository = serverMemberRepository;
     this.notificationManager = notificationManager;
     this.roleManager = roleManager;
     this.verificationEventRepository = verificationEventRepository;
     this.adminActionService = adminActionService;
-    this.eventBus = eventBus; // Assign EventBus
-    this.client = client; // Assign Client
-    this.subscribe(); // Call subscribe method
-  }
-
-  /**
-   * Subscribes to relevant events on the EventBus
-   */
-  private subscribe(): void {
-    this.eventBus.subscribe(
-      EventNames.AdminVerifyUserRequested,
-      this.handleAdminVerifyRequest.bind(this)
-    );
-    this.eventBus.subscribe(
-      EventNames.AdminBanUserRequested,
-      this.handleAdminBanRequest.bind(this)
-    );
+    this.threadManager = threadManager;
   }
 
   /**
@@ -122,8 +99,7 @@ export class UserModerationService implements IUserModerationService {
       // Assign the role using RoleManager
       const roleAssigned = await this.roleManager.assignRestrictedRole(member);
       if (!roleAssigned) {
-        console.error(`Failed to assign restricted role to ${member.user.tag}`);
-        return false; // Fail if role assignment fails
+        throw new Error(`Failed to assign restricted role to ${member.user.tag}`);
       }
 
       // Update server member record
@@ -137,12 +113,11 @@ export class UserModerationService implements IUserModerationService {
       return true;
     } catch (error) {
       console.error(`Failed to restrict user ${member.user.tag}:`, error);
-      return false;
+      throw error;
     }
   }
 
   /**
-   * (Now primarily internal - triggered by AdminVerifyUserRequested event)
    * Removes the restricted role from a guild member and updates their verification status
    * @param member The guild member to verify (unrestrict)
    * @param moderator The user who performed the verification
@@ -159,6 +134,8 @@ export class UserModerationService implements IUserModerationService {
         throw new Error('No active verification event found to verify');
       }
 
+      const previousStatus = verificationEvent.status;
+
       // Set status and resolution details
       verificationEvent.status = VerificationStatus.VERIFIED;
       verificationEvent.resolved_by = moderator.id;
@@ -174,28 +151,60 @@ export class UserModerationService implements IUserModerationService {
         );
       }
 
-      // Publish UserVerified event instead of direct calls
-      this.eventBus.publish(EventNames.UserVerified, {
-        userId: member.id,
-        serverId: member.guild.id,
-        moderatorId: moderator.id,
-        verificationEventId: verificationEvent.id,
+      const roleRemoved = await this.roleManager.removeRestrictedRole(member);
+      if (!roleRemoved) {
+        throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
+      }
+
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        is_restricted: false,
+        verification_status: VerificationStatus.VERIFIED,
+        last_status_change: new Date(),
+        last_verified_at: new Date().toISOString(),
       });
 
-      // Side effects (role removal, status update, logging) are now handled by subscribers listening to UserVerified event.
+      await this.threadManager.resolveVerificationThread(
+        verificationEvent,
+        VerificationStatus.VERIFIED,
+        moderator.id
+      );
+
+      const logged = await this.notificationManager.logActionToMessage(
+        verificationEvent,
+        AdminActionType.VERIFY,
+        moderator
+      );
+      if (!logged) {
+        throw new Error(`Failed to log verify action for ${member.user.tag}`);
+      }
+
+      await this.notificationManager.updateNotificationButtons(
+        verificationEvent,
+        VerificationStatus.VERIFIED
+      );
+
+      await this.adminActionService.recordAction({
+        server_id: member.guild.id,
+        user_id: member.id,
+        admin_id: moderator.id,
+        verification_event_id: verificationEvent.id,
+        action_type: AdminActionType.VERIFY,
+        previous_status: previousStatus,
+        new_status: VerificationStatus.VERIFIED,
+        notes: null,
+      });
 
       console.log(
-        `User ${member.user.tag} verification process completed, UserVerified event published.`
+        `User ${member.user.tag} verification process completed successfully.`
       );
       return true; // Verification process completed successfully
     } catch (error) {
       console.error(`Failed to verify user ${member.user.tag}:`, error);
-      return false;
+      throw error;
     }
   }
 
   /**
-   * (Now primarily internal - triggered by AdminBanUserRequested event)
    * Bans a user from the guild
    * @param member The guild member to ban
    * @param reason The reason for the ban
@@ -208,6 +217,8 @@ export class UserModerationService implements IUserModerationService {
         member.id,
         member.guild.id
       );
+
+      const previousStatus = verificationEvent?.status;
 
       // Allow banning even if no active verification event exists
       // if (!verificationEvent) {
@@ -241,86 +252,44 @@ export class UserModerationService implements IUserModerationService {
         last_status_change: new Date(),
       });
 
-      // Publish UserBanned event
-      this.eventBus.publish(EventNames.UserBanned, {
-        userId: member.id,
-        serverId: member.guild.id,
-        moderatorId: moderator.id,
-        reason: reason,
-        verificationEventId: verificationEvent?.id || 'N/A', // Pass ID if event existed
-      });
+      if (verificationEvent) {
+        await this.threadManager.resolveVerificationThread(
+          verificationEvent,
+          VerificationStatus.BANNED,
+          moderator.id
+        );
 
-      // Side effects (status update, logging) are now handled by subscribers listening to UserBanned event.
+        const logged = await this.notificationManager.logActionToMessage(
+          verificationEvent,
+          AdminActionType.BAN,
+          moderator
+        );
+        if (!logged) {
+          throw new Error(`Failed to log ban action for ${member.user.tag}`);
+        }
+
+        await this.notificationManager.updateNotificationButtons(
+          verificationEvent,
+          VerificationStatus.BANNED
+        );
+
+        await this.adminActionService.recordAction({
+          server_id: member.guild.id,
+          user_id: member.id,
+          admin_id: moderator.id,
+          verification_event_id: verificationEvent.id,
+          action_type: AdminActionType.BAN,
+          previous_status: previousStatus ?? VerificationStatus.PENDING,
+          new_status: VerificationStatus.BANNED,
+          notes: reason,
+        });
+      }
 
       return true; // Ban succeeded
     } catch (error) {
       console.error(`Failed to ban user ${member.user.tag}:`, error);
-      return false;
+      throw error;
     }
   }
 
-  // --- Event Handlers ---
-
-  /**
-   * Handles the request to verify a user.
-   */
-  private async handleAdminVerifyRequest(payload: AdminVerifyUserRequestedPayload): Promise<void> {
-    console.log(
-      `UserModerationService: Handling ${EventNames.AdminVerifyUserRequested} for user ${payload.targetUserId}`
-    );
-    try {
-      const guild = await this.client.guilds.fetch(payload.serverId);
-      // If fetch fails, it throws an error caught by the outer try/catch block.
-      // No need for a null check here.
-      const member = await guild.members.fetch(payload.targetUserId);
-      // If fetch fails, it throws an error caught by the outer try/catch block.
-      // No need for a null check here.
-      const moderator = await this.client.users.fetch(payload.adminId);
-      // If fetch fails, it throws an error caught by the outer try/catch block.
-      // No need for a null check here.
-
-      // Call the internal verification logic
-      await this.verifyUser(member, moderator);
-
-      // TODO: Optionally reply to interaction if payload.interactionId exists?
-      // This might be better handled by a dedicated InteractionReplySubscriber
-    } catch (error) {
-      console.error(
-        `UserModerationService: Error handling ${EventNames.AdminVerifyUserRequested} for user ${payload.targetUserId}:`,
-        error
-      );
-      // TODO: Optionally reply to interaction with error?
-    }
-  }
-
-  /**
-   * Handles the request to ban a user.
-   */
-  private async handleAdminBanRequest(payload: AdminBanUserRequestedPayload): Promise<void> {
-    console.log(
-      `UserModerationService: Handling ${EventNames.AdminBanUserRequested} for user ${payload.targetUserId}`
-    );
-    try {
-      const guild = await this.client.guilds.fetch(payload.serverId);
-      // If fetch fails, it throws an error caught by the outer try/catch block.
-      // No need for a null check here.
-      const member = await guild.members.fetch(payload.targetUserId);
-      // If fetch fails, it throws an error caught by the outer try/catch block.
-      // No need for a null check here.
-      const moderator = await this.client.users.fetch(payload.adminId);
-      // If fetch fails, it throws an error caught by the outer try/catch block.
-      // No need for a null check here.
-
-      // Call the internal ban logic
-      await this.banUser(member, payload.reason, moderator);
-
-      // TODO: Optionally reply to interaction if payload.interactionId exists?
-    } catch (error) {
-      console.error(
-        `UserModerationService: Error handling ${EventNames.AdminBanUserRequested} for user ${payload.targetUserId}:`,
-        error
-      );
-      // TODO: Optionally reply to interaction with error?
-    }
-  }
 }

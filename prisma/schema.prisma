@@ -173,6 +173,7 @@ enum detection_type {
   gpt_analysis
   new_account
   pattern_match
+  user_report
 }
 
 enum verification_status {

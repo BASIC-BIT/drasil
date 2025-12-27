@@ -23,11 +23,10 @@ import { UserProfileData } from '../services/GPTService';
 import { IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { INotificationManager } from '../services/NotificationManager';
 import { IConfigService } from '../config/ConfigService';
-// import { IUserModerationService } from '../services/UserModerationService'; // Removed
+import { IUserModerationService } from '../services/UserModerationService';
+import { ISecurityActionService } from '../services/SecurityActionService';
 import { TYPES } from '../di/symbols';
 import 'reflect-metadata';
-import { IEventBus } from '../events/EventBus'; // Added
-import { EventNames } from '../events/events'; // Added
 
 // Load environment variables
 dotenv.config();
@@ -60,9 +59,9 @@ export class CommandHandler implements ICommandHandler {
   private detectionOrchestrator: IDetectionOrchestrator;
   private notificationManager: INotificationManager;
   private configService: IConfigService;
-  // private userModerationService: IUserModerationService; // Removed
+  private userModerationService: IUserModerationService;
+  private securityActionService: ISecurityActionService;
   private commands: RESTPostAPIChatInputApplicationCommandsJSONBody[];
-  private eventBus: IEventBus; // Added
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -70,16 +69,16 @@ export class CommandHandler implements ICommandHandler {
     @inject(TYPES.DetectionOrchestrator) detectionOrchestrator: IDetectionOrchestrator,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
     @inject(TYPES.ConfigService) configService: IConfigService,
-    // @inject(TYPES.UserModerationService) userModerationService: IUserModerationService // Removed
-    @inject(TYPES.EventBus) eventBus: IEventBus // Added
+    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
+    @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService
   ) {
     this.client = client;
     this.heuristicService = heuristicService;
     this.detectionOrchestrator = detectionOrchestrator;
     this.notificationManager = notificationManager;
     this.configService = configService;
-    // this.userModerationService = userModerationService; // Removed
-    this.eventBus = eventBus; // Added
+    this.userModerationService = userModerationService;
+    this.securityActionService = securityActionService;
 
     // Define slash commands
     this.commands = [
@@ -231,21 +230,19 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
-    // Publish event instead of calling service directly
-    this.eventBus.publish(EventNames.AdminBanUserRequested, {
-      targetUserId: targetUser.id,
-      serverId: guild.id,
-      adminId: interaction.user.id,
-      reason: reason,
-      interactionId: interaction.id,
-      // No verificationEventId from direct command
-    });
-
-    // Reply indicating the request was received
-    await interaction.reply({
-      content: `Ban request for ${targetUser.tag} received. Processing...`,
-      flags: MessageFlags.Ephemeral,
-    });
+    try {
+      await this.userModerationService.banUser(member, reason, interaction.user);
+      await interaction.reply({
+        content: `User ${targetUser.tag} has been banned.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error('Failed to ban user via command:', error);
+      await interaction.reply({
+        content: `Failed to ban ${targetUser.tag}. Please try again later.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   }
 
   /**
@@ -513,20 +510,32 @@ export class CommandHandler implements ICommandHandler {
     const targetUser = interaction.options.getUser('user', true);
     const reason = interaction.options.getString('reason'); // Optional
 
-    // Publish the event
-    this.eventBus.publish(EventNames.AdminFlagUserRequested, {
-      targetUserId: targetUser.id,
-      serverId: guild.id,
-      adminId: interaction.user.id,
-      reason: reason ?? undefined, // Pass reason if provided
-      interactionId: interaction.id,
-    });
+    const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+    if (!targetMember) {
+      await interaction.reply({
+        content: `Could not find user ${targetUser.tag} in this server.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
 
-    // Reply indicating the request was received
-    await interaction.reply({
-      content: `Flag request for ${targetUser.tag} received. Initiating verification process...`,
-      flags: MessageFlags.Ephemeral,
-    });
+    try {
+      await this.securityActionService.handleManualFlag(
+        targetMember,
+        interaction.user,
+        reason ?? undefined
+      );
+      await interaction.reply({
+        content: `Flag request for ${targetUser.tag} received. Initiating verification process...`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error('Failed to manually flag user:', error);
+      await interaction.reply({
+        content: `Failed to flag ${targetUser.tag}. Please try again later.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   }
 
   /**

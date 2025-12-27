@@ -21,7 +21,6 @@ export const TYPES = {
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),
-  SupabaseRepository: Symbol.for('SupabaseRepository'),
   ServerRepository: Symbol.for('ServerRepository'),
   UserRepository: Symbol.for('UserRepository'),
   ServerMemberRepository: Symbol.for('ServerMemberRepository'),
@@ -31,13 +30,11 @@ export const TYPES = {
   // External dependencies
   DiscordClient: Symbol.for('DiscordClient'),
   OpenAI: Symbol.for('OpenAI'),
-  SupabaseClient: Symbol.for('SupabaseClient'),
 
   // Configuration
   GlobalConfig: Symbol.for('GlobalConfig'),
 
   // Discord modules
-  VerificationReopenSubscriber: Symbol.for('VerificationReopenSubscriber'),
   CommandHandler: Symbol.for('CommandHandler'),
   EventHandler: Symbol.for('EventHandler'),
   InteractionHandler: Symbol.for('InteractionHandler'),
@@ -49,18 +46,5 @@ export const TYPES = {
   AdminActionRepository: Symbol.for('AdminActionRepository'),
 
   AdminActionService: Symbol.for('AdminActionService'),
-  EventBus: Symbol.for('EventBus'),
-
-  // Subscribers
-  RestrictionSubscriber: Symbol.for('RestrictionSubscriber'),
-  NotificationSubscriber: Symbol.for('NotificationSubscriber'),
-  RoleUpdateSubscriber: Symbol.for('RoleUpdateSubscriber'),
-  ActionLogSubscriber: Symbol.for('ActionLogSubscriber'),
-  ServerMemberStatusSubscriber: Symbol.for('ServerMemberStatusSubscriber'),
-  DetectionResultHandlerSubscriber: Symbol.for('DetectionResultHandlerSubscriber'),
-  AdminFlagUserSubscriber: Symbol.for('AdminFlagUserSubscriber'),
-  UserReportSubscriber: Symbol.for('UserReportSubscriber'),
-
-  // Initializers
-  SubscriberInitializer: Symbol.for('SubscriberInitializer'),
+  // EventBus removed; direct orchestration handles workflows.
 };

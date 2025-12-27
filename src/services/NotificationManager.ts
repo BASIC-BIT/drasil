@@ -322,21 +322,30 @@ export class NotificationManager implements INotificationManager {
 
     // Create trigger information
     let triggerInfo: string;
-    if (
-      detectionResult.triggerSource === DetectionType.SUSPICIOUS_CONTENT &&
-      detectionResult.triggerContent
-    ) {
-      // Wrap trigger content in code blocks to prevent auto-linking
-      const safeContent = `\`${detectionResult.triggerContent}\``;
+    if (detectionResult.triggerSource === DetectionType.SUSPICIOUS_CONTENT) {
+      const safeContent = detectionResult.triggerContent
+        ? `\`${detectionResult.triggerContent}\``
+        : '`Message content unavailable`';
 
-      // If we have the source message, create a direct link to it
       if (sourceMessage) {
         triggerInfo = `[Flagged for message](${sourceMessage.url}): ${safeContent}`;
       } else {
         triggerInfo = `Flagged for message: ${safeContent}`;
       }
-    } else {
+    } else if (detectionResult.triggerSource === DetectionType.USER_REPORT) {
+      const safeContent = detectionResult.triggerContent
+        ? `\`${detectionResult.triggerContent}\``
+        : '`No report reason provided`';
+      triggerInfo = `Flagged via user report: ${safeContent}`;
+    } else if (detectionResult.triggerSource === DetectionType.GPT_ANALYSIS) {
+      const safeContent = detectionResult.triggerContent
+        ? `\`${detectionResult.triggerContent}\``
+        : '`Manual flag`';
+      triggerInfo = `Flagged via manual review: ${safeContent}`;
+    } else if (detectionResult.triggerSource === DetectionType.NEW_ACCOUNT) {
       triggerInfo = 'Flagged upon joining server';
+    } else {
+      triggerInfo = 'Flagged for suspicious activity';
     }
 
     // Get all detection events for this user in this server

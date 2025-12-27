@@ -17,13 +17,11 @@ import { TYPES } from '../di/symbols';
 import { VerificationStatus } from '../repositories/types';
 import { VerificationHistoryFormatter } from '../utils/VerificationHistoryFormatter';
 import 'reflect-metadata';
-// import { IUserModerationService } from '../services/UserModerationService'; // Removed unused import
+import { IUserModerationService } from '../services/UserModerationService';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { IThreadManager } from '../services/ThreadManager';
 import { IAdminActionRepository } from '../repositories/AdminActionRepository';
 import { ISecurityActionService } from '../services/SecurityActionService';
-import { IEventBus } from '../events/EventBus'; // Added
-import { EventNames } from '../events/events'; // Added
 // Load environment variables
 dotenv.config();
 
@@ -46,33 +44,30 @@ export interface IInteractionHandler {
 export class InteractionHandler implements IInteractionHandler {
   private client: Client;
   private notificationManager: INotificationManager;
-  // private userModerationService: IUserModerationService; // Removed
+  private userModerationService: IUserModerationService;
   private securityActionService: ISecurityActionService;
   // TODO: Handlers calling a repository is a smell, and should be improved
   private verificationEventRepository: IVerificationEventRepository;
   private threadManager: IThreadManager;
   private adminActionRepository: IAdminActionRepository;
-  private eventBus: IEventBus; // Added
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
-    // @inject(TYPES.UserModerationService) userModerationService: IUserModerationService, // Removed
+    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
     @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService,
     @inject(TYPES.VerificationEventRepository)
     verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.ThreadManager) threadManager: IThreadManager,
-    @inject(TYPES.AdminActionRepository) adminActionRepository: IAdminActionRepository,
-    @inject(TYPES.EventBus) eventBus: IEventBus // Added
+    @inject(TYPES.AdminActionRepository) adminActionRepository: IAdminActionRepository
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
-    // this.userModerationService = userModerationService; // Removed
+    this.userModerationService = userModerationService;
     this.securityActionService = securityActionService;
     this.verificationEventRepository = verificationEventRepository;
     this.threadManager = threadManager;
     this.adminActionRepository = adminActionRepository;
-    this.eventBus = eventBus; // Added
   }
 
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
@@ -132,40 +127,10 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
-      // Get the guild
-      // const guild = await this.client.guilds.fetch(guildId); // Removed unused guild fetch
-      // const member = await guild.members.fetch(userId); // Removed unused member fetch
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId);
 
-      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
-        userId,
-        guildId
-      );
-
-      if (!verificationEvent) {
-        throw new Error('No active verification event found');
-      }
-
-      // Publish event instead of calling service directly
-      this.eventBus.publish(EventNames.AdminVerifyUserRequested, {
-        targetUserId: userId,
-        serverId: guildId,
-        adminId: interaction.user.id,
-        interactionId: interaction.id,
-        verificationEventId: verificationEvent.id,
-      });
-
-      // Update the buttons to show History and Reopen
-      await this.notificationManager.updateNotificationButtons(
-        verificationEvent,
-        VerificationStatus.VERIFIED
-      );
-
-      // Lock and archive the thread if it exists
-      await this.threadManager.resolveVerificationThread(
-        verificationEvent,
-        VerificationStatus.VERIFIED,
-        interaction.user.id
-      ); // Lock and Archive on Verify
+      await this.userModerationService.verifyUser(member, interaction.user);
 
       await interaction.followUp({
         content: `User <@${userId}> has been verified and can now access the server.`,
@@ -188,42 +153,11 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
-      // Get the guild
-      // const guild = await this.client.guilds.fetch(guildId); // Removed unused guild fetch
-      // const member = await guild.members.fetch(userId); // Removed unused member fetch
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId);
 
-      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
-        userId,
-        guildId
-      );
-
-      if (!verificationEvent) {
-        throw new Error('No active verification event found');
-      }
-
-      // Publish event instead of calling service directly
       const banReason = 'Banned by moderator during verification (button)';
-      this.eventBus.publish(EventNames.AdminBanUserRequested, {
-        targetUserId: userId,
-        serverId: guildId,
-        adminId: interaction.user.id,
-        reason: banReason,
-        interactionId: interaction.id,
-        verificationEventId: verificationEvent.id,
-      });
-
-      // Update the notification message buttons
-      await this.notificationManager.updateNotificationButtons(
-        verificationEvent,
-        VerificationStatus.BANNED
-      );
-
-      // Lock and archive the thread if it exists
-      await this.threadManager.resolveVerificationThread(
-        verificationEvent,
-        VerificationStatus.BANNED,
-        interaction.user.id
-      ); // Lock and Archive on Ban
+      await this.userModerationService.banUser(member, banReason, interaction.user);
 
       await interaction.followUp({
         content: `User <@${userId}> has been banned from the server.`,
@@ -375,12 +309,6 @@ export class InteractionHandler implements IInteractionHandler {
       // Reopen the verification using VerificationService
       await this.securityActionService.reopenVerification(verificationEvent, interaction.user);
 
-      // Update the notification message buttons
-      await this.notificationManager.updateNotificationButtons(
-        verificationEvent,
-        VerificationStatus.PENDING // Set back to PENDING
-      );
-
       await interaction.followUp({
         content: `Verification for <@${userId}> has been reopened. The user has been restricted again.`,
         flags: MessageFlags.Ephemeral,
@@ -462,19 +390,26 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
-      // NOTE: We are passing the raw input string. The subscriber will need to resolve this.
-      // A more robust solution might try to resolve the user here first.
-      this.eventBus.publish(EventNames.UserReportSubmitted, {
-        targetUserInput: targetUserInputString, // Pass the raw input string
-        serverId: interaction.guildId,
-        reporterId: interaction.user.id,
-        reason: reason || undefined, // Pass reason if provided
-        interactionId: interaction.id,
-      });
+      const targetUserId = await this.resolveUserId(interaction.guildId, targetUserInputString);
+      if (!targetUserId) {
+        await interaction.reply({
+          content: `Could not find a user matching "${targetUserInputString}".`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
 
-      // Confirm submission to the user who reported
+      const guild = await this.client.guilds.fetch(interaction.guildId);
+      const member = await guild.members.fetch(targetUserId);
+
+      await this.securityActionService.handleUserReport(
+        member,
+        interaction.user,
+        reason || undefined
+      );
+
       await interaction.reply({
-        content: `✅ Thank you for your report regarding user input "${targetUserInputString}". It has been submitted for review.`,
+        content: `Thank you for your report regarding <@${targetUserId}>. It has been submitted for review.`,
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
@@ -492,5 +427,41 @@ export class InteractionHandler implements IInteractionHandler {
         });
       }
     }
+  }
+
+  /**
+   * Attempts to resolve a user ID string or tag string to a valid User ID within a guild.
+   */
+  private async resolveUserId(guildId: string, userInput: string): Promise<string | null> {
+    const trimmedInput = userInput.trim();
+
+    if (/^\d{17,19}$/.test(trimmedInput)) {
+      try {
+        const guild = await this.client.guilds.fetch(guildId);
+        await guild.members.fetch(trimmedInput);
+        return trimmedInput;
+      } catch {
+        return null;
+      }
+    }
+
+    const tagMatch = trimmedInput.match(/^(.+)#(\d{4})$/);
+    if (tagMatch) {
+      const username = tagMatch[1];
+      const discriminator = tagMatch[2];
+      try {
+        const guild = await this.client.guilds.fetch(guildId);
+        const members = await guild.members.fetch();
+        const foundMember = members.find(
+          (m) => m.user.username === username && m.user.discriminator === discriminator
+        );
+        return foundMember ? foundMember.id : null;
+      } catch (error) {
+        console.error(`[InteractionHandler] Error fetching members for tag resolution: ${error}`);
+        return null;
+      }
+    }
+
+    return null;
   }
 }

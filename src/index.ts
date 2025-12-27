@@ -4,7 +4,6 @@ import { configureContainer } from './di/container';
 import { TYPES } from './di/symbols';
 import { IBot } from './Bot';
 
-import { ISubscriberInitializer } from './initializers/SubscriberInitializer'; // Import Initializer
 
 // Load environment variables
 dotenv.config();
@@ -18,9 +17,6 @@ async function bootstrap(): Promise<void> {
 
     // Create and configure the container
     const container = configureContainer();
-
-    // Explicitly get the SubscriberInitializer to force instantiation of all subscribers
-    container.get<ISubscriberInitializer>(TYPES.SubscriberInitializer);
 
     // Get the bot instance from the container
     const bot = container.get<IBot>(TYPES.Bot);

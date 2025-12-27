@@ -1,7 +1,6 @@
 import { injectable, inject } from 'inversify';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { Server, ServerSettings } from '../repositories/types';
-import { isSupabaseConfigured } from './supabase';
 import { globalConfig } from './GlobalConfig';
 import { TYPES } from '../di/symbols';
 import { Client, Role, TextChannel } from 'discord.js';
@@ -89,8 +88,8 @@ export class ConfigService implements IConfigService {
    * Loads all active servers into cache
    */
   async initialize(): Promise<void> {
-    // Only attempt to load from database if Supabase is configured
-    if (isSupabaseConfigured()) {
+    // Only attempt to load from database if DATABASE_URL is configured
+    if (process.env.DATABASE_URL) {
       try {
         const servers = await this.serverRepository.findAllActive();
 
@@ -104,7 +103,7 @@ export class ConfigService implements IConfigService {
         console.error('Failed to load server configurations from database:', error);
       }
     } else {
-      console.warn('Supabase is not configured. Using environment variables for configuration.');
+      console.warn('DATABASE_URL is not configured. Using environment variables for configuration.');
     }
   }
 
@@ -162,8 +161,8 @@ export class ConfigService implements IConfigService {
       return cachedServer;
     }
 
-    // Try to get from database if Supabase is configured
-    if (isSupabaseConfigured()) {
+    // Try to get from database if DATABASE_URL is configured
+    if (process.env.DATABASE_URL) {
       try {
         const server = await this.serverRepository.findByGuildId(guildId);
         if (server) {
@@ -250,7 +249,7 @@ export class ConfigService implements IConfigService {
   private async createDefaultServerConfig(guildId: string): Promise<Server> {
     // Try to get existing server first
     let existingServer: Server | null = null;
-    if (isSupabaseConfigured()) {
+    if (process.env.DATABASE_URL) {
       try {
         existingServer = await this.serverRepository.findByGuildId(guildId);
       } catch (error) {
@@ -275,7 +274,7 @@ export class ConfigService implements IConfigService {
    * @returns The updated server configuration
    */
   async updateServerConfig(guildId: string, data: Partial<Server>): Promise<Server> {
-    if (isSupabaseConfigured()) {
+    if (process.env.DATABASE_URL) {
       try {
         const server = await this.serverRepository.upsertByGuildId(guildId, data);
         // Update cache

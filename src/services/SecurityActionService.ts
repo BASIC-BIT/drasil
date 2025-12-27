@@ -6,18 +6,17 @@ import { DetectionResult } from './DetectionOrchestrator';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import {
+  AdminActionType,
   DetectionEvent,
+  DetectionType,
   VerificationEvent,
   VerificationStatus,
-  // AdminActionType, // Removed as it's no longer used directly here
 } from '../repositories/types';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IUserRepository } from '../repositories/UserRepository';
 import { IThreadManager } from './ThreadManager';
 import { IUserModerationService } from './UserModerationService';
-import { IEventBus } from '../events/EventBus'; // Added EventBus import
-import { EventNames } from '../events/events'; // Added EventNames import
 /**
  * Interface for the SecurityActionService
  */
@@ -46,6 +45,16 @@ export interface ISecurityActionService {
   handleSuspiciousJoin(member: GuildMember, detectionResult: DetectionResult): Promise<boolean>;
 
   /**
+   * Handle a manual flag initiated by an admin
+   */
+  handleManualFlag(member: GuildMember, moderator: User, reason?: string): Promise<boolean>;
+
+  /**
+   * Handle a user report submitted via modal
+   */
+  handleUserReport(member: GuildMember, reporter: User, reason?: string): Promise<boolean>;
+
+  /**
    * Reopens a verification event, and re-restricts the user (or unbans them?)
    * @param verificationEvent The verification event to reopen
    * @returns Whether the thread was successfully reopened
@@ -68,7 +77,6 @@ export class SecurityActionService implements ISecurityActionService {
   private threadManager: IThreadManager;
   private userModerationService: IUserModerationService; // Keep for reopenVerification for now
   private client: Client;
-  private eventBus: IEventBus; // Added EventBus
 
   constructor(
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
@@ -80,8 +88,7 @@ export class SecurityActionService implements ISecurityActionService {
     @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
     @inject(TYPES.ThreadManager) threadManager: IThreadManager,
     @inject(TYPES.UserModerationService) userModerationService: IUserModerationService, // Keep for reopenVerification
-    @inject(TYPES.DiscordClient) client: Client,
-    @inject(TYPES.EventBus) eventBus: IEventBus // Inject EventBus
+    @inject(TYPES.DiscordClient) client: Client
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -92,7 +99,6 @@ export class SecurityActionService implements ISecurityActionService {
     this.threadManager = threadManager;
     this.userModerationService = userModerationService; // Keep for reopenVerification
     this.client = client;
-    this.eventBus = eventBus; // Assign EventBus
   }
 
   /**
@@ -158,6 +164,116 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   /**
+   * Ensure a detection event exists and return its ID.
+   * If the detection result already includes an ID, reuse it.
+   */
+  private async ensureDetectionEventId(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<string> {
+    if (detectionResult.detectionEventId) {
+      return detectionResult.detectionEventId;
+    }
+
+    const createdEvent = await this.recordDetectionEvent(
+      member.guild.id,
+      member.id,
+      detectionResult,
+      sourceMessage?.content,
+      sourceMessage?.id,
+      sourceMessage?.channelId
+    );
+
+    detectionResult.detectionEventId = createdEvent.id;
+    return createdEvent.id;
+  }
+
+  private async upsertNotification(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    verificationEvent: VerificationEvent,
+    sourceMessage?: Message
+  ): Promise<void> {
+    const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
+      member,
+      detectionResult,
+      verificationEvent,
+      sourceMessage
+    );
+
+    if (!notificationMessage) {
+      throw new Error('Failed to send or update suspicious user notification');
+    }
+
+    if (verificationEvent.notification_message_id !== notificationMessage.id) {
+      await this.verificationEventRepository.update(verificationEvent.id, {
+        notification_message_id: notificationMessage.id,
+      });
+    }
+  }
+
+  private async handleSuspiciousMember(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<boolean> {
+    // Fail fast: we don't attempt retries or compensation yet.
+    // TODO: Add retries/idempotency and partial failure handling if needed later.
+    await this.ensureEntitiesExist(
+      member.guild.id,
+      member.id,
+      member.user.username,
+      member.joinedAt?.toISOString()
+    );
+
+    const detectionEventId = await this.ensureDetectionEventId(
+      member,
+      detectionResult,
+      sourceMessage
+    );
+
+    const activeVerificationEvent =
+      await this.verificationEventRepository.findActiveByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+
+    if (activeVerificationEvent) {
+      console.log(
+        `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Updating notification.`
+      );
+      await this.upsertNotification(member, detectionResult, activeVerificationEvent, sourceMessage);
+      return true;
+    }
+
+    console.log(
+      `No active verification found for user ${member.user.tag}. Creating new verification event.`
+    );
+
+    const newVerificationEvent = await this.verificationEventRepository.createFromDetection(
+      detectionEventId,
+      member.guild.id,
+      member.id,
+      VerificationStatus.PENDING
+    );
+
+    const restricted = await this.userModerationService.restrictUser(member);
+    if (!restricted) {
+      throw new Error(`Failed to restrict user ${member.user.tag}`);
+    }
+
+    const thread = await this.threadManager.createVerificationThread(member, newVerificationEvent);
+    if (!thread) {
+      throw new Error(`Failed to create verification thread for ${member.user.tag}`);
+    }
+
+    await this.upsertNotification(member, detectionResult, newVerificationEvent, sourceMessage);
+
+    return true;
+  }
+
+  /**
    * Handle the response to a suspicious message
    *
    * @param member The guild member who sent the message
@@ -171,94 +287,12 @@ export class SecurityActionService implements ISecurityActionService {
     sourceMessage?: Message
   ): Promise<boolean> {
     try {
-      // 1. Ensure entities exist
-      await this.ensureEntitiesExist(
-        member.guild.id,
-        member.id,
-        member.user.username,
-        member.joinedAt?.toISOString()
-      );
-
       console.log(`Suspicious message detected for: ${member.user.tag} (${member.id})`);
       console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-
-      // 2. Record the DetectionEvent
-      const detectionEvent = await this.recordDetectionEvent(
-        member.guild.id,
-        member.id,
-        detectionResult,
-        sourceMessage?.content,
-        sourceMessage?.id,
-        sourceMessage?.channelId
-      );
-
-      // 3. Check for an existing active verification event
-      const activeVerificationEvent =
-        await this.verificationEventRepository.findActiveByUserAndServer(
-          member.id,
-          member.guild.id
-        );
-
-      if (activeVerificationEvent) {
-        // --- Active verification exists ---
-        console.log(
-          `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Reusing notification.`
-        );
-
-        // Publish event for additional suspicion
-        this.eventBus.publish(EventNames.AdditionalSuspicionDetected, {
-          userId: member.id,
-          serverId: member.guild.id,
-          detectionEventId: detectionEvent.id,
-          detectionResult: detectionResult,
-          existingVerificationEvent: activeVerificationEvent,
-          sourceMessage: sourceMessage,
-        });
-
-        // Side effects (updating notification) are now handled by subscribers
-        // We can assume success if the event was published
-        const updatedMessage = true; // Indicate success for return value consistency
-
-        return !!updatedMessage; // Return success based on notification update
-      } else {
-        // --- No active verification exists ---
-        console.log(
-          `No active verification found for user ${member.user.tag}. Creating new event.`
-        );
-
-        // Create a NEW VerificationEvent
-        let newVerificationEvent: VerificationEvent | null = null;
-        try {
-          // Corrected createFromDetection call
-          newVerificationEvent = await this.verificationEventRepository.createFromDetection(
-            detectionEvent.id,
-            member.guild.id, // serverId
-            member.id, // userId
-            VerificationStatus.PENDING
-          );
-          console.log(`Created verification event ${newVerificationEvent.id}`);
-
-          // Publish VerificationStarted event
-          this.eventBus.publish(EventNames.VerificationStarted, {
-            userId: member.id,
-            serverId: member.guild.id,
-            verificationEvent: newVerificationEvent,
-            detectionEventId: detectionEvent.id,
-            detectionResult: detectionResult, // Added detectionResult
-          });
-        } catch (error) {
-          console.error(`Failed to create verification event for ${member.user.tag}:`, error);
-          return false; // Stop if event creation fails
-        }
-
-        // Side effects (restriction, notification) are now handled by subscribers listening to VerificationStarted event.
-
-        // If we reached here, the event was published successfully
-        return true;
-      } // Close the else block for 'No active verification exists'
+      return await this.handleSuspiciousMember(member, detectionResult, sourceMessage);
     } catch (error) {
       console.error(`Failed to handle suspicious message for ${member.user.tag}:`, error);
-      return false;
+      throw error;
     }
   }
 
@@ -274,7 +308,21 @@ export class SecurityActionService implements ISecurityActionService {
     detectionResult: DetectionResult
   ): Promise<boolean> {
     try {
-      // 1. Ensure entities exist
+      console.log(`Suspicious join detected for: ${member.user.tag} (${member.id})`);
+      console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
+      return await this.handleSuspiciousMember(member, detectionResult);
+    } catch (error) {
+      console.error(`Failed to handle suspicious join for ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
+  public async handleManualFlag(
+    member: GuildMember,
+    moderator: User,
+    reason?: string
+  ): Promise<boolean> {
+    try {
       await this.ensureEntitiesExist(
         member.guild.id,
         member.id,
@@ -282,86 +330,70 @@ export class SecurityActionService implements ISecurityActionService {
         member.joinedAt?.toISOString()
       );
 
-      console.log(`Suspicious join detected for: ${member.user.tag} (${member.id})`);
-      console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
+      const reasonText = reason ? `Reason: ${reason}` : 'No reason provided.';
+      const detectionEvent = await this.detectionEventsRepository.create({
+        server_id: member.guild.id,
+        user_id: member.id,
+        detection_type: DetectionType.GPT_ANALYSIS,
+        confidence: 1.0,
+        reasons: [`Manually flagged by admin ${moderator.id}. ${reasonText}`],
+        detected_at: new Date(),
+        metadata: { type: 'admin_flag', adminId: moderator.id, reason: reason ?? reasonText },
+      });
 
-      // 2. Record the DetectionEvent
-      const detectionEvent = await this.recordDetectionEvent(
+      const detectionResult: DetectionResult = {
+        label: 'SUSPICIOUS',
+        confidence: 1.0,
+        reasons: [`Manually flagged by admin ${moderator.id}. ${reasonText}`],
+        triggerSource: DetectionType.GPT_ANALYSIS,
+        triggerContent: reason ?? 'Manual admin flag',
+        detectionEventId: detectionEvent.id,
+      };
+
+      return await this.handleSuspiciousMember(member, detectionResult);
+    } catch (error) {
+      console.error(`Failed to handle manual flag for ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
+  public async handleUserReport(
+    member: GuildMember,
+    reporter: User,
+    reason?: string
+  ): Promise<boolean> {
+    try {
+      await this.ensureEntitiesExist(
         member.guild.id,
         member.id,
-        detectionResult
-        // No source message for join event
+        member.user.username,
+        member.joinedAt?.toISOString()
       );
 
-      // 3. Check for an existing active verification event
-      const activeVerificationEvent =
-        await this.verificationEventRepository.findActiveByUserAndServer(
-          member.id,
-          member.guild.id
-        );
+      const reasonText = reason ? `Reason: ${reason}` : 'No reason provided.';
+      const detectionEvent = await this.detectionEventsRepository.create({
+        server_id: member.guild.id,
+        user_id: member.id,
+        detection_type: DetectionType.USER_REPORT,
+        confidence: 1.0,
+        reasons: [`Reported by user ${reporter.id}. ${reasonText}`],
+        detected_at: new Date(),
+        metadata: { type: 'user_report', reporterId: reporter.id, reason: reason ?? reasonText },
+      });
 
-      if (activeVerificationEvent) {
-        // --- Active verification exists ---
-        console.log(
-          `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Reusing notification.`
-        );
+      const detectionResult: DetectionResult = {
+        label: 'SUSPICIOUS',
+        confidence: 1.0,
+        reasons: [`Reported by user ${reporter.id}. ${reasonText}`],
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: reason ?? 'User report',
+        detectionEventId: detectionEvent.id,
+      };
 
-        // Publish event for additional suspicion
-        this.eventBus.publish(EventNames.AdditionalSuspicionDetected, {
-          userId: member.id,
-          serverId: member.guild.id,
-          detectionEventId: detectionEvent.id,
-          detectionResult: detectionResult,
-          existingVerificationEvent: activeVerificationEvent,
-          // No sourceMessage for join event
-        });
-
-        // Side effects (updating notification) are now handled by subscribers
-        // We can assume success if the event was published
-        const updatedMessage = true; // Indicate success for return value consistency
-
-        // Removed the block that tried to update notification_message_id here.
-        // This logic will be handled by the NotificationSubscriber listening to AdditionalSuspicionDetected.
-        return !!updatedMessage; // Return success based on notification update
-      } else {
-        // --- No active verification exists ---
-        console.log(
-          `No active verification found for user ${member.user.tag}. Creating new event.`
-        );
-
-        // Create a NEW VerificationEvent
-        let newVerificationEvent: VerificationEvent | null = null;
-        try {
-          // Corrected createFromDetection call
-          newVerificationEvent = await this.verificationEventRepository.createFromDetection(
-            detectionEvent.id,
-            member.guild.id, // serverId
-            member.id, // userId
-            VerificationStatus.PENDING
-          );
-          console.log(`Created verification event ${newVerificationEvent.id}`);
-
-          // Publish VerificationStarted event
-          this.eventBus.publish(EventNames.VerificationStarted, {
-            userId: member.id,
-            serverId: member.guild.id,
-            verificationEvent: newVerificationEvent,
-            detectionEventId: detectionEvent.id,
-            detectionResult: detectionResult, // Added detectionResult
-          });
-        } catch (error) {
-          console.error(`Failed to create verification event for ${member.user.tag}:`, error);
-          return false; // Error handled in createFromDetection
-        }
-
-        // Side effects (restriction, notification) are now handled by subscribers listening to VerificationStarted event.
-
-        // If we reached here, the event was published successfully
-        return true;
-      } // Close the else block for 'No active verification exists'
+      return await this.handleSuspiciousMember(member, detectionResult);
     } catch (error) {
-      console.error(`Failed to handle suspicious join for ${member.user.tag}:`, error);
-      return false;
+      console.error(`Failed to handle user report for ${member.user.tag}:`, error);
+      throw error;
     }
   }
 
@@ -376,31 +408,39 @@ export class SecurityActionService implements ISecurityActionService {
     verificationEvent: VerificationEvent,
     moderator: User
   ): Promise<boolean> {
-    // TODO: Refactor reopenVerification fully to events
-    // Removed: await this.threadManager.reopenVerificationThread(verificationEvent); // Handled by subscriber
+    try {
+      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
+        status: VerificationStatus.PENDING,
+        resolved_at: null,
+        resolved_by: null,
+      });
 
-    // TODO: Fetch server member better?
-    // const guild = await this.client.guilds.fetch(verificationEvent.server_id); // Removed as guild is no longer used directly here
-    // const member = await guild.members.fetch(verificationEvent.user_id); // Removed as member is no longer used directly here
+      if (!updatedEvent) {
+        throw new Error(`Verification event ${verificationEvent.id} not found for reopen.`);
+      }
 
-    // Update the verification event to pending
-    verificationEvent.status = VerificationStatus.PENDING;
-    await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
+      const guild = await this.client.guilds.fetch(verificationEvent.server_id);
+      const member = await guild.members.fetch(verificationEvent.user_id);
 
-    // Re-restrict the user
-    // Removed: await this.userModerationService.restrictUser(member); // Handled by subscriber
+      await this.threadManager.reopenVerificationThread(verificationEvent);
+      await this.userModerationService.restrictUser(member);
+      await this.notificationManager.logActionToMessage(
+        verificationEvent,
+        AdminActionType.REOPEN,
+        moderator
+      );
+      await this.notificationManager.updateNotificationButtons(
+        verificationEvent,
+        VerificationStatus.PENDING
+      );
 
-    // Log the action to the message
-    // Removed: await this.notificationManager.logActionToMessage(...) // Handled by subscriber
-
-    // Publish VerificationReopened event
-    this.eventBus.publish(EventNames.VerificationReopened, {
-      verificationEventId: verificationEvent.id,
-      userId: verificationEvent.user_id,
-      serverId: verificationEvent.server_id,
-      moderatorId: moderator.id,
-    });
-
-    return true;
+      return true;
+    } catch (error) {
+      console.error(
+        `Failed to reopen verification event ${verificationEvent.id} for user ${verificationEvent.user_id}:`,
+        error
+      );
+      throw error;
+    }
   }
 }

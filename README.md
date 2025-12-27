@@ -9,7 +9,7 @@ This bot uses:
 - **Discord.js** for Discord integration
 - **OpenAI GPT** for advanced spam detection
 - **Heuristic checks** for quick identification of obvious spam
-- **Supabase** for data persistence
+- **Postgres via Prisma** for data persistence (local Supabase recommended for dev)
 
 ## Features
 
@@ -25,10 +25,15 @@ This bot uses:
 
 1. Clone the repo
 2. Install npm dependencies `npm i --legacy-peer-deps`
-3. `cp .env.example .env` and fill out required fields
-4. `npx supabase start`
-5. `npm run db:reset:local`
+3. `cp .env.example .env` and fill out required fields (including `DATABASE_URL`)
+4. Start Postgres (local Supabase recommended): `npx supabase start`
+5. `npm run db:reset:local` (local Supabase only)
 6. `npm run dev`
+
+## Workflow
+
+The bot now uses direct orchestration (no internal EventBus). See `docs/workflow.md`
+for the full detection and moderation flow.
 
 ### Heuristic Spam Detection
 
@@ -58,6 +63,10 @@ This project uses npm scripts for common development tasks:
 - `npm run prisma:studio`: Opens the Prisma Studio GUI to view and edit database data.
 - `npm run prisma:format`: Formats the `prisma/schema.prisma` file.
 - `npm run db:seed`: Executes the seed script (`prisma/seed.ts`) to populate the database.
+
+## Testing
+
+High-signal manual and automated test ideas live in `docs/test-cases.md`.
 
 ## Usage
 
@@ -110,7 +119,7 @@ When a user is flagged as suspicious, the bot will:
    - Interactive buttons:
      - **Verify User** button to remove the restricted role
      - **Ban User** button to ban the user from the server
-     - **Create Thread** button to open a verification thread
+     - **Create Thread** button (shown only if the auto-created thread is missing)
 3. Log all admin actions (button presses) directly in the notification message
 4. Create verification threads in a dedicated verification channel that's visible only to:
    - Server administrators and moderators
