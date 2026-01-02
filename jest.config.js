@@ -8,6 +8,8 @@ module.exports = {
   clearMocks: true,
   resetMocks: true,
   restoreMocks: true,
+  maxWorkers: 1,
+  testTimeout: 30000,
   setupFilesAfterEnv: ['<rootDir>/src/__tests__/setup.ts'],
   moduleNameMapper: {
     '^./index': '<rootDir>/src/__mocks__/index.ts',

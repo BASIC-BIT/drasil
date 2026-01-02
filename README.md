@@ -9,7 +9,7 @@ This bot uses:
 - **Discord.js** for Discord integration
 - **OpenAI GPT** for advanced spam detection
 - **Heuristic checks** for quick identification of obvious spam
-- **Postgres via Prisma** for data persistence (local Supabase recommended for dev)
+- **Supabase Postgres via Prisma** for data persistence (local Supabase recommended for dev)
 
 ## Features
 
@@ -26,7 +26,7 @@ This bot uses:
 1. Clone the repo
 2. Install npm dependencies `npm i --legacy-peer-deps`
 3. `cp .env.example .env` and fill out required fields (including `DATABASE_URL`)
-4. Start Postgres (local Supabase recommended): `npx supabase start`
+4. Start Postgres (Supabase recommended): `npx supabase start`
 5. `npm run db:reset:local` (local Supabase only)
 6. `npm run dev`
 
