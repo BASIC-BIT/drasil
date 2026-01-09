@@ -28,10 +28,9 @@ const buildMember = (guildId: string, userId: string): GuildMember =>
       remove: jest.fn().mockResolvedValue(undefined),
     },
     ban: jest.fn().mockResolvedValue(undefined),
-  }) as GuildMember;
+  }) as unknown as GuildMember;
 
-const describeIntegration =
-  process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
+const describeIntegration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 
 describeIntegration('UserModerationService (integration)', () => {
   let prisma: PrismaClient;
@@ -196,7 +195,7 @@ describeIntegration('UserModerationService (integration)', () => {
     expect(adminActions[0].action_type).toBe(AdminActionType.BAN);
     expect(adminActions[0].notes).toBe('banned in test');
 
-    expect((member.ban as jest.Mock).mock.calls.length).toBe(1);
+    expect((member.ban as jest.Mock).mock.calls).toHaveLength(1);
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       VerificationStatus.BANNED,

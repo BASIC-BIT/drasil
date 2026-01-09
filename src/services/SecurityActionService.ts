@@ -234,16 +234,18 @@ export class SecurityActionService implements ISecurityActionService {
     );
 
     const activeVerificationEvent =
-      await this.verificationEventRepository.findActiveByUserAndServer(
-        member.id,
-        member.guild.id
-      );
+      await this.verificationEventRepository.findActiveByUserAndServer(member.id, member.guild.id);
 
     if (activeVerificationEvent) {
       console.log(
         `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Updating notification.`
       );
-      await this.upsertNotification(member, detectionResult, activeVerificationEvent, sourceMessage);
+      await this.upsertNotification(
+        member,
+        detectionResult,
+        activeVerificationEvent,
+        sourceMessage
+      );
       return true;
     }
 

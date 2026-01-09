@@ -23,7 +23,7 @@ const buildMember = (guildId: string, userId: string): GuildMember =>
       username: 'test-user',
       tag: 'test-user#0001',
     } as User,
-  }) as GuildMember;
+  }) as unknown as GuildMember;
 
 const buildMessage = (guildId: string, channelId: string): Message =>
   ({
@@ -33,8 +33,7 @@ const buildMessage = (guildId: string, channelId: string): Message =>
     url: `https://discord.com/channels/${guildId}/${channelId}/message-1`,
   }) as Message;
 
-const describeIntegration =
-  process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
+const describeIntegration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 
 describeIntegration('SecurityActionService (integration)', () => {
   let prisma: PrismaClient;
@@ -56,9 +55,7 @@ describeIntegration('SecurityActionService (integration)', () => {
     userRepository = new UserRepository(prisma);
     serverRepository = new ServerRepository(prisma);
     notificationManager = {
-      upsertSuspiciousUserNotification: jest
-        .fn()
-        .mockResolvedValue({ id: 'notif-1' } as Message),
+      upsertSuspiciousUserNotification: jest.fn().mockResolvedValue({ id: 'notif-1' } as Message),
       logActionToMessage: jest.fn().mockResolvedValue(true),
       setupVerificationChannel: jest.fn().mockResolvedValue('channel-1'),
       handleHistoryButtonClick: jest.fn().mockResolvedValue(true),
@@ -67,9 +64,7 @@ describeIntegration('SecurityActionService (integration)', () => {
     threadManager = {
       createVerificationThread: jest
         .fn()
-        .mockResolvedValue(
-          { id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any
-        ),
+        .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
     };

@@ -194,9 +194,7 @@ export class UserModerationService implements IUserModerationService {
         notes: null,
       });
 
-      console.log(
-        `User ${member.user.tag} verification process completed successfully.`
-      );
+      console.log(`User ${member.user.tag} verification process completed successfully.`);
       return true; // Verification process completed successfully
     } catch (error) {
       console.error(`Failed to verify user ${member.user.tag}:`, error);
@@ -291,5 +289,4 @@ export class UserModerationService implements IUserModerationService {
       throw error;
     }
   }
-
 }

@@ -7,6 +7,9 @@ import prettier from 'eslint-plugin-prettier';
 
 // Config for JavaScript config files must come first to prevent TypeScript parser from being used on them
 const configs = [
+  {
+    ignores: ['dist/**', 'build/**'],
+  },
   // Config for JavaScript config files
   {
     files: ['*.js', '*.cjs', '.*.js', '.*.mjs', '.*.cjs'],

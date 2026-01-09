@@ -103,7 +103,9 @@ export class ConfigService implements IConfigService {
         console.error('Failed to load server configurations from database:', error);
       }
     } else {
-      console.warn('DATABASE_URL is not configured. Using environment variables for configuration.');
+      console.warn(
+        'DATABASE_URL is not configured. Using environment variables for configuration.'
+      );
     }
   }
 

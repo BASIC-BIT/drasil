@@ -38,12 +38,7 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
   }
 
   async create(data: Partial<DetectionEvent>): Promise<DetectionEvent> {
-    if (
-      !data.server_id ||
-      !data.user_id ||
-      !data.detection_type ||
-      data.confidence === undefined
-    ) {
+    if (!data.server_id || !data.user_id || !data.detection_type || data.confidence === undefined) {
       throw new Error(
         'server_id, user_id, detection_type, and confidence are required to create a detection event'
       );
@@ -109,9 +104,7 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - retentionDays);
     const beforeCount = this.events.length;
-    this.events = this.events.filter(
-      (event) => toTimestamp(event.detected_at) >= cutoff.getTime()
-    );
+    this.events = this.events.filter((event) => toTimestamp(event.detected_at) >= cutoff.getTime());
     return beforeCount - this.events.length;
   }
 
@@ -141,7 +134,10 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
 
     const start = options.offset ?? 0;
     const end = options.limit ? start + options.limit : undefined;
-    return filtered.slice(start, end).reverse().map((event) => ({ ...event }));
+    return filtered
+      .slice(start, end)
+      .reverse()
+      .map((event) => ({ ...event }));
   }
 
   async findActiveByUserAndServer(
@@ -221,7 +217,10 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
 
     if (data.status !== undefined) {
       updated.status = data.status;
-      if (data.status === VerificationStatus.VERIFIED || data.status === VerificationStatus.BANNED) {
+      if (
+        data.status === VerificationStatus.VERIFIED ||
+        data.status === VerificationStatus.BANNED
+      ) {
         updated.resolved_at = data.resolved_at ?? new Date();
         updated.resolved_by = data.resolved_by ?? updated.resolved_by;
       }
@@ -279,10 +278,7 @@ export class InMemoryServerRepository implements IServerRepository {
     return { ...updated, settings: { ...updated.settings } };
   }
 
-  async updateSettings(
-    guildId: string,
-    settings: Partial<ServerSettings>
-  ): Promise<Server | null> {
+  async updateSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server | null> {
     const existing = this.servers.get(guildId);
     if (!existing) {
       return null;

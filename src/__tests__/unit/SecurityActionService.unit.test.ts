@@ -1,7 +1,7 @@
 import { Client, Guild, GuildMember, Message, User } from 'discord.js';
 import { SecurityActionService } from '../../services/SecurityActionService';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
-import { DetectionType, VerificationStatus } from '../../repositories/types';
+import { AdminActionType, DetectionType, VerificationStatus } from '../../repositories/types';
 import {
   InMemoryDetectionEventsRepository,
   InMemoryServerMemberRepository,
@@ -50,9 +50,7 @@ describe('SecurityActionService (unit)', () => {
     userRepository = new InMemoryUserRepository();
     serverRepository = new InMemoryServerRepository();
     notificationManager = {
-      upsertSuspiciousUserNotification: jest
-        .fn()
-        .mockResolvedValue({ id: 'notif-1' } as Message),
+      upsertSuspiciousUserNotification: jest.fn().mockResolvedValue({ id: 'notif-1' } as Message),
       logActionToMessage: jest.fn().mockResolvedValue(true),
       setupVerificationChannel: jest.fn().mockResolvedValue('channel-1'),
       handleHistoryButtonClick: jest.fn().mockResolvedValue(true),
@@ -61,9 +59,7 @@ describe('SecurityActionService (unit)', () => {
     threadManager = {
       createVerificationThread: jest
         .fn()
-        .mockResolvedValue(
-          { id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any
-        ),
+        .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
     };
@@ -103,10 +99,7 @@ describe('SecurityActionService (unit)', () => {
 
     await service.handleSuspiciousMessage(member, detectionResult, message);
 
-    const detectionEvents = await detectionEventsRepository.findByServerAndUser(
-      guildId,
-      userId
-    );
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
     expect(detectionEvents).toHaveLength(1);
     expect(detectionEvents[0].detection_type).toBe(DetectionType.SUSPICIOUS_CONTENT);
 
@@ -197,15 +190,97 @@ describe('SecurityActionService (unit)', () => {
 
     await service.handleUserReport(member, { id: reporterId } as User, 'reported');
 
-    const detectionEvents = await detectionEventsRepository.findByServerAndUser(
-      guildId,
-      userId
-    );
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
     expect(detectionEvents).toHaveLength(1);
     expect(detectionEvents[0].detection_type).toBe(DetectionType.USER_REPORT);
     expect(detectionEvents[0].metadata).toMatchObject({
       type: 'user_report',
       reporterId,
     });
+  });
+
+  it('creates detection event for manual flag', async () => {
+    const guildId = 'guild-4';
+    const userId = 'user-4';
+    const moderatorId = 'admin-1';
+    const member = buildMember(guildId, userId);
+
+    const service = new SecurityActionService(
+      notificationManager,
+      detectionEventsRepository,
+      serverMemberRepository,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      threadManager,
+      userModerationService,
+      {} as Client
+    );
+
+    await service.handleManualFlag(member, { id: moderatorId } as User, 'manual flag');
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents).toHaveLength(1);
+    expect(detectionEvents[0].detection_type).toBe(DetectionType.GPT_ANALYSIS);
+    expect(detectionEvents[0].metadata).toMatchObject({
+      type: 'admin_flag',
+      adminId: moderatorId,
+    });
+    expect(userModerationService.restrictUser).toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+  });
+
+  it('reopens verification and re-restricts the user', async () => {
+    const guildId = 'guild-5';
+    const userId = 'user-5';
+    const moderator = { id: 'admin-2' } as User;
+    const member = buildMember(guildId, userId);
+
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.VERIFIED
+    );
+
+    const client = {
+      guilds: {
+        fetch: jest.fn().mockResolvedValue({
+          members: {
+            fetch: jest.fn().mockResolvedValue(member),
+          },
+        }),
+      },
+    } as unknown as Client;
+
+    const service = new SecurityActionService(
+      notificationManager,
+      detectionEventsRepository,
+      serverMemberRepository,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      threadManager,
+      userModerationService,
+      client
+    );
+
+    await service.reopenVerification(verificationEvent, moderator);
+
+    const updatedEvent = await verificationEventRepository.findById(verificationEvent.id);
+    expect(updatedEvent?.status).toBe(VerificationStatus.PENDING);
+    expect(updatedEvent?.resolved_at).toBeNull();
+    expect(updatedEvent?.resolved_by).toBeNull();
+    expect(threadManager.reopenVerificationThread).toHaveBeenCalledWith(verificationEvent);
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(notificationManager.logActionToMessage).toHaveBeenCalledWith(
+      verificationEvent,
+      AdminActionType.REOPEN,
+      moderator
+    );
+    expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+      verificationEvent,
+      VerificationStatus.PENDING
+    );
   });
 });

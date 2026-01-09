@@ -45,13 +45,5 @@ jobs:
             sleep 2
           done
           exit 1
-      - name: Build
-        run: npm run build
-      - name: Format check
-        run: npm run format:check
-      - name: Lint
-        run: npm run lint
-      - name: Unit tests
-        run: npm test
-      - name: Integration tests
-        run: npm run test:integration
+      - name: Quality gate
+        run: npm run check:ci

@@ -123,7 +123,12 @@ describe('DetectionOrchestrator (unit)', () => {
       recentMessages: [],
     };
 
-    const result = await orchestrator.detectMessage(serverId, userId, 'free discord nitro', profile);
+    const result = await orchestrator.detectMessage(
+      serverId,
+      userId,
+      'free discord nitro',
+      profile
+    );
 
     expect(gptService.analyzeProfile).not.toHaveBeenCalled();
     expect(result.label).toBe('SUSPICIOUS');

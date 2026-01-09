@@ -117,14 +117,8 @@ export class EventHandler implements IEventHandler {
     const content = message.content;
 
     try {
-      // Get user profile data if available
-      let profileData: UserProfileData | undefined;
-
-      // Only collect profile data if we have access to the user and guild member
-      // message.author is guaranteed non-null by the check on line 122
-      if (message.member) {
-        profileData = this.extractUserProfileData(message.member);
-      }
+      // Get user profile data for detection context
+      const profileData = this.extractUserProfileData(message.member);
 
       // Use the detection orchestrator to analyze the message
       const detectionResult = await this.detectionOrchestrator.detectMessage(

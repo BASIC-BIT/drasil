@@ -49,6 +49,6 @@ describe('HeuristicService (unit)', () => {
     const analysis = service.analyzeMessage('user-1', 'free discord nitro');
 
     expect(analysis.result).toBe('SUSPICIOUS');
-    expect(analysis.reasons.length).toBe(2);
+    expect(analysis.reasons).toHaveLength(2);
   });
 });

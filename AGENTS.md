@@ -25,6 +25,7 @@
 - Manual flag and user report both create detection events and follow the same flow.
 
 Primary flow (see `docs/workflow.md`):
+
 1. `EventHandler` -> `DetectionOrchestrator` -> `SecurityActionService`.
 2. `SecurityActionService` ensures entities, ensures detection event, creates verification if
    needed, restricts the user, creates a thread, and upserts admin notification.
@@ -88,23 +89,29 @@ Primary flow (see `docs/workflow.md`):
 - `npm run lint:fix` lint with fixes
 - `npm run format:check` check formatting
 - `npm run check` local quality gate (lint:fix, build, tests)
+- `npm run check:full` full gate (format:check, check, integration tests)
+- `npm run check:ci` CI gate (format:check, lint, build, tests, integration tests)
 
 ## Agent Rules (Cursor)
 
 Clean code:
+
 - Prefer constants over magic numbers; meaningful names; single responsibility; DRY.
 - Comments explain why, not what.
 - Encapsulate logic; keep structure tidy.
 
 TypeScript:
+
 - Prefer interfaces for object shapes; avoid `any`; explicit return types for public APIs.
 - Use async/await; handle nulls carefully; avoid unnecessary type assertions.
 
 Jest:
+
 - Use AAA (Arrange/Act/Assert), `jest.fn()` mocks, and clear test names.
 - Test success and failure cases; keep tests isolated.
 
 Code quality rules:
+
 - Verify information; do not assume or speculate.
 - File-by-file changes; preserve unrelated code and structure.
 - No apologies; no "understanding" feedback.
@@ -117,4 +124,5 @@ Code quality rules:
 - Avoid discussing current implementation unless explicitly requested.
 
 Memory bank:
+
 - If asked to update or use the Memory Bank, read all core files in `memory-bank/`.

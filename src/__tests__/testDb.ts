@@ -15,9 +15,7 @@ function resolveDatabaseUrl(): string {
 
   const databaseUrl = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
   if (!databaseUrl) {
-    throw new Error(
-      'Missing TEST_DATABASE_URL or DATABASE_URL for integration tests.'
-    );
+    throw new Error('Missing TEST_DATABASE_URL or DATABASE_URL for integration tests.');
   }
 
   process.env.DATABASE_URL = databaseUrl;

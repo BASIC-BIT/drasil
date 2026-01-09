@@ -4,7 +4,6 @@ import { configureContainer } from './di/container';
 import { TYPES } from './di/symbols';
 import { IBot } from './Bot';
 
-
 // Load environment variables
 dotenv.config();
 

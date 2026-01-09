@@ -181,7 +181,7 @@ describe('UserModerationService (unit)', () => {
     expect(adminActions[0].action_type).toBe(AdminActionType.BAN);
     expect(adminActions[0].notes).toBe('banned in test');
 
-    expect((member.ban as jest.Mock).mock.calls.length).toBe(1);
+    expect((member.ban as jest.Mock).mock.calls).toHaveLength(1);
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       VerificationStatus.BANNED,

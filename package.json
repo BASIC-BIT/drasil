@@ -24,6 +24,8 @@
     "format": "prettier --write \"**/*.{ts,js,json,md,mjs}\"",
     "format:check": "prettier --check \"**/*.{ts,js,json,md,mjs}\"",
     "check": "npm run lint:fix && npm run build && npm test",
+    "check:full": "npm run format:check && npm run check && npm run test:integration",
+    "check:ci": "npm run format:check && npm run lint && npm run build && npm test && npm run test:integration",
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:db:pull": "prisma db pull",
