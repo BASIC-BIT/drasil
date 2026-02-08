@@ -53,6 +53,9 @@ coverage/
 supabase/.temp/
 supabase/.env
 
+# OpenCode
+.opencode/state/
+
 # OS files
 Thumbs.db 
 

@@ -366,10 +366,11 @@ The detailed development roadmap is tracked in the progress.md file.
 
 ### Documentation
 
-- [Project README](../README.md)
-- [API Documentation](./API.md)
-- [Architecture Overview](./systemPatterns.md)
-- [Testing Best Practices](./testing-best-practices.md)
+- [Project README](../../README.md)
+- [Workflow Overview](../workflow.md)
+- [Test Cases](../test-cases.md)
+- [Legacy Architecture Notes](../legacy/memory-bank/systemPatterns.md)
+- [Testing Best Practices](../legacy/learnings/testing-best-practices.md)
 
 ### External Resources
 

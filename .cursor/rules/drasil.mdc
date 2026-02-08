@@ -1,6 +1,0 @@
----
-description: 
-globs: 
-alwaysApply: true
----
-If I ever say "Reset the database", perform `npx supabase db reset`

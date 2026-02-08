@@ -1,10 +1,8 @@
-# AGENTS
+# Drasil (Discord Anti-Spam Bot)
 
-## Project Overview
+Discord anti-spam bot that combines heuristics and GPT analysis to proactively detect and mitigate scammers/spammers in Discord servers.
 
-- Discord anti-spam bot that combines heuristics and GPT analysis.
-- Supabase Postgres as the backing database, accessed through Prisma.
-- Direct orchestration (no internal EventBus).
+Persistence uses Postgres (often Supabase) via Prisma. Orchestration is direct (controllers call services; no internal EventBus).
 
 ## Stack
 
@@ -49,15 +47,19 @@ Primary flow (see `docs/workflow.md`):
 - Services: `src/services/SecurityActionService.ts`, `src/services/UserModerationService.ts`,
   `src/services/DetectionOrchestrator.ts`.
 - Docs: `docs/workflow.md`, `docs/test-cases.md`, `docs/future-features.md`.
+- Context (product/spec): `docs/context/`
+- Archives (historical): `docs/legacy/`
 
 ## Environment & Local Dev
 
 - `.env` uses:
   - `DISCORD_TOKEN`, `OPENAI_API_KEY`
   - `DATABASE_URL` (Prisma)
-  - `PRISMA_DB_PASSWORD`, `POSTGRES_DB_URL` (local Supabase reset tooling)
-- Local DB: `npx supabase start`.
-- If the user says "Reset the database", run: `npx supabase db reset`.
+  - `PRISMA_DB_PASSWORD`, `POSTGRES_DB_URL` (local Supabase tooling + integration tests)
+- Local DB: `npx supabase start`
+- Canonical local reset + seed: `npm run db:reset:local`
+
+If the user says "Reset the database", run `npm run db:reset:local`.
 
 ## Testing
 
@@ -92,7 +94,14 @@ Primary flow (see `docs/workflow.md`):
 - `npm run check:full` full gate (format:check, check, integration tests)
 - `npm run check:ci` CI gate (format:check, lint, build, tests, integration tests)
 
-## Agent Rules (Cursor)
+## Engineering Guidelines
+
+Operating principles:
+
+- Prefer boring, reliable changes over clever ones.
+- Keep diffs tight; preserve unrelated behavior.
+- Verify claims with code or repo files; avoid guessing.
+- Never add secrets/credentials to git.
 
 Clean code:
 
@@ -103,26 +112,15 @@ Clean code:
 TypeScript:
 
 - Prefer interfaces for object shapes; avoid `any`; explicit return types for public APIs.
-- Use async/await; handle nulls carefully; avoid unnecessary type assertions.
+- Use async/await; handle `null` carefully (Prisma maps SQL `NULL` -> JS `null`).
 
 Jest:
 
 - Use AAA (Arrange/Act/Assert), `jest.fn()` mocks, and clear test names.
 - Test success and failure cases; keep tests isolated.
 
-Code quality rules:
+## Skills (progressive disclosure)
 
-- Verify information; do not assume or speculate.
-- File-by-file changes; preserve unrelated code and structure.
-- No apologies; no "understanding" feedback.
-- No whitespace-only suggestions.
-- No summaries in responses.
-- No inventions beyond the request.
-- No unnecessary confirmations or implementation checks.
-- Single-chunk edits per file.
-- Provide real file links when referencing files.
-- Avoid discussing current implementation unless explicitly requested.
+This repo keeps always-on guidance in `AGENTS.md`.
 
-Memory bank:
-
-- If asked to update or use the Memory Bank, read all core files in `memory-bank/`.
+Use Skills for deeper workflows/playbooks. Skills live under `.opencode/skills/<name>/SKILL.md`.

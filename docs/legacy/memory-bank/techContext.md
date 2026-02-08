@@ -675,10 +675,8 @@ describe('InversifyJS Container Configuration', () => {
 
 ### Migrations
 
-- Located in `supabase/migrations/`
-- Current migration: `20250327133248_create_initial_schema.sql`
-- Creates initial tables with indexes and comments
-- Enables row-level security with appropriate policies
+- Prisma migrations are located in `prisma/migrations/`
+- The Supabase folder (`supabase/`) is used for local dev config (e.g., `npx supabase start`), not as the primary migrations source of truth.
 
 ## Security Considerations
 

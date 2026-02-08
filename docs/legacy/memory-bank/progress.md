@@ -296,7 +296,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 ### Short-term (Next 2 Weeks)
 
 1.  **Testing**: Add integration tests for core EDA flows (`UserDetectedSuspicious`, `AdminVerifyUserRequested`, `AdminBanUserRequested`). Add repository tests using Prisma mocking.
-2.  **Documentation**: Complete Memory Bank updates (`progress.md`, README, guides). Document schema and migration process.
+2.  **Documentation**: Complete project context doc updates (`progress.md`, README, guides). Document schema and migration process.
 3.  **Alpha Polish**: Address button timeouts, improve admin feedback (potentially `InteractionReplySubscriber`). Implement basic user reputation columns/logic.
 
 ### Medium-term (1-2 Months)
@@ -323,7 +323,7 @@ The Discord Anti-Spam Bot is currently in active development with several key co
 ## Documentation Status
 
 - README: Needs update for Prisma/EDA.
-- Memory Bank: Updated for EDA Phase 3 and Eager Subscriber Loading (`eda-events.md`, `systemPatterns.md`, `activeContext.md`, `techContext.md`, `progress.md`).
+- Project context docs: Updated for EDA Phase 3 and eager subscriber loading (`eda-events.md`, `systemPatterns.md`, `activeContext.md`, `techContext.md`, `progress.md`).
 - API Documentation: Not started.
 - Admin Guide: Not started.
 - Developer Guide: Not started.

@@ -155,7 +155,7 @@ The project is currently focused on solidifying the internal architecture using 
   - Fixed bug with server configuration creation
   - Proper handling of "not found" cases in repositories
   - Improved data validation before database operations
-  - Documented best practices in supabase-error-handling.md
+  - Documented best practices in `docs/legacy/learnings/supabase-error-handling.md`
 
 - ✅ **Database Repository Implementation (Supabase Client)**:
   - Implemented ServerRepository with tests (Note: Tests later found to be missing)
@@ -302,8 +302,8 @@ The system uses InversifyJS for dependency injection and an Event-Driven Archite
     - ✅ Document Supabase error handling best practices
     - ✅ Document server configuration command
     - ✅ Document InversifyJS testing approach (Note: Needs review based on actual test setup)
-    - ✅ Updated Memory Bank (`techContext.md`, `systemPatterns.md`) for Prisma migration.
-    - ✅ Updated Memory Bank (`eda-events.md`, `systemPatterns.md`, `activeContext.md`, `techContext.md`) for EDA refactoring (Phases 1-3) and Eager Subscriber Loading.
+    - ✅ Updated project context docs (`techContext.md`, `systemPatterns.md`) for Prisma migration.
+    - ✅ Updated project context docs (`eda-events.md`, `systemPatterns.md`, `activeContext.md`, `techContext.md`) for EDA refactoring (Phases 1-3) and eager subscriber loading.
     - 🔄 Update `progress.md` to reflect completed EDA work.
     - 🔄 Update README with setup instructions (including Prisma).
     - 🔄 Document database schema (`prisma/schema.prisma`) and migration process (`prisma migrate dev`).

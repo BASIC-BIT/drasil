@@ -7,13 +7,11 @@ The Discord Anti-Spam Bot follows a modular, service-oriented architecture with 
 ## Directory Structure
 
 ```
+├── AGENTS.md                   # OpenCode project rules
+├── .agents/                    # OpenCode skills (on-demand)
+│   └── skills/
+│       └── <skill-name>/SKILL.md
 ├── src/                        # Source code directory
-│   ├── __tests__/             # Test files
-│   │   ├── config/            # Configuration tests
-│   │   ├── integration/       # Integration tests
-│   │   ├── repositories/      # Repository tests
-│   │   └── utils/             # Test utilities
-│   ├── __mocks__/             # Mock files for testing
 │   ├── config/                # Configuration files
 │   │   ├── supabase.ts       # Supabase client configuration
 │   │   └── gpt-config.ts     # GPT configuration
@@ -35,8 +33,7 @@ The Discord Anti-Spam Bot follows a modular, service-oriented architecture with 
 │   ├── repositories/          # Data access layer
 │   │   ├── types.ts          # Database entity types
 │   │   ├── BaseRepository.ts # Base repository interface
-│   │   ├── SupabaseRepository.ts # Supabase implementation
-│   │   └── ServerRepository.ts   # Server configuration repository
+│   │   └── ServerRepository.ts   # Server configuration repository (Prisma)
 │   ├── services/             # Core services
 │   ├── controllers/          # Handlers for Discord events/interactions
 │   │   ├── CommandHandler.ts
@@ -46,10 +43,11 @@ The Discord Anti-Spam Bot follows a modular, service-oriented architecture with 
 │   ├── initializers/        # Eager loading initializers
 │   │   └── SubscriberInitializer.ts # Ensures subscribers are loaded
 │   └── index.ts             # Application entry point
-├── docs/                    # Legacy documentation (being migrated to memory-bank)
-├── memory-bank/            # Project documentation and context
-├── supabase/               # Supabase configuration
-│   └── migrations/         # Database migrations
+├── docs/
+│   ├── context/             # Project context and architecture docs
+│   └── legacy/              # Archived plans/learnings from earlier iterations
+├── prisma/                  # Prisma schema, migrations, seed
+├── supabase/                # Local Supabase config (for `npx supabase start`)
 ├── .env                    # Environment variables
 └── configuration files     # Various config files (tsconfig.json, etc.)
 ```
