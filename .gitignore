@@ -32,6 +32,7 @@ coverage/
 # IDE and editor files
 .idea/
 .vscode/
+*.code-workspace
 *.swp
 *.swo
 .DS_Store
