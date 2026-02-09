@@ -1,5 +1,11 @@
 import { injectable, inject } from 'inversify';
-import { Client, GuildMember, ThreadChannel, ThreadAutoArchiveDuration } from 'discord.js';
+import {
+  Client,
+  GuildMember,
+  ThreadChannel,
+  ThreadAutoArchiveDuration,
+  ChannelType,
+} from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { VerificationStatus, VerificationEvent } from '../repositories/types';
@@ -112,7 +118,8 @@ export class ThreadManager implements IThreadManager {
         name: threadName,
         autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
         reason: `Verification thread for suspicious user: ${member.user.tag}`,
-        type: 11, // PrivateThread
+        type: ChannelType.PrivateThread,
+        invitable: false,
       });
 
       // Add the member to the private thread so they can see it
