@@ -223,11 +223,13 @@ export class CommandHandler implements ICommandHandler {
     }
 
     // Permission gate (defaultMemberPermissions is not a security boundary)
-    let hasBanPermission =
-      interaction.memberPermissions?.has(PermissionFlagsBits.BanMembers) ?? false;
-    if (!hasBanPermission) {
+    // Prefer `interaction.memberPermissions` since it includes channel-level overrides.
+    let hasBanPermission = interaction.memberPermissions?.has(PermissionFlagsBits.BanMembers);
+    if (hasBanPermission === null || hasBanPermission === undefined) {
       const invokingMember = await guild.members.fetch(interaction.user.id).catch(() => null);
-      hasBanPermission = invokingMember?.permissions.has(PermissionFlagsBits.BanMembers) ?? false;
+      hasBanPermission = invokingMember
+        ? invokingMember.permissionsIn(interaction.channelId).has(PermissionFlagsBits.BanMembers)
+        : false;
     }
 
     if (!hasBanPermission) {

@@ -60,9 +60,57 @@ describe('CommandHandler (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(userModerationService.banUser).not.toHaveBeenCalled();
-    expect(guild.members.fetch).toHaveBeenCalledWith(invoker.id);
+    expect(guild.members.fetch).not.toHaveBeenCalled();
     expect(interaction.reply).toHaveBeenCalledWith({
       content: 'You need Ban Members permission to use this command.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('falls back to permissionsIn when memberPermissions is null', async () => {
+    const banUser = jest.fn().mockResolvedValue(true);
+    const { handler, userModerationService } = buildHandler({ banUser });
+
+    const invoker: User = { id: 'user-1' } as User;
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const targetMember = { id: targetUser.id } as any;
+
+    const permissionsIn = jest.fn().mockReturnValue({
+      has: jest.fn().mockReturnValue(true),
+    });
+    const invokingMember = {
+      permissionsIn,
+    } as any;
+
+    const guild = {
+      members: {
+        fetch: jest.fn().mockImplementation(async (id: string) => {
+          if (id === invoker.id) return invokingMember;
+          if (id === targetUser.id) return targetMember;
+          return null;
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'ban',
+      user: invoker,
+      guild,
+      channelId: 'channel-1',
+      memberPermissions: null,
+      options: {
+        getUser: jest.fn().mockReturnValue(targetUser),
+        getString: jest.fn().mockReturnValue('reason'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(permissionsIn).toHaveBeenCalledWith('channel-1');
+    expect(userModerationService.banUser).toHaveBeenCalledWith(targetMember, 'reason', invoker);
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: `User ${targetUser.tag} has been banned.`,
       flags: MessageFlags.Ephemeral,
     });
   });
