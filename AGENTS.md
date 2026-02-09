@@ -102,6 +102,7 @@ Operating principles:
 - Keep diffs tight; preserve unrelated behavior.
 - Verify claims with code or repo files; avoid guessing.
 - Never add secrets/credentials to git.
+- Public posts: if the agent drafts text that will be posted on a public forum (GitHub issues/PRs, release notes, etc.), prefix the content with "[AGENT]" so it's clear it was written by automation.
 
 Clean code:
 
