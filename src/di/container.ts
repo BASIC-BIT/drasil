@@ -138,7 +138,7 @@ function configureServices(container: Container): void {
     .inSingletonScope();
 
   container.bind<IDetectionOrchestrator>(TYPES.DetectionOrchestrator).to(DetectionOrchestrator);
-  container.bind<IConfigService>(TYPES.ConfigService).to(ConfigService);
+  container.bind<IConfigService>(TYPES.ConfigService).to(ConfigService).inSingletonScope();
 
   // Add SecurityActionService binding
   container

@@ -23,6 +23,12 @@ export interface IConfigService {
   getServerConfig(guildId: string): Promise<Server>;
 
   /**
+   * Get a server configuration from in-memory cache only.
+   * This must not hit the database and is safe to use on hot paths.
+   */
+  getCachedServerConfig(guildId: string): Server | undefined;
+
+  /**
    * Update a server configuration
    * @param guildId The Discord guild ID
    * @param data The data to update
@@ -207,6 +213,10 @@ export class ConfigService implements IConfigService {
     const defaultConfig = this.createDefaultConfig(guildId);
     this.serverCache.set(guildId, defaultConfig);
     return defaultConfig;
+  }
+
+  public getCachedServerConfig(guildId: string): Server | undefined {
+    return this.serverCache.get(guildId);
   }
 
   /**
