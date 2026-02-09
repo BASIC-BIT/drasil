@@ -71,7 +71,8 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
-    const [action, targetUserId] = interaction.customId.split('_');
+    const customId = interaction.customId;
+
     if (!interaction.guildId) {
       await interaction.reply({
         content: 'This button can only be used in a server.',
@@ -82,6 +83,21 @@ export class InteractionHandler implements IInteractionHandler {
     const guildId = interaction.guildId;
 
     try {
+      // Exact-match IDs must be routed before parsing action/user IDs.
+      if (customId === 'report_user_initiate') {
+        await this.handleReportUserInitiate(interaction);
+        return;
+      }
+
+      const [action, targetUserId] = customId.split('_');
+      if (!targetUserId) {
+        await interaction.reply({
+          content: 'Unknown button action',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
       switch (action) {
         case 'verify':
           await this.handleVerifyButton(interaction, guildId, targetUserId);
@@ -98,17 +114,11 @@ export class InteractionHandler implements IInteractionHandler {
         case 'reopen':
           await this.handleReopenButton(interaction, guildId, targetUserId);
           break;
-        case 'report_user_initiate': // Added case for report button
-          await this.handleReportUserInitiate(interaction);
-          break;
         default:
-          // Try splitting only if it's not the report button
-          if (action !== 'report_user_initiate') {
-            await interaction.reply({
-              content: 'Unknown button action',
-              flags: MessageFlags.Ephemeral,
-            });
-          }
+          await interaction.reply({
+            content: 'Unknown button action',
+            flags: MessageFlags.Ephemeral,
+          });
       }
     } catch (error) {
       console.error('Error handling button interaction:', error);

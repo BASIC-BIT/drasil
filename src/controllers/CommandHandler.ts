@@ -90,7 +90,8 @@ export class CommandHandler implements ICommandHandler {
         )
         .addStringOption((option) =>
           option.setName('reason').setDescription('Reason for the ban').setRequired(false)
-        ),
+        )
+        .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
       new SlashCommandBuilder()
         .setName('setupverification')
         .setDescription('Set up a dedicated verification channel for restricted users'),
@@ -216,6 +217,24 @@ export class CommandHandler implements ICommandHandler {
     if (!guild) {
       await interaction.reply({
         content: 'This command can only be used in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    // Permission gate (defaultMemberPermissions is not a security boundary)
+    // Prefer `interaction.memberPermissions` since it includes channel-level overrides.
+    let hasBanPermission = interaction.memberPermissions?.has(PermissionFlagsBits.BanMembers);
+    if (hasBanPermission === null || hasBanPermission === undefined) {
+      const invokingMember = await guild.members.fetch(interaction.user.id).catch(() => null);
+      hasBanPermission = invokingMember
+        ? invokingMember.permissionsIn(interaction.channelId).has(PermissionFlagsBits.BanMembers)
+        : false;
+    }
+
+    if (!hasBanPermission) {
+      await interaction.reply({
+        content: 'You need Ban Members permission to use this command.',
         flags: MessageFlags.Ephemeral,
       });
       return;
