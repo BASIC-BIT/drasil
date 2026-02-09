@@ -34,7 +34,7 @@ describe('DetectionOrchestrator (unit)', () => {
     userRepository = new InMemoryUserRepository();
   });
 
-  it('creates detection event without GPT when no profile data is provided', async () => {
+  it('does not create a detection event when the final label is OK (no profile data)', async () => {
     heuristicService.analyzeMessage.mockReturnValue({ result: 'OK', reasons: [] });
 
     const orchestrator = new DetectionOrchestrator(
@@ -48,12 +48,37 @@ describe('DetectionOrchestrator (unit)', () => {
     const result = await orchestrator.detectMessage(serverId, userId, 'hello');
 
     expect(gptService.analyzeProfile).not.toHaveBeenCalled();
+    expect(result.label).toBe('OK');
+    expect(result.detectionEventId).toBeUndefined();
+
+    const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
+    expect(events).toHaveLength(0);
+  });
+
+  it('creates a detection event when the final label is SUSPICIOUS (no profile data)', async () => {
+    heuristicService.analyzeMessage.mockReturnValue({
+      result: 'SUSPICIOUS',
+      reasons: ['Suspicious keywords'],
+    });
+
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository
+    );
+
+    const result = await orchestrator.detectMessage(serverId, userId, 'free nitro');
+
+    expect(gptService.analyzeProfile).not.toHaveBeenCalled();
+    expect(result.label).toBe('SUSPICIOUS');
     expect(result.detectionEventId).toBeDefined();
 
     const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
     expect(events).toHaveLength(1);
     expect(events[0].detection_type).toBe(DetectionType.SUSPICIOUS_CONTENT);
-    expect(events[0].metadata).toMatchObject({ content: 'hello' });
+    expect(events[0].metadata).toMatchObject({ content: 'free nitro' });
   });
 
   it('uses GPT for new accounts and returns suspicious when GPT flags it', async () => {
@@ -83,6 +108,7 @@ describe('DetectionOrchestrator (unit)', () => {
 
     expect(gptService.analyzeProfile).toHaveBeenCalledTimes(1);
     expect(result.label).toBe('SUSPICIOUS');
+    expect(result.detectionEventId).toBeDefined();
 
     const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
     expect(events).toHaveLength(1);
@@ -132,8 +158,73 @@ describe('DetectionOrchestrator (unit)', () => {
 
     expect(gptService.analyzeProfile).not.toHaveBeenCalled();
     expect(result.label).toBe('SUSPICIOUS');
+    expect(result.detectionEventId).toBeDefined();
 
     const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
     expect(events).toHaveLength(2);
+  });
+
+  it('does not create a detection event for an OK new join', async () => {
+    gptService.analyzeProfile.mockResolvedValue({
+      result: 'OK',
+      confidence: 0.2,
+      reasons: ['GPT OK'],
+    });
+
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository
+    );
+
+    const profile: UserProfileData = {
+      username: 'old-user',
+      accountCreatedAt: new Date('2020-01-01T00:00:00.000Z'),
+      joinedServerAt: new Date('2020-01-01T00:00:00.000Z'),
+      recentMessages: [],
+    };
+
+    const result = await orchestrator.detectNewJoin(serverId, userId, profile);
+
+    expect(result.label).toBe('OK');
+    expect(result.detectionEventId).toBeUndefined();
+
+    const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
+    expect(events).toHaveLength(0);
+  });
+
+  it('creates a detection event for a suspicious new join', async () => {
+    gptService.analyzeProfile.mockResolvedValue({
+      result: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious profile'],
+    });
+
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository
+    );
+
+    const profile: UserProfileData = {
+      username: 'old-user',
+      accountCreatedAt: new Date('2020-01-01T00:00:00.000Z'),
+      joinedServerAt: new Date('2020-01-01T00:00:00.000Z'),
+      recentMessages: [],
+    };
+
+    const result = await orchestrator.detectNewJoin(serverId, userId, profile);
+
+    expect(result.label).toBe('SUSPICIOUS');
+    expect(result.detectionEventId).toBeDefined();
+
+    const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
+    expect(events).toHaveLength(1);
+    expect(events[0].detection_type).toBe(DetectionType.NEW_ACCOUNT);
+    expect(events[0].metadata).toMatchObject({ join: true });
   });
 });
