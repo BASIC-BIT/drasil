@@ -1,10 +1,12 @@
 ---
 name: git-worktrees
-description: Use git worktrees for parallel feature branches and agent sessions in Drasil.
+description: Create and manage git worktrees (parallel branches) without stash/switching.
 compatibility: opencode
 ---
 
-Use this when you want to work on multiple branches in parallel without stashing/switching.
+## Reference
+
+- `docs/dev/worktrees.md`
 
 ## Core commands
 
@@ -16,12 +18,7 @@ From the base repo checkout:
 - Remove a worktree: `git worktree remove ../drasil-wt/my-change`
 - Prune stale metadata: `git worktree prune`
 
-## Drasil notes
-
-- Run `npm ci` in each worktree (do not share `node_modules`).
-- Copy `.env.example` to `.env` per worktree; keep secrets local.
-- Integration tests may collide if multiple worktrees share the same DB/schema.
-  Run them one at a time or use separate databases.
+For layout/deps/.env and integration test DB gotchas, see `docs/dev/worktrees.md`.
 
 ## Safety
 

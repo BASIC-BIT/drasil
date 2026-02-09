@@ -25,10 +25,6 @@ If applicable:
 - Manual test notes (if any):
 - Questions for reviewers:
 
-## Checklist
+## Merge checklist
 
-- [ ] No secrets committed
-- [ ] CI passes
 - [ ] All PR review threads resolved (or explicitly addressed)
-- [ ] Greptile review completed (or intentionally skipped)
-- [ ] Copilot code review requested (if enabled)

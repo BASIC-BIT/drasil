@@ -1,33 +1,27 @@
 ---
 name: pr-workflow
-description: Ship-safe issue -> branch/worktree -> PR workflow (with AI review loops) for Drasil.
+description: Land changes via PRs with CI + AI review loops (issue -> branch/worktree -> PR).
 compatibility: opencode
 ---
 
-Use this when landing changes into `main`.
+## Reference
 
-## Steps
+- Canonical workflow: `docs/dev/pr-workflow.md`
+- PR template: `.github/pull_request_template.md`
+- Worktrees: `docs/dev/worktrees.md`
 
-1. Ensure there is a GitHub issue with acceptance criteria.
-2. Create a branch (prefer a worktree) off `origin/main`.
-3. Make changes; keep diffs tight; update tests/docs as needed.
-4. Run the local gate:
-   - `npm ci`
-   - `npm run format:check`
-   - `npm run check`
-5. Open a draft PR early and link issues in the PR body:
-   - `Closes #123`
-6. Keep the PR description (or a pinned PR comment) as the canonical context for fresh-context
-   review + recycle loops.
-7. Ensure automated checks are green:
-   - CI (`npm run check:ci`)
-   - Greptile Review status check
-   - Copilot code review (if enabled)
-8. Resolve PR review threads:
-   - If a comment is not applicable, reply with rationale and resolve the thread.
-9. If there are major changes after reviews, trigger a re-review:
-   - comment `@greptileai` on the PR
-10. Squash merge; delete the branch; remove the worktree.
+## Quick local gate
+
+```bash
+npm ci
+npm run format:check
+npm run check
+```
+
+## Merge readiness
+
+- Required checks pass.
+- PR review threads are resolved (or explicitly addressed).
 
 ## Notes
 
