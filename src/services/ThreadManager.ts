@@ -1,5 +1,11 @@
 import { injectable, inject } from 'inversify';
-import { Client, GuildMember, ThreadChannel, ThreadAutoArchiveDuration } from 'discord.js';
+import {
+  Client,
+  GuildMember,
+  ThreadChannel,
+  ThreadAutoArchiveDuration,
+  ChannelType,
+} from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { VerificationStatus, VerificationEvent } from '../repositories/types';
@@ -112,11 +118,23 @@ export class ThreadManager implements IThreadManager {
         name: threadName,
         autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
         reason: `Verification thread for suspicious user: ${member.user.tag}`,
-        type: 11, // PrivateThread
+        type: ChannelType.PrivateThread,
       });
 
       // Add the member to the private thread so they can see it
       await thread.members.add(member.id);
+
+      // Lock invites after the flagged user has been added.
+      // Some server permission setups allow creating private threads but not managing them;
+      // setting `invitable: false` at creation time can prevent adding the user.
+      try {
+        await thread.setInvitable(false, 'Prevent members from inviting others to verification');
+      } catch (error) {
+        console.warn(
+          `Failed to set invitable=false for verification thread ${thread.id} (continuing):`,
+          error
+        );
+      }
 
       // Send an initial message to the thread
       await thread.send({

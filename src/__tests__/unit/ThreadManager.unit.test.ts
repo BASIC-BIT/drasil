@@ -1,4 +1,4 @@
-import { Guild, GuildMember, ThreadChannel, User } from 'discord.js';
+import { ChannelType, Guild, GuildMember, ThreadChannel, User } from 'discord.js';
 import { ThreadManager } from '../../services/ThreadManager';
 import { IConfigService } from '../../config/ConfigService';
 import {
@@ -43,6 +43,15 @@ describe('ThreadManager (unit)', () => {
   let userRepository: InMemoryUserRepository;
   let serverRepository: InMemoryServerRepository;
   let serverMemberRepository: InMemoryServerMemberRepository;
+
+  type ThreadParentChannel = {
+    threads: {
+      create: jest.Mock;
+      fetch?: jest.Mock;
+    };
+  };
+
+  let channel: ThreadParentChannel;
   let thread: jest.Mocked<ThreadChannel>;
 
   beforeEach(() => {
@@ -55,15 +64,16 @@ describe('ThreadManager (unit)', () => {
       send: jest.fn().mockResolvedValue(undefined),
       setArchived: jest.fn().mockResolvedValue(undefined),
       setLocked: jest.fn().mockResolvedValue(undefined),
+      setInvitable: jest.fn().mockResolvedValue(undefined),
       isThread: jest.fn().mockReturnValue(true),
     } as unknown as jest.Mocked<ThreadChannel>;
 
-    const channel = {
+    channel = {
       threads: {
         create: jest.fn().mockResolvedValue(thread),
         fetch: jest.fn().mockResolvedValue(thread),
       },
-    } as any;
+    };
 
     configService = {
       getVerificationChannel: jest.fn().mockResolvedValue(channel),
@@ -97,6 +107,12 @@ describe('ThreadManager (unit)', () => {
     const createdThread = await manager.createVerificationThread(member, event);
     const storedEvent = await verificationEventRepository.findById(event.id);
 
+    expect(channel.threads.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: ChannelType.PrivateThread,
+      })
+    );
+    expect(thread.setInvitable).toHaveBeenCalledWith(false, expect.any(String));
     expect(createdThread?.id).toBe('thread-1');
     expect(storedEvent?.thread_id).toBe('thread-1');
     expect(thread.members.add).toHaveBeenCalledWith(member.id);
@@ -104,11 +120,11 @@ describe('ThreadManager (unit)', () => {
   });
 
   it('falls back to admin channel when verification channel is missing', async () => {
-    const channel = {
+    channel = {
       threads: {
         create: jest.fn().mockResolvedValue(thread),
       },
-    } as any;
+    };
     (configService.getVerificationChannel as jest.Mock).mockResolvedValue(undefined);
     (configService.getAdminChannel as jest.Mock).mockResolvedValue(channel);
 
@@ -131,7 +147,12 @@ describe('ThreadManager (unit)', () => {
 
     await manager.createVerificationThread(member, event);
 
-    expect(channel.threads.create).toHaveBeenCalled();
+    expect(channel.threads.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: ChannelType.PrivateThread,
+      })
+    );
+    expect(thread.setInvitable).toHaveBeenCalledWith(false, expect.any(String));
   });
 
   it('resolves verification thread and locks it', async () => {
