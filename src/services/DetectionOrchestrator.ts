@@ -227,19 +227,22 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         };
       }
 
-      // Create the detection event record
-      const createdEvent = await this.detectionEventsRepository.create({
-        server_id: serverId,
-        user_id: userId,
-        detection_type: result.triggerSource,
-        confidence: result.confidence,
-        reasons: result.reasons,
-        detected_at: new Date(),
-        // message_id and channel_id are not needed here; context is available later via event payload
-        metadata: { content: content }, // Store original content
-      });
+      // Only persist detection events for suspicious results.
+      // (OK results would otherwise bloat the DB and inflate "flagged X times" counts.)
+      if (result.label === 'SUSPICIOUS') {
+        const createdEvent = await this.detectionEventsRepository.create({
+          server_id: serverId,
+          user_id: userId,
+          detection_type: result.triggerSource,
+          confidence: result.confidence,
+          reasons: result.reasons,
+          detected_at: new Date(),
+          // message_id and channel_id are not needed here; context is available later via event payload
+          metadata: { content: content },
+        });
 
-      result.detectionEventId = createdEvent.id; // Add the event ID to the result
+        result.detectionEventId = createdEvent.id;
+      }
       return result;
     } catch (error) {
       // Add outer catch block
@@ -299,20 +302,23 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         profileData: profileData,
       };
 
-      // Create the detection event record using the correct variables
-      const createdEvent = await this.detectionEventsRepository.create({
-        server_id: serverId, // Use param
-        user_id: userId, // Use param
-        detection_type: initialResult.triggerSource,
-        confidence: initialResult.confidence,
-        reasons: initialResult.reasons,
-        detected_at: new Date(),
-        // No message_id or channel_id for join events
-        metadata: { join: true }, // Indicate this was a join event
-      });
+      // Only persist detection events for suspicious results.
+      if (initialResult.label === 'SUSPICIOUS') {
+        const createdEvent = await this.detectionEventsRepository.create({
+          server_id: serverId,
+          user_id: userId,
+          detection_type: initialResult.triggerSource,
+          confidence: initialResult.confidence,
+          reasons: initialResult.reasons,
+          detected_at: new Date(),
+          // No message_id or channel_id for join events
+          metadata: { join: true },
+        });
 
-      initialResult.detectionEventId = createdEvent.id; // Add the event ID to the result
-      return initialResult; // Return the modified result
+        initialResult.detectionEventId = createdEvent.id;
+      }
+
+      return initialResult;
     } catch (error) {
       // Add outer catch block
       console.error(
