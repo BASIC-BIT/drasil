@@ -13,6 +13,7 @@ Use this when landing changes into `main`.
 3. Make changes; keep diffs tight; update tests/docs as needed.
 4. Run the local gate:
    - `npm ci`
+   - `npm run format:check`
    - `npm run check`
 5. Open a draft PR early and link issues in the PR body:
    - `Closes #123`

@@ -7,6 +7,7 @@
 ## How to test
 
 - `npm ci`
+- `npm run format:check`
 - `npm run check`
 
 If applicable:

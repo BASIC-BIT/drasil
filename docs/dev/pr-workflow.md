@@ -44,6 +44,7 @@ Before pushing (when feasible):
 
 ```bash
 npm ci
+npm run format:check
 npm run check
 ```
 
