@@ -85,6 +85,15 @@ Practical loop:
 If a reviewer/agent needs clarification, ask in PR comments. That keeps answers visible to
 the next fresh-context review cycle.
 
+## Merge readiness
+
+Before merging, ensure:
+
+- All required checks pass (CI + required review/status checks).
+- All PR review threads are resolved.
+  - If a comment is not applicable (common for AI-generated reviews), reply with a brief rationale
+    and then resolve the thread so the merge state is unambiguous.
+
 ## Merge
 
 - Prefer squash merges.

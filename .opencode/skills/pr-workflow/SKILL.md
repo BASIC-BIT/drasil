@@ -22,9 +22,11 @@ Use this when landing changes into `main`.
    - CI (`npm run check:ci`)
    - Greptile Review status check
    - Copilot code review (if enabled)
-8. If there are major changes after reviews, trigger a re-review:
+8. Resolve PR review threads:
+   - If a comment is not applicable, reply with rationale and resolve the thread.
+9. If there are major changes after reviews, trigger a re-review:
    - comment `@greptileai` on the PR
-9. Squash merge; delete the branch; remove the worktree.
+10. Squash merge; delete the branch; remove the worktree.
 
 ## Notes
 

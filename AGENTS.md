@@ -92,6 +92,7 @@ If the user says "Reset the database", run `npm run db:reset:local`.
 - Land changes via PRs (avoid direct pushes to `main`).
 - For parallel work, prefer `git worktree`. See `docs/dev/worktrees.md`.
 - PRs should link the issue(s), include a test plan, and pass CI (`npm run check:ci`).
+- Resolve PR review threads (including AI reviewer threads) before merge.
 - Prefer AI-assisted reviews (Copilot + Greptile) and recycle loops; keep critical context in the PR.
 
 ## Scripts
