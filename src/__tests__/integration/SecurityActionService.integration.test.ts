@@ -1,13 +1,15 @@
 import { Client, Guild, GuildMember, Message, User } from 'discord.js';
 import { PrismaClient } from '@prisma/client';
 import { SecurityActionService } from '../../services/SecurityActionService';
+import { AdminActionService } from '../../services/AdminActionService';
 import { DetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
+import { AdminActionRepository } from '../../repositories/AdminActionRepository';
 import { ServerMemberRepository } from '../../repositories/ServerMemberRepository';
 import { VerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import { UserRepository } from '../../repositories/UserRepository';
 import { ServerRepository } from '../../repositories/ServerRepository';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
-import { DetectionType, VerificationStatus } from '../../repositories/types';
+import { AdminActionType, DetectionType, VerificationStatus } from '../../repositories/types';
 import { getPrismaClient } from '../testDb';
 import { INotificationManager } from '../../services/NotificationManager';
 import { IThreadManager } from '../../services/ThreadManager';
@@ -38,10 +40,12 @@ const describeIntegration = process.env.JEST_INTEGRATION === '1' ? describe : de
 describeIntegration('SecurityActionService (integration)', () => {
   let prisma: PrismaClient;
   let detectionEventsRepository: DetectionEventsRepository;
+  let adminActionRepository: AdminActionRepository;
   let serverMemberRepository: ServerMemberRepository;
   let verificationEventRepository: VerificationEventRepository;
   let userRepository: UserRepository;
   let serverRepository: ServerRepository;
+  let adminActionService: AdminActionService;
 
   let notificationManager: jest.Mocked<INotificationManager>;
   let threadManager: jest.Mocked<IThreadManager>;
@@ -50,10 +54,16 @@ describeIntegration('SecurityActionService (integration)', () => {
   beforeEach(() => {
     prisma = getPrismaClient();
     detectionEventsRepository = new DetectionEventsRepository(prisma);
+    adminActionRepository = new AdminActionRepository(prisma);
     serverMemberRepository = new ServerMemberRepository(prisma);
     verificationEventRepository = new VerificationEventRepository(prisma);
     userRepository = new UserRepository(prisma);
     serverRepository = new ServerRepository(prisma);
+    adminActionService = new AdminActionService(
+      adminActionRepository,
+      userRepository,
+      serverRepository
+    );
     notificationManager = {
       upsertSuspiciousUserNotification: jest.fn().mockResolvedValue({ id: 'notif-1' } as Message),
       logActionToMessage: jest.fn().mockResolvedValue(true),
@@ -97,6 +107,7 @@ describeIntegration('SecurityActionService (integration)', () => {
       verificationEventRepository,
       userRepository,
       serverRepository,
+      adminActionService,
       threadManager,
       userModerationService,
       {} as Client
@@ -158,6 +169,7 @@ describeIntegration('SecurityActionService (integration)', () => {
       verificationEventRepository,
       userRepository,
       serverRepository,
+      adminActionService,
       threadManager,
       userModerationService,
       {} as Client
@@ -184,6 +196,7 @@ describeIntegration('SecurityActionService (integration)', () => {
       verificationEventRepository,
       userRepository,
       serverRepository,
+      adminActionService,
       threadManager,
       userModerationService,
       {} as Client
@@ -198,5 +211,57 @@ describeIntegration('SecurityActionService (integration)', () => {
       type: 'user_report',
       reporterId,
     });
+  });
+
+  it('records an admin action when reopening verification', async () => {
+    const guildId = 'guild-4';
+    const userId = 'user-4';
+    const moderatorId = 'admin-1';
+    const member = buildMember(guildId, userId);
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, member.user.username);
+
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.VERIFIED
+    );
+
+    const client = {
+      guilds: {
+        fetch: jest.fn().mockResolvedValue({
+          members: {
+            fetch: jest.fn().mockResolvedValue(member),
+          },
+        }),
+      },
+    } as unknown as Client;
+
+    const service = new SecurityActionService(
+      notificationManager,
+      detectionEventsRepository,
+      serverMemberRepository,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      adminActionService,
+      threadManager,
+      userModerationService,
+      client
+    );
+
+    await service.reopenVerification(verificationEvent, { id: moderatorId } as User);
+
+    const actions = await prisma.admin_actions.findMany();
+    expect(actions).toHaveLength(1);
+    expect(actions[0].action_type).toBe(AdminActionType.REOPEN);
+    expect(actions[0].previous_status).toBe(VerificationStatus.VERIFIED);
+    expect(actions[0].new_status).toBe(VerificationStatus.PENDING);
+    expect(actions[0].admin_id).toBe(moderatorId);
+    expect(actions[0].server_id).toBe(guildId);
+    expect(actions[0].user_id).toBe(userId);
+    expect(actions[0].verification_event_id).toBe(verificationEvent.id);
   });
 });
