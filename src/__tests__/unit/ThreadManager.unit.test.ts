@@ -43,7 +43,15 @@ describe('ThreadManager (unit)', () => {
   let userRepository: InMemoryUserRepository;
   let serverRepository: InMemoryServerRepository;
   let serverMemberRepository: InMemoryServerMemberRepository;
-  let channel: any;
+
+  type ThreadParentChannel = {
+    threads: {
+      create: jest.Mock;
+      fetch?: jest.Mock;
+    };
+  };
+
+  let channel: ThreadParentChannel;
   let thread: jest.Mocked<ThreadChannel>;
 
   beforeEach(() => {
@@ -56,6 +64,7 @@ describe('ThreadManager (unit)', () => {
       send: jest.fn().mockResolvedValue(undefined),
       setArchived: jest.fn().mockResolvedValue(undefined),
       setLocked: jest.fn().mockResolvedValue(undefined),
+      setInvitable: jest.fn().mockResolvedValue(undefined),
       isThread: jest.fn().mockReturnValue(true),
     } as unknown as jest.Mocked<ThreadChannel>;
 
@@ -64,7 +73,7 @@ describe('ThreadManager (unit)', () => {
         create: jest.fn().mockResolvedValue(thread),
         fetch: jest.fn().mockResolvedValue(thread),
       },
-    } as any;
+    };
 
     configService = {
       getVerificationChannel: jest.fn().mockResolvedValue(channel),
@@ -101,9 +110,9 @@ describe('ThreadManager (unit)', () => {
     expect(channel.threads.create).toHaveBeenCalledWith(
       expect.objectContaining({
         type: ChannelType.PrivateThread,
-        invitable: false,
       })
     );
+    expect(thread.setInvitable).toHaveBeenCalledWith(false, expect.any(String));
     expect(createdThread?.id).toBe('thread-1');
     expect(storedEvent?.thread_id).toBe('thread-1');
     expect(thread.members.add).toHaveBeenCalledWith(member.id);
@@ -115,7 +124,7 @@ describe('ThreadManager (unit)', () => {
       threads: {
         create: jest.fn().mockResolvedValue(thread),
       },
-    } as any;
+    };
     (configService.getVerificationChannel as jest.Mock).mockResolvedValue(undefined);
     (configService.getAdminChannel as jest.Mock).mockResolvedValue(channel);
 
@@ -141,9 +150,9 @@ describe('ThreadManager (unit)', () => {
     expect(channel.threads.create).toHaveBeenCalledWith(
       expect.objectContaining({
         type: ChannelType.PrivateThread,
-        invitable: false,
       })
     );
+    expect(thread.setInvitable).toHaveBeenCalledWith(false, expect.any(String));
   });
 
   it('resolves verification thread and locks it', async () => {
