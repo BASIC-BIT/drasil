@@ -1,7 +1,18 @@
-dist
-node_modules
-coverage
-build
-.git
-*.log
-package-lock.json 
+# Build outputs
+dist/
+build/
+
+# Dependencies
+node_modules/
+
+# Lockfiles (generated)
+package-lock.json
+
+# Coverage
+coverage/
+
+# Archived docs (historical reference only)
+docs/legacy/**
+
+# Misc
+repomix-output.xml

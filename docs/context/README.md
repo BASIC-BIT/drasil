@@ -9,13 +9,11 @@ For day-to-day agent guidance, prefer the repo root rules in `AGENTS.md`. These 
 These files are the best starting points when you need deeper product/context:
 
 1. **projectbrief.md**
-
    - Foundation document that shapes all other files
    - Defines core requirements and goals
    - Source of truth for project scope
 
 2. **productContext.md**
-
    - Why this project exists
    - Problems it solves
    - How it should work
@@ -25,6 +23,12 @@ These files are the best starting points when you need deeper product/context:
 
 - Primary workflow: `docs/workflow.md`
 - Manual regression + test ideas: `docs/test-cases.md`
+- Release readiness checklist: `docs/release-checklist.md`
+
+## Dev workflow
+
+- Issue/branch/PR workflow: `docs/dev/pr-workflow.md`
+- Parallel worktrees: `docs/dev/worktrees.md`
 
 ## Usage Guidelines
 

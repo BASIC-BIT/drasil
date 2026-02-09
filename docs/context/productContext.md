@@ -66,13 +66,11 @@ The implementation includes:
 The bot combines:
 
 - **Fast heuristic checks**:
-
   - Message frequency tracking (>5 messages in 10 seconds)
   - Suspicious keyword detection (nitro scam, free discord nitro, etc.)
   - Pattern matching for common spam formats
 
 - **Sophisticated GPT analysis**:
-
   - User profile evaluation with account age and join date
   - Message content analysis for subtle spam indicators
   - Few-shot learning with categorized examples
@@ -104,7 +102,6 @@ For flagged users, the bot implements a structured verification process:
 Administrators receive:
 
 - **Detailed notification embeds** with:
-
   - User profile information and avatar
   - Account creation and join timestamps (both absolute and relative)
   - Detection confidence level (Low/Medium/High)
@@ -112,7 +109,6 @@ Administrators receive:
   - Trigger source (message content or join event)
 
 - **Interactive buttons** for one-click actions:
-
   - Verify User (removes restricted role)
   - Ban User (removes from server)
   - Create Thread (for verification conversation)
@@ -146,21 +142,18 @@ The Discord Anti-Spam Bot is a specialized bot for Discord servers that detects 
 ### For Server Administrators
 
 - **Reduced Workload**:
-
   - Automatic detection of suspicious users
   - Proactive restriction before spam occurs
   - One-click moderation actions
   - Organized verification system
 
 - **Clear Information**:
-
   - Detailed notification embeds
   - Confidence levels for detection reliability
   - Reason explanations for transparency
   - Action history for accountability
 
 - **Simple Controls**:
-
   - Interactive buttons for common actions
   - Slash commands for additional control
   - Verification threads for communication
@@ -175,21 +168,18 @@ The Discord Anti-Spam Bot is a specialized bot for Discord servers that detects 
 ### For Server Members
 
 - **Safer Environment**:
-
   - Proactive protection from scams
   - Reduced exposure to spam messages
   - Fewer disruptive raid attacks
   - More focused community discussions
 
 - **Minimal Friction**:
-
   - No verification for most legitimate users
   - Targeted restrictions only for suspicious accounts
   - Simple verification process if flagged incorrectly
   - Quick resolution through dedicated threads
 
 - **Transparent Process**:
-
   - Clear verification instructions
   - Private communication channels
   - Consistent moderation standards
@@ -222,28 +212,24 @@ The Discord Anti-Spam Bot is a specialized bot for Discord servers that detects 
 What sets our bot apart from existing solutions is our AI-first approach to spam detection:
 
 1. **AI-First Approach**:
-
    - GPT-powered analysis for nuanced understanding
    - Few-shot learning with categorized examples
    - Context-aware evaluation of user profiles
    - Sophisticated message content analysis
 
 2. **Proactive vs. Reactive**:
-
    - New join analysis before any messages
    - Account age and creation time evaluation
    - Early restriction of suspicious accounts
    - Prevention rather than cleanup
 
 3. **Admin-Optimized UX**:
-
    - Detailed yet scannable notification embeds
    - One-click moderation actions
    - Integrated action logging
    - Dedicated verification system
 
 4. **Balanced Protection**:
-
    - Selective verification only for suspicious users
    - Smart routing between heuristics and GPT
    - Confidence levels for informed decisions
@@ -259,21 +245,18 @@ What sets our bot apart from existing solutions is our AI-first approach to spam
 ## Target Audience
 
 - **Primary**: Medium to large Discord communities (500+ members):
-
   - Gaming communities with public invites
   - Open educational and professional groups
   - Content creator communities
   - Public interest groups
 
 - **Secondary**: Smaller communities with specific security concerns:
-
   - Communities with sensitive discussions
   - Groups that have experienced raids or spam attacks
   - Servers with limited moderation resources
   - Communities with vulnerable populations
 
 - **Tertiary**: Public-facing official Discord servers
-
   - Brand and product communities
   - Support servers for software and services
   - Event-based communities with fluctuating membership
@@ -373,28 +356,24 @@ All roles and channels are optionally configurable during onboarding, with clear
 The bot's effectiveness will be measured by:
 
 1. **Reduction in Successful Spam Incidents**:
-
    - Fewer spam messages reaching general channels
    - Decreased number of users reporting scam attempts
    - Reduced need for message deletion and cleanup
    - Lower frequency of raid attacks
 
 2. **False Positive Rate**:
-
    - Minimal incorrect flagging of legitimate users
    - Quick resolution of false positives through verification
    - Decreasing trend in false positive rate over time
    - Positive feedback on verification experience
 
 3. **Admin Time Savings**:
-
    - Reduced time spent on manual moderation
    - Fewer required admin interventions
    - Quicker resolution of moderation issues
    - More efficient verification process
 
 4. **User Satisfaction**:
-
    - Positive feedback from administrators
    - Minimal complaints from legitimate users
    - Increased server retention rates
@@ -442,19 +421,16 @@ The bot's effectiveness will be measured by:
 ### Planned Enhancements
 
 1. **Custom fine-tuned AI model**:
-
    - Gather large volumes of confirmed spam and scam profiles
    - Fine-tune a GPT model specifically on these examples
    - Improve accuracy for subtle scam behavior detection
 
 2. **Cross-server reputation system**:
-
    - Trusted networks for shared reputation data
    - Global suspicion raising for users flagged in multiple servers
    - Verification records from reputable servers
 
 3. **Advanced data analysis**:
-
    - Image analysis for profile pictures and banners
    - Behavioral logs for messaging patterns
    - Friend request and DM pattern tracking

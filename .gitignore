@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
@@ -16,6 +15,9 @@ build/
 .env.development
 .env.test
 .env.production
+
+# Local-only agent context
+AGENTS.local.md
 
 # Logs
 logs/
