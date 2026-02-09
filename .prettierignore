@@ -4,4 +4,8 @@ coverage
 build
 .git
 *.log
-package-lock.json 
+package-lock.json
+
+# OpenCode local files
+.opencode/state
+.opencode/package.json

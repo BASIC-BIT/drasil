@@ -4,7 +4,8 @@ This file captures important patterns, preferences, and project intelligence tha
 
 ## Project Structure Patterns
 
-- **Source Code Organization**: 
+- **Source Code Organization**:
+
   - `src/` contains all source code
   - `src/services/` contains core business logic services
   - `src/repositories/` implements the data access layer
@@ -15,6 +16,7 @@ This file captures important patterns, preferences, and project intelligence tha
   - `prisma/schema.prisma` defines the database schema for Prisma ORM.
 
 - **Naming Conventions**:
+
   - Services end with `Service.ts` (e.g., `GPTService.ts`)
   - Repositories end with `Repository.ts` (e.g., `ServerRepository.ts`)
   - Test files end with `.test.ts` (e.g., `GPTService.test.ts`)
@@ -38,12 +40,14 @@ This file captures important patterns, preferences, and project intelligence tha
 ## Development Workflow
 
 - **Test-Driven Development**:
+
   - Write tests first to define expected behavior
   - Implement functionality to pass tests
   - Refactor while maintaining test coverage
   - Mock external dependencies (Discord, OpenAI, Prisma Client)
 
 - **Iterative Development**:
+
   - Complete one chunk before moving to the next
   - Each chunk builds on previous functionality
   - Maintain working state at each step
@@ -58,6 +62,7 @@ This file captures important patterns, preferences, and project intelligence tha
 ## Technical Preferences
 
 - **TypeScript Best Practices**:
+
   - Use explicit typing rather than `any`
   - Leverage interfaces for clear contracts
   - Use type guards for runtime type checking
@@ -68,6 +73,7 @@ This file captures important patterns, preferences, and project intelligence tha
   - **Checking Nullable Prisma Fields**: When checking for the presence/absence of optional fields returned by Prisma (which maps database `NULL` to JavaScript `null`), prefer truthiness checks (`if (value)`) or explicit null checks (`value !== null`) over checks like `value !== undefined`. The latter can lead to logical errors as `null !== undefined` evaluates to `true`.
 
 - **Testing Approach**:
+
   - Mock external dependencies (Discord, OpenAI, Prisma Client)
   - Test behavior rather than implementation details
   - Use descriptive test names that explain the expected behavior
@@ -88,6 +94,7 @@ This file captures important patterns, preferences, and project intelligence tha
 ## Project-Specific Insights
 
 - **GPT Usage Optimization**:
+
   - Only use GPT for borderline cases or new users
   - Implement caching to avoid redundant API calls
   - Use few-shot examples for improved accuracy
@@ -98,6 +105,7 @@ This file captures important patterns, preferences, and project intelligence tha
   - Few-shot examples in four categories (clearly suspicious, borderline suspicious, borderline normal, clearly normal)
 
 - **Discord Interaction Patterns**:
+
   - Button interactions expire after 15 minutes
   - Use ephemeral responses for admin-only information
   - Format embeds consistently for better readability
@@ -108,6 +116,7 @@ This file captures important patterns, preferences, and project intelligence tha
   - Action logging updates the original notification message
 
 - **Configuration Management**:
+
   - Environment variables for sensitive data
   - Database-backed configuration for server-specific settings
   - Caching for frequently accessed configurations
@@ -123,6 +132,7 @@ This file captures important patterns, preferences, and project intelligence tha
   - Environment variables as fallback for critical settings (Discord Token, OpenAI Key).
 
 - **Detection Strategy**:
+
   - Heuristic checks run first for efficiency
   - Message frequency threshold: 5 messages in 10 seconds
   - Suspicious keywords defined in HeuristicService
@@ -130,7 +140,7 @@ This file captures important patterns, preferences, and project intelligence tha
   - New server member threshold: 3 days
   - Borderline suspicion range: 0.3-0.7
   - Final classification threshold: 0.5 (above = SUSPICIOUS)
-  - Confidence calculation: Math.abs(suspicionScore - 0.5) * 2
+  - Confidence calculation: Math.abs(suspicionScore - 0.5) \* 2
 
 - **Database Structure (Prisma)**:
   - Schema defined in `prisma/schema.prisma`.
@@ -145,18 +155,21 @@ This file captures important patterns, preferences, and project intelligence tha
 ## Known Challenges
 
 - **Rate Limiting**:
+
   - Discord API has various rate limits per endpoint
   - OpenAI API has token-based rate limits
   - No sophisticated rate limiting implemented yet
   - Potential for quota exhaustion in high-traffic scenarios
 
 - **Large Server Performance**:
+
   - Message history tracking could consume memory
   - Database connection limits not configured
   - Caching strategy needed for high-volume servers
   - Not tested with very large servers (10,000+ members)
 
 - **Testing Discord Interactions**:
+
   - Discord.js client is complex to mock
   - Button interactions require special handling
   - Event-based architecture complicates testing
@@ -171,18 +184,21 @@ This file captures important patterns, preferences, and project intelligence tha
 ## Future Considerations
 
 - **Database Schema Evolution**:
+
   - Use `prisma migrate dev` for schema changes.
   - Consider backward compatibility for updates
   - Plan for data migration between versions
   - Design for extensibility with JSONB fields
 
 - **Cross-Server Data Sharing**:
+
   - Privacy implications of sharing user data
   - Security considerations for trusted networks
   - Consent and opt-out mechanisms
   - Data retention and deletion policies
 
 - **Custom AI Model**:
+
   - Training data collection from real examples
   - Model fine-tuning process
   - Evaluation framework for performance
