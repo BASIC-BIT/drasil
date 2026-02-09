@@ -74,6 +74,7 @@ describe('NotificationManager (unit)', () => {
     };
     configService = {
       getAdminChannel: jest.fn().mockResolvedValue(adminChannel as unknown as TextChannel),
+      getServerConfig: jest.fn().mockResolvedValue({ admin_notification_role_id: null } as any),
     } as unknown as IConfigService;
   });
 
@@ -107,11 +108,96 @@ describe('NotificationManager (unit)', () => {
     await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
 
     expect(adminChannel.send).toHaveBeenCalledTimes(1);
-    const sendArgs = adminChannel.send.mock.calls[0][0] as { components: unknown[] };
+    const sendArgs = adminChannel.send.mock.calls[0][0] as {
+      components: unknown[];
+      content?: string;
+      allowedMentions?: unknown;
+    };
+    expect(sendArgs.content).toBeUndefined();
+    expect(sendArgs.allowedMentions).toBeUndefined();
     const labels = extractLabels(sendArgs.components);
     expect(labels).toEqual(
       expect.arrayContaining(['Verify User', 'Ban User', 'Create Thread', 'View Full History'])
     );
+  });
+
+  it('pings the admin notification role when configured and sending new notification', async () => {
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      admin_notification_role_id: 'role-1',
+    } as any);
+
+    const member = buildMember('guild-1', 'user-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+    };
+
+    const sentMessage: MockMessage = { id: 'message-1', edit: jest.fn() };
+    adminChannel.send.mockResolvedValue(sentMessage);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({ thread_id: null });
+
+    await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
+
+    expect(adminChannel.send).toHaveBeenCalledTimes(1);
+    const sendArgs = adminChannel.send.mock.calls[0][0] as {
+      content?: string;
+      allowedMentions?: {
+        parse?: string[];
+        roles?: string[];
+        users?: string[];
+        repliedUser?: boolean;
+      };
+    };
+    expect(sendArgs.content).toBe('<@&role-1>');
+    expect(sendArgs.allowedMentions).toEqual({
+      parse: [],
+      roles: ['role-1'],
+      users: [],
+      repliedUser: false,
+    });
+  });
+
+  it('does not include a mention payload when editing an existing notification (even if role is configured)', async () => {
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      admin_notification_role_id: 'role-1',
+    } as any);
+
+    const member = buildMember('guild-2', 'user-2');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.8,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+    };
+
+    const existingMessage: MockMessage = {
+      id: 'message-2',
+      edit: jest.fn().mockResolvedValue(undefined),
+    };
+    adminChannel.messages.fetch.mockResolvedValue(existingMessage as unknown as Message<true>);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({
+      notification_message_id: 'message-2',
+      thread_id: 'thread-1',
+    });
+
+    await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
+
+    expect(existingMessage.edit).toHaveBeenCalledTimes(1);
+    const editArgs = existingMessage.edit.mock.calls[0][0] as {
+      content?: string;
+      allowedMentions?: unknown;
+    };
+
+    expect(editArgs.content).toBeUndefined();
+    expect(editArgs.allowedMentions).toBeUndefined();
   });
 
   it('edits existing notification and omits Create Thread when thread exists', async () => {
@@ -139,7 +225,13 @@ describe('NotificationManager (unit)', () => {
     await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
 
     expect(existingMessage.edit).toHaveBeenCalledTimes(1);
-    const editArgs = existingMessage.edit.mock.calls[0][0] as { components: unknown[] };
+    const editArgs = existingMessage.edit.mock.calls[0][0] as {
+      components: unknown[];
+      content?: string;
+      allowedMentions?: unknown;
+    };
+    expect(editArgs.content).toBeUndefined();
+    expect(editArgs.allowedMentions).toBeUndefined();
     const labels = extractLabels(editArgs.components);
     expect(labels).toEqual(expect.arrayContaining(['Verify User', 'Ban User']));
     expect(labels).not.toContain('Create Thread');
