@@ -5,6 +5,9 @@ build/
 # Dependencies
 node_modules/
 
+# Lockfiles (generated)
+package-lock.json
+
 # Coverage
 coverage/
 

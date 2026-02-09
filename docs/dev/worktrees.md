@@ -8,15 +8,10 @@ OpenCode/agent sessions) without constantly switching branches.
 - Keep the main repo checkout as your "base" clone.
 - Put worktrees in a sibling directory so they don't share `node_modules/` and don't collide.
 
-Example (Windows):
+Example layout (any OS):
 
-- Base repo: `D:\\bench\\drasil`
-- Worktrees: `D:\\bench\\drasil-wt\\<name>`
-
-Example (macOS/Linux):
-
-- Base repo: `~/projects/drasil`
-- Worktrees: `~/projects/drasil-wt/<name>`
+- Base repo: `<workspace>/drasil`
+- Worktrees: `<workspace>/drasil-wt/<name>`
 
 ## Create a worktree
 
@@ -24,12 +19,12 @@ From your base repo checkout:
 
 ```bash
 git fetch origin
-mkdir -p ../drasil-wt
 git worktree add -b fix/issue-123-short-name ../drasil-wt/issue-123 origin/main
 ```
 
 Notes:
 
+- If `../drasil-wt` doesn't exist yet, create it first (command depends on your shell).
 - Prefer `origin/main` as the starting point.
 - Use short, readable worktree names.
 
@@ -58,17 +53,22 @@ Avoid sharing `node_modules/` between worktrees.
 
 ## Safe `.env` handling
 
-`.env` is gitignored. For each worktree:
+`.env` is gitignored. For each worktree, copy `.env.example` to `.env` and fill values locally.
+
+Command examples:
 
 ```bash
+# bash / zsh
 cp .env.example .env
+
+# PowerShell
+Copy-Item .env.example .env
+
+# cmd.exe
+copy .env.example .env
 ```
 
-Local-only shortcut (never commit secrets):
-
-```bash
-cp ../drasil/.env .env
-```
+Local-only shortcut (never commit secrets): copy an existing `.env` from your base repo checkout.
 
 Rules:
 
@@ -88,9 +88,8 @@ Keep it boring:
 
 ## OpenCode permissions (access worktrees without prompts)
 
-If you start OpenCode inside the base repo (for example `D:\\bench\\drasil`), a sibling
-worktree directory (for example `D:\\bench\\drasil-wt`) is considered an "external directory" by
-OpenCode permissions.
+If you start OpenCode inside the base repo, a sibling worktree directory is considered an
+"external directory" by OpenCode permissions.
 
 Two good options:
 
@@ -98,38 +97,23 @@ Two good options:
    workspace).
 2. Allow worktree paths via the `external_directory` permission.
 
-OpenCode config locations (see OpenCode docs):
+OpenCode config locations:
 
 - Global: `~/.config/opencode/opencode.json`
 - Per project: `opencode.json` in the repo root
 
-On Windows, `~/.config` typically resolves under your user profile (for example
-`C:\\Users\\<you>\\.config\\opencode\\opencode.json`).
+Example snippet (use your own workspace path; keep it as narrow as practical):
 
-Example snippet (prefer the narrowest path you trust):
-
-```json
+```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "permission": {
     "external_directory": {
-      "D:/bench/drasil-wt/**": "allow"
-    }
-  }
+      "~/projects/**": "allow",
+      // "C:/projects/**": "allow"
+    },
+  },
 }
 ```
 
-If you truly want all of `D:\\bench` allowed:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "permission": {
-    "external_directory": {
-      "D:/bench/**": "allow"
-    }
-  }
-}
-```
-
-Reference: OpenCode `external_directory` permissions: https://opencode.ai/docs/permissions/#external-directories
+Reference: https://opencode.ai/docs/permissions/#external-directories

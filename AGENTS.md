@@ -4,6 +4,12 @@ Discord anti-spam bot that combines heuristics and GPT analysis to proactively d
 
 Persistence uses Postgres (often Supabase) via Prisma. Orchestration is direct (controllers call services; no internal EventBus).
 
+## Optional local context
+
+- `AGENTS.local.md` is gitignored and can capture machine-specific paths and personal preferences.
+- Template: `AGENTS.local.md.example`.
+- If `AGENTS.local.md` exists, read it first and follow it for this machine.
+
 ## Stack
 
 - TypeScript + Node.js
@@ -132,3 +138,13 @@ Jest:
 This repo keeps always-on guidance in `AGENTS.md`.
 
 Use Skills for deeper workflows/playbooks. Skills live under `.opencode/skills/<name>/SKILL.md`.
+
+Common skills in this repo:
+
+- `db-reset-local`
+- `prisma-workflow`
+- `testing-integration`
+- `git-worktrees`
+- `pr-workflow`
+- `release-checklist`
+- `opencode-external-directory`

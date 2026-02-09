@@ -16,6 +16,9 @@ build/
 .env.test
 .env.production
 
+# Local-only agent context
+AGENTS.local.md
+
 # Logs
 logs/
 *.log

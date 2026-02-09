@@ -1,0 +1,28 @@
+# Local Operator Context (Not Committed)
+
+This file is optional and intended to capture personal and machine-specific context that should
+not live in the repo-wide `AGENTS.md`.
+
+Copy to `AGENTS.local.md` (gitignored) and edit freely.
+
+Rules:
+
+- Never include secrets/tokens.
+- Prefer describing paths and workflows over pasting large logs.
+
+## Common local paths (optional)
+
+- Workspace root: (fill in)
+- Drasil base repo path: (fill in)
+- Worktrees root path: (fill in)
+
+## OpenCode permissions (optional)
+
+If you keep worktrees outside the repo root, OpenCode may prompt for "external_directory" access.
+
+- Put your preferred allowlist patterns here, or configure them in your global OpenCode config
+  (`~/.config/opencode/opencode.json`).
+
+## Personal preferences (optional)
+
+- (fill in: commit style, test expectations, formatting preferences, etc.)
