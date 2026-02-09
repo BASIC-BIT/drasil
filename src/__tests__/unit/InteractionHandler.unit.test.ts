@@ -35,6 +35,7 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
     deferUpdate: jest.fn().mockResolvedValue(undefined),
     followUp: jest.fn().mockResolvedValue(undefined),
     reply: jest.fn().mockResolvedValue(undefined),
+    showModal: jest.fn().mockResolvedValue(undefined),
   }) as unknown as ButtonInteraction;
 
 describe('InteractionHandler (unit)', () => {
@@ -280,5 +281,28 @@ describe('InteractionHandler (unit)', () => {
         'Thank you for your report regarding <@123456789012345678>. It has been submitted for review.',
       flags: MessageFlags.Ephemeral,
     });
+  });
+
+  it('routes report button clicks to show the report modal', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('report_user_initiate', 'guild-1', {
+      id: 'reporter-1',
+    } as User);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+
+    const modalArg = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
+    expect(modalArg.toJSON().custom_id).toBe('report_user_modal_submit');
   });
 });
