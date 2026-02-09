@@ -12,6 +12,7 @@ import {
 import { INotificationManager } from '../../services/NotificationManager';
 import { IThreadManager } from '../../services/ThreadManager';
 import { IUserModerationService } from '../../services/UserModerationService';
+import { IAdminActionService } from '../../services/AdminActionService';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -42,6 +43,7 @@ describe('SecurityActionService (unit)', () => {
   let notificationManager: jest.Mocked<INotificationManager>;
   let threadManager: jest.Mocked<IThreadManager>;
   let userModerationService: jest.Mocked<IUserModerationService>;
+  let adminActionService: jest.Mocked<IAdminActionService>;
 
   beforeEach(() => {
     detectionEventsRepository = new InMemoryDetectionEventsRepository();
@@ -68,6 +70,10 @@ describe('SecurityActionService (unit)', () => {
       verifyUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
     };
+
+    adminActionService = {
+      recordAction: jest.fn().mockResolvedValue({} as any),
+    } as unknown as jest.Mocked<IAdminActionService>;
   });
 
   it('creates detection and verification when none exists', async () => {
@@ -92,6 +98,7 @@ describe('SecurityActionService (unit)', () => {
       verificationEventRepository,
       userRepository,
       serverRepository,
+      adminActionService,
       threadManager,
       userModerationService,
       {} as Client
@@ -153,6 +160,7 @@ describe('SecurityActionService (unit)', () => {
       verificationEventRepository,
       userRepository,
       serverRepository,
+      adminActionService,
       threadManager,
       userModerationService,
       {} as Client
@@ -183,6 +191,7 @@ describe('SecurityActionService (unit)', () => {
       verificationEventRepository,
       userRepository,
       serverRepository,
+      adminActionService,
       threadManager,
       userModerationService,
       {} as Client
@@ -212,6 +221,7 @@ describe('SecurityActionService (unit)', () => {
       verificationEventRepository,
       userRepository,
       serverRepository,
+      adminActionService,
       threadManager,
       userModerationService,
       {} as Client
@@ -260,6 +270,7 @@ describe('SecurityActionService (unit)', () => {
       verificationEventRepository,
       userRepository,
       serverRepository,
+      adminActionService,
       threadManager,
       userModerationService,
       client
@@ -282,5 +293,16 @@ describe('SecurityActionService (unit)', () => {
       verificationEvent,
       VerificationStatus.PENDING
     );
+
+    expect(adminActionService.recordAction).toHaveBeenCalledWith({
+      server_id: guildId,
+      user_id: userId,
+      admin_id: moderator.id,
+      verification_event_id: verificationEvent.id,
+      action_type: AdminActionType.REOPEN,
+      previous_status: VerificationStatus.VERIFIED,
+      new_status: VerificationStatus.PENDING,
+      notes: null,
+    });
   });
 });

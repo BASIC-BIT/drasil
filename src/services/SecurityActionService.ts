@@ -17,6 +17,7 @@ import { IServerRepository } from '../repositories/ServerRepository';
 import { IUserRepository } from '../repositories/UserRepository';
 import { IThreadManager } from './ThreadManager';
 import { IUserModerationService } from './UserModerationService';
+import { IAdminActionService } from './AdminActionService';
 /**
  * Interface for the SecurityActionService
  */
@@ -74,6 +75,7 @@ export class SecurityActionService implements ISecurityActionService {
   private verificationEventRepository: IVerificationEventRepository;
   private userRepository: IUserRepository;
   private serverRepository: IServerRepository;
+  private adminActionService: IAdminActionService;
   private threadManager: IThreadManager;
   private userModerationService: IUserModerationService; // Keep for reopenVerification for now
   private client: Client;
@@ -86,6 +88,7 @@ export class SecurityActionService implements ISecurityActionService {
     verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.UserRepository) userRepository: IUserRepository,
     @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
+    @inject(TYPES.AdminActionService) adminActionService: IAdminActionService,
     @inject(TYPES.ThreadManager) threadManager: IThreadManager,
     @inject(TYPES.UserModerationService) userModerationService: IUserModerationService, // Keep for reopenVerification
     @inject(TYPES.DiscordClient) client: Client
@@ -96,6 +99,7 @@ export class SecurityActionService implements ISecurityActionService {
     this.verificationEventRepository = verificationEventRepository;
     this.userRepository = userRepository;
     this.serverRepository = serverRepository;
+    this.adminActionService = adminActionService;
     this.threadManager = threadManager;
     this.userModerationService = userModerationService; // Keep for reopenVerification
     this.client = client;
@@ -411,6 +415,8 @@ export class SecurityActionService implements ISecurityActionService {
     moderator: User
   ): Promise<boolean> {
     try {
+      const previousStatus = verificationEvent.status;
+
       const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
         status: VerificationStatus.PENDING,
         resolved_at: null,
@@ -424,6 +430,13 @@ export class SecurityActionService implements ISecurityActionService {
       const guild = await this.client.guilds.fetch(verificationEvent.server_id);
       const member = await guild.members.fetch(verificationEvent.user_id);
 
+      await this.ensureEntitiesExist(
+        verificationEvent.server_id,
+        verificationEvent.user_id,
+        member.user.username,
+        member.joinedAt?.toISOString()
+      );
+
       await this.threadManager.reopenVerificationThread(verificationEvent);
       await this.userModerationService.restrictUser(member);
       await this.notificationManager.logActionToMessage(
@@ -435,6 +448,17 @@ export class SecurityActionService implements ISecurityActionService {
         verificationEvent,
         VerificationStatus.PENDING
       );
+
+      await this.adminActionService.recordAction({
+        server_id: verificationEvent.server_id,
+        user_id: verificationEvent.user_id,
+        admin_id: moderator.id,
+        verification_event_id: verificationEvent.id,
+        action_type: AdminActionType.REOPEN,
+        previous_status: previousStatus,
+        new_status: VerificationStatus.PENDING,
+        notes: null,
+      });
 
       return true;
     } catch (error) {
