@@ -1,0 +1,8 @@
+{
+  "commentTypes": ["logic", "syntax"],
+  "triggerOnUpdates": true,
+  "statusCheck": true,
+  "statusCommentsEnabled": true,
+  "strictness": 2,
+  "instructions": "Follow AGENTS.md. Keep diffs tight, avoid secrets, and ensure npm run check:ci passes. Prefer boring, reliable changes over clever ones."
+}

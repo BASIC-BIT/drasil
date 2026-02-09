@@ -24,7 +24,7 @@ This bot uses:
 ### Getting Started
 
 1. Clone the repo
-2. Install npm dependencies `npm i --legacy-peer-deps`
+2. Install npm dependencies `npm ci`
 3. `cp .env.example .env` and fill out required fields (including `DATABASE_URL`)
 4. Start Postgres (Supabase recommended): `npx supabase start`
 5. `npm run db:reset:local` (local Supabase only)
@@ -81,13 +81,11 @@ High-signal manual and automated test ideas live in `docs/test-cases.md`.
 ### Server Configuration
 
 1. **Create a Restricted Role**:
-
    - Create a role in your Discord server that has limited permissions
    - Take note of the role ID (enable Developer Mode in Discord Settings -> Advanced, then right-click the role and select "Copy ID")
    - Use the `/config key:restricted_role_id value:<role-id>` command to set this value
 
 2. **Create an Admin Channel**:
-
    - Create a channel that only moderators/admins have access to
    - This channel will receive notifications about suspicious users with interactive buttons
    - Use the `/config key:admin_channel_id value:<channel-id>` command to set this value

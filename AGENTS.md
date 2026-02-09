@@ -4,6 +4,16 @@ Discord anti-spam bot that combines heuristics and GPT analysis to proactively d
 
 Persistence uses Postgres (often Supabase) via Prisma. Orchestration is direct (controllers call services; no internal EventBus).
 
+> If `AGENTS.local.md` exists (gitignored), read it first and follow it for this machine.
+> Template: `AGENTS.local.md.example`.
+
+## Where guidance lives
+
+- Always-on rules: `AGENTS.md`
+- Local-only (paths/preferences): `AGENTS.local.md` (gitignored)
+- Canonical reference docs: `docs/` (prefer linking over duplicating)
+- Progressive disclosure playbooks: `.opencode/skills/*` (keep short; point to canonical docs)
+
 ## Stack
 
 - TypeScript + Node.js
@@ -80,6 +90,17 @@ If the user says "Reset the database", run `npm run db:reset:local`.
 - Workflow: `.github/workflows/ci.yml`
 - Gates: build, format check, lint, tests against Postgres service.
 
+## Contribution workflow
+
+- Track work with GitHub issues.
+- Land changes via PRs (avoid direct pushes to `main`).
+- For parallel work, prefer `git worktree`. See `docs/dev/worktrees.md`.
+- Use one worktree per issue/PR; run `npm ci` per worktree.
+- Avoid running integration tests concurrently across worktrees unless each uses its own database.
+- PRs should link the issue(s), include a test plan, and pass CI (`npm run check:ci`).
+- Resolve PR review threads (including AI reviewer threads) before merge.
+- Prefer AI-assisted reviews (Copilot + Greptile) and recycle loops; keep critical context in the PR.
+
 ## Scripts
 
 - `npm run dev` start bot (hot reload)
@@ -125,3 +146,11 @@ Jest:
 This repo keeps always-on guidance in `AGENTS.md`.
 
 Use Skills for deeper workflows/playbooks. Skills live under `.opencode/skills/<name>/SKILL.md`.
+
+Common skills in this repo:
+
+- `db-reset-local`
+- `prisma-workflow`
+- `testing-integration`
+- `git-worktrees`
+- `pr-workflow`

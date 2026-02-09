@@ -1,11 +1,22 @@
-dist
-node_modules
-coverage
-build
-.git
-*.log
+# Build outputs
+dist/
+build/
+
+# Dependencies
+node_modules/
+
+# Lockfiles (generated)
 package-lock.json
 
+# Coverage
+coverage/
+
+# Archived docs (historical reference only)
+docs/legacy/**
+
 # OpenCode local files
-.opencode/state
+.opencode/state/**
 .opencode/package.json
+
+# Misc
+repomix-output.xml
