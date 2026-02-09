@@ -165,7 +165,11 @@ export class NotificationManager implements INotificationManager {
       }
 
       // Create a new message
+      const serverConfig = await this.configService.getServerConfig(member.guild.id);
+      const adminNotificationRoleId = serverConfig.admin_notification_role_id;
       return await adminChannel.send({
+        content: adminNotificationRoleId ? `<@&${adminNotificationRoleId}>` : undefined,
+        allowedMentions: adminNotificationRoleId ? { roles: [adminNotificationRoleId] } : undefined,
         embeds: [embed],
         components: [actionRow], // Use the conditionally created action row
       });
