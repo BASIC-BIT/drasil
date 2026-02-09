@@ -169,7 +169,14 @@ export class NotificationManager implements INotificationManager {
       const adminNotificationRoleId = serverConfig.admin_notification_role_id;
       return await adminChannel.send({
         content: adminNotificationRoleId ? `<@&${adminNotificationRoleId}>` : undefined,
-        allowedMentions: adminNotificationRoleId ? { roles: [adminNotificationRoleId] } : undefined,
+        allowedMentions: adminNotificationRoleId
+          ? {
+              parse: [],
+              roles: [adminNotificationRoleId],
+              users: [],
+              repliedUser: false,
+            }
+          : undefined,
         embeds: [embed],
         components: [actionRow], // Use the conditionally created action row
       });

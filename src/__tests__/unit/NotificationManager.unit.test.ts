@@ -146,10 +146,58 @@ describe('NotificationManager (unit)', () => {
     expect(adminChannel.send).toHaveBeenCalledTimes(1);
     const sendArgs = adminChannel.send.mock.calls[0][0] as {
       content?: string;
-      allowedMentions?: { roles?: string[] };
+      allowedMentions?: {
+        parse?: string[];
+        roles?: string[];
+        users?: string[];
+        repliedUser?: boolean;
+      };
     };
     expect(sendArgs.content).toBe('<@&role-1>');
-    expect(sendArgs.allowedMentions).toEqual({ roles: ['role-1'] });
+    expect(sendArgs.allowedMentions).toEqual({
+      parse: [],
+      roles: ['role-1'],
+      users: [],
+      repliedUser: false,
+    });
+  });
+
+  it('does not include a mention payload when editing an existing notification (even if role is configured)', async () => {
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      admin_notification_role_id: 'role-1',
+    } as any);
+
+    const member = buildMember('guild-2', 'user-2');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.8,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+    };
+
+    const existingMessage: MockMessage = {
+      id: 'message-2',
+      edit: jest.fn().mockResolvedValue(undefined),
+    };
+    adminChannel.messages.fetch.mockResolvedValue(existingMessage as unknown as Message<true>);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({
+      notification_message_id: 'message-2',
+      thread_id: 'thread-1',
+    });
+
+    await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
+
+    expect(existingMessage.edit).toHaveBeenCalledTimes(1);
+    const editArgs = existingMessage.edit.mock.calls[0][0] as {
+      content?: string;
+      allowedMentions?: unknown;
+    };
+
+    expect(editArgs.content).toBeUndefined();
+    expect(editArgs.allowedMentions).toBeUndefined();
   });
 
   it('edits existing notification and omits Create Thread when thread exists', async () => {
