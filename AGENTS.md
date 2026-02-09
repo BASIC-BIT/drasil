@@ -80,6 +80,14 @@ If the user says "Reset the database", run `npm run db:reset:local`.
 - Workflow: `.github/workflows/ci.yml`
 - Gates: build, format check, lint, tests against Postgres service.
 
+## Contribution workflow
+
+- Track work with GitHub issues.
+- Land changes via PRs (avoid direct pushes to `main`).
+- For parallel work, prefer `git worktree`. See `docs/dev/worktrees.md`.
+- PRs should link the issue(s), include a test plan, and pass CI (`npm run check:ci`).
+- Prefer AI-assisted reviews (Copilot + Greptile) and recycle loops; keep critical context in the PR.
+
 ## Scripts
 
 - `npm run dev` start bot (hot reload)
