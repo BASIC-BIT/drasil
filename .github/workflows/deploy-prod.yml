@@ -8,6 +8,10 @@ on:
         required: false
         default: 'main'
 
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -56,21 +60,38 @@ jobs:
 
           IMAGE_SHA="$(git rev-parse HEAD)"
           IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY"
+          IMAGE="$IMAGE_URI:$IMAGE_SHA"
 
           docker build \
-            -t "$IMAGE_URI:$IMAGE_SHA" \
-            -t "$IMAGE_URI:latest" \
+            -t "$IMAGE" \
             .
 
-          docker push "$IMAGE_URI:$IMAGE_SHA"
-          docker push "$IMAGE_URI:latest"
+          docker push "$IMAGE"
 
-      - name: Force ECS redeploy
+      - name: Register new task definition revision
         shell: bash
         env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
           ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
           ECS_SERVICE: ${{ vars.ECS_SERVICE }}
         run: |
           set -euo pipefail
-          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --force-new-deployment
+
+          IMAGE_SHA="$(git rev-parse HEAD)"
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY"
+          IMAGE="$IMAGE_URI:$IMAGE_SHA"
+
+          CURRENT_TD_ARN="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query 'services[0].taskDefinition' --output text)"
+          aws ecs describe-task-definition --task-definition "$CURRENT_TD_ARN" --query 'taskDefinition' > taskdef.json
+
+          jq --arg IMAGE "$IMAGE" '
+            .containerDefinitions |= map(if .name == "drasil" then .image = $IMAGE else . end)
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
+          ' taskdef.json > taskdef.new.json
+
+          NEW_TD_ARN="$(aws ecs register-task-definition --cli-input-json file://taskdef.new.json --query 'taskDefinition.taskDefinitionArn' --output text)"
+          echo "Registered task definition: $NEW_TD_ARN"
+
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "$NEW_TD_ARN"
           aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"

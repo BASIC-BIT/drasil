@@ -42,6 +42,10 @@ Terraform creates:
 - Secrets Manager secrets (metadata only; you set the values)
 - GitHub Actions OIDC role for deploys
 
+If your AWS account already has the standard GitHub Actions OIDC provider
+(`token.actions.githubusercontent.com`), set `github_oidc_provider_arn` when
+applying `infra/aws/prod` so this stack reuses it.
+
 ## 3) Set production secrets
 
 Terraform creates three Secrets Manager secrets:
@@ -79,14 +83,16 @@ Run the workflow:
 It will:
 
 - build and push the container image to ECR
-- tag it as both the commit SHA and `latest`
-- force a new ECS deployment (service will pull `latest`)
+- tag it with the commit SHA
+- register a new ECS task definition revision pinned to that image
+- update the ECS service to the new task definition and wait for it to stabilize
 
 ## Rollback
 
-Re-run the deploy workflow and set the `ref` input to an older commit SHA. That rebuilds that version and publishes it as `latest`, then forces a redeploy.
+Re-run the deploy workflow and set the `ref` input to an older commit SHA. That rebuilds and pushes that image tag and updates the ECS service to a new task definition revision referencing it.
 
 ## Notes
 
+- The Terraform-managed task definition uses a placeholder image tag (`:bootstrap`). The deploy workflow registers task definitions using immutable commit SHA tags.
 - If/when we add sharding, we can increase `desired_count` and/or move to a more controlled rollout.
 - If you prefer private subnets, add a NAT Gateway and set `assign_public_ip = false` in `infra/aws/prod/main.tf`.

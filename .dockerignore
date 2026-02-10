@@ -23,6 +23,7 @@ Thumbs.db
 **/*.tfstate
 **/*.tfstate.*
 **/*.tfvars
+**/backend.hcl
 
 # Logs
 *.log

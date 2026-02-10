@@ -28,6 +28,11 @@ output "github_deploy_role_arn" {
   description = "IAM role ARN for GitHub Actions (OIDC) deployments."
 }
 
+output "github_oidc_provider_arn" {
+  value       = local.github_oidc_provider_arn
+  description = "GitHub Actions OIDC provider ARN used by this environment."
+}
+
 output "secrets" {
   value = {
     DISCORD_TOKEN  = aws_secretsmanager_secret.discord_token.arn

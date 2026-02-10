@@ -6,6 +6,8 @@ locals {
   name_prefix = "${var.project_name}-${var.environment}"
 
   secrets_prefix = "${var.project_name}/${var.environment}"
+
+  github_oidc_provider_arn = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
 }
 
 resource "aws_vpc" "main" {
@@ -81,7 +83,7 @@ resource "aws_cloudwatch_log_group" "ecs" {
 
 resource "aws_ecr_repository" "app" {
   name                 = local.name_prefix
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
@@ -201,7 +203,7 @@ resource "aws_ecs_task_definition" "bot" {
   container_definitions = jsonencode([
     {
       name      = "drasil"
-      image     = "${aws_ecr_repository.app.repository_url}:latest"
+      image     = "${aws_ecr_repository.app.repository_url}:bootstrap"
       essential = true
       environment = [
         {
@@ -252,10 +254,18 @@ resource "aws_ecs_service" "bot" {
     security_groups  = [aws_security_group.ecs_task.id]
     assign_public_ip = true
   }
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 }
 
 # GitHub Actions OIDC deploy role (optional but recommended for CI/CD)
+# Note: OIDC providers are account-wide. If the provider already exists, pass
+# `var.github_oidc_provider_arn` to reuse it.
 resource "aws_iam_openid_connect_provider" "github" {
+  count = var.github_oidc_provider_arn == null ? 1 : 0
+
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
@@ -266,7 +276,7 @@ data "aws_iam_policy_document" "github_assume" {
     actions = ["sts:AssumeRoleWithWebIdentity"]
     principals {
       type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.github.arn]
+      identifiers = [local.github_oidc_provider_arn]
     }
 
     condition {
@@ -312,9 +322,25 @@ data "aws_iam_policy_document" "github_deploy" {
   statement {
     actions = [
       "ecs:DescribeServices",
+      "ecs:DescribeTaskDefinition",
+      "ecs:RegisterTaskDefinition",
       "ecs:UpdateService"
     ]
-    resources = [aws_ecs_service.bot.id]
+    resources = ["*"]
+  }
+
+  statement {
+    actions = ["iam:PassRole"]
+    resources = [
+      aws_iam_role.ecs_task_execution.arn,
+      aws_iam_role.ecs_task.arn
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ecs-tasks.amazonaws.com"]
+    }
   }
 }
 

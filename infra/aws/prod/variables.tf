@@ -58,6 +58,12 @@ variable "github_repo" {
   default     = "BASIC-BIT/drasil"
 }
 
+variable "github_oidc_provider_arn" {
+  type        = string
+  description = "Existing GitHub Actions OIDC provider ARN for token.actions.githubusercontent.com. If set, this stack will reuse it instead of creating a new provider."
+  default     = null
+}
+
 variable "tags" {
   type        = map(string)
   description = "Tags applied to created resources."
