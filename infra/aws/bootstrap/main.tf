@@ -63,6 +63,31 @@ resource "aws_s3_bucket_ownership_controls" "tf_state" {
   }
 }
 
+resource "aws_s3_bucket_policy" "tf_state_tls_only" {
+  bucket = aws_s3_bucket.tf_state.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.tf_state.arn,
+          "${aws_s3_bucket.tf_state.arn}/*"
+        ]
+        Condition = {
+          Bool = {
+            "aws:SecureTransport" = "false"
+          }
+        }
+      }
+    ]
+  })
+}
+
 resource "aws_dynamodb_table" "tf_lock" {
   name         = var.lock_table_name
   billing_mode = "PAY_PER_REQUEST"

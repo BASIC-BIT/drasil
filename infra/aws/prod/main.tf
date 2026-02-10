@@ -244,6 +244,11 @@ resource "aws_ecs_service" "bot" {
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
+  # Discord bots should generally run a single active instance unless sharding/leader election is implemented.
+  # These settings avoid overlapping tasks during deployments.
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
+
   deployment_circuit_breaker {
     enable   = true
     rollback = true
@@ -290,7 +295,7 @@ data "aws_iam_policy_document" "github_assume" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:*"]
+      values   = ["repo:${var.github_repo}:ref:refs/heads/main"]
     }
   }
 }
