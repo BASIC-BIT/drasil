@@ -168,10 +168,18 @@ export class GPTService implements IGPTService {
 
           return normalized;
         } catch (error) {
-          span.recordException(error as Error);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+
+          if (error instanceof Error) {
+            span.recordException(error);
+          } else {
+            span.setAttribute('drasil.gpt.error', errorMessage.slice(0, 500));
+            span.setAttribute('drasil.gpt.error_type', typeof error);
+          }
+
           span.setStatus({
             code: SpanStatusCode.ERROR,
-            message: error instanceof Error ? error.message : 'OpenAI error',
+            message: errorMessage,
           });
 
           if (debugGpt) {

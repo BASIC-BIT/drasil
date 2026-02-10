@@ -2,6 +2,7 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+const prismaSchemaPath = path.join(process.cwd(), 'prisma', 'schema.prisma');
 const prismaClientTypesPath = path.join(
   process.cwd(),
   'node_modules',
@@ -12,12 +13,19 @@ const prismaClientTypesPath = path.join(
 
 function isGeneratedPrismaClient() {
   try {
-    const stat = fs.statSync(prismaClientTypesPath);
+    if (!fs.existsSync(prismaSchemaPath)) {
+      return true;
+    }
 
-    // A fully generated Prisma Client types file is typically very large.
-    // The default postinstall stub is small and causes TypeScript builds to fail
-    // when schema-specific types (enums/input types) are referenced.
-    return stat.size > 100_000;
+    const types = fs.readFileSync(prismaClientTypesPath, 'utf8');
+
+    // Check for schema-specific exports we rely on in this codebase.
+    // This avoids brittle size checks and aligns with our schema.
+    return (
+      types.includes('export type detection_type') &&
+      types.includes('export type verification_status') &&
+      types.includes('export type admin_action_type')
+    );
   } catch {
     return false;
   }
