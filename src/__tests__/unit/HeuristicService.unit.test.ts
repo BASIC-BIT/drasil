@@ -119,4 +119,25 @@ describe('HeuristicService (unit)', () => {
     expect(service.isFrequencyAboveThreshold('user-1', 'guild-2')).toBe(false);
     expect(service.isFrequencyAboveThreshold('user-1', 'guild-2')).toBe(true);
   });
+
+  it('falls back to defaults when message_threshold floors below 1', () => {
+    jest.useFakeTimers().setSystemTime(new Date('2024-01-01T00:00:00.000Z'));
+
+    const defaultService = new HeuristicService(buildConfigService());
+    const configuredService = new HeuristicService(
+      buildConfigService({
+        'guild-1': buildServer('guild-1', { message_threshold: 0.5, message_timeframe: 10 }),
+      })
+    );
+
+    const defaultResults: boolean[] = [];
+    const configuredResults: boolean[] = [];
+
+    for (let i = 0; i < 6; i += 1) {
+      defaultResults.push(defaultService.isFrequencyAboveThreshold('user-1'));
+      configuredResults.push(configuredService.isFrequencyAboveThreshold('user-1', 'guild-1'));
+    }
+
+    expect(configuredResults).toEqual(defaultResults);
+  });
 });

@@ -110,8 +110,34 @@ export class HeuristicService implements IHeuristicService {
 
     const serverIdStart = colonIndex + 1;
     const serverIdEnd = serverIdStart + serverIdLength;
+    if (serverIdEnd >= userKey.length) {
+      return undefined;
+    }
     const serverId = userKey.slice(serverIdStart, serverIdEnd);
     if (serverId.length !== serverIdLength) {
+      return undefined;
+    }
+
+    // Validate full encoding: `${len1}:${serverId}:${len2}:${userId}`
+    if (userKey[serverIdEnd] !== ':') {
+      return undefined;
+    }
+
+    const userIdLengthTextStart = serverIdEnd + 1;
+    const userIdLengthTextEnd = userKey.indexOf(':', userIdLengthTextStart);
+    if (userIdLengthTextEnd < 0) {
+      return undefined;
+    }
+
+    const userIdLengthText = userKey.slice(userIdLengthTextStart, userIdLengthTextEnd);
+    const userIdLength = Number.parseInt(userIdLengthText, 10);
+    if (!Number.isFinite(userIdLength) || userIdLength <= 0) {
+      return undefined;
+    }
+
+    const userIdStart = userIdLengthTextEnd + 1;
+    const userIdEnd = userIdStart + userIdLength;
+    if (userIdEnd !== userKey.length) {
       return undefined;
     }
 
@@ -127,9 +153,13 @@ export class HeuristicService implements IHeuristicService {
     const settings = server?.settings;
 
     const thresholdRaw = settings?.message_threshold;
-    const messageThreshold =
-      typeof thresholdRaw === 'number' && Number.isFinite(thresholdRaw) && thresholdRaw > 0
+    const thresholdNormalized =
+      typeof thresholdRaw === 'number' && Number.isFinite(thresholdRaw)
         ? Math.floor(thresholdRaw)
+        : undefined;
+    const messageThreshold =
+      thresholdNormalized !== undefined && thresholdNormalized >= 1
+        ? thresholdNormalized
         : this.defaultMessageThreshold;
 
     const timeframeRaw = settings?.message_timeframe;
