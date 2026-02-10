@@ -119,8 +119,8 @@ export class EventHandler implements IEventHandler {
     const content = message.content;
 
     try {
-      // Ensure config cache is populated before we start processing messages.
-      // (Prevents applying global defaults during startup while initialize() is still running.)
+      // Ensure the config cache init attempt has completed before processing messages.
+      // (Prevents applying global defaults while initialize() is still running.)
       await this.ensureConfigInitialized();
 
       // Warm the per-guild config cache in the background (no await) so hot-path heuristics

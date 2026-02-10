@@ -220,6 +220,7 @@ export class HeuristicService implements IHeuristicService {
    *
    * @param userId The Discord user ID
    * @param content The message content
+   * @param serverId The server ID
    * @returns true if suspicious, false otherwise
    */
   public isMessageSuspicious(userId: string, content: string, serverId: string): boolean {
@@ -233,6 +234,7 @@ export class HeuristicService implements IHeuristicService {
    * Records a new message from a user and checks if they've exceeded the rate limit
    *
    * @param userId The Discord user ID
+   * @param serverId The server ID
    * @returns true if user has exceeded message frequency threshold
    */
   public isFrequencyAboveThreshold(userId: string, serverId: string): boolean {
@@ -278,6 +280,7 @@ export class HeuristicService implements IHeuristicService {
    * Checks if a message contains any suspicious keywords
    *
    * @param content The message content
+   * @param serverId The server ID
    * @returns true if suspicious keywords are found
    */
   public containsSuspiciousKeywords(content: string, serverId: string): boolean {
