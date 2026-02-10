@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { Container } from 'inversify';
 import { Client, GatewayIntentBits } from 'discord.js';
-import { OpenAI } from 'openai';
+import OpenAI from 'openai';
 import { PrismaClient } from '@prisma/client'; // Import Prisma client
 
 import { TYPES } from './symbols';
