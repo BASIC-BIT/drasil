@@ -54,18 +54,40 @@ export interface IHeuristicService {
 
 /**
  * HeuristicService: Provides basic spam detection using heuristic methods
- * - Message frequency checking (> 5 messages in 10 seconds)
- * - Suspicious keyword detection
+ *
+ * The heuristics are server-configurable (per guild) via cached `Server.settings`,
+ * with global defaults as a fallback:
+ * - `message_threshold`: max messages allowed in the time window
+ * - `message_timeframe`: time window (seconds)
+ * - `suspicious_keywords`: substring match list
  */
 @injectable()
 export class HeuristicService implements IHeuristicService {
   private configService: IConfigService;
 
+  private readonly defaultMessageThreshold: number;
+  private readonly defaultTimeWindowMs: number;
+  private readonly defaultSuspiciousKeywords: string[];
+
+  private readonly cleanupIntervalMs = 60_000;
+  private lastCleanupAt = 0;
+
   // Store message timestamps by user ID
   private userMessages: Map<string, number[]> = new Map();
+  private userTimeWindows: Map<string, number> = new Map();
 
-  constructor(@inject(TYPES.ConfigService) configService: IConfigService) {
+  constructor(
+    @inject(TYPES.ConfigService)
+    configService: IConfigService = {
+      getCachedServerConfig: () => undefined,
+    } as unknown as IConfigService
+  ) {
     this.configService = configService;
+
+    const globalSettings = globalConfig.getSettings();
+    this.defaultMessageThreshold = globalSettings.defaultServerSettings.messageThreshold;
+    this.defaultTimeWindowMs = globalSettings.defaultServerSettings.messageTimeframe * 1000;
+    this.defaultSuspiciousKeywords = [...globalSettings.defaultSuspiciousKeywords];
   }
 
   private getUserKey(userId: string, serverId?: string): string {
@@ -77,11 +99,6 @@ export class HeuristicService implements IHeuristicService {
     timeWindowMs: number;
     suspiciousKeywords: string[];
   } {
-    const globalSettings = globalConfig.getSettings();
-    const defaultThreshold = globalSettings.defaultServerSettings.messageThreshold;
-    const defaultTimeframeSeconds = globalSettings.defaultServerSettings.messageTimeframe;
-    const defaultKeywords = globalSettings.defaultSuspiciousKeywords;
-
     const server = serverId ? this.configService.getCachedServerConfig(serverId) : undefined;
     const settings = server?.settings;
 
@@ -89,13 +106,13 @@ export class HeuristicService implements IHeuristicService {
     const messageThreshold =
       typeof thresholdRaw === 'number' && Number.isFinite(thresholdRaw) && thresholdRaw > 0
         ? Math.floor(thresholdRaw)
-        : defaultThreshold;
+        : this.defaultMessageThreshold;
 
     const timeframeRaw = settings?.message_timeframe;
     const timeframeSeconds =
       typeof timeframeRaw === 'number' && Number.isFinite(timeframeRaw) && timeframeRaw > 0
         ? timeframeRaw
-        : defaultTimeframeSeconds;
+        : this.defaultTimeWindowMs / 1000;
     const timeWindowMs = timeframeSeconds * 1000;
 
     const keywordsRaw = settings?.suspicious_keywords;
@@ -104,9 +121,26 @@ export class HeuristicService implements IHeuristicService {
           .filter((value): value is string => typeof value === 'string')
           .map((value) => value.trim())
           .filter((value) => value.length > 0)
-      : defaultKeywords;
+      : this.defaultSuspiciousKeywords;
 
     return { messageThreshold, timeWindowMs, suspiciousKeywords };
+  }
+
+  private maybeCleanupMessageHistory(now: number): void {
+    if (now - this.lastCleanupAt < this.cleanupIntervalMs) {
+      return;
+    }
+    this.lastCleanupAt = now;
+
+    for (const [userKey, timestamps] of this.userMessages.entries()) {
+      const lastTimestamp = timestamps[timestamps.length - 1];
+      const timeWindowMs = this.userTimeWindows.get(userKey) ?? this.defaultTimeWindowMs;
+
+      if (!lastTimestamp || lastTimestamp <= now - timeWindowMs) {
+        this.userMessages.delete(userKey);
+        this.userTimeWindows.delete(userKey);
+      }
+    }
   }
 
   /**
@@ -170,6 +204,9 @@ export class HeuristicService implements IHeuristicService {
     const userKey = this.getUserKey(userId, serverId);
     const userMessageTimes = this.userMessages.get(userKey) || [];
 
+    this.maybeCleanupMessageHistory(now);
+    this.userTimeWindows.set(userKey, timeWindowMs);
+
     // Add current message timestamp
     userMessageTimes.push(now);
 
@@ -205,5 +242,6 @@ export class HeuristicService implements IHeuristicService {
    */
   public clearMessageHistory(): void {
     this.userMessages.clear();
+    this.userTimeWindows.clear();
   }
 }

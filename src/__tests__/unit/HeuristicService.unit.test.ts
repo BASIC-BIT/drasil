@@ -1,12 +1,13 @@
 import { HeuristicService } from '../../services/HeuristicService';
 import { IConfigService } from '../../config/ConfigService';
+import { Server, ServerSettings } from '../../repositories/types';
 
-const buildConfigService = (servers: Record<string, any> = {}): IConfigService =>
+const buildConfigService = (servers: Record<string, Server> = {}): IConfigService =>
   ({
     getCachedServerConfig: jest.fn().mockImplementation((guildId: string) => servers[guildId]),
   }) as unknown as IConfigService;
 
-const buildServer = (guildId: string, settings: Record<string, unknown>): any => ({
+const buildServer = (guildId: string, settings: Partial<ServerSettings>): Server => ({
   guild_id: guildId,
   restricted_role_id: null,
   admin_channel_id: null,
@@ -15,7 +16,7 @@ const buildServer = (guildId: string, settings: Record<string, unknown>): any =>
   created_at: null,
   updated_at: null,
   updated_by: null,
-  settings,
+  settings: { suspicious_keywords: null, ...settings } as ServerSettings,
   is_active: true,
 });
 

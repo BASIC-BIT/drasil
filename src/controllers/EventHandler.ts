@@ -117,6 +117,9 @@ export class EventHandler implements IEventHandler {
     const content = message.content;
 
     try {
+      // Warm the per-guild config cache so hot-path heuristics can use it without DB calls.
+      await this.configService.getServerConfig(serverId);
+
       // Get user profile data for detection context
       const profileData = this.extractUserProfileData(message.member);
 
