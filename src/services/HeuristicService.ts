@@ -68,11 +68,16 @@ export class HeuristicService implements IHeuristicService {
   private readonly defaultMessageThreshold: number;
   private readonly defaultTimeWindowMs: number;
   private readonly defaultSuspiciousKeywords: string[];
+  private readonly legacyDefaultSuspiciousKeywords = [
+    'free nitro',
+    'discord nitro',
+    'claim your prize',
+  ];
 
   private readonly cleanupIntervalMs = 60_000;
   private lastCleanupAt = 0;
 
-  // Store message timestamps by user ID
+  // Store message timestamps by a per-user key (server-aware when serverId is provided)
   private userMessages: Map<string, number[]> = new Map();
 
   constructor(
@@ -135,14 +140,37 @@ export class HeuristicService implements IHeuristicService {
     const timeWindowMs = timeframeSeconds * 1000;
 
     const keywordsRaw = settings?.suspicious_keywords;
-    const suspiciousKeywords = Array.isArray(keywordsRaw)
-      ? keywordsRaw
-          .filter((value): value is string => typeof value === 'string')
-          .map((value) => value.trim())
-          .filter((value) => value.length > 0)
-      : this.defaultSuspiciousKeywords;
+    let suspiciousKeywords: string[];
+
+    if (Array.isArray(keywordsRaw)) {
+      const sanitized = keywordsRaw
+        .filter((value): value is string => typeof value === 'string')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+
+      // Migration-friendly behavior: many servers have a persisted copy of the old
+      // 3-keyword default list. If so, use the current global defaults to keep the
+      // heuristic wide without requiring manual DB edits.
+      suspiciousKeywords = this.isLegacyDefaultKeywordList(sanitized)
+        ? this.defaultSuspiciousKeywords
+        : sanitized;
+    } else {
+      suspiciousKeywords = this.defaultSuspiciousKeywords;
+    }
 
     return { messageThreshold, timeWindowMs, suspiciousKeywords };
+  }
+
+  private isLegacyDefaultKeywordList(keywords: string[]): boolean {
+    const normalized = Array.from(new Set(keywords.map((value) => value.toLowerCase())))
+      .sort()
+      .join('|');
+    const legacy = Array.from(
+      new Set(this.legacyDefaultSuspiciousKeywords.map((value) => value.toLowerCase()))
+    )
+      .sort()
+      .join('|');
+    return normalized.length > 0 && normalized === legacy;
   }
 
   private maybeCleanupMessageHistory(now: number): void {

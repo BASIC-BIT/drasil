@@ -4,6 +4,8 @@ import { Server, ServerSettings } from '../../repositories/types';
 
 type CachedConfigService = jest.Mocked<Pick<IConfigService, 'getCachedServerConfig'>>;
 
+const fixtureTimestamp = new Date('2024-01-01T00:00:00.000Z').toISOString();
+
 const buildConfigService = (servers: Record<string, Server> = {}): CachedConfigService => ({
   getCachedServerConfig: jest.fn().mockImplementation((guildId: string) => servers[guildId]),
 });
@@ -14,10 +16,10 @@ const buildServer = (guildId: string, settings: Partial<ServerSettings>): Server
   admin_channel_id: null,
   verification_channel_id: null,
   admin_notification_role_id: null,
-  created_at: null,
-  updated_at: null,
+  created_at: fixtureTimestamp,
+  updated_at: fixtureTimestamp,
   updated_by: null,
-  settings: { suspicious_keywords: null, ...settings } as ServerSettings,
+  settings: { suspicious_keywords: null, ...settings },
   is_active: true,
 });
 

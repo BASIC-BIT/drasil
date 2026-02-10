@@ -31,6 +31,7 @@ export class EventHandler implements IEventHandler {
   private commandHandler: ICommandHandler;
   private interactionHandler: IInteractionHandler;
   private serverConfigWarmups: Set<string> = new Set();
+  private configInitializePromise: Promise<void> | null = null;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -67,7 +68,7 @@ export class EventHandler implements IEventHandler {
     console.log(`Logged in as ${this.client.user.tag}!`);
 
     // Initialize services
-    await this.configService.initialize();
+    await this.ensureConfigInitialized();
 
     await this.commandHandler.registerCommands();
   }
@@ -118,6 +119,10 @@ export class EventHandler implements IEventHandler {
     const content = message.content;
 
     try {
+      // Ensure config cache is populated before we start processing messages.
+      // (Prevents applying global defaults during startup while initialize() is still running.)
+      await this.ensureConfigInitialized();
+
       // Warm the per-guild config cache in the background (no await) so hot-path heuristics
       // can consult the in-memory cache without blocking message handling.
       if (!this.configService.getCachedServerConfig(serverId)) {
@@ -171,9 +176,19 @@ export class EventHandler implements IEventHandler {
       });
   }
 
+  private async ensureConfigInitialized(): Promise<void> {
+    if (!this.configInitializePromise) {
+      this.configInitializePromise = this.configService.initialize();
+    }
+
+    await this.configInitializePromise;
+  }
+
   private async handleGuildMemberAdd(member: GuildMember): Promise<void> {
     try {
       console.log(`New member joined: ${member.user.tag} (${member.id})`);
+
+      await this.ensureConfigInitialized();
 
       // Extract profile data
       const profileData = this.extractUserProfileData(member);
