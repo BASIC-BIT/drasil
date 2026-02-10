@@ -76,12 +76,7 @@ export class HeuristicService implements IHeuristicService {
   private userMessages: Map<string, number[]> = new Map();
   private userTimeWindows: Map<string, number> = new Map();
 
-  constructor(
-    @inject(TYPES.ConfigService)
-    configService: IConfigService = {
-      getCachedServerConfig: () => undefined,
-    } as unknown as IConfigService
-  ) {
+  constructor(@inject(TYPES.ConfigService) configService: IConfigService) {
     this.configService = configService;
 
     const globalSettings = globalConfig.getSettings();

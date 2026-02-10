@@ -30,6 +30,7 @@ export class EventHandler implements IEventHandler {
   private securityActionService: ISecurityActionService;
   private commandHandler: ICommandHandler;
   private interactionHandler: IInteractionHandler;
+  private serverConfigWarmups: Set<string> = new Set();
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -117,10 +118,10 @@ export class EventHandler implements IEventHandler {
     const content = message.content;
 
     try {
-      // Warm the per-guild config cache so hot-path heuristics can use it without DB calls.
-      // Only fetch on cache miss to avoid per-message awaits/DB work.
+      // Warm the per-guild config cache in the background (no await) so hot-path heuristics
+      // can consult the in-memory cache without blocking message handling.
       if (!this.configService.getCachedServerConfig(serverId)) {
-        await this.configService.getServerConfig(serverId);
+        this.warmServerConfigCache(serverId);
       }
 
       // Get user profile data for detection context
@@ -152,6 +153,22 @@ export class EventHandler implements IEventHandler {
         );
       }
     }
+  }
+
+  private warmServerConfigCache(guildId: string): void {
+    if (this.serverConfigWarmups.has(guildId)) {
+      return;
+    }
+
+    this.serverConfigWarmups.add(guildId);
+    void this.configService
+      .getServerConfig(guildId)
+      .catch((error) => {
+        console.warn(`Failed to warm server config cache for guild ${guildId}:`, error);
+      })
+      .finally(() => {
+        this.serverConfigWarmups.delete(guildId);
+      });
   }
 
   private async handleGuildMemberAdd(member: GuildMember): Promise<void> {
