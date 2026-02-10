@@ -116,6 +116,14 @@ Common pitfalls:
 - Pin GitHub Actions to real tags (some actions don’t publish a major-only tag like `@v1`).
 - Checkov is useful early as advisory (`soft_fail: true`) while the team decides which IaC best-practice checks to enforce.
 
+Practical workflow tips:
+
+- When responding to GitHub PR review comments via shell, avoid unescaped backticks (they trigger command substitution in bash). Prefer `gh ... --body-file - <<'EOF'` heredocs.
+- To reply to a specific inline review comment: `gh api -X POST repos/<owner>/<repo>/pulls/<pr>/comments -F in_reply_to=<comment_id> -f body='...'`.
+- To resolve a review thread (no UI): use GraphQL `resolveReviewThread` with the thread ID.
+- When CI/CD updates ECS task definitions, either manage deploys in Terraform (changing image/digest) or add `lifecycle.ignore_changes = [task_definition]` to avoid drift fights.
+- Before committing/pushing, sanity check `git status` (branch + dirty files), especially when switching between PRs/worktrees.
+
 ## Scripts
 
 - `npm run dev` start bot (hot reload)
