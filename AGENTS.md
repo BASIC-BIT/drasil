@@ -101,6 +101,21 @@ If the user says "Reset the database", run `npm run db:reset:local`.
 - Resolve PR review threads (including AI reviewer threads) before merge.
 - Prefer AI-assisted reviews (Copilot + Greptile) and recycle loops; keep critical context in the PR.
 
+## AI Review Recycle Loop
+
+When PRs trigger AI reviewers (Greptile/Copilot/Codex), treat their feedback as suggestions, not ground truth.
+
+- For each comment/thread: validate it against the repo context + intent before changing code.
+- Prefer replying in-thread with what you changed (or why you didn’t), then mark the thread resolved.
+- Keep CI green while iterating; when possible run `npm run check:ci` locally.
+
+Common pitfalls:
+
+- Some AI review tooling may show up as a required check but not expose an API key locally; fall back to reading the GitHub PR conversation/threads.
+- `actionlint` also runs `shellcheck` on workflow `run:` blocks; existing scripts can fail on new warnings.
+- Pin GitHub Actions to real tags (some actions don’t publish a major-only tag like `@v1`).
+- Checkov is useful early as advisory (`soft_fail: true`) while the team decides which IaC best-practice checks to enforce.
+
 ## Scripts
 
 - `npm run dev` start bot (hot reload)
