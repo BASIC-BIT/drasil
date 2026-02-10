@@ -122,6 +122,8 @@ Practical workflow tips:
 - To reply to a specific inline review comment: `gh api -X POST repos/<owner>/<repo>/pulls/<pr>/comments -F in_reply_to=<comment_id> -f body='...'`.
 - To resolve a review thread (no UI): use GraphQL `resolveReviewThread` with the thread ID.
 - When CI/CD updates ECS task definitions, either manage deploys in Terraform (changing image/digest) or add `lifecycle.ignore_changes = [task_definition]` to avoid drift fights.
+- If a GitHub Actions workflow relies on CLI tools (e.g. `jq`), install them explicitly; runner images can change.
+- Some Terraform resources validate with warnings that become errors later (e.g. S3 lifecycle rules now require `filter {}` / `prefix`); fix warnings proactively.
 - Before committing/pushing, sanity check `git status` (branch + dirty files), especially when switching between PRs/worktrees.
 
 ## Scripts
