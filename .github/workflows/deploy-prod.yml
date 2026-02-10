@@ -1,0 +1,76 @@
+name: Deploy (prod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (branch, tag, or commit SHA) to deploy'
+        required: false
+        default: 'main'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Validate required variables
+        shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+        run: |
+          set -euo pipefail
+          : "${AWS_REGION:?Set repo variable AWS_REGION}"
+          : "${AWS_ROLE_TO_ASSUME:?Set repo variable AWS_ROLE_TO_ASSUME}"
+          : "${ECR_REPOSITORY:?Set repo variable ECR_REPOSITORY}"
+          : "${ECS_CLUSTER:?Set repo variable ECS_CLUSTER}"
+          : "${ECS_SERVICE:?Set repo variable ECS_SERVICE}"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          set -euo pipefail
+
+          IMAGE_SHA="$(git rev-parse HEAD)"
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY"
+
+          docker build \
+            -t "$IMAGE_URI:$IMAGE_SHA" \
+            -t "$IMAGE_URI:latest" \
+            .
+
+          docker push "$IMAGE_URI:$IMAGE_SHA"
+          docker push "$IMAGE_URI:latest"
+
+      - name: Force ECS redeploy
+        shell: bash
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+        run: |
+          set -euo pipefail
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --force-new-deployment
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
