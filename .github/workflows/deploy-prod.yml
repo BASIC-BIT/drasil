@@ -50,6 +50,10 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Install jq
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Build and push image
         shell: bash
         env:
