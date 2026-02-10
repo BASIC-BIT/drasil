@@ -14,7 +14,13 @@ async function bootstrap(): Promise<void> {
   try {
     console.log('Starting Anti-Spam Bot...');
 
-    initPhoenixTracing();
+    const tracingInitResult = initPhoenixTracing();
+    if (
+      !tracingInitResult.enabled &&
+      tracingInitResult.reason !== 'PHOENIX_TRACING_ENABLED not set'
+    ) {
+      console.warn(`[phoenix] tracing disabled: ${tracingInitResult.reason}`);
+    }
 
     // Create and configure the container
     const { configureContainer } = await import('./di/container');

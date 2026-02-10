@@ -11,12 +11,17 @@ const prismaClientTypesPath = path.join(
   'index.d.ts'
 );
 
+if (process.env.PRISMA_SKIP_POSTINSTALL_GENERATE) {
+  process.exit(0);
+}
+
+if (!fs.existsSync(prismaSchemaPath)) {
+  console.warn('[postinstall] prisma/schema.prisma not found; skipping prisma generate');
+  process.exit(0);
+}
+
 function isGeneratedPrismaClient() {
   try {
-    if (!fs.existsSync(prismaSchemaPath)) {
-      return true;
-    }
-
     const types = fs.readFileSync(prismaClientTypesPath, 'utf8');
 
     // Check for schema-specific exports we rely on in this codebase.

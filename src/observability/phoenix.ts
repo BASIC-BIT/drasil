@@ -1,12 +1,13 @@
 import OpenAI from 'openai';
 import { register, registerInstrumentations } from '@arizeai/phoenix-otel';
-import { OpenAIInstrumentation } from '@arizeai/openinference-instrumentation-openai';
+import { OpenAIInstrumentation, isPatched } from '@arizeai/openinference-instrumentation-openai';
 
 type InitResult =
   | { enabled: true; projectName: string; url: string; hideContent: boolean }
   | { enabled: false; reason: string };
 
 let initialized = false;
+let initAttempted = false;
 
 function isTracingEnabled(): boolean {
   // Explicit opt-in only.
@@ -30,6 +31,12 @@ export function initPhoenixTracing(): InitResult {
   if (!isTracingEnabled()) {
     return { enabled: false, reason: 'PHOENIX_TRACING_ENABLED not set' };
   }
+
+  if (initAttempted) {
+    return { enabled: false, reason: 'already-attempted' };
+  }
+
+  initAttempted = true;
 
   const projectName = process.env.PHOENIX_PROJECT_NAME || 'drasil';
   const url = resolveCollectorUrl();
@@ -60,6 +67,10 @@ export function initPhoenixTracing(): InitResult {
 
     // Defensive: works in both ESM + CJS setups.
     openAiInstrumentation.manuallyInstrument(OpenAI);
+
+    if (!isPatched()) {
+      console.warn('[phoenix] OpenAI instrumentation did not patch openai module');
+    }
 
     registerInstrumentations({
       instrumentations: [openAiInstrumentation],
