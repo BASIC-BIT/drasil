@@ -89,7 +89,7 @@ export class HeuristicService implements IHeuristicService {
   }
 
   private getUserKey(userId: string, serverId?: string): string {
-    return serverId ? `${serverId.length}:${serverId}${userId}` : userId;
+    return serverId ? `${serverId.length}:${serverId}:${userId.length}:${userId}` : userId;
   }
 
   private getServerHeuristicSettings(serverId?: string): {
