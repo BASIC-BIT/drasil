@@ -12,6 +12,8 @@ This is safe-by-default: prompt/response content is redacted unless you explicit
 docker compose -f docker-compose.phoenix.yml up
 ```
 
+Note: `docker-compose.phoenix.yml` pins the Phoenix image tag. Bump it intentionally when upgrading Phoenix.
+
 2. Open the Phoenix UI:
 
 - http://localhost:6006

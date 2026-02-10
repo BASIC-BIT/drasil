@@ -1,6 +1,7 @@
 services:
   phoenix:
-    image: arizephoenix/phoenix:latest
+    # Pin the Phoenix version to keep local dev reproducible.
+    image: arizephoenix/phoenix:version-4.36.0
     restart: unless-stopped
     ports:
       - '6006:6006' # Phoenix UI + OTLP HTTP collector

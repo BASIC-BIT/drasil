@@ -9,24 +9,16 @@ type InitResult =
 let initialized = false;
 
 function isTracingEnabled(): boolean {
-  if (process.env.PHOENIX_TRACING_ENABLED === 'true') {
-    return true;
-  }
-
-  // Back-compat / convenience: enable if an endpoint is explicitly provided.
-  return Boolean(
-    process.env.PHOENIX_COLLECTOR_ENDPOINT ||
-    process.env.PHOENIX_COLLECTOR_URL ||
-    process.env.PHOENIX_ENDPOINT
-  );
+  // Explicit opt-in only.
+  return process.env.PHOENIX_TRACING_ENABLED === 'true';
 }
 
-function resolveCollectorUrl(): string {
+function resolveCollectorUrl(): string | null {
   return (
     process.env.PHOENIX_COLLECTOR_ENDPOINT ||
     process.env.PHOENIX_COLLECTOR_URL ||
     process.env.PHOENIX_ENDPOINT ||
-    'http://localhost:6006'
+    null
   );
 }
 
@@ -41,6 +33,9 @@ export function initPhoenixTracing(): InitResult {
 
   const projectName = process.env.PHOENIX_PROJECT_NAME || 'drasil';
   const url = resolveCollectorUrl();
+  if (!url) {
+    return { enabled: false, reason: 'PHOENIX_COLLECTOR_ENDPOINT not set' };
+  }
   const apiKey = process.env.PHOENIX_API_KEY;
 
   const hideContent = process.env.PHOENIX_HIDE_CONTENT !== 'false';

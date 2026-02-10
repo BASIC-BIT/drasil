@@ -19,7 +19,7 @@
     "build": "tsc",
     "build:watch": "tsc -w",
     "clean": "rm -rf dist",
-    "postinstall": "prisma generate",
+    "postinstall": "node scripts/prisma-generate-if-needed.js",
     "lint": "eslint . --ext .ts,.js,.mjs",
     "lint:fix": "eslint . --ext .ts,.js,.mjs --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md,mjs}\"",

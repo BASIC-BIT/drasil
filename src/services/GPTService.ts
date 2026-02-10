@@ -57,7 +57,6 @@ export class GPTService implements IGPTService {
       // Initialize the OpenAI client with API key from environment variable
       this.openai = new OpenAI({
         apiKey,
-        dangerouslyAllowBrowser: true, // Add this if testing in browser environment
       });
 
       // Never log API keys.
