@@ -77,7 +77,8 @@ export class HeuristicService implements IHeuristicService {
   private readonly cleanupIntervalMs = 60_000;
   private lastCleanupAt = 0;
 
-  // Store message timestamps by a per-user key (server-aware when serverId is provided)
+  // Store message timestamps by a per-user key; when serverId is provided we key by a
+  // composite (serverId+userId) via getUserKey.
   private userMessages: Map<string, number[]> = new Map();
 
   constructor(
@@ -167,7 +168,11 @@ export class HeuristicService implements IHeuristicService {
       typeof timeframeRaw === 'number' && Number.isFinite(timeframeRaw) && timeframeRaw > 0
         ? timeframeRaw
         : this.defaultTimeWindowMs / 1000;
-    const timeWindowMs = timeframeSeconds * 1000;
+    const timeWindowMsCandidate = timeframeSeconds * 1000;
+    const timeWindowMs =
+      Number.isFinite(timeWindowMsCandidate) && timeWindowMsCandidate > 0
+        ? timeWindowMsCandidate
+        : this.defaultTimeWindowMs;
 
     const keywordsRaw = settings?.suspicious_keywords;
     let suspiciousKeywords: string[];
@@ -223,7 +228,7 @@ export class HeuristicService implements IHeuristicService {
         serverTimeWindows.set(serverId, timeWindowMs);
       }
 
-      if (!lastTimestamp || lastTimestamp <= now - timeWindowMs) {
+      if (lastTimestamp === undefined || lastTimestamp <= now - timeWindowMs) {
         this.userMessages.delete(userKey);
       }
     }

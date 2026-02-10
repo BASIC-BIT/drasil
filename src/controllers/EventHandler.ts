@@ -178,7 +178,15 @@ export class EventHandler implements IEventHandler {
 
   private async ensureConfigInitialized(): Promise<void> {
     if (!this.configInitializePromise) {
-      this.configInitializePromise = this.configService.initialize();
+      const wrappedPromise = this.configService.initialize().catch((error) => {
+        // If initialization fails, allow a future call to retry.
+        if (this.configInitializePromise === wrappedPromise) {
+          this.configInitializePromise = null;
+        }
+        throw error;
+      });
+
+      this.configInitializePromise = wrappedPromise;
     }
 
     await this.configInitializePromise;

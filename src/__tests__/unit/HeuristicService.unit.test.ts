@@ -102,6 +102,20 @@ describe('HeuristicService (unit)', () => {
     expect(service.containsSuspiciousKeywords('free discord nitro', 'guild-1')).toBe(false);
   });
 
+  it('treats legacy default keyword list as "unset" and falls back to current defaults', () => {
+    const service = new HeuristicService(
+      buildConfigService({
+        'guild-1': buildServer('guild-1', {
+          suspicious_keywords: ['free nitro', 'discord nitro', 'claim your prize'],
+        }),
+      })
+    );
+
+    // "steam gift" is part of the expanded default list; this should remain detected
+    // even if a server has the legacy 3-keyword list persisted.
+    expect(service.containsSuspiciousKeywords('steam gift', 'guild-1')).toBe(true);
+  });
+
   it('does not share frequency history across servers', () => {
     jest.useFakeTimers().setSystemTime(new Date('2024-01-01T00:00:00.000Z'));
     const service = new HeuristicService(
