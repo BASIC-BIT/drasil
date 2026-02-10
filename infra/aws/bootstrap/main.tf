@@ -1,6 +1,10 @@
 resource "aws_s3_bucket" "tf_state" {
   bucket = var.state_bucket_name
   tags   = var.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_s3_bucket_versioning" "tf_state" {
@@ -8,6 +12,28 @@ resource "aws_s3_bucket_versioning" "tf_state" {
   versioning_configuration {
     status = "Enabled"
   }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "tf_state" {
+  bucket = aws_s3_bucket.tf_state.id
+
+  rule {
+    id     = "state-retention"
+    status = "Enabled"
+
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days           = 90
+      newer_noncurrent_versions = 20
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.tf_state]
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "tf_state" {
@@ -52,4 +78,8 @@ resource "aws_dynamodb_table" "tf_lock" {
   }
 
   tags = var.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }

@@ -255,6 +255,8 @@ resource "aws_ecs_service" "bot" {
     assign_public_ip = true
   }
 
+  # Task definition revisions are managed by CI/CD (deploy workflow), not Terraform.
+  # Ignoring drift here avoids `terraform apply` fighting deployments.
   lifecycle {
     ignore_changes = [task_definition]
   }
@@ -268,7 +270,7 @@ resource "aws_iam_openid_connect_provider" "github" {
 
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+  thumbprint_list = var.github_oidc_thumbprints
 }
 
 data "aws_iam_policy_document" "github_assume" {
@@ -321,12 +323,24 @@ data "aws_iam_policy_document" "github_deploy" {
 
   statement {
     actions = [
-      "ecs:DescribeServices",
-      "ecs:DescribeTaskDefinition",
-      "ecs:RegisterTaskDefinition",
-      "ecs:UpdateService"
+      "ecs:DescribeServices"
     ]
     resources = ["*"]
+  }
+
+  statement {
+    actions = [
+      "ecs:DescribeTaskDefinition",
+      "ecs:RegisterTaskDefinition"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    actions = [
+      "ecs:UpdateService"
+    ]
+    resources = [aws_ecs_service.bot.id]
   }
 
   statement {

@@ -64,6 +64,12 @@ variable "github_oidc_provider_arn" {
   default     = null
 }
 
+variable "github_oidc_thumbprints" {
+  type        = list(string)
+  description = "Thumbprints for the GitHub Actions OIDC provider. Only used when this stack creates the provider."
+  default     = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+}
+
 variable "tags" {
   type        = map(string)
   description = "Tags applied to created resources."
