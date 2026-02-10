@@ -11,13 +11,13 @@ export interface IHeuristicService {
    * Analyzes a message for suspicious patterns using rule-based heuristics
    * @param userId The Discord user ID
    * @param content The message content to analyze
-   * @param serverId The server ID where the message was sent (optional)
+   * @param serverId The server ID where the message was sent
    * @returns Object with result and reasons
    */
   analyzeMessage(
     userId: string,
     content: string,
-    serverId?: string
+    serverId: string
   ): {
     result: 'OK' | 'SUSPICIOUS';
     reasons: string[];
@@ -27,24 +27,26 @@ export interface IHeuristicService {
    * Checks if a message is suspicious based on frequency and keywords
    * @param userId The Discord user ID
    * @param content The message content
-   * @param serverId The server ID (optional)
+   * @param serverId The server ID
    * @returns Whether the message is suspicious
    */
-  isMessageSuspicious(userId: string, content: string, serverId?: string): boolean;
+  isMessageSuspicious(userId: string, content: string, serverId: string): boolean;
 
   /**
    * Checks if the user is sending messages too frequently
    * @param userId The Discord user ID
+   * @param serverId The server ID
    * @returns Whether the user has exceeded the frequency threshold
    */
-  isFrequencyAboveThreshold(userId: string, serverId?: string): boolean;
+  isFrequencyAboveThreshold(userId: string, serverId: string): boolean;
 
   /**
    * Checks if content contains suspicious keywords
    * @param content The message content
+   * @param serverId The server ID
    * @returns Whether suspicious keywords were detected
    */
-  containsSuspiciousKeywords(content: string, serverId?: string): boolean;
+  containsSuspiciousKeywords(content: string, serverId: string): boolean;
 
   /**
    * Clears the message history (mainly for testing)
@@ -77,9 +79,9 @@ export class HeuristicService implements IHeuristicService {
   private readonly cleanupIntervalMs = 60_000;
   private lastCleanupAt = 0;
 
-  // Store message timestamps by a per-user key; when serverId is provided we key by a
-  // composite (serverId+userId) via getUserKey.
-  private userMessages: Map<string, number[]> = new Map();
+  // Store message timestamps by server and user.
+  // We intentionally require serverId everywhere to avoid cross-server history bleed.
+  private userMessagesByServer: Map<string, Map<string, number[]>> = new Map();
 
   constructor(
     @inject(TYPES.ConfigService)
@@ -93,64 +95,12 @@ export class HeuristicService implements IHeuristicService {
     this.defaultSuspiciousKeywords = [...globalSettings.defaultSuspiciousKeywords];
   }
 
-  private getUserKey(userId: string, serverId?: string): string {
-    return serverId ? `${serverId.length}:${serverId}:${userId.length}:${userId}` : userId;
-  }
-
-  private extractServerIdFromUserKey(userKey: string): string | undefined {
-    const colonIndex = userKey.indexOf(':');
-    if (colonIndex < 0) {
-      return undefined;
-    }
-
-    const lengthText = userKey.slice(0, colonIndex);
-    const serverIdLength = Number.parseInt(lengthText, 10);
-    if (!Number.isFinite(serverIdLength) || serverIdLength <= 0) {
-      return undefined;
-    }
-
-    const serverIdStart = colonIndex + 1;
-    const serverIdEnd = serverIdStart + serverIdLength;
-    if (serverIdEnd >= userKey.length) {
-      return undefined;
-    }
-    const serverId = userKey.slice(serverIdStart, serverIdEnd);
-    if (serverId.length !== serverIdLength) {
-      return undefined;
-    }
-
-    // Validate full encoding: `${len1}:${serverId}:${len2}:${userId}`
-    if (userKey[serverIdEnd] !== ':') {
-      return undefined;
-    }
-
-    const userIdLengthTextStart = serverIdEnd + 1;
-    const userIdLengthTextEnd = userKey.indexOf(':', userIdLengthTextStart);
-    if (userIdLengthTextEnd < 0) {
-      return undefined;
-    }
-
-    const userIdLengthText = userKey.slice(userIdLengthTextStart, userIdLengthTextEnd);
-    const userIdLength = Number.parseInt(userIdLengthText, 10);
-    if (!Number.isFinite(userIdLength) || userIdLength <= 0) {
-      return undefined;
-    }
-
-    const userIdStart = userIdLengthTextEnd + 1;
-    const userIdEnd = userIdStart + userIdLength;
-    if (userIdEnd !== userKey.length) {
-      return undefined;
-    }
-
-    return serverId;
-  }
-
-  private getServerHeuristicSettings(serverId?: string): {
+  private getServerHeuristicSettings(serverId: string): {
     messageThreshold: number;
     timeWindowMs: number;
     suspiciousKeywords: string[];
   } {
-    const server = serverId ? this.configService.getCachedServerConfig(serverId) : undefined;
+    const server = this.configService.getCachedServerConfig(serverId);
     const settings = server?.settings;
 
     const thresholdRaw = settings?.message_threshold;
@@ -214,22 +164,18 @@ export class HeuristicService implements IHeuristicService {
     }
     this.lastCleanupAt = now;
 
-    const serverTimeWindows = new Map<string, number>();
+    for (const [serverId, userMessages] of this.userMessagesByServer.entries()) {
+      const { timeWindowMs } = this.getServerHeuristicSettings(serverId);
 
-    for (const [userKey, timestamps] of this.userMessages.entries()) {
-      const lastTimestamp = timestamps[timestamps.length - 1];
-
-      const serverId = this.extractServerIdFromUserKey(userKey);
-      const timeWindowMs = serverId
-        ? (serverTimeWindows.get(serverId) ??
-          this.getServerHeuristicSettings(serverId).timeWindowMs)
-        : this.defaultTimeWindowMs;
-      if (serverId && !serverTimeWindows.has(serverId)) {
-        serverTimeWindows.set(serverId, timeWindowMs);
+      for (const [userId, timestamps] of userMessages.entries()) {
+        const lastTimestamp = timestamps[timestamps.length - 1];
+        if (lastTimestamp === undefined || lastTimestamp <= now - timeWindowMs) {
+          userMessages.delete(userId);
+        }
       }
 
-      if (lastTimestamp === undefined || lastTimestamp <= now - timeWindowMs) {
-        this.userMessages.delete(userKey);
+      if (userMessages.size === 0) {
+        this.userMessagesByServer.delete(serverId);
       }
     }
   }
@@ -238,13 +184,13 @@ export class HeuristicService implements IHeuristicService {
    * Analyzes a message with comprehensive heuristics
    * @param userId The Discord user ID
    * @param content The message content to analyze
-   * @param serverId The server ID where the message was sent (optional)
+   * @param serverId The server ID where the message was sent
    * @returns Object with result and reasons
    */
   public analyzeMessage(
     userId: string,
     content: string,
-    serverId?: string
+    serverId: string
   ): {
     result: 'OK' | 'SUSPICIOUS';
     reasons: string[];
@@ -276,7 +222,7 @@ export class HeuristicService implements IHeuristicService {
    * @param content The message content
    * @returns true if suspicious, false otherwise
    */
-  public isMessageSuspicious(userId: string, content: string, serverId?: string): boolean {
+  public isMessageSuspicious(userId: string, content: string, serverId: string): boolean {
     return (
       this.isFrequencyAboveThreshold(userId, serverId) ||
       this.containsSuspiciousKeywords(content, serverId)
@@ -289,25 +235,43 @@ export class HeuristicService implements IHeuristicService {
    * @param userId The Discord user ID
    * @returns true if user has exceeded message frequency threshold
    */
-  public isFrequencyAboveThreshold(userId: string, serverId?: string): boolean {
+  public isFrequencyAboveThreshold(userId: string, serverId: string): boolean {
     const now = Date.now();
     const { messageThreshold, timeWindowMs } = this.getServerHeuristicSettings(serverId);
-    const userKey = this.getUserKey(userId, serverId);
-    const userMessageTimes = this.userMessages.get(userKey) || [];
-
     this.maybeCleanupMessageHistory(now);
+
+    let serverMessages = this.userMessagesByServer.get(serverId);
+    if (!serverMessages) {
+      serverMessages = new Map();
+      this.userMessagesByServer.set(serverId, serverMessages);
+    }
+
+    const userMessageTimes = serverMessages.get(userId) || [];
 
     // Add current message timestamp
     userMessageTimes.push(now);
 
     // Remove messages older than the time window
-    const recentMessages = userMessageTimes.filter((timestamp) => timestamp > now - timeWindowMs);
+    const cutoff = now - timeWindowMs;
+    let startIndex = 0;
+    while (startIndex < userMessageTimes.length && userMessageTimes[startIndex] <= cutoff) {
+      startIndex += 1;
+    }
+
+    const recentMessages = startIndex > 0 ? userMessageTimes.slice(startIndex) : userMessageTimes;
+
+    // Keep only what we need to evaluate the threshold.
+    const maxToKeep = messageThreshold + 1;
+    const cappedMessages =
+      recentMessages.length > maxToKeep
+        ? recentMessages.slice(recentMessages.length - maxToKeep)
+        : recentMessages;
 
     // Update the stored messages
-    this.userMessages.set(userKey, recentMessages);
+    serverMessages.set(userId, cappedMessages);
 
     // Check if the number of recent messages exceeds the threshold
-    return recentMessages.length > messageThreshold;
+    return cappedMessages.length > messageThreshold;
   }
 
   /**
@@ -316,7 +280,7 @@ export class HeuristicService implements IHeuristicService {
    * @param content The message content
    * @returns true if suspicious keywords are found
    */
-  public containsSuspiciousKeywords(content: string, serverId?: string): boolean {
+  public containsSuspiciousKeywords(content: string, serverId: string): boolean {
     const { suspiciousKeywords } = this.getServerHeuristicSettings(serverId);
     if (suspiciousKeywords.length === 0) {
       return false;
@@ -331,6 +295,6 @@ export class HeuristicService implements IHeuristicService {
    * Clears the message history for testing purposes
    */
   public clearMessageHistory(): void {
-    this.userMessages.clear();
+    this.userMessagesByServer.clear();
   }
 }

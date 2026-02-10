@@ -34,7 +34,7 @@ describe('HeuristicService (unit)', () => {
     const results: boolean[] = [];
 
     for (let i = 0; i < 6; i += 1) {
-      results.push(service.isFrequencyAboveThreshold('user-1'));
+      results.push(service.isFrequencyAboveThreshold('user-1', 'guild-1'));
     }
 
     expect(results.slice(0, 5).every((value) => value === false)).toBe(true);
@@ -46,18 +46,18 @@ describe('HeuristicService (unit)', () => {
     const service = new HeuristicService(buildConfigService());
 
     for (let i = 0; i < 5; i += 1) {
-      service.isFrequencyAboveThreshold('user-1');
+      service.isFrequencyAboveThreshold('user-1', 'guild-1');
     }
 
     jest.setSystemTime(new Date('2024-01-01T00:00:11.000Z'));
-    const isAboveThreshold = service.isFrequencyAboveThreshold('user-1');
+    const isAboveThreshold = service.isFrequencyAboveThreshold('user-1', 'guild-1');
 
     expect(isAboveThreshold).toBe(false);
   });
 
   it('detects suspicious keywords', () => {
     const service = new HeuristicService(buildConfigService());
-    const result = service.containsSuspiciousKeywords('Get FREE Discord Nitro now!');
+    const result = service.containsSuspiciousKeywords('Get FREE Discord Nitro now!', 'guild-1');
     expect(result).toBe(true);
   });
 
@@ -66,10 +66,10 @@ describe('HeuristicService (unit)', () => {
     const service = new HeuristicService(buildConfigService());
 
     for (let i = 0; i < 6; i += 1) {
-      service.isFrequencyAboveThreshold('user-1');
+      service.isFrequencyAboveThreshold('user-1', 'guild-1');
     }
 
-    const analysis = service.analyzeMessage('user-1', 'free discord nitro');
+    const analysis = service.analyzeMessage('user-1', 'free discord nitro', 'guild-1');
 
     expect(analysis.result).toBe('SUSPICIOUS');
     expect(analysis.reasons).toHaveLength(2);
@@ -148,7 +148,7 @@ describe('HeuristicService (unit)', () => {
     const configuredResults: boolean[] = [];
 
     for (let i = 0; i < 6; i += 1) {
-      defaultResults.push(defaultService.isFrequencyAboveThreshold('user-1'));
+      defaultResults.push(defaultService.isFrequencyAboveThreshold('user-1', 'guild-1'));
       configuredResults.push(configuredService.isFrequencyAboveThreshold('user-1', 'guild-1'));
     }
 

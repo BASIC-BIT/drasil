@@ -308,11 +308,12 @@ export class CommandHandler implements ICommandHandler {
       switch (testCommand) {
         case 'spam':
           // Simulate message frequency spam
+          if (!message.guildId) {
+            await message.reply('This command can only be used in a server.');
+            return;
+          }
           for (let i = 0; i < 10; i++) {
-            this.heuristicService.isFrequencyAboveThreshold(
-              message.author.id,
-              message.guildId ?? undefined
-            );
+            this.heuristicService.isFrequencyAboveThreshold(message.author.id, message.guildId);
           }
           await message.reply(
             'Simulated rapid message frequency. Next message should trigger detection.'
