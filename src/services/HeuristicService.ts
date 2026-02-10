@@ -63,7 +63,7 @@ export interface IHeuristicService {
  */
 @injectable()
 export class HeuristicService implements IHeuristicService {
-  private configService: IConfigService;
+  private configService: Pick<IConfigService, 'getCachedServerConfig'>;
 
   private readonly defaultMessageThreshold: number;
   private readonly defaultTimeWindowMs: number;
@@ -76,7 +76,10 @@ export class HeuristicService implements IHeuristicService {
   private userMessages: Map<string, number[]> = new Map();
   private userTimeWindows: Map<string, number> = new Map();
 
-  constructor(@inject(TYPES.ConfigService) configService: IConfigService) {
+  constructor(
+    @inject(TYPES.ConfigService)
+    configService: Pick<IConfigService, 'getCachedServerConfig'>
+  ) {
     this.configService = configService;
 
     const globalSettings = globalConfig.getSettings();
@@ -86,7 +89,7 @@ export class HeuristicService implements IHeuristicService {
   }
 
   private getUserKey(userId: string, serverId?: string): string {
-    return serverId ? `${serverId}:${userId}` : userId;
+    return serverId ? `${serverId.length}:${serverId}${userId}` : userId;
   }
 
   private getServerHeuristicSettings(serverId?: string): {

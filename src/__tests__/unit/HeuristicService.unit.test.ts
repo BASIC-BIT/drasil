@@ -2,10 +2,11 @@ import { HeuristicService } from '../../services/HeuristicService';
 import { IConfigService } from '../../config/ConfigService';
 import { Server, ServerSettings } from '../../repositories/types';
 
-const buildConfigService = (servers: Record<string, Server> = {}): IConfigService =>
-  ({
-    getCachedServerConfig: jest.fn().mockImplementation((guildId: string) => servers[guildId]),
-  }) as unknown as IConfigService;
+type CachedConfigService = jest.Mocked<Pick<IConfigService, 'getCachedServerConfig'>>;
+
+const buildConfigService = (servers: Record<string, Server> = {}): CachedConfigService => ({
+  getCachedServerConfig: jest.fn().mockImplementation((guildId: string) => servers[guildId]),
+});
 
 const buildServer = (guildId: string, settings: Partial<ServerSettings>): Server => ({
   guild_id: guildId,
