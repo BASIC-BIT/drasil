@@ -19,6 +19,7 @@
     "build": "tsc",
     "build:watch": "tsc -w",
     "clean": "rm -rf dist",
+    "postinstall": "prisma generate",
     "lint": "eslint . --ext .ts,.js,.mjs",
     "lint:fix": "eslint . --ext .ts,.js,.mjs --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md,mjs}\"",
@@ -50,6 +51,7 @@
     "@jest/globals": "^29.7.0",
     "@prisma/client": "^6.5.0",
     "@types/jest": "^29.5.14",
+    "@types/node": "^20.17.24",
     "@types/pg": "^8.16.0",
     "babel-jest": "^29.7.0",
     "eslint": "^9.23.0",
@@ -69,7 +71,10 @@
     "typescript-eslint": "^8.28.0"
   },
   "dependencies": {
+    "@arizeai/openinference-instrumentation-openai": "^2.1.0",
+    "@arizeai/phoenix-otel": "^0.3.4",
     "@supabase/supabase-js": "^2.49.3",
+    "@opentelemetry/api": "^1.9.0",
     "discord.js": "^14.18.0",
     "dotenv": "^16.4.7",
     "inversify": "^7.2.0",

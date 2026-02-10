@@ -1,8 +1,8 @@
 import 'reflect-metadata';
 import * as dotenv from 'dotenv';
-import { configureContainer } from './di/container';
 import { TYPES } from './di/symbols';
-import { IBot } from './Bot';
+import type { IBot } from './Bot';
+import { initPhoenixTracing } from './observability/phoenix';
 
 // Load environment variables
 dotenv.config();
@@ -14,7 +14,10 @@ async function bootstrap(): Promise<void> {
   try {
     console.log('Starting Anti-Spam Bot...');
 
+    initPhoenixTracing();
+
     // Create and configure the container
+    const { configureContainer } = await import('./di/container');
     const container = configureContainer();
 
     // Get the bot instance from the container

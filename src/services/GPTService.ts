@@ -7,6 +7,8 @@ import { injectable, inject } from 'inversify';
 import OpenAI from 'openai';
 import { getFormattedExamples } from '../config/gpt-config';
 import { TYPES } from '../di/symbols';
+import { SpanStatusCode, trace } from '@opentelemetry/api';
+import { hashIdentifier } from '../observability/hash';
 
 export interface UserProfileData {
   serverId?: string; // Added optional serverId
@@ -36,13 +38,6 @@ export interface IGPTService {
   }>;
 }
 
-// Type for OpenAI error with response data
-interface OpenAIErrorWithResponse extends Error {
-  response?: {
-    data?: unknown;
-  };
-}
-
 /**
  * Implementation of the GPT service using OpenAI API
  */
@@ -65,12 +60,7 @@ export class GPTService implements IGPTService {
         dangerouslyAllowBrowser: true, // Add this if testing in browser environment
       });
 
-      // Display partial key for debugging
-      if (apiKey) {
-        const firstFour = apiKey.substring(0, 4);
-        const lastFour = apiKey.substring(apiKey.length - 4);
-        console.log(`OpenAI client initialized with API key: ${firstFour}...${lastFour}`);
-      }
+      // Never log API keys.
     }
   }
 
@@ -118,64 +108,84 @@ export class GPTService implements IGPTService {
    * @returns Promise resolving to "OK" or "SUSPICIOUS"
    */
   private async classifyUserProfile(userProfile: UserProfileData): Promise<string> {
-    try {
-      // Create a structured prompt for GPT with few-shot examples
-      const prompt = this.createPrompt(userProfile);
+    const tracer = trace.getTracer('drasil');
+    const debugGpt = process.env.DEBUG_GPT === 'true';
 
-      console.log('Sending request to OpenAI with prompt:', prompt.substring(0, 400) + '...');
+    const userIdHash = userProfile.userId ? hashIdentifier(userProfile.userId) : undefined;
+    const serverIdHash = userProfile.serverId ? hashIdentifier(userProfile.serverId) : undefined;
 
-      // Call OpenAI API
-      const response = await this.openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content:
-              "You are a Discord moderation assistant. Based on the user's profile, classify whether the user is suspicious. If suspicious, respond 'SUSPICIOUS'; if normal, respond 'OK'. In your decision, consider factors like account age, username characteristics, nickname if available, how recently they joined, and the content of their recent message if provided.",
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        temperature: 0.3,
-        max_tokens: 50,
-      });
+    return tracer.startActiveSpan(
+      'drasil.gpt.classifyUserProfile',
+      {
+        attributes: {
+          ...(serverIdHash ? { 'drasil.guild_id_hash': serverIdHash } : {}),
+          ...(userIdHash ? { 'drasil.user_id_hash': userIdHash } : {}),
+          'drasil.gpt.model': 'gpt-4o-mini',
+          'drasil.profile.recent_messages_count': userProfile.recentMessages.length,
+        },
+      },
+      async (span) => {
+        try {
+          // Create a structured prompt for GPT with few-shot examples
+          const prompt = this.createPrompt(userProfile);
 
-      // Debug the API response in development
-      if (process.env.NODE_ENV === 'development' || process.env.DEBUG) {
-        console.log('OpenAI API Response:', JSON.stringify(response, null, 2));
-      }
+          // Call OpenAI API
+          const response = await this.openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content:
+                  "You are a Discord moderation assistant. Based on the user's profile, classify whether the user is suspicious. If suspicious, respond 'SUSPICIOUS'; if normal, respond 'OK'. In your decision, consider factors like account age, username characteristics, nickname if available, how recently they joined, and the content of their recent message if provided.",
+              },
+              {
+                role: 'user',
+                content: prompt,
+              },
+            ],
+            temperature: 0.3,
+            max_tokens: 50,
+          });
 
-      // Safer extraction of classification with more validation
-      // If the API call fails, an error is thrown and caught.
-      // If it succeeds, 'response' and 'response.choices' are guaranteed by the SDK type.
-      if (!response.choices.length) {
-        console.error('Unexpected API response structure:', response);
-        return 'OK'; // Default to OK if response format is unexpected
-      }
+          if (response.usage) {
+            span.setAttribute('drasil.openai.prompt_tokens', response.usage.prompt_tokens);
+            span.setAttribute('drasil.openai.completion_tokens', response.usage.completion_tokens);
+            span.setAttribute('drasil.openai.total_tokens', response.usage.total_tokens);
+          }
 
-      // Extract the classification from the response
-      const classification = response.choices[0]?.message?.content?.trim() || '';
-      console.log('Classification from API:', classification);
+          // Safer extraction of classification with more validation
+          if (!response.choices.length) {
+            span.setAttribute('drasil.gpt.classification', 'OK');
+            return 'OK';
+          }
 
-      // Return only "OK" or "SUSPICIOUS", default to "OK" if unclear
-      if (classification.includes('SUSPICIOUS')) {
-        return 'SUSPICIOUS';
-      } else {
-        return 'OK';
-      }
-    } catch (error) {
-      console.error('Error calling OpenAI API:', error);
-      if (error instanceof Error) {
-        console.error('Error details:', error.message);
-        if ('response' in error) {
-          console.error('API response:', (error as OpenAIErrorWithResponse).response?.data);
+          const raw = response.choices[0]?.message?.content?.trim() || '';
+          const normalized = raw.includes('SUSPICIOUS') ? 'SUSPICIOUS' : 'OK';
+          span.setAttribute('drasil.gpt.classification', normalized);
+
+          if (debugGpt) {
+            console.log(`[gpt] classification=${normalized}`);
+          }
+
+          return normalized;
+        } catch (error) {
+          span.recordException(error as Error);
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: error instanceof Error ? error.message : 'OpenAI error',
+          });
+
+          if (debugGpt) {
+            console.warn('[gpt] OpenAI call failed; defaulting to OK', error);
+          }
+
+          // Default to "OK" in case of API errors to prevent false positives
+          return 'OK';
+        } finally {
+          span.end();
         }
       }
-      // Default to "OK" in case of API errors to prevent false positives
-      return 'OK';
-    }
+    );
   }
 
   /**
