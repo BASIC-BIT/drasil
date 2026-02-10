@@ -74,7 +74,6 @@ export class HeuristicService implements IHeuristicService {
 
   // Store message timestamps by user ID
   private userMessages: Map<string, number[]> = new Map();
-  private userTimeWindows: Map<string, number> = new Map();
 
   constructor(
     @inject(TYPES.ConfigService)
@@ -90,6 +89,28 @@ export class HeuristicService implements IHeuristicService {
 
   private getUserKey(userId: string, serverId?: string): string {
     return serverId ? `${serverId.length}:${serverId}:${userId.length}:${userId}` : userId;
+  }
+
+  private extractServerIdFromUserKey(userKey: string): string | undefined {
+    const colonIndex = userKey.indexOf(':');
+    if (colonIndex < 0) {
+      return undefined;
+    }
+
+    const lengthText = userKey.slice(0, colonIndex);
+    const serverIdLength = Number.parseInt(lengthText, 10);
+    if (!Number.isFinite(serverIdLength) || serverIdLength <= 0) {
+      return undefined;
+    }
+
+    const serverIdStart = colonIndex + 1;
+    const serverIdEnd = serverIdStart + serverIdLength;
+    const serverId = userKey.slice(serverIdStart, serverIdEnd);
+    if (serverId.length !== serverIdLength) {
+      return undefined;
+    }
+
+    return serverId;
   }
 
   private getServerHeuristicSettings(serverId?: string): {
@@ -130,13 +151,22 @@ export class HeuristicService implements IHeuristicService {
     }
     this.lastCleanupAt = now;
 
+    const serverTimeWindows = new Map<string, number>();
+
     for (const [userKey, timestamps] of this.userMessages.entries()) {
       const lastTimestamp = timestamps[timestamps.length - 1];
-      const timeWindowMs = this.userTimeWindows.get(userKey) ?? this.defaultTimeWindowMs;
+
+      const serverId = this.extractServerIdFromUserKey(userKey);
+      const timeWindowMs = serverId
+        ? (serverTimeWindows.get(serverId) ??
+          this.getServerHeuristicSettings(serverId).timeWindowMs)
+        : this.defaultTimeWindowMs;
+      if (serverId && !serverTimeWindows.has(serverId)) {
+        serverTimeWindows.set(serverId, timeWindowMs);
+      }
 
       if (!lastTimestamp || lastTimestamp <= now - timeWindowMs) {
         this.userMessages.delete(userKey);
-        this.userTimeWindows.delete(userKey);
       }
     }
   }
@@ -203,7 +233,6 @@ export class HeuristicService implements IHeuristicService {
     const userMessageTimes = this.userMessages.get(userKey) || [];
 
     this.maybeCleanupMessageHistory(now);
-    this.userTimeWindows.set(userKey, timeWindowMs);
 
     // Add current message timestamp
     userMessageTimes.push(now);
@@ -240,6 +269,5 @@ export class HeuristicService implements IHeuristicService {
    */
   public clearMessageHistory(): void {
     this.userMessages.clear();
-    this.userTimeWindows.clear();
   }
 }
