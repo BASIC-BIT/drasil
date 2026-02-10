@@ -55,7 +55,7 @@ variable "container_insights" {
 variable "github_repo" {
   type        = string
   description = "GitHub repo in OWNER/REPO format used to restrict OIDC role assumption."
-  default     = "BASIC-BIT/drasil"
+  default     = "basic-bit/drasil"
 }
 
 variable "github_oidc_provider_arn" {
