@@ -1,5 +1,4 @@
 import { inject, injectable } from 'inversify';
-import { globalConfig } from '../config/GlobalConfig';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 
@@ -65,16 +64,7 @@ export interface IHeuristicService {
  */
 @injectable()
 export class HeuristicService implements IHeuristicService {
-  private configService: Pick<IConfigService, 'getCachedServerConfig'>;
-
-  private readonly defaultMessageThreshold: number;
-  private readonly defaultTimeWindowMs: number;
-  private readonly defaultSuspiciousKeywords: string[];
-  private readonly legacyDefaultSuspiciousKeywords = [
-    'free nitro',
-    'discord nitro',
-    'claim your prize',
-  ];
+  private configService: Pick<IConfigService, 'getCachedHeuristicSettings'>;
 
   private readonly cleanupIntervalMs = 60_000;
   private lastCleanupAt = 0;
@@ -85,77 +75,9 @@ export class HeuristicService implements IHeuristicService {
 
   constructor(
     @inject(TYPES.ConfigService)
-    configService: Pick<IConfigService, 'getCachedServerConfig'>
+    configService: Pick<IConfigService, 'getCachedHeuristicSettings'>
   ) {
     this.configService = configService;
-
-    const globalSettings = globalConfig.getSettings();
-    this.defaultMessageThreshold = globalSettings.defaultServerSettings.messageThreshold;
-    this.defaultTimeWindowMs = globalSettings.defaultServerSettings.messageTimeframe * 1000;
-    this.defaultSuspiciousKeywords = [...globalSettings.defaultSuspiciousKeywords];
-  }
-
-  private getServerHeuristicSettings(serverId: string): {
-    messageThreshold: number;
-    timeWindowMs: number;
-    suspiciousKeywords: string[];
-  } {
-    const server = this.configService.getCachedServerConfig(serverId);
-    const settings = server?.settings;
-
-    const thresholdRaw = settings?.message_threshold;
-    const thresholdNormalized =
-      typeof thresholdRaw === 'number' && Number.isFinite(thresholdRaw)
-        ? Math.floor(thresholdRaw)
-        : undefined;
-    const messageThreshold =
-      thresholdNormalized !== undefined && thresholdNormalized >= 1
-        ? thresholdNormalized
-        : this.defaultMessageThreshold;
-
-    const timeframeRaw = settings?.message_timeframe;
-    const timeframeSeconds =
-      typeof timeframeRaw === 'number' && Number.isFinite(timeframeRaw) && timeframeRaw > 0
-        ? timeframeRaw
-        : this.defaultTimeWindowMs / 1000;
-    const timeWindowMsCandidate = timeframeSeconds * 1000;
-    const timeWindowMs =
-      Number.isFinite(timeWindowMsCandidate) && timeWindowMsCandidate > 0
-        ? timeWindowMsCandidate
-        : this.defaultTimeWindowMs;
-
-    const keywordsRaw = settings?.suspicious_keywords;
-    let suspiciousKeywords: string[];
-
-    if (Array.isArray(keywordsRaw)) {
-      const sanitized = keywordsRaw
-        .filter((value): value is string => typeof value === 'string')
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0);
-
-      // Migration-friendly behavior: many servers have a persisted copy of the old
-      // 3-keyword default list. If so, use the current global defaults to keep the
-      // heuristic wide without requiring manual DB edits.
-      suspiciousKeywords = this.isLegacyDefaultKeywordList(sanitized)
-        ? this.defaultSuspiciousKeywords
-        : sanitized;
-    } else {
-      suspiciousKeywords = this.defaultSuspiciousKeywords;
-    }
-
-    return { messageThreshold, timeWindowMs, suspiciousKeywords };
-  }
-
-  private isLegacyDefaultKeywordList(keywords: string[]): boolean {
-    const normalized = Array.from(new Set(keywords.map((value) => value.toLowerCase())))
-      .sort()
-      .join('|');
-    const legacy = Array.from(
-      new Set(this.legacyDefaultSuspiciousKeywords.map((value) => value.toLowerCase()))
-    )
-      .sort()
-      .join('|');
-    return normalized.length > 0 && normalized === legacy;
   }
 
   private maybeCleanupMessageHistory(now: number): void {
@@ -165,11 +87,10 @@ export class HeuristicService implements IHeuristicService {
     this.lastCleanupAt = now;
 
     for (const [serverId, userMessages] of this.userMessagesByServer.entries()) {
-      const { timeWindowMs } = this.getServerHeuristicSettings(serverId);
+      const { timeWindowMs } = this.configService.getCachedHeuristicSettings(serverId);
 
       for (const [userId, timestamps] of userMessages.entries()) {
-        const lastTimestamp = timestamps[timestamps.length - 1];
-        if (lastTimestamp === undefined || lastTimestamp <= now - timeWindowMs) {
+        if (timestamps.length === 0 || timestamps[timestamps.length - 1] <= now - timeWindowMs) {
           userMessages.delete(userId);
         }
       }
@@ -239,7 +160,8 @@ export class HeuristicService implements IHeuristicService {
    */
   public isFrequencyAboveThreshold(userId: string, serverId: string): boolean {
     const now = Date.now();
-    const { messageThreshold, timeWindowMs } = this.getServerHeuristicSettings(serverId);
+    const { messageThreshold, timeWindowMs } =
+      this.configService.getCachedHeuristicSettings(serverId);
     this.maybeCleanupMessageHistory(now);
 
     let serverMessages = this.userMessagesByServer.get(serverId);
@@ -284,7 +206,7 @@ export class HeuristicService implements IHeuristicService {
    * @returns true if suspicious keywords are found
    */
   public containsSuspiciousKeywords(content: string, serverId: string): boolean {
-    const { suspiciousKeywords } = this.getServerHeuristicSettings(serverId);
+    const { suspiciousKeywords } = this.configService.getCachedHeuristicSettings(serverId);
     if (suspiciousKeywords.length === 0) {
       return false;
     }

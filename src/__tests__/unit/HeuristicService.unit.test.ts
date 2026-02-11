@@ -1,26 +1,21 @@
 import { HeuristicService } from '../../services/HeuristicService';
-import { IConfigService } from '../../config/ConfigService';
-import { Server, ServerSettings } from '../../repositories/types';
+import { HeuristicSettings, IConfigService } from '../../config/ConfigService';
 
-type CachedConfigService = jest.Mocked<Pick<IConfigService, 'getCachedServerConfig'>>;
+type CachedConfigService = jest.Mocked<Pick<IConfigService, 'getCachedHeuristicSettings'>>;
 
-const fixtureTimestamp = new Date('2024-01-01T00:00:00.000Z').toISOString();
+const defaultHeuristicSettings: HeuristicSettings = {
+  messageThreshold: 5,
+  timeWindowMs: 10_000,
+  suspiciousKeywords: ['free discord nitro'],
+};
 
-const buildConfigService = (servers: Record<string, Server> = {}): CachedConfigService => ({
-  getCachedServerConfig: jest.fn().mockImplementation((guildId: string) => servers[guildId]),
-});
-
-const buildServer = (guildId: string, settings: Partial<ServerSettings>): Server => ({
-  guild_id: guildId,
-  restricted_role_id: null,
-  admin_channel_id: null,
-  verification_channel_id: null,
-  admin_notification_role_id: null,
-  created_at: fixtureTimestamp,
-  updated_at: fixtureTimestamp,
-  updated_by: null,
-  settings: { suspicious_keywords: null, ...settings },
-  is_active: true,
+const buildConfigService = (
+  overridesByGuild: Record<string, Partial<HeuristicSettings>> = {}
+): CachedConfigService => ({
+  getCachedHeuristicSettings: jest.fn().mockImplementation((guildId: string) => ({
+    ...defaultHeuristicSettings,
+    ...overridesByGuild[guildId],
+  })),
 });
 
 describe('HeuristicService (unit)', () => {
@@ -75,11 +70,11 @@ describe('HeuristicService (unit)', () => {
     expect(analysis.reasons).toHaveLength(2);
   });
 
-  it('uses per-server message threshold and timeframe when present in cached settings', () => {
+  it('uses per-server message threshold and timeframe when provided by config cache', () => {
     jest.useFakeTimers().setSystemTime(new Date('2024-01-01T00:00:00.000Z'));
     const service = new HeuristicService(
       buildConfigService({
-        'guild-1': buildServer('guild-1', { message_threshold: 2, message_timeframe: 1 }),
+        'guild-1': { messageThreshold: 2, timeWindowMs: 1000 },
       })
     );
 
@@ -91,10 +86,10 @@ describe('HeuristicService (unit)', () => {
     expect(service.isFrequencyAboveThreshold('user-1', 'guild-1')).toBe(false);
   });
 
-  it('uses per-server suspicious keyword list when present in cached settings', () => {
+  it('uses per-server suspicious keyword list when provided by config cache', () => {
     const service = new HeuristicService(
       buildConfigService({
-        'guild-1': buildServer('guild-1', { suspicious_keywords: ['banana'] }),
+        'guild-1': { suspiciousKeywords: ['banana'] },
       })
     );
 
@@ -102,26 +97,12 @@ describe('HeuristicService (unit)', () => {
     expect(service.containsSuspiciousKeywords('free discord nitro', 'guild-1')).toBe(false);
   });
 
-  it('treats legacy default keyword list as "unset" and falls back to current defaults', () => {
-    const service = new HeuristicService(
-      buildConfigService({
-        'guild-1': buildServer('guild-1', {
-          suspicious_keywords: ['free nitro', 'discord nitro', 'claim your prize'],
-        }),
-      })
-    );
-
-    // "steam gift" is part of the expanded default list; this should remain detected
-    // even if a server has the legacy 3-keyword list persisted.
-    expect(service.containsSuspiciousKeywords('steam gift', 'guild-1')).toBe(true);
-  });
-
   it('does not share frequency history across servers', () => {
     jest.useFakeTimers().setSystemTime(new Date('2024-01-01T00:00:00.000Z'));
     const service = new HeuristicService(
       buildConfigService({
-        'guild-1': buildServer('guild-1', { message_threshold: 2, message_timeframe: 10 }),
-        'guild-2': buildServer('guild-2', { message_threshold: 2, message_timeframe: 10 }),
+        'guild-1': { messageThreshold: 2, timeWindowMs: 10_000 },
+        'guild-2': { messageThreshold: 2, timeWindowMs: 10_000 },
       })
     );
 
@@ -132,26 +113,5 @@ describe('HeuristicService (unit)', () => {
     expect(service.isFrequencyAboveThreshold('user-1', 'guild-2')).toBe(false);
     expect(service.isFrequencyAboveThreshold('user-1', 'guild-2')).toBe(false);
     expect(service.isFrequencyAboveThreshold('user-1', 'guild-2')).toBe(true);
-  });
-
-  it('falls back to defaults when message_threshold floors below 1', () => {
-    jest.useFakeTimers().setSystemTime(new Date('2024-01-01T00:00:00.000Z'));
-
-    const defaultService = new HeuristicService(buildConfigService());
-    const configuredService = new HeuristicService(
-      buildConfigService({
-        'guild-1': buildServer('guild-1', { message_threshold: 0.5, message_timeframe: 10 }),
-      })
-    );
-
-    const defaultResults: boolean[] = [];
-    const configuredResults: boolean[] = [];
-
-    for (let i = 0; i < 6; i += 1) {
-      defaultResults.push(defaultService.isFrequencyAboveThreshold('user-1', 'guild-1'));
-      configuredResults.push(configuredService.isFrequencyAboveThreshold('user-1', 'guild-1'));
-    }
-
-    expect(configuredResults).toEqual(defaultResults);
   });
 });
