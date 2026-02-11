@@ -68,9 +68,11 @@ jobs:
           IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY"
           IMAGE="$IMAGE_URI:$IMAGE_SHA"
 
-          echo "requested_ref=$INPUT_REF" >> "$GITHUB_OUTPUT"
-          echo "image_sha=$IMAGE_SHA" >> "$GITHUB_OUTPUT"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          {
+            echo "requested_ref=$INPUT_REF"
+            echo "image_sha=$IMAGE_SHA"
+            echo "image=$IMAGE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check image tag in ECR
         id: image_exists
@@ -144,8 +146,8 @@ jobs:
           set -euo pipefail
           {
             echo "## Deploy target"
-            echo "- Requested ref: \\`$REQUESTED_REF\\`"
-            echo "- Resolved commit SHA: \\`$IMAGE_SHA\\`"
-            echo "- Image: \\`$IMAGE\\`"
-            echo "- Image reused from ECR: \\`$IMAGE_EXISTS\\`"
+            echo "- Requested ref: $REQUESTED_REF"
+            echo "- Resolved commit SHA: $IMAGE_SHA"
+            echo "- Image: $IMAGE"
+            echo "- Image reused from ECR: $IMAGE_EXISTS"
           } >> "$GITHUB_STEP_SUMMARY"
