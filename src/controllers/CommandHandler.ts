@@ -225,7 +225,7 @@ export class CommandHandler implements ICommandHandler {
     // Permission gate (defaultMemberPermissions is not a security boundary)
     // Prefer `interaction.memberPermissions` since it includes channel-level overrides.
     let hasBanPermission = interaction.memberPermissions?.has(PermissionFlagsBits.BanMembers);
-    if (hasBanPermission === null || hasBanPermission === undefined) {
+    if (hasBanPermission === undefined) {
       const invokingMember = await guild.members.fetch(interaction.user.id).catch(() => null);
       hasBanPermission = invokingMember
         ? invokingMember.permissionsIn(interaction.channelId).has(PermissionFlagsBits.BanMembers)
@@ -308,8 +308,12 @@ export class CommandHandler implements ICommandHandler {
       switch (testCommand) {
         case 'spam':
           // Simulate message frequency spam
+          if (!message.guildId) {
+            await message.reply('This command can only be used in a server.');
+            return;
+          }
           for (let i = 0; i < 10; i++) {
-            this.heuristicService.isFrequencyAboveThreshold(message.author.id);
+            this.heuristicService.isFrequencyAboveThreshold(message.author.id, message.guildId);
           }
           await message.reply(
             'Simulated rapid message frequency. Next message should trigger detection.'

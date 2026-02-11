@@ -50,7 +50,19 @@ class GlobalConfig {
         messageRetentionDays: 7,
         detectionRetentionDays: 30,
       },
-      defaultSuspiciousKeywords: ['free nitro', 'discord nitro', 'claim your prize'],
+      defaultSuspiciousKeywords: [
+        'nitro scam',
+        'free discord nitro',
+        'free nitro',
+        'discord nitro',
+        'steam gift',
+        'gift card',
+        'click this link',
+        'claim your prize',
+        'crypto giveaway',
+        'airdrop',
+        'free robux',
+      ],
     };
 
     // Load settings from environment variables
