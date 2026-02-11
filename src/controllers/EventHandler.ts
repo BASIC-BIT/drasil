@@ -30,6 +30,8 @@ export class EventHandler implements IEventHandler {
   private securityActionService: ISecurityActionService;
   private commandHandler: ICommandHandler;
   private interactionHandler: IInteractionHandler;
+  private serverConfigWarmups: Set<string> = new Set();
+  private configInitializePromise: Promise<void> | null = null;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -66,7 +68,7 @@ export class EventHandler implements IEventHandler {
     console.log(`Logged in as ${this.client.user.tag}!`);
 
     // Initialize services
-    await this.configService.initialize();
+    await this.ensureConfigInitialized();
 
     await this.commandHandler.registerCommands();
   }
@@ -117,6 +119,16 @@ export class EventHandler implements IEventHandler {
     const content = message.content;
 
     try {
+      // Ensure the config cache init attempt has completed before processing messages.
+      // (Prevents applying global defaults while initialize() is still running.)
+      await this.ensureConfigInitialized();
+
+      // Warm the per-guild config cache in the background (no await) so hot-path heuristics
+      // can consult the in-memory cache without blocking message handling.
+      if (!this.configService.getCachedServerConfig(serverId)) {
+        this.warmServerConfigCache(serverId);
+      }
+
       // Get user profile data for detection context
       const profileData = this.extractUserProfileData(message.member);
 
@@ -148,9 +160,43 @@ export class EventHandler implements IEventHandler {
     }
   }
 
+  private warmServerConfigCache(guildId: string): void {
+    if (this.serverConfigWarmups.has(guildId)) {
+      return;
+    }
+
+    this.serverConfigWarmups.add(guildId);
+    void this.configService
+      .getServerConfig(guildId)
+      .catch((error) => {
+        console.warn(`Failed to warm server config cache for guild ${guildId}:`, error);
+      })
+      .finally(() => {
+        this.serverConfigWarmups.delete(guildId);
+      });
+  }
+
+  private async ensureConfigInitialized(): Promise<void> {
+    if (!this.configInitializePromise) {
+      const wrappedPromise = this.configService.initialize().catch((error) => {
+        // If initialization fails, allow a future call to retry.
+        if (this.configInitializePromise === wrappedPromise) {
+          this.configInitializePromise = null;
+        }
+        throw error;
+      });
+
+      this.configInitializePromise = wrappedPromise;
+    }
+
+    await this.configInitializePromise;
+  }
+
   private async handleGuildMemberAdd(member: GuildMember): Promise<void> {
     try {
       console.log(`New member joined: ${member.user.tag} (${member.id})`);
+
+      await this.ensureConfigInitialized();
 
       // Extract profile data
       const profileData = this.extractUserProfileData(member);
