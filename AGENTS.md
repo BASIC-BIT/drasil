@@ -124,6 +124,9 @@ Practical workflow tips:
 - When CI/CD updates ECS task definitions, either manage deploys in Terraform (changing image/digest) or add `lifecycle.ignore_changes = [task_definition]` to avoid drift fights.
 - If a GitHub Actions workflow relies on CLI tools (e.g. `jq`), install them explicitly; runner images can change.
 - Some Terraform resources validate with warnings that become errors later (e.g. S3 lifecycle rules now require `filter {}` / `prefix`); fix warnings proactively.
+- AI reviewers (and humans) can suggest Terraform attributes that don't exist in the provider schema; confirm with `terraform validate` (e.g. `aws_ecs_service` uses `id` as the ARN and does not export a separate `arn`).
+- When writing GitHub OIDC trust policies, normalize repo casing (`lower(...)`) to match the `sub` claim and avoid subtle mismatches.
+- If an ECS service references an image tag that is only produced by CI/CD, expect tasks to fail until the first deploy; consider `desired_count=0` for the initial `terraform apply` and scale up after the first deploy.
 - Before committing/pushing, sanity check `git status` (branch + dirty files), especially when switching between PRs/worktrees.
 
 ## Scripts
