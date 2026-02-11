@@ -24,8 +24,8 @@ variable "vpc_cidr" {
 
 variable "desired_count" {
   type        = number
-  description = "Number of ECS tasks to run. Keep at 1 for a non-sharded Discord bot."
-  default     = 1
+  description = "Number of ECS tasks to run. Defaults to 0 to avoid first-apply failures before the first image deploy."
+  default     = 0
 }
 
 variable "task_cpu" {

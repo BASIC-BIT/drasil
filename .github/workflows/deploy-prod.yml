@@ -54,17 +54,46 @@ jobs:
         shell: bash
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Build and push image
+      - name: Resolve deploy image
+        id: resolve_image
         shell: bash
         env:
           ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          INPUT_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
 
           IMAGE_SHA="$(git rev-parse HEAD)"
           IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY"
           IMAGE="$IMAGE_URI:$IMAGE_SHA"
+
+          echo "requested_ref=$INPUT_REF" >> "$GITHUB_OUTPUT"
+          echo "image_sha=$IMAGE_SHA" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Check image tag in ECR
+        id: image_exists
+        shell: bash
+        env:
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_SHA: ${{ steps.resolve_image.outputs.image_sha }}
+        run: |
+          set -euo pipefail
+
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_SHA" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push image
+        if: steps.image_exists.outputs.exists != 'true'
+        shell: bash
+        env:
+          IMAGE: ${{ steps.resolve_image.outputs.image }}
+        run: |
+          set -euo pipefail
 
           docker build \
             -t "$IMAGE" \
@@ -72,19 +101,23 @@ jobs:
 
           docker push "$IMAGE"
 
+      - name: Reuse existing image tag
+        if: steps.image_exists.outputs.exists == 'true'
+        shell: bash
+        env:
+          IMAGE: ${{ steps.resolve_image.outputs.image }}
+        run: |
+          set -euo pipefail
+          echo "Image already exists in ECR, skipping build/push: $IMAGE"
+
       - name: Register new task definition revision
         shell: bash
         env:
-          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE: ${{ steps.resolve_image.outputs.image }}
           ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
           ECS_SERVICE: ${{ vars.ECS_SERVICE }}
         run: |
           set -euo pipefail
-
-          IMAGE_SHA="$(git rev-parse HEAD)"
-          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY"
-          IMAGE="$IMAGE_URI:$IMAGE_SHA"
 
           CURRENT_TD_ARN="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query 'services[0].taskDefinition' --output text)"
           aws ecs describe-task-definition --task-definition "$CURRENT_TD_ARN" --query 'taskDefinition' > taskdef.json
@@ -99,3 +132,20 @@ jobs:
 
           aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "$NEW_TD_ARN"
           aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
+
+      - name: Deployment summary
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ steps.resolve_image.outputs.requested_ref }}
+          IMAGE_SHA: ${{ steps.resolve_image.outputs.image_sha }}
+          IMAGE: ${{ steps.resolve_image.outputs.image }}
+          IMAGE_EXISTS: ${{ steps.image_exists.outputs.exists }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Deploy target"
+            echo "- Requested ref: \\`$REQUESTED_REF\\`"
+            echo "- Resolved commit SHA: \\`$IMAGE_SHA\\`"
+            echo "- Image: \\`$IMAGE\\`"
+            echo "- Image reused from ECR: \\`$IMAGE_EXISTS\\`"
+          } >> "$GITHUB_STEP_SUMMARY"

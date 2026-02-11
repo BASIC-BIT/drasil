@@ -4,7 +4,7 @@ This repo can be deployed as a long-running Discord bot on AWS ECS Fargate.
 
 The defaults are intentionally simple:
 
-- ECS Fargate service with `desired_count = 1` (Discord bot should not run multiple instances yet)
+- ECS Fargate service with `desired_count = 0` initially (set to 1 after first successful deploy)
 - Public subnets + public IP (outbound-only) to avoid NAT Gateway cost
 - Secrets stored in AWS Secrets Manager
 - Customer-managed KMS keys for encryption at rest (state + runtime resources)
@@ -92,12 +92,12 @@ It will:
 
 ## Rollback
 
-Re-run the deploy workflow and set the `ref` input to an older commit SHA. That rebuilds and pushes that image tag and updates the ECS service to a new task definition revision referencing it.
+Re-run the deploy workflow and set the `ref` input to an older commit SHA. The workflow resolves that commit SHA and reuses the existing immutable ECR tag if it already exists (or builds/pushes it if missing), then updates ECS to a new task definition revision referencing that image.
 
 ## Notes
 
 - The Terraform-managed task definition uses a placeholder image tag (`:bootstrap`). The deploy workflow registers task definitions using immutable commit SHA tags.
-- Until the first deploy runs, the ECS service may fail to start tasks because the placeholder image tag does not exist yet. If you want to avoid that churn, apply `infra/aws/prod` initially with `-var desired_count=0`, run the first deploy, then set `desired_count=1`.
+- `desired_count` defaults to `0` so the initial `terraform apply` does not churn on the placeholder image tag. After the first deploy succeeds, set `desired_count=1` for normal bot operation.
 - The ECS service task definition is updated by the deploy workflow; Terraform intentionally ignores `task_definition` drift to avoid fighting deploys.
 - If/when we add sharding, we can increase `desired_count` and/or move to a more controlled rollout.
 - If you prefer private subnets, add a NAT Gateway and set `assign_public_ip = false` in `infra/aws/prod/main.tf`.
