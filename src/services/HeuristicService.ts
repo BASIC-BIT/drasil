@@ -213,7 +213,7 @@ export class HeuristicService implements IHeuristicService {
 
     const normalizedContent = content.toLowerCase();
 
-    return suspiciousKeywords.some((keyword) => normalizedContent.includes(keyword.toLowerCase()));
+    return suspiciousKeywords.some((keyword) => normalizedContent.includes(keyword));
   }
 
   /**

@@ -8,9 +8,9 @@ import { Client, Role, TextChannel } from 'discord.js';
 import { z } from 'zod';
 
 export interface HeuristicSettings {
-  messageThreshold: number;
-  timeWindowMs: number;
-  suspiciousKeywords: string[];
+  readonly messageThreshold: number;
+  readonly timeWindowMs: number;
+  readonly suspiciousKeywords: readonly string[];
 }
 
 const CachedServerHeuristicSettingsSchema = z
@@ -115,11 +115,14 @@ export class ConfigService implements IConfigService {
     this.discordClient = discordClient;
 
     const globalSettings = globalConfig.getSettings();
-    this.defaultHeuristicSettings = {
+    const defaultKeywords = globalSettings.defaultSuspiciousKeywords
+      .map((value) => value.trim().toLowerCase())
+      .filter((value) => value.length > 0);
+    this.defaultHeuristicSettings = this.freezeHeuristicSettings({
       messageThreshold: globalSettings.defaultServerSettings.messageThreshold,
       timeWindowMs: globalSettings.defaultServerSettings.messageTimeframe * 1000,
-      suspiciousKeywords: [...globalSettings.defaultSuspiciousKeywords],
-    };
+      suspiciousKeywords: defaultKeywords,
+    });
   }
 
   public getCachedHeuristicSettings(guildId: string): HeuristicSettings {
@@ -151,26 +154,41 @@ export class ConfigService implements IConfigService {
     const timeWindowMs = timeframeSeconds * 1000;
 
     const keywordValue = parsed.data.suspicious_keywords;
-    let suspiciousKeywords: string[];
+    let suspiciousKeywords: readonly string[];
     if (keywordValue === null || keywordValue === undefined) {
       suspiciousKeywords = this.defaultHeuristicSettings.suspiciousKeywords;
     } else {
+      const normalizedKeywords = keywordValue.map((value) => value.toLowerCase());
+
       const legacyKeywordSet = new Set(LEGACY_DEFAULT_SUSPICIOUS_KEYWORDS);
-      const normalizedSet = new Set(keywordValue.map((value) => value.toLowerCase()));
+      const normalizedSet = new Set(normalizedKeywords);
       const isLegacyDefaultList =
         normalizedSet.size === legacyKeywordSet.size &&
         Array.from(normalizedSet).every((value) => legacyKeywordSet.has(value));
 
       suspiciousKeywords = isLegacyDefaultList
         ? this.defaultHeuristicSettings.suspiciousKeywords
-        : keywordValue;
+        : normalizedKeywords;
     }
 
-    return {
+    return this.freezeHeuristicSettings({
       messageThreshold,
       timeWindowMs,
       suspiciousKeywords,
-    };
+    });
+  }
+
+  private freezeHeuristicSettings(settings: {
+    messageThreshold: number;
+    timeWindowMs: number;
+    suspiciousKeywords: readonly string[];
+  }): HeuristicSettings {
+    const frozenKeywords = Object.freeze([...settings.suspiciousKeywords]);
+    return Object.freeze({
+      messageThreshold: settings.messageThreshold,
+      timeWindowMs: settings.timeWindowMs,
+      suspiciousKeywords: frozenKeywords,
+    });
   }
 
   private cacheServerConfig(server: Server): void {
