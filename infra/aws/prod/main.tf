@@ -345,6 +345,7 @@ data "aws_iam_policy_document" "github_deploy" {
     actions = [
       "ecs:UpdateService"
     ]
+    # aws_ecs_service does not export a dedicated `arn` attribute; `id` is the service ARN.
     resources = [aws_ecs_service.bot.id]
   }
 

@@ -29,6 +29,7 @@ You will be prompted for a globally unique `state_bucket_name`.
 ```bash
 cd infra/aws/prod
 cp backend.hcl.example backend.hcl
+ # Edit backend.hcl and replace REPLACE_ME values (e.g. the state bucket name)
 terraform init -backend-config=backend.hcl
 terraform apply
 ```
@@ -94,6 +95,7 @@ Re-run the deploy workflow and set the `ref` input to an older commit SHA. That 
 ## Notes
 
 - The Terraform-managed task definition uses a placeholder image tag (`:bootstrap`). The deploy workflow registers task definitions using immutable commit SHA tags.
+- Until the first deploy runs, the ECS service may fail to start tasks because the placeholder image tag does not exist yet. If you want to avoid that churn, apply `infra/aws/prod` initially with `-var desired_count=0`, run the first deploy, then set `desired_count=1`.
 - The ECS service task definition is updated by the deploy workflow; Terraform intentionally ignores `task_definition` drift to avoid fighting deploys.
 - If/when we add sharding, we can increase `desired_count` and/or move to a more controlled rollout.
 - If you prefer private subnets, add a NAT Gateway and set `assign_public_ip = false` in `infra/aws/prod/main.tf`.

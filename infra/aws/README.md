@@ -22,6 +22,7 @@ terraform apply
 ```bash
 cd infra/aws/prod
 cp backend.hcl.example backend.hcl
+# Edit backend.hcl and replace REPLACE_ME with the state bucket name from step 1
 terraform init -backend-config=backend.hcl
 ```
 
