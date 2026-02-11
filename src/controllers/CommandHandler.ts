@@ -22,7 +22,8 @@ import { IHeuristicService } from '../services/HeuristicService';
 import { UserProfileData } from '../services/GPTService';
 import { IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { INotificationManager } from '../services/NotificationManager';
-import { IConfigService } from '../config/ConfigService';
+import { HeuristicSettings, IConfigService } from '../config/ConfigService';
+import { globalConfig } from '../config/GlobalConfig';
 import { IUserModerationService } from '../services/UserModerationService';
 import { ISecurityActionService } from '../services/SecurityActionService';
 import { TYPES } from '../di/symbols';
@@ -98,20 +99,94 @@ export class CommandHandler implements ICommandHandler {
       new SlashCommandBuilder()
         .setName('config')
         .setDescription('Configure server settings')
-        .addStringOption((option) =>
-          option
-            .setName('key')
-            .setDescription('The configuration key to update')
-            .setRequired(true)
-            .addChoices(
-              { name: 'Restricted Role ID', value: 'restricted_role_id' },
-              { name: 'Admin Channel ID', value: 'admin_channel_id' },
-              { name: 'Verification Channel ID', value: 'verification_channel_id' },
-              { name: 'Admin Notification Role ID', value: 'admin_notification_role_id' }
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set')
+            .setDescription('Update a general server configuration value')
+            .addStringOption((option) =>
+              option
+                .setName('key')
+                .setDescription('The configuration key to update')
+                .setRequired(true)
+                .addChoices(
+                  { name: 'Restricted Role ID', value: 'restricted_role_id' },
+                  { name: 'Admin Channel ID', value: 'admin_channel_id' },
+                  { name: 'Verification Channel ID', value: 'verification_channel_id' },
+                  { name: 'Admin Notification Role ID', value: 'admin_notification_role_id' }
+                )
+            )
+            .addStringOption((option) =>
+              option.setName('value').setDescription('The value to set').setRequired(true)
             )
         )
-        .addStringOption((option) =>
-          option.setName('value').setDescription('The value to set').setRequired(true)
+        .addSubcommandGroup((group) =>
+          group
+            .setName('heuristic')
+            .setDescription('Manage heuristic detection settings')
+            .addSubcommand((subcommand) =>
+              subcommand.setName('view').setDescription('View the current heuristic configuration')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('set-threshold')
+                .setDescription('Set the message threshold for frequency detection')
+                .addIntegerOption((option) =>
+                  option
+                    .setName('value')
+                    .setDescription('Messages allowed in the configured timeframe (1-100)')
+                    .setRequired(true)
+                    .setMinValue(1)
+                    .setMaxValue(100)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('set-timeframe')
+                .setDescription('Set the timeframe in seconds for frequency detection')
+                .addIntegerOption((option) =>
+                  option
+                    .setName('value')
+                    .setDescription('Timeframe in seconds (1-600)')
+                    .setRequired(true)
+                    .setMinValue(1)
+                    .setMaxValue(600)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('keywords-list')
+                .setDescription('List configured suspicious keywords')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('keywords-add')
+                .setDescription('Add a suspicious keyword')
+                .addStringOption((option) =>
+                  option
+                    .setName('keyword')
+                    .setDescription('Keyword or phrase to add')
+                    .setRequired(true)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('keywords-remove')
+                .setDescription('Remove a suspicious keyword')
+                .addStringOption((option) =>
+                  option
+                    .setName('keyword')
+                    .setDescription('Keyword or phrase to remove')
+                    .setRequired(true)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('keywords-reset')
+                .setDescription('Reset suspicious keywords to defaults')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand.setName('reset').setDescription('Reset all heuristic settings to defaults')
+            )
         ),
       new SlashCommandBuilder() // Added flaguser command
         .setName('flaguser')
@@ -465,32 +540,29 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
-    // Get the key and value from the command options
-    const key = interaction.options.getString('key', true);
-    const value = interaction.options.getString('value', true);
+    const subcommandGroup = interaction.options.getSubcommandGroup(false);
+    if (subcommandGroup === 'heuristic') {
+      await this.handleHeuristicConfigCommand(interaction, guild.id);
+      return;
+    }
 
-    // Validate the key
-    const validKeys = [
-      'restricted_role_id',
-      'admin_channel_id',
-      'verification_channel_id',
-      'admin_notification_role_id',
-    ];
-    if (!validKeys.includes(key)) {
+    const subcommand = interaction.options.getSubcommand(false);
+    if (subcommand !== 'set') {
       await interaction.reply({
-        content: `Invalid configuration key: ${key}. Valid keys are: ${validKeys.join(', ')}`,
+        content: 'Unsupported /config subcommand.',
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
+    const key = interaction.options.getString('key', true);
+    const value = interaction.options.getString('value', true);
+
     try {
-      // Update the configuration in the database
       await this.configService.updateServerConfig(guild.id, {
         [key]: value,
       });
 
-      // Respond to the user
       await interaction.reply({
         content: `✅ Configuration updated successfully!\n\`${key}\` has been set to \`${value}\``,
         flags: MessageFlags.Ephemeral,
@@ -499,6 +571,157 @@ export class CommandHandler implements ICommandHandler {
       console.error(`Failed to update configuration for guild ${guild.id}:`, error);
       await interaction.reply({
         content: 'An error occurred while updating the configuration. Please try again later.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  private formatKeywordSummary(keywords: readonly string[]): string {
+    if (keywords.length === 0) {
+      return '(none configured)';
+    }
+
+    const preview = keywords
+      .slice(0, 20)
+      .map((keyword) => `\`${keyword}\``)
+      .join(', ');
+    if (keywords.length <= 20) {
+      return preview;
+    }
+
+    return `${preview}, ... (+${keywords.length - 20} more)`;
+  }
+
+  private formatHeuristicSettings(settings: HeuristicSettings): string {
+    const timeframeSeconds = settings.timeWindowMs / 1000;
+    return [
+      `Threshold: \`${settings.messageThreshold}\` messages`,
+      `Timeframe: \`${timeframeSeconds}\` seconds`,
+      `Keywords (${settings.suspiciousKeywords.length}): ${this.formatKeywordSummary(settings.suspiciousKeywords)}`,
+    ].join('\n');
+  }
+
+  private async handleHeuristicConfigCommand(
+    interaction: ChatInputCommandInteraction,
+    guildId: string
+  ): Promise<void> {
+    const subcommand = interaction.options.getSubcommand(true);
+
+    try {
+      switch (subcommand) {
+        case 'view': {
+          const settings = await this.configService.getHeuristicSettings(guildId);
+          await interaction.reply({
+            content: `Current heuristic settings:\n${this.formatHeuristicSettings(settings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'set-threshold': {
+          const value = interaction.options.getInteger('value', true);
+          const settings = await this.configService.updateHeuristicSettings(guildId, {
+            messageThreshold: value,
+          });
+          await interaction.reply({
+            content: `✅ Updated heuristic threshold.\n${this.formatHeuristicSettings(settings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'set-timeframe': {
+          const value = interaction.options.getInteger('value', true);
+          const settings = await this.configService.updateHeuristicSettings(guildId, {
+            timeframeSeconds: value,
+          });
+          await interaction.reply({
+            content: `✅ Updated heuristic timeframe.\n${this.formatHeuristicSettings(settings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'keywords-list': {
+          const settings = await this.configService.getHeuristicSettings(guildId);
+          await interaction.reply({
+            content: `Suspicious keywords (${settings.suspiciousKeywords.length}): ${this.formatKeywordSummary(
+              settings.suspiciousKeywords
+            )}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'keywords-add': {
+          const keyword = interaction.options.getString('keyword', true);
+          const current = await this.configService.getHeuristicSettings(guildId);
+          const settings = await this.configService.updateHeuristicSettings(guildId, {
+            suspiciousKeywords: [...current.suspiciousKeywords, keyword],
+          });
+          await interaction.reply({
+            content: `✅ Added suspicious keyword.\n${this.formatHeuristicSettings(settings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'keywords-remove': {
+          const keyword = interaction.options.getString('keyword', true).trim().toLowerCase();
+          const current = await this.configService.getHeuristicSettings(guildId);
+          const remaining = current.suspiciousKeywords.filter((existing) => existing !== keyword);
+
+          if (remaining.length === current.suspiciousKeywords.length) {
+            await interaction.reply({
+              content: `Keyword \`${keyword}\` is not in the configured list.`,
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          const settings = await this.configService.updateHeuristicSettings(guildId, {
+            suspiciousKeywords: remaining,
+          });
+          await interaction.reply({
+            content: `✅ Removed suspicious keyword.\n${this.formatHeuristicSettings(settings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'keywords-reset': {
+          const settings = await this.configService.updateHeuristicSettings(guildId, {
+            suspiciousKeywords: [...globalConfig.getSettings().defaultSuspiciousKeywords],
+          });
+          await interaction.reply({
+            content: `✅ Reset suspicious keywords to defaults.\n${this.formatHeuristicSettings(settings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'reset': {
+          const settings = await this.configService.resetHeuristicSettings(guildId);
+          await interaction.reply({
+            content: `✅ Reset all heuristic settings to defaults.\n${this.formatHeuristicSettings(settings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        default:
+          await interaction.reply({
+            content: 'Unsupported heuristic subcommand.',
+            flags: MessageFlags.Ephemeral,
+          });
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'An error occurred while updating heuristic settings.';
+      await interaction.reply({
+        content: `Failed to update heuristic settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       });
     }

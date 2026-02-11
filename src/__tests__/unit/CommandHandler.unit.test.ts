@@ -2,9 +2,42 @@ import { MessageFlags, PermissionFlagsBits, User } from 'discord.js';
 import { CommandHandler } from '../../controllers/CommandHandler';
 
 describe('CommandHandler (unit)', () => {
-  const buildHandler = (overrides: Partial<{ banUser: jest.Mock }> = {}) => {
+  type HandlerOverrides = Partial<{
+    banUser: jest.Mock;
+    updateServerConfig: jest.Mock;
+    getHeuristicSettings: jest.Mock;
+    updateHeuristicSettings: jest.Mock;
+    resetHeuristicSettings: jest.Mock;
+  }>;
+
+  const buildHandler = (overrides: HandlerOverrides = {}) => {
     const userModerationService = {
       banUser: overrides.banUser ?? jest.fn().mockResolvedValue(true),
+    } as any;
+
+    const configService = {
+      updateServerConfig: overrides.updateServerConfig ?? jest.fn().mockResolvedValue({}),
+      getHeuristicSettings:
+        overrides.getHeuristicSettings ??
+        jest.fn().mockResolvedValue({
+          messageThreshold: 5,
+          timeWindowMs: 10_000,
+          suspiciousKeywords: ['free nitro'],
+        }),
+      updateHeuristicSettings:
+        overrides.updateHeuristicSettings ??
+        jest.fn().mockResolvedValue({
+          messageThreshold: 5,
+          timeWindowMs: 10_000,
+          suspiciousKeywords: ['free nitro'],
+        }),
+      resetHeuristicSettings:
+        overrides.resetHeuristicSettings ??
+        jest.fn().mockResolvedValue({
+          messageThreshold: 5,
+          timeWindowMs: 10_000,
+          suspiciousKeywords: ['free nitro'],
+        }),
     } as any;
 
     return {
@@ -13,11 +46,12 @@ describe('CommandHandler (unit)', () => {
         {} as any,
         {} as any,
         {} as any,
-        {} as any,
+        configService,
         userModerationService,
         {} as any
       ),
       userModerationService,
+      configService,
     };
   };
 
@@ -28,6 +62,33 @@ describe('CommandHandler (unit)', () => {
 
     expect(banCommand).toBeDefined();
     expect(banCommand.default_member_permissions).toBe(PermissionFlagsBits.BanMembers.toString());
+  });
+
+  it('registers /config heuristic subcommands', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const configCommand = commands.find((c) => c.name === 'config');
+
+    expect(configCommand).toBeDefined();
+
+    const heuristicGroup = configCommand.options.find(
+      (option: any) => option.type === 2 && option.name === 'heuristic'
+    );
+    expect(heuristicGroup).toBeDefined();
+
+    const heuristicSubcommands = heuristicGroup.options.map((option: any) => option.name);
+    expect(heuristicSubcommands).toEqual(
+      expect.arrayContaining([
+        'view',
+        'set-threshold',
+        'set-timeframe',
+        'keywords-list',
+        'keywords-add',
+        'keywords-remove',
+        'keywords-reset',
+        'reset',
+      ])
+    );
   });
 
   it('denies /ban when user lacks BanMembers permission', async () => {
@@ -149,6 +210,88 @@ describe('CommandHandler (unit)', () => {
     expect(userModerationService.banUser).toHaveBeenCalledWith(targetMember, 'reason', invoker);
     expect(interaction.reply).toHaveBeenCalledWith({
       content: `User ${targetUser.tag} has been banned.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles /config heuristic set-threshold', async () => {
+    const updateHeuristicSettings = jest.fn().mockResolvedValue({
+      messageThreshold: 8,
+      timeWindowMs: 10_000,
+      suspiciousKeywords: ['free nitro'],
+    });
+    const { handler, configService } = buildHandler({ updateHeuristicSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('heuristic'),
+        getSubcommand: jest.fn().mockReturnValue('set-threshold'),
+        getInteger: jest.fn().mockReturnValue(8),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateHeuristicSettings).toHaveBeenCalledWith('guild-1', {
+      messageThreshold: 8,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Updated heuristic threshold'),
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles /config heuristic keywords-remove when keyword is missing', async () => {
+    const getHeuristicSettings = jest.fn().mockResolvedValue({
+      messageThreshold: 5,
+      timeWindowMs: 10_000,
+      suspiciousKeywords: ['free nitro'],
+    });
+    const { handler, configService } = buildHandler({ getHeuristicSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('heuristic'),
+        getSubcommand: jest.fn().mockReturnValue('keywords-remove'),
+        getString: jest.fn().mockReturnValue('unknown keyword'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateHeuristicSettings).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('is not in the configured list'),
       flags: MessageFlags.Ephemeral,
     });
   });

@@ -94,20 +94,23 @@ model server_members {
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model servers {
-  guild_id                   String                @id
-  restricted_role_id         String?
-  admin_channel_id           String?
-  verification_channel_id    String?
-  admin_notification_role_id String?
-  created_at                 DateTime?             @default(now()) @db.Timestamptz(6)
-  updated_at                 DateTime?             @default(now()) @db.Timestamptz(6)
-  updated_by                 String?
-  settings                   Json?                 @default("{}")
-  is_active                  Boolean?              @default(true)
-  admin_actions              admin_actions[]
-  detection_events           detection_events[]
-  server_members             server_members[]
-  verification_events        verification_events[]
+  guild_id                            String                @id
+  restricted_role_id                  String?
+  admin_channel_id                    String?
+  verification_channel_id             String?
+  admin_notification_role_id          String?
+  heuristic_message_threshold         Int                   @default(5)
+  heuristic_message_timeframe_seconds Int                   @default(10)
+  heuristic_suspicious_keywords       String[]              @default(["nitro scam", "free discord nitro", "free nitro", "discord nitro", "steam gift", "gift card", "click this link", "claim your prize", "crypto giveaway", "airdrop", "free robux"])
+  created_at                          DateTime?             @default(now()) @db.Timestamptz(6)
+  updated_at                          DateTime?             @default(now()) @db.Timestamptz(6)
+  updated_by                          String?
+  settings                            Json?                 @default("{}")
+  is_active                           Boolean?              @default(true)
+  admin_actions                       admin_actions[]
+  detection_events                    detection_events[]
+  server_members                      server_members[]
+  verification_events                 verification_events[]
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments

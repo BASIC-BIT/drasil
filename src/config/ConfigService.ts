@@ -1,11 +1,14 @@
 import { injectable, inject } from 'inversify';
+import { Client, Role, TextChannel } from 'discord.js';
+import { z } from 'zod';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { Server, ServerSettings } from '../repositories/types';
 import { globalConfig } from './GlobalConfig';
 import { TYPES } from '../di/symbols';
-import { Client, Role, TextChannel } from 'discord.js';
 
-import { z } from 'zod';
+const MAX_HEURISTIC_MESSAGE_THRESHOLD = 100;
+const MAX_HEURISTIC_TIMEFRAME_SECONDS = 600;
+const MAX_HEURISTIC_KEYWORDS = 200;
 
 export interface HeuristicSettings {
   readonly messageThreshold: number;
@@ -13,15 +16,32 @@ export interface HeuristicSettings {
   readonly suspiciousKeywords: readonly string[];
 }
 
-const CachedServerHeuristicSettingsSchema = z
-  .object({
-    message_threshold: z.number().int().min(1).max(100).optional(),
-    message_timeframe: z.number().int().min(1).max(600).finite().optional(),
-    suspicious_keywords: z.array(z.string().trim().min(1)).max(200).nullable().optional(),
-  })
-  .passthrough();
+export interface HeuristicSettingsUpdate {
+  messageThreshold?: number;
+  timeframeSeconds?: number;
+  suspiciousKeywords?: string[];
+}
 
-const LEGACY_DEFAULT_SUSPICIOUS_KEYWORDS = ['free nitro', 'discord nitro', 'claim your prize'];
+const CachedServerHeuristicSettingsSchema = z.object({
+  heuristic_message_threshold: z.number().int().min(1).max(MAX_HEURISTIC_MESSAGE_THRESHOLD),
+  heuristic_message_timeframe_seconds: z.number().int().min(1).max(MAX_HEURISTIC_TIMEFRAME_SECONDS),
+  heuristic_suspicious_keywords: z
+    .array(z.string().trim().min(1))
+    .max(MAX_HEURISTIC_KEYWORDS)
+    .default([]),
+});
+
+const HeuristicSettingsUpdateSchema = z
+  .object({
+    messageThreshold: z.number().int().min(1).max(MAX_HEURISTIC_MESSAGE_THRESHOLD).optional(),
+    timeframeSeconds: z.number().int().min(1).max(MAX_HEURISTIC_TIMEFRAME_SECONDS).optional(),
+    suspiciousKeywords: z.array(z.string().trim().min(1)).max(MAX_HEURISTIC_KEYWORDS).optional(),
+  })
+  .strict()
+  .refine((value: HeuristicSettingsUpdate) => Object.keys(value).length > 0, {
+    message: 'At least one heuristic setting must be provided.',
+  });
+
 /**
  * Interface for the ConfigService
  */
@@ -51,6 +71,24 @@ export interface IConfigService {
    * This must not hit the database and is safe to use on hot paths.
    */
   getCachedHeuristicSettings(guildId: string): HeuristicSettings;
+
+  /**
+   * Get heuristic settings, loading server config if needed.
+   */
+  getHeuristicSettings(guildId: string): Promise<HeuristicSettings>;
+
+  /**
+   * Update typed heuristic settings.
+   */
+  updateHeuristicSettings(
+    guildId: string,
+    updates: HeuristicSettingsUpdate
+  ): Promise<HeuristicSettings>;
+
+  /**
+   * Reset typed heuristic settings to global defaults.
+   */
+  resetHeuristicSettings(guildId: string): Promise<HeuristicSettings>;
 
   /**
    * Update a server configuration
@@ -101,11 +139,11 @@ export interface IConfigService {
  */
 @injectable()
 export class ConfigService implements IConfigService {
-  private serverRepository: IServerRepository;
-  private serverCache: Map<string, Server> = new Map();
-  private heuristicSettingsCache: Map<string, HeuristicSettings> = new Map();
-  private defaultHeuristicSettings: HeuristicSettings;
-  private discordClient: Client;
+  private readonly serverRepository: IServerRepository;
+  private readonly serverCache: Map<string, Server> = new Map();
+  private readonly heuristicSettingsCache: Map<string, HeuristicSettings> = new Map();
+  private readonly defaultHeuristicSettings: HeuristicSettings;
+  private readonly discordClient: Client;
 
   constructor(
     @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
@@ -115,14 +153,124 @@ export class ConfigService implements IConfigService {
     this.discordClient = discordClient;
 
     const globalSettings = globalConfig.getSettings();
-    const defaultKeywords = globalSettings.defaultSuspiciousKeywords
-      .map((value) => value.trim().toLowerCase())
-      .filter((value) => value.length > 0);
+    const defaultKeywords = this.normalizeKeywords(globalSettings.defaultSuspiciousKeywords);
     this.defaultHeuristicSettings = this.freezeHeuristicSettings({
       messageThreshold: globalSettings.defaultServerSettings.messageThreshold,
       timeWindowMs: globalSettings.defaultServerSettings.messageTimeframe * 1000,
       suspiciousKeywords: defaultKeywords,
     });
+  }
+
+  private normalizeKeywords(keywords: readonly string[]): string[] {
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+
+    for (const rawKeyword of keywords) {
+      const keyword = rawKeyword.trim().toLowerCase();
+      if (!keyword || seen.has(keyword)) {
+        continue;
+      }
+
+      seen.add(keyword);
+      normalized.push(keyword);
+    }
+
+    return normalized;
+  }
+
+  private freezeHeuristicSettings(settings: {
+    messageThreshold: number;
+    timeWindowMs: number;
+    suspiciousKeywords: readonly string[];
+  }): HeuristicSettings {
+    const frozenKeywords = Object.freeze([...settings.suspiciousKeywords]);
+    return Object.freeze({
+      messageThreshold: settings.messageThreshold,
+      timeWindowMs: settings.timeWindowMs,
+      suspiciousKeywords: frozenKeywords,
+    });
+  }
+
+  private computeHeuristicSettings(server: Server): HeuristicSettings {
+    const parsed = CachedServerHeuristicSettingsSchema.safeParse({
+      heuristic_message_threshold: server.heuristic_message_threshold,
+      heuristic_message_timeframe_seconds: server.heuristic_message_timeframe_seconds,
+      heuristic_suspicious_keywords: server.heuristic_suspicious_keywords,
+    });
+
+    if (!parsed.success) {
+      return this.defaultHeuristicSettings;
+    }
+
+    return this.freezeHeuristicSettings({
+      messageThreshold: parsed.data.heuristic_message_threshold,
+      timeWindowMs: parsed.data.heuristic_message_timeframe_seconds * 1000,
+      suspiciousKeywords: this.normalizeKeywords(parsed.data.heuristic_suspicious_keywords),
+    });
+  }
+
+  private cacheServerConfig(server: Server): void {
+    this.serverCache.set(server.guild_id, server);
+    this.heuristicSettingsCache.set(server.guild_id, this.computeHeuristicSettings(server));
+  }
+
+  private createDefaultConfig(guildId: string): Server {
+    const globalSettings = globalConfig.getSettings();
+    const defaultSettings: ServerSettings = {
+      min_confidence_threshold: globalSettings.defaultServerSettings.minConfidenceThreshold,
+      auto_restrict: true,
+      use_gpt_on_join: true,
+      gpt_message_check_count: 3,
+      message_retention_days: globalSettings.defaultServerSettings.messageRetentionDays,
+      detection_retention_days: globalSettings.defaultServerSettings.detectionRetentionDays,
+    };
+
+    return {
+      guild_id: guildId,
+      restricted_role_id: null,
+      admin_channel_id: null,
+      verification_channel_id: null,
+      admin_notification_role_id: null,
+      heuristic_message_threshold: this.defaultHeuristicSettings.messageThreshold,
+      heuristic_message_timeframe_seconds: this.defaultHeuristicSettings.timeWindowMs / 1000,
+      heuristic_suspicious_keywords: [...this.defaultHeuristicSettings.suspiciousKeywords],
+      updated_by: null,
+      is_active: true,
+      settings: defaultSettings,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  private async createDefaultServerConfig(guildId: string): Promise<Server> {
+    let existingServer: Server | null = null;
+
+    if (process.env.DATABASE_URL) {
+      try {
+        existingServer = await this.serverRepository.findByGuildId(guildId);
+      } catch (error) {
+        console.error(`Failed to fetch existing server config for guild ${guildId}:`, error);
+      }
+    }
+
+    if (existingServer) {
+      return existingServer;
+    }
+
+    return this.createDefaultConfig(guildId);
+  }
+
+  private formatZodError(error: z.ZodError): string {
+    return error.issues
+      .map((issue: z.ZodIssue) => {
+        const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
+        return `${path}${issue.message}`;
+      })
+      .join('; ');
+  }
+
+  public getCachedServerConfig(guildId: string): Server | undefined {
+    return this.serverCache.get(guildId);
   }
 
   public getCachedHeuristicSettings(guildId: string): HeuristicSettings {
@@ -141,59 +289,46 @@ export class ConfigService implements IConfigService {
     return this.defaultHeuristicSettings;
   }
 
-  private computeHeuristicSettings(server: Server): HeuristicSettings {
-    const parsed = CachedServerHeuristicSettingsSchema.safeParse(server.settings);
+  public async getHeuristicSettings(guildId: string): Promise<HeuristicSettings> {
+    await this.getServerConfig(guildId);
+    return this.getCachedHeuristicSettings(guildId);
+  }
+
+  public async updateHeuristicSettings(
+    guildId: string,
+    updates: HeuristicSettingsUpdate
+  ): Promise<HeuristicSettings> {
+    const parsed = HeuristicSettingsUpdateSchema.safeParse(updates);
     if (!parsed.success) {
-      return this.defaultHeuristicSettings;
+      throw new Error(this.formatZodError(parsed.error));
     }
 
-    const messageThreshold =
-      parsed.data.message_threshold ?? this.defaultHeuristicSettings.messageThreshold;
-    const timeframeSeconds =
-      parsed.data.message_timeframe ?? this.defaultHeuristicSettings.timeWindowMs / 1000;
-    const timeWindowMs = timeframeSeconds * 1000;
+    const currentConfig = await this.getServerConfig(guildId);
+    const nextThreshold = parsed.data.messageThreshold ?? currentConfig.heuristic_message_threshold;
+    const nextTimeframeSeconds =
+      parsed.data.timeframeSeconds ?? currentConfig.heuristic_message_timeframe_seconds;
+    const nextKeywords =
+      parsed.data.suspiciousKeywords !== undefined
+        ? this.normalizeKeywords(parsed.data.suspiciousKeywords)
+        : currentConfig.heuristic_suspicious_keywords;
 
-    const keywordValue = parsed.data.suspicious_keywords;
-    let suspiciousKeywords: readonly string[];
-    if (keywordValue === null || keywordValue === undefined) {
-      suspiciousKeywords = this.defaultHeuristicSettings.suspiciousKeywords;
-    } else {
-      const normalizedKeywords = keywordValue.map((value) => value.toLowerCase());
-
-      const legacyKeywordSet = new Set(LEGACY_DEFAULT_SUSPICIOUS_KEYWORDS);
-      const normalizedSet = new Set(normalizedKeywords);
-      const isLegacyDefaultList =
-        normalizedSet.size === legacyKeywordSet.size &&
-        Array.from(normalizedSet).every((value) => legacyKeywordSet.has(value));
-
-      suspiciousKeywords = isLegacyDefaultList
-        ? this.defaultHeuristicSettings.suspiciousKeywords
-        : normalizedKeywords;
-    }
-
-    return this.freezeHeuristicSettings({
-      messageThreshold,
-      timeWindowMs,
-      suspiciousKeywords,
+    await this.updateServerConfig(guildId, {
+      heuristic_message_threshold: nextThreshold,
+      heuristic_message_timeframe_seconds: nextTimeframeSeconds,
+      heuristic_suspicious_keywords: nextKeywords,
     });
+
+    return this.getCachedHeuristicSettings(guildId);
   }
 
-  private freezeHeuristicSettings(settings: {
-    messageThreshold: number;
-    timeWindowMs: number;
-    suspiciousKeywords: readonly string[];
-  }): HeuristicSettings {
-    const frozenKeywords = Object.freeze([...settings.suspiciousKeywords]);
-    return Object.freeze({
-      messageThreshold: settings.messageThreshold,
-      timeWindowMs: settings.timeWindowMs,
-      suspiciousKeywords: frozenKeywords,
+  public async resetHeuristicSettings(guildId: string): Promise<HeuristicSettings> {
+    await this.updateServerConfig(guildId, {
+      heuristic_message_threshold: this.defaultHeuristicSettings.messageThreshold,
+      heuristic_message_timeframe_seconds: this.defaultHeuristicSettings.timeWindowMs / 1000,
+      heuristic_suspicious_keywords: [...this.defaultHeuristicSettings.suspiciousKeywords],
     });
-  }
 
-  private cacheServerConfig(server: Server): void {
-    this.serverCache.set(server.guild_id, server);
-    this.heuristicSettingsCache.set(server.guild_id, this.computeHeuristicSettings(server));
+    return this.getCachedHeuristicSettings(guildId);
   }
 
   /**
@@ -201,12 +336,9 @@ export class ConfigService implements IConfigService {
    * Loads all active servers into cache
    */
   async initialize(): Promise<void> {
-    // Only attempt to load from database if DATABASE_URL is configured
     if (process.env.DATABASE_URL) {
       try {
         const servers = await this.serverRepository.findAllActive();
-
-        // Cache all active servers
         servers.forEach((server) => {
           this.cacheServerConfig(server);
         });
@@ -232,10 +364,12 @@ export class ConfigService implements IConfigService {
     if (!server.admin_channel_id) {
       return undefined;
     }
+
     const channel = await this.discordClient.channels.fetch(server.admin_channel_id);
     if (!channel) {
       return undefined;
     }
+
     return channel as TextChannel;
   }
 
@@ -249,6 +383,7 @@ export class ConfigService implements IConfigService {
     if (!server.verification_channel_id) {
       return undefined;
     }
+
     const channel = await this.discordClient.channels.fetch(server.verification_channel_id);
     return channel as TextChannel;
   }
@@ -258,6 +393,7 @@ export class ConfigService implements IConfigService {
     if (!server.restricted_role_id) {
       return null;
     }
+
     const guild = await this.discordClient.guilds.fetch(guildId);
     const role = await guild.roles.fetch(server.restricted_role_id);
     return role;
@@ -270,45 +406,41 @@ export class ConfigService implements IConfigService {
    * @returns The server configuration
    */
   async getServerConfig(guildId: string): Promise<Server> {
-    // Check cache first
     const cachedServer = this.serverCache.get(guildId);
     if (cachedServer) {
       return cachedServer;
     }
 
-    // Try to get from database if DATABASE_URL is configured
     if (process.env.DATABASE_URL) {
       try {
         const server = await this.serverRepository.findByGuildId(guildId);
         if (server) {
-          // Update cache
           this.cacheServerConfig(server);
           return server;
         }
 
-        // If no server found, create a default one and save it
         const defaultConfig = this.createDefaultConfig(guildId);
-        // Create a copy of defaultConfig without the 'id' field to avoid UUID validation errors
-        // Extract only the fields we want to send to the database
         const configForDb = {
           guild_id: defaultConfig.guild_id,
           restricted_role_id: defaultConfig.restricted_role_id,
           admin_channel_id: defaultConfig.admin_channel_id,
           verification_channel_id: defaultConfig.verification_channel_id,
           admin_notification_role_id: defaultConfig.admin_notification_role_id,
+          heuristic_message_threshold: defaultConfig.heuristic_message_threshold,
+          heuristic_message_timeframe_seconds: defaultConfig.heuristic_message_timeframe_seconds,
+          heuristic_suspicious_keywords: defaultConfig.heuristic_suspicious_keywords,
           is_active: defaultConfig.is_active,
           settings: defaultConfig.settings,
         };
+
         await this.serverRepository.upsertByGuildId(guildId, configForDb);
 
-        // Retrieve the saved server to ensure we have the complete object
         const savedServer = await this.serverRepository.findByGuildId(guildId);
         if (savedServer) {
           this.cacheServerConfig(savedServer);
           return savedServer;
         }
 
-        // Fallback to the default config if we couldn't retrieve the saved server
         this.cacheServerConfig(defaultConfig);
         return defaultConfig;
       } catch (error) {
@@ -316,74 +448,9 @@ export class ConfigService implements IConfigService {
       }
     }
 
-    // If no configuration exists yet or database failed, create a default one
     const defaultConfig = this.createDefaultConfig(guildId);
     this.cacheServerConfig(defaultConfig);
     return defaultConfig;
-  }
-
-  public getCachedServerConfig(guildId: string): Server | undefined {
-    return this.serverCache.get(guildId);
-  }
-
-  /**
-   * Create a default server configuration using environment variables
-   * @param guildId The Discord guild ID
-   * @returns The default server configuration
-   */
-  private createDefaultConfig(guildId: string): Server {
-    const globalSettings = globalConfig.getSettings();
-    const defaultSettings = {
-      message_threshold: globalSettings.defaultServerSettings.messageThreshold,
-      message_timeframe: globalSettings.defaultServerSettings.messageTimeframe,
-      suspicious_keywords: globalSettings.defaultSuspiciousKeywords,
-      min_confidence_threshold: globalSettings.defaultServerSettings.minConfidenceThreshold,
-      auto_restrict: true,
-      use_gpt_on_join: true,
-      gpt_message_check_count: 3,
-      message_retention_days: globalSettings.defaultServerSettings.messageRetentionDays,
-      detection_retention_days: globalSettings.defaultServerSettings.detectionRetentionDays,
-    };
-
-    // Create an in-memory server object
-    return {
-      guild_id: guildId,
-      restricted_role_id: null,
-      admin_channel_id: null,
-      verification_channel_id: null,
-      admin_notification_role_id: null,
-      updated_by: null,
-      is_active: true,
-      settings: defaultSettings,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-  }
-
-  /**
-   * Create or get a server configuration, preserving existing settings if found
-   * @param guildId The Discord guild ID
-   * @returns The server configuration
-   */
-  private async createDefaultServerConfig(guildId: string): Promise<Server> {
-    // Try to get existing server first
-    let existingServer: Server | null = null;
-    if (process.env.DATABASE_URL) {
-      try {
-        existingServer = await this.serverRepository.findByGuildId(guildId);
-      } catch (error) {
-        console.error(`Failed to fetch existing server config for guild ${guildId}:`, error);
-      }
-    }
-
-    // If we have an existing server, return it as is without modifying its settings
-    if (existingServer) {
-      // This is the important part - we're preserving the existing server settings
-      return existingServer;
-    }
-
-    // Otherwise, create a new default configuration
-    return this.createDefaultConfig(guildId);
   }
 
   /**
@@ -396,7 +463,6 @@ export class ConfigService implements IConfigService {
     if (process.env.DATABASE_URL) {
       try {
         const server = await this.serverRepository.upsertByGuildId(guildId, data);
-        // Update cache
         this.cacheServerConfig(server);
         return server;
       } catch (error) {
@@ -404,7 +470,6 @@ export class ConfigService implements IConfigService {
       }
     }
 
-    // If we couldn't save to database, update the cached version or create a new one
     const currentConfig =
       this.serverCache.get(guildId) || (await this.createDefaultServerConfig(guildId));
     const updatedServer: Server = {
@@ -413,7 +478,6 @@ export class ConfigService implements IConfigService {
       updated_at: new Date().toISOString(),
     };
 
-    // Update cache
     this.cacheServerConfig(updatedServer);
     return updatedServer;
   }
@@ -425,16 +489,12 @@ export class ConfigService implements IConfigService {
    * @returns The updated server configuration
    */
   async updateServerSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server> {
-    // Get current server config
     const currentConfig = await this.getServerConfig(guildId);
-
-    // Merge existing settings with new ones
     const updatedSettings: ServerSettings = {
       ...currentConfig.settings,
       ...settings,
     };
 
-    // Update the server configuration with new settings
     return this.updateServerConfig(guildId, { settings: updatedSettings });
   }
 
