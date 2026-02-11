@@ -295,4 +295,40 @@ describe('CommandHandler (unit)', () => {
       flags: MessageFlags.Ephemeral,
     });
   });
+
+  it('rejects empty keyword input for /config heuristic keywords-remove', async () => {
+    const { handler, configService } = buildHandler();
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('heuristic'),
+        getSubcommand: jest.fn().mockReturnValue('keywords-remove'),
+        getString: jest.fn().mockReturnValue('   '),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.getHeuristicSettings).not.toHaveBeenCalled();
+    expect(configService.updateHeuristicSettings).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Keyword cannot be empty.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
 });

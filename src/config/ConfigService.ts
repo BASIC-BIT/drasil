@@ -310,7 +310,7 @@ export class ConfigService implements IConfigService {
     const nextKeywords =
       parsed.data.suspiciousKeywords !== undefined
         ? this.normalizeKeywords(parsed.data.suspiciousKeywords)
-        : currentConfig.heuristic_suspicious_keywords;
+        : this.normalizeKeywords(currentConfig.heuristic_suspicious_keywords);
 
     await this.updateServerConfig(guildId, {
       heuristic_message_threshold: nextThreshold,
@@ -467,6 +467,9 @@ export class ConfigService implements IConfigService {
         return server;
       } catch (error) {
         console.error(`Failed to update server configuration for guild ${guildId}:`, error);
+        throw error instanceof Error
+          ? error
+          : new Error(`Failed to update server configuration for guild ${guildId}`);
       }
     }
 

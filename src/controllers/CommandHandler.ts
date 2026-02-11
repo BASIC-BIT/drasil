@@ -654,7 +654,15 @@ export class CommandHandler implements ICommandHandler {
         }
 
         case 'keywords-add': {
-          const keyword = interaction.options.getString('keyword', true);
+          const keyword = interaction.options.getString('keyword', true).trim();
+          if (!keyword) {
+            await interaction.reply({
+              content: 'Keyword cannot be empty.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
           const current = await this.configService.getHeuristicSettings(guildId);
           const settings = await this.configService.updateHeuristicSettings(guildId, {
             suspiciousKeywords: [...current.suspiciousKeywords, keyword],
@@ -668,6 +676,14 @@ export class CommandHandler implements ICommandHandler {
 
         case 'keywords-remove': {
           const keyword = interaction.options.getString('keyword', true).trim().toLowerCase();
+          if (!keyword) {
+            await interaction.reply({
+              content: 'Keyword cannot be empty.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
           const current = await this.configService.getHeuristicSettings(guildId);
           const remaining = current.suspiciousKeywords.filter((existing) => existing !== keyword);
 

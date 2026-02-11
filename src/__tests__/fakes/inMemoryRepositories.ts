@@ -16,6 +16,7 @@ import {
   VerificationEvent,
   VerificationStatus,
 } from '../../repositories/types';
+import { globalConfig } from '../../config/GlobalConfig';
 
 const toTimestamp = (value: string | Date | null | undefined): number => {
   if (!value) {
@@ -24,28 +25,20 @@ const toTimestamp = (value: string | Date | null | undefined): number => {
   return new Date(value).getTime();
 };
 
+const globalSettings = globalConfig.getSettings();
+
 const baseSettings: ServerSettings = {
-  min_confidence_threshold: 70,
+  min_confidence_threshold: globalSettings.defaultServerSettings.minConfidenceThreshold,
   auto_restrict: true,
   use_gpt_on_join: true,
   gpt_message_check_count: 3,
-  message_retention_days: 7,
-  detection_retention_days: 30,
+  message_retention_days: globalSettings.defaultServerSettings.messageRetentionDays,
+  detection_retention_days: globalSettings.defaultServerSettings.detectionRetentionDays,
 };
 
-const defaultHeuristicKeywords = [
-  'nitro scam',
-  'free discord nitro',
-  'free nitro',
-  'discord nitro',
-  'steam gift',
-  'gift card',
-  'click this link',
-  'claim your prize',
-  'crypto giveaway',
-  'airdrop',
-  'free robux',
-];
+const defaultHeuristicThreshold = globalSettings.defaultServerSettings.messageThreshold;
+const defaultHeuristicTimeframeSeconds = globalSettings.defaultServerSettings.messageTimeframe;
+const defaultHeuristicKeywords = [...globalSettings.defaultSuspiciousKeywords];
 
 export class InMemoryDetectionEventsRepository implements IDetectionEventsRepository {
   private events: DetectionEvent[] = [];
@@ -274,8 +267,9 @@ export class InMemoryServerRepository implements IServerRepository {
       admin_channel_id: data.admin_channel_id ?? null,
       verification_channel_id: data.verification_channel_id ?? null,
       admin_notification_role_id: data.admin_notification_role_id ?? null,
-      heuristic_message_threshold: data.heuristic_message_threshold ?? 5,
-      heuristic_message_timeframe_seconds: data.heuristic_message_timeframe_seconds ?? 10,
+      heuristic_message_threshold: data.heuristic_message_threshold ?? defaultHeuristicThreshold,
+      heuristic_message_timeframe_seconds:
+        data.heuristic_message_timeframe_seconds ?? defaultHeuristicTimeframeSeconds,
       heuristic_suspicious_keywords: data.heuristic_suspicious_keywords?.map(
         (keyword) => keyword
       ) ?? [...defaultHeuristicKeywords],

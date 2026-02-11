@@ -145,6 +145,27 @@ describe('ConfigService (unit)', () => {
     expect(updated.suspiciousKeywords).toEqual(['banana', 'steam gift']);
   });
 
+  it('normalizes existing keywords when updating only threshold/timeframe', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const discordClient = buildClient();
+    const service = new ConfigService(serverRepository, discordClient);
+
+    await service.updateServerConfig('guild-heur-4b', {
+      heuristic_suspicious_keywords: [' Banana ', 'banana', 'STEAM GIFT'],
+    });
+
+    const updated = await service.updateHeuristicSettings('guild-heur-4b', {
+      messageThreshold: 7,
+    });
+
+    expect(updated.messageThreshold).toBe(7);
+    expect(updated.suspiciousKeywords).toEqual(['banana', 'steam gift']);
+
+    const persisted = await service.getServerConfig('guild-heur-4b');
+    expect(persisted.heuristic_suspicious_keywords).toEqual(['banana', 'steam gift']);
+  });
+
   it('rejects invalid heuristic updates', async () => {
     process.env.DATABASE_URL = 'in-memory';
     const serverRepository = new InMemoryServerRepository();
