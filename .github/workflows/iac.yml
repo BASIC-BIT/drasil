@@ -39,7 +39,7 @@ jobs:
         with:
           directory: infra/aws
           framework: terraform
-          soft_fail: true
+          soft_fail: false
 
   actionlint:
     runs-on: ubuntu-latest

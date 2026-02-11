@@ -43,7 +43,7 @@ variable "task_memory" {
 variable "log_retention_days" {
   type        = number
   description = "CloudWatch Logs retention in days."
-  default     = 30
+  default     = 365
 }
 
 variable "container_insights" {

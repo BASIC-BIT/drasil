@@ -7,6 +7,8 @@ The defaults are intentionally simple:
 - ECS Fargate service with `desired_count = 1` (Discord bot should not run multiple instances yet)
 - Public subnets + public IP (outbound-only) to avoid NAT Gateway cost
 - Secrets stored in AWS Secrets Manager
+- Customer-managed KMS keys for encryption at rest (state + runtime resources)
+- VPC Flow Logs enabled to CloudWatch Logs
 
 ## Prerequisites
 
@@ -99,3 +101,4 @@ Re-run the deploy workflow and set the `ref` input to an older commit SHA. That 
 - The ECS service task definition is updated by the deploy workflow; Terraform intentionally ignores `task_definition` drift to avoid fighting deploys.
 - If/when we add sharding, we can increase `desired_count` and/or move to a more controlled rollout.
 - If you prefer private subnets, add a NAT Gateway and set `assign_public_ip = false` in `infra/aws/prod/main.tf`.
+- Secrets Manager automatic rotation is intentionally not configured yet; it requires a rotation Lambda and an ops runbook.

@@ -2,6 +2,8 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+data "aws_caller_identity" "current" {}
+
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
 
@@ -28,6 +30,7 @@ resource "aws_internet_gateway" "main" {
 }
 
 resource "aws_subnet" "public" {
+  #checkov:skip=CKV_AWS_130:Public subnets are intentional for this initial ECS topology.
   count = 2
 
   vpc_id                  = aws_vpc.main.id
@@ -60,11 +63,13 @@ resource "aws_route_table_association" "public" {
 }
 
 resource "aws_security_group" "ecs_task" {
+  #checkov:skip=CKV_AWS_382:Tasks require outbound internet access to Discord/OpenAI APIs in this phase.
   name        = "${local.name_prefix}-ecs-task"
   description = "ECS task security group (no inbound; outbound-only)."
   vpc_id      = aws_vpc.main.id
 
   egress {
+    description = "Allow all outbound internet traffic for bot API dependencies."
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -79,6 +84,13 @@ resource "aws_security_group" "ecs_task" {
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = "/ecs/${local.name_prefix}"
   retention_in_days = var.log_retention_days
+  kms_key_id        = aws_kms_key.prod.arn
+}
+
+resource "aws_cloudwatch_log_group" "vpc_flow" {
+  name              = "/vpc-flow/${local.name_prefix}"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = aws_kms_key.prod.arn
 }
 
 resource "aws_ecr_repository" "app" {
@@ -90,7 +102,8 @@ resource "aws_ecr_repository" "app" {
   }
 
   encryption_configuration {
-    encryption_type = "AES256"
+    encryption_type = "KMS"
+    kms_key         = aws_kms_key.prod.arn
   }
 }
 
@@ -115,18 +128,35 @@ resource "aws_ecr_lifecycle_policy" "app" {
 }
 
 resource "aws_secretsmanager_secret" "discord_token" {
-  name                    = "${local.secrets_prefix}/DISCORD_TOKEN"
+  name = "${local.secrets_prefix}/DISCORD_TOKEN"
+  #checkov:skip=CKV2_AWS_57:Automatic rotation requires dedicated rotation Lambda + runbook and is deferred intentionally.
   recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.prod.arn
 }
 
 resource "aws_secretsmanager_secret" "openai_api_key" {
-  name                    = "${local.secrets_prefix}/OPENAI_API_KEY"
+  name = "${local.secrets_prefix}/OPENAI_API_KEY"
+  #checkov:skip=CKV2_AWS_57:Automatic rotation requires dedicated rotation Lambda + runbook and is deferred intentionally.
   recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.prod.arn
 }
 
 resource "aws_secretsmanager_secret" "database_url" {
-  name                    = "${local.secrets_prefix}/DATABASE_URL"
+  name = "${local.secrets_prefix}/DATABASE_URL"
+  #checkov:skip=CKV2_AWS_57:Automatic rotation requires dedicated rotation Lambda + runbook and is deferred intentionally.
   recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.prod.arn
+}
+
+resource "aws_default_security_group" "main" {
+  vpc_id = aws_vpc.main.id
+
+  ingress = []
+  egress  = []
+
+  tags = {
+    Name = "${local.name_prefix}-default-sg"
+  }
 }
 
 data "aws_iam_policy_document" "ecs_task_assume" {
@@ -160,6 +190,13 @@ data "aws_iam_policy_document" "ecs_task_execution_secrets" {
       aws_secretsmanager_secret.database_url.arn
     ]
   }
+
+  statement {
+    actions = [
+      "kms:Decrypt"
+    ]
+    resources = [aws_kms_key.prod.arn]
+  }
 }
 
 resource "aws_iam_policy" "ecs_task_execution_secrets" {
@@ -186,7 +223,16 @@ resource "aws_ecs_cluster" "main" {
   }
 }
 
+resource "aws_flow_log" "main" {
+  log_destination      = aws_cloudwatch_log_group.vpc_flow.arn
+  log_destination_type = "cloud-watch-logs"
+  iam_role_arn         = aws_iam_role.vpc_flow_logs.arn
+  traffic_type         = "ALL"
+  vpc_id               = aws_vpc.main.id
+}
+
 resource "aws_ecs_task_definition" "bot" {
+  #checkov:skip=CKV_AWS_336:Read-only root filesystem needs runtime validation for dependencies writing temp files.
   family                   = local.name_prefix
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
@@ -238,6 +284,7 @@ resource "aws_ecs_task_definition" "bot" {
 }
 
 resource "aws_ecs_service" "bot" {
+  #checkov:skip=CKV_AWS_333:Public IP assignment is intentional while using public subnets in the initial deployment.
   name            = "${local.name_prefix}-bot"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.bot.arn
@@ -306,6 +353,7 @@ resource "aws_iam_role" "github_deploy" {
 }
 
 data "aws_iam_policy_document" "github_deploy" {
+  #checkov:skip=CKV_AWS_356:Some ECS/ECR actions (for deployment APIs) require wildcard resources.
   statement {
     actions = [
       "ecr:GetAuthorizationToken"
@@ -330,7 +378,7 @@ data "aws_iam_policy_document" "github_deploy" {
     actions = [
       "ecs:DescribeServices"
     ]
-    resources = ["*"]
+    resources = [aws_ecs_service.bot.id]
   }
 
   statement {
@@ -372,4 +420,89 @@ resource "aws_iam_policy" "github_deploy" {
 resource "aws_iam_role_policy_attachment" "github_deploy" {
   role       = aws_iam_role.github_deploy.name
   policy_arn = aws_iam_policy.github_deploy.arn
+}
+
+data "aws_iam_policy_document" "kms" {
+  #checkov:skip=CKV_AWS_109:KMS key policies require wildcard resources; access is constrained by principals and service usage.
+  #checkov:skip=CKV_AWS_111:KMS key policies require wildcard resources; access is constrained by principals and service usage.
+  #checkov:skip=CKV_AWS_356:KMS key policies require wildcard resources by design.
+  statement {
+    sid = "EnableRootPermissions"
+
+    actions   = ["kms:*"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+
+  statement {
+    sid = "AllowServiceUse"
+
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey",
+      "kms:CreateGrant"
+    ]
+    resources = ["*"]
+
+    principals {
+      type = "Service"
+      identifiers = [
+        "logs.${var.aws_region}.amazonaws.com",
+        "secretsmanager.amazonaws.com",
+        "ecr.amazonaws.com"
+      ]
+    }
+  }
+}
+
+resource "aws_kms_key" "prod" {
+  description         = "CMK for ${local.name_prefix} production resources"
+  enable_key_rotation = true
+  policy              = data.aws_iam_policy_document.kms.json
+}
+
+resource "aws_kms_alias" "prod" {
+  name          = "alias/${local.name_prefix}-prod"
+  target_key_id = aws_kms_key.prod.key_id
+}
+
+data "aws_iam_policy_document" "vpc_flow_logs_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["vpc-flow-logs.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "vpc_flow_logs" {
+  name               = "${local.name_prefix}-vpc-flow-logs"
+  assume_role_policy = data.aws_iam_policy_document.vpc_flow_logs_assume.json
+}
+
+data "aws_iam_policy_document" "vpc_flow_logs" {
+  statement {
+    actions = [
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+      "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams"
+    ]
+    resources = ["${aws_cloudwatch_log_group.vpc_flow.arn}:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "vpc_flow_logs" {
+  name   = "${local.name_prefix}-vpc-flow-logs"
+  role   = aws_iam_role.vpc_flow_logs.id
+  policy = data.aws_iam_policy_document.vpc_flow_logs.json
 }

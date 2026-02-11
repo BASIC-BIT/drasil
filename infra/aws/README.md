@@ -35,3 +35,18 @@ terraform apply
 4. Set secret values in AWS Secrets Manager (created by Terraform) and then deploy the container image.
 
 Docs: `docs/deploy/aws.md`
+
+## IaC policy posture (Checkov)
+
+- Checkov runs in enforced mode in CI (`soft_fail: false`).
+- The Terraform in `infra/aws` now satisfies baseline hardening checks including:
+  - customer-managed KMS keys for state/data-plane resources,
+  - VPC Flow Logs,
+  - default security group lockdown,
+  - DynamoDB point-in-time recovery,
+  - 365-day CloudWatch retention.
+- A small set of checks is intentionally skipped inline with `checkov:skip=...` comments and rationale, including:
+  - public-subnet/public-IP networking for the current cost-optimized topology,
+  - deferred Secrets Manager automatic rotation (requires Lambda + operational runbook),
+  - Terraform backend bucket controls that are not currently required (replication/events/access logs),
+  - unavoidable wildcard scope in KMS key policy semantics.
