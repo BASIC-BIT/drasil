@@ -15,9 +15,9 @@ export interface HeuristicSettings {
 
 const CachedServerHeuristicSettingsSchema = z
   .object({
-    message_threshold: z.number().int().min(1).optional(),
-    message_timeframe: z.number().int().min(1).finite().optional(),
-    suspicious_keywords: z.array(z.string().trim().min(1)).nullable().optional(),
+    message_threshold: z.number().int().min(1).max(100).optional(),
+    message_timeframe: z.number().int().min(1).max(600).finite().optional(),
+    suspicious_keywords: z.array(z.string().trim().min(1)).max(200).nullable().optional(),
   })
   .passthrough();
 

@@ -26,7 +26,11 @@ const restoreEnv = (key: string, value: string | undefined): void => {
 };
 
 describe('ConfigService (unit)', () => {
-  const originalDatabaseUrl = process.env.DATABASE_URL;
+  let originalDatabaseUrl: string | undefined;
+
+  beforeEach(() => {
+    originalDatabaseUrl = process.env.DATABASE_URL;
+  });
 
   afterEach(() => {
     restoreEnv('DATABASE_URL', originalDatabaseUrl);
@@ -133,6 +137,28 @@ describe('ConfigService (unit)', () => {
     expect(settings.messageThreshold).toBe(
       globalConfig.getSettings().defaultServerSettings.messageThreshold
     );
+  });
+
+  it('falls back to defaults when cached settings exceed safety bounds', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const discordClient = buildClient();
+    const service = new ConfigService(serverRepository, discordClient);
+
+    await serverRepository.upsertByGuildId('guild-heur-4', {
+      settings: {
+        message_threshold: 10_000,
+        message_timeframe: 10_000,
+        suspicious_keywords: null,
+      },
+    });
+
+    await service.getServerConfig('guild-heur-4');
+    const settings = service.getCachedHeuristicSettings('guild-heur-4');
+
+    const defaults = globalConfig.getSettings();
+    expect(settings.messageThreshold).toBe(defaults.defaultServerSettings.messageThreshold);
+    expect(settings.timeWindowMs).toBe(defaults.defaultServerSettings.messageTimeframe * 1000);
   });
 
   it('fetches admin channel when configured', async () => {
