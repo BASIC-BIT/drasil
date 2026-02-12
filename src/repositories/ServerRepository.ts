@@ -25,6 +25,38 @@ export class ServerRepository implements IServerRepository {
   // Inject PrismaClient instead of SupabaseClient
   constructor(@inject(TYPES.PrismaClient) private prisma: PrismaClient) {}
 
+  private toDomainServer(server: {
+    guild_id: string;
+    restricted_role_id: string | null;
+    admin_channel_id: string | null;
+    verification_channel_id: string | null;
+    admin_notification_role_id: string | null;
+    heuristic_message_threshold: number;
+    heuristic_message_timeframe_seconds: number;
+    heuristic_suspicious_keywords: string[];
+    created_at: Date | null;
+    updated_at: Date | null;
+    updated_by: string | null;
+    settings: Prisma.JsonValue | null;
+    is_active: boolean | null;
+  }): Server {
+    return {
+      guild_id: server.guild_id,
+      restricted_role_id: server.restricted_role_id,
+      admin_channel_id: server.admin_channel_id,
+      verification_channel_id: server.verification_channel_id,
+      admin_notification_role_id: server.admin_notification_role_id,
+      heuristic_message_threshold: server.heuristic_message_threshold,
+      heuristic_message_timeframe_seconds: server.heuristic_message_timeframe_seconds,
+      heuristic_suspicious_keywords: [...server.heuristic_suspicious_keywords],
+      created_at: server.created_at ? server.created_at.toISOString() : null,
+      updated_at: server.updated_at ? server.updated_at.toISOString() : null,
+      updated_by: server.updated_by,
+      settings: (server.settings as unknown as ServerSettings | null) ?? {},
+      is_active: server.is_active ?? true,
+    };
+  }
+
   /**
    * Handle errors from Prisma operations
    */
@@ -54,12 +86,8 @@ export class ServerRepository implements IServerRepository {
         where: { guild_id: id }, // Use the 'id' parameter which corresponds to guild_id
       });
       // Prisma returns null directly if not found
-      // Cast settings field correctly on return
       if (server) {
-        return {
-          ...server,
-          settings: (server.settings as unknown as ServerSettings | null) ?? null,
-        } as Server;
+        return this.toDomainServer(server);
       }
       return null;
     } catch (error) {
@@ -76,12 +104,8 @@ export class ServerRepository implements IServerRepository {
         where: { guild_id: guildId },
       });
       // Prisma returns null directly if not found
-      // Cast settings field correctly on return
       if (server) {
-        return {
-          ...server,
-          settings: (server.settings as unknown as ServerSettings | null) ?? null,
-        } as Server;
+        return this.toDomainServer(server);
       }
       return null;
     } catch (error) {
@@ -106,6 +130,9 @@ export class ServerRepository implements IServerRepository {
         admin_channel_id: data.admin_channel_id,
         verification_channel_id: data.verification_channel_id,
         admin_notification_role_id: data.admin_notification_role_id,
+        heuristic_message_threshold: data.heuristic_message_threshold,
+        heuristic_message_timeframe_seconds: data.heuristic_message_timeframe_seconds,
+        heuristic_suspicious_keywords: data.heuristic_suspicious_keywords,
         // created_at is handled by default in schema
         updated_at: new Date(), // Prisma handles timestamp updates
       };
@@ -123,11 +150,7 @@ export class ServerRepository implements IServerRepository {
         },
       });
 
-      // Cast settings field correctly on return
-      return {
-        ...upserted,
-        settings: (upserted.settings as unknown as ServerSettings | null) ?? null,
-      } as Server;
+      return this.toDomainServer(upserted);
     } catch (error) {
       this.handleError(error, 'upsertByGuildId');
     }
@@ -159,12 +182,7 @@ export class ServerRepository implements IServerRepository {
         },
       });
 
-      // Cast settings field correctly on return
-      // Cast settings field correctly on return
-      return {
-        ...updatedServer,
-        settings: (updatedServer.settings as unknown as ServerSettings | null) ?? null,
-      } as Server | null;
+      return this.toDomainServer(updatedServer);
     } catch (error) {
       // Handle potential "not found" error during update (P2025)
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
@@ -187,12 +205,7 @@ export class ServerRepository implements IServerRepository {
           updated_at: new Date(),
         },
       });
-      // Cast settings field correctly on return
-      // Cast settings field correctly on return
-      return {
-        ...updatedServer,
-        settings: (updatedServer.settings as unknown as ServerSettings | null) ?? null,
-      } as Server | null;
+      return this.toDomainServer(updatedServer);
     } catch (error) {
       // Handle potential "not found" error during update (P2025)
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
@@ -211,19 +224,7 @@ export class ServerRepository implements IServerRepository {
       const servers = await this.prisma.servers.findMany({
         where: { is_active: true },
       });
-      // Cast settings field correctly for each server in the array
-      // Cast settings field correctly for each server in the array
-      // findMany always returns an array, and map on an array always returns an array.
-      // Arrays are truthy, so the `|| []` is unnecessary.
-      return servers.map(
-        (
-          server: (typeof servers)[number] // Infer type from array element
-        ) =>
-          ({
-            ...server,
-            settings: (server.settings as unknown as ServerSettings | null) ?? null,
-          }) as Server
-      );
+      return servers.map((server: (typeof servers)[number]) => this.toDomainServer(server));
     } catch (error) {
       this.handleError(error, 'findAllActive');
     }

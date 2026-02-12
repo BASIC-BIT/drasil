@@ -56,11 +56,11 @@ export interface IHeuristicService {
 /**
  * HeuristicService: Provides basic spam detection using heuristic methods
  *
- * The heuristics are server-configurable (per guild) via cached `Server.settings`,
+ * The heuristics are server-configurable (per guild) via cached typed server columns,
  * with global defaults as a fallback:
- * - `message_threshold`: max messages allowed in the time window
- * - `message_timeframe`: time window (seconds)
- * - `suspicious_keywords`: substring match list
+ * - `heuristic_message_threshold`: max messages allowed in the time window
+ * - `heuristic_message_timeframe_seconds`: time window (seconds)
+ * - `heuristic_suspicious_keywords`: substring match list
  */
 @injectable()
 export class HeuristicService implements IHeuristicService {

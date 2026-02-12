@@ -12,6 +12,9 @@ export interface Server {
   admin_channel_id: string | null; // ID of admin notification channel
   verification_channel_id: string | null; // ID of verification channel
   admin_notification_role_id: string | null; // ID of role to ping for notifications
+  heuristic_message_threshold: number; // Number of messages before triggering frequency detection
+  heuristic_message_timeframe_seconds: number; // Timeframe in seconds for message threshold
+  heuristic_suspicious_keywords: string[]; // Keywords that trigger suspicious content detection
   created_at: string | null; // Creation timestamp
   updated_at: string | null; // Last update timestamp
   updated_by: string | null; // Discord ID of who last updated the record
@@ -23,9 +26,6 @@ export interface Server {
  * Flexible server settings stored as JSON
  */
 export interface ServerSettings {
-  message_threshold?: number; // Number of messages before triggering detection
-  message_timeframe?: number; // Timeframe in seconds for message threshold
-  suspicious_keywords: string[] | null; // Keywords that trigger detection
   min_confidence_threshold?: number; // Minimum confidence for GPT detection
   auto_restrict?: boolean; // Whether to automatically restrict users
   use_gpt_on_join?: boolean; // Whether to use GPT for join verification
