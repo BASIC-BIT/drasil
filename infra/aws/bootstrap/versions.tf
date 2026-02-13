@@ -14,14 +14,14 @@ provider "aws" {
 
   default_tags {
     tags = merge(
+      var.tags,
       {
         Project     = var.project_name
         Environment = var.environment
         ManagedBy   = "terraform"
         Repository  = "basic-bit/drasil"
         Component   = "terraform-state"
-      },
-      var.tags
+      }
     )
   }
 }

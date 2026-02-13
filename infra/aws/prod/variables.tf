@@ -100,6 +100,12 @@ variable "monthly_cost_budget_usd" {
   default     = 25
 }
 
+variable "monthly_cost_budget_start" {
+  type        = string
+  description = "Budget start timestamp in AWS Budgets format YYYY-MM-DD_HH:MM."
+  default     = "2026-01-01_00:00"
+}
+
 variable "cost_anomaly_threshold_usd" {
   type        = number
   description = "Absolute USD impact threshold for Cost Anomaly Detection notifications."

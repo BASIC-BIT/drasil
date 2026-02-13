@@ -124,7 +124,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_memory_high" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "ecs_running_tasks_low" {
-  count = local.observability_enabled ? 1 : 0
+  count = local.observability_enabled && var.desired_count > 0 ? 1 : 0
 
   alarm_name          = "${local.name_prefix}-ecs-running-tasks-low"
   comparison_operator = "LessThanThreshold"
@@ -133,7 +133,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_running_tasks_low" {
   namespace           = "AWS/ECS"
   period              = 300
   statistic           = "Average"
-  threshold           = local.running_task_alarm_trigger
+  threshold           = var.desired_count
   treat_missing_data  = "notBreaching"
   alarm_description   = "ECS running task count dropped below the expected baseline."
 
@@ -250,7 +250,7 @@ resource "aws_budgets_budget" "monthly_cost" {
   limit_amount      = tostring(var.monthly_cost_budget_usd)
   limit_unit        = "USD"
   time_unit         = "MONTHLY"
-  time_period_start = "2026-01-01_00:00"
+  time_period_start = var.monthly_cost_budget_start
 
   notification {
     comparison_operator        = "GREATER_THAN"
@@ -270,7 +270,7 @@ resource "aws_budgets_budget" "monthly_cost" {
 }
 
 resource "aws_ce_anomaly_monitor" "service_costs" {
-  count = local.cost_controls_enabled ? 1 : 0
+  count = local.cost_controls_enabled && local.notifications_enabled ? 1 : 0
 
   name              = "${local.name_prefix}-service-costs"
   monitor_type      = "DIMENSIONAL"

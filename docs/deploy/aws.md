@@ -48,6 +48,7 @@ tags = {
 
 alert_email_addresses     = ["you@example.com"]
 monthly_cost_budget_usd   = 25
+monthly_cost_budget_start = "2026-01-01_00:00"
 cost_anomaly_threshold_usd = 10
 ```
 

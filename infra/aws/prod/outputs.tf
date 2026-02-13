@@ -64,10 +64,10 @@ output "cost_controls_enabled" {
 
 output "monthly_budget_name" {
   value       = try(aws_budgets_budget.monthly_cost[0].name, null)
-  description = "AWS Budget name for monthly cost alerts (null when cost notifications are not configured)."
+  description = "AWS Budget name for monthly cost alerts (null when notifications are not configured or cost controls are disabled)."
 }
 
 output "cost_anomaly_monitor_arn" {
   value       = try(aws_ce_anomaly_monitor.service_costs[0].arn, null)
-  description = "Cost Anomaly Detection monitor ARN (null when cost controls are disabled)."
+  description = "Cost Anomaly Detection monitor ARN (null when notifications are not configured or cost controls are disabled)."
 }

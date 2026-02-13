@@ -12,6 +12,7 @@ locals {
   github_oidc_provider_arn = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
 
   common_tags = merge(
+    var.tags,
     {
       Project     = var.project_name
       Environment = var.environment
@@ -19,14 +20,12 @@ locals {
       Repository  = "basic-bit/drasil"
       Service     = "discord-bot"
       Component   = "infrastructure"
-    },
-    var.tags
+    }
   )
 
-  notifications_enabled      = length(var.alert_email_addresses) > 0
-  observability_enabled      = var.enable_observability
-  cost_controls_enabled      = var.enable_cost_controls
-  running_task_alarm_trigger = var.desired_count > 0 ? 1 : 0
+  notifications_enabled = length(var.alert_email_addresses) > 0
+  observability_enabled = var.enable_observability
+  cost_controls_enabled = var.enable_cost_controls
 }
 
 resource "aws_vpc" "main" {
