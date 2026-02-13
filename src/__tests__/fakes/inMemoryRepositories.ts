@@ -16,6 +16,7 @@ import {
   VerificationEvent,
   VerificationStatus,
 } from '../../repositories/types';
+import { globalConfig } from '../../config/GlobalConfig';
 
 const toTimestamp = (value: string | Date | null | undefined): number => {
   if (!value) {
@@ -24,9 +25,20 @@ const toTimestamp = (value: string | Date | null | undefined): number => {
   return new Date(value).getTime();
 };
 
+const globalSettings = globalConfig.getSettings();
+
 const baseSettings: ServerSettings = {
-  suspicious_keywords: null,
+  min_confidence_threshold: globalSettings.defaultServerSettings.minConfidenceThreshold,
+  auto_restrict: true,
+  use_gpt_on_join: true,
+  gpt_message_check_count: 3,
+  message_retention_days: globalSettings.defaultServerSettings.messageRetentionDays,
+  detection_retention_days: globalSettings.defaultServerSettings.detectionRetentionDays,
 };
+
+const defaultHeuristicThreshold = globalSettings.defaultServerSettings.messageThreshold;
+const defaultHeuristicTimeframeSeconds = globalSettings.defaultServerSettings.messageTimeframe;
+const defaultHeuristicKeywords = [...globalSettings.defaultSuspiciousKeywords];
 
 export class InMemoryDetectionEventsRepository implements IDetectionEventsRepository {
   private events: DetectionEvent[] = [];
@@ -239,6 +251,14 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
 export class InMemoryServerRepository implements IServerRepository {
   private servers = new Map<string, Server>();
 
+  private cloneServer(server: Server): Server {
+    return {
+      ...server,
+      settings: { ...server.settings },
+      heuristic_suspicious_keywords: [...server.heuristic_suspicious_keywords],
+    };
+  }
+
   private buildServer(guildId: string, data: Partial<Server>): Server {
     const now = new Date().toISOString();
     return {
@@ -247,6 +267,12 @@ export class InMemoryServerRepository implements IServerRepository {
       admin_channel_id: data.admin_channel_id ?? null,
       verification_channel_id: data.verification_channel_id ?? null,
       admin_notification_role_id: data.admin_notification_role_id ?? null,
+      heuristic_message_threshold: data.heuristic_message_threshold ?? defaultHeuristicThreshold,
+      heuristic_message_timeframe_seconds:
+        data.heuristic_message_timeframe_seconds ?? defaultHeuristicTimeframeSeconds,
+      heuristic_suspicious_keywords: data.heuristic_suspicious_keywords?.map(
+        (keyword) => keyword
+      ) ?? [...defaultHeuristicKeywords],
       created_at: data.created_at ?? now,
       updated_at: data.updated_at ?? now,
       updated_by: data.updated_by ?? null,
@@ -261,7 +287,7 @@ export class InMemoryServerRepository implements IServerRepository {
 
   async findByGuildId(guildId: string): Promise<Server | null> {
     const server = this.servers.get(guildId);
-    return server ? { ...server, settings: { ...server.settings } } : null;
+    return server ? this.cloneServer(server) : null;
   }
 
   async upsertByGuildId(guildId: string, data: Partial<Server>): Promise<Server> {
@@ -271,11 +297,13 @@ export class InMemoryServerRepository implements IServerRepository {
           ...existing,
           ...data,
           settings: data.settings ?? existing.settings,
+          heuristic_suspicious_keywords:
+            data.heuristic_suspicious_keywords ?? existing.heuristic_suspicious_keywords,
           updated_at: new Date().toISOString(),
         }
       : this.buildServer(guildId, data);
     this.servers.set(guildId, updated);
-    return { ...updated, settings: { ...updated.settings } };
+    return this.cloneServer(updated);
   }
 
   async updateSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server | null> {
@@ -293,7 +321,7 @@ export class InMemoryServerRepository implements IServerRepository {
       updated_at: new Date().toISOString(),
     };
     this.servers.set(guildId, updated);
-    return { ...updated, settings: { ...updated.settings } };
+    return this.cloneServer(updated);
   }
 
   async setActive(guildId: string, isActive: boolean): Promise<Server | null> {
@@ -307,13 +335,13 @@ export class InMemoryServerRepository implements IServerRepository {
       updated_at: new Date().toISOString(),
     };
     this.servers.set(guildId, updated);
-    return { ...updated, settings: { ...updated.settings } };
+    return this.cloneServer(updated);
   }
 
   async findAllActive(): Promise<Server[]> {
     return Array.from(this.servers.values())
       .filter((server) => server.is_active)
-      .map((server) => ({ ...server, settings: { ...server.settings } }));
+      .map((server) => this.cloneServer(server));
   }
 
   async getOrCreateServer(guildId: string): Promise<Server> {

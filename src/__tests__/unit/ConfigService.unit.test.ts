@@ -2,6 +2,7 @@ import { Client, Role, TextChannel } from 'discord.js';
 import { ConfigService } from '../../config/ConfigService';
 import { InMemoryServerRepository } from '../fakes/inMemoryRepositories';
 import { globalConfig } from '../../config/GlobalConfig';
+import { Server } from '../../repositories/types';
 
 const buildClient = (channel?: TextChannel, role?: Role): Client =>
   ({
@@ -61,7 +62,10 @@ describe('ConfigService (unit)', () => {
     const config = await service.getServerConfig('guild-2');
 
     expect(config.guild_id).toBe('guild-2');
-    expect(config.settings.suspicious_keywords).toBeDefined();
+    expect(config.heuristic_message_threshold).toBe(
+      globalConfig.getSettings().defaultServerSettings.messageThreshold
+    );
+    expect(config.heuristic_suspicious_keywords.length).toBeGreaterThan(0);
   });
 
   it('returns default heuristic settings when guild is not cached', () => {
@@ -77,18 +81,16 @@ describe('ConfigService (unit)', () => {
     expect(settings.suspiciousKeywords.length).toBeGreaterThan(0);
   });
 
-  it('derives heuristic settings from cached server settings', async () => {
+  it('derives heuristic settings from cached typed heuristic columns', async () => {
     process.env.DATABASE_URL = 'in-memory';
     const serverRepository = new InMemoryServerRepository();
     const discordClient = buildClient();
     const service = new ConfigService(serverRepository, discordClient);
 
     await serverRepository.upsertByGuildId('guild-heur-1', {
-      settings: {
-        message_threshold: 2,
-        message_timeframe: 1,
-        suspicious_keywords: ['banana'],
-      },
+      heuristic_message_threshold: 2,
+      heuristic_message_timeframe_seconds: 1,
+      heuristic_suspicious_keywords: ['banana'],
     });
 
     await service.getServerConfig('guild-heur-1');
@@ -99,66 +101,125 @@ describe('ConfigService (unit)', () => {
     expect(settings.suspiciousKeywords).toEqual(['banana']);
   });
 
-  it('treats legacy default keyword list as unset and falls back to current defaults', async () => {
+  it('falls back to defaults when cached heuristic columns are invalid', async () => {
     process.env.DATABASE_URL = 'in-memory';
     const serverRepository = new InMemoryServerRepository();
     const discordClient = buildClient();
     const service = new ConfigService(serverRepository, discordClient);
 
     await serverRepository.upsertByGuildId('guild-heur-2', {
-      settings: {
-        suspicious_keywords: ['free nitro', 'discord nitro', 'claim your prize'],
-      },
+      heuristic_message_threshold: 10,
+      heuristic_message_timeframe_seconds: 10,
+      heuristic_suspicious_keywords: ['banana'],
     });
+
+    await serverRepository.upsertByGuildId('guild-heur-2', {
+      heuristic_message_threshold: 0,
+      heuristic_message_timeframe_seconds: 999,
+      heuristic_suspicious_keywords: null,
+    } as unknown as Partial<Server>);
 
     await service.getServerConfig('guild-heur-2');
     const settings = service.getCachedHeuristicSettings('guild-heur-2');
-
-    expect(settings.suspiciousKeywords.length).toBeGreaterThan(3);
-    expect(settings.suspiciousKeywords).toEqual(expect.arrayContaining(['steam gift']));
-  });
-
-  it('falls back to defaults when cached settings are invalid', async () => {
-    process.env.DATABASE_URL = 'in-memory';
-    const serverRepository = new InMemoryServerRepository();
-    const discordClient = buildClient();
-    const service = new ConfigService(serverRepository, discordClient);
-
-    await serverRepository.upsertByGuildId('guild-heur-3', {
-      settings: {
-        message_threshold: 0.5,
-        suspicious_keywords: null,
-      },
-    });
-
-    await service.getServerConfig('guild-heur-3');
-    const settings = service.getCachedHeuristicSettings('guild-heur-3');
-
-    expect(settings.messageThreshold).toBe(
-      globalConfig.getSettings().defaultServerSettings.messageThreshold
-    );
-  });
-
-  it('falls back to defaults when cached settings exceed safety bounds', async () => {
-    process.env.DATABASE_URL = 'in-memory';
-    const serverRepository = new InMemoryServerRepository();
-    const discordClient = buildClient();
-    const service = new ConfigService(serverRepository, discordClient);
-
-    await serverRepository.upsertByGuildId('guild-heur-4', {
-      settings: {
-        message_threshold: 10_000,
-        message_timeframe: 10_000,
-        suspicious_keywords: null,
-      },
-    });
-
-    await service.getServerConfig('guild-heur-4');
-    const settings = service.getCachedHeuristicSettings('guild-heur-4');
-
     const defaults = globalConfig.getSettings();
+
     expect(settings.messageThreshold).toBe(defaults.defaultServerSettings.messageThreshold);
     expect(settings.timeWindowMs).toBe(defaults.defaultServerSettings.messageTimeframe * 1000);
+  });
+
+  it('updates heuristic settings with normalization and dedupe', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const discordClient = buildClient();
+    const service = new ConfigService(serverRepository, discordClient);
+
+    await service.getServerConfig('guild-heur-3');
+    const updated = await service.updateHeuristicSettings('guild-heur-3', {
+      messageThreshold: 8,
+      timeframeSeconds: 20,
+      suspiciousKeywords: ['  Banana  ', 'BANANA', 'steam gift'],
+    });
+
+    expect(updated.messageThreshold).toBe(8);
+    expect(updated.timeWindowMs).toBe(20_000);
+    expect(updated.suspiciousKeywords).toEqual(['banana', 'steam gift']);
+  });
+
+  it('normalizes existing keywords when updating only threshold/timeframe', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const discordClient = buildClient();
+    const service = new ConfigService(serverRepository, discordClient);
+
+    await service.updateServerConfig('guild-heur-4b', {
+      heuristic_suspicious_keywords: [' Banana ', 'banana', 'STEAM GIFT'],
+    });
+
+    const updated = await service.updateHeuristicSettings('guild-heur-4b', {
+      messageThreshold: 7,
+    });
+
+    expect(updated.messageThreshold).toBe(7);
+    expect(updated.suspiciousKeywords).toEqual(['banana', 'steam gift']);
+
+    const persisted = await service.getServerConfig('guild-heur-4b');
+    expect(persisted.heuristic_suspicious_keywords).toEqual(['banana', 'steam gift']);
+  });
+
+  it('rejects invalid heuristic updates', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const discordClient = buildClient();
+    const service = new ConfigService(serverRepository, discordClient);
+
+    await expect(
+      service.updateHeuristicSettings('guild-heur-4', {
+        messageThreshold: 0,
+      })
+    ).rejects.toThrow();
+  });
+
+  it('resets heuristic settings to defaults', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const discordClient = buildClient();
+    const service = new ConfigService(serverRepository, discordClient);
+
+    await service.updateHeuristicSettings('guild-heur-5', {
+      messageThreshold: 8,
+      timeframeSeconds: 20,
+      suspiciousKeywords: ['banana'],
+    });
+
+    const reset = await service.resetHeuristicSettings('guild-heur-5');
+    const defaults = globalConfig.getSettings();
+
+    expect(reset.messageThreshold).toBe(defaults.defaultServerSettings.messageThreshold);
+    expect(reset.timeWindowMs).toBe(defaults.defaultServerSettings.messageTimeframe * 1000);
+    expect(reset.suspiciousKeywords).toEqual(defaults.defaultSuspiciousKeywords);
+  });
+
+  it('updates non-heuristic settings by merging with existing values', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const discordClient = buildClient();
+    const service = new ConfigService(serverRepository, discordClient);
+
+    await serverRepository.upsertByGuildId('guild-4', {
+      settings: {
+        min_confidence_threshold: 60,
+        auto_restrict: true,
+      },
+      heuristic_message_threshold: 2,
+    });
+
+    const updated = await service.updateServerSettings('guild-4', {
+      min_confidence_threshold: 80,
+    });
+
+    expect(updated.settings.auto_restrict).toBe(true);
+    expect(updated.settings.min_confidence_threshold).toBe(80);
+    expect(updated.heuristic_message_threshold).toBe(2);
   });
 
   it('fetches admin channel when configured', async () => {
@@ -168,35 +229,14 @@ describe('ConfigService (unit)', () => {
     const discordClient = buildClient(channel);
     const service = new ConfigService(serverRepository, discordClient);
 
-    await serverRepository.upsertByGuildId('guild-3', {
+    await serverRepository.upsertByGuildId('guild-6', {
       admin_channel_id: 'channel-1',
     });
 
-    const adminChannel = await service.getAdminChannel('guild-3');
+    const adminChannel = await service.getAdminChannel('guild-6');
 
     expect(adminChannel?.id).toBe('channel-1');
     expect(discordClient.channels.fetch).toHaveBeenCalledWith('channel-1');
-  });
-
-  it('updates settings by merging with existing values', async () => {
-    process.env.DATABASE_URL = 'in-memory';
-    const serverRepository = new InMemoryServerRepository();
-    const discordClient = buildClient();
-    const service = new ConfigService(serverRepository, discordClient);
-
-    await serverRepository.upsertByGuildId('guild-4', {
-      settings: {
-        suspicious_keywords: ['abc'],
-        message_threshold: 2,
-      },
-    });
-
-    const updated = await service.updateServerSettings('guild-4', {
-      message_threshold: 5,
-    });
-
-    expect(updated.settings.suspicious_keywords).toEqual(['abc']);
-    expect(updated.settings.message_threshold).toBe(5);
   });
 
   it('returns restricted role when configured', async () => {
@@ -206,11 +246,11 @@ describe('ConfigService (unit)', () => {
     const discordClient = buildClient(undefined, role);
     const service = new ConfigService(serverRepository, discordClient);
 
-    await serverRepository.upsertByGuildId('guild-5', {
+    await serverRepository.upsertByGuildId('guild-7', {
       restricted_role_id: 'role-1',
     });
 
-    const restrictedRole = await service.getRestrictedRole('guild-5');
+    const restrictedRole = await service.getRestrictedRole('guild-7');
 
     expect(restrictedRole?.id).toBe('role-1');
   });
