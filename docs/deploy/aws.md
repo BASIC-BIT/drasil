@@ -9,6 +9,8 @@ The defaults are intentionally simple:
 - Secrets stored in AWS Secrets Manager
 - Customer-managed KMS keys for encryption at rest (state + runtime resources)
 - VPC Flow Logs enabled to CloudWatch Logs
+- CloudWatch dashboard + alarms + SNS topic for operational observability
+- Budget + cost anomaly notifications when `alert_email_addresses` is configured
 
 ## Prerequisites
 
@@ -36,14 +38,29 @@ terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
+Optional before `terraform apply`: create a `terraform.tfvars` for tags/alerts/cost thresholds.
+
+```hcl
+tags = {
+  Owner      = "platform"
+  CostCenter = "security"
+}
+
+alert_email_addresses     = ["you@example.com"]
+monthly_cost_budget_usd   = 25
+monthly_cost_budget_start = "2026-01-01_00:00"
+cost_anomaly_threshold_usd = 10
+```
+
 Terraform creates:
 
 - VPC + 2 public subnets
 - ECR repository
 - ECS cluster + Fargate service
-- CloudWatch log group
+- CloudWatch log groups + flow logs + operational dashboard/alarms
 - Secrets Manager secrets (metadata only; you set the values)
 - GitHub Actions OIDC role for deploys
+- Resource Group filtered by `Project` + `Environment` tags
 
 If your AWS account already has the standard GitHub Actions OIDC provider
 (`token.actions.githubusercontent.com`), set `github_oidc_provider_arn` when
@@ -90,6 +107,15 @@ It will:
 - register a new ECS task definition revision pinned to that image
 - update the ECS service to the new task definition and wait for it to stabilize
 
+## 6) Observability and cost controls
+
+- CloudWatch dashboard output: `operations_dashboard_name`
+- SNS topic output: `ops_alert_topic_arn` (email subscriptions require confirmation)
+- Budget + anomaly notifications are created only when `alert_email_addresses` is non-empty
+- Cost allocation tags still need account-level activation in Billing:
+  - activate at least `Project` and `Environment` as cost allocation tags
+  - allow up to 24 hours for billing views to reflect newly activated tags
+
 ## Rollback
 
 Re-run the deploy workflow and set the `ref` input to an older commit SHA. The workflow resolves that commit SHA and reuses the existing immutable ECR tag if it already exists (or builds/pushes it if missing), then updates ECS to a new task definition revision referencing that image.
@@ -102,3 +128,4 @@ Re-run the deploy workflow and set the `ref` input to an older commit SHA. The w
 - If/when we add sharding, we can increase `desired_count` and/or move to a more controlled rollout.
 - If you prefer private subnets, add a NAT Gateway and set `assign_public_ip = false` in `infra/aws/prod/main.tf`.
 - Secrets Manager automatic rotation is intentionally not configured yet; it requires a rotation Lambda and an ops runbook.
+- CloudWatch alarms publish to SNS regardless of subscribers; add/confirm `alert_email_addresses` to receive notifications.

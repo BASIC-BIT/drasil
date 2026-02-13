@@ -10,6 +10,22 @@ locals {
   secrets_prefix = "${var.project_name}/${var.environment}"
 
   github_oidc_provider_arn = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
+
+  common_tags = merge(
+    var.tags,
+    {
+      Project     = var.project_name
+      Environment = var.environment
+      ManagedBy   = "terraform"
+      Repository  = "basic-bit/drasil"
+      Service     = "discord-bot"
+      Component   = "infrastructure"
+    }
+  )
+
+  notifications_enabled = length(var.alert_email_addresses) > 0
+  observability_enabled = var.enable_observability
+  cost_controls_enabled = var.enable_cost_controls
 }
 
 resource "aws_vpc" "main" {
@@ -457,7 +473,8 @@ data "aws_iam_policy_document" "kms" {
       identifiers = [
         "logs.${var.aws_region}.amazonaws.com",
         "secretsmanager.amazonaws.com",
-        "ecr.amazonaws.com"
+        "ecr.amazonaws.com",
+        "sns.amazonaws.com"
       ]
     }
   }

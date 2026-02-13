@@ -15,6 +15,18 @@ variable "lock_table_name" {
   default     = "drasil-terraform-locks"
 }
 
+variable "project_name" {
+  type        = string
+  description = "Project tag used for bootstrap resources."
+  default     = "drasil"
+}
+
+variable "environment" {
+  type        = string
+  description = "Environment tag used for bootstrap resources."
+  default     = "shared"
+}
+
 variable "tags" {
   type        = map(string)
   description = "Tags applied to created resources."
