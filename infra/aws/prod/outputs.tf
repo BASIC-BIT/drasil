@@ -41,3 +41,33 @@ output "secrets" {
   }
   description = "Secrets Manager secret ARNs created for this environment."
 }
+
+output "resource_group_name" {
+  value       = aws_resourcegroups_group.project.name
+  description = "AWS Resource Group name for this environment."
+}
+
+output "ops_alert_topic_arn" {
+  value       = try(aws_sns_topic.ops_alerts[0].arn, null)
+  description = "SNS topic ARN used for operational alarms (null when observability is disabled)."
+}
+
+output "operations_dashboard_name" {
+  value       = try(aws_cloudwatch_dashboard.operations[0].dashboard_name, null)
+  description = "CloudWatch dashboard name for ECS operational metrics (null when observability is disabled)."
+}
+
+output "cost_controls_enabled" {
+  value       = local.cost_controls_enabled
+  description = "Whether cost-control resources are enabled in this stack."
+}
+
+output "monthly_budget_name" {
+  value       = try(aws_budgets_budget.monthly_cost[0].name, null)
+  description = "AWS Budget name for monthly cost alerts (null when cost notifications are not configured)."
+}
+
+output "cost_anomaly_monitor_arn" {
+  value       = try(aws_ce_anomaly_monitor.service_costs[0].arn, null)
+  description = "Cost Anomaly Detection monitor ARN (null when cost controls are disabled)."
+}

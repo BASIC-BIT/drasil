@@ -11,4 +11,17 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
+
+  default_tags {
+    tags = merge(
+      {
+        Project     = var.project_name
+        Environment = var.environment
+        ManagedBy   = "terraform"
+        Repository  = "basic-bit/drasil"
+        Component   = "terraform-state"
+      },
+      var.tags
+    )
+  }
 }
