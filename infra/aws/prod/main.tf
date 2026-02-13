@@ -474,7 +474,8 @@ data "aws_iam_policy_document" "kms" {
       identifiers = [
         "logs.${var.aws_region}.amazonaws.com",
         "secretsmanager.amazonaws.com",
-        "ecr.amazonaws.com"
+        "ecr.amazonaws.com",
+        "sns.amazonaws.com"
       ]
     }
   }
