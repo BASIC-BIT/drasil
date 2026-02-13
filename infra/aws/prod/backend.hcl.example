@@ -1,0 +1,7 @@
+# Used by: terraform init -backend-config=backend.hcl
+
+bucket         = "REPLACE_ME"
+key            = "drasil/prod/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "drasil-terraform-locks"
+encrypt        = true

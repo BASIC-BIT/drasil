@@ -1,0 +1,153 @@
+name: Deploy (prod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (branch, tag, or commit SHA) to deploy'
+        required: false
+        default: 'main'
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Validate required variables
+        shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+        run: |
+          set -euo pipefail
+          : "${AWS_REGION:?Set repo variable AWS_REGION}"
+          : "${AWS_ROLE_TO_ASSUME:?Set repo variable AWS_ROLE_TO_ASSUME}"
+          : "${ECR_REPOSITORY:?Set repo variable ECR_REPOSITORY}"
+          : "${ECS_CLUSTER:?Set repo variable ECS_CLUSTER}"
+          : "${ECS_SERVICE:?Set repo variable ECS_SERVICE}"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Install jq
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Resolve deploy image
+        id: resolve_image
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+
+          IMAGE_SHA="$(git rev-parse HEAD)"
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY"
+          IMAGE="$IMAGE_URI:$IMAGE_SHA"
+
+          {
+            echo "requested_ref=$INPUT_REF"
+            echo "image_sha=$IMAGE_SHA"
+            echo "image=$IMAGE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check image tag in ECR
+        id: image_exists
+        shell: bash
+        env:
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_SHA: ${{ steps.resolve_image.outputs.image_sha }}
+        run: |
+          set -euo pipefail
+
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_SHA" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push image
+        if: steps.image_exists.outputs.exists != 'true'
+        shell: bash
+        env:
+          IMAGE: ${{ steps.resolve_image.outputs.image }}
+        run: |
+          set -euo pipefail
+
+          docker build \
+            -t "$IMAGE" \
+            .
+
+          docker push "$IMAGE"
+
+      - name: Reuse existing image tag
+        if: steps.image_exists.outputs.exists == 'true'
+        shell: bash
+        env:
+          IMAGE: ${{ steps.resolve_image.outputs.image }}
+        run: |
+          set -euo pipefail
+          echo "Image already exists in ECR, skipping build/push: $IMAGE"
+
+      - name: Register new task definition revision
+        shell: bash
+        env:
+          IMAGE: ${{ steps.resolve_image.outputs.image }}
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+        run: |
+          set -euo pipefail
+
+          CURRENT_TD_ARN="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query 'services[0].taskDefinition' --output text)"
+          aws ecs describe-task-definition --task-definition "$CURRENT_TD_ARN" --query 'taskDefinition' > taskdef.json
+
+          jq --arg IMAGE "$IMAGE" '
+            .containerDefinitions |= map(if .name == "drasil" then .image = $IMAGE else . end)
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
+          ' taskdef.json > taskdef.new.json
+
+          NEW_TD_ARN="$(aws ecs register-task-definition --cli-input-json file://taskdef.new.json --query 'taskDefinition.taskDefinitionArn' --output text)"
+          echo "Registered task definition: $NEW_TD_ARN"
+
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "$NEW_TD_ARN"
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
+
+      - name: Deployment summary
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ steps.resolve_image.outputs.requested_ref }}
+          IMAGE_SHA: ${{ steps.resolve_image.outputs.image_sha }}
+          IMAGE: ${{ steps.resolve_image.outputs.image }}
+          IMAGE_EXISTS: ${{ steps.image_exists.outputs.exists }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Deploy target"
+            echo "- Requested ref: $REQUESTED_REF"
+            echo "- Resolved commit SHA: $IMAGE_SHA"
+            echo "- Image: $IMAGE"
+            echo "- Image reused from ECR: $IMAGE_EXISTS"
+          } >> "$GITHUB_STEP_SUMMARY"

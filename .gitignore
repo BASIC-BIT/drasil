@@ -59,6 +59,14 @@ supabase/.env
 # OpenCode
 .opencode/state/
 
+# Terraform
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/crash.log
+infra/aws/prod/backend.hcl
+
 # OS files
 Thumbs.db 
 

@@ -1,0 +1,30 @@
+# Dependencies / build output
+node_modules
+dist
+coverage
+
+# Git / CI
+.git
+.github
+
+# Local config / secrets
+.env
+.env.*
+AGENTS.local.md
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Terraform
+**/.terraform
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/backend.hcl
+
+# Logs
+*.log
+logs

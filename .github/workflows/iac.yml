@@ -1,0 +1,49 @@
+name: IaC Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Terraform fmt (check)
+        working-directory: infra/aws
+        run: terraform fmt -check -recursive
+
+      - name: Terraform validate (bootstrap)
+        working-directory: infra/aws/bootstrap
+        run: terraform init -backend=false && terraform validate
+
+      - name: Terraform validate (prod)
+        working-directory: infra/aws/prod
+        run: terraform init -backend=false && terraform validate
+
+  checkov:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkov (Terraform)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra/aws
+          framework: terraform
+          soft_fail: false
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        uses: rhysd/actionlint@v1.7.10

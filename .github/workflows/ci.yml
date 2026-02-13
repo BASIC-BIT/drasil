@@ -40,8 +40,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: Wait for Postgres
         run: |
-          for i in {1..10}; do
+          for attempt in {1..10}; do
             pg_isready -h localhost -p 5432 -U postgres -d drasil_test && exit 0
+            echo "Postgres not ready yet (attempt ${attempt}/10)"
             sleep 2
           done
           exit 1

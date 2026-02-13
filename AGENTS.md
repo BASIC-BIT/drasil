@@ -101,6 +101,34 @@ If the user says "Reset the database", run `npm run db:reset:local`.
 - Resolve PR review threads (including AI reviewer threads) before merge.
 - Prefer AI-assisted reviews (Copilot + Greptile) and recycle loops; keep critical context in the PR.
 
+## AI Review Recycle Loop
+
+When PRs trigger AI reviewers (Greptile/Copilot/Codex), treat their feedback as suggestions, not ground truth.
+
+- For each comment/thread: validate it against the repo context + intent before changing code.
+- Prefer replying in-thread with what you changed (or why you didn’t), then mark the thread resolved.
+- Keep CI green while iterating; when possible run `npm run check:ci` locally.
+
+Common pitfalls:
+
+- Some AI review tooling may show up as a required check but not expose an API key locally; fall back to reading the GitHub PR conversation/threads.
+- `actionlint` also runs `shellcheck` on workflow `run:` blocks; existing scripts can fail on new warnings.
+- Pin GitHub Actions to real tags (some actions don’t publish a major-only tag like `@v1`).
+- Checkov is useful early as advisory (`soft_fail: true`) while the team decides which IaC best-practice checks to enforce.
+
+Practical workflow tips:
+
+- When responding to GitHub PR review comments via shell, avoid unescaped backticks (they trigger command substitution in bash). Prefer `gh ... --body-file - <<'EOF'` heredocs.
+- To reply to a specific inline review comment: `gh api -X POST repos/<owner>/<repo>/pulls/<pr>/comments -F in_reply_to=<comment_id> -f body='...'`.
+- To resolve a review thread (no UI): use GraphQL `resolveReviewThread` with the thread ID.
+- When CI/CD updates ECS task definitions, either manage deploys in Terraform (changing image/digest) or add `lifecycle.ignore_changes = [task_definition]` to avoid drift fights.
+- If a GitHub Actions workflow relies on CLI tools (e.g. `jq`), install them explicitly; runner images can change.
+- Some Terraform resources validate with warnings that become errors later (e.g. S3 lifecycle rules now require `filter {}` / `prefix`); fix warnings proactively.
+- AI reviewers (and humans) can suggest Terraform attributes that don't exist in the provider schema; confirm with `terraform validate` (e.g. `aws_ecs_service` uses `id` as the ARN and does not export a separate `arn`).
+- When writing GitHub OIDC trust policies, normalize repo casing (`lower(...)`) to match the `sub` claim and avoid subtle mismatches.
+- If an ECS service references an image tag that is only produced by CI/CD, expect tasks to fail until the first deploy; consider `desired_count=0` for the initial `terraform apply` and scale up after the first deploy.
+- Before committing/pushing, sanity check `git status` (branch + dirty files), especially when switching between PRs/worktrees.
+
 ## Scripts
 
 - `npm run dev` start bot (hot reload)
