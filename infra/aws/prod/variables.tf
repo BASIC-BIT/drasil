@@ -75,3 +75,57 @@ variable "tags" {
   description = "Tags applied to created resources."
   default     = {}
 }
+
+variable "alert_email_addresses" {
+  type        = list(string)
+  description = "Email recipients for operational alarms and cost notifications."
+  default     = []
+}
+
+variable "enable_observability" {
+  type        = bool
+  description = "Enable CloudWatch dashboard, alarms, and alarm notification plumbing."
+  default     = true
+}
+
+variable "enable_cost_controls" {
+  type        = bool
+  description = "Enable AWS Budgets and Cost Anomaly Detection resources."
+  default     = true
+}
+
+variable "monthly_cost_budget_usd" {
+  type        = number
+  description = "Monthly account budget threshold in USD for this environment notifications."
+  default     = 25
+}
+
+variable "monthly_cost_budget_start" {
+  type        = string
+  description = "Budget start timestamp in AWS Budgets format YYYY-MM-DD_HH:MM."
+  default     = "2026-01-01_00:00"
+}
+
+variable "cost_anomaly_threshold_usd" {
+  type        = number
+  description = "Absolute USD impact threshold for Cost Anomaly Detection notifications."
+  default     = 10
+}
+
+variable "cpu_alarm_threshold_percent" {
+  type        = number
+  description = "CPU utilization percent threshold for ECS service alarms."
+  default     = 80
+}
+
+variable "memory_alarm_threshold_percent" {
+  type        = number
+  description = "Memory utilization percent threshold for ECS service alarms."
+  default     = 80
+}
+
+variable "error_alarm_threshold_count" {
+  type        = number
+  description = "Application error log count threshold per alarm period."
+  default     = 5
+}

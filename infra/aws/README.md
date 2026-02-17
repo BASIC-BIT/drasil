@@ -34,6 +34,20 @@ terraform apply
 
 4. Set secret values in AWS Secrets Manager (created by Terraform) and then deploy the container image.
 
+Optional `infra/aws/prod/terraform.tfvars` starter:
+
+```hcl
+tags = {
+  Owner      = "platform"
+  CostCenter = "security"
+}
+
+alert_email_addresses      = ["you@example.com"]
+monthly_cost_budget_usd    = 25
+monthly_cost_budget_start  = "2026-01-01_00:00"
+cost_anomaly_threshold_usd = 10
+```
+
 Docs: `docs/deploy/aws.md`
 
 ## IaC policy posture (Checkov)
@@ -50,3 +64,13 @@ Docs: `docs/deploy/aws.md`
   - deferred Secrets Manager automatic rotation (requires Lambda + operational runbook),
   - Terraform backend bucket controls that are not currently required (replication/events/access logs),
   - unavoidable wildcard scope in KMS key policy semantics.
+
+## Cost and observability
+
+- Provider-level default tags are applied in both `bootstrap` and `prod`.
+- `prod` provisions:
+  - CloudWatch dashboard and ECS/log-based alarms,
+  - SNS alert topic with optional email subscriptions,
+  - Resource Group filtered by `Project` + `Environment`,
+  - Budget and Cost Anomaly Detection notifications (when `alert_email_addresses` is set).
+- Important: activate cost allocation tags (`Project`, `Environment`) in AWS Billing for tag-based cost reporting.
