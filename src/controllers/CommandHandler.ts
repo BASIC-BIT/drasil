@@ -468,9 +468,21 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
-    const hasAdminPermission = interaction.memberPermissions?.has(
-      PermissionFlagsBits.Administrator
-    );
+    let hasAdminPermission = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+
+    if (hasAdminPermission === undefined) {
+      const invokingMember = await guild.members.fetch(interaction.user.id).catch(() => null);
+      if (!invokingMember) {
+        hasAdminPermission = false;
+      } else if (interaction.channelId) {
+        hasAdminPermission = invokingMember
+          .permissionsIn(interaction.channelId)
+          .has(PermissionFlagsBits.Administrator);
+      } else {
+        hasAdminPermission = invokingMember.permissions.has(PermissionFlagsBits.Administrator);
+      }
+    }
+
     if (!hasAdminPermission) {
       await interaction.reply({
         content: 'You need administrator permissions to set up the verification channel.',
@@ -479,7 +491,11 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
-    const serverConfig = await this.configService.getServerConfig(guild.id);
+    const serverConfig = this.configService.getCachedServerConfig(guild.id) ?? {
+      restricted_role_id: null,
+      admin_channel_id: null,
+      verification_channel_id: null,
+    };
 
     const modal = new ModalBuilder()
       .setCustomId(SETUP_VERIFICATION_MODAL_ID)
@@ -524,7 +540,21 @@ export class CommandHandler implements ICommandHandler {
       new ActionRowBuilder<TextInputBuilder>().addComponents(verificationChannelInput)
     );
 
-    await interaction.showModal(modal);
+    try {
+      await interaction.showModal(modal);
+    } catch (error) {
+      console.error('Failed to show setup verification modal:', error);
+      const errorResponse = {
+        content: 'Failed to open setup verification wizard. Please try again.',
+        flags: MessageFlags.Ephemeral,
+      } as const;
+
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(errorResponse);
+      } else {
+        await interaction.reply(errorResponse);
+      }
+    }
   }
 
   /**

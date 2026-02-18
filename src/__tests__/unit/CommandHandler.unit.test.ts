@@ -6,7 +6,7 @@ describe('CommandHandler (unit)', () => {
   type HandlerOverrides = Partial<{
     banUser: jest.Mock;
     updateServerConfig: jest.Mock;
-    getServerConfig: jest.Mock;
+    getCachedServerConfig: jest.Mock;
     getHeuristicSettings: jest.Mock;
     updateHeuristicSettings: jest.Mock;
     resetHeuristicSettings: jest.Mock;
@@ -19,13 +19,7 @@ describe('CommandHandler (unit)', () => {
 
     const configService = {
       updateServerConfig: overrides.updateServerConfig ?? jest.fn().mockResolvedValue({}),
-      getServerConfig:
-        overrides.getServerConfig ??
-        jest.fn().mockResolvedValue({
-          restricted_role_id: null,
-          admin_channel_id: null,
-          verification_channel_id: null,
-        }),
+      getCachedServerConfig: overrides.getCachedServerConfig ?? jest.fn().mockReturnValue(null),
       getHeuristicSettings:
         overrides.getHeuristicSettings ??
         jest.fn().mockResolvedValue({
@@ -224,12 +218,12 @@ describe('CommandHandler (unit)', () => {
   });
 
   it('shows setup verification modal for admins', async () => {
-    const getServerConfig = jest.fn().mockResolvedValue({
+    const getCachedServerConfig = jest.fn().mockReturnValue({
       restricted_role_id: 'role-1',
       admin_channel_id: 'channel-1',
       verification_channel_id: 'channel-2',
     });
-    const { handler, configService } = buildHandler({ getServerConfig });
+    const { handler, configService } = buildHandler({ getCachedServerConfig });
 
     const guild = {
       id: 'guild-1',
@@ -247,12 +241,46 @@ describe('CommandHandler (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1');
+    expect(configService.getCachedServerConfig).toHaveBeenCalledWith('guild-1');
     expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.showModal).toHaveBeenCalledTimes(1);
 
     const modalArg = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
     expect(modalArg.toJSON().custom_id).toBe(SETUP_VERIFICATION_MODAL_ID);
+  });
+
+  it('falls back to member fetch when setupverification memberPermissions is null', async () => {
+    const permissionsIn = jest.fn().mockReturnValue({
+      has: jest.fn().mockReturnValue(true),
+    });
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissionsIn,
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const { handler } = buildHandler();
+    const interaction = {
+      commandName: 'setupverification',
+      guild,
+      channelId: 'channel-1',
+      user: { id: 'admin-1' },
+      memberPermissions: null,
+      reply: jest.fn().mockResolvedValue(undefined),
+      showModal: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(guild.members.fetch).toHaveBeenCalledWith('admin-1');
+    expect(permissionsIn).toHaveBeenCalledWith('channel-1');
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
   });
 
   it('handles /config heuristic set-threshold', async () => {

@@ -552,7 +552,8 @@ export class InteractionHandler implements IInteractionHandler {
       } else {
         const createdChannelId = await this.notificationManager.setupVerificationChannel(
           guild,
-          restrictedRoleId
+          restrictedRoleId,
+          false
         );
         if (!createdChannelId) {
           throw new Error('Failed to create a verification channel during setup.');
@@ -584,10 +585,16 @@ export class InteractionHandler implements IInteractionHandler {
         '[InteractionHandler] Error handling setup verification modal submission:',
         error
       );
-      await interaction.reply({
+      const errorResponse = {
         content: 'Failed to complete setup verification. Please check permissions and try again.',
         flags: MessageFlags.Ephemeral,
-      });
+      } as const;
+
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(errorResponse);
+      } else {
+        await interaction.reply(errorResponse);
+      }
     }
   }
 
