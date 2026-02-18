@@ -15,6 +15,9 @@ import {
   ChannelType, // Added
   EmbedBuilder, // Added
   TextChannel, // Added
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject } from 'inversify';
@@ -27,6 +30,12 @@ import { globalConfig } from '../config/GlobalConfig';
 import { IUserModerationService } from '../services/UserModerationService';
 import { ISecurityActionService } from '../services/SecurityActionService';
 import { TYPES } from '../di/symbols';
+import {
+  SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID,
+  SETUP_VERIFICATION_CHANNEL_FIELD_ID,
+  SETUP_VERIFICATION_MODAL_ID,
+  SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
+} from '../constants/setupVerificationWizard';
 import 'reflect-metadata';
 
 // Load environment variables
@@ -447,12 +456,9 @@ export class CommandHandler implements ICommandHandler {
     }
   }
 
-  // TODO: We don't really *need* this functionality right now, but I'm leaving it around
-  // TODO cont: because it will be useful in the future for the setup wizard flow
   private async handleSetupVerificationCommand(
     interaction: ChatInputCommandInteraction
   ): Promise<void> {
-    // Check if the interaction is in a guild
     const guild = interaction.guild;
     if (!guild) {
       await interaction.reply({
@@ -462,9 +468,22 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
-    // Check if the user has the required permissions
-    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
-    if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
+    let hasAdminPermission = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+
+    if (hasAdminPermission === undefined) {
+      const invokingMember = await guild.members.fetch(interaction.user.id).catch(() => null);
+      if (!invokingMember) {
+        hasAdminPermission = false;
+      } else if (interaction.channelId) {
+        hasAdminPermission = invokingMember
+          .permissionsIn(interaction.channelId)
+          .has(PermissionFlagsBits.Administrator);
+      } else {
+        hasAdminPermission = invokingMember.permissions.has(PermissionFlagsBits.Administrator);
+      }
+    }
+
+    if (!hasAdminPermission) {
       await interaction.reply({
         content: 'You need administrator permissions to set up the verification channel.',
         flags: MessageFlags.Ephemeral,
@@ -472,46 +491,69 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
-    // Defer the reply as the channel creation might take a moment
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const serverConfig = this.configService.getCachedServerConfig(guild.id) ?? {
+      restricted_role_id: null,
+      admin_channel_id: null,
+      verification_channel_id: null,
+    };
 
-    // Get the restricted role ID
-    // Get the server configuration
-    const serverConfig = await this.configService.getServerConfig(guild.id);
+    const modal = new ModalBuilder()
+      .setCustomId(SETUP_VERIFICATION_MODAL_ID)
+      .setTitle('Setup Verification Wizard');
 
-    // Use the restricted role ID from the database
-    const restrictedRoleId = serverConfig.restricted_role_id;
+    const restrictedRoleInput = new TextInputBuilder()
+      .setCustomId(SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID)
+      .setLabel('Restricted role (ID or mention)')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('123456789012345678 or <@&123...>')
+      .setRequired(true);
 
-    // If no restricted role ID is found, prompt the user to set it
-    if (!restrictedRoleId) {
-      await interaction.editReply({
-        content: 'No restricted role ID configured. Please set up the restricted role first.',
-      });
-      return;
+    if (serverConfig.restricted_role_id) {
+      restrictedRoleInput.setValue(serverConfig.restricted_role_id);
     }
 
-    // Create the verification channel
-    const channelId = await this.notificationManager.setupVerificationChannel(
-      guild,
-      restrictedRoleId
+    const adminChannelInput = new TextInputBuilder()
+      .setCustomId(SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID)
+      .setLabel('Admin channel (ID or mention)')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('123456789012345678 or <#123...>')
+      .setRequired(true);
+
+    if (serverConfig.admin_channel_id) {
+      adminChannelInput.setValue(serverConfig.admin_channel_id);
+    }
+
+    const verificationChannelInput = new TextInputBuilder()
+      .setCustomId(SETUP_VERIFICATION_CHANNEL_FIELD_ID)
+      .setLabel('Verification channel (optional)')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Leave blank to auto-create')
+      .setRequired(false);
+
+    if (serverConfig.verification_channel_id) {
+      verificationChannelInput.setValue(serverConfig.verification_channel_id);
+    }
+
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(restrictedRoleInput),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(adminChannelInput),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(verificationChannelInput)
     );
 
-    if (channelId) {
-      await interaction.editReply({
-        content: `✅ Verification channel created successfully! Channel ID: ${channelId}`,
-      });
+    try {
+      await interaction.showModal(modal);
+    } catch (error) {
+      console.error('Failed to show setup verification modal:', error);
+      const errorResponse = {
+        content: 'Failed to open setup verification wizard. Please try again.',
+        flags: MessageFlags.Ephemeral,
+      } as const;
 
-      // Update the environment variable or configuration
-      // Update the configuration in the database
-      await this.configService.updateServerConfig(guild.id, {
-        verification_channel_id: channelId,
-      });
-      console.log(`Verification channel created with ID: ${channelId}`);
-    } else {
-      await interaction.editReply({
-        content:
-          "❌ Failed to create verification channel. Please check the bot's permissions and try again.",
-      });
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(errorResponse);
+      } else {
+        await interaction.reply(errorResponse);
+      }
     }
   }
 

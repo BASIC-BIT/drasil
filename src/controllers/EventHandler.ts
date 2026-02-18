@@ -251,7 +251,8 @@ export class EventHandler implements IEventHandler {
         if (restrictedRoleId) {
           const channelId = await this.notificationManager.setupVerificationChannel(
             guild,
-            restrictedRoleId
+            restrictedRoleId,
+            false
           );
           if (channelId) {
             // Update the configuration with the new channel ID

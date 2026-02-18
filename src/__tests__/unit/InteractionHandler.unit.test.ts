@@ -1,5 +1,6 @@
 import {
   ButtonInteraction,
+  ChannelType,
   Client,
   Guild,
   GuildMember,
@@ -15,6 +16,13 @@ import { IVerificationEventRepository } from '../../repositories/VerificationEve
 import { IThreadManager } from '../../services/ThreadManager';
 import { IAdminActionRepository } from '../../repositories/AdminActionRepository';
 import { VerificationEvent, VerificationStatus } from '../../repositories/types';
+import { IConfigService } from '../../config/ConfigService';
+import {
+  SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID,
+  SETUP_VERIFICATION_CHANNEL_FIELD_ID,
+  SETUP_VERIFICATION_MODAL_ID,
+  SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
+} from '../../constants/setupVerificationWizard';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -43,6 +51,7 @@ describe('InteractionHandler (unit)', () => {
   let userModerationService: jest.Mocked<IUserModerationService>;
   let securityActionService: jest.Mocked<ISecurityActionService>;
   let notificationManager: jest.Mocked<INotificationManager>;
+  let configService: jest.Mocked<IConfigService>;
   let verificationEventRepository: jest.Mocked<IVerificationEventRepository>;
   let threadManager: jest.Mocked<IThreadManager>;
   let adminActionRepository: jest.Mocked<IAdminActionRepository>;
@@ -78,6 +87,21 @@ describe('InteractionHandler (unit)', () => {
       handleHistoryButtonClick: jest.fn().mockResolvedValue(true),
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
     };
+    configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn(),
+      getServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      getServerSettings: jest.fn(),
+      updateServerSettings: jest.fn(),
+      getHeuristicSettings: jest.fn(),
+      updateHeuristicSettings: jest.fn(),
+      resetHeuristicSettings: jest.fn(),
+      getAdminChannel: jest.fn(),
+      getVerificationChannel: jest.fn(),
+      getRestrictedRole: jest.fn(),
+      clearCache: jest.fn(),
+    } as unknown as jest.Mocked<IConfigService>;
     verificationEventRepository = {
       findActiveByUserAndServer: jest.fn(),
       findByUserAndServer: jest.fn(),
@@ -109,6 +133,7 @@ describe('InteractionHandler (unit)', () => {
       notificationManager,
       userModerationService,
       securityActionService,
+      configService,
       verificationEventRepository,
       threadManager,
       adminActionRepository
@@ -132,6 +157,7 @@ describe('InteractionHandler (unit)', () => {
       notificationManager,
       userModerationService,
       securityActionService,
+      configService,
       verificationEventRepository,
       threadManager,
       adminActionRepository
@@ -172,6 +198,7 @@ describe('InteractionHandler (unit)', () => {
       notificationManager,
       userModerationService,
       securityActionService,
+      configService,
       verificationEventRepository,
       threadManager,
       adminActionRepository
@@ -213,6 +240,7 @@ describe('InteractionHandler (unit)', () => {
       notificationManager,
       userModerationService,
       securityActionService,
+      configService,
       verificationEventRepository,
       threadManager,
       adminActionRepository
@@ -246,6 +274,7 @@ describe('InteractionHandler (unit)', () => {
       notificationManager,
       userModerationService,
       securityActionService,
+      configService,
       verificationEventRepository,
       threadManager,
       adminActionRepository
@@ -283,12 +312,242 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('handles setup verification modal and updates config', async () => {
+    const channelFetch = jest.fn().mockImplementation(async (id: string) => {
+      if (id === '123456789012345679' || id === '123456789012345680') {
+        return { id, type: 0 };
+      }
+      return null;
+    });
+
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+      roles: {
+        fetch: jest.fn().mockResolvedValue({ id: '123456789012345678' }),
+      },
+      channels: {
+        fetch: channelFetch,
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: SETUP_VERIFICATION_MODAL_ID,
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID) {
+            return '123456789012345678';
+          }
+          if (id === SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID) {
+            return '123456789012345679';
+          }
+          if (id === SETUP_VERIFICATION_CHANNEL_FIELD_ID) {
+            return '123456789012345680';
+          }
+          return '';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      restricted_role_id: '123456789012345678',
+      admin_channel_id: '123456789012345679',
+      verification_channel_id: '123456789012345680',
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content:
+        'Setup complete.\nRestricted role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nVerification channel: <#123456789012345680>',
+      flags: MessageFlags.Ephemeral,
+    });
+    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+  });
+
+  it('auto-creates verification channel when field is blank', async () => {
+    (notificationManager.setupVerificationChannel as jest.Mock).mockResolvedValue(
+      '123456789012345681'
+    );
+
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+      roles: {
+        fetch: jest.fn().mockResolvedValue({ id: '123456789012345678' }),
+      },
+      channels: {
+        fetch: jest
+          .fn()
+          .mockResolvedValue({ id: '123456789012345679', type: ChannelType.GuildText }),
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: SETUP_VERIFICATION_MODAL_ID,
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID) {
+            return '123456789012345678';
+          }
+          if (id === SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID) {
+            return '123456789012345679';
+          }
+          return '';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
+      expect.anything(),
+      '123456789012345678',
+      false
+    );
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      restricted_role_id: '123456789012345678',
+      admin_channel_id: '123456789012345679',
+      verification_channel_id: '123456789012345681',
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content:
+        'Setup complete.\nRestricted role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nCreated verification channel: <#123456789012345681>',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('rejects setup verification modal when role is invalid', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: SETUP_VERIFICATION_MODAL_ID,
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID) {
+            return 'not-a-role';
+          }
+          return '123456789012345678';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content:
+        'Please provide a valid restricted role ID or role mention (for example `<@&123...>`).',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('rejects setup verification modal when submitter is not admin', async () => {
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(false),
+          },
+        }),
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: SETUP_VERIFICATION_MODAL_ID,
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID) {
+            return '123456789012345678';
+          }
+          if (id === SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID) {
+            return '123456789012345679';
+          }
+          return '';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'You need administrator permissions to complete setup.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('routes report button clicks to show the report modal', async () => {
     const handler = new InteractionHandler(
       client,
       notificationManager,
       userModerationService,
       securityActionService,
+      configService,
       verificationEventRepository,
       threadManager,
       adminActionRepository
