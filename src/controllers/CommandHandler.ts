@@ -31,6 +31,11 @@ import { IUserModerationService } from '../services/UserModerationService';
 import { ISecurityActionService } from '../services/SecurityActionService';
 import { TYPES } from '../di/symbols';
 import {
+  decodeVerificationPromptTemplateInput,
+  resolveVerificationPromptTemplate,
+  VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY,
+} from '../utils/verificationPromptTemplate';
+import {
   SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID,
   SETUP_VERIFICATION_CHANNEL_FIELD_ID,
   SETUP_VERIFICATION_MODAL_ID,
@@ -195,6 +200,35 @@ export class CommandHandler implements ICommandHandler {
             )
             .addSubcommand((subcommand) =>
               subcommand.setName('reset').setDescription('Reset all heuristic settings to defaults')
+            )
+        )
+        .addSubcommandGroup((group) =>
+          group
+            .setName('verification')
+            .setDescription('Manage verification thread prompt settings')
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('prompt-view')
+                .setDescription('View the current verification prompt')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('prompt-set')
+                .setDescription('Set a custom verification prompt template')
+                .addStringOption((option) =>
+                  option
+                    .setName('template')
+                    .setDescription(
+                      'Use {user_mention} and {server_name}. Use \\n for line breaks.'
+                    )
+                    .setRequired(true)
+                    .setMaxLength(1500)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('prompt-reset')
+                .setDescription('Reset verification prompt to the default template')
             )
         ),
       new SlashCommandBuilder() // Added flaguser command
@@ -588,6 +622,11 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    if (subcommandGroup === 'verification') {
+      await this.handleVerificationConfigCommand(interaction, guild.id);
+      return;
+    }
+
     const subcommand = interaction.options.getSubcommand(false);
     if (subcommand !== 'set') {
       await interaction.reply({
@@ -641,6 +680,105 @@ export class CommandHandler implements ICommandHandler {
       `Timeframe: \`${timeframeSeconds}\` seconds`,
       `Keywords (${settings.suspiciousKeywords.length}): ${this.formatKeywordSummary(settings.suspiciousKeywords)}`,
     ].join('\n');
+  }
+
+  private formatVerificationPromptPreview(template: string): string {
+    const maxLength = 1200;
+    if (template.length <= maxLength) {
+      return template;
+    }
+
+    const overflow = template.length - maxLength;
+    return `${template.slice(0, maxLength)}\n... (truncated ${overflow} characters)`;
+  }
+
+  private async handleVerificationConfigCommand(
+    interaction: ChatInputCommandInteraction,
+    guildId: string
+  ): Promise<void> {
+    const subcommand = interaction.options.getSubcommand(true);
+
+    try {
+      switch (subcommand) {
+        case 'prompt-view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const configuredTemplate =
+            serverConfig.settings[VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY];
+          const activeTemplate = resolveVerificationPromptTemplate(configuredTemplate);
+          const sourceLabel = configuredTemplate?.trim() ? 'custom' : 'default';
+
+          await interaction.reply({
+            content:
+              `Verification prompt template (${sourceLabel}):\n\n` +
+              '```\n' +
+              `${this.formatVerificationPromptPreview(activeTemplate)}\n` +
+              '```\n\n' +
+              'Placeholders: `{user_mention}`, `{server_name}`',
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'prompt-set': {
+          const rawTemplate = interaction.options.getString('template', true);
+          const template = decodeVerificationPromptTemplateInput(rawTemplate);
+
+          if (!template) {
+            await interaction.reply({
+              content: 'Template cannot be empty.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          await this.configService.updateServerSettings(guildId, {
+            verification_prompt_template: template,
+          });
+
+          await interaction.reply({
+            content:
+              '✅ Updated verification prompt template. ' +
+              'Use `{user_mention}` and `{server_name}` placeholders as needed. ' +
+              'Run `/config verification prompt-view` to preview the active template.',
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'prompt-reset': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const updatedSettings = { ...serverConfig.settings };
+          delete updatedSettings.verification_prompt_template;
+
+          await this.configService.updateServerConfig(guildId, {
+            settings: updatedSettings,
+          });
+
+          await interaction.reply({
+            content:
+              '✅ Reset verification prompt template to default. ' +
+              'Run `/config verification prompt-view` to preview it.',
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        default:
+          await interaction.reply({
+            content: 'Unsupported verification subcommand.',
+            flags: MessageFlags.Ephemeral,
+          });
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'An error occurred while updating verification prompt settings.';
+      await interaction.reply({
+        content: `Failed to update verification prompt settings: ${errorMessage}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   }
 
   private async handleHeuristicConfigCommand(

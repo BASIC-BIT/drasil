@@ -1,12 +1,15 @@
 import { MessageFlags, PermissionFlagsBits, User } from 'discord.js';
 import { CommandHandler } from '../../controllers/CommandHandler';
 import { SETUP_VERIFICATION_MODAL_ID } from '../../constants/setupVerificationWizard';
+import { VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY } from '../../utils/verificationPromptTemplate';
 
 describe('CommandHandler (unit)', () => {
   type HandlerOverrides = Partial<{
     banUser: jest.Mock;
     updateServerConfig: jest.Mock;
+    updateServerSettings: jest.Mock;
     getCachedServerConfig: jest.Mock;
+    getServerConfig: jest.Mock;
     getHeuristicSettings: jest.Mock;
     updateHeuristicSettings: jest.Mock;
     resetHeuristicSettings: jest.Mock;
@@ -19,7 +22,13 @@ describe('CommandHandler (unit)', () => {
 
     const configService = {
       updateServerConfig: overrides.updateServerConfig ?? jest.fn().mockResolvedValue({}),
+      updateServerSettings: overrides.updateServerSettings ?? jest.fn().mockResolvedValue({}),
       getCachedServerConfig: overrides.getCachedServerConfig ?? jest.fn().mockReturnValue(null),
+      getServerConfig:
+        overrides.getServerConfig ??
+        jest.fn().mockResolvedValue({
+          settings: {},
+        }),
       getHeuristicSettings:
         overrides.getHeuristicSettings ??
         jest.fn().mockResolvedValue({
@@ -91,6 +100,24 @@ describe('CommandHandler (unit)', () => {
         'keywords-reset',
         'reset',
       ])
+    );
+  });
+
+  it('registers /config verification prompt subcommands', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const configCommand = commands.find((c) => c.name === 'config');
+
+    expect(configCommand).toBeDefined();
+
+    const verificationGroup = configCommand.options.find(
+      (option: any) => option.type === 2 && option.name === 'verification'
+    );
+    expect(verificationGroup).toBeDefined();
+
+    const verificationSubcommands = verificationGroup.options.map((option: any) => option.name);
+    expect(verificationSubcommands).toEqual(
+      expect.arrayContaining(['prompt-view', 'prompt-set', 'prompt-reset'])
     );
   });
 
@@ -321,6 +348,89 @@ describe('CommandHandler (unit)', () => {
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining('Updated heuristic threshold'),
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles /config verification prompt-set with escaped newlines', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({});
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('verification'),
+        getSubcommand: jest.fn().mockReturnValue('prompt-set'),
+        getString: jest.fn().mockReturnValue('Welcome {user_mention}\\nIn {server_name}'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      verification_prompt_template: 'Welcome {user_mention}\nIn {server_name}',
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Updated verification prompt template'),
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles /config verification prompt-reset', async () => {
+    const getServerConfig = jest.fn().mockResolvedValue({
+      settings: {
+        [VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY]: 'custom',
+        auto_restrict: true,
+      },
+    });
+    const updateServerConfig = jest.fn().mockResolvedValue({});
+    const { handler, configService } = buildHandler({ getServerConfig, updateServerConfig });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('verification'),
+        getSubcommand: jest.fn().mockReturnValue('prompt-reset'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      settings: {
+        auto_restrict: true,
+      },
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Reset verification prompt template to default'),
       flags: MessageFlags.Ephemeral,
     });
   });
