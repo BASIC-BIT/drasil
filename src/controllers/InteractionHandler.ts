@@ -2,6 +2,8 @@ import {
   Client,
   ButtonInteraction,
   MessageFlags,
+  ChannelType,
+  PermissionFlagsBits,
   ModalBuilder, // Added
   TextInputBuilder, // Added
   TextInputStyle, // Added
@@ -22,6 +24,15 @@ import { IVerificationEventRepository } from '../repositories/VerificationEventR
 import { IThreadManager } from '../services/ThreadManager';
 import { IAdminActionRepository } from '../repositories/AdminActionRepository';
 import { ISecurityActionService } from '../services/SecurityActionService';
+import { IConfigService } from '../config/ConfigService';
+import {
+  parseChannelId,
+  parseRoleId,
+  SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID,
+  SETUP_VERIFICATION_CHANNEL_FIELD_ID,
+  SETUP_VERIFICATION_MODAL_ID,
+  SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
+} from '../constants/setupVerificationWizard';
 // Load environment variables
 dotenv.config();
 
@@ -46,6 +57,7 @@ export class InteractionHandler implements IInteractionHandler {
   private notificationManager: INotificationManager;
   private userModerationService: IUserModerationService;
   private securityActionService: ISecurityActionService;
+  private configService: IConfigService;
   // TODO: Handlers calling a repository is a smell, and should be improved
   private verificationEventRepository: IVerificationEventRepository;
   private threadManager: IThreadManager;
@@ -56,6 +68,7 @@ export class InteractionHandler implements IInteractionHandler {
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
     @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
     @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService,
+    @inject(TYPES.ConfigService) configService: IConfigService,
     @inject(TYPES.VerificationEventRepository)
     verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.ThreadManager) threadManager: IThreadManager,
@@ -65,6 +78,7 @@ export class InteractionHandler implements IInteractionHandler {
     this.notificationManager = notificationManager;
     this.userModerationService = userModerationService;
     this.securityActionService = securityActionService;
+    this.configService = configService;
     this.verificationEventRepository = verificationEventRepository;
     this.threadManager = threadManager;
     this.adminActionRepository = adminActionRepository;
@@ -365,17 +379,21 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   public async handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
-    if (interaction.customId !== 'report_user_modal_submit') {
-      // If it's not our report modal, ignore it (or handle other modals)
-      // You might want a more robust routing system if you have many modals
-      console.log(
-        `[InteractionHandler] Ignoring unknown modal submission: ${interaction.customId}`
-      );
-      // Reply ephemerally that the modal isn't recognized, or just do nothing
-      // await interaction.reply({ content: 'Unknown modal submission.', flags: MessageFlags.Ephemeral });
-      return;
+    switch (interaction.customId) {
+      case 'report_user_modal_submit':
+        await this.handleReportUserModalSubmit(interaction);
+        return;
+      case SETUP_VERIFICATION_MODAL_ID:
+        await this.handleSetupVerificationModalSubmit(interaction);
+        return;
+      default:
+        console.log(
+          `[InteractionHandler] Ignoring unknown modal submission: ${interaction.customId}`
+        );
     }
+  }
 
+  private async handleReportUserModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
     if (!interaction.guildId) {
       await interaction.reply({
         content: 'This action can only be performed in a server.',
@@ -385,13 +403,11 @@ export class InteractionHandler implements IInteractionHandler {
     }
 
     try {
-      // Extract data from the modal components using field custom IDs
       const targetUserInputString = interaction.fields.getTextInputValue(
         'report_target_user_input'
       );
       const reason = interaction.fields.getTextInputValue('report_reason');
 
-      // Basic validation - check if the input string is not empty
       if (!targetUserInputString) {
         await interaction.reply({
           content: 'Error: You must provide the User ID or Tag of the user to report.',
@@ -424,7 +440,6 @@ export class InteractionHandler implements IInteractionHandler {
       });
     } catch (error) {
       console.error('[InteractionHandler] Error handling report modal submission:', error);
-      // Avoid replying again if already replied
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: 'An error occurred while submitting your report. Please try again later.',
@@ -436,6 +451,143 @@ export class InteractionHandler implements IInteractionHandler {
           flags: MessageFlags.Ephemeral,
         });
       }
+    }
+  }
+
+  private async handleSetupVerificationModalSubmit(
+    interaction: ModalSubmitInteraction
+  ): Promise<void> {
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: 'This action can only be performed in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const restrictedRoleInput = interaction.fields
+      .getTextInputValue(SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID)
+      .trim();
+    const adminChannelInput = interaction.fields
+      .getTextInputValue(SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID)
+      .trim();
+    const verificationChannelInput = interaction.fields
+      .getTextInputValue(SETUP_VERIFICATION_CHANNEL_FIELD_ID)
+      .trim();
+
+    const restrictedRoleId = parseRoleId(restrictedRoleInput);
+    if (!restrictedRoleId) {
+      await interaction.reply({
+        content:
+          'Please provide a valid restricted role ID or role mention (for example `<@&123...>`).',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const adminChannelId = parseChannelId(adminChannelInput);
+    if (!adminChannelId) {
+      await interaction.reply({
+        content:
+          'Please provide a valid admin channel ID or channel mention (for example `<#123...>`).',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const providedVerificationChannelId = verificationChannelInput
+      ? parseChannelId(verificationChannelInput)
+      : null;
+
+    if (verificationChannelInput && !providedVerificationChannelId) {
+      await interaction.reply({
+        content:
+          'Please provide a valid verification channel ID or channel mention, or leave it blank to auto-create one.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    try {
+      const guild = await this.client.guilds.fetch(interaction.guildId);
+      const moderator = await guild.members.fetch(interaction.user.id).catch(() => null);
+      if (!moderator || !moderator.permissions.has(PermissionFlagsBits.Administrator)) {
+        await interaction.reply({
+          content: 'You need administrator permissions to complete setup.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const restrictedRole = await guild.roles.fetch(restrictedRoleId);
+      if (!restrictedRole) {
+        await interaction.reply({
+          content: `Could not find restricted role <@&${restrictedRoleId}> in this server.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const adminChannel = await guild.channels.fetch(adminChannelId);
+      if (!adminChannel || adminChannel.type !== ChannelType.GuildText) {
+        await interaction.reply({
+          content: `Admin channel must be a text channel in this server. Received: <#${adminChannelId}>.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      let verificationChannelId = providedVerificationChannelId;
+      let verificationChannelWasCreated = false;
+
+      if (verificationChannelId) {
+        const verificationChannel = await guild.channels.fetch(verificationChannelId);
+        if (!verificationChannel || verificationChannel.type !== ChannelType.GuildText) {
+          await interaction.reply({
+            content: `Verification channel must be a text channel in this server. Received: <#${verificationChannelId}>.`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+      } else {
+        const createdChannelId = await this.notificationManager.setupVerificationChannel(
+          guild,
+          restrictedRoleId
+        );
+        if (!createdChannelId) {
+          throw new Error('Failed to create a verification channel during setup.');
+        }
+        verificationChannelId = createdChannelId;
+        verificationChannelWasCreated = true;
+      }
+
+      await this.configService.updateServerConfig(interaction.guildId, {
+        restricted_role_id: restrictedRoleId,
+        admin_channel_id: adminChannelId,
+        verification_channel_id: verificationChannelId,
+      });
+
+      const verificationChannelMessage = verificationChannelWasCreated
+        ? `Created verification channel: <#${verificationChannelId}>`
+        : `Verification channel: <#${verificationChannelId}>`;
+
+      await interaction.reply({
+        content:
+          'Setup complete.\n' +
+          `Restricted role: <@&${restrictedRoleId}>\n` +
+          `Admin channel: <#${adminChannelId}>\n` +
+          `${verificationChannelMessage}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error(
+        '[InteractionHandler] Error handling setup verification modal submission:',
+        error
+      );
+      await interaction.reply({
+        content: 'Failed to complete setup verification. Please check permissions and try again.',
+        flags: MessageFlags.Ephemeral,
+      });
     }
   }
 

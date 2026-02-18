@@ -1,10 +1,12 @@
 import { MessageFlags, PermissionFlagsBits, User } from 'discord.js';
 import { CommandHandler } from '../../controllers/CommandHandler';
+import { SETUP_VERIFICATION_MODAL_ID } from '../../constants/setupVerificationWizard';
 
 describe('CommandHandler (unit)', () => {
   type HandlerOverrides = Partial<{
     banUser: jest.Mock;
     updateServerConfig: jest.Mock;
+    getServerConfig: jest.Mock;
     getHeuristicSettings: jest.Mock;
     updateHeuristicSettings: jest.Mock;
     resetHeuristicSettings: jest.Mock;
@@ -17,6 +19,13 @@ describe('CommandHandler (unit)', () => {
 
     const configService = {
       updateServerConfig: overrides.updateServerConfig ?? jest.fn().mockResolvedValue({}),
+      getServerConfig:
+        overrides.getServerConfig ??
+        jest.fn().mockResolvedValue({
+          restricted_role_id: null,
+          admin_channel_id: null,
+          verification_channel_id: null,
+        }),
       getHeuristicSettings:
         overrides.getHeuristicSettings ??
         jest.fn().mockResolvedValue({
@@ -212,6 +221,38 @@ describe('CommandHandler (unit)', () => {
       content: `User ${targetUser.tag} has been banned.`,
       flags: MessageFlags.Ephemeral,
     });
+  });
+
+  it('shows setup verification modal for admins', async () => {
+    const getServerConfig = jest.fn().mockResolvedValue({
+      restricted_role_id: 'role-1',
+      admin_channel_id: 'channel-1',
+      verification_channel_id: 'channel-2',
+    });
+    const { handler, configService } = buildHandler({ getServerConfig });
+
+    const guild = {
+      id: 'guild-1',
+    } as any;
+
+    const interaction = {
+      commandName: 'setupverification',
+      guild,
+      memberPermissions: {
+        has: jest.fn().mockReturnValue(true),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      showModal: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1');
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+
+    const modalArg = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
+    expect(modalArg.toJSON().custom_id).toBe(SETUP_VERIFICATION_MODAL_ID);
   });
 
   it('handles /config heuristic set-threshold', async () => {
