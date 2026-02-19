@@ -13,6 +13,12 @@ import { IVerificationEventRepository } from '../repositories/VerificationEventR
 import { IUserRepository } from '../repositories/UserRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
+import {
+  enforceDiscordMessageLimit,
+  renderVerificationPromptTemplate,
+  resolveVerificationPromptTemplate,
+  VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY,
+} from '../utils/verificationPromptTemplate';
 
 /**
  * Interface for NotificationManager service
@@ -79,6 +85,32 @@ export class ThreadManager implements IThreadManager {
     this.serverRepository = serverRepository;
     this.serverMemberRepository = serverMemberRepository;
   }
+
+  private async getInitialVerificationPrompt(member: GuildMember): Promise<string> {
+    const userMention = `<@${member.id}>`;
+
+    try {
+      const serverConfig = await this.configService.getServerConfig(member.guild.id);
+      const template = resolveVerificationPromptTemplate(
+        serverConfig.settings[VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY]
+      );
+
+      return renderVerificationPromptTemplate(template, {
+        userMention,
+        serverName: member.guild.name,
+      });
+    } catch (error) {
+      console.warn(
+        `Failed to load verification prompt template for guild ${member.guild.id}; using default:`,
+        error
+      );
+      return renderVerificationPromptTemplate(resolveVerificationPromptTemplate(undefined), {
+        userMention,
+        serverName: member.guild.name,
+      });
+    }
+  }
+
   /**
    * Creates a thread for a suspicious user in the verification channel
    * @param member The suspicious guild member
@@ -136,9 +168,23 @@ export class ThreadManager implements IThreadManager {
         );
       }
 
+      const rawInitialPrompt = await this.getInitialVerificationPrompt(member);
+      const initialPrompt = enforceDiscordMessageLimit(rawInitialPrompt);
+      if (initialPrompt.length < rawInitialPrompt.length) {
+        console.warn(
+          `Verification prompt exceeded Discord content limit for guild ${member.guild.id}; truncated before sending.`
+        );
+      }
+
       // Send an initial message to the thread
       await thread.send({
-        content: `# Verification for <@${member.id}>\n\nHello <@${member.id}>, your account has been automatically flagged for verification.\n\nTo help us verify your account, please answer these questions:\n\n1. How did you find our community?\n2. What interests you here?\n\nOnce you respond, a moderator will review your answers and grant you full access to the server if everything checks out.`,
+        content: initialPrompt,
+        allowedMentions: {
+          parse: [],
+          users: [member.id],
+          roles: [],
+          repliedUser: false,
+        },
       });
 
       // Store thread in the database

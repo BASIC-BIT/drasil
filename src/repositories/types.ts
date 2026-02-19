@@ -32,6 +32,7 @@ export interface ServerSettings {
   gpt_message_check_count?: number; // Number of messages to check with GPT
   message_retention_days?: number; // Days to retain message history
   detection_retention_days?: number; // Days to retain detection history
+  verification_prompt_template?: string; // Custom verification thread prompt template
 }
 
 /**
