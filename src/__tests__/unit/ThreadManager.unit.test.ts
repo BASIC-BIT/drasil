@@ -9,6 +9,7 @@ import {
 } from '../fakes/inMemoryRepositories';
 import { VerificationEvent, VerificationStatus } from '../../repositories/types';
 import {
+  DISCORD_MESSAGE_CONTENT_MAX_LENGTH,
   DEFAULT_VERIFICATION_PROMPT_TEMPLATE,
   renderVerificationPromptTemplate,
 } from '../../utils/verificationPromptTemplate';
@@ -139,7 +140,7 @@ describe('ThreadManager (unit)', () => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       settings: {
         verification_prompt_template:
-          'Welcome {user_mention} to {server_name}.\\nTell us about yourself.',
+          'Welcome {user_mention} to {server_name}.\nTell us about yourself.',
       },
     });
 
@@ -163,7 +164,7 @@ describe('ThreadManager (unit)', () => {
     await manager.createVerificationThread(member, event);
 
     expect(thread.send).toHaveBeenCalledWith({
-      content: 'Welcome <@user-1> to My @\u200beveryone Server.\\nTell us about yourself.',
+      content: 'Welcome <@user-1> to My @\u200beveryone Server.\nTell us about yourself.',
       allowedMentions: {
         parse: [],
         users: [member.id],
@@ -171,6 +172,81 @@ describe('ThreadManager (unit)', () => {
         repliedUser: false,
       },
     });
+  });
+
+  it('falls back to default template and logs warning when config load fails', async () => {
+    (configService.getServerConfig as jest.Mock).mockRejectedValue(new Error('config failure'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+
+    const member = buildMember('guild-1', 'user-1');
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    await manager.createVerificationThread(member, event);
+
+    expect(thread.send).toHaveBeenCalledWith({
+      content: renderVerificationPromptTemplate(DEFAULT_VERIFICATION_PROMPT_TEMPLATE, {
+        userMention: `<@${member.id}>`,
+        serverName: member.guild.name,
+      }),
+      allowedMentions: {
+        parse: [],
+        users: [member.id],
+        roles: [],
+        repliedUser: false,
+      },
+    });
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('truncates rendered prompt to Discord content limit', async () => {
+    const repeatedPlaceholder = '{user_mention}'.repeat(250);
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      settings: {
+        verification_prompt_template: repeatedPlaceholder,
+      },
+    });
+
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+
+    const member = buildMember('guild-1', 'user-1');
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    await manager.createVerificationThread(member, event);
+
+    const sendPayload = (thread.send as jest.Mock).mock.calls[0][0] as {
+      content: string;
+    };
+    expect(sendPayload.content.length).toBeLessThanOrEqual(DISCORD_MESSAGE_CONTENT_MAX_LENGTH);
+    expect(sendPayload.content).toContain(
+      '[Verification prompt truncated to fit Discord message limits.]'
+    );
   });
 
   it('falls back to admin channel when verification channel is missing', async () => {

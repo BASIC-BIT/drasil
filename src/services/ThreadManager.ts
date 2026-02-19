@@ -14,6 +14,7 @@ import { IUserRepository } from '../repositories/UserRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import {
+  enforceDiscordMessageLimit,
   renderVerificationPromptTemplate,
   resolveVerificationPromptTemplate,
   VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY,
@@ -167,7 +168,13 @@ export class ThreadManager implements IThreadManager {
         );
       }
 
-      const initialPrompt = await this.getInitialVerificationPrompt(member);
+      const rawInitialPrompt = await this.getInitialVerificationPrompt(member);
+      const initialPrompt = enforceDiscordMessageLimit(rawInitialPrompt);
+      if (initialPrompt.length < rawInitialPrompt.length) {
+        console.warn(
+          `Verification prompt exceeded Discord content limit for guild ${member.guild.id}; truncated before sending.`
+        );
+      }
 
       // Send an initial message to the thread
       await thread.send({

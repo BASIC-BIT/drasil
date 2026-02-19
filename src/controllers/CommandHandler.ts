@@ -710,9 +710,7 @@ export class CommandHandler implements ICommandHandler {
           await interaction.reply({
             content:
               `Verification prompt template (${sourceLabel}):\n\n` +
-              '```\n' +
-              `${this.formatVerificationPromptPreview(activeTemplate)}\n` +
-              '```\n\n' +
+              `${this.formatVerificationPromptPreview(activeTemplate)}\n\n` +
               'Placeholders: `{user_mention}`, `{server_name}`',
             flags: MessageFlags.Ephemeral,
           });
@@ -773,9 +771,9 @@ export class CommandHandler implements ICommandHandler {
       const errorMessage =
         error instanceof Error
           ? error.message
-          : 'An error occurred while updating verification prompt settings.';
+          : 'An error occurred while processing verification prompt settings.';
       await interaction.reply({
-        content: `Failed to update verification prompt settings: ${errorMessage}`,
+        content: `Failed to process verification prompt settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       });
     }

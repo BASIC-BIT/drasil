@@ -390,6 +390,49 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('handles /config verification prompt-view', async () => {
+    const getServerConfig = jest.fn().mockResolvedValue({
+      settings: {
+        [VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY]: 'Welcome {user_mention}',
+      },
+    });
+    const { handler, configService } = buildHandler({ getServerConfig });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('verification'),
+        getSubcommand: jest.fn().mockReturnValue('prompt-view'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1');
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Verification prompt template (custom):'),
+      flags: MessageFlags.Ephemeral,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Welcome {user_mention}'),
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('handles /config verification prompt-reset', async () => {
     const getServerConfig = jest.fn().mockResolvedValue({
       settings: {

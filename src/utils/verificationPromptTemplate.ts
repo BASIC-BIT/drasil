@@ -1,4 +1,8 @@
 export const VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY = 'verification_prompt_template';
+export const DISCORD_MESSAGE_CONTENT_MAX_LENGTH = 2000;
+
+const VERIFICATION_PROMPT_TRUNCATION_NOTICE =
+  '\n\n[Verification prompt truncated to fit Discord message limits.]';
 
 export const DEFAULT_VERIFICATION_PROMPT_TEMPLATE =
   '# Verification for {user_mention}\n\n' +
@@ -38,4 +42,18 @@ export function resolveVerificationPromptTemplate(
 ): string {
   const template = templateFromSettings?.trim();
   return template ? template : DEFAULT_VERIFICATION_PROMPT_TEMPLATE;
+}
+
+export function enforceDiscordMessageLimit(content: string): string {
+  if (content.length <= DISCORD_MESSAGE_CONTENT_MAX_LENGTH) {
+    return content;
+  }
+
+  const maxPrefixLength =
+    DISCORD_MESSAGE_CONTENT_MAX_LENGTH - VERIFICATION_PROMPT_TRUNCATION_NOTICE.length;
+  if (maxPrefixLength <= 0) {
+    return content.slice(0, DISCORD_MESSAGE_CONTENT_MAX_LENGTH);
+  }
+
+  return `${content.slice(0, maxPrefixLength)}${VERIFICATION_PROMPT_TRUNCATION_NOTICE}`;
 }
