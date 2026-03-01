@@ -1,6 +1,9 @@
 name: Deploy (prod)
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       ref:
@@ -10,7 +13,7 @@ on:
 
 concurrency:
   group: deploy-prod
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -22,7 +25,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Validate required variables
         shell: bash
@@ -61,15 +64,20 @@ jobs:
           ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
           INPUT_REF: ${{ inputs.ref }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+
+          REQUESTED_REF="${INPUT_REF:-$GITHUB_REF_NAME}"
+          REQUESTED_REF="${REQUESTED_REF:-$GITHUB_SHA}"
 
           IMAGE_SHA="$(git rev-parse HEAD)"
           IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY"
           IMAGE="$IMAGE_URI:$IMAGE_SHA"
 
           {
-            echo "requested_ref=$INPUT_REF"
+            echo "requested_ref=$REQUESTED_REF"
             echo "image_sha=$IMAGE_SHA"
             echo "image=$IMAGE"
           } >> "$GITHUB_OUTPUT"
