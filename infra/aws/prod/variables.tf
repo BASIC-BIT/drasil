@@ -56,6 +56,13 @@ variable "github_repo" {
   type        = string
   description = "GitHub repo in OWNER/REPO format used to restrict OIDC role assumption."
   default     = "basic-bit/drasil"
+
+  validation {
+    condition = length(split("/", var.github_repo)) == 2 && alltrue([
+      for part in split("/", var.github_repo) : length(trimspace(part)) > 0
+    ])
+    error_message = "github_repo must be in OWNER/REPO format."
+  }
 }
 
 variable "github_oidc_provider_arn" {

@@ -9,6 +9,15 @@ locals {
 
   secrets_prefix = "${var.project_name}/${var.environment}"
 
+  github_repo_owner = split("/", var.github_repo)[0]
+  github_repo_name  = split("/", var.github_repo)[1]
+
+  github_oidc_subjects = distinct([
+    "repo:${lower(var.github_repo)}:ref:refs/heads/main",
+    "repo:${var.github_repo}:ref:refs/heads/main",
+    "repo:${upper(local.github_repo_owner)}/${local.github_repo_name}:ref:refs/heads/main"
+  ])
+
   github_oidc_provider_arn = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
 
   common_tags = merge(
@@ -358,7 +367,7 @@ data "aws_iam_policy_document" "github_assume" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${lower(var.github_repo)}:ref:refs/heads/main"]
+      values   = local.github_oidc_subjects
     }
   }
 }
