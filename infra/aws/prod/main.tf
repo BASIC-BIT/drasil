@@ -14,9 +14,7 @@ locals {
 
   github_oidc_subjects = distinct([
     "repo:${local.github_repo_owner}/${local.github_repo_name}:ref:refs/heads/main",
-    "repo:${lower(local.github_repo_owner)}/${lower(local.github_repo_name)}:ref:refs/heads/main",
-    "repo:${upper(local.github_repo_owner)}/${local.github_repo_name}:ref:refs/heads/main",
-    "repo:${upper(local.github_repo_owner)}/${upper(local.github_repo_name)}:ref:refs/heads/main"
+    "repo:${lower(local.github_repo_owner)}/${lower(local.github_repo_name)}:ref:refs/heads/main"
   ])
 
   github_oidc_provider_arn = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
