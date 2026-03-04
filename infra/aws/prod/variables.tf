@@ -58,9 +58,7 @@ variable "github_repo" {
   default     = "basic-bit/drasil"
 
   validation {
-    condition = length(split("/", var.github_repo)) == 2 && alltrue([
-      for part in split("/", var.github_repo) : length(trimspace(part)) > 0
-    ])
+    condition     = can(regex("^[-A-Za-z0-9_.]+/[-A-Za-z0-9_.]+$", var.github_repo))
     error_message = "github_repo must be in OWNER/REPO format."
   }
 }
