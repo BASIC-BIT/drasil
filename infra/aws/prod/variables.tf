@@ -56,6 +56,11 @@ variable "github_repo" {
   type        = string
   description = "GitHub repo in OWNER/REPO format used to restrict OIDC role assumption."
   default     = "basic-bit/drasil"
+
+  validation {
+    condition     = can(regex("^[-A-Za-z0-9_.]+/[-A-Za-z0-9_.]+$", var.github_repo))
+    error_message = "github_repo must be in OWNER/REPO format."
+  }
 }
 
 variable "github_oidc_provider_arn" {

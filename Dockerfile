@@ -33,6 +33,10 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY --chown=node:node --from=build /app/package.json ./package.json
 COPY --chown=node:node --from=build /app/node_modules ./node_modules
 COPY --chown=node:node --from=build /app/dist ./dist
@@ -41,4 +45,4 @@ COPY --chown=node:node --from=build /app/scripts ./scripts
 
 USER node
 
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/src/index.js"]
