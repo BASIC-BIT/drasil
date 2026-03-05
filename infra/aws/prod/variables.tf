@@ -24,8 +24,8 @@ variable "vpc_cidr" {
 
 variable "desired_count" {
   type        = number
-  description = "Number of ECS tasks to run. Defaults to 0 to avoid first-apply failures before the first image deploy."
-  default     = 0
+  description = "Number of ECS tasks to run. Defaults to 1 for steady-state production service availability."
+  default     = 1
 }
 
 variable "task_cpu" {

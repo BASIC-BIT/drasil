@@ -4,7 +4,7 @@ This repo can be deployed as a long-running Discord bot on AWS ECS Fargate.
 
 The defaults are intentionally simple:
 
-- ECS Fargate service with `desired_count = 0` initially (set to 1 after first successful deploy)
+- ECS Fargate service with `desired_count = 1` by default for steady-state availability
 - Public subnets + public IP (outbound-only) to avoid NAT Gateway cost
 - Secrets stored in AWS Secrets Manager
 - Customer-managed KMS keys for encryption at rest (state + runtime resources)
@@ -86,7 +86,7 @@ Repeat for the other secrets.
 
 ## 4) Configure GitHub Actions deploy variables
 
-The deploy workflow is `workflow_dispatch` (manual) and expects repository variables:
+The deploy workflow runs on pushes to `main` (and supports manual `workflow_dispatch`) and expects repository variables:
 
 - `AWS_REGION` (e.g. `us-east-1`)
 - `AWS_ROLE_TO_ASSUME` (Terraform output: `github_deploy_role_arn`)
@@ -123,7 +123,7 @@ Re-run the deploy workflow and set the `ref` input to an older commit SHA. The w
 ## Notes
 
 - The Terraform-managed task definition uses a placeholder image tag (`:bootstrap`). The deploy workflow registers task definitions using immutable commit SHA tags.
-- `desired_count` defaults to `0` so the initial `terraform apply` does not churn on the placeholder image tag. After the first deploy succeeds, set `desired_count=1` for normal bot operation.
+- `desired_count` defaults to `1` for production uptime. If you are bootstrapping before the first image push, set `desired_count=0` temporarily and switch back to `1` after the first deploy.
 - The ECS service task definition is updated by the deploy workflow; Terraform intentionally ignores `task_definition` drift to avoid fighting deploys.
 - If/when we add sharding, we can increase `desired_count` and/or move to a more controlled rollout.
 - If you prefer private subnets, add a NAT Gateway and set `assign_public_ip = false` in `infra/aws/prod/main.tf`.
