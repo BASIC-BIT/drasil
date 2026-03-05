@@ -24,7 +24,7 @@ variable "vpc_cidr" {
 
 variable "desired_count" {
   type        = number
-  description = "Number of ECS tasks to run. Defaults to 1 for steady-state production service availability."
+  description = "Number of ECS tasks to run. Defaults to 1 for steady-state production service availability. On a fresh deployment with a placeholder image tag, set desired_count=0 until the first image is pushed."
   default     = 1
 }
 

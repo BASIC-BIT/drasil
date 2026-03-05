@@ -5,6 +5,7 @@ This repo can be deployed as a long-running Discord bot on AWS ECS Fargate.
 The defaults are intentionally simple:
 
 - ECS Fargate service with `desired_count = 1` by default for steady-state availability
+- For first-time bootstraps with a placeholder image tag (`:bootstrap`), temporarily set `desired_count=0` until the first image is pushed
 - Public subnets + public IP (outbound-only) to avoid NAT Gateway cost
 - Secrets stored in AWS Secrets Manager
 - Customer-managed KMS keys for encryption at rest (state + runtime resources)
