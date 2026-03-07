@@ -6,9 +6,11 @@
 import { injectable, inject } from 'inversify';
 import OpenAI from 'openai';
 import { getFormattedExamples } from '../config/gpt-config';
+import type { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { hashIdentifier } from '../observability/hash';
+import { getServerContextSettings, hasServerContext } from '../utils/serverContextSettings';
 
 export interface UserProfileData {
   serverId?: string; // Added optional serverId
@@ -44,8 +46,14 @@ export interface IGPTService {
 @injectable()
 export class GPTService implements IGPTService {
   private openai: OpenAI;
+  private configService?: IConfigService;
 
-  constructor(@inject(TYPES.OpenAI) openai?: OpenAI) {
+  constructor(
+    @inject(TYPES.OpenAI) openai?: OpenAI,
+    @inject(TYPES.ConfigService) configService?: IConfigService
+  ) {
+    this.configService = configService;
+
     if (openai) {
       this.openai = openai;
     } else {
@@ -126,7 +134,7 @@ export class GPTService implements IGPTService {
       async (span) => {
         try {
           // Create a structured prompt for GPT with few-shot examples
-          const prompt = this.createPrompt(userProfile);
+          const prompt = await this.createPrompt(userProfile);
 
           // Call OpenAI API
           const response = await this.openai.chat.completions.create({
@@ -135,7 +143,7 @@ export class GPTService implements IGPTService {
               {
                 role: 'system',
                 content:
-                  "You are a Discord moderation assistant. Based on the user's profile, classify whether the user is suspicious. If suspicious, respond 'SUSPICIOUS'; if normal, respond 'OK'. In your decision, consider factors like account age, username characteristics, nickname if available, how recently they joined, and the content of their recent message if provided.",
+                  "You are a Discord moderation assistant. Based on the user's profile, classify whether the user is suspicious. If suspicious, respond 'SUSPICIOUS'; if normal, respond 'OK'. In your decision, consider factors like account age, username characteristics, nickname if available, how recently they joined, and the content of their recent message if provided. If moderator-provided server context is included, treat it as ground truth about what is normal and expected in that community.",
               },
               {
                 role: 'user',
@@ -202,7 +210,7 @@ export class GPTService implements IGPTService {
    * @param profileData The user profile data
    * @returns A formatted prompt string with examples
    */
-  private createPrompt(profileData: UserProfileData): string {
+  private async createPrompt(profileData: UserProfileData): Promise<string> {
     const { username, discriminator, nickname, accountCreatedAt, joinedServerAt, recentMessages } =
       profileData;
 
@@ -220,6 +228,11 @@ ${nickname ? `Nickname: ${nickname}` : ''}
 Account age: ${accountAge}
 Joined server: ${joinedServerDaysAgo}`;
 
+    const serverContextBlock = await this.createServerContextBlock(profileData.serverId);
+    if (serverContextBlock) {
+      prompt += `\n${serverContextBlock}`;
+    }
+
     // Add recent messages if available
     // recentMessages is guaranteed to be an array by UserProfileData type,
     // so the truthiness check `recentMessages &&` is unnecessary.
@@ -233,5 +246,38 @@ Joined server: ${joinedServerDaysAgo}`;
     prompt += `\n\nBased on these details and examples, classify the user above as either 'OK' or 'SUSPICIOUS'.`;
 
     return prompt;
+  }
+
+  private async createServerContextBlock(serverId: string | undefined): Promise<string> {
+    if (!serverId || !this.configService) {
+      return '';
+    }
+
+    try {
+      const serverConfig = await this.configService.getServerConfig(serverId);
+      const contextSettings = getServerContextSettings(serverConfig.settings);
+      if (!hasServerContext(contextSettings)) {
+        return '';
+      }
+
+      const details: string[] = [];
+      if (contextSettings.serverAbout) {
+        details.push(`- Server description: ${contextSettings.serverAbout}`);
+      }
+      if (contextSettings.verificationContext) {
+        details.push(`- Legitimate member context: ${contextSettings.verificationContext}`);
+      }
+      if (contextSettings.expectedTopics.length > 0) {
+        details.push(`- Expected topics/keywords: ${contextSettings.expectedTopics.join(', ')}`);
+      }
+
+      return `Moderator-provided server context:\n${details.join('\n')}`;
+    } catch (error) {
+      console.warn(
+        `Failed to load server context for guild ${serverId}; continuing without it.`,
+        error
+      );
+      return '';
+    }
   }
 }

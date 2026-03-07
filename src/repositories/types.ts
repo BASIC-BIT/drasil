@@ -33,6 +33,9 @@ export interface ServerSettings {
   message_retention_days?: number; // Days to retain message history
   detection_retention_days?: number; // Days to retain detection history
   verification_prompt_template?: string; // Custom verification thread prompt template
+  server_about?: string; // Short description of the server/community for GPT context
+  verification_context?: string; // Moderator-provided guidance for what legitimate users know
+  expected_topics?: string[]; // Topics, keywords, or links expected from legitimate users
 }
 
 /**

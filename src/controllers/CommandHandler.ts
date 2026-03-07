@@ -36,6 +36,14 @@ import {
   VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY,
 } from '../utils/verificationPromptTemplate';
 import {
+  decodeExpectedTopicsInput,
+  EXPECTED_TOPICS_SETTING_KEY,
+  getServerContextSettings,
+  hasServerContext,
+  SERVER_ABOUT_SETTING_KEY,
+  VERIFICATION_CONTEXT_SETTING_KEY,
+} from '../utils/serverContextSettings';
+import {
   SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID,
   SETUP_VERIFICATION_CHANNEL_FIELD_ID,
   SETUP_VERIFICATION_MODAL_ID,
@@ -205,7 +213,7 @@ export class CommandHandler implements ICommandHandler {
         .addSubcommandGroup((group) =>
           group
             .setName('verification')
-            .setDescription('Manage verification thread prompt settings')
+            .setDescription('Manage verification prompt and AI context settings')
             .addSubcommand((subcommand) =>
               subcommand
                 .setName('prompt-view')
@@ -229,6 +237,44 @@ export class CommandHandler implements ICommandHandler {
               subcommand
                 .setName('prompt-reset')
                 .setDescription('Reset verification prompt to the default template')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('context-view')
+                .setDescription('View the current server context used for AI analysis')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('context-set')
+                .setDescription('Set server context used for AI analysis')
+                .addStringOption((option) =>
+                  option
+                    .setName('server-about')
+                    .setDescription('Short description of the server or community purpose')
+                    .setRequired(false)
+                    .setMaxLength(500)
+                )
+                .addStringOption((option) =>
+                  option
+                    .setName('verification-context')
+                    .setDescription('What legitimate members would typically know or mention')
+                    .setRequired(false)
+                    .setMaxLength(1000)
+                )
+                .addStringOption((option) =>
+                  option
+                    .setName('expected-topics')
+                    .setDescription(
+                      'Expected topics, links, or keywords; separate with commas or \\n'
+                    )
+                    .setRequired(false)
+                    .setMaxLength(1000)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('context-reset')
+                .setDescription('Reset AI analysis server context to defaults')
             )
         ),
       new SlashCommandBuilder() // Added flaguser command
@@ -692,6 +738,40 @@ export class CommandHandler implements ICommandHandler {
     return `${template.slice(0, maxLength)}\n... (truncated ${overflow} characters)`;
   }
 
+  private decodeOptionalMultilineInput(rawValue: string | null): string | undefined {
+    if (rawValue === null) {
+      return undefined;
+    }
+
+    const decoded = rawValue.replace(/\\n/g, '\n').trim();
+    return decoded ? decoded : undefined;
+  }
+
+  private formatServerContextPreview(
+    guildId: string,
+    settings: ReturnType<typeof getServerContextSettings>
+  ): string {
+    if (!hasServerContext(settings)) {
+      return `Guild ID: \`${guildId}\`\nNo server-specific AI context configured.`;
+    }
+
+    const lines: string[] = [];
+    if (settings.serverAbout) {
+      lines.push(`Server description: ${settings.serverAbout}`);
+    }
+    if (settings.verificationContext) {
+      lines.push(`Legitimate member context: ${settings.verificationContext}`);
+    }
+    if (settings.expectedTopics.length > 0) {
+      lines.push(
+        `Expected topics (${settings.expectedTopics.length}): ${settings.expectedTopics.map((topic) => `\`${topic}\``).join(', ')}`
+      );
+    }
+
+    lines.push(`Guild ID: \`${guildId}\``);
+    return lines.join('\n');
+  }
+
   private async handleVerificationConfigCommand(
     interaction: ChatInputCommandInteraction,
     guildId: string
@@ -761,6 +841,81 @@ export class CommandHandler implements ICommandHandler {
           return;
         }
 
+        case 'context-view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const contextSettings = getServerContextSettings(serverConfig.settings);
+
+          await interaction.reply({
+            content:
+              'Current AI server context:\n\n' +
+              `${this.formatServerContextPreview(guildId, contextSettings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'context-set': {
+          const serverAbout = this.decodeOptionalMultilineInput(
+            interaction.options.getString('server-about')
+          );
+          const verificationContext = this.decodeOptionalMultilineInput(
+            interaction.options.getString('verification-context')
+          );
+          const expectedTopicsInput = interaction.options.getString('expected-topics');
+
+          const updates: {
+            server_about?: string;
+            verification_context?: string;
+            expected_topics?: string[];
+          } = {};
+          if (serverAbout !== undefined) {
+            updates[SERVER_ABOUT_SETTING_KEY] = serverAbout;
+          }
+          if (verificationContext !== undefined) {
+            updates[VERIFICATION_CONTEXT_SETTING_KEY] = verificationContext;
+          }
+          if (expectedTopicsInput !== null) {
+            updates[EXPECTED_TOPICS_SETTING_KEY] = decodeExpectedTopicsInput(expectedTopicsInput);
+          }
+
+          if (Object.keys(updates).length === 0) {
+            await interaction.reply({
+              content: 'Provide at least one server context field to update.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          const updated = await this.configService.updateServerSettings(guildId, updates);
+          const contextSettings = getServerContextSettings(updated.settings);
+
+          await interaction.reply({
+            content:
+              '✅ Updated AI server context.\n\n' +
+              `${this.formatServerContextPreview(guildId, contextSettings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'context-reset': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const updatedSettings = { ...serverConfig.settings };
+          delete updatedSettings[SERVER_ABOUT_SETTING_KEY];
+          delete updatedSettings[VERIFICATION_CONTEXT_SETTING_KEY];
+          delete updatedSettings[EXPECTED_TOPICS_SETTING_KEY];
+
+          await this.configService.updateServerConfig(guildId, {
+            settings: updatedSettings,
+          });
+
+          await interaction.reply({
+            content: '✅ Reset AI server context to defaults.',
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
         default:
           await interaction.reply({
             content: 'Unsupported verification subcommand.',
@@ -773,7 +928,7 @@ export class CommandHandler implements ICommandHandler {
           ? error.message
           : 'An error occurred while processing verification prompt settings.';
       await interaction.reply({
-        content: `Failed to process verification prompt settings: ${errorMessage}`,
+        content: `Failed to process verification settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       });
     }
