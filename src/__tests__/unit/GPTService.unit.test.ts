@@ -67,4 +67,42 @@ describe('GPTService (unit)', () => {
     expect(result.result).toBe('OK');
     expect(result.reasons).toEqual(['User profile appears normal']);
   });
+
+  it('includes moderator-provided server context in the GPT prompt', async () => {
+    const create = jest.fn().mockResolvedValue({
+      choices: [{ message: { content: 'OK' } }],
+      usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+    });
+
+    const openai = { chat: { completions: { create } } } as unknown as OpenAI;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          server_about: 'A retro FPS speedrunning server.',
+          verification_context: 'Real members usually mention Doom, Quake, or routing runs.',
+          expected_topics: ['doom', 'quakeworld'],
+        },
+      }),
+    } as any;
+    const service = new GPTService(openai, configService);
+
+    await service.analyzeProfile(
+      makeProfile({
+        serverId: 'guild-1',
+        recentMessages: ['I like optimizing strafe routes'],
+      })
+    );
+
+    expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1');
+    expect(create).toHaveBeenCalled();
+
+    const call = create.mock.calls[0][0];
+    expect(call.messages[0].content).toContain('treat it as ground truth');
+    expect(call.messages[1].content).toContain('Moderator-provided server context:');
+    expect(call.messages[1].content).toContain('A retro FPS speedrunning server.');
+    expect(call.messages[1].content).toContain(
+      'Real members usually mention Doom, Quake, or routing runs.'
+    );
+    expect(call.messages[1].content).toContain('doom, quakeworld');
+  });
 });
