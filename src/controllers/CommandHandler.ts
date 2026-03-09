@@ -729,13 +729,7 @@ export class CommandHandler implements ICommandHandler {
   }
 
   private formatVerificationPromptPreview(template: string): string {
-    const maxLength = 1200;
-    if (template.length <= maxLength) {
-      return template;
-    }
-
-    const overflow = template.length - maxLength;
-    return `${template.slice(0, maxLength)}\n... (truncated ${overflow} characters)`;
+    return this.truncatePreview(template, 1200);
   }
 
   private decodeOptionalMultilineInput(rawValue: string | null): string | undefined {
@@ -757,10 +751,12 @@ export class CommandHandler implements ICommandHandler {
 
     const lines: string[] = [];
     if (settings.serverAbout) {
-      lines.push(`Server description: ${settings.serverAbout}`);
+      lines.push(this.formatMultilinePreviewField('Server description', settings.serverAbout));
     }
     if (settings.verificationContext) {
-      lines.push(`Legitimate member context: ${settings.verificationContext}`);
+      lines.push(
+        this.formatMultilinePreviewField('Legitimate member context', settings.verificationContext)
+      );
     }
     if (settings.expectedTopics.length > 0) {
       lines.push(
@@ -769,7 +765,25 @@ export class CommandHandler implements ICommandHandler {
     }
 
     lines.push(`Guild ID: \`${guildId}\``);
-    return lines.join('\n');
+    return this.truncatePreview(lines.join('\n'), 1800);
+  }
+
+  private formatMultilinePreviewField(label: string, value: string): string {
+    const [firstLine, ...remainingLines] = value.split('\n');
+    if (remainingLines.length === 0) {
+      return `${label}: ${firstLine}`;
+    }
+
+    return [`${label}: ${firstLine}`, ...remainingLines.map((line) => `  ${line}`)].join('\n');
+  }
+
+  private truncatePreview(value: string, maxLength: number): string {
+    if (value.length <= maxLength) {
+      return value;
+    }
+
+    const overflow = value.length - maxLength;
+    return `${value.slice(0, maxLength)}\n... (truncated ${overflow} characters)`;
   }
 
   private async handleVerificationConfigCommand(
@@ -875,7 +889,10 @@ export class CommandHandler implements ICommandHandler {
             updates[VERIFICATION_CONTEXT_SETTING_KEY] = verificationContext;
           }
           if (expectedTopicsInput !== null) {
-            updates[EXPECTED_TOPICS_SETTING_KEY] = decodeExpectedTopicsInput(expectedTopicsInput);
+            const expectedTopics = decodeExpectedTopicsInput(expectedTopicsInput);
+            if (expectedTopics.length > 0) {
+              updates[EXPECTED_TOPICS_SETTING_KEY] = expectedTopics;
+            }
           }
 
           if (Object.keys(updates).length === 0) {
@@ -926,7 +943,7 @@ export class CommandHandler implements ICommandHandler {
       const errorMessage =
         error instanceof Error
           ? error.message
-          : 'An error occurred while processing verification prompt settings.';
+          : 'An error occurred while processing verification settings.';
       await interaction.reply({
         content: `Failed to process verification settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,

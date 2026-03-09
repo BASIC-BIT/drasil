@@ -541,6 +541,48 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('handles /config verification context-view and truncates oversized previews', async () => {
+    const longLine = 'A'.repeat(1200);
+    const getServerConfig = jest.fn().mockResolvedValue({
+      settings: {
+        [SERVER_ABOUT_SETTING_KEY]: `${longLine}\n${longLine}`,
+        [VERIFICATION_CONTEXT_SETTING_KEY]: `${longLine}\n${longLine}`,
+        [EXPECTED_TOPICS_SETTING_KEY]: ['doom', 'quake'],
+      },
+    });
+    const { handler } = buildHandler({ getServerConfig });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('verification'),
+        getSubcommand: jest.fn().mockReturnValue('context-view'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    const reply = interaction.reply.mock.calls[0][0];
+    expect(reply.content).toContain('Current AI server context');
+    expect(reply.content).toContain('... (truncated ');
+    expect(reply.content.length).toBeLessThanOrEqual(2000);
+    expect(reply.flags).toBe(MessageFlags.Ephemeral);
+  });
+
   it('rejects /config verification context-set with no values', async () => {
     const { handler, configService } = buildHandler();
 
@@ -563,6 +605,44 @@ describe('CommandHandler (unit)', () => {
         getSubcommandGroup: jest.fn().mockReturnValue('verification'),
         getSubcommand: jest.fn().mockReturnValue('context-set'),
         getString: jest.fn().mockReturnValue(null),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Provide at least one server context field to update.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('rejects /config verification context-set when expected-topics contains only delimiters', async () => {
+    const { handler, configService } = buildHandler();
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('verification'),
+        getSubcommand: jest.fn().mockReturnValue('context-set'),
+        getString: jest.fn((name: string) => {
+          if (name === 'expected-topics') return ',,\n,  ,';
+          return null;
+        }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
