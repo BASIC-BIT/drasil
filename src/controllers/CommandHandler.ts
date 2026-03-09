@@ -45,6 +45,7 @@ import {
 } from '../utils/serverContextSettings';
 import {
   getVerificationThreadAnalysisSettings,
+  MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT,
   VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY,
   VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY,
 } from '../utils/verificationThreadAnalysisSettings';
@@ -306,7 +307,7 @@ export class CommandHandler implements ICommandHandler {
                     .setDescription('Number of replies to analyze (1-10)')
                     .setRequired(true)
                     .setMinValue(1)
-                    .setMaxValue(10)
+                    .setMaxValue(MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT)
                 )
             )
         ),

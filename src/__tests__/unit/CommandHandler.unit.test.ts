@@ -673,6 +673,92 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('handles /config verification analysis-view', async () => {
+    const getServerConfig = jest.fn().mockResolvedValue({
+      settings: {
+        verification_ai_thread_analysis_enabled: true,
+        verification_ai_thread_analysis_message_limit: 4,
+      },
+    });
+    const { handler, configService } = buildHandler({ getServerConfig });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('verification'),
+        getSubcommand: jest.fn().mockReturnValue('analysis-view'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1');
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Verification reply AI analysis settings'),
+      flags: MessageFlags.Ephemeral,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Enabled: `yes`'),
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles /config verification analysis-disable', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        verification_ai_thread_analysis_enabled: false,
+        verification_ai_thread_analysis_message_limit: 3,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('verification'),
+        getSubcommand: jest.fn().mockReturnValue('analysis-disable'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      [VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY]: false,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Disabled verification reply AI analysis'),
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('handles /config verification analysis-set-limit', async () => {
     const updateServerSettings = jest.fn().mockResolvedValue({
       settings: {

@@ -112,7 +112,7 @@ describe('GPTService (unit)', () => {
         {
           message: {
             content:
-              '{"result":"SUSPICIOUS","confidence":0.91,"summary":"Responses still do not match what real members usually say."}',
+              '{"result":"suspicious","confidence":0.91,"summary":"Responses still do not match what real members usually say."}',
           },
         },
       ],

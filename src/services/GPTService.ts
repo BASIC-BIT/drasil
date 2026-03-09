@@ -151,7 +151,9 @@ export class GPTService implements IGPTService {
 
       const raw = response.choices[0]?.message?.content?.trim() ?? '';
       const parsed = JSON.parse(raw) as Partial<VerificationThreadAnalysisResult>;
-      const result = parsed.result === 'SUSPICIOUS' ? 'SUSPICIOUS' : 'OK';
+      const normalizedResult =
+        typeof parsed.result === 'string' ? parsed.result.trim().toUpperCase() : '';
+      const result = normalizedResult === 'SUSPICIOUS' ? 'SUSPICIOUS' : 'OK';
       const confidence =
         typeof parsed.confidence === 'number' && parsed.confidence >= 0 && parsed.confidence <= 1
           ? parsed.confidence

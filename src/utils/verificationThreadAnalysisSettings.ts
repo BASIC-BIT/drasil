@@ -14,6 +14,8 @@ export interface VerificationThreadAnalysisSettings {
   messageLimit: number;
 }
 
+export const VERIFICATION_THREAD_ANALYSIS_FETCH_LIMIT = 100;
+
 function coercePositiveInteger(value: unknown, fallback: number): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
     return fallback;

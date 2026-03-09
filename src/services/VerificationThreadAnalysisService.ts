@@ -7,7 +7,10 @@ import type { INotificationManager } from './NotificationManager';
 import type { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import type { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { VerificationStatus } from '../repositories/types';
-import { getVerificationThreadAnalysisSettings } from '../utils/verificationThreadAnalysisSettings';
+import {
+  getVerificationThreadAnalysisSettings,
+  VERIFICATION_THREAD_ANALYSIS_FETCH_LIMIT,
+} from '../utils/verificationThreadAnalysisSettings';
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds: string[];
@@ -19,6 +22,8 @@ export interface IVerificationThreadAnalysisService {
 
 @injectable()
 export class VerificationThreadAnalysisService implements IVerificationThreadAnalysisService {
+  private readonly analysisChains = new Map<string, Promise<void>>();
+
   constructor(
     @inject(TYPES.ConfigService) private configService: IConfigService,
     @inject(TYPES.GPTService) private gptService: IGPTService,
@@ -45,18 +50,34 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       return true;
     }
 
-    const serverConfig = await this.configService.getServerConfig(message.guildId);
+    await this.runSerialized(verificationEvent.id, async () => {
+      await this.handleFlaggedUserThreadMessage(message, verificationEvent.id);
+    });
+
+    return true;
+  }
+
+  private async handleFlaggedUserThreadMessage(
+    message: Message,
+    verificationEventId: string
+  ): Promise<void> {
+    const verificationEvent = await this.verificationEventRepository.findById(verificationEventId);
+    if (!verificationEvent || verificationEvent.status !== VerificationStatus.PENDING) {
+      return;
+    }
+
+    const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
     const settings = getVerificationThreadAnalysisSettings(serverConfig.settings);
     if (!settings.enabled) {
-      return true;
+      return;
     }
 
     const metadata = this.getThreadAnalysisMetadata(verificationEvent.metadata);
     if (metadata.analyzedMessageIds.includes(message.id)) {
-      return true;
+      return;
     }
     if (metadata.analyzedMessageIds.length >= settings.messageLimit) {
-      return true;
+      return;
     }
 
     const responses = await this.collectUserResponses(
@@ -65,7 +86,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       settings.messageLimit
     );
     if (responses.length === 0) {
-      return true;
+      return;
     }
 
     const detectionReasons = await this.getDetectionReasons(verificationEvent.detection_event_id);
@@ -94,8 +115,20 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       analysis,
       nextAnalyzedMessageIds.length
     );
+  }
 
-    return true;
+  private async runSerialized(id: string, operation: () => Promise<void>): Promise<void> {
+    const previous = this.analysisChains.get(id) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(operation);
+    this.analysisChains.set(id, next);
+
+    try {
+      await next;
+    } finally {
+      if (this.analysisChains.get(id) === next) {
+        this.analysisChains.delete(id);
+      }
+    }
   }
 
   private asObject(value: unknown): Record<string, unknown> | null {
@@ -125,7 +158,9 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     userId: string,
     limit: number
   ): Promise<string[]> {
-    const fetchedMessages = await message.channel.messages.fetch({ limit: 100 });
+    const fetchedMessages = await message.channel.messages.fetch({
+      limit: VERIFICATION_THREAD_ANALYSIS_FETCH_LIMIT,
+    });
     return [...fetchedMessages.values()]
       .filter((entry) => entry.author.id === userId)
       .sort((left, right) => left.createdTimestamp - right.createdTimestamp)
