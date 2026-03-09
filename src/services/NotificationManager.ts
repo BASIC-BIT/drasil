@@ -28,6 +28,7 @@ import {
   DetectionType,
 } from '../repositories/types';
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
+import type { VerificationThreadAnalysisResult } from './GPTService';
 
 export interface NotificationButton {
   id: string;
@@ -92,6 +93,12 @@ export interface INotificationManager {
     verificationEvent: VerificationEvent,
     newStatus: VerificationStatus
   ): Promise<void>;
+
+  updateVerificationThreadAnalysis(
+    verificationEvent: VerificationEvent,
+    analysis: VerificationThreadAnalysisResult,
+    analyzedMessageCount: number
+  ): Promise<boolean>;
 }
 
 /**
@@ -276,6 +283,58 @@ export class NotificationManager implements INotificationManager {
       console.error('Failed to log action to message:', error);
       return false;
     }
+  }
+
+  public async updateVerificationThreadAnalysis(
+    verificationEvent: VerificationEvent,
+    analysis: VerificationThreadAnalysisResult,
+    analyzedMessageCount: number
+  ): Promise<boolean> {
+    try {
+      const message = await this.getMessageForVerificationEvent(verificationEvent);
+      const existingEmbed = message.embeds[0];
+      const updatedEmbed = EmbedBuilder.from(existingEmbed);
+
+      const confidencePercent = Math.round(analysis.confidence * 100);
+      const value = this.truncateEmbedFieldValue(
+        [
+          `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
+          `Analyzed responses: ${analyzedMessageCount}`,
+          `Summary: ${analysis.summary}`,
+        ].join('\n')
+      );
+
+      const field = {
+        name: 'AI Thread Analysis',
+        value,
+        inline: false,
+      };
+
+      const existingFieldIndex = updatedEmbed.data.fields?.findIndex(
+        (embedField) => embedField.name === field.name
+      );
+
+      if (existingFieldIndex !== undefined && existingFieldIndex > -1) {
+        updatedEmbed.spliceFields(existingFieldIndex, 1, field);
+      } else {
+        updatedEmbed.addFields(field);
+      }
+
+      await message.edit({ embeds: [updatedEmbed] });
+      return true;
+    } catch (error) {
+      console.error('Failed to update verification thread analysis:', error);
+      return false;
+    }
+  }
+
+  private truncateEmbedFieldValue(value: string): string {
+    const maxLength = 1024;
+    if (value.length <= maxLength) {
+      return value;
+    }
+
+    return `${value.slice(0, maxLength - 3)}...`;
   }
 
   private async getMessageForVerificationEvent(

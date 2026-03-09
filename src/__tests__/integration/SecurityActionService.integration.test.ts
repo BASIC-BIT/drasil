@@ -70,6 +70,7 @@ describeIntegration('SecurityActionService (integration)', () => {
       setupVerificationChannel: jest.fn().mockResolvedValue('channel-1'),
       handleHistoryButtonClick: jest.fn().mockResolvedValue(true),
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
+      updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
       createVerificationThread: jest

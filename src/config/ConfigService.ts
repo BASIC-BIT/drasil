@@ -5,6 +5,10 @@ import { IServerRepository } from '../repositories/ServerRepository';
 import { Server, ServerSettings } from '../repositories/types';
 import { globalConfig } from './GlobalConfig';
 import { TYPES } from '../di/symbols';
+import {
+  DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_ENABLED,
+  DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT,
+} from '../utils/verificationThreadAnalysisSettings';
 
 const MAX_HEURISTIC_MESSAGE_THRESHOLD = 100;
 const MAX_HEURISTIC_TIMEFRAME_SECONDS = 600;
@@ -223,6 +227,9 @@ export class ConfigService implements IConfigService {
       gpt_message_check_count: 3,
       message_retention_days: globalSettings.defaultServerSettings.messageRetentionDays,
       detection_retention_days: globalSettings.defaultServerSettings.detectionRetentionDays,
+      verification_ai_thread_analysis_enabled: DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_ENABLED,
+      verification_ai_thread_analysis_message_limit:
+        DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT,
     };
 
     return {
