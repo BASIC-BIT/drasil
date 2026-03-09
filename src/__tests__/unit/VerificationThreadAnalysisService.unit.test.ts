@@ -19,6 +19,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
         username: 'runner',
       },
       channel: {
+        name: 'Verification: runner',
         isThread: () => true,
         messages: {
           fetch: jest.fn().mockResolvedValue(messages),
@@ -78,6 +79,30 @@ describe('VerificationThreadAnalysisService (unit)', () => {
 
     expect(handled).toBe(true);
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
+  });
+
+  it('ignores non-verification threads before hitting the repository', async () => {
+    const verificationRepo = {
+      findByThreadId: jest.fn(),
+    } as any;
+    const service = new VerificationThreadAnalysisService(
+      { getServerConfig: jest.fn() } as any,
+      { analyzeVerificationThreadResponses: jest.fn() } as any,
+      { updateVerificationThreadAnalysis: jest.fn() } as any,
+      verificationRepo,
+      { findById: jest.fn() } as any
+    );
+
+    const { message } = buildMessage({
+      channel: {
+        name: 'Off-topic chat',
+        isThread: () => true,
+        messages: { fetch: jest.fn() },
+      },
+    });
+
+    await expect(service.handleThreadMessage(message as any)).resolves.toBe(false);
+    expect(verificationRepo.findByThreadId).not.toHaveBeenCalled();
   });
 
   it('consumes admin replies in verification threads without running AI analysis', async () => {
@@ -203,13 +228,19 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     expect(notificationManager.updateVerificationThreadAnalysis).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       expect.objectContaining({ result: 'OK' }),
-      1
+      2
     );
 
     const updated = await verificationRepo.findById(verificationEvent.id);
     expect(updated?.metadata).toEqual({
       thread_analysis: {
         analyzedMessageIds: ['msg-1'],
+        latestAnalysis: {
+          result: 'OK',
+          confidence: 0.67,
+          summary: 'Looks like a real user answering normally.',
+          analyzedMessageCount: 2,
+        },
       },
     });
   });

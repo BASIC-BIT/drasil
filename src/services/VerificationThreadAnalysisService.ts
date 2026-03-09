@@ -14,7 +14,15 @@ import {
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds: string[];
+  latestAnalysis?: {
+    result: 'OK' | 'SUSPICIOUS';
+    confidence: number;
+    summary: string;
+    analyzedMessageCount: number;
+  };
 }
+
+const VERIFICATION_THREAD_NAME_PREFIX = 'Verification:';
 
 export interface IVerificationThreadAnalysisService {
   handleThreadMessage(message: Message): Promise<boolean>;
@@ -36,6 +44,10 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
 
   public async handleThreadMessage(message: Message): Promise<boolean> {
     if (!message.guildId || !message.channel.isThread()) {
+      return false;
+    }
+
+    if (!message.channel.name.startsWith(VERIFICATION_THREAD_NAME_PREFIX)) {
       return false;
     }
 
@@ -104,7 +116,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     const notified = await this.notificationManager.updateVerificationThreadAnalysis(
       verificationEvent,
       analysis,
-      nextAnalyzedMessageIds.length
+      responses.length
     );
     if (!notified) {
       console.warn(
@@ -119,6 +131,12 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
           ...(this.asObject(verificationEvent.metadata) ?? {}),
           thread_analysis: {
             analyzedMessageIds: nextAnalyzedMessageIds,
+            latestAnalysis: {
+              result: analysis.result,
+              confidence: analysis.confidence,
+              summary: analysis.summary,
+              analyzedMessageCount: responses.length,
+            },
           },
         },
       });
@@ -160,9 +178,23 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
           (value): value is string => typeof value === 'string'
         )
       : [];
+    const latestAnalysis = this.asObject(threadAnalysis?.latestAnalysis);
 
     return {
       analyzedMessageIds,
+      latestAnalysis:
+        latestAnalysis &&
+        (latestAnalysis.result === 'OK' || latestAnalysis.result === 'SUSPICIOUS') &&
+        typeof latestAnalysis.confidence === 'number' &&
+        typeof latestAnalysis.summary === 'string' &&
+        typeof latestAnalysis.analyzedMessageCount === 'number'
+          ? {
+              result: latestAnalysis.result,
+              confidence: latestAnalysis.confidence,
+              summary: latestAnalysis.summary,
+              analyzedMessageCount: latestAnalysis.analyzedMessageCount,
+            }
+          : undefined,
     };
   }
 

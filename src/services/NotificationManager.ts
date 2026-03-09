@@ -101,6 +101,16 @@ export interface INotificationManager {
   ): Promise<boolean>;
 }
 
+interface ThreadAnalysisMetadata {
+  analyzedMessageIds?: unknown;
+  latestAnalysis?: {
+    result: 'OK' | 'SUSPICIOUS';
+    confidence: number;
+    summary: string;
+    analyzedMessageCount: number;
+  };
+}
+
 /**
  * Service for managing notifications to admin/summary channels
  * It is NOT intended to perform any action secondary actions
@@ -111,6 +121,7 @@ export class NotificationManager implements INotificationManager {
   private client: Client;
   private configService: IConfigService;
   private detectionEventsRepository: IDetectionEventsRepository;
+  private static readonly THREAD_ANALYSIS_FIELD_NAME = 'AI Thread Analysis';
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -305,7 +316,7 @@ export class NotificationManager implements INotificationManager {
       );
 
       const field = {
-        name: 'AI Thread Analysis',
+        name: NotificationManager.THREAD_ANALYSIS_FIELD_NAME,
         value,
         inline: false,
       };
@@ -509,7 +520,47 @@ export class NotificationManager implements INotificationManager {
       });
     }
 
+    const persistedThreadAnalysis = this.getThreadAnalysisMetadata(verificationEvent.metadata);
+    if (persistedThreadAnalysis?.latestAnalysis) {
+      embed.addFields({
+        name: NotificationManager.THREAD_ANALYSIS_FIELD_NAME,
+        value: this.formatThreadAnalysisFieldValue(persistedThreadAnalysis.latestAnalysis),
+        inline: false,
+      });
+    }
+
     return embed;
+  }
+
+  private formatThreadAnalysisFieldValue(analysis: {
+    result: 'OK' | 'SUSPICIOUS';
+    confidence: number;
+    summary: string;
+    analyzedMessageCount: number;
+  }): string {
+    const confidencePercent = Math.round(analysis.confidence * 100);
+    return this.truncateEmbedFieldValue(
+      [
+        `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
+        `Analyzed responses: ${analysis.analyzedMessageCount}`,
+        `Summary: ${analysis.summary}`,
+      ].join('\n')
+    );
+  }
+
+  private getThreadAnalysisMetadata(
+    metadata: VerificationEvent['metadata']
+  ): ThreadAnalysisMetadata | null {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return null;
+    }
+
+    const threadAnalysis = (metadata as { thread_analysis?: unknown }).thread_analysis;
+    if (!threadAnalysis || typeof threadAnalysis !== 'object' || Array.isArray(threadAnalysis)) {
+      return null;
+    }
+
+    return threadAnalysis as ThreadAnalysisMetadata;
   }
 
   /**
