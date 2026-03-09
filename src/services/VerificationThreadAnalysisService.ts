@@ -125,7 +125,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     userId: string,
     limit: number
   ): Promise<string[]> {
-    const fetchedMessages = await message.channel.messages.fetch({ limit: 20 });
+    const fetchedMessages = await message.channel.messages.fetch({ limit: 100 });
     return [...fetchedMessages.values()]
       .filter((entry) => entry.author.id === userId)
       .sort((left, right) => left.createdTimestamp - right.createdTimestamp)

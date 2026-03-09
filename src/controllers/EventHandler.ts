@@ -124,16 +124,16 @@ export class EventHandler implements IEventHandler {
     const content = message.content;
 
     try {
+      // Ensure the config cache init attempt has completed before processing messages.
+      // (Prevents applying global defaults while initialize() is still running.)
+      await this.ensureConfigInitialized();
+
       if (message.channel.isThread()) {
         const handled = await this.verificationThreadAnalysisService.handleThreadMessage(message);
         if (handled) {
           return;
         }
       }
-
-      // Ensure the config cache init attempt has completed before processing messages.
-      // (Prevents applying global defaults while initialize() is still running.)
-      await this.ensureConfigInitialized();
 
       // Warm the per-guild config cache in the background (no await) so hot-path heuristics
       // can consult the in-memory cache without blocking message handling.
