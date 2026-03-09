@@ -36,6 +36,20 @@ import {
   VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY,
 } from '../utils/verificationPromptTemplate';
 import {
+  decodeExpectedTopicsInput,
+  EXPECTED_TOPICS_SETTING_KEY,
+  getServerContextSettings,
+  hasServerContext,
+  SERVER_ABOUT_SETTING_KEY,
+  VERIFICATION_CONTEXT_SETTING_KEY,
+} from '../utils/serverContextSettings';
+import {
+  getVerificationThreadAnalysisSettings,
+  MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT,
+  VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY,
+  VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY,
+} from '../utils/verificationThreadAnalysisSettings';
+import {
   SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID,
   SETUP_VERIFICATION_CHANNEL_FIELD_ID,
   SETUP_VERIFICATION_MODAL_ID,
@@ -205,7 +219,7 @@ export class CommandHandler implements ICommandHandler {
         .addSubcommandGroup((group) =>
           group
             .setName('verification')
-            .setDescription('Manage verification thread prompt settings')
+            .setDescription('Manage verification prompt and AI context settings')
             .addSubcommand((subcommand) =>
               subcommand
                 .setName('prompt-view')
@@ -229,6 +243,72 @@ export class CommandHandler implements ICommandHandler {
               subcommand
                 .setName('prompt-reset')
                 .setDescription('Reset verification prompt to the default template')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('context-view')
+                .setDescription('View the current server context used for AI analysis')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('context-set')
+                .setDescription('Set server context used for AI analysis')
+                .addStringOption((option) =>
+                  option
+                    .setName('server-about')
+                    .setDescription('Short description of the server or community purpose')
+                    .setRequired(false)
+                    .setMaxLength(500)
+                )
+                .addStringOption((option) =>
+                  option
+                    .setName('verification-context')
+                    .setDescription('What legitimate members would typically know or mention')
+                    .setRequired(false)
+                    .setMaxLength(1000)
+                )
+                .addStringOption((option) =>
+                  option
+                    .setName('expected-topics')
+                    .setDescription(
+                      'Expected topics, links, or keywords; separate with commas or \\n'
+                    )
+                    .setRequired(false)
+                    .setMaxLength(1000)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('context-reset')
+                .setDescription('Reset AI analysis server context to defaults')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('analysis-view')
+                .setDescription('View verification thread AI analysis settings')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('analysis-enable')
+                .setDescription('Enable AI analysis for flagged-user verification replies')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('analysis-disable')
+                .setDescription('Disable AI analysis for verification replies')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('analysis-set-limit')
+                .setDescription('Set how many flagged-user verification replies to analyze')
+                .addIntegerOption((option) =>
+                  option
+                    .setName('value')
+                    .setDescription('Number of replies to analyze (1-10)')
+                    .setRequired(true)
+                    .setMinValue(1)
+                    .setMaxValue(MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT)
+                )
             )
         ),
       new SlashCommandBuilder() // Added flaguser command
@@ -683,13 +763,70 @@ export class CommandHandler implements ICommandHandler {
   }
 
   private formatVerificationPromptPreview(template: string): string {
-    const maxLength = 1200;
-    if (template.length <= maxLength) {
-      return template;
+    return this.truncatePreview(template, 1200);
+  }
+
+  private decodeOptionalMultilineInput(rawValue: string | null): string | undefined {
+    if (rawValue === null) {
+      return undefined;
     }
 
-    const overflow = template.length - maxLength;
-    return `${template.slice(0, maxLength)}\n... (truncated ${overflow} characters)`;
+    const decoded = rawValue.replace(/\\n/g, '\n').trim();
+    return decoded ? decoded : undefined;
+  }
+
+  private formatServerContextPreview(
+    guildId: string,
+    settings: ReturnType<typeof getServerContextSettings>
+  ): string {
+    if (!hasServerContext(settings)) {
+      return `Guild ID: \`${guildId}\`\nNo server-specific AI context configured.`;
+    }
+
+    const lines: string[] = [];
+    if (settings.serverAbout) {
+      lines.push(this.formatMultilinePreviewField('Server description', settings.serverAbout));
+    }
+    if (settings.verificationContext) {
+      lines.push(
+        this.formatMultilinePreviewField('Legitimate member context', settings.verificationContext)
+      );
+    }
+    if (settings.expectedTopics.length > 0) {
+      lines.push(
+        `Expected topics (${settings.expectedTopics.length}): ${settings.expectedTopics.map((topic) => `\`${topic}\``).join(', ')}`
+      );
+    }
+
+    lines.push(`Guild ID: \`${guildId}\``);
+    return this.truncatePreview(lines.join('\n'), 1800);
+  }
+
+  private formatMultilinePreviewField(label: string, value: string): string {
+    const [firstLine, ...remainingLines] = value.split('\n');
+    if (remainingLines.length === 0) {
+      return `${label}: ${firstLine}`;
+    }
+
+    return [`${label}: ${firstLine}`, ...remainingLines.map((line) => `  ${line}`)].join('\n');
+  }
+
+  private truncatePreview(value: string, maxLength: number): string {
+    if (value.length <= maxLength) {
+      return value;
+    }
+
+    const overflow = value.length - maxLength;
+    return `${value.slice(0, maxLength)}\n... (truncated ${overflow} characters)`;
+  }
+
+  private formatVerificationAnalysisSettings(
+    settings: ReturnType<typeof getVerificationThreadAnalysisSettings>
+  ): string {
+    return [
+      `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
+      `Message limit: \`${settings.messageLimit}\``,
+    ].join('\n');
   }
 
   private async handleVerificationConfigCommand(
@@ -761,6 +898,145 @@ export class CommandHandler implements ICommandHandler {
           return;
         }
 
+        case 'context-view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const contextSettings = getServerContextSettings(serverConfig.settings);
+
+          await interaction.reply({
+            content:
+              'Current AI server context:\n\n' +
+              `${this.formatServerContextPreview(guildId, contextSettings)}`,
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'context-set': {
+          const serverAbout = this.decodeOptionalMultilineInput(
+            interaction.options.getString('server-about')
+          );
+          const verificationContext = this.decodeOptionalMultilineInput(
+            interaction.options.getString('verification-context')
+          );
+          const expectedTopicsInput = interaction.options.getString('expected-topics');
+
+          const updates: {
+            server_about?: string;
+            verification_context?: string;
+            expected_topics?: string[];
+          } = {};
+          if (serverAbout !== undefined) {
+            updates[SERVER_ABOUT_SETTING_KEY] = serverAbout;
+          }
+          if (verificationContext !== undefined) {
+            updates[VERIFICATION_CONTEXT_SETTING_KEY] = verificationContext;
+          }
+          if (expectedTopicsInput !== null) {
+            const expectedTopics = decodeExpectedTopicsInput(expectedTopicsInput);
+            if (expectedTopics.length > 0) {
+              updates[EXPECTED_TOPICS_SETTING_KEY] = expectedTopics;
+            }
+          }
+
+          if (Object.keys(updates).length === 0) {
+            await interaction.reply({
+              content: 'Provide at least one server context field to update.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          const updated = await this.configService.updateServerSettings(guildId, updates);
+          const contextSettings = getServerContextSettings(updated.settings);
+
+          await interaction.reply({
+            content:
+              '✅ Updated AI server context.\n\n' +
+              `${this.formatServerContextPreview(guildId, contextSettings)}`,
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'context-reset': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const updatedSettings = { ...serverConfig.settings };
+          delete updatedSettings[SERVER_ABOUT_SETTING_KEY];
+          delete updatedSettings[VERIFICATION_CONTEXT_SETTING_KEY];
+          delete updatedSettings[EXPECTED_TOPICS_SETTING_KEY];
+
+          await this.configService.updateServerConfig(guildId, {
+            settings: updatedSettings,
+          });
+
+          await interaction.reply({
+            content: '✅ Reset AI server context to defaults.',
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'analysis-view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const analysisSettings = getVerificationThreadAnalysisSettings(serverConfig.settings);
+
+          await interaction.reply({
+            content:
+              'Verification reply AI analysis settings:\n\n' +
+              `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'analysis-enable': {
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY]: true,
+          });
+          const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
+
+          await interaction.reply({
+            content:
+              '✅ Enabled verification reply AI analysis.\n\n' +
+              `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'analysis-disable': {
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY]: false,
+          });
+          const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
+
+          await interaction.reply({
+            content:
+              '✅ Disabled verification reply AI analysis.\n\n' +
+              `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'analysis-set-limit': {
+          const value = interaction.options.getInteger('value', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY]: value,
+          });
+          const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
+
+          await interaction.reply({
+            content:
+              '✅ Updated verification reply AI analysis message limit.\n\n' +
+              `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
         default:
           await interaction.reply({
             content: 'Unsupported verification subcommand.',
@@ -771,9 +1047,9 @@ export class CommandHandler implements ICommandHandler {
       const errorMessage =
         error instanceof Error
           ? error.message
-          : 'An error occurred while processing verification prompt settings.';
+          : 'An error occurred while processing verification settings.';
       await interaction.reply({
-        content: `Failed to process verification prompt settings: ${errorMessage}`,
+        content: `Failed to process verification settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       });
     }

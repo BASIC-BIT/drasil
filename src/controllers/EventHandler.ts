@@ -10,6 +10,7 @@ import { ISecurityActionService } from '../services/SecurityActionService';
 import { TYPES } from '../di/symbols';
 import { IInteractionHandler } from './InteractionHandler';
 import { ICommandHandler } from './CommandHandler';
+import { IVerificationThreadAnalysisService } from '../services/VerificationThreadAnalysisService';
 
 // Load environment variables
 dotenv.config();
@@ -30,6 +31,7 @@ export class EventHandler implements IEventHandler {
   private securityActionService: ISecurityActionService;
   private commandHandler: ICommandHandler;
   private interactionHandler: IInteractionHandler;
+  private verificationThreadAnalysisService: IVerificationThreadAnalysisService;
   private serverConfigWarmups: Set<string> = new Set();
   private configInitializePromise: Promise<void> | null = null;
 
@@ -40,7 +42,9 @@ export class EventHandler implements IEventHandler {
     @inject(TYPES.ConfigService) configService: IConfigService,
     @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService,
     @inject(TYPES.CommandHandler) commandHandler: ICommandHandler,
-    @inject(TYPES.InteractionHandler) interactionHandler: IInteractionHandler
+    @inject(TYPES.InteractionHandler) interactionHandler: IInteractionHandler,
+    @inject(TYPES.VerificationThreadAnalysisService)
+    verificationThreadAnalysisService: IVerificationThreadAnalysisService
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -49,6 +53,7 @@ export class EventHandler implements IEventHandler {
     this.securityActionService = securityActionService;
     this.commandHandler = commandHandler;
     this.interactionHandler = interactionHandler;
+    this.verificationThreadAnalysisService = verificationThreadAnalysisService;
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -122,6 +127,13 @@ export class EventHandler implements IEventHandler {
       // Ensure the config cache init attempt has completed before processing messages.
       // (Prevents applying global defaults while initialize() is still running.)
       await this.ensureConfigInitialized();
+
+      if (message.channel.isThread()) {
+        const handled = await this.verificationThreadAnalysisService.handleThreadMessage(message);
+        if (handled) {
+          return;
+        }
+      }
 
       // Warm the per-guild config cache in the background (no await) so hot-path heuristics
       // can consult the in-memory cache without blocking message handling.

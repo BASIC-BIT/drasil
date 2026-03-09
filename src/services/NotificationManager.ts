@@ -28,6 +28,7 @@ import {
   DetectionType,
 } from '../repositories/types';
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
+import type { VerificationThreadAnalysisResult } from './GPTService';
 
 export interface NotificationButton {
   id: string;
@@ -92,6 +93,22 @@ export interface INotificationManager {
     verificationEvent: VerificationEvent,
     newStatus: VerificationStatus
   ): Promise<void>;
+
+  updateVerificationThreadAnalysis(
+    verificationEvent: VerificationEvent,
+    analysis: VerificationThreadAnalysisResult,
+    analyzedMessageCount: number
+  ): Promise<boolean>;
+}
+
+interface ThreadAnalysisMetadata {
+  analyzedMessageIds?: unknown;
+  latestAnalysis?: {
+    result: 'OK' | 'SUSPICIOUS';
+    confidence: number;
+    summary: string;
+    analyzedMessageCount: number;
+  };
 }
 
 /**
@@ -104,6 +121,7 @@ export class NotificationManager implements INotificationManager {
   private client: Client;
   private configService: IConfigService;
   private detectionEventsRepository: IDetectionEventsRepository;
+  private static readonly THREAD_ANALYSIS_FIELD_NAME = 'AI Thread Analysis';
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -278,6 +296,58 @@ export class NotificationManager implements INotificationManager {
     }
   }
 
+  public async updateVerificationThreadAnalysis(
+    verificationEvent: VerificationEvent,
+    analysis: VerificationThreadAnalysisResult,
+    analyzedMessageCount: number
+  ): Promise<boolean> {
+    try {
+      const message = await this.getMessageForVerificationEvent(verificationEvent);
+      const existingEmbed = message.embeds[0];
+      const updatedEmbed = EmbedBuilder.from(existingEmbed);
+
+      const confidencePercent = Math.round(analysis.confidence * 100);
+      const value = this.truncateEmbedFieldValue(
+        [
+          `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
+          `Analyzed responses: ${analyzedMessageCount}`,
+          `Summary: ${analysis.summary}`,
+        ].join('\n')
+      );
+
+      const field = {
+        name: NotificationManager.THREAD_ANALYSIS_FIELD_NAME,
+        value,
+        inline: false,
+      };
+
+      const existingFieldIndex = updatedEmbed.data.fields?.findIndex(
+        (embedField) => embedField.name === field.name
+      );
+
+      if (existingFieldIndex !== undefined && existingFieldIndex > -1) {
+        updatedEmbed.spliceFields(existingFieldIndex, 1, field);
+      } else {
+        updatedEmbed.addFields(field);
+      }
+
+      await message.edit({ embeds: [updatedEmbed] });
+      return true;
+    } catch (error) {
+      console.error('Failed to update verification thread analysis:', error);
+      return false;
+    }
+  }
+
+  private truncateEmbedFieldValue(value: string): string {
+    const maxLength = 1024;
+    if (value.length <= maxLength) {
+      return value;
+    }
+
+    return `${value.slice(0, maxLength - 3)}...`;
+  }
+
   private async getMessageForVerificationEvent(
     verificationEvent: VerificationEvent
   ): Promise<Message> {
@@ -450,7 +520,47 @@ export class NotificationManager implements INotificationManager {
       });
     }
 
+    const persistedThreadAnalysis = this.getThreadAnalysisMetadata(verificationEvent.metadata);
+    if (persistedThreadAnalysis?.latestAnalysis) {
+      embed.addFields({
+        name: NotificationManager.THREAD_ANALYSIS_FIELD_NAME,
+        value: this.formatThreadAnalysisFieldValue(persistedThreadAnalysis.latestAnalysis),
+        inline: false,
+      });
+    }
+
     return embed;
+  }
+
+  private formatThreadAnalysisFieldValue(analysis: {
+    result: 'OK' | 'SUSPICIOUS';
+    confidence: number;
+    summary: string;
+    analyzedMessageCount: number;
+  }): string {
+    const confidencePercent = Math.round(analysis.confidence * 100);
+    return this.truncateEmbedFieldValue(
+      [
+        `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
+        `Analyzed responses: ${analysis.analyzedMessageCount}`,
+        `Summary: ${analysis.summary}`,
+      ].join('\n')
+    );
+  }
+
+  private getThreadAnalysisMetadata(
+    metadata: VerificationEvent['metadata']
+  ): ThreadAnalysisMetadata | null {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return null;
+    }
+
+    const threadAnalysis = (metadata as { thread_analysis?: unknown }).thread_analysis;
+    if (!threadAnalysis || typeof threadAnalysis !== 'object' || Array.isArray(threadAnalysis)) {
+      return null;
+    }
+
+    return threadAnalysis as ThreadAnalysisMetadata;
   }
 
   /**

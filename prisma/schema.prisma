@@ -159,6 +159,7 @@ model verification_events {
   @@index([detection_event_id], map: "idx_verification_events_detection")
   @@index([server_id], map: "idx_verification_events_server")
   @@index([status], map: "idx_verification_events_status")
+  @@index([thread_id], map: "idx_verification_events_thread")
   @@index([user_id], map: "idx_verification_events_user")
   @@index([user_id, server_id, status], map: "idx_verification_events_user_server_status")
 }

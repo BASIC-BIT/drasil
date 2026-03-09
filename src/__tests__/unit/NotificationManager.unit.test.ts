@@ -305,4 +305,84 @@ describe('NotificationManager (unit)', () => {
     expect(threadField?.value).toContain('Click here to view the thread');
     expect(actionLog?.value).toContain('<@admin-1>');
   });
+
+  it('updates the admin notification with AI thread analysis details', async () => {
+    const embed = new EmbedBuilder().setTitle('Suspicious User');
+    const message: MockMessage = {
+      embeds: [embed],
+      edit: jest.fn().mockResolvedValue(undefined),
+    };
+    adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({
+      notification_message_id: 'message-6',
+    });
+
+    await manager.updateVerificationThreadAnalysis(
+      verificationEvent,
+      {
+        result: 'OK',
+        confidence: 0.72,
+        summary: 'Responses match what legitimate users normally say here.',
+      },
+      2
+    );
+
+    const editArgs = message.edit.mock.calls[0][0] as { embeds: EmbedBuilder[] };
+    const fields = editArgs.embeds[0].data.fields ?? [];
+    const analysisField = fields.find((field) => field.name === 'AI Thread Analysis');
+
+    expect(analysisField?.value).toContain('Result: **OK** (72% confidence)');
+    expect(analysisField?.value).toContain('Analyzed responses: 2');
+    expect(analysisField?.value).toContain(
+      'Responses match what legitimate users normally say here.'
+    );
+  });
+
+  it('preserves persisted AI thread analysis when rebuilding the embed', async () => {
+    const member = buildMember('guild-1', 'user-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+    };
+    const message: MockMessage = {
+      id: 'message-7',
+      embeds: [new EmbedBuilder().setTitle('Suspicious User')],
+      edit: jest.fn().mockResolvedValue(undefined),
+    };
+    adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({
+      thread_id: 'thread-1',
+      notification_message_id: 'message-7',
+      metadata: {
+        thread_analysis: {
+          analyzedMessageIds: ['msg-1'],
+          latestAnalysis: {
+            result: 'OK',
+            confidence: 0.72,
+            summary: 'Responses match what legitimate users normally say here.',
+            analyzedMessageCount: 2,
+          },
+        },
+      },
+    });
+
+    await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
+
+    const editArgs = message.edit.mock.calls[0][0] as { embeds: EmbedBuilder[] };
+    const fields = editArgs.embeds[0].data.fields ?? [];
+    const analysisField = fields.find((field) => field.name === 'AI Thread Analysis');
+
+    expect(analysisField?.value).toContain('Result: **OK** (72% confidence)');
+    expect(analysisField?.value).toContain('Analyzed responses: 2');
+    expect(analysisField?.value).toContain(
+      'Responses match what legitimate users normally say here.'
+    );
+  });
 });
