@@ -219,7 +219,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
 
   async findByThreadId(threadId: string): Promise<VerificationEvent | null> {
     const matchingEvents = this.events
-      .filter((item) => item.thread_id === threadId)
+      .filter((item) => item.thread_id === threadId && item.status === VerificationStatus.PENDING)
       .sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
 
     if (matchingEvents.length === 0) {

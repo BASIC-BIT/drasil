@@ -60,7 +60,10 @@ export class VerificationEventRepository implements IVerificationEventRepository
   async findByThreadId(threadId: string): Promise<VerificationEvent | null> {
     try {
       const event = await this.prisma.verification_events.findFirst({
-        where: { thread_id: threadId },
+        where: {
+          thread_id: threadId,
+          status: VerificationStatus.PENDING,
+        },
         orderBy: { created_at: 'desc' },
       });
       return event as VerificationEvent | null;

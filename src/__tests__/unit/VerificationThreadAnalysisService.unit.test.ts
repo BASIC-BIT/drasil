@@ -262,4 +262,76 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
     expect(notificationManager.updateVerificationThreadAnalysis).not.toHaveBeenCalled();
   });
+
+  it('does not consume an analysis slot when the notification update fails', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const detectionEvent = await detectionRepo.create({
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Recent suspicious activity'],
+    });
+    const verificationEvent = await verificationRepo.createFromDetection(
+      detectionEvent.id,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      notification_message_id: 'notif-1',
+    });
+
+    const gptService = {
+      analyzeVerificationThreadResponses: jest.fn().mockResolvedValue({
+        result: 'OK',
+        confidence: 0.67,
+        summary: 'Looks like a real user answering normally.',
+      }),
+    } as any;
+    const notificationManager = {
+      updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(false),
+    } as any;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          verification_ai_thread_analysis_enabled: true,
+          verification_ai_thread_analysis_message_limit: 3,
+        },
+      }),
+    } as any;
+    const service = new VerificationThreadAnalysisService(
+      configService,
+      gptService,
+      notificationManager,
+      verificationRepo,
+      detectionRepo
+    );
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const { message, messages } = buildMessage();
+      messages.set('msg-1', {
+        id: 'msg-1',
+        author: { id: 'user-1' },
+        content: 'I joined for the weekly speedrun races.',
+        createdTimestamp: 2,
+      });
+
+      const handled = await service.handleThreadMessage(message as any);
+
+      expect(handled).toBe(true);
+      expect(notificationManager.updateVerificationThreadAnalysis).toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        `[VerificationThreadAnalysis] Failed to update notification for verification event ${verificationEvent.id}`
+      );
+
+      const updated = await verificationRepo.findById(verificationEvent.id);
+      expect(updated?.metadata).toBeNull();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });

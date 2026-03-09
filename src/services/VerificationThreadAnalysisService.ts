@@ -101,6 +101,18 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     const nextAnalyzedMessageIds = [...metadata.analyzedMessageIds, message.id].slice(
       -settings.messageLimit
     );
+    const notified = await this.notificationManager.updateVerificationThreadAnalysis(
+      verificationEvent,
+      analysis,
+      nextAnalyzedMessageIds.length
+    );
+    if (!notified) {
+      console.warn(
+        `[VerificationThreadAnalysis] Failed to update notification for verification event ${verificationEvent.id}`
+      );
+      return;
+    }
+
     await this.verificationEventRepository.update(verificationEvent.id, {
       metadata: {
         ...(this.asObject(verificationEvent.metadata) ?? {}),
@@ -109,12 +121,6 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
         },
       },
     });
-
-    await this.notificationManager.updateVerificationThreadAnalysis(
-      verificationEvent,
-      analysis,
-      nextAnalyzedMessageIds.length
-    );
   }
 
   private async runSerialized(id: string, operation: () => Promise<void>): Promise<void> {
