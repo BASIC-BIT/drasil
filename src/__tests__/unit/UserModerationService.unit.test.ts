@@ -64,6 +64,7 @@ describe('UserModerationService (unit)', () => {
       setupVerificationChannel: jest.fn().mockResolvedValue('channel-1'),
       handleHistoryButtonClick: jest.fn().mockResolvedValue(true),
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
+      updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
       createVerificationThread: jest.fn().mockResolvedValue({} as any),

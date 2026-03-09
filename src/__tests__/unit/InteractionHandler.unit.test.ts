@@ -86,6 +86,7 @@ describe('InteractionHandler (unit)', () => {
       setupVerificationChannel: jest.fn().mockResolvedValue('channel-1'),
       handleHistoryButtonClick: jest.fn().mockResolvedValue(true),
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
+      updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
     };
     configService = {
       initialize: jest.fn().mockResolvedValue(undefined),
@@ -109,6 +110,7 @@ describe('InteractionHandler (unit)', () => {
       createFromDetection: jest.fn(),
       getVerificationHistory: jest.fn(),
       findById: jest.fn(),
+      findByThreadId: jest.fn(),
       update: jest.fn(),
     };
     threadManager = {

@@ -20,6 +20,7 @@ export interface IVerificationEventRepository {
   ): Promise<VerificationEvent>;
   getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]>;
   findById(id: string): Promise<VerificationEvent | null>;
+  findByThreadId(threadId: string): Promise<VerificationEvent | null>;
   update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent | null>; // Return null if not found
 }
 
@@ -53,6 +54,18 @@ export class VerificationEventRepository implements IVerificationEventRepository
       return event as VerificationEvent | null; // Cast needed if type differs
     } catch (error) {
       this.handleError(error, 'findById');
+    }
+  }
+
+  async findByThreadId(threadId: string): Promise<VerificationEvent | null> {
+    try {
+      const event = await this.prisma.verification_events.findFirst({
+        where: { thread_id: threadId },
+        orderBy: { created_at: 'desc' },
+      });
+      return event as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'findByThreadId');
     }
   }
 

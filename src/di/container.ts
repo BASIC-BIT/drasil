@@ -39,6 +39,10 @@ import { InteractionHandler, IInteractionHandler } from '../controllers/Interact
 import { CommandHandler, ICommandHandler } from '../controllers/CommandHandler';
 import { IEventHandler, EventHandler } from '../controllers/EventHandler';
 import { ThreadManager, IThreadManager } from '../services/ThreadManager';
+import {
+  IVerificationThreadAnalysisService,
+  VerificationThreadAnalysisService,
+} from '../services/VerificationThreadAnalysisService';
 // Initialize container
 const container = new Container();
 
@@ -173,6 +177,11 @@ function configureServices(container: Container): void {
     .inSingletonScope();
 
   container.bind<IThreadManager>(TYPES.ThreadManager).to(ThreadManager).inSingletonScope();
+
+  container
+    .bind<IVerificationThreadAnalysisService>(TYPES.VerificationThreadAnalysisService)
+    .to(VerificationThreadAnalysisService)
+    .inSingletonScope();
 }
 
 export { container };

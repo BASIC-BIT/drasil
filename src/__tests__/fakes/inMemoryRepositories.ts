@@ -17,6 +17,10 @@ import {
   VerificationStatus,
 } from '../../repositories/types';
 import { globalConfig } from '../../config/GlobalConfig';
+import {
+  DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_ENABLED,
+  DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT,
+} from '../../utils/verificationThreadAnalysisSettings';
 
 const toTimestamp = (value: string | Date | null | undefined): number => {
   if (!value) {
@@ -34,6 +38,9 @@ const baseSettings: ServerSettings = {
   gpt_message_check_count: 3,
   message_retention_days: globalSettings.defaultServerSettings.messageRetentionDays,
   detection_retention_days: globalSettings.defaultServerSettings.detectionRetentionDays,
+  verification_ai_thread_analysis_enabled: DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_ENABLED,
+  verification_ai_thread_analysis_message_limit:
+    DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT,
 };
 
 const defaultHeuristicThreshold = globalSettings.defaultServerSettings.messageThreshold;
@@ -207,6 +214,13 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
 
   async findById(id: string): Promise<VerificationEvent | null> {
     const event = this.events.find((item) => item.id === id);
+    return event ? { ...event } : null;
+  }
+
+  async findByThreadId(threadId: string): Promise<VerificationEvent | null> {
+    const event = this.events
+      .filter((item) => item.thread_id === threadId)
+      .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())[0];
     return event ? { ...event } : null;
   }
 
