@@ -334,4 +334,76 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       warnSpy.mockRestore();
     }
   });
+
+  it('warns and continues when metadata persistence fails after notification succeeds', async () => {
+    const verificationEvent = {
+      id: 'verification-1',
+      detection_event_id: 'detection-1',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      status: VerificationStatus.PENDING,
+      thread_id: 'thread-1',
+      notification_message_id: 'notif-1',
+      metadata: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+      resolved_at: null,
+      resolved_by: null,
+      notes: null,
+    } as any;
+    const verificationRepo = {
+      findByThreadId: jest.fn().mockResolvedValue(verificationEvent),
+      findById: jest.fn().mockResolvedValue(verificationEvent),
+      update: jest.fn().mockRejectedValue(new Error('db down')),
+    } as any;
+    const detectionRepo = {
+      findById: jest.fn().mockResolvedValue({ reasons: ['Recent suspicious activity'] }),
+    } as any;
+    const gptService = {
+      analyzeVerificationThreadResponses: jest.fn().mockResolvedValue({
+        result: 'OK',
+        confidence: 0.67,
+        summary: 'Looks like a real user answering normally.',
+      }),
+    } as any;
+    const notificationManager = {
+      updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+    } as any;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          verification_ai_thread_analysis_enabled: true,
+          verification_ai_thread_analysis_message_limit: 3,
+        },
+      }),
+    } as any;
+    const service = new VerificationThreadAnalysisService(
+      configService,
+      gptService,
+      notificationManager,
+      verificationRepo,
+      detectionRepo
+    );
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const { message, messages } = buildMessage();
+      messages.set('msg-1', {
+        id: 'msg-1',
+        author: { id: 'user-1' },
+        content: 'I joined for the weekly speedrun races.',
+        createdTimestamp: 2,
+      });
+
+      await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+      expect(notificationManager.updateVerificationThreadAnalysis).toHaveBeenCalled();
+      expect(verificationRepo.update).toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[VerificationThreadAnalysis] Failed to persist metadata for verification event verification-1',
+        expect.any(Error)
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });

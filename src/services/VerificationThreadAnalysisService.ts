@@ -113,14 +113,21 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       return;
     }
 
-    await this.verificationEventRepository.update(verificationEvent.id, {
-      metadata: {
-        ...(this.asObject(verificationEvent.metadata) ?? {}),
-        thread_analysis: {
-          analyzedMessageIds: nextAnalyzedMessageIds,
+    try {
+      await this.verificationEventRepository.update(verificationEvent.id, {
+        metadata: {
+          ...(this.asObject(verificationEvent.metadata) ?? {}),
+          thread_analysis: {
+            analyzedMessageIds: nextAnalyzedMessageIds,
+          },
         },
-      },
-    });
+      });
+    } catch (error) {
+      console.warn(
+        `[VerificationThreadAnalysis] Failed to persist metadata for verification event ${verificationEvent.id}`,
+        error
+      );
+    }
   }
 
   private async runSerialized(id: string, operation: () => Promise<void>): Promise<void> {
