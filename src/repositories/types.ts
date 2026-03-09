@@ -36,6 +36,8 @@ export interface ServerSettings {
   server_about?: string; // Short description of the server/community for GPT context
   verification_context?: string; // Moderator-provided guidance for what legitimate users know
   expected_topics?: string[]; // Topics, keywords, or links expected from legitimate users
+  verification_ai_thread_analysis_enabled?: boolean; // Whether to analyze replies in verification threads
+  verification_ai_thread_analysis_message_limit?: number; // Max flagged-user thread messages to analyze
 }
 
 /**

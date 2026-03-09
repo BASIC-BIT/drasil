@@ -28,6 +28,7 @@ describe('DetectionOrchestrator (unit)', () => {
     };
     gptService = {
       analyzeProfile: jest.fn(),
+      analyzeVerificationThreadResponses: jest.fn(),
     };
     detectionEventsRepository = new InMemoryDetectionEventsRepository();
     serverRepository = new InMemoryServerRepository();

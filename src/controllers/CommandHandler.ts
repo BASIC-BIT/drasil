@@ -44,6 +44,12 @@ import {
   VERIFICATION_CONTEXT_SETTING_KEY,
 } from '../utils/serverContextSettings';
 import {
+  getVerificationThreadAnalysisSettings,
+  MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT,
+  VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY,
+  VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY,
+} from '../utils/verificationThreadAnalysisSettings';
+import {
   SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID,
   SETUP_VERIFICATION_CHANNEL_FIELD_ID,
   SETUP_VERIFICATION_MODAL_ID,
@@ -275,6 +281,34 @@ export class CommandHandler implements ICommandHandler {
               subcommand
                 .setName('context-reset')
                 .setDescription('Reset AI analysis server context to defaults')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('analysis-view')
+                .setDescription('View verification thread AI analysis settings')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('analysis-enable')
+                .setDescription('Enable AI analysis for flagged-user verification replies')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('analysis-disable')
+                .setDescription('Disable AI analysis for verification replies')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('analysis-set-limit')
+                .setDescription('Set how many flagged-user verification replies to analyze')
+                .addIntegerOption((option) =>
+                  option
+                    .setName('value')
+                    .setDescription('Number of replies to analyze (1-10)')
+                    .setRequired(true)
+                    .setMinValue(1)
+                    .setMaxValue(MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT)
+                )
             )
         ),
       new SlashCommandBuilder() // Added flaguser command
@@ -786,6 +820,15 @@ export class CommandHandler implements ICommandHandler {
     return `${value.slice(0, maxLength)}\n... (truncated ${overflow} characters)`;
   }
 
+  private formatVerificationAnalysisSettings(
+    settings: ReturnType<typeof getVerificationThreadAnalysisSettings>
+  ): string {
+    return [
+      `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
+      `Message limit: \`${settings.messageLimit}\``,
+    ].join('\n');
+  }
+
   private async handleVerificationConfigCommand(
     interaction: ChatInputCommandInteraction,
     guildId: string
@@ -928,6 +971,65 @@ export class CommandHandler implements ICommandHandler {
 
           await interaction.reply({
             content: '✅ Reset AI server context to defaults.',
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'analysis-view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const analysisSettings = getVerificationThreadAnalysisSettings(serverConfig.settings);
+
+          await interaction.reply({
+            content:
+              'Verification reply AI analysis settings:\n\n' +
+              `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'analysis-enable': {
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY]: true,
+          });
+          const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
+
+          await interaction.reply({
+            content:
+              '✅ Enabled verification reply AI analysis.\n\n' +
+              `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'analysis-disable': {
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY]: false,
+          });
+          const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
+
+          await interaction.reply({
+            content:
+              '✅ Disabled verification reply AI analysis.\n\n' +
+              `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'analysis-set-limit': {
+          const value = interaction.options.getInteger('value', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY]: value,
+          });
+          const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
+
+          await interaction.reply({
+            content:
+              '✅ Updated verification reply AI analysis message limit.\n\n' +
+              `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
             flags: MessageFlags.Ephemeral,
           });
           return;
