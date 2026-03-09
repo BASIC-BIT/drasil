@@ -218,10 +218,15 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
   }
 
   async findByThreadId(threadId: string): Promise<VerificationEvent | null> {
-    const event = this.events
+    const matchingEvents = this.events
       .filter((item) => item.thread_id === threadId)
-      .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())[0];
-    return event ? { ...event } : null;
+      .sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
+
+    if (matchingEvents.length === 0) {
+      return null;
+    }
+
+    return { ...matchingEvents[0] };
   }
 
   async update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent | null> {
