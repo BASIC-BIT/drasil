@@ -907,6 +907,7 @@ export class CommandHandler implements ICommandHandler {
               'Current AI server context:\n\n' +
               `${this.formatServerContextPreview(guildId, contextSettings)}`,
             flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
           });
           return;
         }
@@ -954,6 +955,7 @@ export class CommandHandler implements ICommandHandler {
               '✅ Updated AI server context.\n\n' +
               `${this.formatServerContextPreview(guildId, contextSettings)}`,
             flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
           });
           return;
         }

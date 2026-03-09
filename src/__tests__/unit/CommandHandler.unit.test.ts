@@ -546,6 +546,7 @@ describe('CommandHandler (unit)', () => {
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining('Updated AI server context'),
       flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
     });
   });
 
@@ -589,6 +590,7 @@ describe('CommandHandler (unit)', () => {
     expect(reply.content).toContain('... (truncated ');
     expect(reply.content.length).toBeLessThanOrEqual(2000);
     expect(reply.flags).toBe(MessageFlags.Ephemeral);
+    expect(reply.allowedMentions).toEqual({ parse: [] });
   });
 
   it('rejects /config verification context-set with no values', async () => {
