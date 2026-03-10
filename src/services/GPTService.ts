@@ -15,7 +15,7 @@ import { getServerContextSettings, hasServerContext } from '../utils/serverConte
 const SERVER_ABOUT_PROMPT_MAX_LENGTH = 400;
 const VERIFICATION_CONTEXT_PROMPT_MAX_LENGTH = 700;
 const EXPECTED_TOPICS_PROMPT_MAX_LENGTH = 300;
-const VERIFICATION_THREAD_MESSAGE_PROMPT_MAX_LENGTH = 500;
+const USER_MESSAGE_PROMPT_MAX_LENGTH = 500;
 const PROMPT_ROLE_LABEL_PATTERN = /^\s*(system|assistant|user|developer|tool)\s*:/gim;
 
 export interface UserProfileData {
@@ -322,7 +322,7 @@ export class GPTService implements IGPTService {
         recentMessages
           .map(
             (message, index) =>
-              `${index + 1}. ${this.sanitizeContextValue(message, VERIFICATION_THREAD_MESSAGE_PROMPT_MAX_LENGTH)}`
+              `${index + 1}. ${this.sanitizeContextValue(message, USER_MESSAGE_PROMPT_MAX_LENGTH)}`
           )
           .join('\n'),
         '--- End untrusted recent messages from user profile ---'
@@ -444,7 +444,7 @@ export class GPTService implements IGPTService {
     const responses = analysisData.messages
       .map(
         (message, index) =>
-          `${index + 1}. ${this.sanitizeContextValue(message, VERIFICATION_THREAD_MESSAGE_PROMPT_MAX_LENGTH)}`
+          `${index + 1}. ${this.sanitizeContextValue(message, USER_MESSAGE_PROMPT_MAX_LENGTH)}`
       )
       .join('\n');
 
