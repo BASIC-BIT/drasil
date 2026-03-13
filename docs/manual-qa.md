@@ -118,7 +118,8 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 
 ### 8. GPT verification-thread analysis flow
 
-- Enable thread analysis in `/config verification` if it is disabled.
+- Enable thread analysis with `/config verification analysis-enable` if it is disabled.
+- Optionally confirm the setting with `/config verification analysis-view`.
 - Start a fresh pending verification case.
 - Send 1-2 replies from the flagged user inside their verification thread.
 - Expected result:
@@ -130,7 +131,7 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 ### 9. Server-context prompt flow
 
 - Set `server-about`, `verification-context`, and `expected-topics` in `/config verification context-set`.
-- Preview them with `context-view`.
+- Preview them with `/config verification context-view`.
 - Trigger either manual flagging or thread analysis.
 - Expected result:
   - context commands succeed and stay under Discord message limits
