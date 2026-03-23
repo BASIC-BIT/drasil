@@ -1,0 +1,38 @@
+{
+  "case_id": "YYYY-MM-DD-short-slug",
+  "captured_at": "YYYY-MM-DD",
+  "source": {
+    "platform": "Discord",
+    "collection_method": "manual screenshot",
+    "server_context": [],
+    "mutual_server_count": 0,
+    "view": "profile screenshot"
+  },
+  "subject": {
+    "display_name": "",
+    "username": "",
+    "member_since": null,
+    "friend_request_visible": false,
+    "profile_image_description": ""
+  },
+  "classification": {
+    "label": "needs_review",
+    "confidence": "medium",
+    "reasoning": []
+  },
+  "tags": [],
+  "evidence": [
+    {
+      "kind": "image",
+      "status": "captured",
+      "repo_path": "data/intel/evidence/YYYY/MM/example-01.png",
+      "s3_uri": "s3://<bucket>/spam-intel/evidence/YYYY/MM/example-01.png"
+    }
+  ],
+  "review": {
+    "status": "pending",
+    "reviewed_by": null,
+    "reviewed_at": null
+  },
+  "notes": []
+}

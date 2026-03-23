@@ -59,6 +59,14 @@ supabase/.env
 # OpenCode
 .opencode/state/
 
+# Local intelligence repository data
+data/intel/cases/**
+!data/intel/cases/
+!data/intel/cases/.gitkeep
+data/intel/evidence/**
+!data/intel/evidence/
+!data/intel/evidence/.gitkeep
+
 # Terraform
 **/.terraform/
 **/*.tfstate
@@ -66,6 +74,7 @@ supabase/.env
 **/*.tfvars
 **/crash.log
 infra/aws/prod/backend.hcl
+infra/aws/intel/backend.hcl
 
 # OS files
 Thumbs.db 
