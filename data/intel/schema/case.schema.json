@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://drasil.local/schemas/intel-case.schema.json",
+  "title": "Intelligence Case",
+  "type": "object",
+  "required": [
+    "case_id",
+    "captured_at",
+    "source",
+    "subject",
+    "classification",
+    "evidence",
+    "review"
+  ],
+  "properties": {
+    "case_id": {
+      "type": "string"
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date"
+    },
+    "source": {
+      "type": "object",
+      "required": ["platform", "collection_method"],
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "collection_method": {
+          "type": "string"
+        },
+        "server_context": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "subject": {
+      "type": "object",
+      "required": ["display_name", "username"],
+      "properties": {
+        "display_name": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "classification": {
+      "type": "object",
+      "required": ["label", "confidence", "reasoning"],
+      "properties": {
+        "label": {
+          "type": "string",
+          "enum": ["needs_review", "confirmed_scam", "confirmed_spam", "benign", "unknown"]
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "reasoning": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "status"],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "repo_path": {
+            "type": "string"
+          },
+          "s3_uri": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "review": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "reviewed"]
+        },
+        "reviewed_by": {
+          "type": ["string", "null"]
+        },
+        "reviewed_at": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": true
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": true
+}
