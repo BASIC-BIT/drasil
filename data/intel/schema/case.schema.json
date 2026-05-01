@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://drasil.local/schemas/intel-case.schema.json",
+  "$id": "https://drasil.local/schemas/case.schema.json",
   "title": "Intelligence Case",
   "type": "object",
   "required": [

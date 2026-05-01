@@ -21,7 +21,7 @@ Actual case data in `cases/` and binaries in `evidence/` are gitignored. Only sh
 
 1. Save the screenshot or asset under `evidence/YYYY/MM/`.
 2. Create a matching case JSON in `cases/YYYY/`.
-3. Use `classification.label = "needs_review"` only when the signals are genuinely ambiguous.
+3. Default to `classification.label = "needs_review"` whenever evidence is thin or you are not confident; use stronger labels only when the signals are clear.
 4. Update the case later as moderation outcomes become known.
 
 If you want the minimum possible workflow, steps 1-2 plus an `aws s3 cp` upload are enough.

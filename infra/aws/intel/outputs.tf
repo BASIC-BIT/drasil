@@ -9,16 +9,16 @@ output "bucket_arn" {
 }
 
 output "intel_prefix" {
-  value       = var.intel_prefix
+  value       = local.intel_prefix
   description = "Top-level prefix reserved for intelligence data uploads."
 }
 
 output "cases_s3_prefix" {
-  value       = "s3://${aws_s3_bucket.intel.bucket}/${var.intel_prefix}/cases/"
+  value       = "s3://${aws_s3_bucket.intel.bucket}/${local.intel_prefix}/cases/"
   description = "S3 prefix for case JSON manifests."
 }
 
 output "evidence_s3_prefix" {
-  value       = "s3://${aws_s3_bucket.intel.bucket}/${var.intel_prefix}/evidence/"
+  value       = "s3://${aws_s3_bucket.intel.bucket}/${local.intel_prefix}/evidence/"
   description = "S3 prefix for screenshot and evidence uploads."
 }

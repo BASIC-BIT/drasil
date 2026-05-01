@@ -47,6 +47,7 @@ function ensureFile(filePath, label) {
 
 function toS3Key(filePath, prefix) {
   const normalized = filePath.split(path.sep).join('/');
+  const normalizedPrefix = prefix.replace(/^\/+|\/+$/g, '');
   const marker = 'data/intel/';
   const start = normalized.indexOf(marker);
 
@@ -54,16 +55,25 @@ function toS3Key(filePath, prefix) {
     fail(`File must live under data/intel/: ${filePath}`);
   }
 
-  return `${prefix}/${normalized.slice(start + marker.length)}`;
+  if (!normalizedPrefix) {
+    fail('Prefix must not be empty');
+  }
+
+  return `${normalizedPrefix}/${normalized.slice(start + marker.length)}`;
 }
 
 function uploadFile(bucket, prefix, filePath) {
   const key = toS3Key(filePath, prefix);
   const destination = `s3://${bucket}/${key}`;
-  const result = spawnSync('aws', ['s3', 'cp', filePath, destination], {
+  const awsCommand = process.platform === 'win32' ? 'aws.exe' : 'aws';
+  const result = spawnSync(awsCommand, ['s3', 'cp', filePath, destination], {
     stdio: 'inherit',
-    shell: process.platform === 'win32',
   });
+
+  if (result.error || result.status === null) {
+    const details = result.error?.message ? `: ${result.error.message}` : '';
+    fail(`Failed to run AWS CLI (is it installed and on your PATH?)${details}`);
+  }
 
   if (result.status !== 0) {
     fail(`Upload failed for ${filePath}`);

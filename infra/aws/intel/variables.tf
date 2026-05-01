@@ -25,6 +25,11 @@ variable "intel_prefix" {
   type        = string
   description = "Top-level S3 prefix for intelligence data."
   default     = "spam-intel"
+
+  validation {
+    condition     = length(trim(var.intel_prefix, "/")) > 0
+    error_message = "intel_prefix must not be empty; use a value like \"spam-intel\"."
+  }
 }
 
 variable "enable_versioning" {

@@ -1,5 +1,10 @@
+data "aws_caller_identity" "current" {}
+
 locals {
+  intel_prefix = trim(var.intel_prefix, "/")
+
   common_tags = merge(
+    var.tags,
     {
       Project     = var.project_name
       Environment = var.environment
@@ -7,9 +12,25 @@ locals {
       Repository  = "basic-bit/drasil"
       Component   = "spam-intel"
       DataClass   = "evidence"
-    },
-    var.tags
+    }
   )
+}
+
+data "aws_iam_policy_document" "kms" {
+  #checkov:skip=CKV_AWS_109:KMS key policies require wildcard resources; access is constrained to account root.
+  #checkov:skip=CKV_AWS_111:KMS key policies require wildcard resources; access is constrained to account root.
+  #checkov:skip=CKV_AWS_356:KMS key policies require wildcard resources by design.
+  statement {
+    sid = "EnableRootPermissions"
+
+    actions   = ["kms:*"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
 }
 
 resource "aws_s3_bucket" "intel" {
@@ -31,8 +52,11 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "intel" {
   bucket = aws_s3_bucket.intel.id
 
   rule {
+    bucket_key_enabled = true
+
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      kms_master_key_id = aws_kms_key.intel.arn
+      sse_algorithm     = "aws:kms"
     }
   }
 }
@@ -80,6 +104,8 @@ resource "aws_s3_bucket_ownership_controls" "intel" {
 resource "aws_s3_bucket_policy" "intel_tls_only" {
   bucket = aws_s3_bucket.intel.id
 
+  depends_on = [aws_s3_bucket_public_access_block.intel]
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -100,4 +126,16 @@ resource "aws_s3_bucket_policy" "intel_tls_only" {
       }
     ]
   })
+}
+
+resource "aws_kms_key" "intel" {
+  description         = "CMK for Drasil intelligence evidence bucket"
+  enable_key_rotation = true
+  policy              = data.aws_iam_policy_document.kms.json
+  tags                = local.common_tags
+}
+
+resource "aws_kms_alias" "intel" {
+  name          = "alias/${var.project_name}-${var.environment}-spam-intel"
+  target_key_id = aws_kms_key.intel.key_id
 }
