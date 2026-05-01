@@ -33,7 +33,8 @@
     "prisma:studio": "prisma studio",
     "prisma:format": "prisma format",
     "db:seed": "prisma db seed",
-    "db:reset:local": "npx supabase db reset --local && node scripts/create-prisma-user.js && prisma migrate reset && npm run db:seed"
+    "db:reset:local": "npx supabase db reset --local && node scripts/create-prisma-user.js && prisma migrate reset && npm run db:seed",
+    "intel:upload": "node scripts/upload-intel-case.js"
   },
   "keywords": [
     "discord",

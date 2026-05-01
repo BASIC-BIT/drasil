@@ -24,6 +24,7 @@ These files are the best starting points when you need deeper product/context:
 - Primary workflow: `docs/workflow.md`
 - Manual regression + test ideas: `docs/test-cases.md`
 - Release readiness checklist: `docs/release-checklist.md`
+- Scam/spammer evidence repository plan: `docs/context/intelligence-repository.md`
 
 ## Dev workflow
 
@@ -56,5 +57,6 @@ As the project evolves, additional files or folders may be added under `docs/` (
 - API documentation
 - Testing strategies
 - Deployment procedures
+- Intelligence datasets and evidence collection guidance
 
 These should be referenced from the core files to maintain the hierarchical structure.

@@ -5,6 +5,7 @@ This directory contains Terraform for deploying Drasil to AWS.
 Layout:
 
 - `infra/aws/bootstrap`: one-time setup for Terraform remote state (S3 + DynamoDB lock table)
+- `infra/aws/intel`: lightweight private S3 bucket for scam/spam evidence collection
 - `infra/aws/prod`: production infrastructure (ECR + ECS Fargate + networking + IAM)
 
 ## Quick start
@@ -33,6 +34,23 @@ terraform apply
 ```
 
 4. Set secret values in AWS Secrets Manager (created by Terraform) and then deploy the container image.
+
+## Optional intelligence bucket
+
+Use `infra/aws/intel` when you want a lightweight private bucket for screenshots and case JSON.
+
+```bash
+cd infra/aws/intel
+cp backend.hcl.example backend.hcl
+# Edit backend.hcl and replace REPLACE_ME with the shared state bucket name
+terraform init -backend-config=backend.hcl
+terraform apply -var="bucket_name=YOUR_INTEL_BUCKET"
+```
+
+Outputs include:
+
+- `cases_s3_prefix`
+- `evidence_s3_prefix`
 
 Optional `infra/aws/prod/terraform.tfvars` starter:
 
