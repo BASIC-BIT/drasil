@@ -6,6 +6,7 @@ This is intended to be concise and actionable. For flow details see:
 
 - `docs/workflow.md`
 - `docs/test-cases.md`
+- `docs/manual-qa.md`
 
 ## Pre-flight
 
@@ -62,6 +63,8 @@ Configure the bot (current UX is via `/config`):
 ## Smoke tests (end-to-end)
 
 Use `docs/test-cases.md` as the authoritative list. Minimum set:
+
+- If you want a step-by-step runbook instead of a short checklist, use `docs/manual-qa.md`.
 
 - Suspicious message:
   - user restricted

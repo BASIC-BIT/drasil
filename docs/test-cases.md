@@ -2,6 +2,8 @@
 
 ## Manual regression checks
 
+For a real-server walkthrough, use `docs/manual-qa.md`.
+
 - Suspicious message: user gets restricted, verification thread auto-created, admin notification sent.
 - Additional suspicious message while pending: no new verification event; notification updated.
 - New suspicious message after verification resolved: new verification event and new notification message.
@@ -34,6 +36,7 @@
 ## Full-stack smoke test (optional)
 
 - Use a dedicated staging Discord server and bot token.
+- Prefer the deterministic steps in `docs/manual-qa.md` over ad hoc message spam.
 - Script a message that triggers suspicion, then verify and ban via interactions.
 - Assert database state and notification updates.
 - Run manually or nightly (not ideal for every PR due to external deps).
