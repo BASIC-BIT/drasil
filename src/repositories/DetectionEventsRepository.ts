@@ -16,6 +16,10 @@ export interface IDetectionEventsRepository {
     action: 'Verified' | 'Banned' | 'Ignored', // Keep string literal type for now
     adminId: string
   ): Promise<DetectionEvent | null>;
+  linkToVerificationEvent(
+    detectionEventId: string,
+    verificationEventId: string
+  ): Promise<DetectionEvent | null>;
   cleanupOldEvents(retentionDays: number): Promise<number>;
   findById(id: string): Promise<DetectionEvent | null>; // Add findById for consistency
 }
@@ -162,6 +166,28 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
         return null;
       }
       this.handleError(error, 'recordAdminAction');
+    }
+  }
+
+  /**
+   * Link a detection event to the case it most recently updated.
+   */
+  async linkToVerificationEvent(
+    detectionEventId: string,
+    verificationEventId: string
+  ): Promise<DetectionEvent | null> {
+    try {
+      const updatedEvent = await this.prisma.detection_events.update({
+        where: { id: detectionEventId },
+        data: { latest_verification_event_id: verificationEventId },
+      });
+      return updatedEvent as DetectionEvent | null;
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        console.warn(`Attempted to link non-existent detection event: ${detectionEventId}`);
+        return null;
+      }
+      this.handleError(error, 'linkToVerificationEvent');
     }
   }
 

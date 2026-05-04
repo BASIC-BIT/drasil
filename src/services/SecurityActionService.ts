@@ -244,6 +244,15 @@ export class SecurityActionService implements ISecurityActionService {
       console.log(
         `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Updating notification.`
       );
+      const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
+        detectionEventId,
+        activeVerificationEvent.id
+      );
+      if (!linkedDetectionEvent) {
+        throw new Error(
+          `Failed to link detection event ${detectionEventId} to verification event ${activeVerificationEvent.id}`
+        );
+      }
       await this.upsertNotification(
         member,
         detectionResult,
@@ -263,6 +272,16 @@ export class SecurityActionService implements ISecurityActionService {
       member.id,
       VerificationStatus.PENDING
     );
+
+    const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
+      detectionEventId,
+      newVerificationEvent.id
+    );
+    if (!linkedDetectionEvent) {
+      throw new Error(
+        `Failed to link detection event ${detectionEventId} to verification event ${newVerificationEvent.id}`
+      );
+    }
 
     const restricted = await this.userModerationService.restrictUser(member);
     if (!restricted) {
