@@ -8,8 +8,11 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
 - Additional suspicious message while pending: no new verification event; notification updated.
 - New suspicious message after verification resolved: new verification event and new notification message.
 - Suspicious join: same flow as suspicious message.
-- Manual flag: creates a detection event and follows the same flow.
-- User report: creates a detection event with `USER_REPORT` and follows the same flow.
+- Manual flag: creates a detection event with admin flag metadata and follows the same case flow.
+- User report: creates a detection event with `USER_REPORT` and follows the same case flow.
+- User report or manual flag while pending: records a new detection event but reuses the existing case.
+- Repeated pending-case reports/flags link the new detection event to the reused case.
+- User report or manual flag after resolution: opens a new pending case.
 - Verify button: restricted role removed, thread resolved, notification updated, admin action logged.
 - Ban button: member banned, verification status set to BANNED (if present), thread resolved, admin action logged.
 - Reopen button: verification returns to PENDING, thread reopened, user restricted again.
@@ -25,6 +28,13 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
   - Updates the admin notification only.
 - `SecurityActionService.handleUserReport`
   - Creates `detection_event` with `detection_type = USER_REPORT` and reporter metadata.
+  - Reuses an existing pending `verification_event` instead of creating a duplicate case.
+  - Links repeated reports to the reused pending `verification_event`.
+  - Opens a new pending `verification_event` after a previous case was resolved.
+- `SecurityActionService.handleManualFlag`
+  - Creates `detection_event` with admin flag metadata.
+  - Reuses an existing pending `verification_event` instead of creating a duplicate case.
+  - Links repeated manual flags to the reused pending `verification_event`.
 - `UserModerationService.verifyUser`
   - Updates `verification_event` to VERIFIED with `resolved_by` and `resolved_at`.
   - Removes restricted role and updates `server_member`.

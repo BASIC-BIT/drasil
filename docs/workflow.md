@@ -3,6 +3,10 @@
 This project uses direct orchestration (no internal EventBus). Controllers call
 services, and services handle side effects in a single flow.
 
+`verification_events` are Drasil's current local moderation cases. See
+`docs/cases.md` for the product-language mapping between cases, detection
+events, admin actions, and Discord surfaces.
+
 ## Suspicious message or join
 
 1. `EventHandler` receives a guild message or a new member join (DMs are ignored).
@@ -13,32 +17,32 @@ services, and services handle side effects in a single flow.
 4. `SecurityActionService`:
    - Ensures `server`, `user`, and `server_member` records exist.
    - Ensures a `detection_event` record exists (creates one if needed).
-   - If an active verification exists, updates the admin notification only.
-   - Otherwise creates a `verification_event` (PENDING), restricts the user,
+   - If an active case exists, updates the admin notification only.
+   - Otherwise creates a `verification_event` case (PENDING), restricts the user,
      creates a verification thread, and upserts the admin notification.
 
 ## Manual flag
 
 1. Admin initiates a manual flag.
 2. `SecurityActionService.handleManualFlag` creates a `detection_event` with
-   `detection_type = GPT_ANALYSIS` and follows the same flow as above.
+   `metadata.type = "admin_flag"` and follows the same case flow as above.
 
 ## User report
 
 1. A user submits the report modal.
 2. `SecurityActionService.handleUserReport` creates a `detection_event` with
-   `detection_type = USER_REPORT` and follows the same flow as above.
+   `detection_type = USER_REPORT` and follows the same case flow as above.
 
 ## Admin verify or ban
 
 1. `InteractionHandler` or `CommandHandler` calls `UserModerationService`.
 2. Verify:
-   - Update `verification_event` to VERIFIED with `resolved_by` and `resolved_at`.
+   - Update the case to VERIFIED with `resolved_by` and `resolved_at`.
    - Remove restricted role and update `server_member`.
    - Resolve the verification thread and update the admin notification.
    - Record the admin action.
 3. Ban:
-   - Update `verification_event` to BANNED if one exists.
+   - Update the case to BANNED if one exists.
    - Ban the member in Discord.
    - Update `server_member`.
    - Resolve the thread, update the admin notification, and record the admin action.

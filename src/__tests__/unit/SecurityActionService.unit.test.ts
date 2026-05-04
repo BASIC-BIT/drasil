@@ -77,6 +77,20 @@ describe('SecurityActionService (unit)', () => {
     } as unknown as jest.Mocked<IAdminActionService>;
   });
 
+  const buildService = (client: Client = {} as Client): SecurityActionService =>
+    new SecurityActionService(
+      notificationManager,
+      detectionEventsRepository,
+      serverMemberRepository,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      adminActionService,
+      threadManager,
+      userModerationService,
+      client
+    );
+
   it('creates detection and verification when none exists', async () => {
     const guildId = 'guild-1';
     const userId = 'user-1';
@@ -207,6 +221,15 @@ describe('SecurityActionService (unit)', () => {
       type: 'user_report',
       reporterId,
     });
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(userModerationService.restrictUser).toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalled();
   });
 
   it('creates detection event for manual flag', async () => {
@@ -239,6 +262,162 @@ describe('SecurityActionService (unit)', () => {
     });
     expect(userModerationService.restrictUser).toHaveBeenCalled();
     expect(threadManager.createVerificationThread).toHaveBeenCalled();
+  });
+
+  it('adds a user report to an existing pending case without creating a duplicate case', async () => {
+    const guildId = 'guild-4a';
+    const userId = 'user-4a';
+    const reporterId = 'reporter-2';
+    const member = buildMember(guildId, userId);
+
+    const initialDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const activeCase = await verificationEventRepository.createFromDetection(
+      initialDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    await buildService().handleUserReport(member, { id: reporterId } as User, 'follow-up report');
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents).toHaveLength(2);
+    const reportEvent = detectionEvents.find(
+      (event) => event.detection_type === DetectionType.USER_REPORT
+    );
+    expect(reportEvent?.latest_verification_event_id).toBe(activeCase.id);
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('adds a manual flag to an existing pending case without creating a duplicate case', async () => {
+    const guildId = 'guild-4b';
+    const userId = 'user-4b';
+    const moderatorId = 'admin-2';
+    const member = buildMember(guildId, userId);
+
+    const initialDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1.0,
+      reasons: ['Initial report'],
+      detected_at: new Date(),
+    });
+    const activeCase = await verificationEventRepository.createFromDetection(
+      initialDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    await buildService().handleManualFlag(member, { id: moderatorId } as User, 'admin follow-up');
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents).toHaveLength(2);
+    const manualFlagEvent = detectionEvents.find((event) => event.metadata?.type === 'admin_flag');
+    expect(manualFlagEvent?.metadata).toMatchObject({
+      type: 'admin_flag',
+      adminId: moderatorId,
+    });
+    expect(manualFlagEvent?.latest_verification_event_id).toBe(activeCase.id);
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a new pending case when a user report follows a resolved case', async () => {
+    const guildId = 'guild-4c';
+    const userId = 'user-4c';
+    const reporterId = 'reporter-3';
+    const member = buildMember(guildId, userId);
+
+    const initialDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      initialDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.VERIFIED
+    );
+
+    await buildService().handleUserReport(member, { id: reporterId } as User, 'new report');
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(2);
+    expect(verificationEvents.map((event) => event.status).sort()).toEqual([
+      VerificationStatus.PENDING,
+      VerificationStatus.VERIFIED,
+    ]);
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a new pending case when a manual flag follows a resolved case', async () => {
+    const guildId = 'guild-4d';
+    const userId = 'user-4d';
+    const moderatorId = 'admin-3';
+    const member = buildMember(guildId, userId);
+
+    const initialDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1.0,
+      reasons: ['Initial report'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      initialDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.BANNED
+    );
+
+    await buildService().handleManualFlag(member, { id: moderatorId } as User, 'new admin flag');
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(2);
+    expect(verificationEvents.map((event) => event.status).sort()).toEqual([
+      VerificationStatus.BANNED,
+      VerificationStatus.PENDING,
+    ]);
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
   });
 
   it('reopens verification and re-restricts the user', async () => {

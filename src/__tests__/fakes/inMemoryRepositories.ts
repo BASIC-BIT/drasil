@@ -74,6 +74,7 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
       thread_id: data.thread_id ?? null,
       message_id: data.message_id ?? null,
       channel_id: data.channel_id ?? null,
+      latest_verification_event_id: data.latest_verification_event_id ?? null,
       metadata: data.metadata ?? {},
     };
 
@@ -130,6 +131,23 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
   async findById(id: string): Promise<DetectionEvent | null> {
     const event = this.events.find((item) => item.id === id);
     return event ? { ...event } : null;
+  }
+
+  async linkToVerificationEvent(
+    detectionEventId: string,
+    verificationEventId: string
+  ): Promise<DetectionEvent | null> {
+    const eventIndex = this.events.findIndex((item) => item.id === detectionEventId);
+    if (eventIndex === -1) {
+      return null;
+    }
+
+    const updated = {
+      ...this.events[eventIndex],
+      latest_verification_event_id: verificationEventId,
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
   }
 }
 
