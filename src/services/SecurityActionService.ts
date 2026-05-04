@@ -273,6 +273,16 @@ export class SecurityActionService implements ISecurityActionService {
       VerificationStatus.PENDING
     );
 
+    const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
+      detectionEventId,
+      newVerificationEvent.id
+    );
+    if (!linkedDetectionEvent) {
+      throw new Error(
+        `Failed to link detection event ${detectionEventId} to verification event ${newVerificationEvent.id}`
+      );
+    }
+
     const restricted = await this.userModerationService.restrictUser(member);
     if (!restricted) {
       throw new Error(`Failed to restrict user ${member.user.tag}`);

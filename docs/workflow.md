@@ -17,7 +17,8 @@ events, admin actions, and Discord surfaces.
 4. `SecurityActionService`:
    - Ensures `server`, `user`, and `server_member` records exist.
    - Ensures a `detection_event` record exists (creates one if needed).
-   - If an active case exists, updates the admin notification only.
+   - If an active case exists, links the detection event to that case and
+     updates the admin notification.
    - Otherwise creates a `verification_event` case (PENDING), restricts the user,
      creates a verification thread, and upserts the admin notification.
 

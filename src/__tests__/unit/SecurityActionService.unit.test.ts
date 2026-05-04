@@ -132,6 +132,7 @@ describe('SecurityActionService (unit)', () => {
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
     expect(verificationEvents[0].notification_message_id).toBe('notif-1');
+    expect(detectionEvents[0].latest_verification_event_id).toBe(verificationEvents[0].id);
 
     expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
@@ -152,7 +153,7 @@ describe('SecurityActionService (unit)', () => {
       detected_at: new Date(),
     });
 
-    await verificationEventRepository.createFromDetection(
+    const activeCase = await verificationEventRepository.createFromDetection(
       detectionEvent.id,
       guildId,
       userId,
@@ -165,7 +166,6 @@ describe('SecurityActionService (unit)', () => {
       reasons: ['Follow-up detection'],
       triggerSource: DetectionType.SUSPICIOUS_CONTENT,
       triggerContent: 'suspicious follow-up',
-      detectionEventId: detectionEvent.id,
     };
 
     const service = new SecurityActionService(
@@ -188,6 +188,12 @@ describe('SecurityActionService (unit)', () => {
       guildId
     );
     expect(verificationEvents).toHaveLength(1);
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents).toHaveLength(2);
+    const followUpDetection = detectionEvents.find((event) => event.id !== detectionEvent.id);
+    expect(followUpDetection?.latest_verification_event_id).toBe(activeCase.id);
+
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);

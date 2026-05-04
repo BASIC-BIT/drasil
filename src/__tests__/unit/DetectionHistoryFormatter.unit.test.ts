@@ -15,6 +15,7 @@ describe('DetectionHistoryFormatter (unit)', () => {
         thread_id: null,
         message_id: null,
         channel_id: null,
+        latest_verification_event_id: null,
         metadata: {},
       },
       {
@@ -28,6 +29,7 @@ describe('DetectionHistoryFormatter (unit)', () => {
         thread_id: null,
         message_id: 'msg-1',
         channel_id: 'chan-1',
+        latest_verification_event_id: null,
         metadata: { content: 'free discord nitro' },
       },
     ];
