@@ -55,6 +55,15 @@ import {
   SETUP_VERIFICATION_MODAL_ID,
   SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
 } from '../constants/setupVerificationWizard';
+import {
+  DETECTION_RESPONSE_MODE_SETTING_KEY,
+  DETECTION_RESPONSE_MODES,
+  OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY,
+  OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY,
+  OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES_SETTING_KEY,
+  getDetectionResponseSettings,
+  isDetectionResponseMode,
+} from '../utils/detectionResponseSettings';
 import 'reflect-metadata';
 
 // Load environment variables
@@ -214,6 +223,77 @@ export class CommandHandler implements ICommandHandler {
             )
             .addSubcommand((subcommand) =>
               subcommand.setName('reset').setDescription('Reset all heuristic settings to defaults')
+            )
+        )
+        .addSubcommandGroup((group) =>
+          group
+            .setName('detection')
+            .setDescription('Manage automatic detection response policy')
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('view')
+                .setDescription('View the current detection response policy')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('set-mode')
+                .setDescription('Set how automatic detections are handled')
+                .addStringOption((option) =>
+                  option
+                    .setName('mode')
+                    .setDescription('off, record_only, notify_only, open_case, or restrict')
+                    .setRequired(true)
+                    .addChoices(
+                      { name: 'Off', value: 'off' },
+                      { name: 'Record only', value: 'record_only' },
+                      { name: 'Notify only', value: 'notify_only' },
+                      { name: 'Open case', value: 'open_case' },
+                      { name: 'Restrict pending review', value: 'restrict' }
+                    )
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('set-notification-channel')
+                .setDescription('Set the observe-only notification channel')
+                .addChannelOption((option) =>
+                  option
+                    .setName('channel')
+                    .setDescription('Channel for notify-only detection alerts')
+                    .addChannelTypes(ChannelType.GuildText)
+                    .setRequired(true)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('clear-notification-channel')
+                .setDescription('Use the admin channel for observe-only detection alerts')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('set-notification-threshold')
+                .setDescription('Set minimum confidence for observe-only notifications')
+                .addIntegerOption((option) =>
+                  option
+                    .setName('value')
+                    .setDescription('Minimum confidence percentage (0-100)')
+                    .setRequired(true)
+                    .setMinValue(0)
+                    .setMaxValue(100)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('set-notification-window')
+                .setDescription('Set how long repeated detections update one alert')
+                .addIntegerOption((option) =>
+                  option
+                    .setName('minutes')
+                    .setDescription('Notification coalescing window in minutes (1-1440)')
+                    .setRequired(true)
+                    .setMinValue(1)
+                    .setMaxValue(1440)
+                )
             )
         )
         .addSubcommandGroup((group) =>
@@ -702,6 +782,11 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    if (subcommandGroup === 'detection') {
+      await this.handleDetectionConfigCommand(interaction, guild.id);
+      return;
+    }
+
     if (subcommandGroup === 'verification') {
       await this.handleVerificationConfigCommand(interaction, guild.id);
       return;
@@ -759,6 +844,19 @@ export class CommandHandler implements ICommandHandler {
       `Threshold: \`${settings.messageThreshold}\` messages`,
       `Timeframe: \`${timeframeSeconds}\` seconds`,
       `Keywords (${settings.suspiciousKeywords.length}): ${this.formatKeywordSummary(settings.suspiciousKeywords)}`,
+    ].join('\n');
+  }
+
+  private formatDetectionResponseSettings(
+    guildId: string,
+    settings: ReturnType<typeof getDetectionResponseSettings>
+  ): string {
+    return [
+      `Mode: \`${settings.mode}\``,
+      `Observed notification channel: ${settings.observedNotificationChannelId ? `<#${settings.observedNotificationChannelId}>` : '`admin_channel_id` fallback'}`,
+      `Observed notification threshold: \`${settings.observedMinConfidenceThreshold}%\``,
+      `Observed notification window: \`${settings.observedNotificationWindowMinutes} minutes\``,
+      `Guild ID: \`${guildId}\``,
     ].join('\n');
   }
 
@@ -827,6 +925,133 @@ export class CommandHandler implements ICommandHandler {
       `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
       `Message limit: \`${settings.messageLimit}\``,
     ].join('\n');
+  }
+
+  private async handleDetectionConfigCommand(
+    interaction: ChatInputCommandInteraction,
+    guildId: string
+  ): Promise<void> {
+    const subcommand = interaction.options.getSubcommand(true);
+
+    try {
+      switch (subcommand) {
+        case 'view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const settings = getDetectionResponseSettings(serverConfig.settings);
+          await interaction.reply({
+            content:
+              'Current automatic detection response policy:\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-mode': {
+          const mode = interaction.options.getString('mode', true);
+          if (!isDetectionResponseMode(mode)) {
+            await interaction.reply({
+              content: `Unsupported detection response mode. Choose one of: ${DETECTION_RESPONSE_MODES.map((value) => `\`${value}\``).join(', ')}`,
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [DETECTION_RESPONSE_MODE_SETTING_KEY]: mode,
+            auto_restrict: mode === 'restrict',
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated automatic detection response policy.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-notification-channel': {
+          const channel = interaction.options.getChannel('channel', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY]: channel.id,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated observe-only notification channel.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'clear-notification-channel': {
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY]: null,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Reset observe-only notifications to use the admin channel.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-notification-threshold': {
+          const value = interaction.options.getInteger('value', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY]: value,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated observe-only notification threshold.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-notification-window': {
+          const minutes = interaction.options.getInteger('minutes', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES_SETTING_KEY]: minutes,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated observe-only notification window.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        default:
+          await interaction.reply({
+            content: 'Unsupported detection subcommand.',
+            flags: MessageFlags.Ephemeral,
+          });
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'An error occurred while processing detection settings.';
+      await interaction.reply({
+        content: `Failed to process detection settings: ${errorMessage}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   }
 
   private async handleVerificationConfigCommand(

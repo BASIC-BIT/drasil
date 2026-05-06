@@ -128,7 +128,28 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
   - result is admin-facing only
   - repeated replies update the same analysis area rather than creating a second notification
 
-### 9. Server-context prompt flow
+### 9. Observe-only detection notification flow
+
+- Set detection mode with `/config detection set-mode mode:notify_only`.
+- Confirm settings with `/config detection view`.
+- Trigger a suspicious automatic detection from a safe test account.
+- Expected result:
+  - no restricted role is assigned
+  - no verification event/case is created
+  - a `detection_event` is recorded
+  - an admin-channel `Suspicious Activity Observed` embed is posted
+  - the embed says no automatic restriction was applied
+
+### 10. Observe-only notification coalescing
+
+- Keep detection mode set to `notify_only`.
+- Set the window with `/config detection set-notification-window minutes:60`.
+- Trigger two suspicious automatic detections for the same safe test account.
+- Expected result:
+  - the second detection updates the recent observed notification
+  - the second detection does not send a second role ping inside the window
+
+### 11. Server-context prompt flow
 
 - Set `server-about`, `verification-context`, and `expected-topics` in `/config verification context-set`.
 - Preview them with `/config verification context-view`.

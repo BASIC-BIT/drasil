@@ -38,6 +38,10 @@ export interface ServerSettings {
   expected_topics?: string[]; // Topics, keywords, or links expected from legitimate users
   verification_ai_thread_analysis_enabled?: boolean; // Whether to analyze replies in verification threads
   verification_ai_thread_analysis_message_limit?: number; // Max flagged-user thread messages to analyze
+  detection_response_mode?: 'off' | 'record_only' | 'notify_only' | 'open_case' | 'restrict';
+  observed_detection_notification_channel_id?: string | null;
+  observed_detection_min_confidence_threshold?: number;
+  observed_detection_notification_window_minutes?: number;
 }
 
 /**

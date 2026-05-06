@@ -2,7 +2,7 @@ import { Client, Message, GuildMember, Interaction, Guild, MessageFlags } from '
 import * as dotenv from 'dotenv';
 import { injectable, inject } from 'inversify';
 import { UserProfileData } from '../services/GPTService';
-import { IDetectionOrchestrator } from '../services/DetectionOrchestrator';
+import { DetectionResult, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { INotificationManager } from '../services/NotificationManager';
 import { IConfigService } from '../config/ConfigService';
 import { globalConfig } from '../config/GlobalConfig';
@@ -11,6 +11,10 @@ import { TYPES } from '../di/symbols';
 import { IInteractionHandler } from './InteractionHandler';
 import { ICommandHandler } from './CommandHandler';
 import { IVerificationThreadAnalysisService } from '../services/VerificationThreadAnalysisService';
+import {
+  DetectionResponseSettings,
+  getDetectionResponseSettings,
+} from '../utils/detectionResponseSettings';
 
 // Load environment variables
 dotenv.config();
@@ -141,6 +145,15 @@ export class EventHandler implements IEventHandler {
         this.warmServerConfigCache(serverId);
       }
 
+      const serverConfig = await this.configService.getServerConfig(serverId);
+      const responseSettings = getDetectionResponseSettings(serverConfig.settings);
+      if (responseSettings.mode === 'off') {
+        console.log(
+          `Automatic detection is disabled for guild ${serverId}; skipping message scan.`
+        );
+        return;
+      }
+
       // Get user profile data for detection context
       const profileData = this.extractUserProfileData(message.member);
 
@@ -152,13 +165,14 @@ export class EventHandler implements IEventHandler {
         profileData
       );
 
-      if (detectionResult.label === 'SUSPICIOUS') {
-        await this.securityActionService.handleSuspiciousMessage(
-          message.member,
-          detectionResult,
-          message
-        );
-      }
+      await this.handleAutomaticDetection(
+        message.member,
+        detectionResult,
+        responseSettings,
+        serverConfig.settings.min_confidence_threshold ??
+          globalConfig.getSettings().defaultServerSettings.minConfidenceThreshold,
+        message
+      );
     } catch (error) {
       console.error('Error detecting spam:', error);
       console.error(
@@ -204,11 +218,116 @@ export class EventHandler implements IEventHandler {
     await this.configInitializePromise;
   }
 
+  private async notifyObservedDetectionIfEligible(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    responseSettings: DetectionResponseSettings,
+    sourceMessage?: Message
+  ): Promise<void> {
+    const confidencePercent = detectionResult.confidence * 100;
+    if (confidencePercent < responseSettings.observedMinConfidenceThreshold) {
+      console.log(
+        `Detection confidence ${confidencePercent.toFixed(2)}% is below observed notification threshold ${responseSettings.observedMinConfidenceThreshold}% for guild ${member.guild.id}; recording only.`
+      );
+      return;
+    }
+
+    await this.notificationManager.upsertObservedDetectionNotification(
+      member,
+      detectionResult,
+      sourceMessage
+    );
+  }
+
+  private async handleAutomaticDetection(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    responseSettings: DetectionResponseSettings,
+    actionThreshold: number,
+    sourceMessage?: Message
+  ): Promise<void> {
+    if (detectionResult.label !== 'SUSPICIOUS') {
+      return;
+    }
+
+    const confidencePercent = detectionResult.confidence * 100;
+    switch (responseSettings.mode) {
+      case 'record_only':
+        console.log(
+          `Recorded suspicious detection for ${member.user.tag}; response mode is record_only.`
+        );
+        return;
+
+      case 'notify_only':
+        await this.notifyObservedDetectionIfEligible(
+          member,
+          detectionResult,
+          responseSettings,
+          sourceMessage
+        );
+        return;
+
+      case 'open_case':
+        if (confidencePercent < actionThreshold) {
+          await this.notifyObservedDetectionIfEligible(
+            member,
+            detectionResult,
+            responseSettings,
+            sourceMessage
+          );
+          return;
+        }
+        if (sourceMessage) {
+          await this.securityActionService.openCaseForSuspiciousMessage(
+            member,
+            detectionResult,
+            sourceMessage
+          );
+        } else {
+          await this.securityActionService.openCaseForSuspiciousJoin(member, detectionResult);
+        }
+        return;
+
+      case 'restrict':
+        if (confidencePercent < actionThreshold) {
+          await this.notifyObservedDetectionIfEligible(
+            member,
+            detectionResult,
+            responseSettings,
+            sourceMessage
+          );
+          return;
+        }
+        if (sourceMessage) {
+          await this.securityActionService.handleSuspiciousMessage(
+            member,
+            detectionResult,
+            sourceMessage
+          );
+        } else {
+          await this.securityActionService.handleSuspiciousJoin(member, detectionResult);
+        }
+        return;
+
+      case 'off':
+        return;
+    }
+  }
+
   private async handleGuildMemberAdd(member: GuildMember): Promise<void> {
     try {
       console.log(`New member joined: ${member.user.tag} (${member.id})`);
 
       await this.ensureConfigInitialized();
+
+      const serverConfig = await this.configService.getServerConfig(member.guild.id);
+      const responseSettings = getDetectionResponseSettings(serverConfig.settings);
+      if (responseSettings.mode === 'off') {
+        console.log(
+          `Automatic detection is disabled for guild ${member.guild.id}; skipping join scan.`
+        );
+        return;
+      }
 
       // Extract profile data
       const profileData = this.extractUserProfileData(member);
@@ -220,9 +339,13 @@ export class EventHandler implements IEventHandler {
         profileData
       );
 
-      if (detectionResult.label === 'SUSPICIOUS') {
-        await this.securityActionService.handleSuspiciousJoin(member, detectionResult);
-      }
+      await this.handleAutomaticDetection(
+        member,
+        detectionResult,
+        responseSettings,
+        serverConfig.settings.min_confidence_threshold ??
+          globalConfig.getSettings().defaultServerSettings.minConfidenceThreshold
+      );
     } catch (error) {
       console.error('Error handling new member:', error);
     }
