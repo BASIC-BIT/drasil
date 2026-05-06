@@ -260,7 +260,11 @@ export class NotificationManager implements INotificationManager {
           .fetch(existingNotification.observed_notification_message_id)
           .catch(() => null);
         if (existingMessage) {
-          notificationMessage = await existingMessage.edit({ embeds: [embed], components: [] });
+          notificationMessage = await existingMessage.edit({
+            allowedMentions: { parse: [] },
+            embeds: [embed],
+            components: [],
+          });
         }
       }
 
@@ -476,10 +480,12 @@ export class NotificationManager implements INotificationManager {
     responseSettings: ReturnType<typeof getDetectionResponseSettings>
   ): Promise<TextChannel | null> {
     if (responseSettings.observedNotificationChannelId) {
-      const channel = await this.client.channels.fetch(
-        responseSettings.observedNotificationChannelId
-      );
-      return channel && channel.type === ChannelType.GuildText ? channel : null;
+      const channel = await this.client.channels
+        .fetch(responseSettings.observedNotificationChannelId)
+        .catch(() => null);
+      return channel && channel.type === ChannelType.GuildText && channel.guildId === guildId
+        ? channel
+        : null;
     }
 
     return (await this.configService.getAdminChannel(guildId)) ?? null;
