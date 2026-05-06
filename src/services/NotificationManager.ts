@@ -226,15 +226,18 @@ export class NotificationManager implements INotificationManager {
     detectionResult: DetectionResult,
     sourceMessage?: Message
   ): Promise<Message | null> {
-    const notificationChannel = await this.getObservedDetectionNotificationChannel(member.guild.id);
-    if (!notificationChannel) {
-      console.error('No observed detection notification channel configured');
-      return null;
-    }
-
     try {
       const serverConfig = await this.configService.getServerConfig(member.guild.id);
       const responseSettings = getDetectionResponseSettings(serverConfig.settings);
+      const notificationChannel = await this.getObservedDetectionNotificationChannel(
+        member.guild.id,
+        responseSettings
+      );
+      if (!notificationChannel) {
+        console.error('No observed detection notification channel configured');
+        return null;
+      }
+
       const detectionEvents = await this.detectionEventsRepository.findByServerAndUser(
         member.guild.id,
         member.id
@@ -469,10 +472,9 @@ export class NotificationManager implements INotificationManager {
   }
 
   private async getObservedDetectionNotificationChannel(
-    guildId: string
+    guildId: string,
+    responseSettings: ReturnType<typeof getDetectionResponseSettings>
   ): Promise<TextChannel | null> {
-    const serverConfig = await this.configService.getServerConfig(guildId);
-    const responseSettings = getDetectionResponseSettings(serverConfig.settings);
     if (responseSettings.observedNotificationChannelId) {
       const channel = await this.client.channels.fetch(
         responseSettings.observedNotificationChannelId
@@ -555,7 +557,12 @@ export class NotificationManager implements INotificationManager {
           inline: false,
         },
         { name: 'Detection Confidence', value: `${confidencePercent}%`, inline: true },
-        { name: 'Trigger', value: this.formatDetectionTrigger(detectionResult, sourceMessage) },
+        {
+          name: 'Trigger',
+          value: this.truncateEmbedFieldValue(
+            this.formatDetectionTrigger(detectionResult, sourceMessage)
+          ),
+        },
         {
           name: 'Reasons',
           value: this.truncateEmbedFieldValue(reasonsFormatted || 'No specific reason provided'),

@@ -990,11 +990,8 @@ export class CommandHandler implements ICommandHandler {
         }
 
         case 'clear-notification-channel': {
-          const serverConfig = await this.configService.getServerConfig(guildId);
-          const updatedSettings = { ...serverConfig.settings };
-          delete updatedSettings[OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY];
-          const updated = await this.configService.updateServerConfig(guildId, {
-            settings: updatedSettings,
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY]: null,
           });
           const settings = getDetectionResponseSettings(updated.settings);
           await interaction.reply({
