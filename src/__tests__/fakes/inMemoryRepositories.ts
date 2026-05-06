@@ -21,6 +21,10 @@ import {
   DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_ENABLED,
   DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT,
 } from '../../utils/verificationThreadAnalysisSettings';
+import {
+  DEFAULT_OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD,
+  DEFAULT_OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES,
+} from '../../utils/detectionResponseSettings';
 
 const toTimestamp = (value: string | Date | null | undefined): number => {
   if (!value) {
@@ -41,6 +45,10 @@ const baseSettings: ServerSettings = {
   verification_ai_thread_analysis_enabled: DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_ENABLED,
   verification_ai_thread_analysis_message_limit:
     DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT,
+  detection_response_mode: 'restrict',
+  observed_detection_min_confidence_threshold: DEFAULT_OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD,
+  observed_detection_notification_window_minutes:
+    DEFAULT_OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES,
 };
 
 const defaultHeuristicThreshold = globalSettings.defaultServerSettings.messageThreshold;
@@ -145,6 +153,23 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     const updated = {
       ...this.events[eventIndex],
       latest_verification_event_id: verificationEventId,
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
+  async updateMetadata(
+    detectionEventId: string,
+    metadata: Record<string, unknown>
+  ): Promise<DetectionEvent | null> {
+    const eventIndex = this.events.findIndex((item) => item.id === detectionEventId);
+    if (eventIndex === -1) {
+      return null;
+    }
+
+    const updated = {
+      ...this.events[eventIndex],
+      metadata,
     };
     this.events[eventIndex] = updated;
     return { ...updated };

@@ -58,6 +58,9 @@ describe('SecurityActionService (unit)', () => {
       handleHistoryButtonClick: jest.fn().mockResolvedValue(true),
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+      upsertObservedDetectionNotification: jest
+        .fn()
+        .mockResolvedValue({ id: 'observe-1' } as Message),
     };
     threadManager = {
       createVerificationThread: jest
@@ -196,6 +199,44 @@ describe('SecurityActionService (unit)', () => {
 
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a case without restricting when requested by detection policy', async () => {
+    const guildId = 'guild-open-case';
+    const userId = 'user-open-case';
+    const member = buildMember(guildId, userId);
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+    };
+
+    const service = new SecurityActionService(
+      notificationManager,
+      detectionEventsRepository,
+      serverMemberRepository,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      adminActionService,
+      threadManager,
+      userModerationService,
+      {} as Client
+    );
+
+    await service.openCaseForSuspiciousMessage(member, detectionResult);
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 

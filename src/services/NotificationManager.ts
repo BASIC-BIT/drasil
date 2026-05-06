@@ -15,6 +15,7 @@ import {
   GuildChannelCreateOptions,
   ButtonInteraction,
   MessageFlags,
+  TextChannel,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
@@ -29,6 +30,7 @@ import {
 } from '../repositories/types';
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
 import type { VerificationThreadAnalysisResult } from './GPTService';
+import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 
 export interface NotificationButton {
   id: string;
@@ -99,6 +101,12 @@ export interface INotificationManager {
     analysis: VerificationThreadAnalysisResult,
     analyzedMessageCount: number
   ): Promise<boolean>;
+
+  upsertObservedDetectionNotification(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<Message | null>;
 }
 
 interface ThreadAnalysisMetadata {
@@ -109,6 +117,11 @@ interface ThreadAnalysisMetadata {
     summary: string;
     analyzedMessageCount: number;
   };
+}
+
+interface ObservedDetectionMetadata {
+  observed_notification_message_id?: string;
+  observed_notification_last_notified_at?: string;
 }
 
 /**
@@ -204,6 +217,82 @@ export class NotificationManager implements INotificationManager {
       });
     } catch (error) {
       console.error('Failed to upsert suspicious user notification:', error);
+      return null;
+    }
+  }
+
+  public async upsertObservedDetectionNotification(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<Message | null> {
+    const notificationChannel = await this.getObservedDetectionNotificationChannel(member.guild.id);
+    if (!notificationChannel) {
+      console.error('No observed detection notification channel configured');
+      return null;
+    }
+
+    try {
+      const serverConfig = await this.configService.getServerConfig(member.guild.id);
+      const responseSettings = getDetectionResponseSettings(serverConfig.settings);
+      const detectionEvents = await this.detectionEventsRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
+
+      const existingNotification = this.findRecentObservedDetectionNotification(
+        detectionEvents,
+        responseSettings.observedNotificationWindowMinutes
+      );
+      const embed = this.createObservedDetectionEmbed(
+        member,
+        detectionResult,
+        detectionEvents,
+        sourceMessage
+      );
+
+      let notificationMessage: Message | null = null;
+      if (existingNotification?.observed_notification_message_id) {
+        const existingMessage = await notificationChannel.messages
+          .fetch(existingNotification.observed_notification_message_id)
+          .catch(() => null);
+        if (existingMessage) {
+          notificationMessage = await existingMessage.edit({ embeds: [embed], components: [] });
+        }
+      }
+
+      if (!notificationMessage) {
+        const adminNotificationRoleId = serverConfig.admin_notification_role_id;
+        notificationMessage = await notificationChannel.send({
+          content: adminNotificationRoleId ? `<@&${adminNotificationRoleId}>` : undefined,
+          allowedMentions: adminNotificationRoleId
+            ? {
+                parse: [],
+                roles: [adminNotificationRoleId],
+                users: [],
+                repliedUser: false,
+              }
+            : undefined,
+          embeds: [embed],
+          components: [],
+        });
+      }
+
+      if (detectionResult.detectionEventId) {
+        const currentDetection = detectionEvents.find(
+          (event) => event.id === detectionResult.detectionEventId
+        );
+        const metadata = this.metadataToRecord(currentDetection?.metadata);
+        await this.detectionEventsRepository.updateMetadata(detectionResult.detectionEventId, {
+          ...metadata,
+          observed_notification_message_id: notificationMessage.id,
+          observed_notification_last_notified_at: new Date().toISOString(),
+        });
+      }
+
+      return notificationMessage;
+    } catch (error) {
+      console.error('Failed to upsert observed detection notification:', error);
       return null;
     }
   }
@@ -346,6 +435,142 @@ export class NotificationManager implements INotificationManager {
     }
 
     return `${value.slice(0, maxLength - 3)}...`;
+  }
+
+  private metadataToRecord(metadata: DetectionEvent['metadata']): Record<string, unknown> {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return {};
+    }
+
+    return { ...metadata } as Record<string, unknown>;
+  }
+
+  private findRecentObservedDetectionNotification(
+    detectionEvents: DetectionEvent[],
+    windowMinutes: number
+  ): ObservedDetectionMetadata | null {
+    const cutoff = Date.now() - windowMinutes * 60 * 1000;
+
+    for (const event of detectionEvents) {
+      const metadata = this.metadataToRecord(event.metadata) as ObservedDetectionMetadata;
+      if (!metadata.observed_notification_message_id) {
+        continue;
+      }
+
+      const lastNotifiedAt = metadata.observed_notification_last_notified_at
+        ? new Date(metadata.observed_notification_last_notified_at).getTime()
+        : 0;
+      if (lastNotifiedAt >= cutoff) {
+        return metadata;
+      }
+    }
+
+    return null;
+  }
+
+  private async getObservedDetectionNotificationChannel(
+    guildId: string
+  ): Promise<TextChannel | null> {
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    const responseSettings = getDetectionResponseSettings(serverConfig.settings);
+    if (responseSettings.observedNotificationChannelId) {
+      const channel = await this.client.channels.fetch(
+        responseSettings.observedNotificationChannelId
+      );
+      return channel && channel.type === ChannelType.GuildText ? channel : null;
+    }
+
+    return (await this.configService.getAdminChannel(guildId)) ?? null;
+  }
+
+  private formatDetectionTrigger(
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): string {
+    if (detectionResult.triggerSource === DetectionType.SUSPICIOUS_CONTENT) {
+      const safeContent = detectionResult.triggerContent
+        ? `\`${detectionResult.triggerContent}\``
+        : '`Message content unavailable`';
+      return sourceMessage
+        ? `[Observed message](${sourceMessage.url}): ${safeContent}`
+        : `Observed message: ${safeContent}`;
+    }
+
+    if (detectionResult.triggerSource === DetectionType.NEW_ACCOUNT) {
+      return 'Observed upon joining server';
+    }
+
+    if (detectionResult.triggerSource === DetectionType.USER_REPORT) {
+      return `Observed via user report: \`${detectionResult.triggerContent || 'No reason provided'}\``;
+    }
+
+    if (detectionResult.triggerSource === DetectionType.GPT_ANALYSIS) {
+      return `Observed via manual review: \`${detectionResult.triggerContent || 'Manual flag'}\``;
+    }
+
+    return 'Observed suspicious activity';
+  }
+
+  private createObservedDetectionEmbed(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    detectionEvents: DetectionEvent[],
+    sourceMessage?: Message
+  ): EmbedBuilder {
+    const accountCreatedAt = new Date(member.user.createdTimestamp);
+    const accountCreatedTimestamp = Math.floor(accountCreatedAt.getTime() / 1000);
+    const joinedServerTimestamp = member.joinedAt
+      ? Math.floor(member.joinedAt.getTime() / 1000)
+      : null;
+    const confidencePercent = Math.round(detectionResult.confidence * 100);
+    const reasonsFormatted = detectionResult.reasons.map((reason) => `• ${reason}`).join('\n');
+    const recentEvents = detectionEvents.slice(0, 5);
+    const detectionHistory = recentEvents
+      .map((event) => {
+        const timestamp = Math.floor(new Date(event.detected_at).getTime() / 1000);
+        return `• <t:${timestamp}:R>: ${event.detection_type} (${Math.round(event.confidence * 100)}% confidence)`;
+      })
+      .join('\n');
+
+    const embed = new EmbedBuilder()
+      .setColor(0xffc107)
+      .setTitle('Suspicious Activity Observed')
+      .setDescription(
+        `Drasil observed suspicious activity from <@${member.id}>. No automatic restriction was applied.`
+      )
+      .setThumbnail(member.user.displayAvatarURL())
+      .addFields(
+        { name: 'Username', value: member.user.tag, inline: true },
+        { name: 'User ID', value: member.id, inline: true },
+        {
+          name: 'Account Created',
+          value: `<t:${accountCreatedTimestamp}:F> (<t:${accountCreatedTimestamp}:R>)`,
+          inline: false,
+        },
+        {
+          name: 'Joined Server',
+          value: joinedServerTimestamp
+            ? `<t:${joinedServerTimestamp}:F> (<t:${joinedServerTimestamp}:R>)`
+            : 'Unknown',
+          inline: false,
+        },
+        { name: 'Detection Confidence', value: `${confidencePercent}%`, inline: true },
+        { name: 'Trigger', value: this.formatDetectionTrigger(detectionResult, sourceMessage) },
+        {
+          name: 'Reasons',
+          value: this.truncateEmbedFieldValue(reasonsFormatted || 'No specific reason provided'),
+        }
+      )
+      .setTimestamp();
+
+    if (detectionHistory) {
+      embed.addFields({
+        name: 'Recent Detection History',
+        value: this.truncateEmbedFieldValue(detectionHistory),
+      });
+    }
+
+    return embed;
   }
 
   private async getMessageForVerificationEvent(

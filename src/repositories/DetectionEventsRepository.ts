@@ -20,6 +20,10 @@ export interface IDetectionEventsRepository {
     detectionEventId: string,
     verificationEventId: string
   ): Promise<DetectionEvent | null>;
+  updateMetadata(
+    detectionEventId: string,
+    metadata: Record<string, unknown>
+  ): Promise<DetectionEvent | null>;
   cleanupOldEvents(retentionDays: number): Promise<number>;
   findById(id: string): Promise<DetectionEvent | null>; // Add findById for consistency
 }
@@ -188,6 +192,27 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
         return null;
       }
       this.handleError(error, 'linkToVerificationEvent');
+    }
+  }
+
+  async updateMetadata(
+    detectionEventId: string,
+    metadata: Record<string, unknown>
+  ): Promise<DetectionEvent | null> {
+    try {
+      const updatedEvent = await this.prisma.detection_events.update({
+        where: { id: detectionEventId },
+        data: { metadata: metadata as Prisma.InputJsonValue },
+      });
+      return updatedEvent as DetectionEvent | null;
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        console.warn(
+          `Attempted to update metadata for non-existent detection event: ${detectionEventId}`
+        );
+        return null;
+      }
+      this.handleError(error, 'updateMetadata');
     }
   }
 

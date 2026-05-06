@@ -162,6 +162,112 @@ describe('NotificationManager (unit)', () => {
     });
   });
 
+  it('sends an observe-only detection notification without action buttons', async () => {
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      admin_notification_role_id: 'role-1',
+      settings: {
+        detection_response_mode: 'notify_only',
+        observed_detection_notification_window_minutes: 60,
+      },
+    } as any);
+
+    const detectionEvent = await detectionRepository.create({
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+    const member = buildMember('guild-1', 'user-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+      detectionEventId: detectionEvent.id,
+    };
+    const sentMessage: MockMessage = { id: 'message-1', edit: jest.fn() };
+    adminChannel.send.mockResolvedValue(sentMessage);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await manager.upsertObservedDetectionNotification(member, detectionResult);
+
+    expect(adminChannel.send).toHaveBeenCalledTimes(1);
+    const sendArgs = adminChannel.send.mock.calls[0][0] as {
+      content?: string;
+      allowedMentions?: { roles?: string[] };
+      components: unknown[];
+      embeds: EmbedBuilder[];
+    };
+    expect(sendArgs.content).toBe('<@&role-1>');
+    expect(sendArgs.allowedMentions?.roles).toEqual(['role-1']);
+    expect(sendArgs.components).toEqual([]);
+    expect(sendArgs.embeds[0].data.title).toBe('Suspicious Activity Observed');
+
+    const updatedEvent = await detectionRepository.findById(detectionEvent.id);
+    expect(updatedEvent?.metadata).toMatchObject({
+      observed_notification_message_id: 'message-1',
+    });
+  });
+
+  it('edits a recent observe-only notification instead of sending another ping', async () => {
+    const now = new Date();
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      admin_notification_role_id: 'role-1',
+      settings: {
+        detection_response_mode: 'notify_only',
+        observed_detection_notification_window_minutes: 60,
+      },
+    } as any);
+
+    await detectionRepository.create({
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.9,
+      reasons: ['Previous suspicious content'],
+      detected_at: now,
+      metadata: {
+        observed_notification_message_id: 'message-1',
+        observed_notification_last_notified_at: now.toISOString(),
+      },
+    });
+    const currentEvent = await detectionRepository.create({
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.85,
+      reasons: ['Suspicious content'],
+      detected_at: now,
+    });
+    const existingMessage: MockMessage = {
+      id: 'message-1',
+      edit: jest.fn(),
+    };
+    existingMessage.edit.mockResolvedValue(existingMessage);
+    adminChannel.messages.fetch.mockResolvedValue(existingMessage as unknown as Message<true>);
+
+    const member = buildMember('guild-1', 'user-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.85,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+      detectionEventId: currentEvent.id,
+    };
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await manager.upsertObservedDetectionNotification(member, detectionResult);
+
+    expect(adminChannel.send).not.toHaveBeenCalled();
+    expect(adminChannel.messages.fetch).toHaveBeenCalledWith('message-1');
+    expect(existingMessage.edit).toHaveBeenCalledTimes(1);
+  });
+
   it('does not include a mention payload when editing an existing notification (even if role is configured)', async () => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       admin_notification_role_id: 'role-1',

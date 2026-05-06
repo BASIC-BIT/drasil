@@ -45,6 +45,17 @@ export interface ISecurityActionService {
    */
   handleSuspiciousJoin(member: GuildMember, detectionResult: DetectionResult): Promise<boolean>;
 
+  openCaseForSuspiciousMessage(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<boolean>;
+
+  openCaseForSuspiciousJoin(
+    member: GuildMember,
+    detectionResult: DetectionResult
+  ): Promise<boolean>;
+
   /**
    * Handle a manual flag initiated by an admin
    */
@@ -220,7 +231,8 @@ export class SecurityActionService implements ISecurityActionService {
   private async handleSuspiciousMember(
     member: GuildMember,
     detectionResult: DetectionResult,
-    sourceMessage?: Message
+    sourceMessage?: Message,
+    restrictUser = true
   ): Promise<boolean> {
     // Fail fast: we don't attempt retries or compensation yet.
     // TODO: Add retries/idempotency and partial failure handling if needed later.
@@ -283,9 +295,17 @@ export class SecurityActionService implements ISecurityActionService {
       );
     }
 
-    const restricted = await this.userModerationService.restrictUser(member);
-    if (!restricted) {
-      throw new Error(`Failed to restrict user ${member.user.tag}`);
+    if (restrictUser) {
+      const restricted = await this.userModerationService.restrictUser(member);
+      if (!restricted) {
+        throw new Error(`Failed to restrict user ${member.user.tag}`);
+      }
+    } else {
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        is_restricted: false,
+        verification_status: VerificationStatus.PENDING,
+        last_status_change: new Date(),
+      });
     }
 
     const thread = await this.threadManager.createVerificationThread(member, newVerificationEvent);
@@ -338,6 +358,35 @@ export class SecurityActionService implements ISecurityActionService {
       return await this.handleSuspiciousMember(member, detectionResult);
     } catch (error) {
       console.error(`Failed to handle suspicious join for ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
+  public async openCaseForSuspiciousMessage(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<boolean> {
+    try {
+      console.log(`Opening case without restriction for: ${member.user.tag} (${member.id})`);
+      console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
+      return await this.handleSuspiciousMember(member, detectionResult, sourceMessage, false);
+    } catch (error) {
+      console.error(`Failed to open case without restriction for ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
+  public async openCaseForSuspiciousJoin(
+    member: GuildMember,
+    detectionResult: DetectionResult
+  ): Promise<boolean> {
+    try {
+      console.log(`Opening join case without restriction for: ${member.user.tag} (${member.id})`);
+      console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
+      return await this.handleSuspiciousMember(member, detectionResult, undefined, false);
+    } catch (error) {
+      console.error(`Failed to open join case without restriction for ${member.user.tag}:`, error);
       throw error;
     }
   }

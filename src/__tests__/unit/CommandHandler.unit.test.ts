@@ -112,6 +112,29 @@ describe('CommandHandler (unit)', () => {
     );
   });
 
+  it('registers /config detection subcommands', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const configCommand = commands.find((c) => c.name === 'config');
+
+    const detectionGroup = configCommand.options.find(
+      (option: any) => option.type === 2 && option.name === 'detection'
+    );
+    expect(detectionGroup).toBeDefined();
+
+    const detectionSubcommands = detectionGroup.options.map((option: any) => option.name);
+    expect(detectionSubcommands).toEqual(
+      expect.arrayContaining([
+        'view',
+        'set-mode',
+        'set-notification-channel',
+        'clear-notification-channel',
+        'set-notification-threshold',
+        'set-notification-window',
+      ])
+    );
+  });
+
   it('registers /config verification prompt subcommands', () => {
     const { handler } = buildHandler();
     const commands = (handler as any).commands as any[];
@@ -369,6 +392,51 @@ describe('CommandHandler (unit)', () => {
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining('Updated heuristic threshold'),
       flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles /config detection set-mode', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        detection_response_mode: 'notify_only',
+        auto_restrict: false,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('detection'),
+        getSubcommand: jest.fn().mockReturnValue('set-mode'),
+        getString: jest.fn().mockReturnValue('notify_only'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      detection_response_mode: 'notify_only',
+      auto_restrict: false,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Updated automatic detection response policy'),
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
     });
   });
 

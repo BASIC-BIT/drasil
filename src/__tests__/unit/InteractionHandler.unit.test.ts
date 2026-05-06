@@ -76,6 +76,8 @@ describe('InteractionHandler (unit)', () => {
     securityActionService = {
       handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
       handleSuspiciousJoin: jest.fn().mockResolvedValue(true),
+      openCaseForSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      openCaseForSuspiciousJoin: jest.fn().mockResolvedValue(true),
       handleManualFlag: jest.fn().mockResolvedValue(true),
       handleUserReport: jest.fn().mockResolvedValue(true),
       reopenVerification: jest.fn().mockResolvedValue(true),
@@ -87,6 +89,7 @@ describe('InteractionHandler (unit)', () => {
       handleHistoryButtonClick: jest.fn().mockResolvedValue(true),
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+      upsertObservedDetectionNotification: jest.fn().mockResolvedValue(null),
     };
     configService = {
       initialize: jest.fn().mockResolvedValue(undefined),
