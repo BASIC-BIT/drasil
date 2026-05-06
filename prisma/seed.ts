@@ -11,12 +11,16 @@ async function main(): Promise<void> {
     restricted_role_id: '1354218905937121402',
     admin_channel_id: '1278730769572958238',
     verification_channel_id: '1355206974630793227',
-    admin_notification_role_id: '1278730769572958238',
+    admin_notification_role_id: null,
     // created_at handled by default
     // updated_at handled by default/update trigger
     settings: {
       // Prisma handles JSON automatically
-      auto_restrict: true,
+      auto_restrict: false,
+      detection_response_mode: 'notify_only',
+      observed_detection_notification_channel_id: '1278730769572958238',
+      observed_detection_min_confidence_threshold: 70,
+      observed_detection_notification_window_minutes: 60,
       use_gpt_on_join: true,
       message_threshold: 5,
       message_timeframe: 10,
