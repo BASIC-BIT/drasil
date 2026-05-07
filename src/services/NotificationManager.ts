@@ -576,6 +576,14 @@ export class NotificationManager implements INotificationManager {
       )
       .setTimestamp();
 
+    const aiDiagnosticFieldValue = this.formatGptDiagnosticFieldValue(detectionResult);
+    if (aiDiagnosticFieldValue) {
+      embed.addFields({
+        name: 'AI Analysis',
+        value: aiDiagnosticFieldValue,
+      });
+    }
+
     if (detectionHistory) {
       embed.addFields({
         name: 'Recent Detection History',
@@ -735,6 +743,15 @@ export class NotificationManager implements INotificationManager {
       )
       .setTimestamp();
 
+    const aiDiagnosticFieldValue = this.formatGptDiagnosticFieldValue(detectionResult);
+    if (aiDiagnosticFieldValue) {
+      embed.addFields({
+        name: 'AI Analysis',
+        value: aiDiagnosticFieldValue,
+        inline: false,
+      });
+    }
+
     // Add detection history if we have any
     if (detectionHistory) {
       embed.addFields({
@@ -781,6 +798,24 @@ export class NotificationManager implements INotificationManager {
       [
         `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
         `Analyzed responses: ${analysis.analyzedMessageCount}`,
+        `Summary: ${analysis.summary}`,
+      ].join('\n')
+    );
+  }
+
+  private formatGptDiagnosticFieldValue(detectionResult: DetectionResult): string | null {
+    const analysis = detectionResult.gptAnalysis;
+    if (!analysis) {
+      return null;
+    }
+
+    const confidencePercent = Math.round(analysis.confidence * 100);
+    const reasonCodes = analysis.reasonCodes.length ? analysis.reasonCodes.join(', ') : 'none';
+    return this.truncateEmbedFieldValue(
+      [
+        `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
+        `Primary signal: ${analysis.primarySignal}`,
+        `Reason codes: ${reasonCodes}`,
         `Summary: ${analysis.summary}`,
       ].join('\n')
     );

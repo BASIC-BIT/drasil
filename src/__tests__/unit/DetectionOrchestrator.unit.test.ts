@@ -1,6 +1,12 @@
 import { DetectionOrchestrator } from '../../services/DetectionOrchestrator';
 import { IHeuristicService } from '../../services/HeuristicService';
-import { IGPTService, UserProfileData } from '../../services/GPTService';
+import {
+  GPT_PROFILE_MODEL,
+  GPT_PROFILE_PROMPT_VERSION,
+  GPTProfileAnalysis,
+  IGPTService,
+  UserProfileData,
+} from '../../services/GPTService';
 import { DetectionType } from '../../repositories/types';
 import {
   InMemoryDetectionEventsRepository,
@@ -17,6 +23,20 @@ describe('DetectionOrchestrator (unit)', () => {
   let detectionEventsRepository: InMemoryDetectionEventsRepository;
   let serverRepository: InMemoryServerRepository;
   let userRepository: InMemoryUserRepository;
+
+  function makeGptAnalysis(overrides?: Partial<GPTProfileAnalysis>): GPTProfileAnalysis {
+    return {
+      result: 'OK',
+      confidence: 0.2,
+      reasons: ['AI analysis indicates user/message context is likely legitimate'],
+      reasonCodes: ['normal_context'],
+      primarySignal: 'none',
+      summary: 'Context looks normal.',
+      model: GPT_PROFILE_MODEL,
+      promptVersion: GPT_PROFILE_PROMPT_VERSION,
+      ...overrides,
+    };
+  }
 
   beforeEach(() => {
     heuristicService = {
@@ -84,11 +104,16 @@ describe('DetectionOrchestrator (unit)', () => {
 
   it('uses GPT for new accounts and returns suspicious when GPT flags it', async () => {
     heuristicService.analyzeMessage.mockReturnValue({ result: 'OK', reasons: [] });
-    gptService.analyzeProfile.mockResolvedValue({
-      result: 'SUSPICIOUS',
-      confidence: 0.9,
-      reasons: ['Suspicious profile'],
-    });
+    gptService.analyzeProfile.mockResolvedValue(
+      makeGptAnalysis({
+        result: 'SUSPICIOUS',
+        confidence: 0.9,
+        reasons: ['AI analysis flagged recent message context as suspicious'],
+        reasonCodes: ['suspicious_keyword'],
+        primarySignal: 'message_content',
+        summary: 'Recent message context matches common scam patterns.',
+      })
+    );
 
     const orchestrator = new DetectionOrchestrator(
       heuristicService,
@@ -113,6 +138,13 @@ describe('DetectionOrchestrator (unit)', () => {
 
     const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
     expect(events).toHaveLength(1);
+    expect(events[0].metadata).toMatchObject({
+      gpt: {
+        result: 'SUSPICIOUS',
+        primary_signal: 'message_content',
+        reason_codes: ['suspicious_keyword'],
+      },
+    });
   });
 
   it('skips GPT when recent high-confidence detections exist', async () => {
@@ -129,11 +161,13 @@ describe('DetectionOrchestrator (unit)', () => {
       result: 'SUSPICIOUS',
       reasons: ['Suspicious keywords'],
     });
-    gptService.analyzeProfile.mockResolvedValue({
-      result: 'OK',
-      confidence: 0.2,
-      reasons: ['GPT OK'],
-    });
+    gptService.analyzeProfile.mockResolvedValue(
+      makeGptAnalysis({
+        result: 'OK',
+        confidence: 0.2,
+        reasons: ['GPT OK'],
+      })
+    );
 
     const orchestrator = new DetectionOrchestrator(
       heuristicService,
@@ -166,11 +200,13 @@ describe('DetectionOrchestrator (unit)', () => {
   });
 
   it('does not create a detection event for an OK new join', async () => {
-    gptService.analyzeProfile.mockResolvedValue({
-      result: 'OK',
-      confidence: 0.2,
-      reasons: ['GPT OK'],
-    });
+    gptService.analyzeProfile.mockResolvedValue(
+      makeGptAnalysis({
+        result: 'OK',
+        confidence: 0.2,
+        reasons: ['GPT OK'],
+      })
+    );
 
     const orchestrator = new DetectionOrchestrator(
       heuristicService,
@@ -197,11 +233,16 @@ describe('DetectionOrchestrator (unit)', () => {
   });
 
   it('creates a detection event for a suspicious new join', async () => {
-    gptService.analyzeProfile.mockResolvedValue({
-      result: 'SUSPICIOUS',
-      confidence: 0.9,
-      reasons: ['Suspicious profile'],
-    });
+    gptService.analyzeProfile.mockResolvedValue(
+      makeGptAnalysis({
+        result: 'SUSPICIOUS',
+        confidence: 0.9,
+        reasons: ['AI analysis flagged user/message context as suspicious'],
+        reasonCodes: ['unusual_username'],
+        primarySignal: 'username',
+        summary: 'Username context looks suspicious.',
+      })
+    );
 
     const orchestrator = new DetectionOrchestrator(
       heuristicService,
@@ -226,6 +267,13 @@ describe('DetectionOrchestrator (unit)', () => {
     const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
     expect(events).toHaveLength(1);
     expect(events[0].detection_type).toBe(DetectionType.NEW_ACCOUNT);
-    expect(events[0].metadata).toMatchObject({ join: true });
+    expect(events[0].metadata).toMatchObject({
+      join: true,
+      gpt: {
+        result: 'SUSPICIOUS',
+        primary_signal: 'username',
+        reason_codes: ['unusual_username'],
+      },
+    });
   });
 });
