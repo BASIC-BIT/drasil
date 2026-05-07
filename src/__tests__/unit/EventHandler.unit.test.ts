@@ -101,6 +101,50 @@ describe('EventHandler (unit)', () => {
     expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
   });
 
+  it('runs automatic message detection for moderation members when exemption is disabled', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'free nitro',
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({
+        settings: {
+          automatic_detection_exempt_moderators: false,
+          detection_response_mode: 'notify_only',
+        },
+      }),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          automatic_detection_exempt_moderators: false,
+          detection_response_mode: 'notify_only',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const handler = buildHandler({ detectionOrchestrator, configService });
+
+    await (handler as any).handleMessage(
+      buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers))
+    );
+
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'free nitro',
+      expect.objectContaining({
+        isAutomaticDetectionExempt: true,
+        moderationPermissions: expect.arrayContaining(['kick_members']),
+      })
+    );
+  });
+
   it('runs automatic message detection for regular members', async () => {
     const detectionOrchestrator = {
       detectMessage: jest.fn().mockResolvedValue({
@@ -124,6 +168,60 @@ describe('EventHandler (unit)', () => {
         serverId: 'guild-1',
         userId: 'user-1',
         username: 'test-user',
+      })
+    );
+  });
+
+  it('passes recent user messages and same-channel context into message detection', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'free nitro',
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const handler = buildHandler({ detectionOrchestrator });
+    const permissions = new PermissionsBitField();
+    const firstMessage = buildMessage(permissions) as any;
+    firstMessage.id = 'message-1';
+    firstMessage.content = 'hello everyone';
+    firstMessage.createdTimestamp = Date.now() - 1000;
+    firstMessage.channelId = 'channel-1';
+    firstMessage.channel.messages = { fetch: jest.fn().mockResolvedValue(new Map()) };
+
+    await (handler as any).handleMessage(firstMessage);
+
+    const triggerMessage = buildMessage(permissions) as any;
+    triggerMessage.id = 'message-2';
+    triggerMessage.createdTimestamp = Date.now();
+    triggerMessage.channelId = 'channel-1';
+    triggerMessage.channel.messages = {
+      fetch: jest.fn().mockResolvedValue(
+        new Map([
+          [
+            'other-message',
+            {
+              author: { bot: false, id: 'other-user' },
+              content: 'We are joking about giveaways',
+              createdTimestamp: Date.now() - 500,
+            },
+          ],
+        ])
+      ),
+    };
+
+    await (handler as any).handleMessage(triggerMessage);
+
+    expect(detectionOrchestrator.detectMessage).toHaveBeenLastCalledWith(
+      'guild-1',
+      'user-1',
+      'free nitro',
+      expect.objectContaining({
+        recentMessages: ['hello everyone'],
+        channelContext: ['other_user: We are joking about giveaways'],
       })
     );
   });

@@ -143,6 +143,11 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         meetsConfidenceLevel(event.confidence, 'High')
       );
 
+      if (profileData) {
+        profileData.pastDetectionCount = recentEvents.length;
+        profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
+      }
+
       // Calculate initial suspicion score based on heuristics
       let suspicionScore = 0;
       let reasons: string[] = [];
@@ -204,7 +209,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         gptAnalysis = await this.gptService.analyzeProfile(profileData);
 
         if (gptAnalysis.result === 'SUSPICIOUS') {
-          suspicionScore = 0.9;
+          suspicionScore = Math.max(suspicionScore, gptAnalysis.confidence);
           reasons = [...reasons, ...gptAnalysis.reasons];
         } else if (!gptAnalysis.isFallback) {
           suspicionScore = Math.max(0, suspicionScore - 0.3);
@@ -280,6 +285,16 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       // Add outer try block
       // Ensure server and user exist before proceeding
       await this.ensureEntitiesExist(serverId, userId, profileData.username); // Use params
+
+      const recentEvents = await this.detectionEventsRepository.findByServerAndUser(
+        serverId,
+        userId
+      );
+      const recentSuspiciousEvents = recentEvents.filter((event) =>
+        meetsConfidenceLevel(event.confidence, 'High')
+      );
+      profileData.pastDetectionCount = recentEvents.length;
+      profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
 
       // Use the analyzeProfile method from the interface
       const gptAnalysis = await this.gptService.analyzeProfile(profileData);

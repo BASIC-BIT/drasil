@@ -42,6 +42,7 @@ export interface ServerSettings {
   observed_detection_notification_channel_id?: string | null;
   observed_detection_min_confidence_threshold?: number;
   observed_detection_notification_window_minutes?: number;
+  automatic_detection_exempt_moderators?: boolean;
 }
 
 /**

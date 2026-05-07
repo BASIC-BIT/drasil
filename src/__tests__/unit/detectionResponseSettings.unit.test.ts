@@ -10,6 +10,7 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.mode).toBe('restrict');
     expect(settings.observedMinConfidenceThreshold).toBe(70);
     expect(settings.observedNotificationWindowMinutes).toBe(60);
+    expect(settings.automaticDetectionExemptModerators).toBe(true);
   });
 
   it('maps legacy auto_restrict=false configs to notify_only', () => {
@@ -25,6 +26,14 @@ describe('detectionResponseSettings (unit)', () => {
     });
 
     expect(settings.mode).toBe('open_case');
+  });
+
+  it('allows moderator automatic detection exemption to be disabled', () => {
+    const settings = getDetectionResponseSettings({
+      automatic_detection_exempt_moderators: false,
+    });
+
+    expect(settings.automaticDetectionExemptModerators).toBe(false);
   });
 
   it('clamps numeric observe-only notification settings', () => {
