@@ -29,6 +29,21 @@ events, admin actions, and Discord surfaces.
      restricts the user, creates a verification thread, and upserts the admin
      notification.
 
+## AI detection diagnostics
+
+When `DetectionOrchestrator` asks GPT to classify profile/message context, the
+OpenAI call must return structured JSON instead of a free-form label. The parsed
+diagnostics include the model, prompt version, result, confidence, reason codes,
+primary signal, short summary, token usage, and trace/span IDs when tracing is
+available.
+
+Suspicious `detection_events.metadata.gpt` stores only that safe diagnostic
+record. It does not store the raw prompt, raw model response, or full Discord
+message content beyond the existing detection trigger metadata. Admin embeds show
+heuristic reasons separately from the AI analysis field so moderators can tell
+whether a detection came from message content, account age, username/nickname,
+server context, or mixed evidence.
+
 ## Observe-only notifications
 
 When automatic detection is suspicious but the configured mode does not open a

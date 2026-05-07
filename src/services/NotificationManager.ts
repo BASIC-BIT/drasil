@@ -194,6 +194,7 @@ export class NotificationManager implements INotificationManager {
           verificationEvent.notification_message_id
         );
         return await existingMessage.edit({
+          allowedMentions: { parse: [] },
           embeds: [embed],
           components: [actionRow], // Use the conditionally created action row
         });
@@ -204,14 +205,7 @@ export class NotificationManager implements INotificationManager {
       const adminNotificationRoleId = serverConfig.admin_notification_role_id;
       return await adminChannel.send({
         content: adminNotificationRoleId ? `<@&${adminNotificationRoleId}>` : undefined,
-        allowedMentions: adminNotificationRoleId
-          ? {
-              parse: [],
-              roles: [adminNotificationRoleId],
-              users: [],
-              repliedUser: false,
-            }
-          : undefined,
+        allowedMentions: this.createAdminAllowedMentions(adminNotificationRoleId),
         embeds: [embed],
         components: [actionRow], // Use the conditionally created action row
       });
@@ -261,7 +255,7 @@ export class NotificationManager implements INotificationManager {
           .catch(() => null);
         if (existingMessage) {
           notificationMessage = await existingMessage.edit({
-            allowedMentions: { parse: [] },
+            allowedMentions: this.createAdminAllowedMentions(),
             embeds: [embed],
             components: [],
           });
@@ -272,14 +266,7 @@ export class NotificationManager implements INotificationManager {
         const adminNotificationRoleId = serverConfig.admin_notification_role_id;
         notificationMessage = await notificationChannel.send({
           content: adminNotificationRoleId ? `<@&${adminNotificationRoleId}>` : undefined,
-          allowedMentions: adminNotificationRoleId
-            ? {
-                parse: [],
-                roles: [adminNotificationRoleId],
-                users: [],
-                repliedUser: false,
-              }
-            : undefined,
+          allowedMentions: this.createAdminAllowedMentions(adminNotificationRoleId),
           embeds: [embed],
           components: [],
         });
@@ -384,7 +371,7 @@ export class NotificationManager implements INotificationManager {
       }
 
       // Update the message embed. Let button updates be handled separately.
-      await message.edit({ embeds: [updatedEmbed] });
+      await message.edit({ allowedMentions: { parse: [] }, embeds: [updatedEmbed] });
       return true;
     } catch (error) {
       console.error('Failed to log action to message:', error);
@@ -427,7 +414,7 @@ export class NotificationManager implements INotificationManager {
         updatedEmbed.addFields(field);
       }
 
-      await message.edit({ embeds: [updatedEmbed] });
+      await message.edit({ allowedMentions: { parse: [] }, embeds: [updatedEmbed] });
       return true;
     } catch (error) {
       console.error('Failed to update verification thread analysis:', error);
@@ -450,6 +437,20 @@ export class NotificationManager implements INotificationManager {
     }
 
     return { ...metadata } as Record<string, unknown>;
+  }
+
+  private createAdminAllowedMentions(adminNotificationRoleId?: string | null): {
+    parse: [];
+    roles: string[];
+    users: [];
+    repliedUser: false;
+  } {
+    return {
+      parse: [],
+      roles: adminNotificationRoleId ? [adminNotificationRoleId] : [],
+      users: [],
+      repliedUser: false,
+    };
   }
 
   private findRecentObservedDetectionNotification(
@@ -575,6 +576,15 @@ export class NotificationManager implements INotificationManager {
         }
       )
       .setTimestamp();
+
+    const aiDiagnosticFieldValue = this.formatGptDiagnosticFieldValue(detectionResult);
+    if (aiDiagnosticFieldValue) {
+      embed.addFields({
+        name: 'AI Analysis',
+        value: aiDiagnosticFieldValue,
+        inline: false,
+      });
+    }
 
     if (detectionHistory) {
       embed.addFields({
@@ -735,6 +745,15 @@ export class NotificationManager implements INotificationManager {
       )
       .setTimestamp();
 
+    const aiDiagnosticFieldValue = this.formatGptDiagnosticFieldValue(detectionResult);
+    if (aiDiagnosticFieldValue) {
+      embed.addFields({
+        name: 'AI Analysis',
+        value: aiDiagnosticFieldValue,
+        inline: false,
+      });
+    }
+
     // Add detection history if we have any
     if (detectionHistory) {
       embed.addFields({
@@ -781,6 +800,27 @@ export class NotificationManager implements INotificationManager {
       [
         `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
         `Analyzed responses: ${analysis.analyzedMessageCount}`,
+        `Summary: ${analysis.summary}`,
+      ].join('\n')
+    );
+  }
+
+  private formatGptDiagnosticFieldValue(detectionResult: DetectionResult): string | null {
+    const analysis = detectionResult.gptAnalysis;
+    if (!analysis) {
+      return null;
+    }
+
+    const confidencePercent = Math.round(analysis.confidence * 100);
+    const reasonCodes = analysis.reasonCodes.length ? analysis.reasonCodes.join(', ') : 'none';
+    const resultLine = analysis.isFallback
+      ? 'Result: **Unavailable**'
+      : `Result: **${analysis.result}** (${confidencePercent}% confidence)`;
+    return this.truncateEmbedFieldValue(
+      [
+        resultLine,
+        `Primary signal: ${analysis.primarySignal}`,
+        `Reason codes: ${reasonCodes}`,
         `Summary: ${analysis.summary}`,
       ].join('\n')
     );
@@ -1097,6 +1137,6 @@ export class NotificationManager implements INotificationManager {
 
     const message = await adminChannel.messages.fetch(verificationEvent.notification_message_id);
 
-    await message.edit({ components });
+    await message.edit({ allowedMentions: { parse: [] }, components });
   }
 }

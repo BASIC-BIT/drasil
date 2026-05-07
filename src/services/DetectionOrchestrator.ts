@@ -6,7 +6,7 @@
  */
 import { injectable, inject } from 'inversify';
 import { IHeuristicService } from './HeuristicService';
-import { IGPTService, UserProfileData } from './GPTService';
+import { GPTProfileAnalysis, IGPTService, UserProfileData } from './GPTService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { IUserRepository } from '../repositories/UserRepository'; // Added
 import { IServerRepository } from '../repositories/ServerRepository'; // Added
@@ -22,6 +22,7 @@ export interface DetectionResult {
   triggerContent: string;
   profileData?: UserProfileData;
   detectionEventId?: string;
+  gptAnalysis?: GPTProfileAnalysis;
 }
 
 /**
@@ -196,17 +197,20 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         profileData !== undefined;
 
       let result: DetectionResult;
+      let gptAnalysis: GPTProfileAnalysis | undefined;
 
       if (shouldUseGPT) {
         // Use the analyzeProfile method that conforms to the IGPTService interface
-        const gptAnalysis = await this.gptService.analyzeProfile(profileData);
+        gptAnalysis = await this.gptService.analyzeProfile(profileData);
 
         if (gptAnalysis.result === 'SUSPICIOUS') {
           suspicionScore = 0.9;
           reasons = [...reasons, ...gptAnalysis.reasons];
-        } else {
+        } else if (!gptAnalysis.isFallback) {
           suspicionScore = Math.max(0, suspicionScore - 0.3);
           reasons.push('GPT analysis indicates user is likely legitimate');
+        } else {
+          reasons = [...reasons, ...gptAnalysis.reasons];
         }
 
         result = {
@@ -216,6 +220,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
           triggerSource: DetectionType.SUSPICIOUS_CONTENT,
           triggerContent: content,
           profileData: profileData,
+          gptAnalysis,
         };
       } else {
         result = {
@@ -238,7 +243,10 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
           reasons: result.reasons,
           detected_at: new Date(),
           // message_id and channel_id are not needed here; context is available later via event payload
-          metadata: { content: content },
+          metadata: {
+            content: content,
+            ...(gptAnalysis ? { gpt: this.createGptMetadata(gptAnalysis) } : {}),
+          },
         });
 
         result.detectionEventId = createdEvent.id;
@@ -300,6 +308,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         triggerSource: DetectionType.NEW_ACCOUNT,
         triggerContent: 'Server Join',
         profileData: profileData,
+        gptAnalysis,
       };
 
       // Only persist detection events for suspicious results.
@@ -312,7 +321,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
           reasons: initialResult.reasons,
           detected_at: new Date(),
           // No message_id or channel_id for join events
-          metadata: { join: true },
+          metadata: { join: true, gpt: this.createGptMetadata(gptAnalysis) },
         });
 
         initialResult.detectionEventId = createdEvent.id;
@@ -358,5 +367,30 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       (now.getTime() - joinedServerAt.getTime()) / (1000 * 60 * 60 * 24)
     );
     return diffInDays <= this.NEW_SERVER_MEMBER_THRESHOLD_DAYS;
+  }
+
+  private createGptMetadata(analysis: GPTProfileAnalysis): Record<string, unknown> {
+    const metadata: Record<string, unknown> = {
+      model: analysis.model,
+      prompt_version: analysis.promptVersion,
+      is_fallback: analysis.isFallback,
+      result: analysis.result,
+      confidence: analysis.confidence,
+      reason_codes: analysis.reasonCodes,
+      primary_signal: analysis.primarySignal,
+      summary: analysis.summary,
+    };
+
+    if (analysis.tokenUsage) {
+      metadata.token_usage = analysis.tokenUsage;
+    }
+    if (analysis.traceId) {
+      metadata.trace_id = analysis.traceId;
+    }
+    if (analysis.spanId) {
+      metadata.span_id = analysis.spanId;
+    }
+
+    return metadata;
   }
 }

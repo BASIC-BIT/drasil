@@ -137,8 +137,11 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
   - no restricted role is assigned
   - no verification event/case is created
   - a `detection_event` is recorded
+  - `detection_event.metadata.gpt` has model, prompt version, result, confidence,
+    reason codes, primary signal, summary, and token/trace details when available
   - an admin-channel `Suspicious Activity Observed` embed is posted
   - the embed says no automatic restriction was applied
+  - the embed shows heuristic reasons separately from the `AI Analysis` field
 
 ### 10. Observe-only notification coalescing
 
