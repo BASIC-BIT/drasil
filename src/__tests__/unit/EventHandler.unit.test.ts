@@ -1,4 +1,4 @@
-import { GuildMember, Message } from 'discord.js';
+import { GuildMember, Message, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 import { EventHandler } from '../../controllers/EventHandler';
 import { DetectionType } from '../../repositories/types';
 
@@ -15,7 +15,13 @@ describe('EventHandler (unit)', () => {
         triggerSource: DetectionType.SUSPICIOUS_CONTENT,
         triggerContent: 'hello',
       }),
-      detectNewJoin: jest.fn(),
+      detectNewJoin: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.NEW_ACCOUNT,
+        triggerContent: 'Server Join',
+      }),
     };
 
     const configService = overrides?.configService ?? {
@@ -44,22 +50,27 @@ describe('EventHandler (unit)', () => {
     );
   }
 
-  function buildMessage(hasModerationPermission: boolean): Message {
-    const member = {
+  function buildMember(permissions: PermissionsBitField): GuildMember {
+    return {
       id: 'user-1',
       nickname: null,
       joinedAt: new Date('2024-01-01T00:00:00.000Z'),
       guild: { id: 'guild-1' },
       user: {
         id: 'user-1',
+        tag: 'test-user#0001',
         username: 'test-user',
         discriminator: '0001',
         createdTimestamp: new Date('2020-01-01T00:00:00.000Z').getTime(),
       },
-      permissions: {
-        has: jest.fn().mockReturnValue(hasModerationPermission),
-      },
+      permissions,
     } as unknown as GuildMember;
+  }
+
+  function buildMessage(permissions: PermissionsBitField): Message {
+    const member = {
+      ...buildMember(permissions),
+    } as GuildMember;
 
     return {
       author: { bot: false, id: 'user-1' },
@@ -82,7 +93,9 @@ describe('EventHandler (unit)', () => {
     };
     const handler = buildHandler({ detectionOrchestrator, configService });
 
-    await (handler as any).handleMessage(buildMessage(true));
+    await (handler as any).handleMessage(
+      buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers))
+    );
 
     expect(configService.initialize).not.toHaveBeenCalled();
     expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
@@ -101,12 +114,59 @@ describe('EventHandler (unit)', () => {
     };
     const handler = buildHandler({ detectionOrchestrator });
 
-    await (handler as any).handleMessage(buildMessage(false));
+    await (handler as any).handleMessage(buildMessage(new PermissionsBitField()));
 
     expect(detectionOrchestrator.detectMessage).toHaveBeenCalledWith(
       'guild-1',
       'user-1',
       'free nitro',
+      expect.objectContaining({
+        serverId: 'guild-1',
+        userId: 'user-1',
+        username: 'test-user',
+      })
+    );
+  });
+
+  it('skips automatic join detection for moderation members before config lookup', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn(),
+      getCachedServerConfig: jest.fn(),
+      getServerConfig: jest.fn(),
+    };
+    const handler = buildHandler({ detectionOrchestrator, configService });
+
+    await (handler as any).handleGuildMemberAdd(
+      buildMember(new PermissionsBitField(PermissionFlagsBits.ModerateMembers))
+    );
+
+    expect(configService.initialize).not.toHaveBeenCalled();
+    expect(configService.getServerConfig).not.toHaveBeenCalled();
+    expect(detectionOrchestrator.detectNewJoin).not.toHaveBeenCalled();
+  });
+
+  it('runs automatic join detection for regular members', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.NEW_ACCOUNT,
+        triggerContent: 'Server Join',
+      }),
+    };
+    const handler = buildHandler({ detectionOrchestrator });
+
+    await (handler as any).handleGuildMemberAdd(buildMember(new PermissionsBitField()));
+
+    expect(detectionOrchestrator.detectNewJoin).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
       expect.objectContaining({
         serverId: 'guild-1',
         userId: 'user-1',

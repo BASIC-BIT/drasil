@@ -330,6 +330,10 @@ export class EventHandler implements IEventHandler {
     try {
       console.log(`New member joined: ${member.user.tag} (${member.id})`);
 
+      if (this.isAutomaticDetectionExempt(member)) {
+        return;
+      }
+
       await this.ensureConfigInitialized();
 
       const serverConfig = await this.configService.getServerConfig(member.guild.id);
@@ -338,10 +342,6 @@ export class EventHandler implements IEventHandler {
         console.log(
           `Automatic detection is disabled for guild ${member.guild.id}; skipping join scan.`
         );
-        return;
-      }
-
-      if (this.isAutomaticDetectionExempt(member)) {
         return;
       }
 
@@ -386,7 +386,7 @@ export class EventHandler implements IEventHandler {
   }
 
   private isAutomaticDetectionExempt(member: GuildMember): boolean {
-    return member.permissions.has([
+    return member.permissions.any([
       PermissionFlagsBits.Administrator,
       PermissionFlagsBits.ManageGuild,
       PermissionFlagsBits.ModerateMembers,
