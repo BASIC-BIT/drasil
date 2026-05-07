@@ -132,6 +132,23 @@ describe('GPTService (unit)', () => {
     expect(result.isFallback).toBe(true);
   });
 
+  it('falls back safely when profile analysis omits required fields', async () => {
+    const create = jest.fn().mockResolvedValue({
+      choices: [{ message: { content: '{}' } }],
+    });
+
+    const openai = { chat: { completions: { create } } } as unknown as OpenAI;
+    const service = new GPTService(openai);
+
+    const result = await service.analyzeProfile(makeProfile());
+
+    expect(result.result).toBe('OK');
+    expect(result.confidence).toBe(0.1);
+    expect(result.summary).toBe('AI returned incomplete analysis; review manually.');
+    expect(result.reasonCodes).toEqual(['ai_analysis_unavailable']);
+    expect(result.isFallback).toBe(true);
+  });
+
   it('sanitizes model summaries before exposing diagnostics', async () => {
     const create = jest.fn().mockResolvedValue({
       choices: [
@@ -209,6 +226,33 @@ describe('GPTService (unit)', () => {
     const result = await service.analyzeProfile(makeProfile());
 
     expect(result.summary).toBe('The message [content removed] matches a common scam lure.');
+  });
+
+  it('removes plaintext mass mentions from model summaries', async () => {
+    const create = jest.fn().mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              result: 'SUSPICIOUS',
+              confidence: 0.9,
+              summary: 'The user tried to ping @everyone and @here in the summary.',
+              reason_codes: ['mass_mention'],
+              primary_signal: 'message_content',
+            }),
+          },
+        },
+      ],
+    });
+
+    const openai = { chat: { completions: { create } } } as unknown as OpenAI;
+    const service = new GPTService(openai);
+
+    const result = await service.analyzeProfile(makeProfile());
+
+    expect(result.summary).toBe(
+      'The user tried to ping [mention removed] and [mention removed] in the summary.'
+    );
   });
 
   it('includes moderator-provided server context in the GPT prompt', async () => {

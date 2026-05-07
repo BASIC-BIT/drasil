@@ -22,6 +22,7 @@ const USER_MESSAGE_PROMPT_MAX_LENGTH = 500;
 const PROMPT_ROLE_LABEL_PATTERN = /^\s*(system|assistant|user|developer|tool)\s*:/gim;
 const URL_PATTERN = /https?:\/\/\S+|www\.\S+/gi;
 const DISCORD_MENTION_PATTERN = /<[@#&!?]*\d{17,20}>/g;
+const PLAIN_DISCORD_MENTION_PATTERN = /@(everyone|here)\b/gi;
 const DISCORD_SNOWFLAKE_PATTERN = /\b\d{17,20}\b/g;
 const QUOTED_TEXT_PATTERN = /"[^"\n]+"|'[^'\n]+'/g;
 
@@ -449,6 +450,18 @@ export class GPTService implements IGPTService {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const normalizedResult =
         typeof parsed.result === 'string' ? parsed.result.trim().toUpperCase() : '';
+      if (
+        (normalizedResult !== 'OK' && normalizedResult !== 'SUSPICIOUS') ||
+        typeof parsed.summary !== 'string' ||
+        !parsed.summary.trim()
+      ) {
+        return this.createDefaultProfileAnalysis(
+          'AI returned incomplete analysis; review manually.',
+          tokenUsage,
+          span
+        );
+      }
+
       const result = normalizedResult === 'SUSPICIOUS' ? 'SUSPICIOUS' : 'OK';
       const confidence = this.normalizeConfidence(parsed.confidence, result);
       const primarySignal = this.normalizePrimarySignal(parsed.primary_signal);
@@ -656,6 +669,7 @@ export class GPTService implements IGPTService {
       .replace(/`+/g, '')
       .replace(URL_PATTERN, '[link removed]')
       .replace(DISCORD_MENTION_PATTERN, '[mention removed]')
+      .replace(PLAIN_DISCORD_MENTION_PATTERN, '[mention removed]')
       .replace(DISCORD_SNOWFLAKE_PATTERN, '[id removed]')
       .replace(/\s+/g, ' ')
       .trim();
