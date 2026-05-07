@@ -23,7 +23,7 @@ const PROMPT_ROLE_LABEL_PATTERN = /^\s*(system|assistant|user|developer|tool)\s*
 const URL_PATTERN = /https?:\/\/\S+|www\.\S+/gi;
 const DISCORD_MENTION_PATTERN = /<[@#&!?]*\d{17,20}>/g;
 const DISCORD_SNOWFLAKE_PATTERN = /\b\d{17,20}\b/g;
-const QUOTED_TEXT_PATTERN = /"[^"\n]{1,120}"|'[^'\n]{1,120}'/g;
+const QUOTED_TEXT_PATTERN = /"[^"\n]+"|'[^'\n]+'/g;
 
 export type GPTPrimarySignal =
   | 'message_content'
@@ -514,6 +514,7 @@ export class GPTService implements IGPTService {
           .trim()
           .toLowerCase()
           .replace(/[^a-z0-9_]+/g, '_')
+          .replace(/^_+|_+$/g, '')
       )
       .filter((item) => item.length > 0)
       .slice(0, 6);
