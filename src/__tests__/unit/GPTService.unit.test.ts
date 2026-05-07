@@ -160,6 +160,57 @@ describe('GPTService (unit)', () => {
     );
   });
 
+  it('normalizes invalid primary signals to none', async () => {
+    const create = jest.fn().mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              result: 'SUSPICIOUS',
+              confidence: 0.9,
+              summary: 'Several weak signals looked suspicious.',
+              reason_codes: ['weak_signal'],
+              primary_signal: 'unknown',
+            }),
+          },
+        },
+      ],
+    });
+
+    const openai = { chat: { completions: { create } } } as unknown as OpenAI;
+    const service = new GPTService(openai);
+
+    const result = await service.analyzeProfile(makeProfile());
+
+    expect(result.primarySignal).toBe('none');
+    expect(result.reasons).toEqual(['AI analysis flagged insufficient context as suspicious']);
+  });
+
+  it('strips quoted text from model summaries', async () => {
+    const create = jest.fn().mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              result: 'SUSPICIOUS',
+              confidence: 0.9,
+              summary: 'The message "free nitro" matches a common scam lure.',
+              reason_codes: ['suspicious_keyword'],
+              primary_signal: 'message_content',
+            }),
+          },
+        },
+      ],
+    });
+
+    const openai = { chat: { completions: { create } } } as unknown as OpenAI;
+    const service = new GPTService(openai);
+
+    const result = await service.analyzeProfile(makeProfile());
+
+    expect(result.summary).toBe('The message [content removed] matches a common scam lure.');
+  });
+
   it('includes moderator-provided server context in the GPT prompt', async () => {
     const create = jest.fn().mockResolvedValue({
       choices: [

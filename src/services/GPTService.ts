@@ -23,6 +23,7 @@ const PROMPT_ROLE_LABEL_PATTERN = /^\s*(system|assistant|user|developer|tool)\s*
 const URL_PATTERN = /https?:\/\/\S+|www\.\S+/gi;
 const DISCORD_MENTION_PATTERN = /<[@#&!?]*\d{17,20}>/g;
 const DISCORD_SNOWFLAKE_PATTERN = /\b\d{17,20}\b/g;
+const QUOTED_TEXT_PATTERN = /"[^"\n]{1,120}"|'[^'\n]{1,120}'/g;
 
 export type GPTPrimarySignal =
   | 'message_content'
@@ -498,7 +499,7 @@ export class GPTService implements IGPTService {
 
     return typeof value === 'string' && allowedSignals.includes(value as GPTPrimarySignal)
       ? (value as GPTPrimarySignal)
-      : 'mixed';
+      : 'none';
   }
 
   private normalizeReasonCodes(value: unknown): string[] {
@@ -650,6 +651,7 @@ export class GPTService implements IGPTService {
   private sanitizeModelSummary(value: string): string {
     const sanitized = value
       .replace(/`[^`]*`/g, '[content removed]')
+      .replace(QUOTED_TEXT_PATTERN, '[content removed]')
       .replace(/`+/g, '')
       .replace(URL_PATTERN, '[link removed]')
       .replace(DISCORD_MENTION_PATTERN, '[mention removed]')
