@@ -200,6 +200,7 @@ describe('NotificationManager (unit)', () => {
         summary: 'Recent message context matches common scam patterns.',
         model: GPT_PROFILE_MODEL,
         promptVersion: GPT_PROFILE_PROMPT_VERSION,
+        isFallback: false,
       },
     };
     const sentMessage: MockMessage = { id: 'message-1', edit: jest.fn() };

@@ -49,6 +49,7 @@ describe('GPTService (unit)', () => {
     expect(result.summary).toBe('Recent message context matches common scam patterns.');
     expect(result.model).toBe(GPT_PROFILE_MODEL);
     expect(result.promptVersion).toBe(GPT_PROFILE_PROMPT_VERSION);
+    expect(result.isFallback).toBe(false);
     expect(result.tokenUsage).toEqual({ promptTokens: 1, completionTokens: 2, totalTokens: 3 });
 
     const call = create.mock.calls[0][0];
@@ -98,6 +99,7 @@ describe('GPTService (unit)', () => {
 
     expect(result.result).toBe('OK');
     expect(result.reasonCodes).toEqual(['ai_analysis_unavailable']);
+    expect(result.isFallback).toBe(true);
   });
 
   it('defaults to OK when OpenAI call throws', async () => {
@@ -109,8 +111,9 @@ describe('GPTService (unit)', () => {
     const result = await service.analyzeProfile(makeProfile());
 
     expect(result.result).toBe('OK');
-    expect(result.reasons).toEqual(['AI analysis did not find enough suspicious signal']);
+    expect(result.reasons).toEqual(['AI analysis unavailable; review manually']);
     expect(result.reasonCodes).toEqual(['ai_analysis_unavailable']);
+    expect(result.isFallback).toBe(true);
   });
 
   it('falls back safely when profile analysis returns invalid JSON', async () => {
@@ -126,6 +129,35 @@ describe('GPTService (unit)', () => {
     expect(result.result).toBe('OK');
     expect(result.confidence).toBe(0.1);
     expect(result.summary).toBe('AI returned malformed analysis; review manually.');
+    expect(result.isFallback).toBe(true);
+  });
+
+  it('sanitizes model summaries before exposing diagnostics', async () => {
+    const create = jest.fn().mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              result: 'SUSPICIOUS',
+              confidence: 0.9,
+              summary:
+                'User posted `free nitro` at https://example.com and mentioned <@123456789012345678>.',
+              reason_codes: ['suspicious_keyword'],
+              primary_signal: 'message_content',
+            }),
+          },
+        },
+      ],
+    });
+
+    const openai = { chat: { completions: { create } } } as unknown as OpenAI;
+    const service = new GPTService(openai);
+
+    const result = await service.analyzeProfile(makeProfile());
+
+    expect(result.summary).toBe(
+      'User posted [content removed] at [link removed] and mentioned [mention removed].'
+    );
   });
 
   it('includes moderator-provided server context in the GPT prompt', async () => {

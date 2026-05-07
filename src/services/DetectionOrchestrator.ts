@@ -206,9 +206,11 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         if (gptAnalysis.result === 'SUSPICIOUS') {
           suspicionScore = 0.9;
           reasons = [...reasons, ...gptAnalysis.reasons];
-        } else {
+        } else if (!gptAnalysis.isFallback) {
           suspicionScore = Math.max(0, suspicionScore - 0.3);
           reasons.push('GPT analysis indicates user is likely legitimate');
+        } else {
+          reasons = [...reasons, ...gptAnalysis.reasons];
         }
 
         result = {
@@ -371,6 +373,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     const metadata: Record<string, unknown> = {
       model: analysis.model,
       prompt_version: analysis.promptVersion,
+      is_fallback: analysis.isFallback,
       result: analysis.result,
       confidence: analysis.confidence,
       reason_codes: analysis.reasonCodes,

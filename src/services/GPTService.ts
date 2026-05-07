@@ -20,6 +20,9 @@ const VERIFICATION_CONTEXT_PROMPT_MAX_LENGTH = 700;
 const EXPECTED_TOPICS_PROMPT_MAX_LENGTH = 300;
 const USER_MESSAGE_PROMPT_MAX_LENGTH = 500;
 const PROMPT_ROLE_LABEL_PATTERN = /^\s*(system|assistant|user|developer|tool)\s*:/gim;
+const URL_PATTERN = /https?:\/\/\S+|www\.\S+/gi;
+const DISCORD_MENTION_PATTERN = /<[@#&!?]*\d{17,20}>/g;
+const DISCORD_SNOWFLAKE_PATTERN = /\b\d{17,20}\b/g;
 
 export type GPTPrimarySignal =
   | 'message_content'
@@ -46,6 +49,7 @@ export interface GPTProfileAnalysis {
   summary: string;
   model: string;
   promptVersion: string;
+  isFallback: boolean;
   tokenUsage?: GPTTokenUsage;
   traceId?: string;
   spanId?: string;
@@ -459,6 +463,7 @@ export class GPTService implements IGPTService {
         summary,
         model: GPT_PROFILE_MODEL,
         promptVersion: GPT_PROFILE_PROMPT_VERSION,
+        isFallback: false,
         tokenUsage,
         ...this.getTraceContext(span),
       };
@@ -526,7 +531,7 @@ export class GPTService implements IGPTService {
       return fallback;
     }
 
-    return this.truncate(value.replace(/\s+/g, ' ').trim(), 180);
+    return this.truncate(this.sanitizeModelSummary(value), 180);
   }
 
   private createDefaultProfileAnalysis(
@@ -537,12 +542,13 @@ export class GPTService implements IGPTService {
     return {
       result: 'OK',
       confidence: 0.1,
-      reasons: ['AI analysis did not find enough suspicious signal'],
+      reasons: ['AI analysis unavailable; review manually'],
       reasonCodes: ['ai_analysis_unavailable'],
       primarySignal: 'none',
       summary,
       model: GPT_PROFILE_MODEL,
       promptVersion: GPT_PROFILE_PROMPT_VERSION,
+      isFallback: true,
       tokenUsage,
       ...this.getTraceContext(span),
     };
@@ -639,6 +645,19 @@ export class GPTService implements IGPTService {
 
     const overflow = sanitized.length - maxLength;
     return `${sanitized.slice(0, maxLength)}\n[truncated ${overflow} characters]`;
+  }
+
+  private sanitizeModelSummary(value: string): string {
+    const sanitized = value
+      .replace(/`[^`]*`/g, '[content removed]')
+      .replace(/`+/g, '')
+      .replace(URL_PATTERN, '[link removed]')
+      .replace(DISCORD_MENTION_PATTERN, '[mention removed]')
+      .replace(DISCORD_SNOWFLAKE_PATTERN, '[id removed]')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return sanitized || 'AI analysis did not provide a usable summary.';
   }
 
   private async createVerificationThreadPrompt(

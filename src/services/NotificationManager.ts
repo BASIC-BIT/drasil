@@ -581,6 +581,7 @@ export class NotificationManager implements INotificationManager {
       embed.addFields({
         name: 'AI Analysis',
         value: aiDiagnosticFieldValue,
+        inline: false,
       });
     }
 

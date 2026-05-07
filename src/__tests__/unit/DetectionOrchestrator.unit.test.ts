@@ -34,6 +34,7 @@ describe('DetectionOrchestrator (unit)', () => {
       summary: 'Context looks normal.',
       model: GPT_PROFILE_MODEL,
       promptVersion: GPT_PROFILE_PROMPT_VERSION,
+      isFallback: false,
       ...overrides,
     };
   }
@@ -141,6 +142,7 @@ describe('DetectionOrchestrator (unit)', () => {
     expect(events[0].metadata).toMatchObject({
       gpt: {
         result: 'SUSPICIOUS',
+        is_fallback: false,
         primary_signal: 'message_content',
         reason_codes: ['suspicious_keyword'],
       },
@@ -197,6 +199,47 @@ describe('DetectionOrchestrator (unit)', () => {
 
     const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
     expect(events).toHaveLength(2);
+  });
+
+  it('does not reduce message suspicion when GPT analysis is unavailable', async () => {
+    heuristicService.analyzeMessage.mockReturnValue({
+      result: 'SUSPICIOUS',
+      reasons: ['Suspicious keywords'],
+    });
+    gptService.analyzeProfile.mockResolvedValue(
+      makeGptAnalysis({
+        result: 'OK',
+        confidence: 0.1,
+        reasons: ['AI analysis unavailable; review manually'],
+        reasonCodes: ['ai_analysis_unavailable'],
+        primarySignal: 'none',
+        summary: 'AI analysis failed; review manually.',
+        isFallback: true,
+      })
+    );
+
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository
+    );
+
+    const profile: UserProfileData = {
+      username: 'new-user',
+      accountCreatedAt: new Date(),
+      joinedServerAt: new Date(),
+      recentMessages: [],
+    };
+
+    const result = await orchestrator.detectMessage(serverId, userId, 'free nitro', profile);
+
+    expect(result.label).toBe('SUSPICIOUS');
+    expect(result.reasons).toEqual(
+      expect.arrayContaining(['Suspicious keywords', 'AI analysis unavailable; review manually'])
+    );
+    expect(result.reasons).not.toContain('GPT analysis indicates user is likely legitimate');
   });
 
   it('does not create a detection event for an OK new join', async () => {
@@ -271,6 +314,7 @@ describe('DetectionOrchestrator (unit)', () => {
       join: true,
       gpt: {
         result: 'SUSPICIOUS',
+        is_fallback: false,
         primary_signal: 'username',
         reason_codes: ['unusual_username'],
       },
