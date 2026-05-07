@@ -1,4 +1,12 @@
-import { Client, Message, GuildMember, Interaction, Guild, MessageFlags } from 'discord.js';
+import {
+  Client,
+  Message,
+  GuildMember,
+  Interaction,
+  Guild,
+  MessageFlags,
+  PermissionFlagsBits,
+} from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject } from 'inversify';
 import { UserProfileData } from '../services/GPTService';
@@ -119,6 +127,10 @@ export class EventHandler implements IEventHandler {
     // Handle debug/test commands
     if (message.content.startsWith('!test')) {
       await this.commandHandler.handleTestCommands(message);
+      return;
+    }
+
+    if (this.isAutomaticDetectionExempt(message.member)) {
       return;
     }
 
@@ -329,6 +341,10 @@ export class EventHandler implements IEventHandler {
         return;
       }
 
+      if (this.isAutomaticDetectionExempt(member)) {
+        return;
+      }
+
       // Extract profile data
       const profileData = this.extractUserProfileData(member);
 
@@ -367,6 +383,16 @@ export class EventHandler implements IEventHandler {
       joinedServerAt: member.joinedAt ? new Date(member.joinedAt) : new Date(),
       recentMessages: [], // This might need adjustment based on how it's used
     };
+  }
+
+  private isAutomaticDetectionExempt(member: GuildMember): boolean {
+    return member.permissions.has([
+      PermissionFlagsBits.Administrator,
+      PermissionFlagsBits.ManageGuild,
+      PermissionFlagsBits.ModerateMembers,
+      PermissionFlagsBits.KickMembers,
+      PermissionFlagsBits.BanMembers,
+    ]);
   }
 
   /**
