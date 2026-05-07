@@ -88,7 +88,9 @@ describe('EventHandler (unit)', () => {
     };
     const configService = {
       initialize: jest.fn(),
-      getCachedServerConfig: jest.fn(),
+      getCachedServerConfig: jest.fn().mockReturnValue({
+        settings: { automatic_detection_exempt_moderators: true },
+      }),
       getServerConfig: jest.fn(),
     };
     const handler = buildHandler({ detectionOrchestrator, configService });
@@ -139,7 +141,7 @@ describe('EventHandler (unit)', () => {
       'user-1',
       'free nitro',
       expect.objectContaining({
-        isAutomaticDetectionExempt: true,
+        hasModerationPermissions: true,
         moderationPermissions: expect.arrayContaining(['kick_members']),
       })
     );
@@ -190,7 +192,7 @@ describe('EventHandler (unit)', () => {
     firstMessage.content = 'hello everyone';
     firstMessage.createdTimestamp = Date.now() - 1000;
     firstMessage.channelId = 'channel-1';
-    firstMessage.channel.messages = { fetch: jest.fn().mockResolvedValue(new Map()) };
+    firstMessage.channel.messages = { cache: new Map() };
 
     await (handler as any).handleMessage(firstMessage);
 
@@ -199,18 +201,26 @@ describe('EventHandler (unit)', () => {
     triggerMessage.createdTimestamp = Date.now();
     triggerMessage.channelId = 'channel-1';
     triggerMessage.channel.messages = {
-      fetch: jest.fn().mockResolvedValue(
-        new Map([
-          [
-            'other-message',
-            {
-              author: { bot: false, id: 'other-user' },
-              content: 'We are joking about giveaways',
-              createdTimestamp: Date.now() - 500,
-            },
-          ],
-        ])
-      ),
+      cache: new Map([
+        [
+          'same-user-message',
+          {
+            id: 'same-user-message',
+            author: { bot: false, id: 'user-1' },
+            content: 'same user context should stay in recentMessages only',
+            createdTimestamp: Date.now() - 750,
+          },
+        ],
+        [
+          'other-message',
+          {
+            id: 'other-message',
+            author: { bot: false, id: 'other-user' },
+            content: 'We are joking about giveaways',
+            createdTimestamp: Date.now() - 500,
+          },
+        ],
+      ]),
     };
 
     await (handler as any).handleMessage(triggerMessage);
@@ -226,6 +236,72 @@ describe('EventHandler (unit)', () => {
     );
   });
 
+  it('loads config before exempting moderators when no cached config exists', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'free nitro',
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue(undefined),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          automatic_detection_exempt_moderators: false,
+          detection_response_mode: 'notify_only',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const handler = buildHandler({ detectionOrchestrator, configService });
+
+    await (handler as any).handleMessage(
+      buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers))
+    );
+
+    expect(configService.initialize).toHaveBeenCalled();
+    expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1');
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalled();
+  });
+
+  it('loads config before exempting moderator joins when no cached config exists', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.NEW_ACCOUNT,
+        triggerContent: 'Server Join',
+      }),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue(undefined),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          automatic_detection_exempt_moderators: false,
+          detection_response_mode: 'notify_only',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const handler = buildHandler({ detectionOrchestrator, configService });
+
+    await (handler as any).handleGuildMemberAdd(
+      buildMember(new PermissionsBitField(PermissionFlagsBits.KickMembers))
+    );
+
+    expect(configService.initialize).toHaveBeenCalled();
+    expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1');
+    expect(detectionOrchestrator.detectNewJoin).toHaveBeenCalled();
+  });
+
   it('skips automatic join detection for moderation members before config lookup', async () => {
     const detectionOrchestrator = {
       detectMessage: jest.fn(),
@@ -233,7 +309,9 @@ describe('EventHandler (unit)', () => {
     };
     const configService = {
       initialize: jest.fn(),
-      getCachedServerConfig: jest.fn(),
+      getCachedServerConfig: jest.fn().mockReturnValue({
+        settings: { automatic_detection_exempt_moderators: true },
+      }),
       getServerConfig: jest.fn(),
     };
     const handler = buildHandler({ detectionOrchestrator, configService });

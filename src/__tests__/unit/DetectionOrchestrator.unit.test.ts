@@ -272,7 +272,7 @@ describe('DetectionOrchestrator (unit)', () => {
       joinedServerAt: new Date('2020-01-01T00:00:00.000Z'),
       recentMessages: ['normal conversation'],
       channelContext: ['other_user: joking about old scams'],
-      isAutomaticDetectionExempt: false,
+      hasModerationPermissions: false,
       moderationPermissions: [],
     };
 

@@ -69,7 +69,7 @@ export interface UserProfileData {
   recentMessages: string[];
   channelContext?: string[];
   isGuildOwner?: boolean;
-  isAutomaticDetectionExempt?: boolean;
+  hasModerationPermissions?: boolean;
   moderationPermissions?: string[];
   pastDetectionCount?: number;
   recentHighConfidenceDetectionCount?: number;
@@ -349,7 +349,7 @@ export class GPTService implements IGPTService {
 
     const trustLines = [
       `Guild owner: ${profileData.isGuildOwner === true ? 'yes' : 'no'}`,
-      `Has moderation/admin exemption permissions: ${profileData.isAutomaticDetectionExempt === true ? 'yes' : 'no'}`,
+      `Has moderation/admin permissions: ${profileData.hasModerationPermissions === true ? 'yes' : 'no'}`,
       `Moderation permissions: ${moderationPermissions.length > 0 ? moderationPermissions.join(', ') : 'none'}`,
       `Past suspicious detections in this server: ${profileData.pastDetectionCount ?? 0}`,
       `Recent high-confidence detections in this server: ${profileData.recentHighConfidenceDetectionCount ?? 0}`,

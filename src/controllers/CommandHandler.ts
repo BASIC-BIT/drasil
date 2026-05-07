@@ -304,7 +304,9 @@ export class CommandHandler implements ICommandHandler {
             .addSubcommand((subcommand) =>
               subcommand
                 .setName('moderator-exemption-disable')
-                .setDescription('Allow automatic detection scans for moderation members')
+                .setDescription(
+                  'Allow automatic detection scans for members with moderation permissions'
+                )
             )
         )
         .addSubcommandGroup((group) =>

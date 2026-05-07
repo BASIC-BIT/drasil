@@ -485,6 +485,49 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('handles /config detection moderator-exemption-enable', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        detection_response_mode: 'notify_only',
+        automatic_detection_exempt_moderators: true,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('detection'),
+        getSubcommand: jest.fn().mockReturnValue('moderator-exemption-enable'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      automatic_detection_exempt_moderators: true,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Moderator/admin exemption: `enabled`'),
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
   it('handles /config verification prompt-set with escaped newlines', async () => {
     const updateServerSettings = jest.fn().mockResolvedValue({});
     const { handler, configService } = buildHandler({ updateServerSettings });
