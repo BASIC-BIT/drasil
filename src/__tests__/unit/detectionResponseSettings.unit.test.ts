@@ -11,6 +11,7 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.observedMinConfidenceThreshold).toBe(70);
     expect(settings.observedNotificationWindowMinutes).toBe(60);
     expect(settings.automaticDetectionExemptModerators).toBe(true);
+    expect(settings.observedActionBanRequiresReason).toBe(false);
   });
 
   it('maps legacy auto_restrict=false configs to notify_only', () => {
@@ -34,6 +35,14 @@ describe('detectionResponseSettings (unit)', () => {
     });
 
     expect(settings.automaticDetectionExemptModerators).toBe(false);
+  });
+
+  it('allows observed notification ban reasons to be required', () => {
+    const settings = getDetectionResponseSettings({
+      observed_action_ban_requires_reason: true,
+    });
+
+    expect(settings.observedActionBanRequiresReason).toBe(true);
   });
 
   it('clamps numeric observe-only notification settings', () => {

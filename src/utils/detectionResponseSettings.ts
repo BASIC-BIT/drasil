@@ -9,6 +9,8 @@ export const OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES_SETTING_KEY =
   'observed_detection_notification_window_minutes';
 export const AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY =
   'automatic_detection_exempt_moderators';
+export const OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY =
+  'observed_action_ban_requires_reason';
 
 export const DETECTION_RESPONSE_MODES = [
   'off',
@@ -26,6 +28,7 @@ export interface DetectionResponseSettings {
   observedMinConfidenceThreshold: number;
   observedNotificationWindowMinutes: number;
   automaticDetectionExemptModerators: boolean;
+  observedActionBanRequiresReason: boolean;
 }
 
 export const DEFAULT_OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD = 70;
@@ -80,5 +83,7 @@ export function getDetectionResponseSettings(settings: ServerSettings): Detectio
     ),
     automaticDetectionExemptModerators:
       settings[AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY] !== false,
+    observedActionBanRequiresReason:
+      settings[OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY] === true,
   };
 }

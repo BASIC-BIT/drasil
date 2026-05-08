@@ -14,6 +14,7 @@ describe('VerificationHistoryFormatter (unit)', () => {
       user_id: 'user-1',
       admin_id: 'admin-1',
       verification_event_id: 'event-1',
+      detection_event_id: null,
       action_type: AdminActionType.VERIFY,
       action_at: new Date('2024-01-02T00:00:00.000Z'),
       previous_status: VerificationStatus.PENDING,

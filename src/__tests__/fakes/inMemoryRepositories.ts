@@ -25,6 +25,7 @@ import {
   AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY,
   DEFAULT_OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD,
   DEFAULT_OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES,
+  OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY,
 } from '../../utils/detectionResponseSettings';
 
 const toTimestamp = (value: string | Date | null | undefined): number => {
@@ -51,6 +52,7 @@ const baseSettings: ServerSettings = {
   observed_detection_notification_window_minutes:
     DEFAULT_OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES,
   [AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY]: true,
+  [OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY]: false,
 };
 
 const defaultHeuristicThreshold = globalSettings.defaultServerSettings.messageThreshold;
@@ -739,6 +741,7 @@ export class InMemoryAdminActionRepository implements IAdminActionRepository {
       user_id: data.user_id,
       admin_id: data.admin_id,
       verification_event_id: data.verification_event_id,
+      detection_event_id: data.detection_event_id ?? null,
       action_type: data.action_type,
       action_at: new Date(),
       previous_status: data.previous_status,

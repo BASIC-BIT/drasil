@@ -61,6 +61,7 @@ describe('SecurityActionService (unit)', () => {
       upsertObservedDetectionNotification: jest
         .fn()
         .mockResolvedValue({ id: 'observe-1' } as Message),
+      markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
       createVerificationThread: jest
@@ -465,6 +466,84 @@ describe('SecurityActionService (unit)', () => {
     ]);
     expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens and audits a case from an observed detection', async () => {
+    const guildId = 'guild-observed-open';
+    const userId = 'user-observed-open';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.88,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+      metadata: { content: 'free discord nitro' },
+    });
+
+    await buildService().openObservedDetectionCase(member, detectionEvent.id, moderator);
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(adminActionService.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detection_event_id: detectionEvent.id,
+        verification_event_id: verificationEvents[0].id,
+        action_type: AdminActionType.OPEN_CASE,
+      })
+    );
+    expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
+      detectionEvent.id,
+      'opened a verification case',
+      moderator
+    );
+  });
+
+  it('records false positive dismissal without opening a case', async () => {
+    const guildId = 'guild-observed-dismiss';
+    const userId = 'user-observed-dismiss';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+
+    await buildService().dismissObservedDetection(
+      member,
+      detectionEvent.id,
+      moderator,
+      AdminActionType.FALSE_POSITIVE
+    );
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(0);
+    expect(adminActionService.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detection_event_id: detectionEvent.id,
+        verification_event_id: null,
+        action_type: AdminActionType.FALSE_POSITIVE,
+      })
+    );
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(updatedDetection?.metadata).toMatchObject({
+      observed_action: AdminActionType.FALSE_POSITIVE,
+      observed_action_by: moderator.id,
+    });
   });
 
   it('reopens verification and re-restricts the user', async () => {

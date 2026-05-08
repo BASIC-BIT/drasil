@@ -15,7 +15,7 @@ import { ISecurityActionService } from '../../services/SecurityActionService';
 import { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import { IThreadManager } from '../../services/ThreadManager';
 import { IAdminActionRepository } from '../../repositories/AdminActionRepository';
-import { VerificationEvent, VerificationStatus } from '../../repositories/types';
+import { AdminActionType, VerificationEvent, VerificationStatus } from '../../repositories/types';
 import { IConfigService } from '../../config/ConfigService';
 import {
   SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID,
@@ -45,6 +45,12 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
     reply: jest.fn().mockResolvedValue(undefined),
     showModal: jest.fn().mockResolvedValue(undefined),
   }) as unknown as ButtonInteraction;
+
+const grantInteractionPermissions = (interaction: ButtonInteraction): void => {
+  Object.assign(interaction, {
+    memberPermissions: { has: jest.fn().mockReturnValue(true) },
+  });
+};
 
 describe('InteractionHandler (unit)', () => {
   let client: Client;
@@ -80,6 +86,10 @@ describe('InteractionHandler (unit)', () => {
       openCaseForSuspiciousJoin: jest.fn().mockResolvedValue(true),
       handleManualFlag: jest.fn().mockResolvedValue(true),
       handleUserReport: jest.fn().mockResolvedValue(true),
+      openObservedDetectionCase: jest.fn().mockResolvedValue(true),
+      restrictObservedDetection: jest.fn().mockResolvedValue(true),
+      banObservedDetection: jest.fn().mockResolvedValue(true),
+      dismissObservedDetection: jest.fn().mockResolvedValue(true),
       reopenVerification: jest.fn().mockResolvedValue(true),
     };
     notificationManager = {
@@ -90,6 +100,7 @@ describe('InteractionHandler (unit)', () => {
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue(null),
+      markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
     };
     configService = {
       initialize: jest.fn().mockResolvedValue(undefined),
@@ -262,6 +273,92 @@ describe('InteractionHandler (unit)', () => {
     );
     expect(interaction.followUp).toHaveBeenCalledWith({
       content: 'Verification for <@user-1> has been reopened. The user has been restricted again.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles observed open case button', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('observed:open:user-1:det-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(securityActionService.openObservedDetectionCase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'det-1',
+      interaction.user
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'Opened a verification case for <@user-1>.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('shows observed ban modal using configured reason policy', async () => {
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      settings: { observed_action_ban_requires_reason: true },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('observed:ban:user-1:det-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+    const modal = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
+    expect(modal.toJSON().custom_id).toBe('observed:ban_modal:user-1:det-1');
+    expect(JSON.stringify(modal.toJSON())).toContain('Ban reason');
+  });
+
+  it('handles observed false positive dismissal', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('observed:false_positive:user-1:det-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(securityActionService.dismissObservedDetection).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'det-1',
+      interaction.user,
+      AdminActionType.FALSE_POSITIVE
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'Marked the detection for <@user-1> as a false positive.',
       flags: MessageFlags.Ephemeral,
     });
   });

@@ -66,6 +66,7 @@ describe('UserModerationService (unit)', () => {
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue({} as any),
+      markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
       createVerificationThread: jest.fn().mockResolvedValue({} as any),

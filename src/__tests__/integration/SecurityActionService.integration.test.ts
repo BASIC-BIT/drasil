@@ -74,6 +74,7 @@ describeIntegration('SecurityActionService (integration)', () => {
       upsertObservedDetectionNotification: jest
         .fn()
         .mockResolvedValue({ id: 'observe-1' } as Message),
+      markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
       createVerificationThread: jest

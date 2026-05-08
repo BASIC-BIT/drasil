@@ -35,7 +35,12 @@ export interface IUserModerationService {
    * @param moderator The user who performed the ban
    * @returns Promise resolving to true if successful, false if the user couldn't be banned
    */
-  banUser(member: GuildMember, reason: string, moderator: User): Promise<boolean>;
+  banUser(
+    member: GuildMember,
+    reason: string,
+    moderator: User,
+    detectionEventId?: string
+  ): Promise<boolean>;
 }
 
 /**
@@ -209,7 +214,12 @@ export class UserModerationService implements IUserModerationService {
    * @param moderator The user who performed the ban
    * @returns Promise resolving to true if successful, false if the user couldn't be banned
    */
-  public async banUser(member: GuildMember, reason: string, moderator: User): Promise<boolean> {
+  public async banUser(
+    member: GuildMember,
+    reason: string,
+    moderator: User,
+    detectionEventId?: string
+  ): Promise<boolean> {
     try {
       const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
         member.id,
@@ -276,6 +286,7 @@ export class UserModerationService implements IUserModerationService {
           user_id: member.id,
           admin_id: moderator.id,
           verification_event_id: verificationEvent.id,
+          detection_event_id: detectionEventId,
           action_type: AdminActionType.BAN,
           previous_status: previousStatus ?? VerificationStatus.PENDING,
           new_status: VerificationStatus.BANNED,

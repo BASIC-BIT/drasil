@@ -76,13 +76,29 @@ export class AdminActionService implements IAdminActionService {
       case AdminActionType.CREATE_THREAD:
         summary = `📝 Verification thread created by ${adminMention}`;
         break;
+      case AdminActionType.OPEN_CASE:
+        summary = `📝 Opened a verification case by ${adminMention}`;
+        break;
+      case AdminActionType.RESTRICT:
+        summary = `🔒 Restricted by ${adminMention}`;
+        break;
+      case AdminActionType.DISMISS:
+        summary = `Dismissed by ${adminMention}`;
+        break;
+      case AdminActionType.FALSE_POSITIVE:
+        summary = `Marked false positive by ${adminMention}`;
+        break;
       default:
         summary = `Action taken by ${adminMention}`;
     }
 
     summary += ` at ${timestamp}`;
 
-    if (action.previous_status !== action.new_status) {
+    if (
+      action.previous_status &&
+      action.new_status &&
+      action.previous_status !== action.new_status
+    ) {
       // action.previous_status is always a truthy enum string, so `|| 'none'` is unnecessary.
       summary += `\nStatus changed from ${action.previous_status} to ${action.new_status}`;
     }

@@ -107,6 +107,12 @@ export interface INotificationManager {
     detectionResult: DetectionResult,
     sourceMessage?: Message
   ): Promise<Message | null>;
+
+  markObservedDetectionActionTaken(
+    detectionEventId: string,
+    actionDescription: string,
+    admin: User
+  ): Promise<boolean>;
 }
 
 interface ThreadAnalysisMetadata {
@@ -122,6 +128,7 @@ interface ThreadAnalysisMetadata {
 interface ObservedDetectionMetadata {
   observed_notification_message_id?: string;
   observed_notification_last_notified_at?: string;
+  observed_action?: string;
 }
 
 /**
@@ -247,6 +254,10 @@ export class NotificationManager implements INotificationManager {
         detectionEvents,
         sourceMessage
       );
+      const actionDetectionEventId = detectionResult.detectionEventId ?? detectionEvents[0]?.id;
+      const components = actionDetectionEventId
+        ? this.createObservedActionRows(member.id, actionDetectionEventId)
+        : [];
 
       let notificationMessage: Message | null = null;
       if (existingNotification?.observed_notification_message_id) {
@@ -257,7 +268,7 @@ export class NotificationManager implements INotificationManager {
           notificationMessage = await existingMessage.edit({
             allowedMentions: this.createAdminAllowedMentions(),
             embeds: [embed],
-            components: [],
+            components,
           });
         }
       }
@@ -268,7 +279,7 @@ export class NotificationManager implements INotificationManager {
           content: adminNotificationRoleId ? `<@&${adminNotificationRoleId}>` : undefined,
           allowedMentions: this.createAdminAllowedMentions(adminNotificationRoleId),
           embeds: [embed],
-          components: [],
+          components,
         });
       }
 
@@ -288,6 +299,66 @@ export class NotificationManager implements INotificationManager {
     } catch (error) {
       console.error('Failed to upsert observed detection notification:', error);
       return null;
+    }
+  }
+
+  public async markObservedDetectionActionTaken(
+    detectionEventId: string,
+    actionDescription: string,
+    admin: User
+  ): Promise<boolean> {
+    try {
+      const detectionEvent = await this.detectionEventsRepository.findById(detectionEventId);
+      if (!detectionEvent?.server_id) {
+        return false;
+      }
+
+      const metadata = this.metadataToRecord(detectionEvent.metadata) as ObservedDetectionMetadata;
+      if (!metadata.observed_notification_message_id) {
+        return false;
+      }
+
+      const serverConfig = await this.configService.getServerConfig(detectionEvent.server_id);
+      const notificationChannel = await this.getObservedDetectionNotificationChannel(
+        detectionEvent.server_id,
+        getDetectionResponseSettings(serverConfig.settings)
+      );
+      if (!notificationChannel) {
+        return false;
+      }
+
+      const message = await notificationChannel.messages
+        .fetch(metadata.observed_notification_message_id)
+        .catch(() => null);
+      if (!message) {
+        return false;
+      }
+
+      const updatedEmbed = EmbedBuilder.from(message.embeds[0]);
+      const timestamp = Math.floor(Date.now() / 1000);
+      const field = {
+        name: 'Action Taken',
+        value: `<@${admin.id}> ${actionDescription} <t:${timestamp}:R>`,
+        inline: false,
+      };
+      const fieldIndex = updatedEmbed.data.fields?.findIndex(
+        (existingField) => existingField.name === field.name
+      );
+      if (fieldIndex !== undefined && fieldIndex > -1) {
+        updatedEmbed.spliceFields(fieldIndex, 1, field);
+      } else {
+        updatedEmbed.addFields(field);
+      }
+
+      await message.edit({
+        allowedMentions: { parse: [] },
+        embeds: [updatedEmbed],
+        components: [],
+      });
+      return true;
+    } catch (error) {
+      console.error('Failed to mark observed detection action:', error);
+      return false;
     }
   }
 
@@ -458,10 +529,20 @@ export class NotificationManager implements INotificationManager {
     windowMinutes: number
   ): ObservedDetectionMetadata | null {
     const cutoff = Date.now() - windowMinutes * 60 * 1000;
+    const actionedMessageIds = new Set(
+      detectionEvents
+        .map((event) => this.metadataToRecord(event.metadata) as ObservedDetectionMetadata)
+        .filter((metadata) => metadata.observed_action)
+        .map((metadata) => metadata.observed_notification_message_id)
+        .filter((messageId): messageId is string => typeof messageId === 'string')
+    );
 
     for (const event of detectionEvents) {
       const metadata = this.metadataToRecord(event.metadata) as ObservedDetectionMetadata;
       if (!metadata.observed_notification_message_id) {
+        continue;
+      }
+      if (actionedMessageIds.has(metadata.observed_notification_message_id)) {
         continue;
       }
 
@@ -887,6 +968,36 @@ export class NotificationManager implements INotificationManager {
 
     // Add buttons to an action row
     return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
+  }
+
+  private createObservedActionRows(
+    userId: string,
+    detectionEventId: string
+  ): ActionRowBuilder<ButtonBuilder>[] {
+    return [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`observed:open:${userId}:${detectionEventId}`)
+          .setLabel('Open Case')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`observed:restrict:${userId}:${detectionEventId}`)
+          .setLabel('Restrict')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId(`observed:ban:${userId}:${detectionEventId}`)
+          .setLabel('Ban')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId(`observed:dismiss_menu:${userId}:${detectionEventId}`)
+          .setLabel('Dismiss...')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`observed:history:${userId}:${detectionEventId}`)
+          .setLabel('History')
+          .setStyle(ButtonStyle.Secondary)
+      ),
+    ];
   }
 
   /**

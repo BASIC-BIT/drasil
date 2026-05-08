@@ -60,6 +60,7 @@ import {
   DETECTION_RESPONSE_MODE_SETTING_KEY,
   DETECTION_RESPONSE_MODES,
   OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY,
+  OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY,
   OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY,
   OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES_SETTING_KEY,
   getDetectionResponseSettings,
@@ -307,6 +308,16 @@ export class CommandHandler implements ICommandHandler {
                 .setDescription(
                   'Allow automatic detection scans for members with moderation permissions'
                 )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('ban-reason-require')
+                .setDescription('Require a reason when banning from observed notifications')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('ban-reason-optional')
+                .setDescription('Allow the default reason when banning from observed notifications')
             )
         )
         .addSubcommandGroup((group) =>
@@ -870,6 +881,7 @@ export class CommandHandler implements ICommandHandler {
       `Observed notification channel: ${settings.observedNotificationChannelId ? `<#${settings.observedNotificationChannelId}>` : '`admin_channel_id` fallback'}`,
       `Observed notification threshold: \`${settings.observedMinConfidenceThreshold}%\``,
       `Observed notification window: \`${settings.observedNotificationWindowMinutes} minutes\``,
+      `Observed ban reason required: \`${settings.observedActionBanRequiresReason ? 'yes' : 'no'}\``,
       `Guild ID: \`${guildId}\``,
     ].join('\n');
   }
@@ -1060,6 +1072,23 @@ export class CommandHandler implements ICommandHandler {
           await interaction.reply({
             content:
               'Updated automatic detection moderator/admin exemption.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'ban-reason-require':
+        case 'ban-reason-optional': {
+          const required = subcommand === 'ban-reason-require';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY]: required,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated observed notification ban reason policy.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
             flags: MessageFlags.Ephemeral,
             allowedMentions: { parse: [] },
