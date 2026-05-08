@@ -75,7 +75,10 @@ describe('NotificationManager (unit)', () => {
     };
     configService = {
       getAdminChannel: jest.fn().mockResolvedValue(adminChannel as unknown as TextChannel),
-      getServerConfig: jest.fn().mockResolvedValue({ admin_notification_role_id: null } as any),
+      getServerConfig: jest.fn().mockResolvedValue({
+        admin_notification_role_id: null,
+        settings: {},
+      } as any),
     } as unknown as IConfigService;
   });
 
@@ -368,6 +371,37 @@ describe('NotificationManager (unit)', () => {
 
     expect(adminChannel.messages.fetch).not.toHaveBeenCalled();
     expect(adminChannel.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears observed action buttons even if the notification embed is missing', async () => {
+    const detectionEvent = await detectionRepository.create({
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+      metadata: { observed_notification_message_id: 'message-1' },
+    });
+    const message: MockMessage = {
+      id: 'message-1',
+      embeds: [],
+      edit: jest.fn().mockResolvedValue(undefined),
+    };
+    adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    const marked = await manager.markObservedDetectionActionTaken(
+      detectionEvent.id,
+      'dismissed this alert',
+      { id: 'admin-1' } as User
+    );
+
+    expect(marked).toBe(false);
+    expect(message.edit).toHaveBeenCalledWith({
+      allowedMentions: { parse: [] },
+      components: [],
+    });
   });
 
   it('does not include a mention payload when editing an existing notification (even if role is configured)', async () => {

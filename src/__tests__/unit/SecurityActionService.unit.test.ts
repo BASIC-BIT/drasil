@@ -506,6 +506,33 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it('does not action an already handled observed detection', async () => {
+    const guildId = 'guild-observed-actioned';
+    const userId = 'user-observed-actioned';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.88,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+      metadata: { observed_action: AdminActionType.DISMISS },
+    });
+
+    const opened = await buildService().openObservedDetectionCase(
+      member,
+      detectionEvent.id,
+      moderator
+    );
+
+    expect(opened).toBe(false);
+    expect(await verificationEventRepository.findByUserAndServer(userId, guildId)).toHaveLength(0);
+    expect(adminActionService.recordAction).not.toHaveBeenCalled();
+    expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
+  });
+
   it('records false positive dismissal without opening a case', async () => {
     const guildId = 'guild-observed-dismiss';
     const userId = 'user-observed-dismiss';

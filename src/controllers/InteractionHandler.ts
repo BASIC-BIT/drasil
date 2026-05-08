@@ -550,14 +550,15 @@ export class InteractionHandler implements IInteractionHandler {
     }
 
     const moderationPermissions = this.getObservedModerationPermissions();
-    const canModerate = await this.hasAnyPermission(interaction, guildId, moderationPermissions);
-    const canBan = await this.hasAnyPermission(interaction, guildId, [
-      PermissionFlagsBits.BanMembers,
-    ]);
+    let canModerate: boolean | null = null;
+    const hasModerationPermission = async (): Promise<boolean> => {
+      canModerate ??= await this.hasAnyPermission(interaction, guildId, moderationPermissions);
+      return canModerate;
+    };
 
     switch (parsed.action) {
       case 'open':
-        if (!canModerate) {
+        if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
             interaction,
             'You need moderation permissions to open a case.'
@@ -569,7 +570,7 @@ export class InteractionHandler implements IInteractionHandler {
         return;
 
       case 'restrict':
-        if (!canModerate) {
+        if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
             interaction,
             'You need moderation permissions to restrict a user.'
@@ -586,7 +587,9 @@ export class InteractionHandler implements IInteractionHandler {
         return;
 
       case 'ban':
-        if (!canBan) {
+        if (
+          !(await this.hasAnyPermission(interaction, guildId, [PermissionFlagsBits.BanMembers]))
+        ) {
           await this.replyPermissionDenied(
             interaction,
             'You need Ban Members permission to ban a user.'
@@ -602,7 +605,7 @@ export class InteractionHandler implements IInteractionHandler {
         return;
 
       case 'dismiss_menu':
-        if (!canModerate) {
+        if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
             interaction,
             'You need moderation permissions to dismiss an alert.'
@@ -614,7 +617,7 @@ export class InteractionHandler implements IInteractionHandler {
 
       case 'dismiss':
       case 'false_positive':
-        if (!canModerate) {
+        if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
             interaction,
             'You need moderation permissions to dismiss an alert.'
@@ -634,7 +637,7 @@ export class InteractionHandler implements IInteractionHandler {
         return;
 
       case 'history':
-        if (!canModerate) {
+        if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
             interaction,
             'You need moderation permissions to view history.'
@@ -659,13 +662,15 @@ export class InteractionHandler implements IInteractionHandler {
     detectionEventId: string
   ): Promise<void> {
     const member = await this.getObservedTargetMember(guildId, userId);
-    await this.securityActionService.openObservedDetectionCase(
+    const opened = await this.securityActionService.openObservedDetectionCase(
       member,
       detectionEventId,
       interaction.user
     );
     await interaction.followUp({
-      content: `Opened a verification case for <@${userId}>.`,
+      content: opened
+        ? `Opened a verification case for <@${userId}>.`
+        : `This observed alert for <@${userId}> was already actioned.`,
       flags: MessageFlags.Ephemeral,
     });
   }
@@ -677,13 +682,15 @@ export class InteractionHandler implements IInteractionHandler {
     detectionEventId: string
   ): Promise<void> {
     const member = await this.getObservedTargetMember(guildId, userId);
-    await this.securityActionService.restrictObservedDetection(
+    const restricted = await this.securityActionService.restrictObservedDetection(
       member,
       detectionEventId,
       interaction.user
     );
     await interaction.followUp({
-      content: `Restricted <@${userId}> and opened a verification case.`,
+      content: restricted
+        ? `Restricted <@${userId}> and opened a verification case.`
+        : `This observed alert for <@${userId}> was already actioned.`,
       flags: MessageFlags.Ephemeral,
     });
   }
@@ -753,17 +760,33 @@ export class InteractionHandler implements IInteractionHandler {
     }
 
     const reason = providedReason || OBSERVED_BAN_DEFAULT_REASON;
-    const member = await this.getObservedTargetMember(interaction.guildId, parsed.userId);
-    await this.securityActionService.banObservedDetection(
-      member,
-      parsed.detectionEventId,
-      interaction.user,
-      reason
-    );
-    await interaction.reply({
-      content: `Banned <@${parsed.userId}>.`,
-      flags: MessageFlags.Ephemeral,
-    });
+    try {
+      const member = await this.getObservedTargetMember(interaction.guildId, parsed.userId);
+      const banned = await this.securityActionService.banObservedDetection(
+        member,
+        parsed.detectionEventId,
+        interaction.user,
+        reason
+      );
+      await interaction.reply({
+        content: banned
+          ? `Banned <@${parsed.userId}>.`
+          : `This observed alert for <@${parsed.userId}> was already actioned.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error('Error handling observed ban modal submission:', error);
+      const response = {
+        content:
+          'Failed to ban from the observed alert. A verification case may have been opened; check the case before retrying.',
+        flags: MessageFlags.Ephemeral,
+      } as const;
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(response);
+      } else {
+        await interaction.reply(response);
+      }
+    }
   }
 
   private async showObservedDismissOptions(
@@ -797,15 +820,16 @@ export class InteractionHandler implements IInteractionHandler {
     actionType: AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE
   ): Promise<void> {
     const member = await this.getObservedTargetMember(guildId, userId);
-    await this.securityActionService.dismissObservedDetection(
+    const dismissed = await this.securityActionService.dismissObservedDetection(
       member,
       detectionEventId,
       interaction.user,
       actionType
     );
     await interaction.followUp({
-      content:
-        actionType === AdminActionType.FALSE_POSITIVE
+      content: !dismissed
+        ? `This observed alert for <@${userId}> was already actioned.`
+        : actionType === AdminActionType.FALSE_POSITIVE
           ? `Marked the detection for <@${userId}> as a false positive.`
           : `Dismissed the observed alert for <@${userId}>.`,
       flags: MessageFlags.Ephemeral,

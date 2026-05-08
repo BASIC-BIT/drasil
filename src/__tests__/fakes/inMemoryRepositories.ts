@@ -178,6 +178,31 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     this.events[eventIndex] = updated;
     return { ...updated };
   }
+
+  async claimObservedAction(
+    detectionEventId: string,
+    metadata: Record<string, unknown>
+  ): Promise<DetectionEvent | null> {
+    const eventIndex = this.events.findIndex((item) => item.id === detectionEventId);
+    if (eventIndex === -1) {
+      return null;
+    }
+
+    const existingMetadata = this.events[eventIndex].metadata ?? {};
+    if (existingMetadata.observed_action) {
+      return null;
+    }
+
+    const updated = {
+      ...this.events[eventIndex],
+      metadata: {
+        ...existingMetadata,
+        ...metadata,
+      },
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
 }
 
 export class InMemoryVerificationEventRepository implements IVerificationEventRepository {

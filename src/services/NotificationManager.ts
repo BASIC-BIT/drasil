@@ -334,6 +334,11 @@ export class NotificationManager implements INotificationManager {
         return false;
       }
 
+      if (!message.embeds.length) {
+        await message.edit({ allowedMentions: { parse: [] }, components: [] });
+        return false;
+      }
+
       const updatedEmbed = EmbedBuilder.from(message.embeds[0]);
       const timestamp = Math.floor(Date.now() / 1000);
       const field = {
@@ -1117,6 +1122,10 @@ export class NotificationManager implements INotificationManager {
         return false;
       }
 
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      }
+
       // Get all detection events for this user in this server
       const detectionEvents = await this.detectionEventsRepository.findByServerAndUser(
         interaction.guildId,
@@ -1124,9 +1133,8 @@ export class NotificationManager implements INotificationManager {
       );
 
       if (detectionEvents.length === 0) {
-        await interaction.reply({
+        await interaction.editReply({
           content: 'No detection history found.',
-          flags: MessageFlags.Ephemeral,
         });
         return true;
       }
@@ -1142,7 +1150,7 @@ export class NotificationManager implements INotificationManager {
       const buffer = Buffer.from(fileContent, 'utf-8');
 
       // Send the file as an ephemeral message
-      await interaction.reply({
+      await interaction.editReply({
         content: `Detection history for <@${userId}>:`,
         files: [
           {
@@ -1150,16 +1158,21 @@ export class NotificationManager implements INotificationManager {
             attachment: buffer,
           },
         ],
-        flags: MessageFlags.Ephemeral,
       });
 
       return true;
     } catch (error) {
       console.error('Failed to handle history button click:', error);
-      await interaction.reply({
-        content: 'Failed to fetch detection history. Please try again later.',
-        flags: MessageFlags.Ephemeral,
-      });
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({
+          content: 'Failed to fetch detection history. Please try again later.',
+        });
+      } else {
+        await interaction.reply({
+          content: 'Failed to fetch detection history. Please try again later.',
+          flags: MessageFlags.Ephemeral,
+        });
+      }
       return false;
     }
   }

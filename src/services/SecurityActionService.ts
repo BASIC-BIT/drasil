@@ -317,19 +317,21 @@ export class SecurityActionService implements ISecurityActionService {
     detectionEvent: DetectionEvent,
     moderator: User,
     actionType: AdminActionType
-  ): Promise<void> {
-    const metadata =
-      detectionEvent.metadata &&
-      typeof detectionEvent.metadata === 'object' &&
-      !Array.isArray(detectionEvent.metadata)
-        ? detectionEvent.metadata
-        : {};
-    await this.detectionEventsRepository.updateMetadata(detectionEvent.id, {
-      ...metadata,
+  ): Promise<DetectionEvent | null> {
+    return this.detectionEventsRepository.claimObservedAction(detectionEvent.id, {
       observed_action: actionType,
       observed_action_by: moderator.id,
       observed_action_at: new Date().toISOString(),
     });
+  }
+
+  private hasObservedAction(detectionEvent: DetectionEvent): boolean {
+    return Boolean(
+      detectionEvent.metadata &&
+      typeof detectionEvent.metadata === 'object' &&
+      !Array.isArray(detectionEvent.metadata) &&
+      detectionEvent.metadata.observed_action
+    );
   }
 
   private async recordObservedAction(data: {
@@ -602,19 +604,25 @@ export class SecurityActionService implements ISecurityActionService {
     moderator: User
   ): Promise<boolean> {
     const detectionEvent = await this.getObservedDetectionForMember(member, detectionEventId);
+    if (this.hasObservedAction(detectionEvent)) {
+      return false;
+    }
     const verificationEvent = await this.ensureObservedCase(member, detectionEvent);
-    await this.recordObservedAction({
-      member,
-      moderator,
-      detectionEvent,
-      verificationEvent,
-      actionType: AdminActionType.OPEN_CASE,
-    });
-    await this.updateDetectionMetadataForObservedAction(
+    const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
       detectionEvent,
       moderator,
       AdminActionType.OPEN_CASE
     );
+    if (!claimedDetectionEvent) {
+      return false;
+    }
+    await this.recordObservedAction({
+      member,
+      moderator,
+      detectionEvent: claimedDetectionEvent,
+      verificationEvent,
+      actionType: AdminActionType.OPEN_CASE,
+    });
     await this.notificationManager.markObservedDetectionActionTaken(
       detectionEvent.id,
       'opened a verification case',
@@ -629,20 +637,26 @@ export class SecurityActionService implements ISecurityActionService {
     moderator: User
   ): Promise<boolean> {
     const detectionEvent = await this.getObservedDetectionForMember(member, detectionEventId);
+    if (this.hasObservedAction(detectionEvent)) {
+      return false;
+    }
     const verificationEvent = await this.ensureObservedCase(member, detectionEvent);
     await this.userModerationService.restrictUser(member);
-    await this.recordObservedAction({
-      member,
-      moderator,
-      detectionEvent,
-      verificationEvent,
-      actionType: AdminActionType.RESTRICT,
-    });
-    await this.updateDetectionMetadataForObservedAction(
+    const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
       detectionEvent,
       moderator,
       AdminActionType.RESTRICT
     );
+    if (!claimedDetectionEvent) {
+      return false;
+    }
+    await this.recordObservedAction({
+      member,
+      moderator,
+      detectionEvent: claimedDetectionEvent,
+      verificationEvent,
+      actionType: AdminActionType.RESTRICT,
+    });
     await this.notificationManager.markObservedDetectionActionTaken(
       detectionEvent.id,
       'restricted this user',
@@ -658,21 +672,24 @@ export class SecurityActionService implements ISecurityActionService {
     reason: string
   ): Promise<boolean> {
     const detectionEvent = await this.getObservedDetectionForMember(member, detectionEventId);
-    const verificationEvent = await this.ensureObservedCase(member, detectionEvent);
-    await this.userModerationService.banUser(member, reason, moderator, detectionEvent.id);
-    await this.updateDetectionMetadataForObservedAction(
+    if (this.hasObservedAction(detectionEvent)) {
+      return false;
+    }
+    await this.ensureObservedCase(member, detectionEvent);
+    const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
       detectionEvent,
       moderator,
       AdminActionType.BAN
     );
+    if (!claimedDetectionEvent) {
+      return false;
+    }
+
+    await this.userModerationService.banUser(member, reason, moderator, detectionEvent.id);
     await this.notificationManager.markObservedDetectionActionTaken(
       detectionEvent.id,
       'banned this user',
       moderator
-    );
-    await this.notificationManager.updateNotificationButtons(
-      verificationEvent,
-      VerificationStatus.BANNED
     );
     return true;
   }
@@ -684,19 +701,29 @@ export class SecurityActionService implements ISecurityActionService {
     actionType: AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE
   ): Promise<boolean> {
     const detectionEvent = await this.getObservedDetectionForMember(member, detectionEventId);
+    if (this.hasObservedAction(detectionEvent)) {
+      return false;
+    }
     await this.ensureEntitiesExist(
       member.guild.id,
       member.id,
       member.user.username,
       member.joinedAt?.toISOString()
     );
+    const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
+      detectionEvent,
+      moderator,
+      actionType
+    );
+    if (!claimedDetectionEvent) {
+      return false;
+    }
     await this.recordObservedAction({
       member,
       moderator,
-      detectionEvent,
+      detectionEvent: claimedDetectionEvent,
       actionType,
     });
-    await this.updateDetectionMetadataForObservedAction(detectionEvent, moderator, actionType);
     await this.notificationManager.markObservedDetectionActionTaken(
       detectionEvent.id,
       actionType === AdminActionType.FALSE_POSITIVE
