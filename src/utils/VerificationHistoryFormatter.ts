@@ -1,4 +1,4 @@
-import { VerificationEventWithActions, AdminAction } from '../repositories/types';
+import { VerificationEventWithActions, AdminAction, AdminActionType } from '../repositories/types';
 
 export class VerificationHistoryFormatter {
   static formatHistory(
@@ -51,20 +51,32 @@ export class VerificationHistoryFormatter {
     let output = '';
 
     switch (action.action_type) {
-      case 'verify':
+      case AdminActionType.VERIFY:
         output = `✅ Verified by ${adminMention}`;
         break;
-      case 'reject':
+      case AdminActionType.REJECT:
         output = `❌ Rejected by ${adminMention}`;
         break;
-      case 'ban':
+      case AdminActionType.BAN:
         output = `🔨 Banned by ${adminMention}`;
         break;
-      case 'reopen':
+      case AdminActionType.REOPEN:
         output = `🔄 Verification reopened by ${adminMention}`;
         break;
-      case 'create_thread':
+      case AdminActionType.CREATE_THREAD:
         output = `📝 Verification thread created by ${adminMention}`;
+        break;
+      case AdminActionType.OPEN_CASE:
+        output = `📝 Verification case opened by ${adminMention}`;
+        break;
+      case AdminActionType.RESTRICT:
+        output = `🔒 Restricted by ${adminMention}`;
+        break;
+      case AdminActionType.DISMISS:
+        output = `Dismissed by ${adminMention}`;
+        break;
+      case AdminActionType.FALSE_POSITIVE:
+        output = `Marked false positive by ${adminMention}`;
         break;
       default:
         output = `Action taken by ${adminMention}`;
@@ -72,8 +84,11 @@ export class VerificationHistoryFormatter {
 
     output += ` at ${timestamp}`;
 
-    if (action.previous_status !== action.new_status) {
-      // action.previous_status is always a truthy enum string, so `|| 'none'` is unnecessary.
+    if (
+      action.previous_status &&
+      action.new_status &&
+      action.previous_status !== action.new_status
+    ) {
       output += `\n  Status changed from ${action.previous_status} to ${action.new_status}`;
     }
 
