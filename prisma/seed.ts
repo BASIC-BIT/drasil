@@ -18,6 +18,7 @@ async function main(): Promise<void> {
       // Prisma handles JSON automatically
       auto_restrict: false,
       detection_response_mode: 'notify_only',
+      automatic_detection_exempt_moderators: true,
       observed_detection_notification_channel_id: '1278730769572958238',
       observed_detection_min_confidence_threshold: 70,
       observed_detection_notification_window_minutes: 60,

@@ -56,6 +56,7 @@ import {
   SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
 } from '../constants/setupVerificationWizard';
 import {
+  AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY,
   DETECTION_RESPONSE_MODE_SETTING_KEY,
   DETECTION_RESPONSE_MODES,
   OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY,
@@ -293,6 +294,18 @@ export class CommandHandler implements ICommandHandler {
                     .setRequired(true)
                     .setMinValue(1)
                     .setMaxValue(1440)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('moderator-exemption-enable')
+                .setDescription('Skip automatic detection for members with moderation permissions')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('moderator-exemption-disable')
+                .setDescription(
+                  'Allow automatic detection scans for members with moderation permissions'
                 )
             )
         )
@@ -853,6 +866,7 @@ export class CommandHandler implements ICommandHandler {
   ): string {
     return [
       `Mode: \`${settings.mode}\``,
+      `Moderator/admin exemption: \`${settings.automaticDetectionExemptModerators ? 'enabled' : 'disabled'}\``,
       `Observed notification channel: ${settings.observedNotificationChannelId ? `<#${settings.observedNotificationChannelId}>` : '`admin_channel_id` fallback'}`,
       `Observed notification threshold: \`${settings.observedMinConfidenceThreshold}%\``,
       `Observed notification window: \`${settings.observedNotificationWindowMinutes} minutes\``,
@@ -1029,6 +1043,23 @@ export class CommandHandler implements ICommandHandler {
           await interaction.reply({
             content:
               'Updated observe-only notification window.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'moderator-exemption-enable':
+        case 'moderator-exemption-disable': {
+          const enabled = subcommand === 'moderator-exemption-enable';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY]: enabled,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated automatic detection moderator/admin exemption.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
             flags: MessageFlags.Ephemeral,
             allowedMentions: { parse: [] },

@@ -242,6 +242,137 @@ describe('DetectionOrchestrator (unit)', () => {
     expect(result.reasons).not.toContain('GPT analysis indicates user is likely legitimate');
   });
 
+  it('downgrades bare suspicious keywords for an established user when GPT finds insufficient signal', async () => {
+    heuristicService.analyzeMessage.mockReturnValue({
+      result: 'SUSPICIOUS',
+      reasons: ['Message contains suspicious keywords or patterns'],
+    });
+    gptService.analyzeProfile.mockResolvedValue(
+      makeGptAnalysis({
+        result: 'OK',
+        confidence: 0.7,
+        reasons: ['AI analysis indicates user/message context is likely legitimate'],
+        reasonCodes: ['insufficient_signal', 'trusted_member_context'],
+        primarySignal: 'none',
+        summary: 'Keyword-only context lacks scam mechanics.',
+      })
+    );
+
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository
+    );
+
+    const profile: UserProfileData = {
+      username: 'established-user',
+      accountCreatedAt: new Date('2020-01-01T00:00:00.000Z'),
+      joinedServerAt: new Date('2020-01-01T00:00:00.000Z'),
+      recentMessages: ['normal conversation'],
+      channelContext: ['other_user: joking about old scams'],
+      hasModerationPermissions: false,
+      moderationPermissions: [],
+    };
+
+    const result = await orchestrator.detectMessage(serverId, userId, 'free nitro', profile);
+
+    expect(gptService.analyzeProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pastDetectionCount: 0,
+        recentHighConfidenceDetectionCount: 0,
+        recentMessages: ['normal conversation', 'free nitro'],
+      })
+    );
+    expect(result.label).toBe('OK');
+    expect(result.detectionEventId).toBeUndefined();
+
+    const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
+    expect(events).toHaveLength(0);
+  });
+
+  it('uses GPT confidence instead of forcing every GPT suspicious message to high confidence', async () => {
+    heuristicService.analyzeMessage.mockReturnValue({
+      result: 'SUSPICIOUS',
+      reasons: ['Message contains suspicious keywords or patterns'],
+    });
+    gptService.analyzeProfile.mockResolvedValue(
+      makeGptAnalysis({
+        result: 'SUSPICIOUS',
+        confidence: 0.6,
+        reasons: ['AI analysis flagged recent message context as suspicious'],
+        reasonCodes: ['suspicious_keyword', 'insufficient_signal'],
+        primarySignal: 'message_content',
+        summary: 'Some weak message-content signal exists.',
+      })
+    );
+
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository
+    );
+
+    const profile: UserProfileData = {
+      username: 'established-user',
+      accountCreatedAt: new Date('2020-01-01T00:00:00.000Z'),
+      joinedServerAt: new Date('2020-01-01T00:00:00.000Z'),
+      recentMessages: [],
+    };
+
+    const result = await orchestrator.detectMessage(serverId, userId, 'free nitro', profile);
+
+    expect(result.label).toBe('SUSPICIOUS');
+    expect(result.confidence).toBeCloseTo(0.2);
+    expect(result.confidence).toBeLessThan(0.7);
+  });
+
+  it('keeps strong link-and-CTA scam evidence suspicious for established users', async () => {
+    heuristicService.analyzeMessage.mockReturnValue({
+      result: 'SUSPICIOUS',
+      reasons: ['Message contains suspicious keywords or patterns'],
+    });
+    gptService.analyzeProfile.mockResolvedValue(
+      makeGptAnalysis({
+        result: 'SUSPICIOUS',
+        confidence: 0.95,
+        reasons: ['AI analysis flagged recent message context as suspicious'],
+        reasonCodes: ['scam_link', 'call_to_action'],
+        primarySignal: 'message_content',
+        summary: 'Link and call-to-action match scam mechanics.',
+      })
+    );
+
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository
+    );
+
+    const profile: UserProfileData = {
+      username: 'established-user',
+      accountCreatedAt: new Date('2020-01-01T00:00:00.000Z'),
+      joinedServerAt: new Date('2020-01-01T00:00:00.000Z'),
+      recentMessages: ['normal conversation'],
+    };
+
+    const result = await orchestrator.detectMessage(
+      serverId,
+      userId,
+      'free nitro claim here https://example.test',
+      profile
+    );
+
+    expect(result.label).toBe('SUSPICIOUS');
+    expect(result.confidence).toBeCloseTo(0.9);
+    expect(result.detectionEventId).toBeDefined();
+  });
+
   it('does not create a detection event for an OK new join', async () => {
     gptService.analyzeProfile.mockResolvedValue(
       makeGptAnalysis({

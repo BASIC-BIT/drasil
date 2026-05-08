@@ -24,6 +24,27 @@ import {
   getDetectionResponseSettings,
 } from '../utils/detectionResponseSettings';
 
+const RECENT_USER_CONTEXT_MESSAGE_LIMIT = 5;
+const RECENT_USER_CONTEXT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const RECENT_USER_CONTEXT_CLEANUP_INTERVAL_MS = 60 * 1000;
+const RECENT_USER_CONTEXT_MAX_USERS_PER_SERVER = 1000;
+const RECENT_USER_CONTEXT_MAX_SERVERS = 100;
+const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
+
+interface RecentUserMessageContext {
+  content: string;
+  createdTimestamp: number;
+  channelId?: string;
+}
+
+type CachedMessageChannel = Message['channel'] & {
+  messages: {
+    cache: {
+      values(): Iterable<Message>;
+    };
+  };
+};
+
 // Load environment variables
 dotenv.config();
 
@@ -46,6 +67,8 @@ export class EventHandler implements IEventHandler {
   private verificationThreadAnalysisService: IVerificationThreadAnalysisService;
   private serverConfigWarmups: Set<string> = new Set();
   private configInitializePromise: Promise<void> | null = null;
+  private recentMessagesByServer: Map<string, Map<string, RecentUserMessageContext[]>> = new Map();
+  private lastRecentMessageContextCleanupAt = 0;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -130,14 +153,16 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    if (this.isAutomaticDetectionExempt(message.member)) {
-      return;
-    }
-
     // Extract user data for detection
     const userId = message.author.id;
     const serverId = message.guild.id;
     const content = message.content;
+    const recentMessages = this.getRecentUserMessages(serverId, userId);
+
+    if (this.isAutomaticDetectionExemptByCachedSettings(message.member)) {
+      this.rememberRecentMessage(message);
+      return;
+    }
 
     try {
       // Ensure the config cache init attempt has completed before processing messages.
@@ -165,9 +190,18 @@ export class EventHandler implements IEventHandler {
         );
         return;
       }
+      if (
+        responseSettings.automaticDetectionExemptModerators &&
+        this.hasAutomaticDetectionExemptPermissions(message.member)
+      ) {
+        return;
+      }
 
       // Get user profile data for detection context
-      const profileData = this.extractUserProfileData(message.member);
+      const profileData = this.extractUserProfileData(message.member, {
+        recentMessages,
+        channelContext: this.getCachedChannelContext(message),
+      });
 
       // Use the detection orchestrator to analyze the message
       const detectionResult = await this.detectionOrchestrator.detectMessage(
@@ -195,6 +229,8 @@ export class EventHandler implements IEventHandler {
           `Error name: ${error.name}, message: ${error.message}, stack: ${error.stack}`
         );
       }
+    } finally {
+      this.rememberRecentMessage(message);
     }
   }
 
@@ -330,7 +366,7 @@ export class EventHandler implements IEventHandler {
     try {
       console.log(`New member joined: ${member.user.tag} (${member.id})`);
 
-      if (this.isAutomaticDetectionExempt(member)) {
+      if (this.isAutomaticDetectionExemptByCachedSettings(member)) {
         return;
       }
 
@@ -342,6 +378,12 @@ export class EventHandler implements IEventHandler {
         console.log(
           `Automatic detection is disabled for guild ${member.guild.id}; skipping join scan.`
         );
+        return;
+      }
+      if (
+        responseSettings.automaticDetectionExemptModerators &&
+        this.hasAutomaticDetectionExemptPermissions(member)
+      ) {
         return;
       }
 
@@ -371,7 +413,10 @@ export class EventHandler implements IEventHandler {
    * Helper method to extract user profile data for GPT analysis
    * Only includes data directly available through Discord.js API
    */
-  private extractUserProfileData(member: GuildMember): UserProfileData {
+  private extractUserProfileData(
+    member: GuildMember,
+    context?: Pick<UserProfileData, 'recentMessages' | 'channelContext'>
+  ): UserProfileData {
     // Ensure serverId and userId are included for detectNewJoin context
     return {
       serverId: member.guild.id, // Added serverId
@@ -381,11 +426,15 @@ export class EventHandler implements IEventHandler {
       nickname: member.nickname || undefined,
       accountCreatedAt: new Date(member.user.createdTimestamp),
       joinedServerAt: member.joinedAt ? new Date(member.joinedAt) : new Date(),
-      recentMessages: [], // This might need adjustment based on how it's used
+      recentMessages: context?.recentMessages ?? [],
+      channelContext: context?.channelContext ?? [],
+      isGuildOwner: member.guild.ownerId === member.id,
+      hasModerationPermissions: this.hasAutomaticDetectionExemptPermissions(member),
+      moderationPermissions: this.getModerationPermissionSummary(member),
     };
   }
 
-  private isAutomaticDetectionExempt(member: GuildMember): boolean {
+  private hasAutomaticDetectionExemptPermissions(member: GuildMember): boolean {
     return member.permissions.any([
       PermissionFlagsBits.Administrator,
       PermissionFlagsBits.ManageGuild,
@@ -393,6 +442,143 @@ export class EventHandler implements IEventHandler {
       PermissionFlagsBits.KickMembers,
       PermissionFlagsBits.BanMembers,
     ]);
+  }
+
+  private isAutomaticDetectionExemptByCachedSettings(member: GuildMember): boolean {
+    const cachedConfig = this.configService.getCachedServerConfig(member.guild.id);
+    if (!cachedConfig?.settings) {
+      return false;
+    }
+
+    const responseSettings = getDetectionResponseSettings(cachedConfig.settings);
+
+    return (
+      responseSettings.automaticDetectionExemptModerators &&
+      this.hasAutomaticDetectionExemptPermissions(member)
+    );
+  }
+
+  private getModerationPermissionSummary(member: GuildMember): string[] {
+    const permissions = [
+      { flag: PermissionFlagsBits.Administrator, label: 'administrator' },
+      { flag: PermissionFlagsBits.ManageGuild, label: 'manage_guild' },
+      { flag: PermissionFlagsBits.ModerateMembers, label: 'moderate_members' },
+      { flag: PermissionFlagsBits.KickMembers, label: 'kick_members' },
+      { flag: PermissionFlagsBits.BanMembers, label: 'ban_members' },
+    ];
+
+    return permissions.filter(({ flag }) => member.permissions.has(flag)).map(({ label }) => label);
+  }
+
+  private getRecentUserMessages(serverId: string, userId: string): string[] {
+    const serverMessages = this.recentMessagesByServer.get(serverId);
+    const messages = serverMessages?.get(userId) ?? [];
+    const cutoff = Date.now() - RECENT_USER_CONTEXT_MAX_AGE_MS;
+    const recentMessages = messages.filter((message) => message.createdTimestamp > cutoff);
+
+    if (serverMessages && recentMessages.length !== messages.length) {
+      if (recentMessages.length > 0) {
+        serverMessages.set(userId, recentMessages);
+      } else {
+        serverMessages.delete(userId);
+      }
+    }
+
+    return recentMessages.map((message) => message.content);
+  }
+
+  private rememberRecentMessage(message: Message): void {
+    if (!message.guild || message.author.bot) {
+      return;
+    }
+
+    const content = message.content.trim();
+    if (!content) {
+      return;
+    }
+
+    const now = Date.now();
+    this.pruneRecentMessageContext(now);
+
+    const serverId = message.guild.id;
+    const userId = message.author.id;
+    const serverMessages =
+      this.recentMessagesByServer.get(serverId) ?? new Map<string, RecentUserMessageContext[]>();
+    const cutoff = now - RECENT_USER_CONTEXT_MAX_AGE_MS;
+    const previousMessages = serverMessages.get(userId) ?? [];
+    const nextMessages = [
+      ...previousMessages.filter((entry) => entry.createdTimestamp > cutoff),
+      {
+        content,
+        createdTimestamp: message.createdTimestamp || now,
+        channelId: message.channelId,
+      },
+    ].slice(-RECENT_USER_CONTEXT_MESSAGE_LIMIT);
+
+    serverMessages.delete(userId);
+    serverMessages.set(userId, nextMessages);
+    while (serverMessages.size > RECENT_USER_CONTEXT_MAX_USERS_PER_SERVER) {
+      const oldestUserId = serverMessages.keys().next().value as string | undefined;
+      if (!oldestUserId) {
+        break;
+      }
+      serverMessages.delete(oldestUserId);
+    }
+
+    this.recentMessagesByServer.set(serverId, serverMessages);
+  }
+
+  private pruneRecentMessageContext(now: number): void {
+    if (now - this.lastRecentMessageContextCleanupAt < RECENT_USER_CONTEXT_CLEANUP_INTERVAL_MS) {
+      return;
+    }
+    this.lastRecentMessageContextCleanupAt = now;
+
+    const cutoff = now - RECENT_USER_CONTEXT_MAX_AGE_MS;
+    for (const [serverId, serverMessages] of this.recentMessagesByServer.entries()) {
+      for (const [userId, messages] of serverMessages.entries()) {
+        const recentMessages = messages.filter((message) => message.createdTimestamp > cutoff);
+        if (recentMessages.length > 0) {
+          serverMessages.set(userId, recentMessages);
+        } else {
+          serverMessages.delete(userId);
+        }
+      }
+
+      if (serverMessages.size === 0) {
+        this.recentMessagesByServer.delete(serverId);
+      }
+    }
+
+    while (this.recentMessagesByServer.size > RECENT_USER_CONTEXT_MAX_SERVERS) {
+      const oldestServerId = this.recentMessagesByServer.keys().next().value as string | undefined;
+      if (!oldestServerId) {
+        break;
+      }
+      this.recentMessagesByServer.delete(oldestServerId);
+    }
+  }
+
+  private getCachedChannelContext(message: Message): string[] {
+    try {
+      const cachedMessages = (message.channel as CachedMessageChannel).messages.cache;
+
+      return Array.from(cachedMessages.values())
+        .filter(
+          (contextMessage) =>
+            contextMessage.id !== message.id &&
+            contextMessage.createdTimestamp < message.createdTimestamp &&
+            contextMessage.author.id !== message.author.id &&
+            !contextMessage.author.bot &&
+            contextMessage.content.trim()
+        )
+        .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+        .slice(0, CHANNEL_CONTEXT_MESSAGE_LIMIT)
+        .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+        .map((contextMessage) => `other_user: ${contextMessage.content.trim()}`);
+    } catch {
+      return [];
+    }
   }
 
   /**

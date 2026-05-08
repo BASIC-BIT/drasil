@@ -7,6 +7,8 @@ export const OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY =
   'observed_detection_min_confidence_threshold';
 export const OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES_SETTING_KEY =
   'observed_detection_notification_window_minutes';
+export const AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY =
+  'automatic_detection_exempt_moderators';
 
 export const DETECTION_RESPONSE_MODES = [
   'off',
@@ -23,6 +25,7 @@ export interface DetectionResponseSettings {
   observedNotificationChannelId?: string;
   observedMinConfidenceThreshold: number;
   observedNotificationWindowMinutes: number;
+  automaticDetectionExemptModerators: boolean;
 }
 
 export const DEFAULT_OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD = 70;
@@ -75,5 +78,7 @@ export function getDetectionResponseSettings(settings: ServerSettings): Detectio
       1,
       1440
     ),
+    automaticDetectionExemptModerators:
+      settings[AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY] !== false,
   };
 }

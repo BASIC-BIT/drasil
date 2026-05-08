@@ -22,6 +22,7 @@ import {
   DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT,
 } from '../../utils/verificationThreadAnalysisSettings';
 import {
+  AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY,
   DEFAULT_OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD,
   DEFAULT_OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES,
 } from '../../utils/detectionResponseSettings';
@@ -49,6 +50,7 @@ const baseSettings: ServerSettings = {
   observed_detection_min_confidence_threshold: DEFAULT_OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD,
   observed_detection_notification_window_minutes:
     DEFAULT_OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES,
+  [AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY]: true,
 };
 
 const defaultHeuristicThreshold = globalSettings.defaultServerSettings.messageThreshold;
