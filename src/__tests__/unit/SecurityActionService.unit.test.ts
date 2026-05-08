@@ -537,7 +537,6 @@ describe('SecurityActionService (unit)', () => {
     const guildId = 'guild-observed-dismiss';
     const userId = 'user-observed-dismiss';
     const moderator = { id: 'admin-observed' } as User;
-    const member = buildMember(guildId, userId);
     const detectionEvent = await detectionEventsRepository.create({
       server_id: guildId,
       user_id: userId,
@@ -548,7 +547,8 @@ describe('SecurityActionService (unit)', () => {
     });
 
     await buildService().dismissObservedDetection(
-      member,
+      guildId,
+      userId,
       detectionEvent.id,
       moderator,
       AdminActionType.FALSE_POSITIVE
@@ -569,6 +569,65 @@ describe('SecurityActionService (unit)', () => {
     const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
     expect(updatedDetection?.metadata).toMatchObject({
       observed_action: AdminActionType.FALSE_POSITIVE,
+      observed_action_by: moderator.id,
+    });
+  });
+
+  it('releases an observed ban claim when the ban fails', async () => {
+    const guildId = 'guild-observed-ban-fails';
+    const userId = 'user-observed-ban-fails';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+    userModerationService.banUser.mockRejectedValueOnce(new Error('Missing permissions'));
+
+    await expect(
+      buildService().banObservedDetection(member, detectionEvent.id, moderator, 'Confirmed scam')
+    ).rejects.toThrow('Missing permissions');
+
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
+    expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
+    expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
+  });
+
+  it('keeps an observed ban claim when only notification update fails after banning', async () => {
+    const guildId = 'guild-observed-ban-notify-fails';
+    const userId = 'user-observed-ban-notify-fails';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+    notificationManager.markObservedDetectionActionTaken.mockRejectedValueOnce(
+      new Error('Discord unavailable')
+    );
+
+    await expect(
+      buildService().banObservedDetection(member, detectionEvent.id, moderator, 'Confirmed scam')
+    ).rejects.toThrow('Discord unavailable');
+
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(userModerationService.banUser).toHaveBeenCalledWith(
+      member,
+      'Confirmed scam',
+      moderator,
+      detectionEvent.id
+    );
+    expect(updatedDetection?.metadata).toMatchObject({
+      observed_action: AdminActionType.BAN,
       observed_action_by: moderator.id,
     });
   });

@@ -352,11 +352,13 @@ describe('InteractionHandler (unit)', () => {
     await handler.handleButtonInteraction(interaction);
 
     expect(securityActionService.dismissObservedDetection).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'user-1' }),
+      'guild-1',
+      'user-1',
       'det-1',
       interaction.user,
       AdminActionType.FALSE_POSITIVE
     );
+    expect(client.guilds.fetch).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledWith({
       content: 'Marked the detection for <@user-1> as a false positive.',
       flags: MessageFlags.Ephemeral,

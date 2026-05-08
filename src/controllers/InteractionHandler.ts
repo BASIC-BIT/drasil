@@ -819,9 +819,9 @@ export class InteractionHandler implements IInteractionHandler {
     detectionEventId: string,
     actionType: AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE
   ): Promise<void> {
-    const member = await this.getObservedTargetMember(guildId, userId);
     const dismissed = await this.securityActionService.dismissObservedDetection(
-      member,
+      guildId,
+      userId,
       detectionEventId,
       interaction.user,
       actionType

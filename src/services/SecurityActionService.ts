@@ -86,7 +86,8 @@ export interface ISecurityActionService {
   ): Promise<boolean>;
 
   dismissObservedDetection(
-    member: GuildMember,
+    guildId: string,
+    userId: string,
     detectionEventId: string,
     moderator: User,
     actionType: AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE
@@ -277,11 +278,19 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     detectionEventId: string
   ): Promise<DetectionEvent> {
+    return this.getObservedDetectionForUser(member.guild.id, member.id, detectionEventId);
+  }
+
+  private async getObservedDetectionForUser(
+    guildId: string,
+    userId: string,
+    detectionEventId: string
+  ): Promise<DetectionEvent> {
     const detectionEvent = await this.detectionEventsRepository.findById(detectionEventId);
     if (!detectionEvent) {
       throw new Error(`Detection event ${detectionEventId} not found`);
     }
-    if (detectionEvent.server_id !== member.guild.id || detectionEvent.user_id !== member.id) {
+    if (detectionEvent.server_id !== guildId || detectionEvent.user_id !== userId) {
       throw new Error(`Detection event ${detectionEventId} does not match selected member`);
     }
     return detectionEvent;
@@ -325,6 +334,18 @@ export class SecurityActionService implements ISecurityActionService {
     });
   }
 
+  private async releaseDetectionMetadataForObservedAction(
+    detectionEvent: DetectionEvent,
+    moderator: User,
+    actionType: AdminActionType
+  ): Promise<void> {
+    await this.detectionEventsRepository.releaseObservedAction(
+      detectionEvent.id,
+      actionType,
+      moderator.id
+    );
+  }
+
   private hasObservedAction(detectionEvent: DetectionEvent): boolean {
     return Boolean(
       detectionEvent.metadata &&
@@ -335,7 +356,8 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   private async recordObservedAction(data: {
-    member: GuildMember;
+    serverId: string;
+    userId: string;
     moderator: User;
     detectionEvent: DetectionEvent;
     verificationEvent?: VerificationEvent;
@@ -343,8 +365,8 @@ export class SecurityActionService implements ISecurityActionService {
     notes?: string | null;
   }): Promise<void> {
     await this.adminActionService.recordAction({
-      server_id: data.member.guild.id,
-      user_id: data.member.id,
+      server_id: data.serverId,
+      user_id: data.userId,
       admin_id: data.moderator.id,
       verification_event_id: data.verificationEvent?.id ?? null,
       detection_event_id: data.detectionEvent.id,
@@ -353,6 +375,12 @@ export class SecurityActionService implements ISecurityActionService {
       new_status: data.verificationEvent?.status ?? null,
       notes: data.notes ?? null,
     });
+  }
+
+  private async ensureObservedEntitiesExist(guildId: string, userId: string): Promise<void> {
+    await this.serverRepository.getOrCreateServer(guildId);
+    await this.userRepository.getOrCreateUser(userId);
+    await this.serverMemberRepository.upsertMember(guildId, userId, {});
   }
 
   private async handleSuspiciousMember(
@@ -607,7 +635,6 @@ export class SecurityActionService implements ISecurityActionService {
     if (this.hasObservedAction(detectionEvent)) {
       return false;
     }
-    const verificationEvent = await this.ensureObservedCase(member, detectionEvent);
     const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
       detectionEvent,
       moderator,
@@ -616,19 +643,34 @@ export class SecurityActionService implements ISecurityActionService {
     if (!claimedDetectionEvent) {
       return false;
     }
-    await this.recordObservedAction({
-      member,
-      moderator,
-      detectionEvent: claimedDetectionEvent,
-      verificationEvent,
-      actionType: AdminActionType.OPEN_CASE,
-    });
-    await this.notificationManager.markObservedDetectionActionTaken(
-      detectionEvent.id,
-      'opened a verification case',
-      moderator
-    );
-    return true;
+    let actionRecorded = false;
+    try {
+      const verificationEvent = await this.ensureObservedCase(member, detectionEvent);
+      await this.recordObservedAction({
+        serverId: member.guild.id,
+        userId: member.id,
+        moderator,
+        detectionEvent: claimedDetectionEvent,
+        verificationEvent,
+        actionType: AdminActionType.OPEN_CASE,
+      });
+      actionRecorded = true;
+      await this.notificationManager.markObservedDetectionActionTaken(
+        detectionEvent.id,
+        'opened a verification case',
+        moderator
+      );
+      return true;
+    } catch (error) {
+      if (!actionRecorded) {
+        await this.releaseDetectionMetadataForObservedAction(
+          detectionEvent,
+          moderator,
+          AdminActionType.OPEN_CASE
+        );
+      }
+      throw error;
+    }
   }
 
   public async restrictObservedDetection(
@@ -640,8 +682,6 @@ export class SecurityActionService implements ISecurityActionService {
     if (this.hasObservedAction(detectionEvent)) {
       return false;
     }
-    const verificationEvent = await this.ensureObservedCase(member, detectionEvent);
-    await this.userModerationService.restrictUser(member);
     const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
       detectionEvent,
       moderator,
@@ -650,19 +690,35 @@ export class SecurityActionService implements ISecurityActionService {
     if (!claimedDetectionEvent) {
       return false;
     }
-    await this.recordObservedAction({
-      member,
-      moderator,
-      detectionEvent: claimedDetectionEvent,
-      verificationEvent,
-      actionType: AdminActionType.RESTRICT,
-    });
-    await this.notificationManager.markObservedDetectionActionTaken(
-      detectionEvent.id,
-      'restricted this user',
-      moderator
-    );
-    return true;
+    let actionRecorded = false;
+    try {
+      const verificationEvent = await this.ensureObservedCase(member, detectionEvent);
+      await this.userModerationService.restrictUser(member);
+      await this.recordObservedAction({
+        serverId: member.guild.id,
+        userId: member.id,
+        moderator,
+        detectionEvent: claimedDetectionEvent,
+        verificationEvent,
+        actionType: AdminActionType.RESTRICT,
+      });
+      actionRecorded = true;
+      await this.notificationManager.markObservedDetectionActionTaken(
+        detectionEvent.id,
+        'restricted this user',
+        moderator
+      );
+      return true;
+    } catch (error) {
+      if (!actionRecorded) {
+        await this.releaseDetectionMetadataForObservedAction(
+          detectionEvent,
+          moderator,
+          AdminActionType.RESTRICT
+        );
+      }
+      throw error;
+    }
   }
 
   public async banObservedDetection(
@@ -675,7 +731,6 @@ export class SecurityActionService implements ISecurityActionService {
     if (this.hasObservedAction(detectionEvent)) {
       return false;
     }
-    await this.ensureObservedCase(member, detectionEvent);
     const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
       detectionEvent,
       moderator,
@@ -684,32 +739,44 @@ export class SecurityActionService implements ISecurityActionService {
     if (!claimedDetectionEvent) {
       return false;
     }
-
-    await this.userModerationService.banUser(member, reason, moderator, detectionEvent.id);
-    await this.notificationManager.markObservedDetectionActionTaken(
-      detectionEvent.id,
-      'banned this user',
-      moderator
-    );
-    return true;
+    let actionApplied = false;
+    try {
+      await this.ensureObservedCase(member, detectionEvent);
+      await this.userModerationService.banUser(member, reason, moderator, detectionEvent.id);
+      actionApplied = true;
+      await this.notificationManager.markObservedDetectionActionTaken(
+        detectionEvent.id,
+        'banned this user',
+        moderator
+      );
+      return true;
+    } catch (error) {
+      if (!actionApplied) {
+        await this.releaseDetectionMetadataForObservedAction(
+          detectionEvent,
+          moderator,
+          AdminActionType.BAN
+        );
+      }
+      throw error;
+    }
   }
 
   public async dismissObservedDetection(
-    member: GuildMember,
+    guildId: string,
+    userId: string,
     detectionEventId: string,
     moderator: User,
     actionType: AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE
   ): Promise<boolean> {
-    const detectionEvent = await this.getObservedDetectionForMember(member, detectionEventId);
+    const detectionEvent = await this.getObservedDetectionForUser(
+      guildId,
+      userId,
+      detectionEventId
+    );
     if (this.hasObservedAction(detectionEvent)) {
       return false;
     }
-    await this.ensureEntitiesExist(
-      member.guild.id,
-      member.id,
-      member.user.username,
-      member.joinedAt?.toISOString()
-    );
     const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
       detectionEvent,
       moderator,
@@ -718,20 +785,31 @@ export class SecurityActionService implements ISecurityActionService {
     if (!claimedDetectionEvent) {
       return false;
     }
-    await this.recordObservedAction({
-      member,
-      moderator,
-      detectionEvent: claimedDetectionEvent,
-      actionType,
-    });
-    await this.notificationManager.markObservedDetectionActionTaken(
-      detectionEvent.id,
-      actionType === AdminActionType.FALSE_POSITIVE
-        ? 'marked this detection as a false positive'
-        : 'dismissed this alert',
-      moderator
-    );
-    return true;
+    let actionRecorded = false;
+    try {
+      await this.ensureObservedEntitiesExist(guildId, userId);
+      await this.recordObservedAction({
+        serverId: guildId,
+        userId,
+        moderator,
+        detectionEvent: claimedDetectionEvent,
+        actionType,
+      });
+      actionRecorded = true;
+      await this.notificationManager.markObservedDetectionActionTaken(
+        detectionEvent.id,
+        actionType === AdminActionType.FALSE_POSITIVE
+          ? 'marked this detection as a false positive'
+          : 'dismissed this alert',
+        moderator
+      );
+      return true;
+    } catch (error) {
+      if (!actionRecorded) {
+        await this.releaseDetectionMetadataForObservedAction(detectionEvent, moderator, actionType);
+      }
+      throw error;
+    }
   }
 
   // TODO: Refactor reopenVerification to use events
