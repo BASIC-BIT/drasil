@@ -77,7 +77,7 @@ export class AdminActionService implements IAdminActionService {
         summary = `📝 Verification thread created by ${adminMention}`;
         break;
       case AdminActionType.OPEN_CASE:
-        summary = `📝 Opened a verification case by ${adminMention}`;
+        summary = `📝 Verification case opened by ${adminMention}`;
         break;
       case AdminActionType.RESTRICT:
         summary = `🔒 Restricted by ${adminMention}`;
