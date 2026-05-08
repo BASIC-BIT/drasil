@@ -690,10 +690,11 @@ export class SecurityActionService implements ISecurityActionService {
     if (!claimedDetectionEvent) {
       return false;
     }
-    let actionRecorded = false;
+    let actionApplied = false;
     try {
       const verificationEvent = await this.ensureObservedCase(member, detectionEvent);
       await this.userModerationService.restrictUser(member);
+      actionApplied = true;
       await this.recordObservedAction({
         serverId: member.guild.id,
         userId: member.id,
@@ -702,7 +703,6 @@ export class SecurityActionService implements ISecurityActionService {
         verificationEvent,
         actionType: AdminActionType.RESTRICT,
       });
-      actionRecorded = true;
       await this.notificationManager.markObservedDetectionActionTaken(
         detectionEvent.id,
         'restricted this user',
@@ -710,7 +710,7 @@ export class SecurityActionService implements ISecurityActionService {
       );
       return true;
     } catch (error) {
-      if (!actionRecorded) {
+      if (!actionApplied) {
         await this.releaseDetectionMetadataForObservedAction(
           detectionEvent,
           moderator,

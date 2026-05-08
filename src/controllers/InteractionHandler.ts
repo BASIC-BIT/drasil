@@ -826,13 +826,13 @@ export class InteractionHandler implements IInteractionHandler {
       interaction.user,
       actionType
     );
-    await interaction.followUp({
+    await interaction.editReply({
       content: !dismissed
         ? `This observed alert for <@${userId}> was already actioned.`
         : actionType === AdminActionType.FALSE_POSITIVE
           ? `Marked the detection for <@${userId}> as a false positive.`
           : `Dismissed the observed alert for <@${userId}>.`,
-      flags: MessageFlags.Ephemeral,
+      components: [],
     });
   }
 

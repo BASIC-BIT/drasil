@@ -41,6 +41,7 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
     guildId,
     user,
     deferUpdate: jest.fn().mockResolvedValue(undefined),
+    editReply: jest.fn().mockResolvedValue(undefined),
     followUp: jest.fn().mockResolvedValue(undefined),
     reply: jest.fn().mockResolvedValue(undefined),
     showModal: jest.fn().mockResolvedValue(undefined),
@@ -359,10 +360,11 @@ describe('InteractionHandler (unit)', () => {
       AdminActionType.FALSE_POSITIVE
     );
     expect(client.guilds.fetch).not.toHaveBeenCalled();
-    expect(interaction.followUp).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Marked the detection for <@user-1> as a false positive.',
-      flags: MessageFlags.Ephemeral,
+      components: [],
     });
+    expect(interaction.followUp).not.toHaveBeenCalled();
   });
 
   it('handles report modal submission', async () => {

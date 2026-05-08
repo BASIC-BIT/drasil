@@ -632,6 +632,34 @@ describe('SecurityActionService (unit)', () => {
     });
   });
 
+  it('keeps an observed restrict claim when audit fails after restricting', async () => {
+    const guildId = 'guild-observed-restrict-audit-fails';
+    const userId = 'user-observed-restrict-audit-fails';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+    adminActionService.recordAction.mockRejectedValueOnce(new Error('DB unavailable'));
+
+    await expect(
+      buildService().restrictObservedDetection(member, detectionEvent.id, moderator)
+    ).rejects.toThrow('DB unavailable');
+
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(updatedDetection?.metadata).toMatchObject({
+      observed_action: AdminActionType.RESTRICT,
+      observed_action_by: moderator.id,
+    });
+    expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
+  });
+
   it('reopens verification and re-restricts the user', async () => {
     const guildId = 'guild-5';
     const userId = 'user-5';
