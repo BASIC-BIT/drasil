@@ -170,6 +170,10 @@ enum admin_action_type {
   ban
   reopen
   create_thread
+  open_case
+  restrict
+  dismiss
+  false_positive
 }
 
 enum detection_type {

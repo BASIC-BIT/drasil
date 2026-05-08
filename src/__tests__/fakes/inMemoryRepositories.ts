@@ -25,6 +25,7 @@ import {
   AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY,
   DEFAULT_OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD,
   DEFAULT_OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES,
+  OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY,
 } from '../../utils/detectionResponseSettings';
 
 const toTimestamp = (value: string | Date | null | undefined): number => {
@@ -51,6 +52,7 @@ const baseSettings: ServerSettings = {
   observed_detection_notification_window_minutes:
     DEFAULT_OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES,
   [AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY]: true,
+  [OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY]: false,
 };
 
 const defaultHeuristicThreshold = globalSettings.defaultServerSettings.messageThreshold;
@@ -169,6 +171,61 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
       return null;
     }
 
+    const updated = {
+      ...this.events[eventIndex],
+      metadata,
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
+  async claimObservedAction(
+    detectionEventId: string,
+    metadata: Record<string, unknown>
+  ): Promise<DetectionEvent | null> {
+    const eventIndex = this.events.findIndex((item) => item.id === detectionEventId);
+    if (eventIndex === -1) {
+      return null;
+    }
+
+    const existingMetadata = this.events[eventIndex].metadata ?? {};
+    if (existingMetadata.observed_action) {
+      return null;
+    }
+
+    const updated = {
+      ...this.events[eventIndex],
+      metadata: {
+        ...existingMetadata,
+        ...metadata,
+      },
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
+  async releaseObservedAction(
+    detectionEventId: string,
+    actionType: string,
+    adminId: string
+  ): Promise<DetectionEvent | null> {
+    const eventIndex = this.events.findIndex((item) => item.id === detectionEventId);
+    if (eventIndex === -1) {
+      return null;
+    }
+
+    const existingMetadata = this.events[eventIndex].metadata ?? {};
+    if (
+      existingMetadata.observed_action !== actionType ||
+      existingMetadata.observed_action_by !== adminId
+    ) {
+      return null;
+    }
+
+    const metadata = { ...existingMetadata };
+    delete metadata.observed_action;
+    delete metadata.observed_action_by;
+    delete metadata.observed_action_at;
     const updated = {
       ...this.events[eventIndex],
       metadata,
@@ -739,6 +796,7 @@ export class InMemoryAdminActionRepository implements IAdminActionRepository {
       user_id: data.user_id,
       admin_id: data.admin_id,
       verification_event_id: data.verification_event_id,
+      detection_event_id: data.detection_event_id ?? null,
       action_type: data.action_type,
       action_at: new Date(),
       previous_status: data.previous_status,

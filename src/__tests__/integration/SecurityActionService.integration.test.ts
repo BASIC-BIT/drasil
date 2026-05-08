@@ -74,6 +74,7 @@ describeIntegration('SecurityActionService (integration)', () => {
       upsertObservedDetectionNotification: jest
         .fn()
         .mockResolvedValue({ id: 'observe-1' } as Message),
+      markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
       createVerificationThread: jest
@@ -215,6 +216,40 @@ describeIntegration('SecurityActionService (integration)', () => {
       type: 'user_report',
       reporterId,
     });
+  });
+
+  it('claims observed action metadata only once', async () => {
+    const guildId = 'guild-observed-claim';
+    const userId = 'user-observed-claim';
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+      metadata: { content: 'free discord nitro' },
+    });
+
+    const firstClaim = await detectionEventsRepository.claimObservedAction(detectionEvent.id, {
+      observed_action: AdminActionType.DISMISS,
+      observed_action_by: 'admin-1',
+      observed_action_at: new Date().toISOString(),
+    });
+    const secondClaim = await detectionEventsRepository.claimObservedAction(detectionEvent.id, {
+      observed_action: AdminActionType.FALSE_POSITIVE,
+      observed_action_by: 'admin-2',
+      observed_action_at: new Date().toISOString(),
+    });
+
+    expect(firstClaim?.metadata).toMatchObject({
+      content: 'free discord nitro',
+      observed_action: AdminActionType.DISMISS,
+      observed_action_by: 'admin-1',
+    });
+    expect(secondClaim).toBeNull();
   });
 
   it('records an admin action when reopening verification', async () => {

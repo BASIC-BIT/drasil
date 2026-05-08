@@ -43,6 +43,7 @@ export interface ServerSettings {
   observed_detection_min_confidence_threshold?: number;
   observed_detection_notification_window_minutes?: number;
   automatic_detection_exempt_moderators?: boolean;
+  observed_action_ban_requires_reason?: boolean;
 }
 
 /**
@@ -122,6 +123,10 @@ export enum AdminActionType {
   BAN = 'ban',
   REOPEN = 'reopen',
   CREATE_THREAD = 'create_thread',
+  OPEN_CASE = 'open_case',
+  RESTRICT = 'restrict',
+  DISMISS = 'dismiss',
+  FALSE_POSITIVE = 'false_positive',
 }
 
 export interface VerificationEvent {
@@ -145,11 +150,12 @@ export interface AdminAction {
   server_id: string;
   user_id: string;
   admin_id: string;
-  verification_event_id: string;
+  verification_event_id: string | null;
+  detection_event_id: string | null;
   action_type: AdminActionType;
   action_at: Date; // Use Date type
-  previous_status: VerificationStatus;
-  new_status: VerificationStatus;
+  previous_status: VerificationStatus | null;
+  new_status: VerificationStatus | null;
   notes: string | null;
   metadata: Prisma.JsonValue | null; // Align with Prisma JSON type
 }
@@ -158,7 +164,10 @@ export interface VerificationEventWithActions extends VerificationEvent {
   actions: AdminAction[];
 }
 
-export interface AdminActionCreate extends Omit<AdminAction, 'id' | 'action_at' | 'metadata'> {
+export interface AdminActionCreate extends Omit<
+  AdminAction,
+  'id' | 'action_at' | 'metadata' | 'detection_event_id'
+> {
   // Omit fields handled automatically or differently on create
   detection_event_id?: string | null; // Add optional field
   metadata?: Prisma.JsonValue | null; // Allow metadata on create

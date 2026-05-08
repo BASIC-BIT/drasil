@@ -35,7 +35,12 @@ export interface IUserModerationService {
    * @param moderator The user who performed the ban
    * @returns Promise resolving to true if successful, false if the user couldn't be banned
    */
-  banUser(member: GuildMember, reason: string, moderator: User): Promise<boolean>;
+  banUser(
+    member: GuildMember,
+    reason: string,
+    moderator: User,
+    detectionEventId?: string
+  ): Promise<boolean>;
 }
 
 /**
@@ -209,7 +214,12 @@ export class UserModerationService implements IUserModerationService {
    * @param moderator The user who performed the ban
    * @returns Promise resolving to true if successful, false if the user couldn't be banned
    */
-  public async banUser(member: GuildMember, reason: string, moderator: User): Promise<boolean> {
+  public async banUser(
+    member: GuildMember,
+    reason: string,
+    moderator: User,
+    detectionEventId?: string
+  ): Promise<boolean> {
     try {
       const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
         member.id,
@@ -243,44 +253,52 @@ export class UserModerationService implements IUserModerationService {
       await member.ban({ reason });
       console.log(`Banned user ${member.user.tag}. Reason: ${reason}`);
 
-      // Update server member status
-      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-        verification_status: VerificationStatus.BANNED,
-        is_restricted: true, // Keep restricted flag? Or remove member record? Needs clarification. Let's keep restricted for now.
-        last_status_change: new Date(),
-      });
-
-      if (verificationEvent) {
-        await this.threadManager.resolveVerificationThread(
-          verificationEvent,
-          VerificationStatus.BANNED,
-          moderator.id
-        );
-
-        const logged = await this.notificationManager.logActionToMessage(
-          verificationEvent,
-          AdminActionType.BAN,
-          moderator
-        );
-        if (!logged) {
-          throw new Error(`Failed to log ban action for ${member.user.tag}`);
-        }
-
-        await this.notificationManager.updateNotificationButtons(
-          verificationEvent,
-          VerificationStatus.BANNED
-        );
-
-        await this.adminActionService.recordAction({
-          server_id: member.guild.id,
-          user_id: member.id,
-          admin_id: moderator.id,
-          verification_event_id: verificationEvent.id,
-          action_type: AdminActionType.BAN,
-          previous_status: previousStatus ?? VerificationStatus.PENDING,
-          new_status: VerificationStatus.BANNED,
-          notes: reason,
+      try {
+        // Update server member status
+        await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+          verification_status: VerificationStatus.BANNED,
+          is_restricted: true, // Keep restricted flag? Or remove member record? Needs clarification. Let's keep restricted for now.
+          last_status_change: new Date(),
         });
+
+        if (verificationEvent) {
+          await this.threadManager.resolveVerificationThread(
+            verificationEvent,
+            VerificationStatus.BANNED,
+            moderator.id
+          );
+
+          const logged = await this.notificationManager.logActionToMessage(
+            verificationEvent,
+            AdminActionType.BAN,
+            moderator
+          );
+          if (!logged) {
+            throw new Error(`Failed to log ban action for ${member.user.tag}`);
+          }
+
+          await this.notificationManager.updateNotificationButtons(
+            verificationEvent,
+            VerificationStatus.BANNED
+          );
+
+          await this.adminActionService.recordAction({
+            server_id: member.guild.id,
+            user_id: member.id,
+            admin_id: moderator.id,
+            verification_event_id: verificationEvent.id,
+            detection_event_id: detectionEventId,
+            action_type: AdminActionType.BAN,
+            previous_status: previousStatus ?? VerificationStatus.PENDING,
+            new_status: VerificationStatus.BANNED,
+            notes: reason,
+          });
+        }
+      } catch (postBanError) {
+        console.error(
+          `Ban succeeded for ${member.user.tag}, but post-ban updates failed:`,
+          postBanError
+        );
       }
 
       return true; // Ban succeeded

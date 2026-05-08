@@ -21,6 +21,7 @@ describe('AdminActionService (unit)', () => {
         user_id: 'user-1',
         admin_id: 'admin-1',
         verification_event_id: 'ver-1',
+        detection_event_id: null,
         action_type: AdminActionType.VERIFY,
         previous_status: VerificationStatus.PENDING,
         new_status: VerificationStatus.VERIFIED,
@@ -43,6 +44,7 @@ describe('AdminActionService (unit)', () => {
         user_id: 'missing-user',
         admin_id: 'admin-1',
         verification_event_id: 'ver-1',
+        detection_event_id: null,
         action_type: AdminActionType.BAN,
         previous_status: VerificationStatus.PENDING,
         new_status: VerificationStatus.BANNED,
@@ -65,6 +67,7 @@ describe('AdminActionService (unit)', () => {
       user_id: 'user-2',
       admin_id: 'admin-2',
       verification_event_id: 'ver-2',
+      detection_event_id: null,
       action_type: AdminActionType.VERIFY,
       previous_status: VerificationStatus.PENDING,
       new_status: VerificationStatus.VERIFIED,
@@ -88,6 +91,7 @@ describe('AdminActionService (unit)', () => {
       user_id: 'user-1',
       admin_id: 'admin-1',
       verification_event_id: 'ver-1',
+      detection_event_id: null,
       action_type: AdminActionType.BAN,
       action_at: new Date('2024-01-01T00:00:00.000Z'),
       previous_status: VerificationStatus.PENDING,
@@ -99,5 +103,29 @@ describe('AdminActionService (unit)', () => {
     expect(summary).toContain('Banned by <@admin-1>');
     expect(summary).toContain('Status changed from pending to banned');
     expect(summary).toContain('Notes: ban reason');
+  });
+
+  it('formats open case summary clearly', () => {
+    const adminActionRepository = new InMemoryAdminActionRepository();
+    const userRepository = new InMemoryUserRepository();
+    const serverRepository = new InMemoryServerRepository();
+    const service = new AdminActionService(adminActionRepository, userRepository, serverRepository);
+
+    const summary = service.formatActionSummary({
+      id: 'action-2',
+      server_id: 'server-1',
+      user_id: 'user-1',
+      admin_id: 'admin-1',
+      verification_event_id: 'ver-1',
+      detection_event_id: 'det-1',
+      action_type: AdminActionType.OPEN_CASE,
+      action_at: new Date('2024-01-01T00:00:00.000Z'),
+      previous_status: null,
+      new_status: null,
+      notes: null,
+      metadata: null,
+    });
+
+    expect(summary).toContain('Verification case opened by <@admin-1>');
   });
 });

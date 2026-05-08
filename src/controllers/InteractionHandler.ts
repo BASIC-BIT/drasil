@@ -1,8 +1,10 @@
 import {
   Client,
   ButtonInteraction,
+  ButtonBuilder,
   MessageFlags,
   ChannelType,
+  GuildMember,
   PermissionFlagsBits,
   ModalBuilder, // Added
   TextInputBuilder, // Added
@@ -11,12 +13,13 @@ import {
   // UserSelectMenuBuilder, // Removed - Cannot be used in Modals
   ModalSubmitInteraction, // Added
   // Interaction, // Removed - Unused
+  ButtonStyle,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject } from 'inversify';
 import { INotificationManager } from '../services/NotificationManager';
 import { TYPES } from '../di/symbols';
-import { VerificationStatus } from '../repositories/types';
+import { AdminActionType, VerificationStatus } from '../repositories/types';
 import { VerificationHistoryFormatter } from '../utils/VerificationHistoryFormatter';
 import 'reflect-metadata';
 import { IUserModerationService } from '../services/UserModerationService';
@@ -25,6 +28,7 @@ import { IThreadManager } from '../services/ThreadManager';
 import { IAdminActionRepository } from '../repositories/AdminActionRepository';
 import { ISecurityActionService } from '../services/SecurityActionService';
 import { IConfigService } from '../config/ConfigService';
+import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import {
   parseChannelId,
   parseRoleId,
@@ -35,6 +39,9 @@ import {
 } from '../constants/setupVerificationWizard';
 // Load environment variables
 dotenv.config();
+
+const OBSERVED_ACTION_MODAL_REASON_FIELD_ID = 'observed_ban_reason';
+const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notification';
 
 /**
  * Interface for the Bot class
@@ -103,6 +110,11 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
+      if (customId.startsWith('observed:')) {
+        await this.handleObservedButtonInteraction(interaction, guildId, customId);
+        return;
+      }
+
       const [action, targetUserId] = customId.split('_');
       if (!targetUserId) {
         await interaction.reply({
@@ -136,10 +148,15 @@ export class InteractionHandler implements IInteractionHandler {
       }
     } catch (error) {
       console.error('Error handling button interaction:', error);
-      await interaction.reply({
+      const response = {
         content: 'An error occurred while processing your request.',
         flags: MessageFlags.Ephemeral,
-      });
+      } as const;
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(response);
+      } else {
+        await interaction.reply(response);
+      }
     }
   }
 
@@ -387,6 +404,10 @@ export class InteractionHandler implements IInteractionHandler {
         await this.handleSetupVerificationModalSubmit(interaction);
         return;
       default:
+        if (interaction.customId.startsWith('observed:ban_modal:')) {
+          await this.handleObservedBanModalSubmit(interaction);
+          return;
+        }
         console.log(
           `[InteractionHandler] Ignoring unknown modal submission: ${interaction.customId}`
         );
@@ -452,6 +473,367 @@ export class InteractionHandler implements IInteractionHandler {
         });
       }
     }
+  }
+
+  private parseObservedActionCustomId(customId: string): {
+    action: string;
+    userId: string;
+    detectionEventId: string;
+  } | null {
+    const [, action, userId, detectionEventId] = customId.split(':');
+    if (!action || !userId || !detectionEventId) {
+      return null;
+    }
+    return { action, userId, detectionEventId };
+  }
+
+  private async hasAnyPermission(
+    interaction: ButtonInteraction | ModalSubmitInteraction,
+    guildId: string,
+    permissions: bigint[]
+  ): Promise<boolean> {
+    if (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      return true;
+    }
+    if (permissions.some((permission) => interaction.memberPermissions?.has(permission))) {
+      return true;
+    }
+
+    const guild = await this.client.guilds.fetch(guildId);
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member) {
+      return false;
+    }
+
+    if (member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return true;
+    }
+    return permissions.some((permission) => member.permissions.has(permission));
+  }
+
+  private async replyPermissionDenied(
+    interaction: ButtonInteraction | ModalSubmitInteraction,
+    message: string
+  ): Promise<void> {
+    await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+  }
+
+  private async getObservedTargetMember(guildId: string, userId: string): Promise<GuildMember> {
+    const guild = await this.client.guilds.fetch(guildId);
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member) {
+      throw new Error(`Could not find member ${userId} in guild ${guildId}`);
+    }
+    return member;
+  }
+
+  private getObservedModerationPermissions(): bigint[] {
+    return [
+      PermissionFlagsBits.ManageGuild,
+      PermissionFlagsBits.ModerateMembers,
+      PermissionFlagsBits.BanMembers,
+    ];
+  }
+
+  private async handleObservedButtonInteraction(
+    interaction: ButtonInteraction,
+    guildId: string,
+    customId: string
+  ): Promise<void> {
+    const parsed = this.parseObservedActionCustomId(customId);
+    if (!parsed) {
+      await interaction.reply({
+        content: 'Unknown observed action.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const moderationPermissions = this.getObservedModerationPermissions();
+    let canModerate: boolean | null = null;
+    const hasModerationPermission = async (): Promise<boolean> => {
+      canModerate ??= await this.hasAnyPermission(interaction, guildId, moderationPermissions);
+      return canModerate;
+    };
+
+    switch (parsed.action) {
+      case 'open':
+        if (!(await hasModerationPermission())) {
+          await this.replyPermissionDenied(
+            interaction,
+            'You need moderation permissions to open a case.'
+          );
+          return;
+        }
+        await interaction.deferUpdate();
+        await this.openObservedCase(interaction, guildId, parsed.userId, parsed.detectionEventId);
+        return;
+
+      case 'restrict':
+        if (!(await hasModerationPermission())) {
+          await this.replyPermissionDenied(
+            interaction,
+            'You need moderation permissions to restrict a user.'
+          );
+          return;
+        }
+        await interaction.deferUpdate();
+        await this.restrictObservedUser(
+          interaction,
+          guildId,
+          parsed.userId,
+          parsed.detectionEventId
+        );
+        return;
+
+      case 'ban':
+        if (
+          !(await this.hasAnyPermission(interaction, guildId, [PermissionFlagsBits.BanMembers]))
+        ) {
+          await this.replyPermissionDenied(
+            interaction,
+            'You need Ban Members permission to ban a user.'
+          );
+          return;
+        }
+        await this.showObservedBanModal(
+          interaction,
+          guildId,
+          parsed.userId,
+          parsed.detectionEventId
+        );
+        return;
+
+      case 'dismiss_menu':
+        if (!(await hasModerationPermission())) {
+          await this.replyPermissionDenied(
+            interaction,
+            'You need moderation permissions to dismiss an alert.'
+          );
+          return;
+        }
+        await this.showObservedDismissOptions(interaction, parsed.userId, parsed.detectionEventId);
+        return;
+
+      case 'dismiss':
+      case 'false_positive':
+        if (!(await hasModerationPermission())) {
+          await this.replyPermissionDenied(
+            interaction,
+            'You need moderation permissions to dismiss an alert.'
+          );
+          return;
+        }
+        await interaction.deferUpdate();
+        await this.dismissObservedDetection(
+          interaction,
+          guildId,
+          parsed.userId,
+          parsed.detectionEventId,
+          parsed.action === 'false_positive'
+            ? AdminActionType.FALSE_POSITIVE
+            : AdminActionType.DISMISS
+        );
+        return;
+
+      case 'history':
+        if (!(await hasModerationPermission())) {
+          await this.replyPermissionDenied(
+            interaction,
+            'You need moderation permissions to view history.'
+          );
+          return;
+        }
+        await this.notificationManager.handleHistoryButtonClick(interaction, parsed.userId);
+        return;
+
+      default:
+        await interaction.reply({
+          content: 'Unknown observed action.',
+          flags: MessageFlags.Ephemeral,
+        });
+    }
+  }
+
+  private async openObservedCase(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string,
+    detectionEventId: string
+  ): Promise<void> {
+    const member = await this.getObservedTargetMember(guildId, userId);
+    const opened = await this.securityActionService.openObservedDetectionCase(
+      member,
+      detectionEventId,
+      interaction.user
+    );
+    await interaction.followUp({
+      content: opened
+        ? `Opened a verification case for <@${userId}>.`
+        : `This observed alert for <@${userId}> was already actioned.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  private async restrictObservedUser(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string,
+    detectionEventId: string
+  ): Promise<void> {
+    const member = await this.getObservedTargetMember(guildId, userId);
+    const restricted = await this.securityActionService.restrictObservedDetection(
+      member,
+      detectionEventId,
+      interaction.user
+    );
+    await interaction.followUp({
+      content: restricted
+        ? `Restricted <@${userId}> and opened a verification case.`
+        : `This observed alert for <@${userId}> was already actioned.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  private async showObservedBanModal(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string,
+    detectionEventId: string
+  ): Promise<void> {
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    const modal = new ModalBuilder()
+      .setCustomId(`observed:ban_modal:${userId}:${detectionEventId}`)
+      .setTitle('Confirm Observed Ban');
+    const reasonInput = new TextInputBuilder()
+      .setCustomId(OBSERVED_ACTION_MODAL_REASON_FIELD_ID)
+      .setLabel(settings.observedActionBanRequiresReason ? 'Ban reason' : 'Ban reason (optional)')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(settings.observedActionBanRequiresReason)
+      .setMaxLength(500)
+      .setPlaceholder(OBSERVED_BAN_DEFAULT_REASON);
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
+    await interaction.showModal(modal);
+  }
+
+  private async handleObservedBanModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: 'This action can only be performed in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const parsed = this.parseObservedActionCustomId(interaction.customId);
+    if (!parsed || parsed.action !== 'ban_modal') {
+      await interaction.reply({
+        content: 'Unknown observed ban action.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    if (
+      !(await this.hasAnyPermission(interaction, interaction.guildId, [
+        PermissionFlagsBits.BanMembers,
+      ]))
+    ) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need Ban Members permission to ban a user.'
+      );
+      return;
+    }
+
+    const serverConfig = await this.configService.getServerConfig(interaction.guildId);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    const providedReason = interaction.fields
+      .getTextInputValue(OBSERVED_ACTION_MODAL_REASON_FIELD_ID)
+      .trim();
+    if (settings.observedActionBanRequiresReason && !providedReason) {
+      await interaction.reply({
+        content: 'A ban reason is required.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const reason = providedReason || OBSERVED_BAN_DEFAULT_REASON;
+    try {
+      const member = await this.getObservedTargetMember(interaction.guildId, parsed.userId);
+      const banned = await this.securityActionService.banObservedDetection(
+        member,
+        parsed.detectionEventId,
+        interaction.user,
+        reason
+      );
+      await interaction.reply({
+        content: banned
+          ? `Banned <@${parsed.userId}>.`
+          : `This observed alert for <@${parsed.userId}> was already actioned.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error('Error handling observed ban modal submission:', error);
+      const response = {
+        content:
+          'Failed to ban from the observed alert. A verification case may have been opened; check the case before retrying.',
+        flags: MessageFlags.Ephemeral,
+      } as const;
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(response);
+      } else {
+        await interaction.reply(response);
+      }
+    }
+  }
+
+  private async showObservedDismissOptions(
+    interaction: ButtonInteraction,
+    userId: string,
+    detectionEventId: string
+  ): Promise<void> {
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`observed:dismiss:${userId}:${detectionEventId}`)
+        .setLabel('Dismiss Alert')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`observed:false_positive:${userId}:${detectionEventId}`)
+        .setLabel('False Positive')
+        .setStyle(ButtonStyle.Success)
+    );
+    await interaction.reply({
+      content:
+        'Dismiss only closes this alert. False Positive records that this specific detection was incorrect; future independent detections can still notify.',
+      components: [row],
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  private async dismissObservedDetection(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string,
+    detectionEventId: string,
+    actionType: AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE
+  ): Promise<void> {
+    const dismissed = await this.securityActionService.dismissObservedDetection(
+      guildId,
+      userId,
+      detectionEventId,
+      interaction.user,
+      actionType
+    );
+    await interaction.editReply({
+      content: !dismissed
+        ? `This observed alert for <@${userId}> was already actioned.`
+        : actionType === AdminActionType.FALSE_POSITIVE
+          ? `Marked the detection for <@${userId}> as a false positive.`
+          : `Dismissed the observed alert for <@${userId}>.`,
+      components: [],
+    });
   }
 
   private async handleSetupVerificationModalSubmit(

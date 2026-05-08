@@ -66,6 +66,7 @@ describe('UserModerationService (unit)', () => {
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue({} as any),
+      markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
       createVerificationThread: jest.fn().mockResolvedValue({} as any),
@@ -191,5 +192,51 @@ describe('UserModerationService (unit)', () => {
     );
     expect(notificationManager.logActionToMessage).toHaveBeenCalled();
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
+  });
+
+  it('returns success when post-ban notification updates fail', async () => {
+    const guildId = 'guild-ban-post-update-fails';
+    const userId = 'user-ban-post-update-fails';
+    const moderator = { id: 'mod-ban' } as User;
+    const member = buildMember(guildId, userId);
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+
+    await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    notificationManager.logActionToMessage.mockResolvedValueOnce(false);
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(service.banUser(member, 'banned in test', moderator)).resolves.toBe(true);
+
+    expect(member.ban).toHaveBeenCalledWith({ reason: 'banned in test' });
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('Ban succeeded for test-user#0001, but post-ban updates failed:'),
+      expect.any(Error)
+    );
+    consoleError.mockRestore();
   });
 });
