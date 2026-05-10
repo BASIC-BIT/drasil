@@ -605,11 +605,12 @@ export class InteractionHandler implements IInteractionHandler {
         return;
 
       case 'dismiss_menu':
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         if (!(await hasModerationPermission())) {
-          await this.replyPermissionDenied(
-            interaction,
-            'You need moderation permissions to dismiss an alert.'
-          );
+          await interaction.editReply({
+            content: 'You need moderation permissions to dismiss an alert.',
+            components: [],
+          });
           return;
         }
         await this.showObservedDismissOptions(interaction, parsed.userId, parsed.detectionEventId);
@@ -617,14 +618,14 @@ export class InteractionHandler implements IInteractionHandler {
 
       case 'dismiss':
       case 'false_positive':
+        await interaction.deferUpdate();
         if (!(await hasModerationPermission())) {
-          await this.replyPermissionDenied(
-            interaction,
-            'You need moderation permissions to dismiss an alert.'
-          );
+          await interaction.editReply({
+            content: 'You need moderation permissions to dismiss an alert.',
+            components: [],
+          });
           return;
         }
-        await interaction.deferUpdate();
         await this.dismissObservedDetection(
           interaction,
           guildId,
@@ -804,9 +805,17 @@ export class InteractionHandler implements IInteractionHandler {
         .setLabel('False Positive')
         .setStyle(ButtonStyle.Success)
     );
+    const content =
+      'Dismiss only closes this alert. False Positive records that this specific detection was incorrect; future independent detections can still notify.';
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply({
+        content,
+        components: [row],
+      });
+      return;
+    }
     await interaction.reply({
-      content:
-        'Dismiss only closes this alert. False Positive records that this specific detection was incorrect; future independent detections can still notify.',
+      content,
       components: [row],
       flags: MessageFlags.Ephemeral,
     });

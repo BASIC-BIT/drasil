@@ -35,17 +35,28 @@ const buildMember = (guildId: string, userId: string): GuildMember =>
     } as User,
   }) as unknown as GuildMember;
 
-const buildInteraction = (customId: string, guildId: string, user: User): ButtonInteraction =>
-  ({
+const buildInteraction = (customId: string, guildId: string, user: User): ButtonInteraction => {
+  const interaction = {
     customId,
     guildId,
     user,
-    deferUpdate: jest.fn().mockResolvedValue(undefined),
+    deferred: false,
+    replied: false,
+    deferUpdate: jest.fn().mockImplementation(async () => {
+      interaction.deferred = true;
+    }),
+    deferReply: jest.fn().mockImplementation(async () => {
+      interaction.deferred = true;
+    }),
     editReply: jest.fn().mockResolvedValue(undefined),
     followUp: jest.fn().mockResolvedValue(undefined),
-    reply: jest.fn().mockResolvedValue(undefined),
+    reply: jest.fn().mockImplementation(async () => {
+      interaction.replied = true;
+    }),
     showModal: jest.fn().mockResolvedValue(undefined),
-  }) as unknown as ButtonInteraction;
+  };
+  return interaction as unknown as ButtonInteraction;
+};
 
 const grantInteractionPermissions = (interaction: ButtonInteraction): void => {
   Object.assign(interaction, {
@@ -365,6 +376,78 @@ describe('InteractionHandler (unit)', () => {
       components: [],
     });
     expect(interaction.followUp).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges observed dismiss menu before fetching permissions', async () => {
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: { has: jest.fn().mockReturnValue(true) },
+        }),
+      },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('observed:dismiss_menu:user-1:det-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      (client.guilds.fetch as jest.Mock).mock.invocationCallOrder[0]
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content:
+        'Dismiss only closes this alert. False Positive records that this specific detection was incorrect; future independent detections can still notify.',
+      components: expect.any(Array),
+    });
+  });
+
+  it('acknowledges observed popup action before fetching permissions', async () => {
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: { has: jest.fn().mockReturnValue(true) },
+        }),
+      },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('observed:false_positive:user-1:det-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+    expect((interaction.deferUpdate as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      (client.guilds.fetch as jest.Mock).mock.invocationCallOrder[0]
+    );
+    expect(securityActionService.dismissObservedDetection).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'det-1',
+      interaction.user,
+      AdminActionType.FALSE_POSITIVE
+    );
   });
 
   it('handles report modal submission', async () => {
