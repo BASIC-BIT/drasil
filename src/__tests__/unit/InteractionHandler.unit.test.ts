@@ -437,8 +437,8 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
-    expect((interaction.deferUpdate as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
       (client.guilds.fetch as jest.Mock).mock.invocationCallOrder[0]
     );
     expect(securityActionService.dismissObservedDetection).toHaveBeenCalledWith(
@@ -448,6 +448,38 @@ describe('InteractionHandler (unit)', () => {
       interaction.user,
       AdminActionType.FALSE_POSITIVE
     );
+  });
+
+  it('keeps observed popup permission denial private after acknowledgement', async () => {
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: { has: jest.fn().mockReturnValue(false) },
+        }),
+      },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('observed:dismiss:user-1:det-1', 'guild-1', {
+      id: 'viewer-1',
+    } as User);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'You need moderation permissions to dismiss an alert.',
+      components: [],
+    });
+    expect(securityActionService.dismissObservedDetection).not.toHaveBeenCalled();
   });
 
   it('handles report modal submission', async () => {

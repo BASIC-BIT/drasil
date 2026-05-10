@@ -628,7 +628,7 @@ export class InteractionHandler implements IInteractionHandler {
 
       case 'dismiss':
       case 'false_positive':
-        await interaction.deferUpdate();
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
             interaction,
