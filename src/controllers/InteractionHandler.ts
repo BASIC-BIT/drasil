@@ -513,8 +513,17 @@ export class InteractionHandler implements IInteractionHandler {
 
   private async replyPermissionDenied(
     interaction: ButtonInteraction | ModalSubmitInteraction,
-    message: string
+    message: string,
+    options?: { clearComponents?: boolean }
   ): Promise<void> {
+    const response = {
+      content: message,
+      ...(options?.clearComponents ? { components: [] } : {}),
+    };
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(response);
+      return;
+    }
     await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
   }
 
@@ -607,10 +616,11 @@ export class InteractionHandler implements IInteractionHandler {
       case 'dismiss_menu':
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         if (!(await hasModerationPermission())) {
-          await interaction.editReply({
-            content: 'You need moderation permissions to dismiss an alert.',
-            components: [],
-          });
+          await this.replyPermissionDenied(
+            interaction,
+            'You need moderation permissions to dismiss an alert.',
+            { clearComponents: true }
+          );
           return;
         }
         await this.showObservedDismissOptions(interaction, parsed.userId, parsed.detectionEventId);
@@ -620,10 +630,11 @@ export class InteractionHandler implements IInteractionHandler {
       case 'false_positive':
         await interaction.deferUpdate();
         if (!(await hasModerationPermission())) {
-          await interaction.editReply({
-            content: 'You need moderation permissions to dismiss an alert.',
-            components: [],
-          });
+          await this.replyPermissionDenied(
+            interaction,
+            'You need moderation permissions to dismiss an alert.',
+            { clearComponents: true }
+          );
           return;
         }
         await this.dismissObservedDetection(
@@ -805,19 +816,10 @@ export class InteractionHandler implements IInteractionHandler {
         .setLabel('False Positive')
         .setStyle(ButtonStyle.Success)
     );
-    const content =
-      'Dismiss only closes this alert. False Positive records that this specific detection was incorrect; future independent detections can still notify.';
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({
-        content,
-        components: [row],
-      });
-      return;
-    }
-    await interaction.reply({
-      content,
+    await interaction.editReply({
+      content:
+        'Dismiss only closes this alert. False Positive records that this specific detection was incorrect; future independent detections can still notify.',
       components: [row],
-      flags: MessageFlags.Ephemeral,
     });
   }
 
