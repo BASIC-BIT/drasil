@@ -178,6 +178,10 @@ jobs:
           MIGRATION_DATABASE_URL="${MIGRATION_DATABASE_URL/pgbouncer=true&/}"
           MIGRATION_DATABASE_URL="${MIGRATION_DATABASE_URL/?pgbouncer=true/}"
           MIGRATION_DATABASE_URL="${MIGRATION_DATABASE_URL/&pgbouncer=true/}"
+          MIGRATION_OVERRIDES_JSON="$(jq -cn \
+            --arg database_url "$MIGRATION_DATABASE_URL" \
+            '{containerOverrides:[{name:"drasil",command:["node","-e","const {execSync}=require(\"child_process\");execSync(\"npm run prisma:migrate:deploy\",{stdio:\"inherit\",env:{...process.env,DATABASE_URL:process.argv[1]}})",$database_url]}]}'
+          )"
 
           SUBNET_CSV="$(IFS=,; echo "${SUBNETS[*]}")"
           SECURITY_GROUP_CSV="$(IFS=,; echo "${SECURITY_GROUPS[*]}")"
@@ -188,7 +192,7 @@ jobs:
             --task-definition "$NEW_TD_ARN"
             --count 1
             --network-configuration "$NETWORK_CONFIG"
-            --overrides "$(jq -cn --arg url \"$MIGRATION_DATABASE_URL\" '{containerOverrides:[{name:\"drasil\",command:[\"node\",\"-e\",\"const {execSync}=require(\\\"child_process\\\");execSync(\\\"npm run prisma:migrate:deploy\\\",{stdio:\\\"inherit\\\",env:{...process.env,DATABASE_URL:process.argv[1]}})\",$url]}]}')"
+            --overrides "$MIGRATION_OVERRIDES_JSON"
           )
 
           if [ -n "$LAUNCH_TYPE" ]; then
