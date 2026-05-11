@@ -121,6 +121,7 @@ jobs:
           echo "Image already exists in ECR, skipping build/push: $IMAGE"
 
       - name: Register new task definition revision
+        id: register_task_definition
         shell: bash
         env:
           IMAGE: ${{ steps.resolve_image.outputs.image }}
@@ -139,6 +140,82 @@ jobs:
 
           NEW_TD_ARN="$(aws ecs register-task-definition --cli-input-json file://taskdef.new.json --query 'taskDefinition.taskDefinitionArn' --output text)"
           echo "Registered task definition: $NEW_TD_ARN"
+          echo "task_definition_arn=$NEW_TD_ARN" >> "$GITHUB_OUTPUT"
+
+      - name: Run Prisma migrations
+        shell: bash
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+          NEW_TD_ARN: ${{ steps.register_task_definition.outputs.task_definition_arn }}
+        run: |
+          set -euo pipefail
+
+          SERVICE_JSON="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query 'services[0]' --output json)"
+          LAUNCH_TYPE="$(jq -r '.launchType // empty' <<<"$SERVICE_JSON")"
+          PLATFORM_VERSION="$(jq -r '.platformVersion // "LATEST"' <<<"$SERVICE_JSON")"
+          ASSIGN_PUBLIC_IP="$(jq -r '.networkConfiguration.awsvpcConfiguration.assignPublicIp // "DISABLED"' <<<"$SERVICE_JSON")"
+
+          mapfile -t SUBNETS < <(jq -r '.networkConfiguration.awsvpcConfiguration.subnets[]' <<<"$SERVICE_JSON")
+          mapfile -t SECURITY_GROUPS < <(jq -r '.networkConfiguration.awsvpcConfiguration.securityGroups[]' <<<"$SERVICE_JSON")
+
+          if [ "${#SUBNETS[@]}" -eq 0 ]; then
+            echo "Service $ECS_SERVICE does not define awsvpc subnets; cannot run migration task." >&2
+            exit 1
+          fi
+
+          SUBNET_CSV="$(IFS=,; echo "${SUBNETS[*]}")"
+          SECURITY_GROUP_CSV="$(IFS=,; echo "${SECURITY_GROUPS[*]}")"
+          NETWORK_CONFIG="awsvpcConfiguration={subnets=[${SUBNET_CSV}],securityGroups=[${SECURITY_GROUP_CSV}],assignPublicIp=${ASSIGN_PUBLIC_IP}}"
+
+          RUN_ARGS=(
+            --cluster "$ECS_CLUSTER"
+            --task-definition "$NEW_TD_ARN"
+            --count 1
+            --network-configuration "$NETWORK_CONFIG"
+            --platform-version "$PLATFORM_VERSION"
+            --overrides '{"containerOverrides":[{"name":"drasil","command":["npm","run","prisma:migrate:deploy"]}]}'
+          )
+
+          if [ -n "$LAUNCH_TYPE" ]; then
+            RUN_ARGS+=(--launch-type "$LAUNCH_TYPE")
+          fi
+
+          TASK_ARN="$(aws ecs run-task "${RUN_ARGS[@]}" --query 'tasks[0].taskArn' --output text)"
+          if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+            echo "Failed to start migration task." >&2
+            exit 1
+          fi
+
+          echo "Started migration task: $TASK_ARN"
+          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN"
+
+          TASK_JSON="$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN" --query 'tasks[0]' --output json)"
+          EXIT_CODE="$(jq -r '.containers[] | select(.name == "drasil") | .exitCode // empty' <<<"$TASK_JSON")"
+          STOPPED_REASON="$(jq -r '.stoppedReason // empty' <<<"$TASK_JSON")"
+          CONTAINER_REASON="$(jq -r '.containers[] | select(.name == "drasil") | .reason // empty' <<<"$TASK_JSON")"
+
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "Migration task failed with exit code ${EXIT_CODE:-unknown}." >&2
+            if [ -n "$STOPPED_REASON" ]; then
+              echo "Stopped reason: $STOPPED_REASON" >&2
+            fi
+            if [ -n "$CONTAINER_REASON" ]; then
+              echo "Container reason: $CONTAINER_REASON" >&2
+            fi
+            exit 1
+          fi
+
+          echo "Prisma migrations applied successfully."
+
+      - name: Update ECS service
+        shell: bash
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+          NEW_TD_ARN: ${{ steps.register_task_definition.outputs.task_definition_arn }}
+        run: |
+          set -euo pipefail
 
           aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "$NEW_TD_ARN"
           aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
