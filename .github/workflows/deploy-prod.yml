@@ -165,6 +165,8 @@ jobs:
             exit 1
           fi
 
+          MIGRATION_OVERRIDES_JSON='{"containerOverrides":[{"name":"drasil","command":["node","scripts/prisma-migrate-session.js"]}]}'
+
           SUBNET_CSV="$(IFS=,; echo "${SUBNETS[*]}")"
           SECURITY_GROUP_CSV="$(IFS=,; echo "${SECURITY_GROUPS[*]}")"
           NETWORK_CONFIG="awsvpcConfiguration={subnets=[${SUBNET_CSV}],securityGroups=[${SECURITY_GROUP_CSV}],assignPublicIp=${ASSIGN_PUBLIC_IP}}"
@@ -174,7 +176,7 @@ jobs:
             --task-definition "$NEW_TD_ARN"
             --count 1
             --network-configuration "$NETWORK_CONFIG"
-            --overrides '{"containerOverrides":[{"name":"drasil","command":["npm","run","prisma:migrate:deploy"]}]}'
+            --overrides "$MIGRATION_OVERRIDES_JSON"
           )
 
           if [ -n "$LAUNCH_TYPE" ]; then
