@@ -377,7 +377,6 @@ resource "aws_iam_role" "github_deploy" {
 }
 
 data "aws_iam_policy_document" "github_deploy" {
-  #checkov:skip=CKV_AWS_111:ECS deployment APIs require wildcard resources; access is constrained by GitHub OIDC subjects and iam:PassRole targets.
   #checkov:skip=CKV_AWS_356:Some ECS/ECR actions (for deployment APIs) require wildcard resources.
   statement {
     actions = [
@@ -412,15 +411,37 @@ data "aws_iam_policy_document" "github_deploy" {
       "ecs:DescribeTaskDefinition",
       "ecs:RegisterTaskDefinition"
     ]
-    resources = ["*"]
+    resources = [
+      "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${local.name_prefix}:*"
+    ]
   }
 
   statement {
     actions = [
-      "ecs:RunTask",
+      "ecs:RunTask"
+    ]
+    resources = [
+      "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${local.name_prefix}:*"
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "ecs:cluster"
+      values   = [aws_ecs_cluster.main.arn]
+    }
+  }
+
+  statement {
+    actions = [
       "ecs:DescribeTasks"
     ]
     resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "ecs:cluster"
+      values   = [aws_ecs_cluster.main.arn]
+    }
   }
 
   statement {

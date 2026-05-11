@@ -153,11 +153,12 @@ jobs:
 
           SERVICE_JSON="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query 'services[0]' --output json)"
           LAUNCH_TYPE="$(jq -r '.launchType // empty' <<<"$SERVICE_JSON")"
+          CAPACITY_PROVIDER_STRATEGY="$(jq -c '.capacityProviderStrategy // []' <<<"$SERVICE_JSON")"
           PLATFORM_VERSION="$(jq -r '.platformVersion // "LATEST"' <<<"$SERVICE_JSON")"
           ASSIGN_PUBLIC_IP="$(jq -r '.networkConfiguration.awsvpcConfiguration.assignPublicIp // "DISABLED"' <<<"$SERVICE_JSON")"
 
-          mapfile -t SUBNETS < <(jq -r '.networkConfiguration.awsvpcConfiguration.subnets[]' <<<"$SERVICE_JSON")
-          mapfile -t SECURITY_GROUPS < <(jq -r '.networkConfiguration.awsvpcConfiguration.securityGroups[]' <<<"$SERVICE_JSON")
+          mapfile -t SUBNETS < <(jq -r '(.networkConfiguration.awsvpcConfiguration.subnets // [])[]' <<<"$SERVICE_JSON")
+          mapfile -t SECURITY_GROUPS < <(jq -r '(.networkConfiguration.awsvpcConfiguration.securityGroups // [])[]' <<<"$SERVICE_JSON")
 
           if [ "${#SUBNETS[@]}" -eq 0 ]; then
             echo "Service $ECS_SERVICE does not define awsvpc subnets; cannot run migration task." >&2
@@ -178,15 +179,22 @@ jobs:
 
           if [ -n "$LAUNCH_TYPE" ]; then
             RUN_ARGS+=(--launch-type "$LAUNCH_TYPE")
+          elif [ "$CAPACITY_PROVIDER_STRATEGY" != "[]" ]; then
+            RUN_ARGS+=(--capacity-provider-strategy "$CAPACITY_PROVIDER_STRATEGY")
+          else
+            echo "Service $ECS_SERVICE defines neither launchType nor capacityProviderStrategy; cannot run migration task safely." >&2
+            exit 1
           fi
 
           if [ "$LAUNCH_TYPE" != "EC2" ]; then
             RUN_ARGS+=(--platform-version "$PLATFORM_VERSION")
           fi
 
-          TASK_ARN="$(aws ecs run-task "${RUN_ARGS[@]}" --query 'tasks[0].taskArn' --output text)"
+          RUN_TASK_JSON="$(aws ecs run-task "${RUN_ARGS[@]}" --output json)"
+          TASK_ARN="$(jq -r '.tasks[0].taskArn // empty' <<<"$RUN_TASK_JSON")"
           if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
             echo "Failed to start migration task." >&2
+            jq -r '.failures[]? | "Failure: \(.arn // "unknown") - \(.reason // "unknown")\(if .detail then " (" + .detail + ")" else "" end)"' <<<"$RUN_TASK_JSON" >&2
             exit 1
           fi
 
