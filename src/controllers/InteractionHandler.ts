@@ -524,7 +524,10 @@ export class InteractionHandler implements IInteractionHandler {
       await interaction.editReply(response);
       return;
     }
-    await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+    await interaction.reply({
+      ...response,
+      flags: MessageFlags.Ephemeral,
+    });
   }
 
   private async getObservedTargetMember(guildId: string, userId: string): Promise<GuildMember> {
@@ -623,7 +626,22 @@ export class InteractionHandler implements IInteractionHandler {
           );
           return;
         }
-        await this.showObservedDismissOptions(interaction, parsed.userId, parsed.detectionEventId);
+        await interaction.editReply({
+          content:
+            'Dismiss only closes this alert. False Positive records that this specific detection was incorrect; future independent detections can still notify.',
+          components: [
+            new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`observed:dismiss:${parsed.userId}:${parsed.detectionEventId}`)
+                .setLabel('Dismiss Alert')
+                .setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder()
+                .setCustomId(`observed:false_positive:${parsed.userId}:${parsed.detectionEventId}`)
+                .setLabel('False Positive')
+                .setStyle(ButtonStyle.Success)
+            ),
+          ],
+        });
         return;
 
       case 'dismiss':
@@ -799,28 +817,6 @@ export class InteractionHandler implements IInteractionHandler {
         await interaction.reply(response);
       }
     }
-  }
-
-  private async showObservedDismissOptions(
-    interaction: ButtonInteraction,
-    userId: string,
-    detectionEventId: string
-  ): Promise<void> {
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`observed:dismiss:${userId}:${detectionEventId}`)
-        .setLabel('Dismiss Alert')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId(`observed:false_positive:${userId}:${detectionEventId}`)
-        .setLabel('False Positive')
-        .setStyle(ButtonStyle.Success)
-    );
-    await interaction.editReply({
-      content:
-        'Dismiss only closes this alert. False Positive records that this specific detection was incorrect; future independent detections can still notify.',
-      components: [row],
-    });
   }
 
   private async dismissObservedDetection(

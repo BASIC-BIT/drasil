@@ -48,7 +48,9 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
     deferReply: jest.fn().mockImplementation(async () => {
       interaction.deferred = true;
     }),
-    editReply: jest.fn().mockResolvedValue(undefined),
+    editReply: jest.fn().mockImplementation(async () => {
+      interaction.replied = true;
+    }),
     followUp: jest.fn().mockResolvedValue(undefined),
     reply: jest.fn().mockImplementation(async () => {
       interaction.replied = true;
