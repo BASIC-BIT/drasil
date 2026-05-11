@@ -513,9 +513,21 @@ export class InteractionHandler implements IInteractionHandler {
 
   private async replyPermissionDenied(
     interaction: ButtonInteraction | ModalSubmitInteraction,
-    message: string
+    message: string,
+    options?: { clearComponents?: boolean }
   ): Promise<void> {
-    await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+    const response = {
+      content: message,
+      ...(options?.clearComponents ? { components: [] } : {}),
+    };
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(response);
+      return;
+    }
+    await interaction.reply({
+      ...response,
+      flags: MessageFlags.Ephemeral,
+    });
   }
 
   private async getObservedTargetMember(guildId: string, userId: string): Promise<GuildMember> {
@@ -605,26 +617,44 @@ export class InteractionHandler implements IInteractionHandler {
         return;
 
       case 'dismiss_menu':
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
             interaction,
-            'You need moderation permissions to dismiss an alert.'
+            'You need moderation permissions to dismiss an alert.',
+            { clearComponents: true }
           );
           return;
         }
-        await this.showObservedDismissOptions(interaction, parsed.userId, parsed.detectionEventId);
+        await interaction.editReply({
+          content:
+            'Dismiss only closes this alert. False Positive records that this specific detection was incorrect; future independent detections can still notify.',
+          components: [
+            new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`observed:dismiss:${parsed.userId}:${parsed.detectionEventId}`)
+                .setLabel('Dismiss Alert')
+                .setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder()
+                .setCustomId(`observed:false_positive:${parsed.userId}:${parsed.detectionEventId}`)
+                .setLabel('False Positive')
+                .setStyle(ButtonStyle.Success)
+            ),
+          ],
+        });
         return;
 
       case 'dismiss':
       case 'false_positive':
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
             interaction,
-            'You need moderation permissions to dismiss an alert.'
+            'You need moderation permissions to dismiss an alert.',
+            { clearComponents: true }
           );
           return;
         }
-        await interaction.deferUpdate();
         await this.dismissObservedDetection(
           interaction,
           guildId,
@@ -787,29 +817,6 @@ export class InteractionHandler implements IInteractionHandler {
         await interaction.reply(response);
       }
     }
-  }
-
-  private async showObservedDismissOptions(
-    interaction: ButtonInteraction,
-    userId: string,
-    detectionEventId: string
-  ): Promise<void> {
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`observed:dismiss:${userId}:${detectionEventId}`)
-        .setLabel('Dismiss Alert')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId(`observed:false_positive:${userId}:${detectionEventId}`)
-        .setLabel('False Positive')
-        .setStyle(ButtonStyle.Success)
-    );
-    await interaction.reply({
-      content:
-        'Dismiss only closes this alert. False Positive records that this specific detection was incorrect; future independent detections can still notify.',
-      components: [row],
-      flags: MessageFlags.Ephemeral,
-    });
   }
 
   private async dismissObservedDetection(
