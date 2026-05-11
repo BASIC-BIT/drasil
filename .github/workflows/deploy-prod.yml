@@ -165,7 +165,7 @@ jobs:
             exit 1
           fi
 
-          MIGRATION_OVERRIDES_JSON='{"containerOverrides":[{"name":"drasil","command":["node","-e","const {execSync}=require(\"child_process\");let url=process.env.DATABASE_URL||\"\";url=url.replace(\":6543/\",\":5432/\").replace(\"pgbouncer=true&\",\"\").replace(\"?pgbouncer=true\",\"\").replace(\"&pgbouncer=true\",\"\");execSync(\"npm run prisma:migrate:deploy\",{stdio:\"inherit\",env:{...process.env,DATABASE_URL:url}})"]}]}'
+          MIGRATION_OVERRIDES_JSON='{"containerOverrides":[{"name":"drasil","command":["node","scripts/prisma-migrate-session.js"]}]}'
 
           SUBNET_CSV="$(IFS=,; echo "${SUBNETS[*]}")"
           SECURITY_GROUP_CSV="$(IFS=,; echo "${SECURITY_GROUPS[*]}")"
