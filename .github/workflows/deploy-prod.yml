@@ -173,12 +173,15 @@ jobs:
             --task-definition "$NEW_TD_ARN"
             --count 1
             --network-configuration "$NETWORK_CONFIG"
-            --platform-version "$PLATFORM_VERSION"
             --overrides '{"containerOverrides":[{"name":"drasil","command":["npm","run","prisma:migrate:deploy"]}]}'
           )
 
           if [ -n "$LAUNCH_TYPE" ]; then
             RUN_ARGS+=(--launch-type "$LAUNCH_TYPE")
+          fi
+
+          if [ "$LAUNCH_TYPE" != "EC2" ]; then
+            RUN_ARGS+=(--platform-version "$PLATFORM_VERSION")
           fi
 
           TASK_ARN="$(aws ecs run-task "${RUN_ARGS[@]}" --query 'tasks[0].taskArn' --output text)"
@@ -188,9 +191,28 @@ jobs:
           fi
 
           echo "Started migration task: $TASK_ARN"
-          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN"
 
-          TASK_JSON="$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN" --query 'tasks[0]' --output json)"
+          MAX_POLLS=180
+          POLL_INTERVAL_SECONDS=10
+          TASK_JSON=""
+
+          for ((poll=1; poll<=MAX_POLLS; poll++)); do
+            TASK_JSON="$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN" --query 'tasks[0]' --output json)"
+            LAST_STATUS="$(jq -r '.lastStatus // empty' <<<"$TASK_JSON")"
+
+            if [ "$LAST_STATUS" = "STOPPED" ]; then
+              break
+            fi
+
+            if [ "$poll" -eq "$MAX_POLLS" ]; then
+              echo "Migration task did not stop within $((MAX_POLLS * POLL_INTERVAL_SECONDS / 60)) minutes." >&2
+              echo "Last observed status: ${LAST_STATUS:-unknown}" >&2
+              exit 1
+            fi
+
+            sleep "$POLL_INTERVAL_SECONDS"
+          done
+
           EXIT_CODE="$(jq -r '.containers[] | select(.name == "drasil") | .exitCode // empty' <<<"$TASK_JSON")"
           STOPPED_REASON="$(jq -r '.stoppedReason // empty' <<<"$TASK_JSON")"
           CONTAINER_REASON="$(jq -r '.containers[] | select(.name == "drasil") | .reason // empty' <<<"$TASK_JSON")"
