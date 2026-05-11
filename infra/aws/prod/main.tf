@@ -411,9 +411,7 @@ data "aws_iam_policy_document" "github_deploy" {
       "ecs:DescribeTaskDefinition",
       "ecs:RegisterTaskDefinition"
     ]
-    resources = [
-      "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${local.name_prefix}:*"
-    ]
+    resources = ["*"]
   }
 
   statement {
