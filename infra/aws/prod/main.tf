@@ -377,6 +377,7 @@ resource "aws_iam_role" "github_deploy" {
 }
 
 data "aws_iam_policy_document" "github_deploy" {
+  #checkov:skip=CKV_AWS_111:ECS deployment APIs require wildcard resources; access is constrained by GitHub OIDC subjects and iam:PassRole targets.
   #checkov:skip=CKV_AWS_356:Some ECS/ECR actions (for deployment APIs) require wildcard resources.
   statement {
     actions = [
