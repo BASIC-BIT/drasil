@@ -411,7 +411,37 @@ data "aws_iam_policy_document" "github_deploy" {
       "ecs:DescribeTaskDefinition",
       "ecs:RegisterTaskDefinition"
     ]
+    resources = [
+      "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${local.name_prefix}:*"
+    ]
+  }
+
+  statement {
+    actions = [
+      "ecs:RunTask"
+    ]
+    resources = [
+      "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${local.name_prefix}:*"
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "ecs:cluster"
+      values   = [aws_ecs_cluster.main.arn]
+    }
+  }
+
+  statement {
+    actions = [
+      "ecs:DescribeTasks"
+    ]
     resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "ecs:cluster"
+      values   = [aws_ecs_cluster.main.arn]
+    }
   }
 
   statement {
