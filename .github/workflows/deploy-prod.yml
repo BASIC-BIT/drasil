@@ -152,13 +152,10 @@ jobs:
           set -euo pipefail
 
           SERVICE_JSON="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query 'services[0]' --output json)"
-          CURRENT_TD_ARN="$(jq -r '.taskDefinition' <<<"$SERVICE_JSON")"
-          CURRENT_TD_JSON="$(aws ecs describe-task-definition --task-definition "$CURRENT_TD_ARN" --query 'taskDefinition' --output json)"
           LAUNCH_TYPE="$(jq -r '.launchType // empty' <<<"$SERVICE_JSON")"
           CAPACITY_PROVIDER_STRATEGY="$(jq -c '.capacityProviderStrategy // []' <<<"$SERVICE_JSON")"
           PLATFORM_VERSION="$(jq -r '.platformVersion // "LATEST"' <<<"$SERVICE_JSON")"
           ASSIGN_PUBLIC_IP="$(jq -r '.networkConfiguration.awsvpcConfiguration.assignPublicIp // "DISABLED"' <<<"$SERVICE_JSON")"
-          DATABASE_URL_SECRET_ARN="$(jq -r '.containerDefinitions[] | select(.name == "drasil") | .secrets[]? | select(.name == "DATABASE_URL") | .valueFrom // empty' <<<"$CURRENT_TD_JSON")"
 
           mapfile -t SUBNETS < <(jq -r '(.networkConfiguration.awsvpcConfiguration.subnets // [])[]' <<<"$SERVICE_JSON")
           mapfile -t SECURITY_GROUPS < <(jq -r '(.networkConfiguration.awsvpcConfiguration.securityGroups // [])[]' <<<"$SERVICE_JSON")
@@ -168,20 +165,7 @@ jobs:
             exit 1
           fi
 
-          if [ -z "$DATABASE_URL_SECRET_ARN" ]; then
-            echo "Could not resolve DATABASE_URL secret ARN from task definition $CURRENT_TD_ARN." >&2
-            exit 1
-          fi
-
-          DATABASE_URL="$(aws secretsmanager get-secret-value --secret-id "$DATABASE_URL_SECRET_ARN" --query 'SecretString' --output text)"
-          MIGRATION_DATABASE_URL="${DATABASE_URL/:6543\//:5432/}"
-          MIGRATION_DATABASE_URL="${MIGRATION_DATABASE_URL/pgbouncer=true&/}"
-          MIGRATION_DATABASE_URL="${MIGRATION_DATABASE_URL/?pgbouncer=true/}"
-          MIGRATION_DATABASE_URL="${MIGRATION_DATABASE_URL/&pgbouncer=true/}"
-          MIGRATION_OVERRIDES_JSON="$(jq -cn \
-            --arg database_url "$MIGRATION_DATABASE_URL" \
-            '{containerOverrides:[{name:"drasil",command:["node","-e","const {execSync}=require(\"child_process\");execSync(\"npm run prisma:migrate:deploy\",{stdio:\"inherit\",env:{...process.env,DATABASE_URL:process.argv[1]}})",$database_url]}]}'
-          )"
+          MIGRATION_OVERRIDES_JSON='{"containerOverrides":[{"name":"drasil","command":["node","-e","const {execSync}=require(\"child_process\");let url=process.env.DATABASE_URL||\"\";url=url.replace(\":6543/\",\":5432/\").replace(\"pgbouncer=true&\",\"\").replace(\"?pgbouncer=true\",\"\").replace(\"&pgbouncer=true\",\"\");execSync(\"npm run prisma:migrate:deploy\",{stdio:\"inherit\",env:{...process.env,DATABASE_URL:url}})"]}]}'
 
           SUBNET_CSV="$(IFS=,; echo "${SUBNETS[*]}")"
           SECURITY_GROUP_CSV="$(IFS=,; echo "${SECURITY_GROUPS[*]}")"
