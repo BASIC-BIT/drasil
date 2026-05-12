@@ -353,6 +353,31 @@ export class SecurityActionService implements ISecurityActionService {
     );
   }
 
+  private async restoreDetectionMetadataForObservedAction(
+    detectionEvent: DetectionEvent,
+    moderator: User,
+    actionType: AdminActionType
+  ): Promise<void> {
+    const metadata =
+      detectionEvent.metadata &&
+      typeof detectionEvent.metadata === 'object' &&
+      !Array.isArray(detectionEvent.metadata)
+        ? detectionEvent.metadata
+        : {};
+
+    await this.detectionEventsRepository.claimObservedAction(detectionEvent.id, {
+      observed_action: actionType,
+      observed_action_by:
+        typeof metadata.observed_action_by === 'string'
+          ? metadata.observed_action_by
+          : moderator.id,
+      observed_action_at:
+        typeof metadata.observed_action_at === 'string'
+          ? metadata.observed_action_at
+          : new Date().toISOString(),
+    });
+  }
+
   private hasObservedAction(detectionEvent: DetectionEvent): boolean {
     return this.getObservedAction(detectionEvent) !== null;
   }
@@ -856,25 +881,38 @@ export class SecurityActionService implements ISecurityActionService {
       return null;
     }
 
-    await this.recordObservedAction({
-      serverId: guildId,
-      userId,
-      moderator,
-      detectionEvent: restoredDetectionEvent,
-      actionType: AdminActionType.UNDO_OBSERVED_ACTION,
-      notes:
+    let actionRecorded = false;
+    try {
+      await this.recordObservedAction({
+        serverId: guildId,
+        userId,
+        moderator,
+        detectionEvent: restoredDetectionEvent,
+        actionType: AdminActionType.UNDO_OBSERVED_ACTION,
+        notes:
+          observedAction === AdminActionType.FALSE_POSITIVE
+            ? 'Undid dismissal and reverted false positive indication.'
+            : 'Undid dismissal.',
+      });
+      actionRecorded = true;
+      await this.notificationManager.restoreObservedDetectionActions(
+        detectionEvent.id,
         observedAction === AdminActionType.FALSE_POSITIVE
-          ? 'Undid dismissal and reverted false positive indication.'
-          : 'Undid dismissal.',
-    });
-    await this.notificationManager.restoreObservedDetectionActions(
-      detectionEvent.id,
-      observedAction === AdminActionType.FALSE_POSITIVE
-        ? 'undid the dismissal and reverted the false positive indication'
-        : 'undid the dismissal',
-      moderator
-    );
-    return observedAction;
+          ? 'undid the dismissal and reverted the false positive indication'
+          : 'undid the dismissal',
+        moderator
+      );
+      return observedAction;
+    } catch (error) {
+      if (!actionRecorded) {
+        await this.restoreDetectionMetadataForObservedAction(
+          detectionEvent,
+          moderator,
+          observedAction
+        );
+      }
+      throw error;
+    }
   }
 
   // TODO: Refactor reopenVerification to use events

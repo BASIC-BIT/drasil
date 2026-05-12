@@ -624,6 +624,39 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it('restores observed dismissal metadata if undo audit recording fails', async () => {
+    const guildId = 'guild-observed-undo-fails';
+    const userId = 'user-observed-undo-fails';
+    const moderator = { id: 'admin-observed' } as User;
+    const observedActionAt = new Date().toISOString();
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+      metadata: {
+        observed_action: AdminActionType.DISMISS,
+        observed_action_by: 'previous-admin',
+        observed_action_at: observedActionAt,
+      },
+    });
+    adminActionService.recordAction.mockRejectedValueOnce(new Error('Audit write failed'));
+
+    await expect(
+      buildService().undoObservedDetectionAction(guildId, userId, detectionEvent.id, moderator)
+    ).rejects.toThrow('Audit write failed');
+
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(updatedDetection?.metadata).toMatchObject({
+      observed_action: AdminActionType.DISMISS,
+      observed_action_by: 'previous-admin',
+      observed_action_at: observedActionAt,
+    });
+    expect(notificationManager.restoreObservedDetectionActions).not.toHaveBeenCalled();
+  });
+
   it('releases an observed ban claim when the ban fails', async () => {
     const guildId = 'guild-observed-ban-fails';
     const userId = 'user-observed-ban-fails';
