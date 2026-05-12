@@ -416,7 +416,7 @@ export class NotificationManager implements INotificationManager {
       const components = this.createObservedActionRows(detectionEvent.user_id, detectionEvent.id);
       if (!message.embeds.length) {
         await message.edit({ allowedMentions: { parse: [] }, components });
-        return false;
+        return true;
       }
 
       const updatedEmbed = EmbedBuilder.from(message.embeds[0]);
