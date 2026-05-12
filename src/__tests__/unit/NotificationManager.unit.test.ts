@@ -404,6 +404,75 @@ describe('NotificationManager (unit)', () => {
     });
   });
 
+  it('keeps undo controls after marking an observed false positive', async () => {
+    const detectionEvent = await detectionRepository.create({
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+      metadata: { observed_notification_message_id: 'message-1' },
+    });
+    const message: MockMessage = {
+      id: 'message-1',
+      embeds: [new EmbedBuilder().setTitle('Observed suspicious activity')],
+      edit: jest.fn().mockResolvedValue(undefined),
+    };
+    adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await manager.markObservedDetectionActionTaken(
+      detectionEvent.id,
+      'marked this detection as a false positive',
+      { id: 'admin-1' } as User,
+      { undoButtonLabel: 'Undo False Positive' }
+    );
+
+    const editArgs = message.edit.mock.calls[0][0] as { components: unknown[] };
+    expect(extractLabels(editArgs.components)).toEqual(['Undo False Positive', 'History']);
+  });
+
+  it('restores observed action buttons after undo', async () => {
+    const detectionEvent = await detectionRepository.create({
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+      metadata: { observed_notification_message_id: 'message-1' },
+    });
+    const message: MockMessage = {
+      id: 'message-1',
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('Observed suspicious activity')
+          .addFields({ name: 'Action Taken', value: 'dismissed this alert' }),
+      ],
+      edit: jest.fn().mockResolvedValue(undefined),
+    };
+    adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await manager.restoreObservedDetectionActions(detectionEvent.id, 'undid the dismissal', {
+      id: 'admin-1',
+    } as User);
+
+    const editArgs = message.edit.mock.calls[0][0] as {
+      components: unknown[];
+      embeds: EmbedBuilder[];
+    };
+    expect(extractLabels(editArgs.components)).toEqual([
+      'Open Case',
+      'Restrict',
+      'Ban',
+      'Dismiss...',
+      'History',
+    ]);
+    expect(editArgs.embeds[0].data.fields?.[0].name).toBe('Action Reverted');
+  });
+
   it('does not include a mention payload when editing an existing notification (even if role is configured)', async () => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       admin_notification_role_id: 'role-1',

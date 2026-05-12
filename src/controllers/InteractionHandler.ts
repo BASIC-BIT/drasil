@@ -666,6 +666,24 @@ export class InteractionHandler implements IInteractionHandler {
         );
         return;
 
+      case 'undo_dismiss':
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        if (!(await hasModerationPermission())) {
+          await this.replyPermissionDenied(
+            interaction,
+            'You need moderation permissions to undo a dismissal.',
+            { clearComponents: true }
+          );
+          return;
+        }
+        await this.undoObservedDismissal(
+          interaction,
+          guildId,
+          parsed.userId,
+          parsed.detectionEventId
+        );
+        return;
+
       case 'history':
         if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
@@ -839,6 +857,28 @@ export class InteractionHandler implements IInteractionHandler {
         : actionType === AdminActionType.FALSE_POSITIVE
           ? `Marked the detection for <@${userId}> as a false positive.`
           : `Dismissed the observed alert for <@${userId}>.`,
+      components: [],
+    });
+  }
+
+  private async undoObservedDismissal(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string,
+    detectionEventId: string
+  ): Promise<void> {
+    const undoneAction = await this.securityActionService.undoObservedDetectionAction(
+      guildId,
+      userId,
+      detectionEventId,
+      interaction.user
+    );
+    await interaction.editReply({
+      content: !undoneAction
+        ? `This observed alert for <@${userId}> does not have a dismissal to undo.`
+        : undoneAction === AdminActionType.FALSE_POSITIVE
+          ? `Undid the dismissal and reverted the false-positive indication for <@${userId}>.`
+          : `Undid the dismissal for <@${userId}>.`,
       components: [],
     });
   }

@@ -111,6 +111,13 @@ export interface INotificationManager {
   markObservedDetectionActionTaken(
     detectionEventId: string,
     actionDescription: string,
+    admin: User,
+    options?: { undoButtonLabel?: string }
+  ): Promise<boolean>;
+
+  restoreObservedDetectionActions(
+    detectionEventId: string,
+    actionDescription: string,
     admin: User
   ): Promise<boolean>;
 }
@@ -305,7 +312,8 @@ export class NotificationManager implements INotificationManager {
   public async markObservedDetectionActionTaken(
     detectionEventId: string,
     actionDescription: string,
-    admin: User
+    admin: User,
+    options?: { undoButtonLabel?: string }
   ): Promise<boolean> {
     try {
       const detectionEvent = await this.detectionEventsRepository.findById(detectionEventId);
@@ -346,23 +354,93 @@ export class NotificationManager implements INotificationManager {
         value: `<@${admin.id}> ${actionDescription} <t:${timestamp}:R>`,
         inline: false,
       };
-      const fieldIndex = updatedEmbed.data.fields?.findIndex(
-        (existingField) => existingField.name === field.name
-      );
-      if (fieldIndex !== undefined && fieldIndex > -1) {
-        updatedEmbed.spliceFields(fieldIndex, 1, field);
-      } else {
-        updatedEmbed.addFields(field);
-      }
+      const existingFields =
+        updatedEmbed.data.fields?.filter(
+          (existingField) =>
+            existingField.name !== field.name && existingField.name !== 'Action Reverted'
+        ) ?? [];
+      updatedEmbed.setFields(...existingFields, field);
+
+      const components = options?.undoButtonLabel
+        ? this.createObservedUndoRows(
+            detectionEvent.user_id,
+            detectionEvent.id,
+            options.undoButtonLabel
+          )
+        : [];
 
       await message.edit({
         allowedMentions: { parse: [] },
         embeds: [updatedEmbed],
-        components: [],
+        components,
       });
       return true;
     } catch (error) {
       console.error('Failed to mark observed detection action:', error);
+      return false;
+    }
+  }
+
+  public async restoreObservedDetectionActions(
+    detectionEventId: string,
+    actionDescription: string,
+    admin: User
+  ): Promise<boolean> {
+    try {
+      const detectionEvent = await this.detectionEventsRepository.findById(detectionEventId);
+      if (!detectionEvent?.server_id) {
+        return false;
+      }
+
+      const metadata = this.metadataToRecord(detectionEvent.metadata) as ObservedDetectionMetadata;
+      if (!metadata.observed_notification_message_id) {
+        return false;
+      }
+
+      const serverConfig = await this.configService.getServerConfig(detectionEvent.server_id);
+      const notificationChannel = await this.getObservedDetectionNotificationChannel(
+        detectionEvent.server_id,
+        getDetectionResponseSettings(serverConfig.settings)
+      );
+      if (!notificationChannel) {
+        return false;
+      }
+
+      const message = await notificationChannel.messages
+        .fetch(metadata.observed_notification_message_id)
+        .catch(() => null);
+      if (!message) {
+        return false;
+      }
+
+      const components = this.createObservedActionRows(detectionEvent.user_id, detectionEvent.id);
+      if (!message.embeds.length) {
+        await message.edit({ allowedMentions: { parse: [] }, components });
+        return false;
+      }
+
+      const updatedEmbed = EmbedBuilder.from(message.embeds[0]);
+      const timestamp = Math.floor(Date.now() / 1000);
+      const field = {
+        name: 'Action Reverted',
+        value: `<@${admin.id}> ${actionDescription} <t:${timestamp}:R>`,
+        inline: false,
+      };
+      const existingFields =
+        updatedEmbed.data.fields?.filter(
+          (existingField) =>
+            existingField.name !== 'Action Taken' && existingField.name !== field.name
+        ) ?? [];
+      updatedEmbed.setFields(...existingFields, field);
+
+      await message.edit({
+        allowedMentions: { parse: [] },
+        embeds: [updatedEmbed],
+        components,
+      });
+      return true;
+    } catch (error) {
+      console.error('Failed to restore observed detection actions:', error);
       return false;
     }
   }
@@ -997,6 +1075,25 @@ export class NotificationManager implements INotificationManager {
           .setCustomId(`observed:dismiss_menu:${userId}:${detectionEventId}`)
           .setLabel('Dismiss...')
           .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`observed:history:${userId}:${detectionEventId}`)
+          .setLabel('History')
+          .setStyle(ButtonStyle.Secondary)
+      ),
+    ];
+  }
+
+  private createObservedUndoRows(
+    userId: string,
+    detectionEventId: string,
+    undoButtonLabel: string
+  ): ActionRowBuilder<ButtonBuilder>[] {
+    return [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`observed:undo_dismiss:${userId}:${detectionEventId}`)
+          .setLabel(undoButtonLabel)
+          .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
           .setCustomId(`observed:history:${userId}:${detectionEventId}`)
           .setLabel('History')

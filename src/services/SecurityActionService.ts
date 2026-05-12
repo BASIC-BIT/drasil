@@ -93,6 +93,13 @@ export interface ISecurityActionService {
     actionType: AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE
   ): Promise<boolean>;
 
+  undoObservedDetectionAction(
+    guildId: string,
+    userId: string,
+    detectionEventId: string,
+    moderator: User
+  ): Promise<AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE | null>;
+
   /**
    * Reopens a verification event, and re-restricts the user (or unbans them?)
    * @param verificationEvent The verification event to reopen
@@ -347,12 +354,15 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   private hasObservedAction(detectionEvent: DetectionEvent): boolean {
-    return Boolean(
-      detectionEvent.metadata &&
-      typeof detectionEvent.metadata === 'object' &&
-      !Array.isArray(detectionEvent.metadata) &&
-      detectionEvent.metadata.observed_action
-    );
+    return this.getObservedAction(detectionEvent) !== null;
+  }
+
+  private getObservedAction(detectionEvent: DetectionEvent): AdminActionType | null {
+    const metadata = detectionEvent.metadata;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return null;
+    }
+    return metadata.observed_action ? (metadata.observed_action as AdminActionType) : null;
   }
 
   private async recordObservedAction(data: {
@@ -801,7 +811,13 @@ export class SecurityActionService implements ISecurityActionService {
         actionType === AdminActionType.FALSE_POSITIVE
           ? 'marked this detection as a false positive'
           : 'dismissed this alert',
-        moderator
+        moderator,
+        {
+          undoButtonLabel:
+            actionType === AdminActionType.FALSE_POSITIVE
+              ? 'Undo False Positive'
+              : 'Undo Dismissal',
+        }
       );
       return true;
     } catch (error) {
@@ -810,6 +826,55 @@ export class SecurityActionService implements ISecurityActionService {
       }
       throw error;
     }
+  }
+
+  public async undoObservedDetectionAction(
+    guildId: string,
+    userId: string,
+    detectionEventId: string,
+    moderator: User
+  ): Promise<AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE | null> {
+    const detectionEvent = await this.getObservedDetectionForUser(
+      guildId,
+      userId,
+      detectionEventId
+    );
+    const observedAction = this.getObservedAction(detectionEvent);
+    if (
+      observedAction !== AdminActionType.DISMISS &&
+      observedAction !== AdminActionType.FALSE_POSITIVE
+    ) {
+      return null;
+    }
+
+    await this.ensureObservedEntitiesExist(guildId, userId);
+    const restoredDetectionEvent = await this.detectionEventsRepository.clearObservedAction(
+      detectionEvent.id,
+      [AdminActionType.DISMISS, AdminActionType.FALSE_POSITIVE]
+    );
+    if (!restoredDetectionEvent) {
+      return null;
+    }
+
+    await this.recordObservedAction({
+      serverId: guildId,
+      userId,
+      moderator,
+      detectionEvent: restoredDetectionEvent,
+      actionType: AdminActionType.UNDO_OBSERVED_ACTION,
+      notes:
+        observedAction === AdminActionType.FALSE_POSITIVE
+          ? 'Undid dismissal and reverted false positive indication.'
+          : 'Undid dismissal.',
+    });
+    await this.notificationManager.restoreObservedDetectionActions(
+      detectionEvent.id,
+      observedAction === AdminActionType.FALSE_POSITIVE
+        ? 'undid the dismissal and reverted the false positive indication'
+        : 'undid the dismissal',
+      moderator
+    );
+    return observedAction;
   }
 
   // TODO: Refactor reopenVerification to use events
