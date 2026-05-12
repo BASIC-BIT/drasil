@@ -387,7 +387,11 @@ export class SecurityActionService implements ISecurityActionService {
     if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
       return null;
     }
-    return metadata.observed_action ? (metadata.observed_action as AdminActionType) : null;
+    const observedAction = metadata.observed_action;
+    return typeof observedAction === 'string' &&
+      Object.values(AdminActionType).includes(observedAction as AdminActionType)
+      ? (observedAction as AdminActionType)
+      : null;
   }
 
   private async recordObservedAction(data: {
