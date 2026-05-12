@@ -33,6 +33,10 @@ export interface IDetectionEventsRepository {
     actionType: string,
     adminId: string
   ): Promise<DetectionEvent | null>;
+  clearObservedAction(
+    detectionEventId: string,
+    actionTypes: string[]
+  ): Promise<DetectionEvent | null>;
   cleanupOldEvents(retentionDays: number): Promise<number>;
   findById(id: string): Promise<DetectionEvent | null>; // Add findById for consistency
 }
@@ -263,6 +267,27 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
       return rows[0] ?? null;
     } catch (error) {
       this.handleError(error, 'releaseObservedAction');
+    }
+  }
+
+  async clearObservedAction(
+    detectionEventId: string,
+    actionTypes: string[]
+  ): Promise<DetectionEvent | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<DetectionEvent[]>`
+        UPDATE detection_events
+        SET metadata = COALESCE(metadata, '{}'::jsonb)
+          - 'observed_action'
+          - 'observed_action_by'
+          - 'observed_action_at'
+        WHERE id = ${detectionEventId}::uuid
+          AND COALESCE(metadata, '{}'::jsonb)->>'observed_action' IN (${Prisma.join(actionTypes)})
+        RETURNING *
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'clearObservedAction');
     }
   }
 

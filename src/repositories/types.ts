@@ -127,6 +127,7 @@ export enum AdminActionType {
   RESTRICT = 'restrict',
   DISMISS = 'dismiss',
   FALSE_POSITIVE = 'false_positive',
+  UNDO_OBSERVED_ACTION = 'undo_observed_action',
 }
 
 export interface VerificationEvent {

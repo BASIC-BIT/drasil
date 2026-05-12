@@ -62,6 +62,7 @@ describe('SecurityActionService (unit)', () => {
         .fn()
         .mockResolvedValue({ id: 'observe-1' } as Message),
       markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
+      restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
       createVerificationThread: jest
@@ -571,6 +572,89 @@ describe('SecurityActionService (unit)', () => {
       observed_action: AdminActionType.FALSE_POSITIVE,
       observed_action_by: moderator.id,
     });
+    expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
+      detectionEvent.id,
+      'marked this detection as a false positive',
+      moderator,
+      { undoButtonLabel: 'Undo False Positive' }
+    );
+  });
+
+  it('undoes an observed false positive dismissal and restores actions', async () => {
+    const guildId = 'guild-observed-undo';
+    const userId = 'user-observed-undo';
+    const moderator = { id: 'admin-observed' } as User;
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+      metadata: {
+        observed_action: AdminActionType.FALSE_POSITIVE,
+        observed_action_by: 'previous-admin',
+        observed_action_at: new Date().toISOString(),
+      },
+    });
+
+    const undoneAction = await buildService().undoObservedDetectionAction(
+      guildId,
+      userId,
+      detectionEvent.id,
+      moderator
+    );
+
+    expect(undoneAction).toBe(AdminActionType.FALSE_POSITIVE);
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
+    expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
+    expect(adminActionService.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detection_event_id: detectionEvent.id,
+        verification_event_id: null,
+        action_type: AdminActionType.UNDO_OBSERVED_ACTION,
+        notes: 'Undid dismissal and reverted false positive indication.',
+      })
+    );
+    expect(notificationManager.restoreObservedDetectionActions).toHaveBeenCalledWith(
+      detectionEvent.id,
+      'undid the dismissal and reverted the false positive indication',
+      moderator
+    );
+  });
+
+  it('restores observed dismissal metadata if undo audit recording fails', async () => {
+    const guildId = 'guild-observed-undo-fails';
+    const userId = 'user-observed-undo-fails';
+    const moderator = { id: 'admin-observed' } as User;
+    const observedActionAt = new Date().toISOString();
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+      metadata: {
+        observed_action: AdminActionType.DISMISS,
+        observed_action_by: 'previous-admin',
+        observed_action_at: observedActionAt,
+      },
+    });
+    adminActionService.recordAction.mockRejectedValueOnce(new Error('Audit write failed'));
+
+    await expect(
+      buildService().undoObservedDetectionAction(guildId, userId, detectionEvent.id, moderator)
+    ).rejects.toThrow('Audit write failed');
+
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(updatedDetection?.metadata).toMatchObject({
+      observed_action: AdminActionType.DISMISS,
+      observed_action_by: 'previous-admin',
+      observed_action_at: observedActionAt,
+    });
+    expect(notificationManager.restoreObservedDetectionActions).not.toHaveBeenCalled();
   });
 
   it('releases an observed ban claim when the ban fails', async () => {

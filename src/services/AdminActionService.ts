@@ -88,6 +88,9 @@ export class AdminActionService implements IAdminActionService {
       case AdminActionType.FALSE_POSITIVE:
         summary = `Marked false positive by ${adminMention}`;
         break;
+      case AdminActionType.UNDO_OBSERVED_ACTION:
+        summary = `Observed alert action undone by ${adminMention}`;
+        break;
       default:
         summary = `Action taken by ${adminMention}`;
     }

@@ -104,6 +104,7 @@ describe('InteractionHandler (unit)', () => {
       restrictObservedDetection: jest.fn().mockResolvedValue(true),
       banObservedDetection: jest.fn().mockResolvedValue(true),
       dismissObservedDetection: jest.fn().mockResolvedValue(true),
+      undoObservedDetectionAction: jest.fn().mockResolvedValue(AdminActionType.DISMISS),
       reopenVerification: jest.fn().mockResolvedValue(true),
     };
     notificationManager = {
@@ -115,6 +116,7 @@ describe('InteractionHandler (unit)', () => {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue(null),
       markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
+      restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
     };
     configService = {
       initialize: jest.fn().mockResolvedValue(undefined),
@@ -482,6 +484,39 @@ describe('InteractionHandler (unit)', () => {
       components: [],
     });
     expect(securityActionService.dismissObservedDetection).not.toHaveBeenCalled();
+  });
+
+  it('handles observed false positive undo', async () => {
+    securityActionService.undoObservedDetectionAction.mockResolvedValueOnce(
+      AdminActionType.FALSE_POSITIVE
+    );
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('observed:undo_dismiss:user-1:det-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(securityActionService.undoObservedDetectionAction).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'det-1',
+      interaction.user
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Undid the dismissal and reverted the false-positive indication for <@user-1>.',
+      components: [],
+    });
   });
 
   it('handles report modal submission', async () => {
