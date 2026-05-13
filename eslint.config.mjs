@@ -8,12 +8,12 @@ import prettier from 'eslint-plugin-prettier';
 // Config for JavaScript config files must come first to prevent TypeScript parser from being used on them
 const configs = [
   {
-    ignores: ['dist/**', 'build/**'],
+    ignores: ['dist/**', 'build/**', 'src/generated/prisma/**'],
   },
   // Config for JavaScript config files
   {
     files: ['*.js', '*.cjs', '.*.js', '.*.mjs', '.*.cjs'],
-    ignores: ['dist/**', 'build/**'],
+    ignores: ['dist/**', 'build/**', 'src/generated/prisma/**'],
     languageOptions: {
       globals: {
         ...globals.node,
@@ -48,7 +48,13 @@ const configs = [
   // Base config for all TypeScript files
   {
     files: ['**/*.ts'],
-    ignores: ['**/*.test.ts', '**/*.spec.ts', 'test/**/*', 'dist/**/*'],
+    ignores: [
+      '**/*.test.ts',
+      '**/*.spec.ts',
+      'test/**/*',
+      'dist/**/*',
+      'src/generated/prisma/**/*',
+    ],
     languageOptions: {
       globals: {
         ...globals.node,
@@ -76,7 +82,7 @@ const configs = [
   // Base JavaScript recommended config
   {
     files: ['**/*.{js,mjs,cjs,ts}'],
-    ignores: ['dist/**/*'],
+    ignores: ['dist/**/*', 'src/generated/prisma/**/*'],
     plugins: { js },
     extends: ['js/recommended'],
   },
@@ -89,7 +95,7 @@ const configs = [
       '**/__mocks__/**/*.ts',
       '**/__tests__/**/*.*',
     ],
-    ignores: ['dist/**/*'],
+    ignores: ['dist/**/*', 'src/generated/prisma/**/*'],
     languageOptions: {
       globals: {
         ...globals.node,

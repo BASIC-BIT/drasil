@@ -18,7 +18,7 @@ COPY package.json package-lock.json ./
 COPY prisma ./prisma
 COPY scripts ./scripts
 
-RUN npm ci
+RUN PRISMA_SKIP_POSTINSTALL_GENERATE=1 npm ci
 
 
 FROM base AS build
@@ -26,6 +26,7 @@ FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+RUN npm run prisma:generate
 RUN npm run build
 
 # Produce a production-only node_modules for runtime.
@@ -42,6 +43,7 @@ COPY --chown=node:node --from=build /app/package.json ./package.json
 COPY --chown=node:node --from=build /app/node_modules ./node_modules
 COPY --chown=node:node --from=build /app/dist ./dist
 COPY --chown=node:node --from=build /app/prisma ./prisma
+COPY --chown=node:node --from=build /app/prisma.config.ts ./prisma.config.ts
 COPY --chown=node:node --from=build /app/scripts ./scripts
 
 USER node

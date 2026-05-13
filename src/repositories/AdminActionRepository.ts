@@ -1,5 +1,5 @@
 import { injectable, inject } from 'inversify';
-import { Prisma, PrismaClient, admin_action_type, verification_status } from '@prisma/client'; // Import Prisma types
+import { Prisma, PrismaClient, admin_action_type, verification_status } from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository';
 import { AdminAction, AdminActionCreate } from './types'; // Use local types

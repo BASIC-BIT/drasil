@@ -1,5 +1,5 @@
 import { injectable, inject } from 'inversify';
-import { Prisma, PrismaClient, verification_status } from '@prisma/client';
+import { Prisma, PrismaClient, verification_status } from '../db/prisma';
 import { ServerMember, VerificationStatus } from './types'; // Import VerificationStatus enum
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository'; // Keep using RepositoryError

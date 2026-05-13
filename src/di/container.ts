@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { Container } from 'inversify';
 import { Client, GatewayIntentBits } from 'discord.js';
 import OpenAI from 'openai';
-import { PrismaClient } from '@prisma/client'; // Import Prisma client
+import { createPrismaClient, PrismaClient } from '../db/prisma';
 
 import { TYPES } from './symbols';
 
@@ -85,9 +85,7 @@ function configureExternalDependencies(container: Container): void {
     })
   );
 
-  // Prisma Client
-  // Instantiate Prisma Client (typically a singleton)
-  const prismaClient = new PrismaClient();
+  const prismaClient = createPrismaClient();
   container.bind<PrismaClient>(TYPES.PrismaClient).toConstantValue(prismaClient);
 
   // Supabase client removed; Prisma is used for persistence

@@ -1,5 +1,5 @@
 import { injectable, inject } from 'inversify';
-import { Prisma, PrismaClient, verification_status } from '@prisma/client'; // Import Prisma types
+import { Prisma, PrismaClient, verification_status } from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository';
 import { VerificationEvent, VerificationStatus } from './types'; // Use local enum

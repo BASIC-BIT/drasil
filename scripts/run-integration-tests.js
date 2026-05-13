@@ -5,7 +5,13 @@ process.env.JEST_INTEGRATION = '1';
 const prismaBin = require.resolve('prisma/build/index.js');
 const prismaResult = spawnSync(process.execPath, [prismaBin, 'generate'], {
   stdio: 'inherit',
-  env: process.env,
+  env: {
+    ...process.env,
+    DATABASE_URL:
+      process.env.TEST_DATABASE_URL ||
+      process.env.DATABASE_URL ||
+      'postgresql://postgres:postgres@localhost:5432/drasil_test?schema=public',
+  },
 });
 
 if (prismaResult.status !== 0) {

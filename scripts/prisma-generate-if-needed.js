@@ -3,13 +3,12 @@ const fs = require('fs');
 const path = require('path');
 
 const prismaSchemaPath = path.join(process.cwd(), 'prisma', 'schema.prisma');
-const prismaClientTypesPath = path.join(
-  process.cwd(),
-  'node_modules',
-  '.prisma',
-  'client',
-  'index.d.ts'
-);
+const prismaClientTypesPath = path.join(process.cwd(), 'src', 'generated', 'prisma', 'client.ts');
+
+const generateDatabaseUrl =
+  process.env.DATABASE_URL ||
+  process.env.TEST_DATABASE_URL ||
+  'postgresql://postgres:postgres@localhost:5432/drasil?schema=public';
 
 if (process.env.PRISMA_SKIP_POSTINSTALL_GENERATE) {
   process.exit(0);
@@ -27,9 +26,9 @@ function isGeneratedPrismaClient() {
     // Check for schema-specific exports we rely on in this codebase.
     // This avoids brittle size checks and aligns with our schema.
     return (
-      types.includes('export type detection_type') &&
-      types.includes('export type verification_status') &&
-      types.includes('export type admin_action_type')
+      types.includes('detection_type') &&
+      types.includes('verification_status') &&
+      types.includes('admin_action_type')
     );
   } catch {
     return false;
@@ -53,7 +52,7 @@ try {
 
 const result = spawnSync(process.execPath, [prismaBin, 'generate'], {
   stdio: 'inherit',
-  env: process.env,
+  env: { ...process.env, DATABASE_URL: generateDatabaseUrl },
 });
 
 process.exit(result.status ?? 1);

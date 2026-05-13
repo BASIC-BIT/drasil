@@ -4,7 +4,7 @@ import type { IServerMemberRepository } from '../../repositories/ServerMemberRep
 import type { IServerRepository } from '../../repositories/ServerRepository';
 import type { IUserRepository } from '../../repositories/UserRepository';
 import type { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
-import { verification_status } from '@prisma/client';
+import { verification_status } from '../../db/prisma';
 import {
   AdminAction,
   AdminActionCreate,
