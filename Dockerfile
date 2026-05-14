@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-bookworm-slim AS base
+FROM node:20.19-bookworm-slim AS base
 
 WORKDIR /app
 
