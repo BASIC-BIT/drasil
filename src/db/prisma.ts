@@ -14,6 +14,6 @@ export function createPrismaClient(databaseUrl = process.env.DATABASE_URL): Pris
     throw new Error('DATABASE_URL is required to create a Prisma client.');
   }
 
-  const adapter = new PrismaPg({ connectionString: databaseUrl });
+  const adapter = new PrismaPg({ connectionString: databaseUrl, max: 10 });
   return new PrismaClient({ adapter });
 }
