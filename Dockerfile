@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:20-bookworm-slim AS base
+FROM node:24-bookworm-slim AS base
 
 WORKDIR /app
 
@@ -43,7 +43,7 @@ COPY --chown=node:node --from=build /app/package.json ./package.json
 COPY --chown=node:node --from=build /app/node_modules ./node_modules
 COPY --chown=node:node --from=build /app/dist ./dist
 COPY --chown=node:node --from=build /app/prisma ./prisma
-COPY --chown=node:node --from=build /app/prisma.config.ts ./prisma.config.ts
+COPY --chown=node:node --from=build /app/prisma.config.js ./prisma.config.js
 COPY --chown=node:node --from=build /app/scripts ./scripts
 
 USER node

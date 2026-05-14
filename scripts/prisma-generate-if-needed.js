@@ -4,6 +4,7 @@ const path = require('path');
 
 const prismaSchemaPath = path.join(process.cwd(), 'prisma', 'schema.prisma');
 const prismaClientTypesPath = path.join(process.cwd(), 'src', 'generated', 'prisma', 'client.ts');
+const prismaEnumsTypesPath = path.join(process.cwd(), 'src', 'generated', 'prisma', 'enums.ts');
 
 const generateDatabaseUrl =
   process.env.DATABASE_URL ||
@@ -21,14 +22,17 @@ if (!fs.existsSync(prismaSchemaPath)) {
 
 function isGeneratedPrismaClient() {
   try {
-    const types = fs.readFileSync(prismaClientTypesPath, 'utf8');
+    const clientTypes = fs.readFileSync(prismaClientTypesPath, 'utf8');
+    const enumTypes = fs.readFileSync(prismaEnumsTypesPath, 'utf8');
 
     // Check for schema-specific exports we rely on in this codebase.
     // This avoids brittle size checks and aligns with our schema.
     return (
-      types.includes('detection_type') &&
-      types.includes('verification_status') &&
-      types.includes('admin_action_type')
+      /export const PrismaClient\b/.test(clientTypes) &&
+      /export \{ Prisma \}/.test(clientTypes) &&
+      /export type detection_type\s*=/.test(enumTypes) &&
+      /export type verification_status\s*=/.test(enumTypes) &&
+      /export type admin_action_type\s*=/.test(enumTypes)
     );
   } catch {
     return false;
@@ -55,4 +59,4 @@ const result = spawnSync(process.execPath, [prismaBin, 'generate'], {
   env: { ...process.env, DATABASE_URL: generateDatabaseUrl },
 });
 
-process.exit(result.status ?? 1);
+process.exit(result.status !== null ? result.status : 1);

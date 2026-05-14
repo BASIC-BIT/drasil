@@ -11,4 +11,4 @@ const result = spawnSync(process.execPath, [prismaBin, 'generate'], {
   env: { ...process.env, DATABASE_URL: generateDatabaseUrl },
 });
 
-process.exit(result.status ?? 1);
+process.exit(result.status !== null ? result.status : 1);
