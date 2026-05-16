@@ -1,5 +1,5 @@
 import { injectable, inject } from 'inversify';
-import { Prisma, PrismaClient, detection_type } from '@prisma/client'; // Import PrismaClient and generated types
+import { Prisma, PrismaClient, detection_type } from '../db/prisma';
 import { DetectionEvent } from './types'; // Keep existing domain types
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository'; // Keep using RepositoryError

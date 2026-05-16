@@ -1,5 +1,5 @@
 import { Client, Guild, GuildMember, Message, User } from 'discord.js';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../../db/prisma';
 import { SecurityActionService } from '../../services/SecurityActionService';
 import { AdminActionService } from '../../services/AdminActionService';
 import { DetectionEventsRepository } from '../../repositories/DetectionEventsRepository';

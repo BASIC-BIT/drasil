@@ -1,6 +1,7 @@
 # Build outputs
 dist/
 build/
+src/generated/prisma/
 
 # Dependencies
 node_modules/

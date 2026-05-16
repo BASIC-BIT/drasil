@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma } from '../db/prisma';
 /**
  * TypeScript types for database entities
  */

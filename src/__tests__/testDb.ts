@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { createPrismaClient, PrismaClient } from '../db/prisma';
 import { Client } from 'pg';
 import { execSync } from 'child_process';
 import * as dotenv from 'dotenv';
@@ -29,8 +29,7 @@ function resolveAdminDatabaseUrl(): string {
 
 export function getPrismaClient(): PrismaClient {
   if (!prismaClient) {
-    resolveDatabaseUrl();
-    prismaClient = new PrismaClient();
+    prismaClient = createPrismaClient(resolveDatabaseUrl());
   }
   return prismaClient;
 }
