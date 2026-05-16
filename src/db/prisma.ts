@@ -19,7 +19,7 @@ export function createPrismaClient(databaseUrl = process.env.DATABASE_URL): Pris
 }
 
 function resolvePoolMax(): number {
-  const poolMax = Number.parseInt(process.env.PG_POOL_MAX || '10', 10);
+  const poolMax = Number(process.env.PG_POOL_MAX || '10');
 
   if (!Number.isInteger(poolMax) || poolMax < 1) {
     throw new Error('PG_POOL_MAX must be a positive integer.');
