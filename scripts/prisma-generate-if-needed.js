@@ -29,7 +29,7 @@ function isGeneratedPrismaClient() {
     // This avoids brittle size checks and aligns with our schema.
     return (
       /export const PrismaClient\b/.test(clientTypes) &&
-      /export \{ Prisma \}/.test(clientTypes) &&
+      /export \{[^}]*\bPrisma\b[^}]*\}/.test(clientTypes) &&
       /export type detection_type\s*=/.test(enumTypes) &&
       /export type verification_status\s*=/.test(enumTypes) &&
       /export type admin_action_type\s*=/.test(enumTypes)
