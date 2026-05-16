@@ -81,5 +81,8 @@
     "prisma": "^7.8.0",
     "reflect-metadata": "^0.2.2",
     "zod": "^3.25.76"
+  },
+  "overrides": {
+    "@hono/node-server": "1.19.13"
   }
 }
