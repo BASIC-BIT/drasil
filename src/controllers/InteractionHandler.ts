@@ -585,11 +585,7 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private getModerationPermissions(): bigint[] {
-    return [
-      PermissionFlagsBits.ManageGuild,
-      PermissionFlagsBits.ModerateMembers,
-      PermissionFlagsBits.BanMembers,
-    ];
+    return [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ModerateMembers];
   }
 
   private getObservedModerationPermissions(): bigint[] {
