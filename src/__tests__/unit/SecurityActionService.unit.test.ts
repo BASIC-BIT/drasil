@@ -242,7 +242,7 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('creates detection event for user report', async () => {
+  it('creates a review-only pending case for user report', async () => {
     const guildId = 'guild-3';
     const userId = 'user-3';
     const reporterId = 'reporter-1';
@@ -277,7 +277,7 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(userModerationService.restrictUser).toHaveBeenCalled();
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).toHaveBeenCalled();
   });
 
@@ -429,7 +429,7 @@ describe('SecurityActionService (unit)', () => {
       VerificationStatus.PENDING,
       VerificationStatus.VERIFIED,
     ]);
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
   });
 

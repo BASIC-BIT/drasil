@@ -126,18 +126,63 @@ export class InteractionHandler implements IInteractionHandler {
 
       switch (action) {
         case 'verify':
+          if (
+            !(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))
+          ) {
+            await this.replyPermissionDenied(
+              interaction,
+              'You need moderation permissions to verify a user.'
+            );
+            return;
+          }
           await this.handleVerifyButton(interaction, guildId, targetUserId);
           break;
         case 'ban':
+          if (
+            !(await this.hasAnyPermission(interaction, guildId, [PermissionFlagsBits.BanMembers]))
+          ) {
+            await this.replyPermissionDenied(
+              interaction,
+              'You need Ban Members permission to ban a user.'
+            );
+            return;
+          }
           await this.handleBanButton(interaction, guildId, targetUserId);
           break;
         case 'thread':
+          if (
+            !(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))
+          ) {
+            await this.replyPermissionDenied(
+              interaction,
+              'You need moderation permissions to create a verification thread.'
+            );
+            return;
+          }
           await this.handleThreadButton(interaction, guildId, targetUserId);
           break;
         case 'history':
+          if (
+            !(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))
+          ) {
+            await this.replyPermissionDenied(
+              interaction,
+              'You need moderation permissions to view history.'
+            );
+            return;
+          }
           await this.handleHistoryButton(interaction, guildId, targetUserId);
           break;
         case 'reopen':
+          if (
+            !(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))
+          ) {
+            await this.replyPermissionDenied(
+              interaction,
+              'You need moderation permissions to reopen verification.'
+            );
+            return;
+          }
           await this.handleReopenButton(interaction, guildId, targetUserId);
           break;
         default:
@@ -539,12 +584,16 @@ export class InteractionHandler implements IInteractionHandler {
     return member;
   }
 
-  private getObservedModerationPermissions(): bigint[] {
+  private getModerationPermissions(): bigint[] {
     return [
       PermissionFlagsBits.ManageGuild,
       PermissionFlagsBits.ModerateMembers,
       PermissionFlagsBits.BanMembers,
     ];
+  }
+
+  private getObservedModerationPermissions(): bigint[] {
+    return this.getModerationPermissions();
   }
 
   private async handleObservedButtonInteraction(

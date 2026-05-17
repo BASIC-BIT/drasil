@@ -658,7 +658,7 @@ export class SecurityActionService implements ISecurityActionService {
         detectionEventId: detectionEvent.id,
       };
 
-      return await this.handleSuspiciousMember(member, detectionResult);
+      return await this.handleSuspiciousMember(member, detectionResult, undefined, false);
     } catch (error) {
       console.error(`Failed to handle user report for ${member.user.tag}:`, error);
       throw error;
