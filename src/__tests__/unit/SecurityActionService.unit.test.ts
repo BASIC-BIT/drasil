@@ -354,7 +354,7 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('adds a manual flag to an existing pending case without creating a duplicate case', async () => {
+  it('adds a manual flag to an existing review-only pending case and restricts the user', async () => {
     const guildId = 'guild-4b';
     const userId = 'user-4b';
     const moderatorId = 'admin-2';
@@ -392,7 +392,7 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });

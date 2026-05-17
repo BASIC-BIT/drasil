@@ -297,6 +297,34 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('handles history button for members with moderation permissions', async () => {
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([]);
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('history_user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(verificationEventRepository.findByUserAndServer).toHaveBeenCalledWith(
+      'user-1',
+      'guild-1'
+    );
+    expect(interaction.editReply).toHaveBeenCalled();
+  });
+
   it.each([
     ['verify_user-1', 'You need moderation permissions to verify a user.'],
     ['ban_user-1', 'You need Ban Members permission to ban a user.'],

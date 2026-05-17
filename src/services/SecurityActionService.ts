@@ -459,6 +459,21 @@ export class SecurityActionService implements ISecurityActionService {
           `Failed to link detection event ${detectionEventId} to verification event ${activeVerificationEvent.id}`
         );
       }
+      const initialDetection = activeVerificationEvent.detection_event_id
+        ? await this.detectionEventsRepository.findById(activeVerificationEvent.detection_event_id)
+        : null;
+      if (restrictUser && initialDetection?.detection_type === DetectionType.USER_REPORT) {
+        const serverMember = await this.serverMemberRepository.findByServerAndUser(
+          member.guild.id,
+          member.id
+        );
+        if (serverMember?.is_restricted !== true) {
+          const restricted = await this.userModerationService.restrictUser(member);
+          if (!restricted) {
+            throw new Error(`Failed to restrict user ${member.user.tag}`);
+          }
+        }
+      }
       await this.upsertNotification(
         member,
         detectionResult,
