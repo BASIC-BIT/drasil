@@ -242,7 +242,7 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('creates detection event for user report', async () => {
+  it('creates a review-only pending case for user report', async () => {
     const guildId = 'guild-3';
     const userId = 'user-3';
     const reporterId = 'reporter-1';
@@ -277,7 +277,7 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(userModerationService.restrictUser).toHaveBeenCalled();
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).toHaveBeenCalled();
   });
 
@@ -354,7 +354,7 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('adds a manual flag to an existing pending case without creating a duplicate case', async () => {
+  it('adds a manual flag to an existing review-only pending case and restricts the user', async () => {
     const guildId = 'guild-4b';
     const userId = 'user-4b';
     const moderatorId = 'admin-2';
@@ -392,7 +392,55 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('restricts the user when auto-detection follows an existing review-only pending case', async () => {
+    const guildId = 'guild-4b-auto';
+    const userId = 'user-4b-auto';
+    const member = buildMember(guildId, userId);
+    const message = buildMessage(guildId, 'channel-4b-auto');
+
+    const initialDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1.0,
+      reasons: ['Initial report'],
+      detected_at: new Date(),
+    });
+    const activeCase = await verificationEventRepository.createFromDetection(
+      initialDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.88,
+      reasons: ['Suspicious content after report'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: message.content,
+    };
+
+    await buildService().handleSuspiciousMessage(member, detectionResult, message);
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents).toHaveLength(2);
+    const autoDetectionEvent = detectionEvents.find(
+      (event) => event.detection_type === DetectionType.SUSPICIOUS_CONTENT
+    );
+    expect(autoDetectionEvent?.latest_verification_event_id).toBe(activeCase.id);
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
@@ -429,7 +477,7 @@ describe('SecurityActionService (unit)', () => {
       VerificationStatus.PENDING,
       VerificationStatus.VERIFIED,
     ]);
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
   });
 

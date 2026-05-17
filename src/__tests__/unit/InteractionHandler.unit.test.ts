@@ -6,6 +6,7 @@ import {
   GuildMember,
   MessageFlags,
   ModalSubmitInteraction,
+  PermissionFlagsBits,
   User,
 } from 'discord.js';
 import { InteractionHandler } from '../../controllers/InteractionHandler';
@@ -63,6 +64,14 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
 const grantInteractionPermissions = (interaction: ButtonInteraction): void => {
   Object.assign(interaction, {
     memberPermissions: { has: jest.fn().mockReturnValue(true) },
+  });
+};
+
+const grantOnlyBanMembersPermission = (interaction: ButtonInteraction): void => {
+  Object.assign(interaction, {
+    memberPermissions: {
+      has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.BanMembers),
+    },
   });
 };
 
@@ -173,6 +182,7 @@ describe('InteractionHandler (unit)', () => {
     const interaction = buildInteraction('verify_user-1', 'guild-1', {
       id: 'admin-1',
     } as User);
+    grantInteractionPermissions(interaction);
 
     await handler.handleButtonInteraction(interaction);
 
@@ -197,6 +207,7 @@ describe('InteractionHandler (unit)', () => {
     const interaction = buildInteraction('ban_user-1', 'guild-1', {
       id: 'admin-1',
     } as User);
+    grantInteractionPermissions(interaction);
 
     await handler.handleButtonInteraction(interaction);
 
@@ -238,6 +249,7 @@ describe('InteractionHandler (unit)', () => {
     const interaction = buildInteraction('thread_user-1', 'guild-1', {
       id: 'admin-1',
     } as User);
+    grantInteractionPermissions(interaction);
 
     await handler.handleButtonInteraction(interaction);
 
@@ -280,6 +292,7 @@ describe('InteractionHandler (unit)', () => {
     const interaction = buildInteraction('reopen_user-1', 'guild-1', {
       id: 'admin-1',
     } as User);
+    grantInteractionPermissions(interaction);
 
     await handler.handleButtonInteraction(interaction);
 
@@ -291,6 +304,144 @@ describe('InteractionHandler (unit)', () => {
       content: 'Verification for <@user-1> has been reopened. The user has been restricted again.',
       flags: MessageFlags.Ephemeral,
     });
+  });
+
+  it('handles history button for members with moderation permissions', async () => {
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([]);
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('history_user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(verificationEventRepository.findByUserAndServer).toHaveBeenCalledWith(
+      'user-1',
+      'guild-1'
+    );
+    expect(interaction.editReply).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['verify_user-1', 'You need moderation permissions to verify a user.'],
+    ['ban_user-1', 'You need Ban Members permission to ban a user.'],
+    ['thread_user-1', 'You need moderation permissions to create a verification thread.'],
+    ['history_user-1', 'You need moderation permissions to view history.'],
+    ['reopen_user-1', 'You need moderation permissions to reopen verification.'],
+  ])(
+    'denies legacy moderation button %s without moderator permissions',
+    async (customId, message) => {
+      (client.guilds.fetch as jest.Mock).mockResolvedValue({
+        members: {
+          fetch: jest.fn().mockResolvedValue({
+            permissions: { has: jest.fn().mockReturnValue(false) },
+          }),
+        },
+      });
+      const handler = new InteractionHandler(
+        client,
+        notificationManager,
+        userModerationService,
+        securityActionService,
+        configService,
+        verificationEventRepository,
+        threadManager,
+        adminActionRepository
+      );
+      const interaction = buildInteraction(customId, 'guild-1', { id: 'viewer-1' } as User);
+      Object.assign(interaction, {
+        memberPermissions: { has: jest.fn().mockReturnValue(false) },
+      });
+
+      await handler.handleButtonInteraction(interaction);
+
+      expect(interaction.reply).toHaveBeenCalledWith({
+        content: message,
+        flags: MessageFlags.Ephemeral,
+      });
+      expect(interaction.deferUpdate).not.toHaveBeenCalled();
+      expect(userModerationService.verifyUser).not.toHaveBeenCalled();
+      expect(userModerationService.banUser).not.toHaveBeenCalled();
+      expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+      expect(notificationManager.handleHistoryButtonClick).not.toHaveBeenCalled();
+      expect(securityActionService.reopenVerification).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['verify_user-1', 'You need moderation permissions to verify a user.'],
+    ['thread_user-1', 'You need moderation permissions to create a verification thread.'],
+    ['history_user-1', 'You need moderation permissions to view history.'],
+    ['reopen_user-1', 'You need moderation permissions to reopen verification.'],
+  ])(
+    'denies non-ban legacy button %s with only BanMembers permission',
+    async (customId, message) => {
+      (client.guilds.fetch as jest.Mock).mockResolvedValue({
+        members: {
+          fetch: jest.fn().mockResolvedValue({
+            permissions: {
+              has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.BanMembers),
+            },
+          }),
+        },
+      });
+      const handler = new InteractionHandler(
+        client,
+        notificationManager,
+        userModerationService,
+        securityActionService,
+        configService,
+        verificationEventRepository,
+        threadManager,
+        adminActionRepository
+      );
+      const interaction = buildInteraction(customId, 'guild-1', { id: 'ban-mod-1' } as User);
+      grantOnlyBanMembersPermission(interaction);
+
+      await handler.handleButtonInteraction(interaction);
+
+      expect(interaction.reply).toHaveBeenCalledWith({
+        content: message,
+        flags: MessageFlags.Ephemeral,
+      });
+      expect(userModerationService.verifyUser).not.toHaveBeenCalled();
+      expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+      expect(notificationManager.handleHistoryButtonClick).not.toHaveBeenCalled();
+      expect(securityActionService.reopenVerification).not.toHaveBeenCalled();
+    }
+  );
+
+  it('allows ban button with only BanMembers permission', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('ban_user-1', 'guild-1', {
+      id: 'ban-mod-1',
+    } as User);
+    grantOnlyBanMembersPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(userModerationService.banUser).toHaveBeenCalledTimes(1);
   });
 
   it('handles observed open case button', async () => {
