@@ -34,13 +34,13 @@ Drasil registers these report entry points:
 - `Report User`: guild-only user context-menu command under `Apps` when right-clicking a user.
 - `Report Message`: optional message context-menu command under `Apps` when right-clicking a message.
 
-`Report Message` is intended for user-installed reporting from DMs/GDMs and is disabled by default. Enable command registration with:
+`Report Message` is intended for user-installed reporting from DMs/GDMs. Production enables command registration with:
 
 ```text
 DRASIL_USER_INSTALL_REPORTING_ENABLED=true
 ```
 
-When disabled, Drasil does not register the `Report Message` command on startup.
+When disabled in a non-production deployment, Drasil does not register the `Report Message` command on startup.
 
 ## External Report Intake
 
@@ -64,7 +64,7 @@ External reports never apply automatic restrictions. Moderators must review and 
 
 ## Rollout Notes
 
-- Keep `DRASIL_USER_INSTALL_REPORTING_ENABLED` unset or `false` until at least one test server has opted into external report intake.
+- Keep server external report intake at the default `off` until a test server has opted into `notify_only` or `open_case`.
 - After enabling user install in the Developer Portal, restart Drasil so global commands are re-registered with the new installation contexts.
 - Test `Report Message` from a DM with a non-self message and an opted-in server where the target is a known member before announcing user-install support.
 - If a server requires report reasons, `Report User` asks the reporter to use `/report` because context-menu user commands cannot collect options directly.
