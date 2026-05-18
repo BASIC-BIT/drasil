@@ -32,6 +32,7 @@ import { getDetectionResponseSettings } from '../utils/detectionResponseSettings
 import {
   DEFAULT_USER_REPORT_REASON_REQUIRED,
   getUserReportSettings,
+  USER_REPORT_REASON_MAX_LENGTH,
 } from '../utils/userReportSettings';
 import {
   parseChannelId,
@@ -444,6 +445,7 @@ export class InteractionHandler implements IInteractionHandler {
       .setLabel('Reason')
       .setStyle(TextInputStyle.Paragraph) // Allow multi-line input
       .setPlaceholder('What happened? Include links or message context if useful.')
+      .setMaxLength(USER_REPORT_REASON_MAX_LENGTH)
       .setRequired(reasonRequired);
 
     const reasonRow = new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput);

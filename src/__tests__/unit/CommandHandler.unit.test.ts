@@ -11,7 +11,10 @@ import {
   VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY,
   VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY,
 } from '../../utils/verificationThreadAnalysisSettings';
-import { USER_REPORT_REASON_REQUIRED_SETTING_KEY } from '../../utils/userReportSettings';
+import {
+  USER_REPORT_REASON_MAX_LENGTH,
+  USER_REPORT_REASON_REQUIRED_SETTING_KEY,
+} from '../../utils/userReportSettings';
 
 describe('CommandHandler (unit)', () => {
   type HandlerOverrides = Partial<{
@@ -100,6 +103,9 @@ describe('CommandHandler (unit)', () => {
     expect(reportCommand).toBeDefined();
     expect(reportCommand.default_member_permissions).toBeUndefined();
     expect(reportCommand.options.map((option: any) => option.name)).toEqual(['user', 'reason']);
+    expect(reportCommand.options.find((option: any) => option.name === 'reason').max_length).toBe(
+      USER_REPORT_REASON_MAX_LENGTH
+    );
   });
 
   it('registers /config heuristic subcommands', () => {

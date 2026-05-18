@@ -24,7 +24,10 @@ import {
   SETUP_VERIFICATION_MODAL_ID,
   SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
 } from '../../constants/setupVerificationWizard';
-import { USER_REPORT_REASON_REQUIRED_SETTING_KEY } from '../../utils/userReportSettings';
+import {
+  USER_REPORT_REASON_MAX_LENGTH,
+  USER_REPORT_REASON_REQUIRED_SETTING_KEY,
+} from '../../utils/userReportSettings';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -1336,6 +1339,7 @@ describe('InteractionHandler (unit)', () => {
       '123456789012345678, @username, or username'
     );
     expect(modalJson.components[1].components[0].label).toBe('Reason');
+    expect(modalJson.components[1].components[0].max_length).toBe(USER_REPORT_REASON_MAX_LENGTH);
     expect(modalJson.components[1].components[0].required).toBe(true);
     expect(configService.getCachedServerConfig).toHaveBeenCalledWith('guild-1');
     expect(configService.getServerConfig).not.toHaveBeenCalled();

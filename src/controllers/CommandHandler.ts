@@ -68,6 +68,7 @@ import {
 } from '../utils/detectionResponseSettings';
 import {
   getUserReportSettings,
+  USER_REPORT_REASON_MAX_LENGTH,
   USER_REPORT_REASON_REQUIRED_SETTING_KEY,
 } from '../utils/userReportSettings';
 import 'reflect-metadata';
@@ -147,7 +148,7 @@ export class CommandHandler implements ICommandHandler {
             .setName('reason')
             .setDescription('What happened?')
             .setRequired(false)
-            .setMaxLength(1000)
+            .setMaxLength(USER_REPORT_REASON_MAX_LENGTH)
         ),
       new SlashCommandBuilder()
         .setName('setupverification')
