@@ -723,6 +723,56 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('returns a friendly report modal error when the member leaves before submission completes', async () => {
+    const member = buildMember('guild-1', '123456789012345678');
+    const membersFetch = jest
+      .fn()
+      .mockResolvedValueOnce(member)
+      .mockRejectedValueOnce(new Error('member left'));
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: membersFetch,
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'report_user_modal_submit',
+      guildId: 'guild-1',
+      user: { id: 'reporter-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === 'report_target_user_input') {
+            return '123456789012345678';
+          }
+          return 'reported';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Could not find a user matching "123456789012345678" in this server.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('handles report modal submission with a modern username', async () => {
     const member = {
       ...buildMember('guild-1', '123456789012345678'),
@@ -784,7 +834,7 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleModalSubmit(interaction);
 
-    expect(membersSearch).toHaveBeenCalledWith({ query: 'basic_bit', limit: 10 });
+    expect(membersSearch).toHaveBeenCalledWith({ query: 'basic_bit', limit: 25 });
     expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
       member,
       interaction.user,
@@ -851,7 +901,7 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleModalSubmit(interaction);
 
-    expect(membersSearch).toHaveBeenCalledWith({ query: 'legacyuser', limit: 10 });
+    expect(membersSearch).toHaveBeenCalledWith({ query: 'legacyuser', limit: 25 });
     expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
       member,
       interaction.user,

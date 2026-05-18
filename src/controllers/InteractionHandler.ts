@@ -538,7 +538,14 @@ export class InteractionHandler implements IInteractionHandler {
       }
 
       const guild = await this.client.guilds.fetch(interaction.guildId);
-      const member = await guild.members.fetch(targetUserId);
+      const member = await guild.members.fetch(targetUserId).catch(() => null);
+      if (!member) {
+        await interaction.reply({
+          content: `Could not find a user matching "${targetUserInputString}" in this server.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
 
       await this.securityActionService.handleUserReport(member, interaction.user, reason);
 
@@ -1145,7 +1152,7 @@ export class InteractionHandler implements IInteractionHandler {
       const guild = await this.client.guilds.fetch(guildId);
       const members = await guild.members.search({
         query: tagMatch ? tagMatch[1] : normalizedInput,
-        limit: 10,
+        limit: 25,
       });
       const candidates = Array.from(members.values());
 
