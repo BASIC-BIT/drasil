@@ -116,4 +116,14 @@ describe('createPrismaPoolConfig', () => {
       ssl: { rejectUnauthorized: false },
     });
   });
+
+  it('honors disable sslmode with explicit ssl false', () => {
+    expect(
+      createPrismaPoolConfig('postgresql://user:password@example.com:5432/db?sslmode=disable')
+    ).toEqual({
+      connectionString: 'postgresql://user:password@example.com:5432/db',
+      max: 10,
+      ssl: false,
+    });
+  });
 });
