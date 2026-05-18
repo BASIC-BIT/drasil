@@ -1253,7 +1253,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('routes report button clicks to show the report modal', async () => {
-    configService.getServerConfig.mockResolvedValue({
+    configService.getCachedServerConfig.mockReturnValue({
       settings: {
         [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
       },
@@ -1286,7 +1286,8 @@ describe('InteractionHandler (unit)', () => {
       '123456789012345678, @username, or username'
     );
     expect(modalJson.components[1].components[0].label).toBe('Reason');
-    expect(modalJson.components[1].components[0].required).toBe(false);
+    expect(modalJson.components[1].components[0].required).toBe(true);
+    expect(configService.getCachedServerConfig).toHaveBeenCalledWith('guild-1');
     expect(configService.getServerConfig).not.toHaveBeenCalled();
   });
 });

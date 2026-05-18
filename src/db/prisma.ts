@@ -42,12 +42,13 @@ function resolveSslConfig(databaseUrl: string): PoolConfig['ssl'] | undefined {
     return false;
   }
 
+  const isSupabasePooler = parsed.hostname.endsWith('.pooler.supabase.com');
   const disablesCertificateVerification =
-    sslMode === 'require' ||
-    sslMode === 'no-verify' ||
-    parsed.hostname.endsWith('.pooler.supabase.com');
+    sslMode === 'require' || sslMode === 'no-verify' || (!sslMode && isSupabasePooler);
   const requiresSsl =
-    ['require', 'verify-ca', 'verify-full'].includes(sslMode) || disablesCertificateVerification;
+    ['require', 'verify-ca', 'verify-full'].includes(sslMode) ||
+    disablesCertificateVerification ||
+    isSupabasePooler;
   if (!requiresSsl) {
     return undefined;
   }

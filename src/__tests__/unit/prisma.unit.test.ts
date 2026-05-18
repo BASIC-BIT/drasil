@@ -57,6 +57,19 @@ describe('createPrismaPoolConfig', () => {
     });
   });
 
+  it('honors verify-full sslmode for Supabase pooler URLs', () => {
+    expect(
+      createPrismaPoolConfig(
+        'postgresql://user:password@aws-1-us-east-1.pooler.supabase.com:6543/db?sslmode=verify-full'
+      )
+    ).toEqual({
+      connectionString:
+        'postgresql://user:password@aws-1-us-east-1.pooler.supabase.com:6543/db?sslmode=verify-full',
+      max: 10,
+      ssl: { rejectUnauthorized: true },
+    });
+  });
+
   it('honors require sslmode without CA verification', () => {
     expect(
       createPrismaPoolConfig('postgresql://user:password@example.com:5432/db?sslmode=require')

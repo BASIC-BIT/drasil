@@ -418,6 +418,12 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async handleReportUserInitiate(interaction: ButtonInteraction): Promise<void> {
+    const reasonRequired = getUserReportSettings(
+      interaction.guildId
+        ? this.configService.getCachedServerConfig(interaction.guildId)?.settings
+        : undefined
+    ).reasonRequired;
+
     // Create the modal
     const modal = new ModalBuilder()
       .setCustomId('report_user_modal_submit') // Unique ID for the modal submission
@@ -438,7 +444,7 @@ export class InteractionHandler implements IInteractionHandler {
       .setLabel('Reason')
       .setStyle(TextInputStyle.Paragraph) // Allow multi-line input
       .setPlaceholder('What happened? Include links or message context if useful.')
-      .setRequired(false);
+      .setRequired(reasonRequired);
 
     const reasonRow = new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput);
 
