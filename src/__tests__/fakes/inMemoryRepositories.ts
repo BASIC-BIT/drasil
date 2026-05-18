@@ -27,6 +27,12 @@ import {
   DEFAULT_OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES,
   OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY,
 } from '../../utils/detectionResponseSettings';
+import {
+  DEFAULT_USER_REPORT_EXTERNAL_RESPONSE_MODE,
+  DEFAULT_USER_REPORT_REASON_REQUIRED,
+  USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY,
+  USER_REPORT_REASON_REQUIRED_SETTING_KEY,
+} from '../../utils/userReportSettings';
 
 const toTimestamp = (value: string | Date | null | undefined): number => {
   if (!value) {
@@ -53,6 +59,8 @@ const baseSettings: ServerSettings = {
     DEFAULT_OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES,
   [AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY]: true,
   [OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY]: false,
+  [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: DEFAULT_USER_REPORT_REASON_REQUIRED,
+  [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: DEFAULT_USER_REPORT_EXTERNAL_RESPONSE_MODE,
 };
 
 const defaultHeuristicThreshold = globalSettings.defaultServerSettings.messageThreshold;
@@ -69,15 +77,15 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
   }
 
   async create(data: Partial<DetectionEvent>): Promise<DetectionEvent> {
-    if (!data.server_id || !data.user_id || !data.detection_type || data.confidence === undefined) {
+    if (!data.user_id || !data.detection_type || data.confidence === undefined) {
       throw new Error(
-        'server_id, user_id, detection_type, and confidence are required to create a detection event'
+        'user_id, detection_type, and confidence are required to create a detection event'
       );
     }
 
     const event: DetectionEvent = {
       id: this.nextId(),
-      server_id: data.server_id,
+      server_id: data.server_id ?? null,
       user_id: data.user_id,
       detection_type: data.detection_type,
       confidence: data.confidence,

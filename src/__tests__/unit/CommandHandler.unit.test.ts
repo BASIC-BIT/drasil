@@ -1,4 +1,11 @@
-import { MessageFlags, PermissionFlagsBits, User } from 'discord.js';
+import {
+  ApplicationCommandType,
+  ApplicationIntegrationType,
+  InteractionContextType,
+  MessageFlags,
+  PermissionFlagsBits,
+  User,
+} from 'discord.js';
 import { CommandHandler } from '../../controllers/CommandHandler';
 import { SETUP_VERIFICATION_MODAL_ID } from '../../constants/setupVerificationWizard';
 import {
@@ -12,6 +19,7 @@ import {
   VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY,
 } from '../../utils/verificationThreadAnalysisSettings';
 import {
+  USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY,
   USER_REPORT_REASON_MAX_LENGTH,
   USER_REPORT_REASON_REQUIRED_SETTING_KEY,
 } from '../../utils/userReportSettings';
@@ -27,7 +35,18 @@ describe('CommandHandler (unit)', () => {
     updateHeuristicSettings: jest.Mock;
     resetHeuristicSettings: jest.Mock;
     handleUserReport: jest.Mock;
+    handleMessageReport: jest.Mock;
   }>;
+
+  const originalUserInstallReportingEnabled = process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED;
+
+  afterEach(() => {
+    if (originalUserInstallReportingEnabled === undefined) {
+      delete process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED;
+    } else {
+      process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED = originalUserInstallReportingEnabled;
+    }
+  });
 
   const buildHandler = (overrides: HandlerOverrides = {}) => {
     const userModerationService = {
@@ -68,6 +87,7 @@ describe('CommandHandler (unit)', () => {
 
     const securityActionService = {
       handleUserReport: overrides.handleUserReport ?? jest.fn().mockResolvedValue(true),
+      handleMessageReport: overrides.handleMessageReport ?? jest.fn().mockResolvedValue(true),
     } as any;
 
     return {
@@ -106,6 +126,46 @@ describe('CommandHandler (unit)', () => {
     expect(reportCommand.options.find((option: any) => option.name === 'reason').max_length).toBe(
       USER_REPORT_REASON_MAX_LENGTH
     );
+  });
+
+  it('registers guild-only Report User context command', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const reportUserCommand = commands.find((c) => c.name === 'Report User');
+
+    expect(reportUserCommand).toBeDefined();
+    expect(reportUserCommand.type).toBe(ApplicationCommandType.User);
+    expect(reportUserCommand.integration_types).toEqual([ApplicationIntegrationType.GuildInstall]);
+    expect(reportUserCommand.contexts).toEqual([InteractionContextType.Guild]);
+  });
+
+  it('does not register Report Message context command unless user-install reporting is enabled', () => {
+    delete process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED;
+
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+
+    expect(commands.find((c) => c.name === 'Report Message')).toBeUndefined();
+  });
+
+  it('registers user-installable Report Message context command when enabled', () => {
+    process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED = 'true';
+
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const reportMessageCommand = commands.find((c) => c.name === 'Report Message');
+
+    expect(reportMessageCommand).toBeDefined();
+    expect(reportMessageCommand.type).toBe(ApplicationCommandType.Message);
+    expect(reportMessageCommand.integration_types).toEqual([
+      ApplicationIntegrationType.GuildInstall,
+      ApplicationIntegrationType.UserInstall,
+    ]);
+    expect(reportMessageCommand.contexts).toEqual([
+      InteractionContextType.Guild,
+      InteractionContextType.BotDM,
+      InteractionContextType.PrivateChannel,
+    ]);
   });
 
   it('registers /config heuristic subcommands', () => {
@@ -172,7 +232,7 @@ describe('CommandHandler (unit)', () => {
 
     const reportSubcommands = reportGroup.options.map((option: any) => option.name);
     expect(reportSubcommands).toEqual(
-      expect.arrayContaining(['view', 'reason-require', 'reason-optional'])
+      expect.arrayContaining(['view', 'reason-require', 'reason-optional', 'external-reports'])
     );
   });
 
@@ -483,6 +543,185 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('handles Report User context command in a guild', async () => {
+    const handleUserReport = jest.fn().mockResolvedValue(true);
+    const { handler, securityActionService } = buildHandler({ handleUserReport });
+
+    const targetUser = {
+      id: 'user-2',
+      username: 'target',
+      globalName: 'Target User',
+    } as any;
+    const targetMember = { id: targetUser.id } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue(targetMember),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'Report User',
+      user: { id: 'reporter-1' },
+      targetUser,
+      guild,
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleUserContextMenuCommand(interaction);
+
+    expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
+      targetMember,
+      interaction.user
+    );
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('rejects Report User context command when a report reason is required', async () => {
+    const handleUserReport = jest.fn().mockResolvedValue(true);
+    const getServerConfig = jest.fn().mockResolvedValue({
+      settings: {
+        [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
+      },
+    });
+    const { handler, securityActionService } = buildHandler({ handleUserReport, getServerConfig });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn(),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'Report User',
+      user: { id: 'reporter-1' },
+      targetUser: { id: 'user-2', username: 'target' },
+      guild,
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleUserContextMenuCommand(interaction);
+
+    expect(guild.members.fetch).not.toHaveBeenCalled();
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'This server requires a report reason. Please use `/report` instead.',
+    });
+  });
+
+  it('handles Report Message context command when user-install reporting is enabled', async () => {
+    process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED = 'true';
+    const handleMessageReport = jest.fn().mockResolvedValue(true);
+    const { handler, securityActionService } = buildHandler({ handleMessageReport });
+
+    const targetUser = { id: 'user-2', username: 'target' } as any;
+    const interaction = {
+      commandName: 'Report Message',
+      user: { id: 'reporter-1' },
+      targetMessage: {
+        id: 'message-1',
+        author: targetUser,
+        content: 'suspicious DM',
+      },
+      channelId: 'channel-1',
+      guildId: null,
+      context: InteractionContextType.PrivateChannel,
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleMessageContextMenuCommand(interaction);
+
+    expect(securityActionService.handleMessageReport).toHaveBeenCalledWith(
+      targetUser,
+      interaction.user,
+      {
+        messageId: 'message-1',
+        channelId: 'channel-1',
+        guildId: undefined,
+        content: 'suspicious DM',
+        interactionContext: InteractionContextType.PrivateChannel,
+      }
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('rejects guild Report Message context command when report reasons are required', async () => {
+    process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED = 'true';
+    const handleMessageReport = jest.fn().mockResolvedValue(true);
+    const getServerConfig = jest.fn().mockResolvedValue({
+      settings: {
+        [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
+      },
+    });
+    const { handler, securityActionService } = buildHandler({
+      getServerConfig,
+      handleMessageReport,
+    });
+
+    const interaction = {
+      commandName: 'Report Message',
+      user: { id: 'reporter-1' },
+      targetMessage: {
+        id: 'message-1',
+        author: { id: 'user-2', username: 'target' },
+        content: 'suspicious server message',
+      },
+      channelId: 'channel-1',
+      guildId: 'guild-1',
+      context: InteractionContextType.Guild,
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleMessageContextMenuCommand(interaction);
+
+    expect(getServerConfig).toHaveBeenCalledWith('guild-1');
+    expect(securityActionService.handleMessageReport).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'This server requires a report reason. Please use `/report` instead.',
+    });
+  });
+
+  it('rejects Report Message context command when user-install reporting is disabled', async () => {
+    delete process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED;
+    const handleMessageReport = jest.fn().mockResolvedValue(true);
+    const { handler, securityActionService } = buildHandler({ handleMessageReport });
+
+    const interaction = {
+      commandName: 'Report Message',
+      user: { id: 'reporter-1' },
+      targetMessage: {
+        id: 'message-1',
+        author: { id: 'user-2', username: 'target' },
+        content: 'suspicious DM',
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleMessageContextMenuCommand(interaction);
+
+    expect(securityActionService.handleMessageReport).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'User-installable message reporting is not enabled for this Drasil deployment.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('shows setup verification modal for admins', async () => {
     const getCachedServerConfig = jest.fn().mockReturnValue({
       restricted_role_id: 'role-1',
@@ -759,6 +998,48 @@ describe('CommandHandler (unit)', () => {
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining('Report reason required: `yes`'),
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles /config report external-reports', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: 'notify_only',
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('report'),
+        getSubcommand: jest.fn().mockReturnValue('external-reports'),
+        getString: jest.fn().mockReturnValue('notify_only'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: 'notify_only',
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('External reports: `notify_only`'),
       flags: MessageFlags.Ephemeral,
     });
   });

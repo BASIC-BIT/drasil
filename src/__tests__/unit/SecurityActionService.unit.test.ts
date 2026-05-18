@@ -13,6 +13,7 @@ import { INotificationManager } from '../../services/NotificationManager';
 import { IThreadManager } from '../../services/ThreadManager';
 import { IUserModerationService } from '../../services/UserModerationService';
 import { IAdminActionService } from '../../services/AdminActionService';
+import { USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY } from '../../utils/userReportSettings';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -279,6 +280,299 @@ describe('SecurityActionService (unit)', () => {
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).toHaveBeenCalled();
+  });
+
+  it('records a user-installed message report without opening a server case', async () => {
+    const service = buildService();
+
+    await service.handleMessageReport(
+      { id: 'user-5', username: 'target-user' } as User,
+      { id: 'reporter-5' } as User,
+      {
+        messageId: 'message-5',
+        channelId: 'dm-channel-5',
+        content: 'suspicious DM',
+      }
+    );
+
+    const detectionEvent = await detectionEventsRepository.findById('det-1');
+    expect(detectionEvent).toMatchObject({
+      server_id: null,
+      user_id: 'user-5',
+      detection_type: DetectionType.USER_REPORT,
+      message_id: 'message-5',
+      channel_id: 'dm-channel-5',
+      metadata: {
+        type: 'user_installed_message_report',
+        reporterId: 'reporter-5',
+        targetUserId: 'user-5',
+        targetUsername: 'target-user',
+        channelId: 'dm-channel-5',
+        messageId: 'message-5',
+        content: 'suspicious DM',
+      },
+    });
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+  });
+
+  it('opens review-only cases for message reports from the same guild', async () => {
+    const guildId = 'guild-local-message';
+    const userId = 'user-local-message';
+    const member = buildMember(guildId, userId);
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: 'off',
+      },
+    });
+    await serverMemberRepository.upsertMember(guildId, userId, {});
+    const client = {
+      guilds: {
+        fetch: jest.fn().mockResolvedValue({
+          members: {
+            fetch: jest.fn().mockResolvedValue(member),
+          },
+        }),
+      },
+    } as unknown as Client;
+    const service = buildService(client);
+
+    await service.handleMessageReport(
+      { id: userId, username: 'target-user' } as User,
+      { id: 'reporter-local-message' } as User,
+      {
+        messageId: 'message-local',
+        channelId: 'channel-local',
+        guildId,
+        content: 'local suspicious message',
+      }
+    );
+
+    const globalDetectionEvent = await detectionEventsRepository.findById('det-1');
+    expect(globalDetectionEvent).toMatchObject({
+      server_id: null,
+      metadata: {
+        type: 'guild_message_report',
+        guildId,
+      },
+    });
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents).toHaveLength(1);
+    expect(detectionEvents[0]).toMatchObject({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      message_id: 'message-local',
+      channel_id: 'channel-local',
+      metadata: {
+        type: 'message_report',
+        globalReportId: 'det-1',
+        reporterId: 'reporter-local-message',
+        sourceGuildId: guildId,
+        sourceChannelId: 'channel-local',
+      },
+    });
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(threadManager.createVerificationThread).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ id: verificationEvents[0].id })
+    );
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+  });
+
+  it('notifies opted-in servers for external message reports', async () => {
+    const member = buildMember('guild-external-1', 'user-6');
+    await serverRepository.upsertByGuildId('guild-external-1', {
+      settings: {
+        [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: 'notify_only',
+      },
+    });
+    await serverMemberRepository.upsertMember('guild-external-1', 'user-6', {});
+    const client = {
+      guilds: {
+        fetch: jest.fn().mockResolvedValue({
+          members: {
+            fetch: jest.fn().mockResolvedValue(member),
+          },
+        }),
+      },
+    } as unknown as Client;
+    const service = buildService(client);
+
+    await service.handleMessageReport(
+      { id: 'user-6', username: 'target-user' } as User,
+      { id: 'reporter-6' } as User,
+      {
+        messageId: 'message-6',
+        channelId: 'dm-channel-6',
+        content: 'external suspicious DM',
+      }
+    );
+
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'external suspicious DM',
+      })
+    );
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+  });
+
+  it('opens review-only cases in opted-in servers for external message reports', async () => {
+    const member = buildMember('guild-external-2', 'user-7');
+    await serverRepository.upsertByGuildId('guild-external-2', {
+      settings: {
+        [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: 'open_case',
+      },
+    });
+    await serverMemberRepository.upsertMember('guild-external-2', 'user-7', {});
+    const client = {
+      guilds: {
+        fetch: jest.fn().mockResolvedValue({
+          members: {
+            fetch: jest.fn().mockResolvedValue(member),
+          },
+        }),
+      },
+    } as unknown as Client;
+    const service = buildService(client);
+
+    await service.handleMessageReport(
+      { id: 'user-7', username: 'target-user' } as User,
+      { id: 'reporter-7' } as User,
+      {
+        messageId: 'message-7',
+        channelId: 'dm-channel-7',
+        content: 'external suspicious DM',
+      }
+    );
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      'user-7',
+      'guild-external-2'
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(threadManager.createVerificationThread).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ id: verificationEvents[0].id })
+    );
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+  });
+
+  it('continues notify-only message report fan-out when one server notification fails', async () => {
+    const firstMember = buildMember('guild-external-fail', 'user-8');
+    const secondMember = buildMember('guild-external-success', 'user-8');
+    await serverRepository.upsertByGuildId('guild-external-fail', {
+      settings: {
+        [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: 'notify_only',
+      },
+    });
+    await serverRepository.upsertByGuildId('guild-external-success', {
+      settings: {
+        [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: 'notify_only',
+      },
+    });
+    await serverMemberRepository.upsertMember('guild-external-fail', 'user-8', {});
+    await serverMemberRepository.upsertMember('guild-external-success', 'user-8', {});
+    const client = {
+      guilds: {
+        fetch: jest.fn().mockImplementation((guildId: string) =>
+          Promise.resolve({
+            members: {
+              fetch: jest
+                .fn()
+                .mockResolvedValue(guildId === 'guild-external-fail' ? firstMember : secondMember),
+            },
+          })
+        ),
+      },
+    } as unknown as Client;
+    notificationManager.upsertObservedDetectionNotification
+      .mockRejectedValueOnce(new Error('notification unavailable'))
+      .mockResolvedValue({ id: 'observe-2' } as Message);
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const service = buildService(client);
+
+    await expect(
+      service.handleMessageReport(
+        { id: 'user-8', username: 'target-user' } as User,
+        { id: 'reporter-8' } as User,
+        {
+          messageId: 'message-8',
+          channelId: 'dm-channel-8',
+          content: 'external suspicious DM',
+        }
+      )
+    ).resolves.toBe(true);
+
+    try {
+      expect(consoleError).toHaveBeenCalledWith(
+        'Failed to process message report fan-out for guild guild-external-fail:',
+        expect.any(Error)
+      );
+      expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledTimes(2);
+      expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+      const firstDetections = await detectionEventsRepository.findByServerAndUser(
+        'guild-external-fail',
+        'user-8'
+      );
+      const secondDetections = await detectionEventsRepository.findByServerAndUser(
+        'guild-external-success',
+        'user-8'
+      );
+      expect(firstDetections).toHaveLength(1);
+      expect(secondDetections).toHaveLength(1);
+      expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('propagates open-case fan-out errors instead of silently leaving partial state', async () => {
+    const member = buildMember('guild-external-fail', 'user-9');
+    await serverRepository.upsertByGuildId('guild-external-fail', {
+      settings: {
+        [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: 'open_case',
+      },
+    });
+    await serverMemberRepository.upsertMember('guild-external-fail', 'user-9', {});
+    const client = {
+      guilds: {
+        fetch: jest.fn().mockResolvedValue({
+          members: {
+            fetch: jest.fn().mockResolvedValue(member),
+          },
+        }),
+      },
+    } as unknown as Client;
+    threadManager.createVerificationThread.mockRejectedValueOnce(new Error('thread unavailable'));
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const service = buildService(client);
+
+    try {
+      await expect(
+        service.handleMessageReport(
+          { id: 'user-9', username: 'target-user' } as User,
+          { id: 'reporter-9' } as User,
+          {
+            messageId: 'message-9',
+            channelId: 'dm-channel-9',
+            content: 'external suspicious DM',
+          }
+        )
+      ).rejects.toThrow('thread unavailable');
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('creates detection event for manual flag', async () => {
