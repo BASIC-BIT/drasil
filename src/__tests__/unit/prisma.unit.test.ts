@@ -1,6 +1,6 @@
 import { createPrismaPoolConfig } from '../../db/prisma';
 
-describe('createPrismaClient', () => {
+describe('createPrismaPoolConfig', () => {
   const originalPgPoolMax = process.env.PG_POOL_MAX;
   const originalPgSslMode = process.env.PGSSLMODE;
 
@@ -57,6 +57,16 @@ describe('createPrismaClient', () => {
     });
   });
 
+  it('honors require sslmode with CA verification', () => {
+    expect(
+      createPrismaPoolConfig('postgresql://user:password@example.com:5432/db?sslmode=require')
+    ).toEqual({
+      connectionString: 'postgresql://user:password@example.com:5432/db?sslmode=require',
+      max: 10,
+      ssl: { rejectUnauthorized: true },
+    });
+  });
+
   it('honors verify-ca sslmode', () => {
     expect(
       createPrismaPoolConfig('postgresql://user:password@example.com:5432/db?sslmode=verify-ca')
@@ -64,6 +74,16 @@ describe('createPrismaClient', () => {
       connectionString: 'postgresql://user:password@example.com:5432/db?sslmode=verify-ca',
       max: 10,
       ssl: { rejectUnauthorized: true },
+    });
+  });
+
+  it('honors no-verify sslmode', () => {
+    expect(
+      createPrismaPoolConfig('postgresql://user:password@example.com:5432/db?sslmode=no-verify')
+    ).toEqual({
+      connectionString: 'postgresql://user:password@example.com:5432/db?sslmode=no-verify',
+      max: 10,
+      ssl: { rejectUnauthorized: false },
     });
   });
 });

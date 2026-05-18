@@ -47,6 +47,11 @@ dotenv.config();
 const OBSERVED_ACTION_MODAL_REASON_FIELD_ID = 'observed_ban_reason';
 const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notification';
 
+type UserResolution =
+  | { status: 'found'; userId: string }
+  | { status: 'not_found' }
+  | { status: 'ambiguous' };
+
 /**
  * Interface for the Bot class
  */
@@ -413,8 +418,6 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async handleReportUserInitiate(interaction: ButtonInteraction): Promise<void> {
-    const reasonRequired = await this.getUserReportReasonRequired(interaction.guildId ?? undefined);
-
     // Create the modal
     const modal = new ModalBuilder()
       .setCustomId('report_user_modal_submit') // Unique ID for the modal submission
@@ -435,7 +438,7 @@ export class InteractionHandler implements IInteractionHandler {
       .setLabel('Reason')
       .setStyle(TextInputStyle.Paragraph) // Allow multi-line input
       .setPlaceholder('What happened? Include links or message context if useful.')
-      .setRequired(reasonRequired);
+      .setRequired(false);
 
     const reasonRow = new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput);
 
@@ -498,14 +501,27 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
-      const targetUserId = await this.resolveUserId(interaction.guildId, targetUserInputString);
-      if (!targetUserId) {
+      const targetUserResolution = await this.resolveUserId(
+        interaction.guildId,
+        targetUserInputString
+      );
+      if (targetUserResolution.status === 'not_found') {
         await interaction.reply({
           content: `Could not find a user matching "${targetUserInputString}".`,
           flags: MessageFlags.Ephemeral,
         });
         return;
       }
+
+      if (targetUserResolution.status === 'ambiguous') {
+        await interaction.reply({
+          content: 'Multiple users match that name. Please use their ID or @mention instead.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const targetUserId = targetUserResolution.userId;
 
       if (targetUserId === interaction.user.id) {
         await interaction.reply({
@@ -523,6 +539,7 @@ export class InteractionHandler implements IInteractionHandler {
       await interaction.reply({
         content: `Thank you for your report regarding <@${targetUserId}>. It has been submitted for review.`,
         flags: MessageFlags.Ephemeral,
+        allowedMentions: { parse: [] },
       });
     } catch (error) {
       console.error('[InteractionHandler] Error handling report modal submission:', error);
@@ -1095,7 +1112,7 @@ export class InteractionHandler implements IInteractionHandler {
   /**
    * Attempts to resolve a user ID string or tag string to a valid User ID within a guild.
    */
-  private async resolveUserId(guildId: string, userInput: string): Promise<string | null> {
+  private async resolveUserId(guildId: string, userInput: string): Promise<UserResolution> {
     const trimmedInput = userInput.trim();
     const mentionMatch = trimmedInput.match(/^<@!?(\d{17,19})>$/);
     const directUserId =
@@ -1105,42 +1122,64 @@ export class InteractionHandler implements IInteractionHandler {
       try {
         const guild = await this.client.guilds.fetch(guildId);
         await guild.members.fetch(directUserId);
-        return directUserId;
+        return { status: 'found', userId: directUserId };
       } catch {
-        return null;
+        return { status: 'not_found' };
       }
     }
 
     const normalizedInput = trimmedInput.replace(/^@/, '').toLowerCase();
     if (!normalizedInput) {
-      return null;
+      return { status: 'not_found' };
     }
 
     const tagMatch = trimmedInput.match(/^(.+)#(\d{4})$/);
 
     try {
       const guild = await this.client.guilds.fetch(guildId);
-      const members = await guild.members.fetch();
-      const foundMember = members.find((member) => {
-        if (tagMatch) {
-          return member.user.username === tagMatch[1] && member.user.discriminator === tagMatch[2];
-        }
+      const members = await guild.members.search({
+        query: tagMatch ? tagMatch[1] : normalizedInput,
+        limit: 10,
+      });
+      const candidates = Array.from(members.values());
 
-        const candidates = [
-          member.user.username,
-          member.user.tag,
-          member.user.globalName,
-          member.displayName,
-          member.nickname,
-        ].filter((value): value is string => Boolean(value));
+      if (tagMatch) {
+        const foundMember = candidates.find(
+          (member) =>
+            member.user.username === tagMatch[1] && member.user.discriminator === tagMatch[2]
+        );
+        return foundMember ? { status: 'found', userId: foundMember.id } : { status: 'not_found' };
+      }
 
-        return candidates.some((value) => value.toLowerCase() === normalizedInput);
+      const usernameMatch = candidates.find((member) =>
+        [member.user.username, member.user.tag]
+          .filter((value): value is string => Boolean(value))
+          .some((value) => value.toLowerCase() === normalizedInput)
+      );
+      if (usernameMatch) {
+        return { status: 'found', userId: usernameMatch.id };
+      }
+
+      const nonUniqueMatches = candidates.filter((member) => {
+        const names = [member.user.globalName, member.displayName, member.nickname].filter(
+          (value): value is string => Boolean(value)
+        );
+
+        return names.some((value) => value.toLowerCase() === normalizedInput);
       });
 
-      return foundMember ? foundMember.id : null;
+      if (nonUniqueMatches.length > 1) {
+        return { status: 'ambiguous' };
+      }
+
+      if (nonUniqueMatches.length === 1) {
+        return { status: 'found', userId: nonUniqueMatches[0].id };
+      }
+
+      return { status: 'not_found' };
     } catch (error) {
       console.error(`[InteractionHandler] Error fetching members for user resolution: ${error}`);
-      return null;
+      return { status: 'not_found' };
     }
   }
 

@@ -343,6 +343,8 @@ describe('CommandHandler (unit)', () => {
         getUser: jest.fn().mockReturnValue(targetUser),
         getString: jest.fn().mockReturnValue('reported reason'),
       },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
@@ -353,9 +355,10 @@ describe('CommandHandler (unit)', () => {
       interaction.user,
       'reported reason'
     );
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
-      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
     });
   });
 
@@ -383,6 +386,8 @@ describe('CommandHandler (unit)', () => {
         getUser: jest.fn().mockReturnValue({ id: 'user-2', tag: 'target#0001' }),
         getString: jest.fn().mockReturnValue('   '),
       },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
@@ -390,9 +395,8 @@ describe('CommandHandler (unit)', () => {
 
     expect(guild.members.fetch).not.toHaveBeenCalled();
     expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Please include a reason for this report.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -415,6 +419,8 @@ describe('CommandHandler (unit)', () => {
         getUser: jest.fn().mockReturnValue({ id: 'reporter-1', tag: 'reporter#0001' }),
         getString: jest.fn().mockReturnValue('self report'),
       },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
@@ -422,9 +428,8 @@ describe('CommandHandler (unit)', () => {
 
     expect(guild.members.fetch).not.toHaveBeenCalled();
     expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'You cannot report yourself.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 

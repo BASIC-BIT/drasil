@@ -719,6 +719,7 @@ describe('InteractionHandler (unit)', () => {
       content:
         'Thank you for your report regarding <@123456789012345678>. It has been submitted for review.',
       flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
     });
   });
 
@@ -736,17 +737,19 @@ describe('InteractionHandler (unit)', () => {
       },
     } as unknown as GuildMember;
     const memberCollection = {
-      find: jest.fn((predicate: any) => (predicate(member) ? member : null)),
+      values: jest.fn(() => [member][Symbol.iterator]()),
     };
     const membersFetch = jest.fn().mockImplementation(async (id?: string) => {
       if (id === member.id) {
         return member;
       }
-      return memberCollection;
+      return null;
     });
+    const membersSearch = jest.fn().mockResolvedValue(memberCollection);
     (client.guilds.fetch as jest.Mock).mockResolvedValue({
       members: {
         fetch: membersFetch,
+        search: membersSearch,
       },
     });
 
@@ -781,12 +784,85 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleModalSubmit(interaction);
 
-    expect(memberCollection.find).toHaveBeenCalled();
+    expect(membersSearch).toHaveBeenCalledWith({ query: 'basic_bit', limit: 10 });
     expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
       member,
       interaction.user,
       'reported'
     );
+  });
+
+  it('rejects ambiguous report modal name matches', async () => {
+    const firstMember = {
+      ...buildMember('guild-1', '123456789012345678'),
+      displayName: 'Same Name',
+      nickname: null,
+      user: {
+        id: '123456789012345678',
+        username: 'first_user',
+        globalName: 'Same Name',
+        discriminator: '0',
+        tag: 'first_user',
+      },
+    } as unknown as GuildMember;
+    const secondMember = {
+      ...buildMember('guild-1', '223456789012345678'),
+      displayName: 'Same Name',
+      nickname: null,
+      user: {
+        id: '223456789012345678',
+        username: 'second_user',
+        globalName: 'Same Name',
+        discriminator: '0',
+        tag: 'second_user',
+      },
+    } as unknown as GuildMember;
+    const memberCollection = {
+      values: jest.fn(() => [firstMember, secondMember][Symbol.iterator]()),
+    };
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn(),
+        search: jest.fn().mockResolvedValue(memberCollection),
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'report_user_modal_submit',
+      guildId: 'guild-1',
+      user: { id: 'reporter-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === 'report_target_user_input') {
+            return 'Same Name';
+          }
+          return 'reported';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Multiple users match that name. Please use their ID or @mention instead.',
+      flags: MessageFlags.Ephemeral,
+    });
   });
 
   it('requires report modal reason when configured', async () => {
@@ -1143,6 +1219,7 @@ describe('InteractionHandler (unit)', () => {
       '123456789012345678, @username, or username'
     );
     expect(modalJson.components[1].components[0].label).toBe('Reason');
-    expect(modalJson.components[1].components[0].required).toBe(true);
+    expect(modalJson.components[1].components[0].required).toBe(false);
+    expect(configService.getServerConfig).not.toHaveBeenCalled();
   });
 });

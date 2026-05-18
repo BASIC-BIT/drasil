@@ -615,47 +615,45 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
     const targetUser = interaction.options.getUser('user', true);
     const reason = interaction.options.getString('reason')?.trim() || undefined;
     const serverConfig = await this.configService.getServerConfig(guild.id);
     const reportSettings = getUserReportSettings(serverConfig.settings);
 
     if (reportSettings.reasonRequired && !reason) {
-      await interaction.reply({
+      await interaction.editReply({
         content: 'Please include a reason for this report.',
-        flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
     if (targetUser.id === interaction.user.id) {
-      await interaction.reply({
+      await interaction.editReply({
         content: 'You cannot report yourself.',
-        flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
     const member = await guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) {
-      await interaction.reply({
+      await interaction.editReply({
         content: `Could not find ${targetUser.tag} in this server.`,
-        flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
     try {
       await this.securityActionService.handleUserReport(member, interaction.user, reason);
-      await interaction.reply({
+      await interaction.editReply({
         content: `Thank you for your report regarding <@${targetUser.id}>. It has been submitted for review.`,
-        flags: MessageFlags.Ephemeral,
+        allowedMentions: { parse: [] },
       });
     } catch (error) {
       console.error(`Failed to handle user report for ${targetUser.id}:`, error);
-      await interaction.reply({
+      await interaction.editReply({
         content: 'An error occurred while submitting your report. Please try again later.',
-        flags: MessageFlags.Ephemeral,
       });
     }
   }

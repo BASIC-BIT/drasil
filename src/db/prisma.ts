@@ -42,15 +42,16 @@ function resolveSslConfig(databaseUrl: string): PoolConfig['ssl'] | undefined {
     return false;
   }
 
+  const disablesCertificateVerification =
+    sslMode === 'no-verify' || parsed.hostname.endsWith('.pooler.supabase.com');
   const requiresSsl =
-    ['require', 'verify-ca', 'verify-full', 'no-verify'].includes(sslMode) ||
-    parsed.hostname.endsWith('.pooler.supabase.com');
+    ['require', 'verify-ca', 'verify-full'].includes(sslMode) || disablesCertificateVerification;
   if (!requiresSsl) {
     return undefined;
   }
 
   return {
-    rejectUnauthorized: sslMode === 'verify-ca' || sslMode === 'verify-full',
+    rejectUnauthorized: !disablesCertificateVerification,
   };
 }
 
