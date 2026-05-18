@@ -51,7 +51,7 @@ describe('createPrismaPoolConfig', () => {
     expect(
       createPrismaPoolConfig('postgresql://user:password@example.com:5432/db?sslmode=verify-full')
     ).toEqual({
-      connectionString: 'postgresql://user:password@example.com:5432/db?sslmode=verify-full',
+      connectionString: 'postgresql://user:password@example.com:5432/db',
       max: 10,
       ssl: { rejectUnauthorized: true },
     });
@@ -63,8 +63,7 @@ describe('createPrismaPoolConfig', () => {
         'postgresql://user:password@aws-1-us-east-1.pooler.supabase.com:6543/db?sslmode=verify-full'
       )
     ).toEqual({
-      connectionString:
-        'postgresql://user:password@aws-1-us-east-1.pooler.supabase.com:6543/db?sslmode=verify-full',
+      connectionString: 'postgresql://user:password@aws-1-us-east-1.pooler.supabase.com:6543/db',
       max: 10,
       ssl: { rejectUnauthorized: true },
     });
@@ -74,7 +73,20 @@ describe('createPrismaPoolConfig', () => {
     expect(
       createPrismaPoolConfig('postgresql://user:password@example.com:5432/db?sslmode=require')
     ).toEqual({
-      connectionString: 'postgresql://user:password@example.com:5432/db?sslmode=require',
+      connectionString: 'postgresql://user:password@example.com:5432/db',
+      max: 10,
+      ssl: { rejectUnauthorized: false },
+    });
+  });
+
+  it('strips sslmode while preserving Supabase pooler pgbouncer parameters', () => {
+    expect(
+      createPrismaPoolConfig(
+        'postgresql://user:password@aws-1-us-east-1.pooler.supabase.com:6543/db?pgbouncer=true&sslmode=require'
+      )
+    ).toEqual({
+      connectionString:
+        'postgresql://user:password@aws-1-us-east-1.pooler.supabase.com:6543/db?pgbouncer=true',
       max: 10,
       ssl: { rejectUnauthorized: false },
     });
@@ -86,7 +98,7 @@ describe('createPrismaPoolConfig', () => {
     );
 
     expect(config).toEqual({
-      connectionString: 'postgresql://user:password@example.com:5432/db?sslmode=verify-ca',
+      connectionString: 'postgresql://user:password@example.com:5432/db',
       max: 10,
       ssl: { rejectUnauthorized: true, checkServerIdentity: expect.any(Function) },
     });
@@ -99,7 +111,7 @@ describe('createPrismaPoolConfig', () => {
     expect(
       createPrismaPoolConfig('postgresql://user:password@example.com:5432/db?sslmode=no-verify')
     ).toEqual({
-      connectionString: 'postgresql://user:password@example.com:5432/db?sslmode=no-verify',
+      connectionString: 'postgresql://user:password@example.com:5432/db',
       max: 10,
       ssl: { rejectUnauthorized: false },
     });
