@@ -23,10 +23,23 @@ export function createPrismaPoolConfig(databaseUrl: string): PoolConfig {
   const poolConfig: PoolConfig = { connectionString: databaseUrl, max: resolvePoolMax() };
   const ssl = resolveSslConfig(databaseUrl);
   if (ssl !== undefined) {
+    poolConfig.connectionString = removeSslModeParam(databaseUrl);
     poolConfig.ssl = ssl;
   }
 
   return poolConfig;
+}
+
+function removeSslModeParam(databaseUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    return databaseUrl;
+  }
+
+  parsed.searchParams.delete('sslmode');
+  return parsed.toString();
 }
 
 function resolveSslConfig(databaseUrl: string): PoolConfig['ssl'] | undefined {
