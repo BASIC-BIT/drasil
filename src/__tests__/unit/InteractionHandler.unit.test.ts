@@ -24,6 +24,7 @@ import {
   SETUP_VERIFICATION_MODAL_ID,
   SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
 } from '../../constants/setupVerificationWizard';
+import { USER_REPORT_REASON_REQUIRED_SETTING_KEY } from '../../utils/userReportSettings';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -721,6 +722,118 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('handles report modal submission with a modern username', async () => {
+    const member = {
+      ...buildMember('guild-1', '123456789012345678'),
+      displayName: 'Basic Bit',
+      nickname: null,
+      user: {
+        id: '123456789012345678',
+        username: 'basic_bit',
+        globalName: 'Basic Bit',
+        discriminator: '0',
+        tag: 'basic_bit',
+      },
+    } as unknown as GuildMember;
+    const memberCollection = {
+      find: jest.fn((predicate: any) => (predicate(member) ? member : null)),
+    };
+    const membersFetch = jest.fn().mockImplementation(async (id?: string) => {
+      if (id === member.id) {
+        return member;
+      }
+      return memberCollection;
+    });
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: membersFetch,
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'report_user_modal_submit',
+      guildId: 'guild-1',
+      user: { id: 'reporter-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === 'report_target_user_input') {
+            return 'basic_bit';
+          }
+          return 'reported';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(memberCollection.find).toHaveBeenCalled();
+    expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
+      member,
+      interaction.user,
+      'reported'
+    );
+  });
+
+  it('requires report modal reason when configured', async () => {
+    configService.getServerConfig.mockResolvedValue({
+      settings: {
+        [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
+      },
+    } as any);
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'report_user_modal_submit',
+      guildId: 'guild-1',
+      user: { id: 'reporter-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === 'report_target_user_input') {
+            return '123456789012345678';
+          }
+          return '   ';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Please include a reason for this report.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('handles setup verification modal and updates config', async () => {
     const channelFetch = jest.fn().mockImplementation(async (id: string) => {
       if (id === '123456789012345679' || id === '123456789012345680') {
@@ -951,6 +1064,12 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('routes report button clicks to show the report modal', async () => {
+    configService.getServerConfig.mockResolvedValue({
+      settings: {
+        [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
+      },
+    } as any);
+
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -971,6 +1090,13 @@ describe('InteractionHandler (unit)', () => {
     expect(interaction.showModal).toHaveBeenCalledTimes(1);
 
     const modalArg = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
-    expect(modalArg.toJSON().custom_id).toBe('report_user_modal_submit');
+    const modalJson = modalArg.toJSON();
+    expect(modalJson.custom_id).toBe('report_user_modal_submit');
+    expect(modalJson.components[0].components[0].label).toBe('User ID, mention, or username');
+    expect(modalJson.components[0].components[0].placeholder).toBe(
+      '123456789012345678, @username, or username'
+    );
+    expect(modalJson.components[1].components[0].label).toBe('Reason');
+    expect(modalJson.components[1].components[0].required).toBe(true);
   });
 });

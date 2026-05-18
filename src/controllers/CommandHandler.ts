@@ -66,6 +66,10 @@ import {
   getDetectionResponseSettings,
   isDetectionResponseMode,
 } from '../utils/detectionResponseSettings';
+import {
+  getUserReportSettings,
+  USER_REPORT_REASON_REQUIRED_SETTING_KEY,
+} from '../utils/userReportSettings';
 import 'reflect-metadata';
 
 // Load environment variables
@@ -132,6 +136,19 @@ export class CommandHandler implements ICommandHandler {
           option.setName('reason').setDescription('Reason for the ban').setRequired(false)
         )
         .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+      new SlashCommandBuilder()
+        .setName('report')
+        .setDescription('Report a user to moderators')
+        .addUserOption((option) =>
+          option.setName('user').setDescription('The user to report').setRequired(true)
+        )
+        .addStringOption((option) =>
+          option
+            .setName('reason')
+            .setDescription('What happened?')
+            .setRequired(false)
+            .setMaxLength(1000)
+        ),
       new SlashCommandBuilder()
         .setName('setupverification')
         .setDescription('Set up a dedicated verification channel for restricted users'),
@@ -322,6 +339,24 @@ export class CommandHandler implements ICommandHandler {
         )
         .addSubcommandGroup((group) =>
           group
+            .setName('report')
+            .setDescription('Manage user report settings')
+            .addSubcommand((subcommand) =>
+              subcommand.setName('view').setDescription('View user report settings')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('reason-require')
+                .setDescription('Require a reason for user reports')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('reason-optional')
+                .setDescription('Allow user reports without a reason')
+            )
+        )
+        .addSubcommandGroup((group) =>
+          group
             .setName('verification')
             .setDescription('Manage verification prompt and AI context settings')
             .addSubcommand((subcommand) =>
@@ -476,6 +511,10 @@ export class CommandHandler implements ICommandHandler {
         await this.handleBanCommand(interaction);
         break;
 
+      case 'report':
+        await this.handleReportCommand(interaction);
+        break;
+
       case 'setupverification':
         await this.handleSetupVerificationCommand(interaction);
         break;
@@ -561,6 +600,53 @@ export class CommandHandler implements ICommandHandler {
       console.error('Failed to ban user via command:', error);
       await interaction.reply({
         content: `Failed to ban ${targetUser.tag}. Please try again later.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  private async handleReportCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({
+        content: 'This command can only be used in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const targetUser = interaction.options.getUser('user', true);
+    const reason = interaction.options.getString('reason')?.trim() || undefined;
+    const serverConfig = await this.configService.getServerConfig(guild.id);
+    const reportSettings = getUserReportSettings(serverConfig.settings);
+
+    if (reportSettings.reasonRequired && !reason) {
+      await interaction.reply({
+        content: 'Please include a reason for this report.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const member = await guild.members.fetch(targetUser.id).catch(() => null);
+    if (!member) {
+      await interaction.reply({
+        content: `Could not find ${targetUser.tag} in this server.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    try {
+      await this.securityActionService.handleUserReport(member, interaction.user, reason);
+      await interaction.reply({
+        content: `Thank you for your report regarding <@${targetUser.id}>. It has been submitted for review.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error(`Failed to handle user report for ${targetUser.id}:`, error);
+      await interaction.reply({
+        content: 'An error occurred while submitting your report. Please try again later.',
         flags: MessageFlags.Ephemeral,
       });
     }
@@ -811,6 +897,11 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    if (subcommandGroup === 'report') {
+      await this.handleReportConfigCommand(interaction, guild.id);
+      return;
+    }
+
     if (subcommandGroup === 'verification') {
       await this.handleVerificationConfigCommand(interaction, guild.id);
       return;
@@ -882,6 +973,16 @@ export class CommandHandler implements ICommandHandler {
       `Observed notification threshold: \`${settings.observedMinConfidenceThreshold}%\``,
       `Observed notification window: \`${settings.observedNotificationWindowMinutes} minutes\``,
       `Observed ban reason required: \`${settings.observedActionBanRequiresReason ? 'yes' : 'no'}\``,
+      `Guild ID: \`${guildId}\``,
+    ].join('\n');
+  }
+
+  private formatUserReportSettings(
+    guildId: string,
+    settings: ReturnType<typeof getUserReportSettings>
+  ): string {
+    return [
+      `Report reason required: \`${settings.reasonRequired ? 'yes' : 'no'}\``,
       `Guild ID: \`${guildId}\``,
     ].join('\n');
   }
@@ -1109,6 +1210,60 @@ export class CommandHandler implements ICommandHandler {
           : 'An error occurred while processing detection settings.';
       await interaction.reply({
         content: `Failed to process detection settings: ${errorMessage}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  private async handleReportConfigCommand(
+    interaction: ChatInputCommandInteraction,
+    guildId: string
+  ): Promise<void> {
+    const subcommand = interaction.options.getSubcommand(true);
+
+    try {
+      switch (subcommand) {
+        case 'view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const settings = getUserReportSettings(serverConfig.settings);
+          await interaction.reply({
+            content:
+              'Current user report settings:\n\n' +
+              this.formatUserReportSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'reason-require':
+        case 'reason-optional': {
+          const required = subcommand === 'reason-require';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: required,
+          });
+          const settings = getUserReportSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated user report settings.\n\n' +
+              this.formatUserReportSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        default:
+          await interaction.reply({
+            content: 'Unsupported report subcommand.',
+            flags: MessageFlags.Ephemeral,
+          });
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'An error occurred while processing report settings.';
+      await interaction.reply({
+        content: `Failed to process report settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       });
     }

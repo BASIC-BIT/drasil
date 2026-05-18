@@ -11,6 +11,7 @@ import {
   VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY,
   VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY,
 } from '../../utils/verificationThreadAnalysisSettings';
+import { USER_REPORT_REASON_REQUIRED_SETTING_KEY } from '../../utils/userReportSettings';
 
 describe('CommandHandler (unit)', () => {
   type HandlerOverrides = Partial<{
@@ -22,6 +23,7 @@ describe('CommandHandler (unit)', () => {
     getHeuristicSettings: jest.Mock;
     updateHeuristicSettings: jest.Mock;
     resetHeuristicSettings: jest.Mock;
+    handleUserReport: jest.Mock;
   }>;
 
   const buildHandler = (overrides: HandlerOverrides = {}) => {
@@ -61,6 +63,10 @@ describe('CommandHandler (unit)', () => {
         }),
     } as any;
 
+    const securityActionService = {
+      handleUserReport: overrides.handleUserReport ?? jest.fn().mockResolvedValue(true),
+    } as any;
+
     return {
       handler: new CommandHandler(
         {} as any,
@@ -69,10 +75,11 @@ describe('CommandHandler (unit)', () => {
         {} as any,
         configService,
         userModerationService,
-        {} as any
+        securityActionService
       ),
       userModerationService,
       configService,
+      securityActionService,
     };
   };
 
@@ -83,6 +90,16 @@ describe('CommandHandler (unit)', () => {
 
     expect(banCommand).toBeDefined();
     expect(banCommand.default_member_permissions).toBe(PermissionFlagsBits.BanMembers.toString());
+  });
+
+  it('registers /report without default moderation permissions', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const reportCommand = commands.find((c) => c.name === 'report');
+
+    expect(reportCommand).toBeDefined();
+    expect(reportCommand.default_member_permissions).toBeUndefined();
+    expect(reportCommand.options.map((option: any) => option.name)).toEqual(['user', 'reason']);
   });
 
   it('registers /config heuristic subcommands', () => {
@@ -134,6 +151,22 @@ describe('CommandHandler (unit)', () => {
         'moderator-exemption-enable',
         'moderator-exemption-disable',
       ])
+    );
+  });
+
+  it('registers /config report subcommands', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const configCommand = commands.find((c) => c.name === 'config');
+
+    const reportGroup = configCommand.options.find(
+      (option: any) => option.type === 2 && option.name === 'report'
+    );
+    expect(reportGroup).toBeDefined();
+
+    const reportSubcommands = reportGroup.options.map((option: any) => option.name);
+    expect(reportSubcommands).toEqual(
+      expect.arrayContaining(['view', 'reason-require', 'reason-optional'])
     );
   });
 
@@ -285,6 +318,80 @@ describe('CommandHandler (unit)', () => {
     expect(userModerationService.banUser).toHaveBeenCalledWith(targetMember, 'reason', invoker);
     expect(interaction.reply).toHaveBeenCalledWith({
       content: `User ${targetUser.tag} has been banned.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles /report with Discord user picker target', async () => {
+    const handleUserReport = jest.fn().mockResolvedValue(true);
+    const { handler, securityActionService } = buildHandler({ handleUserReport });
+
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const targetMember = { id: targetUser.id } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue(targetMember),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'report',
+      user: { id: 'reporter-1' },
+      guild,
+      options: {
+        getUser: jest.fn().mockReturnValue(targetUser),
+        getString: jest.fn().mockReturnValue('reported reason'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
+      targetMember,
+      interaction.user,
+      'reported reason'
+    );
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('requires /report reason when configured', async () => {
+    const handleUserReport = jest.fn().mockResolvedValue(true);
+    const getServerConfig = jest.fn().mockResolvedValue({
+      settings: {
+        [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
+      },
+    });
+    const { handler, securityActionService } = buildHandler({ handleUserReport, getServerConfig });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn(),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'report',
+      user: { id: 'reporter-1' },
+      guild,
+      options: {
+        getUser: jest.fn().mockReturnValue({ id: 'user-2', tag: 'target#0001' }),
+        getString: jest.fn().mockReturnValue('   '),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(guild.members.fetch).not.toHaveBeenCalled();
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Please include a reason for this report.',
       flags: MessageFlags.Ephemeral,
     });
   });
@@ -525,6 +632,47 @@ describe('CommandHandler (unit)', () => {
       content: expect.stringContaining('Moderator/admin exemption: `enabled`'),
       flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
+    });
+  });
+
+  it('handles /config report reason-require', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('report'),
+        getSubcommand: jest.fn().mockReturnValue('reason-require'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Report reason required: `yes`'),
+      flags: MessageFlags.Ephemeral,
     });
   });
 
