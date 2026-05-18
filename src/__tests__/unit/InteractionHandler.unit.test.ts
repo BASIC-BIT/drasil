@@ -792,6 +792,73 @@ describe('InteractionHandler (unit)', () => {
     );
   });
 
+  it('handles report modal submission with an at-prefixed legacy username tag', async () => {
+    const member = {
+      ...buildMember('guild-1', '123456789012345678'),
+      user: {
+        id: '123456789012345678',
+        username: 'LegacyUser',
+        globalName: null,
+        discriminator: '1234',
+        tag: 'LegacyUser#1234',
+      },
+    } as unknown as GuildMember;
+    const memberCollection = {
+      values: jest.fn(() => [member][Symbol.iterator]()),
+    };
+    const membersFetch = jest.fn().mockImplementation(async (id?: string) => {
+      if (id === member.id) {
+        return member;
+      }
+      return null;
+    });
+    const membersSearch = jest.fn().mockResolvedValue(memberCollection);
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: membersFetch,
+        search: membersSearch,
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'report_user_modal_submit',
+      guildId: 'guild-1',
+      user: { id: 'reporter-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === 'report_target_user_input') {
+            return '@legacyuser#1234';
+          }
+          return 'reported';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(membersSearch).toHaveBeenCalledWith({ query: 'legacyuser', limit: 10 });
+    expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
+      member,
+      interaction.user,
+      'reported'
+    );
+  });
+
   it('rejects ambiguous report modal name matches', async () => {
     const firstMember = {
       ...buildMember('guild-1', '123456789012345678'),

@@ -43,7 +43,9 @@ function resolveSslConfig(databaseUrl: string): PoolConfig['ssl'] | undefined {
   }
 
   const disablesCertificateVerification =
-    sslMode === 'no-verify' || parsed.hostname.endsWith('.pooler.supabase.com');
+    sslMode === 'require' ||
+    sslMode === 'no-verify' ||
+    parsed.hostname.endsWith('.pooler.supabase.com');
   const requiresSsl =
     ['require', 'verify-ca', 'verify-full'].includes(sslMode) || disablesCertificateVerification;
   if (!requiresSsl) {

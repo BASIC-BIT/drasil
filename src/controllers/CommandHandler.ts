@@ -619,8 +619,13 @@ export class CommandHandler implements ICommandHandler {
 
     const targetUser = interaction.options.getUser('user', true);
     const reason = interaction.options.getString('reason')?.trim() || undefined;
-    const serverConfig = await this.configService.getServerConfig(guild.id);
-    const reportSettings = getUserReportSettings(serverConfig.settings);
+    let reportSettings = getUserReportSettings();
+    try {
+      const serverConfig = await this.configService.getServerConfig(guild.id);
+      reportSettings = getUserReportSettings(serverConfig.settings);
+    } catch (error) {
+      console.error(`Failed to load report settings for guild ${guild.id}:`, error);
+    }
 
     if (reportSettings.reasonRequired && !reason) {
       await interaction.editReply({

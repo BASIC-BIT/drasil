@@ -1133,7 +1133,7 @@ export class InteractionHandler implements IInteractionHandler {
       return { status: 'not_found' };
     }
 
-    const tagMatch = trimmedInput.match(/^(.+)#(\d{4})$/);
+    const tagMatch = trimmedInput.replace(/^@/, '').match(/^(.+)#(\d{4})$/);
 
     try {
       const guild = await this.client.guilds.fetch(guildId);
@@ -1146,7 +1146,8 @@ export class InteractionHandler implements IInteractionHandler {
       if (tagMatch) {
         const foundMember = candidates.find(
           (member) =>
-            member.user.username === tagMatch[1] && member.user.discriminator === tagMatch[2]
+            member.user.username.toLowerCase() === tagMatch[1].toLowerCase() &&
+            member.user.discriminator === tagMatch[2]
         );
         return foundMember ? { status: 'found', userId: foundMember.id } : { status: 'not_found' };
       }

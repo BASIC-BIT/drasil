@@ -57,13 +57,13 @@ describe('createPrismaPoolConfig', () => {
     });
   });
 
-  it('honors require sslmode with CA verification', () => {
+  it('honors require sslmode without CA verification', () => {
     expect(
       createPrismaPoolConfig('postgresql://user:password@example.com:5432/db?sslmode=require')
     ).toEqual({
       connectionString: 'postgresql://user:password@example.com:5432/db?sslmode=require',
       max: 10,
-      ssl: { rejectUnauthorized: true },
+      ssl: { rejectUnauthorized: false },
     });
   });
 

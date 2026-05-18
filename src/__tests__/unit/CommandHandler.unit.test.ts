@@ -362,6 +362,48 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('keeps /report usable when report settings cannot be loaded', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const handleUserReport = jest.fn().mockResolvedValue(true);
+    const getServerConfig = jest.fn().mockRejectedValue(new Error('config unavailable'));
+    const { handler, securityActionService } = buildHandler({ handleUserReport, getServerConfig });
+
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const targetMember = { id: targetUser.id } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue(targetMember),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'report',
+      user: { id: 'reporter-1' },
+      guild,
+      options: {
+        getUser: jest.fn().mockReturnValue(targetUser),
+        getString: jest.fn().mockReturnValue('   '),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
+      targetMember,
+      interaction.user,
+      undefined
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
+      allowedMentions: { parse: [] },
+    });
+    consoleError.mockRestore();
+  });
+
   it('requires /report reason when configured', async () => {
     const handleUserReport = jest.fn().mockResolvedValue(true);
     const getServerConfig = jest.fn().mockResolvedValue({
