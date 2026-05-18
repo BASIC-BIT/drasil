@@ -279,6 +279,10 @@ resource "aws_ecs_task_definition" "bot" {
         {
           name  = "NODE_ENV"
           value = "production"
+        },
+        {
+          name  = "DRASIL_USER_INSTALL_REPORTING_ENABLED"
+          value = "true"
         }
       ]
       secrets = [
