@@ -30,6 +30,11 @@ import { ISecurityActionService } from '../services/SecurityActionService';
 import { IConfigService } from '../config/ConfigService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import {
+  DEFAULT_USER_REPORT_REASON_REQUIRED,
+  getUserReportSettings,
+  USER_REPORT_REASON_MAX_LENGTH,
+} from '../utils/userReportSettings';
+import {
   parseChannelId,
   parseRoleId,
   SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID,
@@ -42,6 +47,11 @@ dotenv.config();
 
 const OBSERVED_ACTION_MODAL_REASON_FIELD_ID = 'observed_ban_reason';
 const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notification';
+
+type UserResolution =
+  | { status: 'found'; userId: string }
+  | { status: 'not_found' }
+  | { status: 'ambiguous' };
 
 /**
  * Interface for the Bot class
@@ -409,6 +419,12 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async handleReportUserInitiate(interaction: ButtonInteraction): Promise<void> {
+    const reasonRequired = getUserReportSettings(
+      interaction.guildId
+        ? this.configService.getCachedServerConfig(interaction.guildId)?.settings
+        : undefined
+    ).reasonRequired;
+
     // Create the modal
     const modal = new ModalBuilder()
       .setCustomId('report_user_modal_submit') // Unique ID for the modal submission
@@ -417,8 +433,8 @@ export class InteractionHandler implements IInteractionHandler {
     // Create the target user input field
     const targetUserInput = new TextInputBuilder()
       .setCustomId('report_target_user_input') // Changed ID
-      .setLabel('User ID or Tag to Report')
-      .setPlaceholder('Enter the User ID (e.g., 123456789012345678) or Tag (e.g., username#1234)')
+      .setLabel('User ID, mention, or username')
+      .setPlaceholder('123456789012345678, @username, or username')
       .setStyle(TextInputStyle.Short) // Use Short style for ID/Tag
       .setRequired(true);
     const targetUserRow = new ActionRowBuilder<TextInputBuilder>().addComponents(targetUserInput);
@@ -426,10 +442,11 @@ export class InteractionHandler implements IInteractionHandler {
     // Create the reason text input
     const reasonInput = new TextInputBuilder()
       .setCustomId('report_reason')
-      .setLabel('Reason for Report (Optional)')
+      .setLabel('Reason')
       .setStyle(TextInputStyle.Paragraph) // Allow multi-line input
-      .setPlaceholder('Please provide details about why you are reporting this user.')
-      .setRequired(false); // Make reason optional
+      .setPlaceholder('What happened? Include links or message context if useful.')
+      .setMaxLength(USER_REPORT_REASON_MAX_LENGTH)
+      .setRequired(reasonRequired);
 
     const reasonRow = new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput);
 
@@ -472,18 +489,31 @@ export class InteractionHandler implements IInteractionHandler {
       const targetUserInputString = interaction.fields.getTextInputValue(
         'report_target_user_input'
       );
-      const reason = interaction.fields.getTextInputValue('report_reason');
+      const reason = interaction.fields.getTextInputValue('report_reason').trim() || undefined;
 
       if (!targetUserInputString) {
         await interaction.reply({
-          content: 'Error: You must provide the User ID or Tag of the user to report.',
+          content:
+            'Error: You must provide the user ID, mention, or username of the user to report.',
           flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
-      const targetUserId = await this.resolveUserId(interaction.guildId, targetUserInputString);
-      if (!targetUserId) {
+      const reasonRequired = await this.getUserReportReasonRequired(interaction.guildId);
+      if (reasonRequired && !reason) {
+        await interaction.reply({
+          content: 'Please include a reason for this report.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const targetUserResolution = await this.resolveUserId(
+        interaction.guildId,
+        targetUserInputString
+      );
+      if (targetUserResolution.status === 'not_found') {
         await interaction.reply({
           content: `Could not find a user matching "${targetUserInputString}".`,
           flags: MessageFlags.Ephemeral,
@@ -491,18 +521,40 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
-      const guild = await this.client.guilds.fetch(interaction.guildId);
-      const member = await guild.members.fetch(targetUserId);
+      if (targetUserResolution.status === 'ambiguous') {
+        await interaction.reply({
+          content: 'Multiple users match that name. Please use their ID or @mention instead.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
 
-      await this.securityActionService.handleUserReport(
-        member,
-        interaction.user,
-        reason || undefined
-      );
+      const targetUserId = targetUserResolution.userId;
+
+      if (targetUserId === interaction.user.id) {
+        await interaction.reply({
+          content: 'You cannot report yourself.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const guild = await this.client.guilds.fetch(interaction.guildId);
+      const member = await guild.members.fetch(targetUserId).catch(() => null);
+      if (!member) {
+        await interaction.reply({
+          content: `Could not find a user matching "${targetUserInputString}" in this server.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      await this.securityActionService.handleUserReport(member, interaction.user, reason);
 
       await interaction.reply({
         content: `Thank you for your report regarding <@${targetUserId}>. It has been submitted for review.`,
         flags: MessageFlags.Ephemeral,
+        allowedMentions: { parse: [] },
       });
     } catch (error) {
       console.error('[InteractionHandler] Error handling report modal submission:', error);
@@ -1075,36 +1127,92 @@ export class InteractionHandler implements IInteractionHandler {
   /**
    * Attempts to resolve a user ID string or tag string to a valid User ID within a guild.
    */
-  private async resolveUserId(guildId: string, userInput: string): Promise<string | null> {
+  private async resolveUserId(guildId: string, userInput: string): Promise<UserResolution> {
     const trimmedInput = userInput.trim();
+    const mentionMatch = trimmedInput.match(/^<@!?(\d{17,19})>$/);
+    const directUserId =
+      mentionMatch?.[1] ?? (/^\d{17,19}$/.test(trimmedInput) ? trimmedInput : null);
 
-    if (/^\d{17,19}$/.test(trimmedInput)) {
+    if (directUserId) {
       try {
         const guild = await this.client.guilds.fetch(guildId);
-        await guild.members.fetch(trimmedInput);
-        return trimmedInput;
+        await guild.members.fetch(directUserId);
+        return { status: 'found', userId: directUserId };
       } catch {
-        return null;
+        return { status: 'not_found' };
       }
     }
 
-    const tagMatch = trimmedInput.match(/^(.+)#(\d{4})$/);
-    if (tagMatch) {
-      const username = tagMatch[1];
-      const discriminator = tagMatch[2];
-      try {
-        const guild = await this.client.guilds.fetch(guildId);
-        const members = await guild.members.fetch();
-        const foundMember = members.find(
-          (m) => m.user.username === username && m.user.discriminator === discriminator
+    const normalizedInput = trimmedInput.replace(/^@/, '').toLowerCase();
+    if (!normalizedInput) {
+      return { status: 'not_found' };
+    }
+
+    const tagMatch = trimmedInput.replace(/^@/, '').match(/^(.+)#(\d{4})$/);
+
+    try {
+      const guild = await this.client.guilds.fetch(guildId);
+      const members = await guild.members.search({
+        query: tagMatch ? tagMatch[1] : normalizedInput,
+        limit: 100,
+      });
+      const candidates = Array.from(members.values());
+
+      if (tagMatch) {
+        const foundMember = candidates.find(
+          (member) =>
+            member.user.username.toLowerCase() === tagMatch[1].toLowerCase() &&
+            member.user.discriminator === tagMatch[2]
         );
-        return foundMember ? foundMember.id : null;
-      } catch (error) {
-        console.error(`[InteractionHandler] Error fetching members for tag resolution: ${error}`);
-        return null;
+        return foundMember ? { status: 'found', userId: foundMember.id } : { status: 'not_found' };
       }
+
+      const usernameMatch = candidates.find((member) =>
+        [member.user.username, member.user.tag]
+          .filter((value): value is string => Boolean(value))
+          .some((value) => value.toLowerCase() === normalizedInput)
+      );
+      if (usernameMatch) {
+        return { status: 'found', userId: usernameMatch.id };
+      }
+
+      const nonUniqueMatches = candidates.filter((member) => {
+        const names = [member.user.globalName, member.displayName, member.nickname].filter(
+          (value): value is string => Boolean(value)
+        );
+
+        return names.some((value) => value.toLowerCase() === normalizedInput);
+      });
+
+      if (nonUniqueMatches.length > 1) {
+        return { status: 'ambiguous' };
+      }
+
+      if (nonUniqueMatches.length === 1) {
+        return { status: 'found', userId: nonUniqueMatches[0].id };
+      }
+
+      return { status: 'not_found' };
+    } catch (error) {
+      console.error(`[InteractionHandler] Error fetching members for user resolution: ${error}`);
+      return { status: 'not_found' };
+    }
+  }
+
+  private async getUserReportReasonRequired(guildId: string | undefined): Promise<boolean> {
+    if (!guildId) {
+      return DEFAULT_USER_REPORT_REASON_REQUIRED;
     }
 
-    return null;
+    try {
+      const serverConfig = await this.configService.getServerConfig(guildId);
+      return getUserReportSettings(serverConfig.settings).reasonRequired;
+    } catch (error) {
+      console.error(
+        `[InteractionHandler] Failed to load report settings for guild ${guildId}:`,
+        error
+      );
+      return DEFAULT_USER_REPORT_REASON_REQUIRED;
+    }
   }
 }

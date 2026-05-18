@@ -24,6 +24,10 @@ import {
   SETUP_VERIFICATION_MODAL_ID,
   SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
 } from '../../constants/setupVerificationWizard';
+import {
+  USER_REPORT_REASON_MAX_LENGTH,
+  USER_REPORT_REASON_REQUIRED_SETTING_KEY,
+} from '../../utils/userReportSettings';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -718,6 +722,357 @@ describe('InteractionHandler (unit)', () => {
       content:
         'Thank you for your report regarding <@123456789012345678>. It has been submitted for review.',
       flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('returns a friendly report modal error when the member leaves before submission completes', async () => {
+    const member = buildMember('guild-1', '123456789012345678');
+    const membersFetch = jest
+      .fn()
+      .mockResolvedValueOnce(member)
+      .mockRejectedValueOnce(new Error('member left'));
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: membersFetch,
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'report_user_modal_submit',
+      guildId: 'guild-1',
+      user: { id: 'reporter-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === 'report_target_user_input') {
+            return '123456789012345678';
+          }
+          return 'reported';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Could not find a user matching "123456789012345678" in this server.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles report modal submission with a modern username', async () => {
+    const member = {
+      ...buildMember('guild-1', '123456789012345678'),
+      displayName: 'Basic Bit',
+      nickname: null,
+      user: {
+        id: '123456789012345678',
+        username: 'basic_bit',
+        globalName: 'Basic Bit',
+        discriminator: '0',
+        tag: 'basic_bit',
+      },
+    } as unknown as GuildMember;
+    const memberCollection = {
+      values: jest.fn(() => [member][Symbol.iterator]()),
+    };
+    const membersFetch = jest.fn().mockImplementation(async (id?: string) => {
+      if (id === member.id) {
+        return member;
+      }
+      return null;
+    });
+    const membersSearch = jest.fn().mockResolvedValue(memberCollection);
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: membersFetch,
+        search: membersSearch,
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'report_user_modal_submit',
+      guildId: 'guild-1',
+      user: { id: 'reporter-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === 'report_target_user_input') {
+            return 'basic_bit';
+          }
+          return 'reported';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(membersSearch).toHaveBeenCalledWith({ query: 'basic_bit', limit: 100 });
+    expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
+      member,
+      interaction.user,
+      'reported'
+    );
+  });
+
+  it('handles report modal submission with an at-prefixed legacy username tag', async () => {
+    const member = {
+      ...buildMember('guild-1', '123456789012345678'),
+      user: {
+        id: '123456789012345678',
+        username: 'LegacyUser',
+        globalName: null,
+        discriminator: '1234',
+        tag: 'LegacyUser#1234',
+      },
+    } as unknown as GuildMember;
+    const memberCollection = {
+      values: jest.fn(() => [member][Symbol.iterator]()),
+    };
+    const membersFetch = jest.fn().mockImplementation(async (id?: string) => {
+      if (id === member.id) {
+        return member;
+      }
+      return null;
+    });
+    const membersSearch = jest.fn().mockResolvedValue(memberCollection);
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: membersFetch,
+        search: membersSearch,
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'report_user_modal_submit',
+      guildId: 'guild-1',
+      user: { id: 'reporter-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === 'report_target_user_input') {
+            return '@legacyuser#1234';
+          }
+          return 'reported';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(membersSearch).toHaveBeenCalledWith({ query: 'legacyuser', limit: 100 });
+    expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
+      member,
+      interaction.user,
+      'reported'
+    );
+  });
+
+  it('rejects ambiguous report modal name matches', async () => {
+    const firstMember = {
+      ...buildMember('guild-1', '123456789012345678'),
+      displayName: 'Same Name',
+      nickname: null,
+      user: {
+        id: '123456789012345678',
+        username: 'first_user',
+        globalName: 'Same Name',
+        discriminator: '0',
+        tag: 'first_user',
+      },
+    } as unknown as GuildMember;
+    const secondMember = {
+      ...buildMember('guild-1', '223456789012345678'),
+      displayName: 'Same Name',
+      nickname: null,
+      user: {
+        id: '223456789012345678',
+        username: 'second_user',
+        globalName: 'Same Name',
+        discriminator: '0',
+        tag: 'second_user',
+      },
+    } as unknown as GuildMember;
+    const memberCollection = {
+      values: jest.fn(() => [firstMember, secondMember][Symbol.iterator]()),
+    };
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn(),
+        search: jest.fn().mockResolvedValue(memberCollection),
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'report_user_modal_submit',
+      guildId: 'guild-1',
+      user: { id: 'reporter-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === 'report_target_user_input') {
+            return 'Same Name';
+          }
+          return 'reported';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Multiple users match that name. Please use their ID or @mention instead.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('requires report modal reason when configured', async () => {
+    configService.getServerConfig.mockResolvedValue({
+      settings: {
+        [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
+      },
+    } as any);
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'report_user_modal_submit',
+      guildId: 'guild-1',
+      user: { id: 'reporter-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === 'report_target_user_input') {
+            return '123456789012345678';
+          }
+          return '   ';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Please include a reason for this report.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('rejects report modal self-reports', async () => {
+    const member = buildMember('guild-1', '123456789012345678');
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockResolvedValue(member),
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'report_user_modal_submit',
+      guildId: 'guild-1',
+      user: { id: '123456789012345678' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === 'report_target_user_input') {
+            return '123456789012345678';
+          }
+          return 'reported';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'You cannot report yourself.',
+      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -951,6 +1306,12 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('routes report button clicks to show the report modal', async () => {
+    configService.getCachedServerConfig.mockReturnValue({
+      settings: {
+        [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
+      },
+    } as any);
+
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -971,6 +1332,16 @@ describe('InteractionHandler (unit)', () => {
     expect(interaction.showModal).toHaveBeenCalledTimes(1);
 
     const modalArg = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
-    expect(modalArg.toJSON().custom_id).toBe('report_user_modal_submit');
+    const modalJson = modalArg.toJSON();
+    expect(modalJson.custom_id).toBe('report_user_modal_submit');
+    expect(modalJson.components[0].components[0].label).toBe('User ID, mention, or username');
+    expect(modalJson.components[0].components[0].placeholder).toBe(
+      '123456789012345678, @username, or username'
+    );
+    expect(modalJson.components[1].components[0].label).toBe('Reason');
+    expect(modalJson.components[1].components[0].max_length).toBe(USER_REPORT_REASON_MAX_LENGTH);
+    expect(modalJson.components[1].components[0].required).toBe(true);
+    expect(configService.getCachedServerConfig).toHaveBeenCalledWith('guild-1');
+    expect(configService.getServerConfig).not.toHaveBeenCalled();
   });
 });

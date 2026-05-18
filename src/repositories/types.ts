@@ -44,6 +44,7 @@ export interface ServerSettings {
   observed_detection_notification_window_minutes?: number;
   automatic_detection_exempt_moderators?: boolean;
   observed_action_ban_requires_reason?: boolean;
+  user_report_reason_required?: boolean;
 }
 
 /**
