@@ -44,7 +44,7 @@ function resolveSslConfig(databaseUrl: string): PoolConfig['ssl'] | undefined {
 
   const requiresSsl =
     ['require', 'verify-ca', 'verify-full', 'no-verify'].includes(sslMode) ||
-    parsed.hostname.endsWith('.supabase.com');
+    parsed.hostname.endsWith('.pooler.supabase.com');
   if (!requiresSsl) {
     return undefined;
   }

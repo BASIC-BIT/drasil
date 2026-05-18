@@ -396,6 +396,38 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('rejects /report self-reports', async () => {
+    const handleUserReport = jest.fn().mockResolvedValue(true);
+    const { handler, securityActionService } = buildHandler({ handleUserReport });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn(),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'report',
+      user: { id: 'reporter-1' },
+      guild,
+      options: {
+        getUser: jest.fn().mockReturnValue({ id: 'reporter-1', tag: 'reporter#0001' }),
+        getString: jest.fn().mockReturnValue('self report'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(guild.members.fetch).not.toHaveBeenCalled();
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'You cannot report yourself.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('shows setup verification modal for admins', async () => {
     const getCachedServerConfig = jest.fn().mockReturnValue({
       restricted_role_id: 'role-1',

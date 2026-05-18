@@ -628,6 +628,14 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    if (targetUser.id === interaction.user.id) {
+      await interaction.reply({
+        content: 'You cannot report yourself.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
     const member = await guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) {
       await interaction.reply({

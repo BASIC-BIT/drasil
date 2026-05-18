@@ -507,6 +507,14 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
+      if (targetUserId === interaction.user.id) {
+        await interaction.reply({
+          content: 'You cannot report yourself.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
       const guild = await this.client.guilds.fetch(interaction.guildId);
       const member = await guild.members.fetch(targetUserId);
 

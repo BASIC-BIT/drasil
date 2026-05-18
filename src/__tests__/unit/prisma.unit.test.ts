@@ -38,11 +38,30 @@ describe('createPrismaClient', () => {
     });
   });
 
+  it('does not disable CA verification for direct Supabase URLs by default', () => {
+    expect(
+      createPrismaPoolConfig('postgresql://user:password@db.project.supabase.com:5432/db')
+    ).toEqual({
+      connectionString: 'postgresql://user:password@db.project.supabase.com:5432/db',
+      max: 10,
+    });
+  });
+
   it('honors verify-full sslmode', () => {
     expect(
       createPrismaPoolConfig('postgresql://user:password@example.com:5432/db?sslmode=verify-full')
     ).toEqual({
       connectionString: 'postgresql://user:password@example.com:5432/db?sslmode=verify-full',
+      max: 10,
+      ssl: { rejectUnauthorized: true },
+    });
+  });
+
+  it('honors verify-ca sslmode', () => {
+    expect(
+      createPrismaPoolConfig('postgresql://user:password@example.com:5432/db?sslmode=verify-ca')
+    ).toEqual({
+      connectionString: 'postgresql://user:password@example.com:5432/db?sslmode=verify-ca',
       max: 10,
       ssl: { rejectUnauthorized: true },
     });

@@ -834,6 +834,52 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('rejects report modal self-reports', async () => {
+    const member = buildMember('guild-1', '123456789012345678');
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockResolvedValue(member),
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'report_user_modal_submit',
+      guildId: 'guild-1',
+      user: { id: '123456789012345678' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === 'report_target_user_input') {
+            return '123456789012345678';
+          }
+          return 'reported';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'You cannot report yourself.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('handles setup verification modal and updates config', async () => {
     const channelFetch = jest.fn().mockImplementation(async (id: string) => {
       if (id === '123456789012345679' || id === '123456789012345680') {
