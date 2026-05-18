@@ -1154,7 +1154,7 @@ export class InteractionHandler implements IInteractionHandler {
       const guild = await this.client.guilds.fetch(guildId);
       const members = await guild.members.search({
         query: tagMatch ? tagMatch[1] : normalizedInput,
-        limit: 25,
+        limit: 100,
       });
       const candidates = Array.from(members.values());
 

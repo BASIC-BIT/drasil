@@ -837,7 +837,7 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleModalSubmit(interaction);
 
-    expect(membersSearch).toHaveBeenCalledWith({ query: 'basic_bit', limit: 25 });
+    expect(membersSearch).toHaveBeenCalledWith({ query: 'basic_bit', limit: 100 });
     expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
       member,
       interaction.user,
@@ -904,7 +904,7 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleModalSubmit(interaction);
 
-    expect(membersSearch).toHaveBeenCalledWith({ query: 'legacyuser', limit: 25 });
+    expect(membersSearch).toHaveBeenCalledWith({ query: 'legacyuser', limit: 100 });
     expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
       member,
       interaction.user,

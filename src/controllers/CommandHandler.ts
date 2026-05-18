@@ -646,7 +646,7 @@ export class CommandHandler implements ICommandHandler {
     const member = await guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) {
       await interaction.editReply({
-        content: `Could not find ${targetUser.tag} in this server.`,
+        content: `Could not find ${targetUser.globalName ?? targetUser.username} in this server.`,
       });
       return;
     }
