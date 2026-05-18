@@ -1,5 +1,5 @@
 import { injectable, inject } from 'inversify';
-import { GuildMember, Message, Client, User } from 'discord.js';
+import { GuildMember, Message, Client, User, APIUser, InteractionContextType } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import { INotificationManager } from './NotificationManager';
 import { DetectionResult } from './DetectionOrchestrator';
@@ -18,6 +18,7 @@ import { IUserRepository } from '../repositories/UserRepository';
 import { IThreadManager } from './ThreadManager';
 import { IUserModerationService } from './UserModerationService';
 import { IAdminActionService } from './AdminActionService';
+import { getUserReportSettings } from '../utils/userReportSettings';
 /**
  * Interface for the SecurityActionService
  */
@@ -66,6 +67,12 @@ export interface ISecurityActionService {
    */
   handleUserReport(member: GuildMember, reporter: User, reason?: string): Promise<boolean>;
 
+  handleMessageReport(
+    targetUser: User | APIUser,
+    reporter: User | APIUser,
+    report: MessageReportContext
+  ): Promise<boolean>;
+
   openObservedDetectionCase(
     member: GuildMember,
     detectionEventId: string,
@@ -106,6 +113,14 @@ export interface ISecurityActionService {
    * @returns Whether the thread was successfully reopened
    */
   reopenVerification(verificationEvent: VerificationEvent, moderator: User): Promise<boolean>;
+}
+
+export interface MessageReportContext {
+  messageId: string;
+  channelId?: string;
+  guildId?: string;
+  content?: string;
+  interactionContext?: InteractionContextType;
 }
 
 /**
@@ -682,6 +697,169 @@ export class SecurityActionService implements ISecurityActionService {
       console.error(`Failed to handle user report for ${member.user.tag}:`, error);
       throw error;
     }
+  }
+
+  public async handleMessageReport(
+    targetUser: User | APIUser,
+    reporter: User | APIUser,
+    report: MessageReportContext
+  ): Promise<boolean> {
+    try {
+      await this.userRepository.getOrCreateUser(targetUser.id, targetUser.username);
+
+      const reason = `Message reported by user ${reporter.id}.`;
+      const isGuildContext =
+        report.interactionContext === InteractionContextType.Guild || !!report.guildId;
+      const metadata: Record<string, unknown> = {
+        type: isGuildContext ? 'guild_message_report' : 'user_installed_message_report',
+        reporterId: reporter.id,
+        targetUserId: targetUser.id,
+        targetUsername: targetUser.username,
+        messageId: report.messageId,
+      };
+      if (report.guildId) metadata.guildId = report.guildId;
+      if (report.channelId) metadata.channelId = report.channelId;
+      if (report.content) metadata.content = report.content;
+      if (report.interactionContext !== undefined) {
+        metadata.interactionContext = report.interactionContext;
+      }
+
+      const globalReport = await this.detectionEventsRepository.create({
+        server_id: null,
+        user_id: targetUser.id,
+        detection_type: DetectionType.USER_REPORT,
+        confidence: 1.0,
+        reasons: [reason],
+        message_id: report.messageId,
+        channel_id: report.channelId,
+        metadata,
+      });
+
+      await this.processMessageReportForManagedServers(
+        targetUser,
+        reporter,
+        report,
+        globalReport.id
+      );
+
+      return true;
+    } catch (error) {
+      console.error(`Failed to handle message report for ${targetUser.id}:`, error);
+      throw error;
+    }
+  }
+
+  private async processMessageReportForManagedServers(
+    targetUser: User | APIUser,
+    reporter: User | APIUser,
+    report: MessageReportContext,
+    globalReportId: string
+  ): Promise<void> {
+    const memberships = await this.serverMemberRepository.findByUser(targetUser.id);
+    const handledServerIds = new Set<string>();
+
+    for (const membership of memberships) {
+      const serverId = membership.server_id;
+      if (handledServerIds.has(serverId)) {
+        continue;
+      }
+      handledServerIds.add(serverId);
+
+      const server = await this.serverRepository.findByGuildId(serverId);
+      if (!server?.is_active) {
+        continue;
+      }
+
+      const isLocalReport = report.guildId === serverId;
+      const reportSettings = getUserReportSettings(server.settings);
+      const responseMode = isLocalReport ? 'open_case' : reportSettings.externalResponseMode;
+      if (responseMode === 'off') {
+        continue;
+      }
+
+      const member = await this.fetchManagedReportMember(serverId, targetUser.id);
+      if (!member) {
+        continue;
+      }
+
+      const serverDetectionEvent = await this.createManagedMessageReportDetection(
+        member,
+        reporter,
+        report,
+        globalReportId,
+        isLocalReport
+      );
+      const detectionResult: DetectionResult = {
+        label: 'SUSPICIOUS',
+        confidence: 1.0,
+        reasons: [
+          isLocalReport
+            ? `Message reported in this server by user ${reporter.id}.`
+            : `External DM/GDM report submitted by user ${reporter.id}.`,
+        ],
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: report.content || 'Message report',
+        detectionEventId: serverDetectionEvent.id,
+      };
+
+      if (responseMode === 'notify_only') {
+        try {
+          await this.notificationManager.upsertObservedDetectionNotification(
+            member,
+            detectionResult
+          );
+        } catch (error) {
+          console.error(`Failed to process message report fan-out for guild ${serverId}:`, error);
+        }
+      } else {
+        await this.handleSuspiciousMember(member, detectionResult, undefined, false);
+      }
+    }
+  }
+
+  private async fetchManagedReportMember(
+    guildId: string,
+    userId: string
+  ): Promise<GuildMember | null> {
+    const guild = await this.client.guilds.fetch(guildId).catch(() => null);
+    return (await guild?.members.fetch(userId).catch(() => null)) ?? null;
+  }
+
+  private async createManagedMessageReportDetection(
+    member: GuildMember,
+    reporter: User | APIUser,
+    report: MessageReportContext,
+    globalReportId: string,
+    isLocalReport: boolean
+  ): Promise<DetectionEvent> {
+    const metadata: Record<string, unknown> = {
+      type: isLocalReport ? 'message_report' : 'external_message_report',
+      globalReportId,
+      reporterId: reporter.id,
+      targetUserId: member.id,
+      messageId: report.messageId,
+    };
+    if (report.guildId) metadata.sourceGuildId = report.guildId;
+    if (report.channelId) metadata.sourceChannelId = report.channelId;
+    if (report.content) metadata.content = report.content;
+    if (report.interactionContext !== undefined) {
+      metadata.interactionContext = report.interactionContext;
+    }
+
+    return await this.detectionEventsRepository.create({
+      server_id: member.guild.id,
+      user_id: member.id,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1.0,
+      reasons: [
+        isLocalReport
+          ? `Message reported in this server by user ${reporter.id}.`
+          : `External DM/GDM report submitted by user ${reporter.id}.`,
+      ],
+      message_id: isLocalReport ? report.messageId : undefined,
+      channel_id: isLocalReport ? report.channelId : undefined,
+      metadata,
+    });
   }
 
   public async openObservedDetectionCase(

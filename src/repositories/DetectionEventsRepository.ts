@@ -85,14 +85,9 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
    */
   async create(data: Partial<DetectionEvent>): Promise<DetectionEvent> {
     try {
-      if (
-        !data.server_id ||
-        !data.user_id ||
-        !data.detection_type ||
-        data.confidence === undefined
-      ) {
+      if (!data.user_id || !data.detection_type || data.confidence === undefined) {
         throw new Error(
-          'server_id, user_id, detection_type, and confidence are required to create a detection event'
+          'user_id, detection_type, and confidence are required to create a detection event'
         );
       }
 

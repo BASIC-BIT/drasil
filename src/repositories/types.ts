@@ -45,6 +45,7 @@ export interface ServerSettings {
   automatic_detection_exempt_moderators?: boolean;
   observed_action_ban_requires_reason?: boolean;
   user_report_reason_required?: boolean;
+  user_report_external_response_mode?: 'off' | 'notify_only' | 'open_case';
 }
 
 /**
@@ -99,7 +100,7 @@ export enum DetectionType {
  */
 export interface DetectionEvent {
   id: string; // UUID for the event
-  server_id: string; // Discord server ID
+  server_id: string | null; // Discord server ID, null for user-installed app reports
   user_id: string; // Discord user ID
   thread_id: string | null; // Discord thread ID if applicable
   message_id: string | null; // Discord message ID

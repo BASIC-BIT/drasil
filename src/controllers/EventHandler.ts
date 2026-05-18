@@ -117,6 +117,10 @@ export class EventHandler implements IEventHandler {
     try {
       if (interaction.isChatInputCommand()) {
         await this.commandHandler.handleSlashCommand(interaction);
+      } else if (interaction.isUserContextMenuCommand()) {
+        await this.commandHandler.handleUserContextMenuCommand(interaction);
+      } else if (interaction.isMessageContextMenuCommand()) {
+        await this.commandHandler.handleMessageContextMenuCommand(interaction);
       } else if (interaction.isButton()) {
         await this.interactionHandler.handleButtonInteraction(interaction);
       } else if (interaction.isModalSubmit()) {

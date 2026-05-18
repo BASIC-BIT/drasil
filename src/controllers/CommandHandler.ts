@@ -5,10 +5,16 @@ import {
   REST,
   Routes,
   SlashCommandBuilder,
+  ContextMenuCommandBuilder,
   ChatInputCommandInteraction,
-  RESTPostAPIChatInputApplicationCommandsJSONBody,
+  UserContextMenuCommandInteraction,
+  MessageContextMenuCommandInteraction,
+  RESTPostAPIApplicationCommandsJSONBody,
   PermissionFlagsBits,
   MessageFlags,
+  ApplicationCommandType,
+  ApplicationIntegrationType,
+  InteractionContextType,
   ActionRowBuilder, // Added
   ButtonBuilder, // Added
   ButtonStyle, // Added
@@ -68,6 +74,10 @@ import {
 } from '../utils/detectionResponseSettings';
 import {
   getUserReportSettings,
+  isUserReportExternalResponseMode,
+  USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY,
+  USER_REPORT_EXTERNAL_RESPONSE_MODES,
+  USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH,
   USER_REPORT_REASON_MAX_LENGTH,
   USER_REPORT_REASON_REQUIRED_SETTING_KEY,
 } from '../utils/userReportSettings';
@@ -75,6 +85,14 @@ import 'reflect-metadata';
 
 // Load environment variables
 dotenv.config();
+
+const REPORT_USER_CONTEXT_COMMAND_NAME = 'Report User';
+const REPORT_MESSAGE_CONTEXT_COMMAND_NAME = 'Report Message';
+const USER_INSTALL_REPORTING_ENABLED_ENV = 'DRASIL_USER_INSTALL_REPORTING_ENABLED';
+
+function isUserInstallReportingEnabled(): boolean {
+  return process.env[USER_INSTALL_REPORTING_ENABLED_ENV] === 'true';
+}
 
 /**
  * Interface for the Bot class
@@ -89,6 +107,10 @@ export interface ICommandHandler {
    * Handle a slash command
    */
   handleSlashCommand(interaction: ChatInputCommandInteraction): Promise<void>;
+
+  handleUserContextMenuCommand(interaction: UserContextMenuCommandInteraction): Promise<void>;
+
+  handleMessageContextMenuCommand(interaction: MessageContextMenuCommandInteraction): Promise<void>;
 
   // TODO: Rip this out in favor of a slash command
   /**
@@ -106,7 +128,7 @@ export class CommandHandler implements ICommandHandler {
   private configService: IConfigService;
   private userModerationService: IUserModerationService;
   private securityActionService: ISecurityActionService;
-  private commands: RESTPostAPIChatInputApplicationCommandsJSONBody[];
+  private commands: RESTPostAPIApplicationCommandsJSONBody[];
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -355,6 +377,22 @@ export class CommandHandler implements ICommandHandler {
                 .setName('reason-optional')
                 .setDescription('Allow user reports without a reason')
             )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('external-reports')
+                .setDescription('Set how reports from user-installed DMs/GDMs are handled')
+                .addStringOption((option) =>
+                  option
+                    .setName('mode')
+                    .setDescription('off, notify_only, or open_case')
+                    .setRequired(true)
+                    .addChoices(
+                      { name: 'Off', value: 'off' },
+                      { name: 'Notify only', value: 'notify_only' },
+                      { name: 'Open case', value: 'open_case' }
+                    )
+                )
+            )
         )
         .addSubcommandGroup((group) =>
           group
@@ -472,6 +510,27 @@ export class CommandHandler implements ICommandHandler {
             .setRequired(true)
         )
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // Require Admin perms
+      new ContextMenuCommandBuilder()
+        .setName(REPORT_USER_CONTEXT_COMMAND_NAME)
+        .setType(ApplicationCommandType.User)
+        .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+        .setContexts(InteractionContextType.Guild),
+      ...(isUserInstallReportingEnabled()
+        ? [
+            new ContextMenuCommandBuilder()
+              .setName(REPORT_MESSAGE_CONTEXT_COMMAND_NAME)
+              .setType(ApplicationCommandType.Message)
+              .setIntegrationTypes(
+                ApplicationIntegrationType.GuildInstall,
+                ApplicationIntegrationType.UserInstall
+              )
+              .setContexts(
+                InteractionContextType.Guild,
+                InteractionContextType.BotDM,
+                InteractionContextType.PrivateChannel
+              ),
+          ]
+        : []),
     ].map((command) => command.toJSON());
   }
 
@@ -538,6 +597,34 @@ export class CommandHandler implements ICommandHandler {
           flags: MessageFlags.Ephemeral,
         });
     }
+  }
+
+  public async handleUserContextMenuCommand(
+    interaction: UserContextMenuCommandInteraction
+  ): Promise<void> {
+    if (interaction.commandName !== REPORT_USER_CONTEXT_COMMAND_NAME) {
+      await interaction.reply({
+        content: `Unknown user command: ${interaction.commandName}`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await this.handleReportUserContextCommand(interaction);
+  }
+
+  public async handleMessageContextMenuCommand(
+    interaction: MessageContextMenuCommandInteraction
+  ): Promise<void> {
+    if (interaction.commandName !== REPORT_MESSAGE_CONTEXT_COMMAND_NAME) {
+      await interaction.reply({
+        content: `Unknown message command: ${interaction.commandName}`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await this.handleReportMessageContextCommand(interaction);
   }
 
   private async handleBanCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -659,6 +746,126 @@ export class CommandHandler implements ICommandHandler {
       });
     } catch (error) {
       console.error(`Failed to handle user report for ${targetUser.id}:`, error);
+      await interaction.editReply({
+        content: 'An error occurred while submitting your report. Please try again later.',
+      });
+    }
+  }
+
+  private async handleReportUserContextCommand(
+    interaction: UserContextMenuCommandInteraction
+  ): Promise<void> {
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.reply({
+        content: 'This command can only be used in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const targetUser = interaction.targetUser;
+    if (targetUser.id === interaction.user.id) {
+      await interaction.editReply({
+        content: 'You cannot report yourself.',
+      });
+      return;
+    }
+
+    let reportSettings = getUserReportSettings();
+    try {
+      const serverConfig = await this.configService.getServerConfig(guild.id);
+      reportSettings = getUserReportSettings(serverConfig.settings);
+    } catch (error) {
+      console.error(`Failed to load report settings for guild ${guild.id}:`, error);
+    }
+
+    if (reportSettings.reasonRequired) {
+      await interaction.editReply({
+        content: 'This server requires a report reason. Please use `/report` instead.',
+      });
+      return;
+    }
+
+    const member = await guild.members.fetch(targetUser.id).catch(() => null);
+    if (!member) {
+      await interaction.editReply({
+        content: `Could not find ${targetUser.globalName ?? targetUser.username} in this server.`,
+      });
+      return;
+    }
+
+    try {
+      await this.securityActionService.handleUserReport(member, interaction.user);
+      await interaction.editReply({
+        content: `Thank you for your report regarding <@${targetUser.id}>. It has been submitted for review.`,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error(`Failed to handle context user report for ${targetUser.id}:`, error);
+      await interaction.editReply({
+        content: 'An error occurred while submitting your report. Please try again later.',
+      });
+    }
+  }
+
+  private async handleReportMessageContextCommand(
+    interaction: MessageContextMenuCommandInteraction
+  ): Promise<void> {
+    if (!isUserInstallReportingEnabled()) {
+      await interaction.reply({
+        content: 'User-installable message reporting is not enabled for this Drasil deployment.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const targetMessage = interaction.targetMessage;
+    const targetUser = targetMessage.author;
+    if (targetUser.id === interaction.user.id) {
+      await interaction.editReply({
+        content: 'You cannot report your own message.',
+      });
+      return;
+    }
+
+    const guildId = interaction.guildId ?? undefined;
+    if (guildId) {
+      let reportSettings = getUserReportSettings();
+      try {
+        const serverConfig = await this.configService.getServerConfig(guildId);
+        reportSettings = getUserReportSettings(serverConfig.settings);
+      } catch (error) {
+        console.error(`Failed to load report settings for guild ${guildId}:`, error);
+      }
+
+      if (reportSettings.reasonRequired) {
+        await interaction.editReply({
+          content: 'This server requires a report reason. Please use `/report` instead.',
+        });
+        return;
+      }
+    }
+
+    try {
+      await this.securityActionService.handleMessageReport(targetUser, interaction.user, {
+        messageId: targetMessage.id,
+        channelId: interaction.channelId,
+        guildId,
+        content: targetMessage.content.slice(0, USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH),
+        // discord.js may expose a missing interaction context as null; omit it in report metadata.
+        interactionContext: interaction.context ?? undefined,
+      });
+      await interaction.editReply({
+        content: `Thank you for your report regarding <@${targetUser.id}>. It has been submitted for review.`,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error(`Failed to handle context message report for ${targetUser.id}:`, error);
       await interaction.editReply({
         content: 'An error occurred while submitting your report. Please try again later.',
       });
@@ -996,6 +1203,7 @@ export class CommandHandler implements ICommandHandler {
   ): string {
     return [
       `Report reason required: \`${settings.reasonRequired ? 'yes' : 'no'}\``,
+      `External reports: \`${settings.externalResponseMode}\``,
       `Guild ID: \`${guildId}\``,
     ].join('\n');
   }
@@ -1253,6 +1461,26 @@ export class CommandHandler implements ICommandHandler {
           const required = subcommand === 'reason-require';
           const updated = await this.configService.updateServerSettings(guildId, {
             [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: required,
+          });
+          const settings = getUserReportSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated user report settings.\n\n' +
+              this.formatUserReportSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'external-reports': {
+          const mode = interaction.options.getString('mode', true);
+          if (!isUserReportExternalResponseMode(mode)) {
+            throw new Error(
+              `Invalid external report mode. Use one of: ${USER_REPORT_EXTERNAL_RESPONSE_MODES.join(', ')}`
+            );
+          }
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: mode,
           });
           const settings = getUserReportSettings(updated.settings);
           await interaction.reply({
