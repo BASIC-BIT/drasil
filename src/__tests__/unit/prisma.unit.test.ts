@@ -67,14 +67,19 @@ describe('createPrismaPoolConfig', () => {
     });
   });
 
-  it('honors verify-ca sslmode', () => {
-    expect(
-      createPrismaPoolConfig('postgresql://user:password@example.com:5432/db?sslmode=verify-ca')
-    ).toEqual({
+  it('honors verify-ca sslmode without hostname verification', () => {
+    const config = createPrismaPoolConfig(
+      'postgresql://user:password@example.com:5432/db?sslmode=verify-ca'
+    );
+
+    expect(config).toEqual({
       connectionString: 'postgresql://user:password@example.com:5432/db?sslmode=verify-ca',
       max: 10,
-      ssl: { rejectUnauthorized: true },
+      ssl: { rejectUnauthorized: true, checkServerIdentity: expect.any(Function) },
     });
+    expect(
+      typeof config.ssl === 'object' && config.ssl.checkServerIdentity?.('example.com', {} as any)
+    ).toBe(undefined);
   });
 
   it('honors no-verify sslmode', () => {

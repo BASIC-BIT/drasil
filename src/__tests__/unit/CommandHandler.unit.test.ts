@@ -444,7 +444,8 @@ describe('CommandHandler (unit)', () => {
 
   it('rejects /report self-reports', async () => {
     const handleUserReport = jest.fn().mockResolvedValue(true);
-    const { handler, securityActionService } = buildHandler({ handleUserReport });
+    const getServerConfig = jest.fn();
+    const { handler, securityActionService } = buildHandler({ handleUserReport, getServerConfig });
 
     const guild = {
       id: 'guild-1',
@@ -469,6 +470,7 @@ describe('CommandHandler (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(guild.members.fetch).not.toHaveBeenCalled();
+    expect(getServerConfig).not.toHaveBeenCalled();
     expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'You cannot report yourself.',

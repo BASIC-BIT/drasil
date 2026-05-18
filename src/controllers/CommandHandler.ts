@@ -619,6 +619,14 @@ export class CommandHandler implements ICommandHandler {
 
     const targetUser = interaction.options.getUser('user', true);
     const reason = interaction.options.getString('reason')?.trim() || undefined;
+
+    if (targetUser.id === interaction.user.id) {
+      await interaction.editReply({
+        content: 'You cannot report yourself.',
+      });
+      return;
+    }
+
     let reportSettings = getUserReportSettings();
     try {
       const serverConfig = await this.configService.getServerConfig(guild.id);
@@ -630,13 +638,6 @@ export class CommandHandler implements ICommandHandler {
     if (reportSettings.reasonRequired && !reason) {
       await interaction.editReply({
         content: 'Please include a reason for this report.',
-      });
-      return;
-    }
-
-    if (targetUser.id === interaction.user.id) {
-      await interaction.editReply({
-        content: 'You cannot report yourself.',
       });
       return;
     }

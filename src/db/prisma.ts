@@ -52,6 +52,13 @@ function resolveSslConfig(databaseUrl: string): PoolConfig['ssl'] | undefined {
     return undefined;
   }
 
+  if (sslMode === 'verify-ca') {
+    return {
+      rejectUnauthorized: true,
+      checkServerIdentity: () => undefined,
+    };
+  }
+
   return {
     rejectUnauthorized: !disablesCertificateVerification,
   };
