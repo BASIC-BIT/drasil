@@ -297,6 +297,36 @@ export class SecurityActionService implements ISecurityActionService {
     };
   }
 
+  private shouldUseReportReviewThread(
+    restrictUser: boolean,
+    detectionResult: DetectionResult
+  ): boolean {
+    return !restrictUser && detectionResult.triggerSource === DetectionType.USER_REPORT;
+  }
+
+  private async createCaseThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult,
+    restrictUser: boolean,
+    sourceMessage?: Message
+  ): Promise<void> {
+    const useReportReviewThread = this.shouldUseReportReviewThread(restrictUser, detectionResult);
+    const thread = useReportReviewThread
+      ? await this.threadManager.createReportReviewThread(
+          member,
+          verificationEvent,
+          detectionResult,
+          sourceMessage
+        )
+      : await this.threadManager.createVerificationThread(member, verificationEvent);
+
+    if (!thread) {
+      const threadKind = useReportReviewThread ? 'report review thread' : 'verification thread';
+      throw new Error(`Failed to create ${threadKind} for ${member.user.tag}`);
+    }
+  }
+
   private async getObservedDetectionForMember(
     member: GuildMember,
     detectionEventId: string
@@ -335,10 +365,7 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     if (!verificationEvent.thread_id) {
-      const thread = await this.threadManager.createVerificationThread(member, verificationEvent);
-      if (!thread) {
-        throw new Error(`Failed to create verification thread for ${member.user.tag}`);
-      }
+      await this.createCaseThread(member, verificationEvent, detectionResult, false);
       await this.upsertNotification(member, detectionResult, verificationEvent);
     }
 
@@ -537,22 +564,13 @@ export class SecurityActionService implements ISecurityActionService {
       });
     }
 
-    const thread =
-      !restrictUser && detectionResult.triggerSource === DetectionType.USER_REPORT
-        ? await this.threadManager.createReportReviewThread(
-            member,
-            newVerificationEvent,
-            detectionResult,
-            sourceMessage
-          )
-        : await this.threadManager.createVerificationThread(member, newVerificationEvent);
-    if (!thread) {
-      const threadKind =
-        !restrictUser && detectionResult.triggerSource === DetectionType.USER_REPORT
-          ? 'report review thread'
-          : 'verification thread';
-      throw new Error(`Failed to create ${threadKind} for ${member.user.tag}`);
-    }
+    await this.createCaseThread(
+      member,
+      newVerificationEvent,
+      detectionResult,
+      restrictUser,
+      sourceMessage
+    );
 
     await this.upsertNotification(member, detectionResult, newVerificationEvent, sourceMessage);
 

@@ -930,6 +930,41 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it('recreates missing threads for observed user reports as moderator-only review threads', async () => {
+    const guildId = 'guild-observed-report-open';
+    const userId = 'user-observed-report-open';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1.0,
+      reasons: ['Reported by user reporter-observed. Reason: suspicious DM'],
+      detected_at: new Date(),
+      metadata: { type: 'user_report', reporterId: 'reporter-observed', content: 'suspicious DM' },
+    });
+    const existingCase = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    await buildService().openObservedDetectionCase(member, detectionEvent.id, moderator);
+
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ id: existingCase.id }),
+      expect.objectContaining({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'suspicious DM',
+      }),
+      undefined
+    );
+  });
+
   it('does not action an already handled observed detection', async () => {
     const guildId = 'guild-observed-actioned';
     const userId = 'user-observed-actioned';
