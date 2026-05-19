@@ -308,10 +308,9 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     verificationEvent: VerificationEvent,
     detectionResult: DetectionResult,
-    restrictUser: boolean,
+    useReportReviewThread: boolean,
     sourceMessage?: Message
   ): Promise<void> {
-    const useReportReviewThread = this.shouldUseReportReviewThread(restrictUser, detectionResult);
     const thread = useReportReviewThread
       ? await this.threadManager.createReportReviewThread(
           member,
@@ -351,10 +350,19 @@ export class SecurityActionService implements ISecurityActionService {
 
   private async ensureObservedCase(
     member: GuildMember,
-    detectionEvent: DetectionEvent
+    detectionEvent: DetectionEvent,
+    useReportReviewThread?: boolean
   ): Promise<VerificationEvent> {
     const detectionResult = this.createDetectionResultFromEvent(detectionEvent);
-    await this.handleSuspiciousMember(member, detectionResult, undefined, false);
+    const shouldUseReviewThread =
+      useReportReviewThread ?? this.shouldUseReportReviewThread(false, detectionResult);
+    await this.handleSuspiciousMember(
+      member,
+      detectionResult,
+      undefined,
+      false,
+      shouldUseReviewThread
+    );
 
     const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
       member.id,
@@ -365,7 +373,12 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     if (!verificationEvent.thread_id) {
-      await this.createCaseThread(member, verificationEvent, detectionResult, false);
+      await this.createCaseThread(
+        member,
+        verificationEvent,
+        detectionResult,
+        shouldUseReviewThread
+      );
       await this.upsertNotification(member, detectionResult, verificationEvent);
     }
 
@@ -469,7 +482,8 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     detectionResult: DetectionResult,
     sourceMessage?: Message,
-    restrictUser = true
+    restrictUser = true,
+    useReportReviewThread = this.shouldUseReportReviewThread(restrictUser, detectionResult)
   ): Promise<boolean> {
     // Fail fast: we don't attempt retries or compensation yet.
     // TODO: Add retries/idempotency and partial failure handling if needed later.
@@ -568,7 +582,7 @@ export class SecurityActionService implements ISecurityActionService {
       member,
       newVerificationEvent,
       detectionResult,
-      restrictUser,
+      useReportReviewThread,
       sourceMessage
     );
 
@@ -1002,7 +1016,7 @@ export class SecurityActionService implements ISecurityActionService {
     }
     let actionApplied = false;
     try {
-      const verificationEvent = await this.ensureObservedCase(member, detectionEvent);
+      const verificationEvent = await this.ensureObservedCase(member, detectionEvent, false);
       await this.userModerationService.restrictUser(member);
       actionApplied = true;
       await this.recordObservedAction({
@@ -1051,7 +1065,7 @@ export class SecurityActionService implements ISecurityActionService {
     }
     let actionApplied = false;
     try {
-      await this.ensureObservedCase(member, detectionEvent);
+      await this.ensureObservedCase(member, detectionEvent, false);
       await this.userModerationService.banUser(member, reason, moderator, detectionEvent.id);
       actionApplied = true;
       await this.notificationManager.markObservedDetectionActionTaken(
