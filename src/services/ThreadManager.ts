@@ -2,6 +2,7 @@ import { injectable, inject } from 'inversify';
 import {
   Client,
   GuildMember,
+  Message,
   ThreadChannel,
   ThreadAutoArchiveDuration,
   ChannelType,
@@ -19,6 +20,7 @@ import {
   resolveVerificationPromptTemplate,
   VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY,
 } from '../utils/verificationPromptTemplate';
+import { DetectionResult } from './DetectionOrchestrator';
 
 /**
  * Interface for NotificationManager service
@@ -32,6 +34,13 @@ export interface IThreadManager {
   createVerificationThread(
     member: GuildMember,
     verificationEvent: VerificationEvent
+  ): Promise<ThreadChannel | null>;
+
+  createReportReviewThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
   ): Promise<ThreadChannel | null>;
 
   /**
@@ -109,6 +118,32 @@ export class ThreadManager implements IThreadManager {
         serverName: member.guild.name,
       });
     }
+  }
+
+  private buildReportReviewThreadMessage(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): string {
+    const reasonLines = detectionResult.reasons.length
+      ? detectionResult.reasons.map((reason) => `- ${reason}`)
+      : ['- No reason provided.'];
+    const contentLines = [
+      `Review-only report opened for ${member.user.tag} (${member.id}).`,
+      'No automatic restriction was applied. Do not add the reported user unless moderators decide to engage them.',
+      '',
+      'Report details:',
+      ...reasonLines,
+    ];
+
+    if (detectionResult.triggerContent) {
+      contentLines.push('', `Context: ${detectionResult.triggerContent}`);
+    }
+    if (sourceMessage?.url) {
+      contentLines.push(`Source message: ${sourceMessage.url}`);
+    }
+
+    return enforceDiscordMessageLimit(contentLines.join('\n'));
   }
 
   /**
@@ -194,6 +229,66 @@ export class ThreadManager implements IThreadManager {
       return thread;
     } catch (error) {
       console.error('Failed to create verification thread:', error);
+      return null;
+    }
+  }
+
+  public async createReportReviewThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<ThreadChannel | null> {
+    const channel =
+      (await this.configService.getVerificationChannel(member.guild.id)) ||
+      (await this.configService.getAdminChannel(member.guild.id));
+
+    if (!channel) {
+      console.error('No verification or admin channel ID configured');
+      return null;
+    }
+
+    try {
+      await this.serverRepository.getOrCreateServer(member.guild.id);
+      await this.userRepository.getOrCreateUser(member.id, member.user.username);
+      await this.serverMemberRepository.getOrCreateMember(
+        member.guild.id,
+        member.id,
+        member.joinedAt ?? undefined
+      );
+
+      const thread = await channel.threads.create({
+        name: `Report review: ${member.user.username}`,
+        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+        reason: `Review-only report thread for user: ${member.user.tag}`,
+        type: ChannelType.PrivateThread,
+      });
+
+      try {
+        await thread.setInvitable(false, 'Keep report review thread moderator-only');
+      } catch (error) {
+        console.warn(
+          `Failed to set invitable=false for report review thread ${thread.id} (continuing):`,
+          error
+        );
+      }
+
+      await thread.send({
+        content: this.buildReportReviewThreadMessage(member, detectionResult, sourceMessage),
+        allowedMentions: {
+          parse: [],
+          users: [],
+          roles: [],
+          repliedUser: false,
+        },
+      });
+
+      verificationEvent.thread_id = thread.id;
+      await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
+
+      return thread;
+    } catch (error) {
+      console.error('Failed to create report review thread:', error);
       return null;
     }
   }

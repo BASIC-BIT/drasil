@@ -69,6 +69,9 @@ describe('SecurityActionService (unit)', () => {
       createVerificationThread: jest
         .fn()
         .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
+      createReportReviewThread: jest
+        .fn()
+        .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
     };
@@ -279,7 +282,16 @@ describe('SecurityActionService (unit)', () => {
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
-    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ id: verificationEvents[0].id }),
+      expect.objectContaining({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'reported',
+      }),
+      undefined
+    );
   });
 
   it('records a user-installed message report without opening a server case', async () => {
@@ -379,9 +391,15 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(threadManager.createVerificationThread).toHaveBeenCalledWith(
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
       member,
-      expect.objectContaining({ id: verificationEvents[0].id })
+      expect.objectContaining({ id: verificationEvents[0].id }),
+      expect.objectContaining({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'local suspicious message',
+      }),
+      undefined
     );
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
@@ -429,9 +447,15 @@ describe('SecurityActionService (unit)', () => {
       guildId
     );
     expect(verificationEvents).toHaveLength(1);
-    expect(threadManager.createVerificationThread).toHaveBeenCalledWith(
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
       member,
-      expect.objectContaining({ id: verificationEvents[0].id })
+      expect.objectContaining({ id: verificationEvents[0].id }),
+      expect.objectContaining({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'reported from native context menu',
+      }),
+      undefined
     );
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
@@ -511,9 +535,15 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(threadManager.createVerificationThread).toHaveBeenCalledWith(
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
       member,
-      expect.objectContaining({ id: verificationEvents[0].id })
+      expect.objectContaining({ id: verificationEvents[0].id }),
+      expect.objectContaining({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'external suspicious DM',
+      }),
+      undefined
     );
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
@@ -604,7 +634,7 @@ describe('SecurityActionService (unit)', () => {
         }),
       },
     } as unknown as Client;
-    threadManager.createVerificationThread.mockRejectedValueOnce(new Error('thread unavailable'));
+    threadManager.createReportReviewThread.mockRejectedValueOnce(new Error('thread unavailable'));
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const service = buildService(client);
 
@@ -822,7 +852,8 @@ describe('SecurityActionService (unit)', () => {
       VerificationStatus.VERIFIED,
     ]);
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
-    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).toHaveBeenCalledTimes(1);
   });
 
   it('opens a new pending case when a manual flag follows a resolved case', async () => {

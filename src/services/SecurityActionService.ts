@@ -537,7 +537,15 @@ export class SecurityActionService implements ISecurityActionService {
       });
     }
 
-    const thread = await this.threadManager.createVerificationThread(member, newVerificationEvent);
+    const thread =
+      !restrictUser && detectionResult.triggerSource === DetectionType.USER_REPORT
+        ? await this.threadManager.createReportReviewThread(
+            member,
+            newVerificationEvent,
+            detectionResult,
+            sourceMessage
+          )
+        : await this.threadManager.createVerificationThread(member, newVerificationEvent);
     if (!thread) {
       throw new Error(`Failed to create verification thread for ${member.user.tag}`);
     }

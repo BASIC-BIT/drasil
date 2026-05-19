@@ -161,6 +161,9 @@ describe('InteractionHandler (unit)', () => {
       createVerificationThread: jest
         .fn()
         .mockResolvedValue({ url: 'https://discord.com/channels/thread-1' } as any),
+      createReportReviewThread: jest
+        .fn()
+        .mockResolvedValue({ url: 'https://discord.com/channels/thread-1' } as any),
       resolveVerificationThread: jest.fn(),
       reopenVerificationThread: jest.fn(),
     };
