@@ -483,8 +483,11 @@ export class SecurityActionService implements ISecurityActionService {
     detectionResult: DetectionResult,
     sourceMessage?: Message,
     restrictUser = true,
-    useReportReviewThread = this.shouldUseReportReviewThread(restrictUser, detectionResult)
+    useReportReviewThread?: boolean
   ): Promise<boolean> {
+    const shouldUseReviewThread =
+      useReportReviewThread ?? this.shouldUseReportReviewThread(restrictUser, detectionResult);
+
     // Fail fast: we don't attempt retries or compensation yet.
     // TODO: Add retries/idempotency and partial failure handling if needed later.
     await this.ensureEntitiesExist(
@@ -582,7 +585,7 @@ export class SecurityActionService implements ISecurityActionService {
       member,
       newVerificationEvent,
       detectionResult,
-      useReportReviewThread,
+      shouldUseReviewThread,
       sourceMessage
     );
 

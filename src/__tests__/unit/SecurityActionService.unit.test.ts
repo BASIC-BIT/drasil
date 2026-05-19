@@ -1202,6 +1202,43 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it('uses a verification thread when banning an observed user report', async () => {
+    const guildId = 'guild-observed-report-ban';
+    const userId = 'user-observed-report-ban';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1.0,
+      reasons: ['Reported by user reporter-observed. Reason: suspicious DM'],
+      detected_at: new Date(),
+      metadata: { type: 'user_report', reporterId: 'reporter-observed', content: 'suspicious DM' },
+    });
+
+    await buildService().banObservedDetection(
+      member,
+      detectionEvent.id,
+      moderator,
+      'Confirmed scam'
+    );
+
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(userModerationService.banUser).toHaveBeenCalledWith(
+      member,
+      'Confirmed scam',
+      moderator,
+      detectionEvent.id
+    );
+    expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
+      detectionEvent.id,
+      'banned this user',
+      moderator
+    );
+  });
+
   it('keeps an observed restrict claim when audit fails after restricting', async () => {
     const guildId = 'guild-observed-restrict-audit-fails';
     const userId = 'user-observed-restrict-audit-fails';
