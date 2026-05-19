@@ -75,6 +75,8 @@ import {
 import {
   getUserReportSettings,
   isUserReportExternalResponseMode,
+  REPORT_MESSAGE_MODAL_PREFIX,
+  REPORT_MESSAGE_REASON_FIELD_ID,
   USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY,
   USER_REPORT_EXTERNAL_RESPONSE_MODES,
   USER_REPORT_REASON_MAX_LENGTH,
@@ -88,8 +90,6 @@ dotenv.config();
 const REPORT_USER_CONTEXT_COMMAND_NAME = 'Report User';
 const REPORT_MESSAGE_CONTEXT_COMMAND_NAME = 'Report Message';
 const USER_INSTALL_REPORTING_ENABLED_ENV = 'DRASIL_USER_INSTALL_REPORTING_ENABLED';
-const REPORT_MESSAGE_MODAL_PREFIX = 'rmm';
-const REPORT_MESSAGE_REASON_FIELD_ID = 'report_message_reason';
 
 function isUserInstallReportingEnabled(): boolean {
   return process.env[USER_INSTALL_REPORTING_ENABLED_ENV] === 'true';

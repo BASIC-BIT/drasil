@@ -722,7 +722,7 @@ export class SecurityActionService implements ISecurityActionService {
       if (report.guildId) metadata.guildId = report.guildId;
       if (report.channelId) metadata.channelId = report.channelId;
       if (report.content) metadata.content = report.content;
-      metadata.reason = report.reason ?? reasonText;
+      if (report.reason) metadata.reason = report.reason;
       if (report.interactionContext !== undefined) {
         metadata.interactionContext = report.interactionContext;
       }

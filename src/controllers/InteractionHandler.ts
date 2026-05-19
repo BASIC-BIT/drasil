@@ -34,6 +34,8 @@ import { getDetectionResponseSettings } from '../utils/detectionResponseSettings
 import {
   DEFAULT_USER_REPORT_REASON_REQUIRED,
   getUserReportSettings,
+  REPORT_MESSAGE_MODAL_PREFIX,
+  REPORT_MESSAGE_REASON_FIELD_ID,
   USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH,
   USER_REPORT_REASON_MAX_LENGTH,
 } from '../utils/userReportSettings';
@@ -50,8 +52,6 @@ dotenv.config();
 
 const OBSERVED_ACTION_MODAL_REASON_FIELD_ID = 'observed_ban_reason';
 const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notification';
-const REPORT_MESSAGE_MODAL_PREFIX = 'rmm';
-const REPORT_MESSAGE_REASON_FIELD_ID = 'report_message_reason';
 
 type UserResolution =
   | { status: 'found'; userId: string }
@@ -521,8 +521,11 @@ export class InteractionHandler implements IInteractionHandler {
           }) as User
       );
       const message = await this.fetchReportMessage(channelId, messageId);
+      const contextNumber = Number(contextRaw);
       const interactionContext =
-        contextRaw === 'x' ? undefined : (Number(contextRaw) as InteractionContextType);
+        contextRaw === 'x' || Number.isNaN(contextNumber)
+          ? undefined
+          : (contextNumber as InteractionContextType);
 
       await this.securityActionService.handleMessageReport(targetUser, interaction.user, {
         messageId,
