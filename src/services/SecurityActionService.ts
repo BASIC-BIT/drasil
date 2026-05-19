@@ -15,7 +15,11 @@ import {
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IUserRepository } from '../repositories/UserRepository';
-import { IThreadManager } from './ThreadManager';
+import {
+  IThreadManager,
+  REPORT_REVIEW_THREAD_TYPE,
+  VERIFICATION_THREAD_TYPE_METADATA_KEY,
+} from './ThreadManager';
 import { IUserModerationService } from './UserModerationService';
 import { IAdminActionService } from './AdminActionService';
 import { getUserReportSettings } from '../utils/userReportSettings';
@@ -297,6 +301,46 @@ export class SecurityActionService implements ISecurityActionService {
     };
   }
 
+  private shouldUseReportReviewThread(
+    restrictUser: boolean,
+    detectionResult: DetectionResult
+  ): boolean {
+    return !restrictUser && detectionResult.triggerSource === DetectionType.USER_REPORT;
+  }
+
+  private hasReportReviewThread(verificationEvent: VerificationEvent): boolean {
+    const metadata =
+      verificationEvent.metadata &&
+      typeof verificationEvent.metadata === 'object' &&
+      !Array.isArray(verificationEvent.metadata)
+        ? verificationEvent.metadata
+        : {};
+
+    return metadata[VERIFICATION_THREAD_TYPE_METADATA_KEY] === REPORT_REVIEW_THREAD_TYPE;
+  }
+
+  private async createCaseThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult,
+    useReportReviewThread: boolean,
+    sourceMessage?: Message
+  ): Promise<void> {
+    const thread = useReportReviewThread
+      ? await this.threadManager.createReportReviewThread(
+          member,
+          verificationEvent,
+          detectionResult,
+          sourceMessage
+        )
+      : await this.threadManager.createVerificationThread(member, verificationEvent);
+
+    if (!thread) {
+      const threadKind = useReportReviewThread ? 'report review thread' : 'verification thread';
+      throw new Error(`Failed to create ${threadKind} for ${member.user.tag}`);
+    }
+  }
+
   private async getObservedDetectionForMember(
     member: GuildMember,
     detectionEventId: string
@@ -321,10 +365,19 @@ export class SecurityActionService implements ISecurityActionService {
 
   private async ensureObservedCase(
     member: GuildMember,
-    detectionEvent: DetectionEvent
+    detectionEvent: DetectionEvent,
+    useReportReviewThread?: boolean
   ): Promise<VerificationEvent> {
     const detectionResult = this.createDetectionResultFromEvent(detectionEvent);
-    await this.handleSuspiciousMember(member, detectionResult, undefined, false);
+    const shouldUseReviewThread =
+      useReportReviewThread ?? this.shouldUseReportReviewThread(false, detectionResult);
+    await this.handleSuspiciousMember(
+      member,
+      detectionResult,
+      undefined,
+      false,
+      shouldUseReviewThread
+    );
 
     const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
       member.id,
@@ -334,11 +387,16 @@ export class SecurityActionService implements ISecurityActionService {
       throw new Error(`Failed to create or find pending case for ${member.user.tag}`);
     }
 
-    if (!verificationEvent.thread_id) {
-      const thread = await this.threadManager.createVerificationThread(member, verificationEvent);
-      if (!thread) {
-        throw new Error(`Failed to create verification thread for ${member.user.tag}`);
-      }
+    if (
+      !verificationEvent.thread_id ||
+      (!shouldUseReviewThread && this.hasReportReviewThread(verificationEvent))
+    ) {
+      await this.createCaseThread(
+        member,
+        verificationEvent,
+        detectionResult,
+        shouldUseReviewThread
+      );
       await this.upsertNotification(member, detectionResult, verificationEvent);
     }
 
@@ -442,8 +500,12 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     detectionResult: DetectionResult,
     sourceMessage?: Message,
-    restrictUser = true
+    restrictUser = true,
+    useReportReviewThread?: boolean
   ): Promise<boolean> {
+    const shouldUseReviewThread =
+      useReportReviewThread ?? this.shouldUseReportReviewThread(restrictUser, detectionResult);
+
     // Fail fast: we don't attempt retries or compensation yet.
     // TODO: Add retries/idempotency and partial failure handling if needed later.
     await this.ensureEntitiesExist(
@@ -537,10 +599,13 @@ export class SecurityActionService implements ISecurityActionService {
       });
     }
 
-    const thread = await this.threadManager.createVerificationThread(member, newVerificationEvent);
-    if (!thread) {
-      throw new Error(`Failed to create verification thread for ${member.user.tag}`);
-    }
+    await this.createCaseThread(
+      member,
+      newVerificationEvent,
+      detectionResult,
+      shouldUseReviewThread,
+      sourceMessage
+    );
 
     await this.upsertNotification(member, detectionResult, newVerificationEvent, sourceMessage);
 
@@ -681,7 +746,12 @@ export class SecurityActionService implements ISecurityActionService {
         confidence: 1.0,
         reasons: [`Reported by user ${reporter.id}. ${reasonText}`],
         detected_at: new Date(),
-        metadata: { type: 'user_report', reporterId: reporter.id, reason: reason ?? reasonText },
+        metadata: {
+          type: 'user_report',
+          reporterId: reporter.id,
+          content: reason ?? 'User report',
+          reason: reason ?? reasonText,
+        },
       });
 
       const detectionResult: DetectionResult = {
@@ -967,7 +1037,7 @@ export class SecurityActionService implements ISecurityActionService {
     }
     let actionApplied = false;
     try {
-      const verificationEvent = await this.ensureObservedCase(member, detectionEvent);
+      const verificationEvent = await this.ensureObservedCase(member, detectionEvent, false);
       await this.userModerationService.restrictUser(member);
       actionApplied = true;
       await this.recordObservedAction({
@@ -1016,7 +1086,7 @@ export class SecurityActionService implements ISecurityActionService {
     }
     let actionApplied = false;
     try {
-      await this.ensureObservedCase(member, detectionEvent);
+      await this.ensureObservedCase(member, detectionEvent, false);
       await this.userModerationService.banUser(member, reason, moderator, detectionEvent.id);
       actionApplied = true;
       await this.notificationManager.markObservedDetectionActionTaken(

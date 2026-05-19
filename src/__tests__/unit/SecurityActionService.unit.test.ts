@@ -10,7 +10,11 @@ import {
   InMemoryServerRepository,
 } from '../fakes/inMemoryRepositories';
 import { INotificationManager } from '../../services/NotificationManager';
-import { IThreadManager } from '../../services/ThreadManager';
+import {
+  IThreadManager,
+  REPORT_REVIEW_THREAD_TYPE,
+  VERIFICATION_THREAD_TYPE_METADATA_KEY,
+} from '../../services/ThreadManager';
 import { IUserModerationService } from '../../services/UserModerationService';
 import { IAdminActionService } from '../../services/AdminActionService';
 import { USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY } from '../../utils/userReportSettings';
@@ -67,6 +71,9 @@ describe('SecurityActionService (unit)', () => {
     };
     threadManager = {
       createVerificationThread: jest
+        .fn()
+        .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
+      createReportReviewThread: jest
         .fn()
         .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
@@ -270,6 +277,7 @@ describe('SecurityActionService (unit)', () => {
     expect(detectionEvents[0].metadata).toMatchObject({
       type: 'user_report',
       reporterId,
+      content: 'reported',
     });
 
     const verificationEvents = await verificationEventRepository.findByUserAndServer(
@@ -279,7 +287,16 @@ describe('SecurityActionService (unit)', () => {
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
-    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ id: verificationEvents[0].id }),
+      expect.objectContaining({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'reported',
+      }),
+      undefined
+    );
   });
 
   it('records a user-installed message report without opening a server case', async () => {
@@ -379,9 +396,15 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(threadManager.createVerificationThread).toHaveBeenCalledWith(
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
       member,
-      expect.objectContaining({ id: verificationEvents[0].id })
+      expect.objectContaining({ id: verificationEvents[0].id }),
+      expect.objectContaining({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'local suspicious message',
+      }),
+      undefined
     );
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
@@ -429,9 +452,15 @@ describe('SecurityActionService (unit)', () => {
       guildId
     );
     expect(verificationEvents).toHaveLength(1);
-    expect(threadManager.createVerificationThread).toHaveBeenCalledWith(
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
       member,
-      expect.objectContaining({ id: verificationEvents[0].id })
+      expect.objectContaining({ id: verificationEvents[0].id }),
+      expect.objectContaining({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'reported from native context menu',
+      }),
+      undefined
     );
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
@@ -511,9 +540,15 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(threadManager.createVerificationThread).toHaveBeenCalledWith(
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
       member,
-      expect.objectContaining({ id: verificationEvents[0].id })
+      expect.objectContaining({ id: verificationEvents[0].id }),
+      expect.objectContaining({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'external suspicious DM',
+      }),
+      undefined
     );
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
@@ -604,7 +639,7 @@ describe('SecurityActionService (unit)', () => {
         }),
       },
     } as unknown as Client;
-    threadManager.createVerificationThread.mockRejectedValueOnce(new Error('thread unavailable'));
+    threadManager.createReportReviewThread.mockRejectedValueOnce(new Error('thread unavailable'));
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const service = buildService(client);
 
@@ -822,7 +857,8 @@ describe('SecurityActionService (unit)', () => {
       VerificationStatus.VERIFIED,
     ]);
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
-    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).toHaveBeenCalledTimes(1);
   });
 
   it('opens a new pending case when a manual flag follows a resolved case', async () => {
@@ -896,6 +932,41 @@ describe('SecurityActionService (unit)', () => {
       detectionEvent.id,
       'opened a verification case',
       moderator
+    );
+  });
+
+  it('recreates missing threads for observed user reports as moderator-only review threads', async () => {
+    const guildId = 'guild-observed-report-open';
+    const userId = 'user-observed-report-open';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1.0,
+      reasons: ['Reported by user reporter-observed. Reason: suspicious DM'],
+      detected_at: new Date(),
+      metadata: { type: 'user_report', reporterId: 'reporter-observed', content: 'suspicious DM' },
+    });
+    const existingCase = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    await buildService().openObservedDetectionCase(member, detectionEvent.id, moderator);
+
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ id: existingCase.id }),
+      expect.objectContaining({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'suspicious DM',
+      }),
+      undefined
     );
   });
 
@@ -1106,6 +1177,139 @@ describe('SecurityActionService (unit)', () => {
       observed_action: AdminActionType.BAN,
       observed_action_by: moderator.id,
     });
+  });
+
+  it('uses a verification thread when restricting an observed user report', async () => {
+    const guildId = 'guild-observed-report-restrict';
+    const userId = 'user-observed-report-restrict';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1.0,
+      reasons: ['Reported by user reporter-observed. Reason: suspicious DM'],
+      detected_at: new Date(),
+      metadata: { type: 'user_report', reporterId: 'reporter-observed', content: 'suspicious DM' },
+    });
+
+    await buildService().restrictObservedDetection(member, detectionEvent.id, moderator);
+
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
+      detectionEvent.id,
+      'restricted this user',
+      moderator
+    );
+  });
+
+  it('upgrades an existing report review thread when restricting a user report', async () => {
+    const guildId = 'guild-observed-existing-report-restrict';
+    const userId = 'user-observed-existing-report-restrict';
+    const moderator = { id: 'admin-observed' } as User;
+    const reporter = { id: 'reporter-observed' } as User;
+    const member = buildMember(guildId, userId);
+    threadManager.createReportReviewThread.mockImplementationOnce(async (_member, event) => {
+      await verificationEventRepository.update(event.id, {
+        thread_id: 'review-thread-1',
+        metadata: {
+          [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
+        },
+      });
+      return { id: 'review-thread-1' } as any;
+    });
+    const service = buildService();
+
+    await service.handleUserReport(member, reporter, 'suspicious DM');
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    const reportDetection = detectionEvents.find(
+      (event) => event.detection_type === DetectionType.USER_REPORT
+    );
+    threadManager.createReportReviewThread.mockClear();
+    threadManager.createVerificationThread.mockClear();
+
+    await service.restrictObservedDetection(member, reportDetection!.id, moderator);
+
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+  });
+
+  it('uses a verification thread when banning an observed user report', async () => {
+    const guildId = 'guild-observed-report-ban';
+    const userId = 'user-observed-report-ban';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1.0,
+      reasons: ['Reported by user reporter-observed. Reason: suspicious DM'],
+      detected_at: new Date(),
+      metadata: { type: 'user_report', reporterId: 'reporter-observed', content: 'suspicious DM' },
+    });
+
+    await buildService().banObservedDetection(
+      member,
+      detectionEvent.id,
+      moderator,
+      'Confirmed scam'
+    );
+
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(userModerationService.banUser).toHaveBeenCalledWith(
+      member,
+      'Confirmed scam',
+      moderator,
+      detectionEvent.id
+    );
+    expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
+      detectionEvent.id,
+      'banned this user',
+      moderator
+    );
+  });
+
+  it('upgrades an existing report review thread when banning a user report', async () => {
+    const guildId = 'guild-observed-existing-report-ban';
+    const userId = 'user-observed-existing-report-ban';
+    const moderator = { id: 'admin-observed' } as User;
+    const reporter = { id: 'reporter-observed' } as User;
+    const member = buildMember(guildId, userId);
+    threadManager.createReportReviewThread.mockImplementationOnce(async (_member, event) => {
+      await verificationEventRepository.update(event.id, {
+        thread_id: 'review-thread-1',
+        metadata: {
+          [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
+        },
+      });
+      return { id: 'review-thread-1' } as any;
+    });
+    const service = buildService();
+
+    await service.handleUserReport(member, reporter, 'suspicious DM');
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    const reportDetection = detectionEvents.find(
+      (event) => event.detection_type === DetectionType.USER_REPORT
+    );
+    threadManager.createReportReviewThread.mockClear();
+    threadManager.createVerificationThread.mockClear();
+
+    await service.banObservedDetection(member, reportDetection!.id, moderator, 'Confirmed scam');
+
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(userModerationService.banUser).toHaveBeenCalledWith(
+      member,
+      'Confirmed scam',
+      moderator,
+      reportDetection!.id
+    );
   });
 
   it('keeps an observed restrict claim when audit fails after restricting', async () => {

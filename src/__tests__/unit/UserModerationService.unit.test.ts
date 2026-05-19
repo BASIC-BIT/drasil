@@ -71,6 +71,7 @@ describe('UserModerationService (unit)', () => {
     };
     threadManager = {
       createVerificationThread: jest.fn().mockResolvedValue({} as any),
+      createReportReviewThread: jest.fn().mockResolvedValue({} as any),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
     };

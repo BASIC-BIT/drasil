@@ -81,6 +81,9 @@ describeIntegration('SecurityActionService (integration)', () => {
       createVerificationThread: jest
         .fn()
         .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
+      createReportReviewThread: jest
+        .fn()
+        .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
     };

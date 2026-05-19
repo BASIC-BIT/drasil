@@ -1,5 +1,10 @@
 import { ChannelType, Guild, GuildMember, ThreadChannel, User } from 'discord.js';
-import { ThreadManager } from '../../services/ThreadManager';
+import {
+  REPORT_REVIEW_THREAD_TYPE,
+  ThreadManager,
+  VERIFICATION_THREAD_TYPE,
+  VERIFICATION_THREAD_TYPE_METADATA_KEY,
+} from '../../services/ThreadManager';
 import { IConfigService } from '../../config/ConfigService';
 import {
   InMemoryServerMemberRepository,
@@ -7,7 +12,7 @@ import {
   InMemoryUserRepository,
   InMemoryVerificationEventRepository,
 } from '../fakes/inMemoryRepositories';
-import { VerificationEvent, VerificationStatus } from '../../repositories/types';
+import { DetectionType, VerificationEvent, VerificationStatus } from '../../repositories/types';
 import {
   DISCORD_MESSAGE_CONTENT_MAX_LENGTH,
   DEFAULT_VERIFICATION_PROMPT_TEMPLATE,
@@ -121,6 +126,9 @@ describe('ThreadManager (unit)', () => {
     expect(thread.setInvitable).toHaveBeenCalledWith(false, expect.any(String));
     expect(createdThread?.id).toBe('thread-1');
     expect(storedEvent?.thread_id).toBe('thread-1');
+    expect(storedEvent?.metadata).toMatchObject({
+      [VERIFICATION_THREAD_TYPE_METADATA_KEY]: VERIFICATION_THREAD_TYPE,
+    });
     expect(thread.members.add).toHaveBeenCalledWith(member.id);
     expect(thread.send).toHaveBeenCalledWith({
       content: renderVerificationPromptTemplate(DEFAULT_VERIFICATION_PROMPT_TEMPLATE, {
@@ -168,6 +176,57 @@ describe('ThreadManager (unit)', () => {
       allowedMentions: {
         parse: [],
         users: [member.id],
+        roles: [],
+        repliedUser: false,
+      },
+    });
+  });
+
+  it('creates a moderator-only report review thread without adding the reported user', async () => {
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+
+    const member = buildMember('guild-1', 'user-1');
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    const createdThread = await manager.createReportReviewThread(member, event, {
+      label: 'SUSPICIOUS',
+      confidence: 1.0,
+      reasons: ['Reported by user reporter-1. Reason: suspicious DM'],
+      triggerSource: DetectionType.USER_REPORT,
+      triggerContent: 'suspicious DM',
+    });
+    const storedEvent = await verificationEventRepository.findById(event.id);
+
+    expect(channel.threads.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Report review: test-user',
+        type: ChannelType.PrivateThread,
+      })
+    );
+    expect(createdThread?.id).toBe('thread-1');
+    expect(storedEvent?.thread_id).toBe('thread-1');
+    expect(storedEvent?.metadata).toMatchObject({
+      [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
+    });
+    expect(thread.members.add).not.toHaveBeenCalled();
+    expect(thread.setInvitable).toHaveBeenCalledWith(false, expect.any(String));
+    expect(thread.send).toHaveBeenCalledWith({
+      content: expect.stringContaining('No automatic restriction was applied.'),
+      allowedMentions: {
+        parse: [],
+        users: [],
         roles: [],
         repliedUser: false,
       },
