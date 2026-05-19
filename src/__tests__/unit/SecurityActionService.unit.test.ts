@@ -10,7 +10,11 @@ import {
   InMemoryServerRepository,
 } from '../fakes/inMemoryRepositories';
 import { INotificationManager } from '../../services/NotificationManager';
-import { IThreadManager } from '../../services/ThreadManager';
+import {
+  IThreadManager,
+  REPORT_REVIEW_THREAD_TYPE,
+  VERIFICATION_THREAD_TYPE_METADATA_KEY,
+} from '../../services/ThreadManager';
 import { IUserModerationService } from '../../services/UserModerationService';
 import { IAdminActionService } from '../../services/AdminActionService';
 import { USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY } from '../../utils/userReportSettings';
@@ -1202,6 +1206,38 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it('upgrades an existing report review thread when restricting a user report', async () => {
+    const guildId = 'guild-observed-existing-report-restrict';
+    const userId = 'user-observed-existing-report-restrict';
+    const moderator = { id: 'admin-observed' } as User;
+    const reporter = { id: 'reporter-observed' } as User;
+    const member = buildMember(guildId, userId);
+    threadManager.createReportReviewThread.mockImplementationOnce(async (_member, event) => {
+      await verificationEventRepository.update(event.id, {
+        thread_id: 'review-thread-1',
+        metadata: {
+          [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
+        },
+      });
+      return { id: 'review-thread-1' } as any;
+    });
+    const service = buildService();
+
+    await service.handleUserReport(member, reporter, 'suspicious DM');
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    const reportDetection = detectionEvents.find(
+      (event) => event.detection_type === DetectionType.USER_REPORT
+    );
+    threadManager.createReportReviewThread.mockClear();
+    threadManager.createVerificationThread.mockClear();
+
+    await service.restrictObservedDetection(member, reportDetection!.id, moderator);
+
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+  });
+
   it('uses a verification thread when banning an observed user report', async () => {
     const guildId = 'guild-observed-report-ban';
     const userId = 'user-observed-report-ban';
@@ -1236,6 +1272,43 @@ describe('SecurityActionService (unit)', () => {
       detectionEvent.id,
       'banned this user',
       moderator
+    );
+  });
+
+  it('upgrades an existing report review thread when banning a user report', async () => {
+    const guildId = 'guild-observed-existing-report-ban';
+    const userId = 'user-observed-existing-report-ban';
+    const moderator = { id: 'admin-observed' } as User;
+    const reporter = { id: 'reporter-observed' } as User;
+    const member = buildMember(guildId, userId);
+    threadManager.createReportReviewThread.mockImplementationOnce(async (_member, event) => {
+      await verificationEventRepository.update(event.id, {
+        thread_id: 'review-thread-1',
+        metadata: {
+          [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
+        },
+      });
+      return { id: 'review-thread-1' } as any;
+    });
+    const service = buildService();
+
+    await service.handleUserReport(member, reporter, 'suspicious DM');
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    const reportDetection = detectionEvents.find(
+      (event) => event.detection_type === DetectionType.USER_REPORT
+    );
+    threadManager.createReportReviewThread.mockClear();
+    threadManager.createVerificationThread.mockClear();
+
+    await service.banObservedDetection(member, reportDetection!.id, moderator, 'Confirmed scam');
+
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(userModerationService.banUser).toHaveBeenCalledWith(
+      member,
+      'Confirmed scam',
+      moderator,
+      reportDetection!.id
     );
   });
 

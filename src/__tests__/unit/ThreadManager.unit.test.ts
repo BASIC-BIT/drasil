@@ -1,5 +1,10 @@
 import { ChannelType, Guild, GuildMember, ThreadChannel, User } from 'discord.js';
-import { ThreadManager } from '../../services/ThreadManager';
+import {
+  REPORT_REVIEW_THREAD_TYPE,
+  ThreadManager,
+  VERIFICATION_THREAD_TYPE,
+  VERIFICATION_THREAD_TYPE_METADATA_KEY,
+} from '../../services/ThreadManager';
 import { IConfigService } from '../../config/ConfigService';
 import {
   InMemoryServerMemberRepository,
@@ -121,6 +126,9 @@ describe('ThreadManager (unit)', () => {
     expect(thread.setInvitable).toHaveBeenCalledWith(false, expect.any(String));
     expect(createdThread?.id).toBe('thread-1');
     expect(storedEvent?.thread_id).toBe('thread-1');
+    expect(storedEvent?.metadata).toMatchObject({
+      [VERIFICATION_THREAD_TYPE_METADATA_KEY]: VERIFICATION_THREAD_TYPE,
+    });
     expect(thread.members.add).toHaveBeenCalledWith(member.id);
     expect(thread.send).toHaveBeenCalledWith({
       content: renderVerificationPromptTemplate(DEFAULT_VERIFICATION_PROMPT_TEMPLATE, {
@@ -209,6 +217,9 @@ describe('ThreadManager (unit)', () => {
     );
     expect(createdThread?.id).toBe('thread-1');
     expect(storedEvent?.thread_id).toBe('thread-1');
+    expect(storedEvent?.metadata).toMatchObject({
+      [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
+    });
     expect(thread.members.add).not.toHaveBeenCalled();
     expect(thread.setInvitable).toHaveBeenCalledWith(false, expect.any(String));
     expect(thread.send).toHaveBeenCalledWith({

@@ -15,7 +15,11 @@ import {
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IUserRepository } from '../repositories/UserRepository';
-import { IThreadManager } from './ThreadManager';
+import {
+  IThreadManager,
+  REPORT_REVIEW_THREAD_TYPE,
+  VERIFICATION_THREAD_TYPE_METADATA_KEY,
+} from './ThreadManager';
 import { IUserModerationService } from './UserModerationService';
 import { IAdminActionService } from './AdminActionService';
 import { getUserReportSettings } from '../utils/userReportSettings';
@@ -304,6 +308,17 @@ export class SecurityActionService implements ISecurityActionService {
     return !restrictUser && detectionResult.triggerSource === DetectionType.USER_REPORT;
   }
 
+  private hasReportReviewThread(verificationEvent: VerificationEvent): boolean {
+    const metadata =
+      verificationEvent.metadata &&
+      typeof verificationEvent.metadata === 'object' &&
+      !Array.isArray(verificationEvent.metadata)
+        ? verificationEvent.metadata
+        : {};
+
+    return metadata[VERIFICATION_THREAD_TYPE_METADATA_KEY] === REPORT_REVIEW_THREAD_TYPE;
+  }
+
   private async createCaseThread(
     member: GuildMember,
     verificationEvent: VerificationEvent,
@@ -372,7 +387,10 @@ export class SecurityActionService implements ISecurityActionService {
       throw new Error(`Failed to create or find pending case for ${member.user.tag}`);
     }
 
-    if (!verificationEvent.thread_id) {
+    if (
+      !verificationEvent.thread_id ||
+      (!shouldUseReviewThread && this.hasReportReviewThread(verificationEvent))
+    ) {
       await this.createCaseThread(
         member,
         verificationEvent,

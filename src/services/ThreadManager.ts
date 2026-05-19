@@ -22,6 +22,10 @@ import {
 } from '../utils/verificationPromptTemplate';
 import { DetectionResult } from './DetectionOrchestrator';
 
+export const VERIFICATION_THREAD_TYPE_METADATA_KEY = 'thread_type';
+export const VERIFICATION_THREAD_TYPE = 'verification';
+export const REPORT_REVIEW_THREAD_TYPE = 'report_review';
+
 /**
  * Interface for NotificationManager service
  */
@@ -146,6 +150,26 @@ export class ThreadManager implements IThreadManager {
     return enforceDiscordMessageLimit(contentLines.join('\n'));
   }
 
+  private async storeThreadId(
+    verificationEvent: VerificationEvent,
+    threadId: string,
+    threadType: typeof VERIFICATION_THREAD_TYPE | typeof REPORT_REVIEW_THREAD_TYPE
+  ): Promise<void> {
+    const metadata =
+      verificationEvent.metadata &&
+      typeof verificationEvent.metadata === 'object' &&
+      !Array.isArray(verificationEvent.metadata)
+        ? { ...verificationEvent.metadata }
+        : {};
+
+    verificationEvent.thread_id = threadId;
+    verificationEvent.metadata = {
+      ...metadata,
+      [VERIFICATION_THREAD_TYPE_METADATA_KEY]: threadType,
+    };
+    await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
+  }
+
   /**
    * Creates a thread for a suspicious user in the verification channel
    * @param member The suspicious guild member
@@ -223,8 +247,7 @@ export class ThreadManager implements IThreadManager {
       });
 
       // Store thread in the database
-      verificationEvent.thread_id = thread.id;
-      await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
+      await this.storeThreadId(verificationEvent, thread.id, VERIFICATION_THREAD_TYPE);
 
       return thread;
     } catch (error) {
@@ -283,8 +306,7 @@ export class ThreadManager implements IThreadManager {
         },
       });
 
-      verificationEvent.thread_id = thread.id;
-      await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
+      await this.storeThreadId(verificationEvent, thread.id, REPORT_REVIEW_THREAD_TYPE);
 
       return thread;
     } catch (error) {
