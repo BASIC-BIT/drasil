@@ -711,7 +711,12 @@ export class SecurityActionService implements ISecurityActionService {
         confidence: 1.0,
         reasons: [`Reported by user ${reporter.id}. ${reasonText}`],
         detected_at: new Date(),
-        metadata: { type: 'user_report', reporterId: reporter.id, reason: reason ?? reasonText },
+        metadata: {
+          type: 'user_report',
+          reporterId: reporter.id,
+          content: reason ?? 'User report',
+          reason: reason ?? reasonText,
+        },
       });
 
       const detectionResult: DetectionResult = {

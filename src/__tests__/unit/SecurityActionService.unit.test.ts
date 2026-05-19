@@ -273,6 +273,7 @@ describe('SecurityActionService (unit)', () => {
     expect(detectionEvents[0].metadata).toMatchObject({
       type: 'user_report',
       reporterId,
+      content: 'reported',
     });
 
     const verificationEvents = await verificationEventRepository.findByUserAndServer(
