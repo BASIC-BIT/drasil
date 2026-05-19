@@ -547,7 +547,11 @@ export class SecurityActionService implements ISecurityActionService {
           )
         : await this.threadManager.createVerificationThread(member, newVerificationEvent);
     if (!thread) {
-      throw new Error(`Failed to create verification thread for ${member.user.tag}`);
+      const threadKind =
+        !restrictUser && detectionResult.triggerSource === DetectionType.USER_REPORT
+          ? 'report review thread'
+          : 'verification thread';
+      throw new Error(`Failed to create ${threadKind} for ${member.user.tag}`);
     }
 
     await this.upsertNotification(member, detectionResult, newVerificationEvent, sourceMessage);
