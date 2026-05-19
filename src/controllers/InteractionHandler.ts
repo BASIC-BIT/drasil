@@ -10,6 +10,8 @@ import {
   TextInputBuilder, // Added
   TextInputStyle, // Added
   ActionRowBuilder, // Added
+  InteractionContextType,
+  User,
   // UserSelectMenuBuilder, // Removed - Cannot be used in Modals
   ModalSubmitInteraction, // Added
   // Interaction, // Removed - Unused
@@ -32,6 +34,9 @@ import { getDetectionResponseSettings } from '../utils/detectionResponseSettings
 import {
   DEFAULT_USER_REPORT_REASON_REQUIRED,
   getUserReportSettings,
+  REPORT_MESSAGE_MODAL_PREFIX,
+  REPORT_MESSAGE_REASON_FIELD_ID,
+  USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH,
   USER_REPORT_REASON_MAX_LENGTH,
 } from '../utils/userReportSettings';
 import {
@@ -466,6 +471,10 @@ export class InteractionHandler implements IInteractionHandler {
         await this.handleSetupVerificationModalSubmit(interaction);
         return;
       default:
+        if (interaction.customId.startsWith(`${REPORT_MESSAGE_MODAL_PREFIX}:`)) {
+          await this.handleReportMessageModalSubmit(interaction);
+          return;
+        }
         if (interaction.customId.startsWith('observed:ban_modal:')) {
           await this.handleObservedBanModalSubmit(interaction);
           return;
@@ -474,6 +483,82 @@ export class InteractionHandler implements IInteractionHandler {
           `[InteractionHandler] Ignoring unknown modal submission: ${interaction.customId}`
         );
     }
+  }
+
+  private async handleReportMessageModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+    const [, messageId, channelId, targetUserId, guildIdRaw, contextRaw] =
+      interaction.customId.split(':');
+    if (!messageId || !channelId || !targetUserId || !guildIdRaw || !contextRaw) {
+      await interaction.reply({
+        content: 'This report form is invalid. Please try reporting the message again.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const reason =
+      interaction.fields.getTextInputValue(REPORT_MESSAGE_REASON_FIELD_ID).trim() || undefined;
+    const guildId = guildIdRaw === '0' ? undefined : guildIdRaw;
+    if (guildId) {
+      const reasonRequired = await this.getUserReportReasonRequired(guildId);
+      if (reasonRequired && !reason) {
+        await interaction.reply({
+          content: 'Please include a reason for this report.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      const targetUser = await this.client.users.fetch(targetUserId).catch(
+        () =>
+          ({
+            id: targetUserId,
+            username: targetUserId,
+          }) as User
+      );
+      const message = await this.fetchReportMessage(channelId, messageId);
+      const contextNumber = Number(contextRaw);
+      const interactionContext =
+        contextRaw === 'x' || Number.isNaN(contextNumber)
+          ? undefined
+          : (contextNumber as InteractionContextType);
+
+      await this.securityActionService.handleMessageReport(targetUser, interaction.user, {
+        messageId,
+        channelId,
+        guildId,
+        content: message?.content.slice(0, USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH),
+        reason,
+        interactionContext,
+      });
+
+      await interaction.editReply({
+        content: `Thank you for your report regarding <@${targetUserId}>. It has been submitted for review.`,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error(`Failed to handle message report modal for ${targetUserId}:`, error);
+      await interaction.editReply({
+        content: 'An error occurred while submitting your report. Please try again later.',
+      });
+    }
+  }
+
+  private async fetchReportMessage(
+    channelId: string,
+    messageId: string
+  ): Promise<{ content: string } | null> {
+    const channel = await this.client.channels.fetch(channelId).catch(() => null);
+    if (!channel || !('messages' in channel)) {
+      return null;
+    }
+
+    const message = await channel.messages.fetch(messageId).catch(() => null);
+    return typeof message?.content === 'string' ? { content: message.content } : null;
   }
 
   private async handleReportUserModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {

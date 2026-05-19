@@ -75,9 +75,10 @@ import {
 import {
   getUserReportSettings,
   isUserReportExternalResponseMode,
+  REPORT_MESSAGE_MODAL_PREFIX,
+  REPORT_MESSAGE_REASON_FIELD_ID,
   USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY,
   USER_REPORT_EXTERNAL_RESPONSE_MODES,
-  USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH,
   USER_REPORT_REASON_MAX_LENGTH,
   USER_REPORT_REASON_REQUIRED_SETTING_KEY,
 } from '../utils/userReportSettings';
@@ -822,18 +823,18 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
     const targetMessage = interaction.targetMessage;
     const targetUser = targetMessage.author;
     if (targetUser.id === interaction.user.id) {
-      await interaction.editReply({
+      await interaction.reply({
         content: 'You cannot report your own message.',
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
     const guildId = interaction.guildId ?? undefined;
+    let reasonRequired = false;
     if (guildId) {
       let reportSettings = getUserReportSettings();
       try {
@@ -843,33 +844,32 @@ export class CommandHandler implements ICommandHandler {
         console.error(`Failed to load report settings for guild ${guildId}:`, error);
       }
 
-      if (reportSettings.reasonRequired) {
-        await interaction.editReply({
-          content: 'This server requires a report reason. Please use `/report` instead.',
-        });
-        return;
-      }
+      reasonRequired = reportSettings.reasonRequired;
     }
 
-    try {
-      await this.securityActionService.handleMessageReport(targetUser, interaction.user, {
-        messageId: targetMessage.id,
-        channelId: interaction.channelId,
-        guildId,
-        content: targetMessage.content.slice(0, USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH),
-        // discord.js may expose a missing interaction context as null; omit it in report metadata.
-        interactionContext: interaction.context ?? undefined,
-      });
-      await interaction.editReply({
-        content: `Thank you for your report regarding <@${targetUser.id}>. It has been submitted for review.`,
-        allowedMentions: { parse: [] },
-      });
-    } catch (error) {
-      console.error(`Failed to handle context message report for ${targetUser.id}:`, error);
-      await interaction.editReply({
-        content: 'An error occurred while submitting your report. Please try again later.',
-      });
-    }
+    const context = interaction.context ?? 'x';
+    const modal = new ModalBuilder()
+      .setCustomId(
+        [
+          REPORT_MESSAGE_MODAL_PREFIX,
+          targetMessage.id,
+          interaction.channelId,
+          targetUser.id,
+          guildId ?? '0',
+          context,
+        ].join(':')
+      )
+      .setTitle('Report Message');
+    const reasonInput = new TextInputBuilder()
+      .setCustomId(REPORT_MESSAGE_REASON_FIELD_ID)
+      .setLabel('Reason')
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder('What happened? Include extra context if useful.')
+      .setMaxLength(USER_REPORT_REASON_MAX_LENGTH)
+      .setRequired(reasonRequired);
+
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
+    await interaction.showModal(modal);
   }
 
   /**

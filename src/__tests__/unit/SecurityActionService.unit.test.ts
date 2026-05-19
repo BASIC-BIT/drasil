@@ -386,6 +386,56 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
 
+  it('opens local message report cases even when the target has no stored member row', async () => {
+    const guildId = 'guild-local-untracked-message';
+    const userId = 'user-local-untracked-message';
+    const member = buildMember(guildId, userId);
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: 'off',
+      },
+    });
+    const client = {
+      guilds: {
+        fetch: jest.fn().mockResolvedValue({
+          members: {
+            fetch: jest.fn().mockResolvedValue(member),
+          },
+        }),
+      },
+    } as unknown as Client;
+    const service = buildService(client);
+
+    await service.handleMessageReport(
+      { id: userId, username: 'target-user' } as User,
+      { id: 'reporter-local-message' } as User,
+      {
+        messageId: 'message-local',
+        channelId: 'channel-local',
+        guildId,
+        content: 'local suspicious message',
+        reason: 'reported from native context menu',
+      }
+    );
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents).toHaveLength(1);
+    expect(detectionEvents[0].metadata).toMatchObject({
+      type: 'message_report',
+      reason: 'reported from native context menu',
+    });
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(threadManager.createVerificationThread).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ id: verificationEvents[0].id })
+    );
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+  });
+
   it('notifies opted-in servers for external message reports', async () => {
     const member = buildMember('guild-external-1', 'user-6');
     await serverRepository.upsertByGuildId('guild-external-1', {

@@ -777,6 +777,62 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('submits Report Message modal with optional reason', async () => {
+    const targetUser = { id: 'user-2', username: 'target' } as User;
+    (client as any).users = {
+      fetch: jest.fn().mockResolvedValue(targetUser),
+    };
+    (client as any).channels = {
+      fetch: jest.fn().mockResolvedValue({
+        messages: {
+          fetch: jest.fn().mockResolvedValue({ content: 'suspicious message' }),
+        },
+      }),
+    };
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: 'rmm:message-1:channel-1:user-2:guild-1:0',
+      guildId: 'guild-1',
+      user: { id: 'reporter-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn(() => 'message report reason'),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.handleMessageReport).toHaveBeenCalledWith(
+      targetUser,
+      interaction.user,
+      {
+        messageId: 'message-1',
+        channelId: 'channel-1',
+        guildId: 'guild-1',
+        content: 'suspicious message',
+        reason: 'message report reason',
+        interactionContext: 0,
+      }
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
+      allowedMentions: { parse: [] },
+    });
+  });
+
   it('handles report modal submission with a modern username', async () => {
     const member = {
       ...buildMember('guild-1', '123456789012345678'),
