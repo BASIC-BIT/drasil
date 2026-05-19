@@ -618,7 +618,7 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
-  it('handles Report Message context command when user-install reporting is enabled', async () => {
+  it('opens a Report Message modal when user-install reporting is enabled', async () => {
     process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED = 'true';
     const handleMessageReport = jest.fn().mockResolvedValue(true);
     const { handler, securityActionService } = buildHandler({ handleMessageReport });
@@ -638,28 +638,23 @@ describe('CommandHandler (unit)', () => {
       deferReply: jest.fn().mockResolvedValue(undefined),
       editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
+      showModal: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     await handler.handleMessageContextMenuCommand(interaction);
 
-    expect(securityActionService.handleMessageReport).toHaveBeenCalledWith(
-      targetUser,
-      interaction.user,
-      {
-        messageId: 'message-1',
-        channelId: 'channel-1',
-        guildId: undefined,
-        content: 'suspicious DM',
-        interactionContext: InteractionContextType.PrivateChannel,
-      }
-    );
-    expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
-      allowedMentions: { parse: [] },
+    expect(securityActionService.handleMessageReport).not.toHaveBeenCalled();
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+
+    const modalJson = (interaction.showModal as jest.Mock).mock.calls[0][0].toJSON();
+    expect(modalJson.custom_id).toBe('rmm:message-1:channel-1:user-2:0:2');
+    expect(modalJson.components[0].components[0]).toMatchObject({
+      custom_id: 'report_message_reason',
+      required: false,
     });
   });
 
-  it('rejects guild Report Message context command when report reasons are required', async () => {
+  it('requires the modal reason for guild Report Message when report reasons are required', async () => {
     process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED = 'true';
     const handleMessageReport = jest.fn().mockResolvedValue(true);
     const getServerConfig = jest.fn().mockResolvedValue({
@@ -686,14 +681,20 @@ describe('CommandHandler (unit)', () => {
       deferReply: jest.fn().mockResolvedValue(undefined),
       editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
+      showModal: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     await handler.handleMessageContextMenuCommand(interaction);
 
     expect(getServerConfig).toHaveBeenCalledWith('guild-1');
     expect(securityActionService.handleMessageReport).not.toHaveBeenCalled();
-    expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'This server requires a report reason. Please use `/report` instead.',
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+
+    const modalJson = (interaction.showModal as jest.Mock).mock.calls[0][0].toJSON();
+    expect(modalJson.custom_id).toBe('rmm:message-1:channel-1:user-2:guild-1:0');
+    expect(modalJson.components[0].components[0]).toMatchObject({
+      custom_id: 'report_message_reason',
+      required: true,
     });
   });
 

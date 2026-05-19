@@ -120,6 +120,7 @@ export interface MessageReportContext {
   channelId?: string;
   guildId?: string;
   content?: string;
+  reason?: string;
   interactionContext?: InteractionContextType;
 }
 
@@ -707,7 +708,8 @@ export class SecurityActionService implements ISecurityActionService {
     try {
       await this.userRepository.getOrCreateUser(targetUser.id, targetUser.username);
 
-      const reason = `Message reported by user ${reporter.id}.`;
+      const reasonText = report.reason ? `Reason: ${report.reason}` : 'No reason provided.';
+      const reason = `Message reported by user ${reporter.id}. ${reasonText}`;
       const isGuildContext =
         report.interactionContext === InteractionContextType.Guild || !!report.guildId;
       const metadata: Record<string, unknown> = {
@@ -720,6 +722,7 @@ export class SecurityActionService implements ISecurityActionService {
       if (report.guildId) metadata.guildId = report.guildId;
       if (report.channelId) metadata.channelId = report.channelId;
       if (report.content) metadata.content = report.content;
+      metadata.reason = report.reason ?? reasonText;
       if (report.interactionContext !== undefined) {
         metadata.interactionContext = report.interactionContext;
       }
@@ -755,8 +758,25 @@ export class SecurityActionService implements ISecurityActionService {
     report: MessageReportContext,
     globalReportId: string
   ): Promise<void> {
-    const memberships = await this.serverMemberRepository.findByUser(targetUser.id);
     const handledServerIds = new Set<string>();
+
+    if (report.guildId) {
+      const localServer = await this.serverRepository.findByGuildId(report.guildId);
+      if (localServer?.is_active) {
+        handledServerIds.add(report.guildId);
+        await this.processMessageReportForManagedServer(
+          report.guildId,
+          targetUser,
+          reporter,
+          report,
+          globalReportId,
+          true,
+          'open_case'
+        );
+      }
+    }
+
+    const memberships = await this.serverMemberRepository.findByUser(targetUser.id);
 
     for (const membership of memberships) {
       const serverId = membership.server_id;
@@ -777,43 +797,61 @@ export class SecurityActionService implements ISecurityActionService {
         continue;
       }
 
-      const member = await this.fetchManagedReportMember(serverId, targetUser.id);
-      if (!member) {
-        continue;
-      }
-
-      const serverDetectionEvent = await this.createManagedMessageReportDetection(
-        member,
+      await this.processMessageReportForManagedServer(
+        serverId,
+        targetUser,
         reporter,
         report,
         globalReportId,
-        isLocalReport
+        isLocalReport,
+        responseMode
       );
-      const detectionResult: DetectionResult = {
-        label: 'SUSPICIOUS',
-        confidence: 1.0,
-        reasons: [
-          isLocalReport
-            ? `Message reported in this server by user ${reporter.id}.`
-            : `External DM/GDM report submitted by user ${reporter.id}.`,
-        ],
-        triggerSource: DetectionType.USER_REPORT,
-        triggerContent: report.content || 'Message report',
-        detectionEventId: serverDetectionEvent.id,
-      };
+    }
+  }
 
-      if (responseMode === 'notify_only') {
-        try {
-          await this.notificationManager.upsertObservedDetectionNotification(
-            member,
-            detectionResult
-          );
-        } catch (error) {
-          console.error(`Failed to process message report fan-out for guild ${serverId}:`, error);
-        }
-      } else {
-        await this.handleSuspiciousMember(member, detectionResult, undefined, false);
+  private async processMessageReportForManagedServer(
+    serverId: string,
+    targetUser: User | APIUser,
+    reporter: User | APIUser,
+    report: MessageReportContext,
+    globalReportId: string,
+    isLocalReport: boolean,
+    responseMode: 'notify_only' | 'open_case'
+  ): Promise<void> {
+    const member = await this.fetchManagedReportMember(serverId, targetUser.id);
+    if (!member) {
+      return;
+    }
+
+    const serverDetectionEvent = await this.createManagedMessageReportDetection(
+      member,
+      reporter,
+      report,
+      globalReportId,
+      isLocalReport
+    );
+    const reasonText = report.reason ? ` Reason: ${report.reason}` : '';
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 1.0,
+      reasons: [
+        isLocalReport
+          ? `Message reported in this server by user ${reporter.id}.${reasonText}`
+          : `External DM/GDM report submitted by user ${reporter.id}.${reasonText}`,
+      ],
+      triggerSource: DetectionType.USER_REPORT,
+      triggerContent: report.reason || report.content || 'Message report',
+      detectionEventId: serverDetectionEvent.id,
+    };
+
+    if (responseMode === 'notify_only') {
+      try {
+        await this.notificationManager.upsertObservedDetectionNotification(member, detectionResult);
+      } catch (error) {
+        console.error(`Failed to process message report fan-out for guild ${serverId}:`, error);
       }
+    } else {
+      await this.handleSuspiciousMember(member, detectionResult, undefined, false);
     }
   }
 
@@ -842,6 +880,7 @@ export class SecurityActionService implements ISecurityActionService {
     if (report.guildId) metadata.sourceGuildId = report.guildId;
     if (report.channelId) metadata.sourceChannelId = report.channelId;
     if (report.content) metadata.content = report.content;
+    if (report.reason) metadata.reason = report.reason;
     if (report.interactionContext !== undefined) {
       metadata.interactionContext = report.interactionContext;
     }
@@ -853,8 +892,8 @@ export class SecurityActionService implements ISecurityActionService {
       confidence: 1.0,
       reasons: [
         isLocalReport
-          ? `Message reported in this server by user ${reporter.id}.`
-          : `External DM/GDM report submitted by user ${reporter.id}.`,
+          ? `Message reported in this server by user ${reporter.id}.${report.reason ? ` Reason: ${report.reason}` : ''}`
+          : `External DM/GDM report submitted by user ${reporter.id}.${report.reason ? ` Reason: ${report.reason}` : ''}`,
       ],
       message_id: isLocalReport ? report.messageId : undefined,
       channel_id: isLocalReport ? report.channelId : undefined,
