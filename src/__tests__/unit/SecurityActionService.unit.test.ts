@@ -87,6 +87,7 @@ describe('SecurityActionService (unit)', () => {
 
     adminActionService = {
       recordAction: jest.fn().mockResolvedValue({} as any),
+      getActionsForUser: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<IAdminActionService>;
   });
 
@@ -1346,6 +1347,50 @@ describe('SecurityActionService (unit)', () => {
       moderator,
       reportDetection!.id
     );
+    expect(adminActionService.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action_type: AdminActionType.BAN,
+        detection_event_id: reportDetection!.id,
+        verification_event_id: reviewEvent.id,
+        notes: 'Confirmed scam',
+      })
+    );
+  });
+
+  it('does not duplicate observed ban audit when ban service already records it', async () => {
+    const guildId = 'guild-observed-ban-existing-audit';
+    const userId = 'user-observed-ban-existing-audit';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    adminActionService.getActionsForUser.mockResolvedValueOnce([
+      {
+        detection_event_id: detectionEvent.id,
+        action_type: AdminActionType.BAN,
+      } as any,
+    ]);
+
+    await buildService().banObservedDetection(
+      member,
+      detectionEvent.id,
+      moderator,
+      'Confirmed scam'
+    );
+
+    expect(adminActionService.recordAction).not.toHaveBeenCalled();
   });
 
   it('keeps an observed restrict claim when audit fails after restricting', async () => {

@@ -520,6 +520,19 @@ export class SecurityActionService implements ISecurityActionService {
     });
   }
 
+  private async hasRecordedObservedAction(
+    serverId: string,
+    userId: string,
+    detectionEventId: string,
+    actionType: AdminActionType
+  ): Promise<boolean> {
+    const actions = await this.adminActionService.getActionsForUser(serverId, userId);
+    return actions.some(
+      (action) =>
+        action.detection_event_id === detectionEventId && action.action_type === actionType
+    );
+  }
+
   private async ensureObservedEntitiesExist(guildId: string, userId: string): Promise<void> {
     await this.serverRepository.getOrCreateServer(guildId);
     await this.userRepository.getOrCreateUser(userId);
@@ -896,6 +909,8 @@ export class SecurityActionService implements ISecurityActionService {
       if (responseMode === 'off') {
         continue;
       }
+      // notify_only and open_case both use observed alerts now. The distinction is
+      // retained for compatibility and future UX polish.
 
       await this.processMessageReportForManagedServer(
         serverId,
@@ -1122,12 +1137,22 @@ export class SecurityActionService implements ISecurityActionService {
         );
       await this.userModerationService.banUser(member, reason, moderator, detectionEvent.id);
       actionApplied = true;
-      if (!activeVerificationEvent) {
+      const actionAlreadyRecorded = await this.hasRecordedObservedAction(
+        member.guild.id,
+        member.id,
+        claimedDetectionEvent.id,
+        AdminActionType.BAN
+      );
+      if (!actionAlreadyRecorded) {
+        const currentVerificationEvent = activeVerificationEvent
+          ? await this.verificationEventRepository.findById(activeVerificationEvent.id)
+          : null;
         await this.recordObservedAction({
           serverId: member.guild.id,
           userId: member.id,
           moderator,
           detectionEvent: claimedDetectionEvent,
+          verificationEvent: currentVerificationEvent ?? activeVerificationEvent ?? undefined,
           actionType: AdminActionType.BAN,
           notes: reason,
         });

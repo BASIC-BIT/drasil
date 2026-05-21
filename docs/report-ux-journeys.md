@@ -72,8 +72,8 @@ Safest default. Reporter may not understand that no server acted on the report u
 
 1. Reporter submits a DM/GDM report.
 2. Drasil identifies managed servers where the reported user is known.
-3. Opted-in servers receive an observe-only notification.
-4. No case thread is created and no moderation action is applied.
+3. Opted-in servers receive a moderator-facing observed alert with the existing action buttons.
+4. No case thread is created by default, and no moderation action is applied automatically.
 
 Current UX result:
 Good low-commitment signal for moderators. It avoids case clutter but may be easy to miss if notifications are noisy.
@@ -82,12 +82,12 @@ Good low-commitment signal for moderators. It avoids case clutter but may be eas
 
 1. Reporter submits a DM/GDM report.
 2. Drasil identifies opted-in servers where the reported user is known.
-3. Each opted-in server gets a moderator-facing observed alert with case actions.
+3. Each opted-in server gets the same moderator-facing observed alert as `notify_only`.
 4. No case thread is created by default.
 5. No automatic restriction is applied.
 
 Current UX result:
-Strongest moderator signal for opted-in servers without fan-out thread clutter.
+Currently equivalent to `notify_only`; retained as a separate mode for compatibility and future UX polish.
 
 ### Moderator Escalates A Report Case
 
@@ -155,8 +155,8 @@ Target behavior:
 - Moderator opens case: create the existing moderator-only report review thread/workspace.
 - Moderator restricts: create a user-visible verification thread.
 - Moderator bans: ban and log the action, with no user-visible verification thread.
-- External `notify_only`: observe-only embed, no case thread.
-- External `open_case`: observed alert with case actions, no automatic thread.
+- External `notify_only`: observed alert with action buttons, no case thread.
+- External `open_case`: currently the same observed-alert behavior as `notify_only`, retained for compatibility and future UX polish.
 
 The key product rule should be: report triage needs context and buttons; restriction needs a user-visible conversation; moderator collaboration can use the existing report review thread when a moderator explicitly opens a case.
 

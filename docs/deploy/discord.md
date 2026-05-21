@@ -57,8 +57,8 @@ Configure each server with:
 Modes:
 
 - `off`: default. Store the global report signal only.
-- `notify_only`: post an observe-only notification to that server's observed/admin notification channel.
-- `open_case`: post a moderator-facing alert with case actions in that server without restricting the user or creating a thread by default.
+- `notify_only`: post a moderator-facing observed alert to that server's observed/admin notification channel.
+- `open_case`: currently uses the same observed-alert surface as `notify_only`; the separate mode is retained for compatibility and future UX polish.
 
 External reports never apply automatic restrictions. Moderators must review and choose any action.
 
