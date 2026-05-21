@@ -66,7 +66,15 @@ if one is set.
 
 1. A user submits the report modal.
 2. `SecurityActionService.handleUserReport` creates a `detection_event` with
-   `detection_type = USER_REPORT` and follows the same case flow as above.
+   `detection_type = USER_REPORT`.
+3. If the reported user already has an active case in the server, Drasil links
+   the report to that case and updates the case notification.
+4. Otherwise Drasil posts or updates an observed alert with moderator action
+   buttons. No verification event or thread is created until a moderator opens a
+   case or restricts the user.
+
+See `docs/report-ux-journeys.md` for the product-level user journeys and the
+recommended future direction for report-only cases.
 
 ## Admin verify or ban
 

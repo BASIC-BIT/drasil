@@ -113,8 +113,12 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 - Submit a report against the suspicious-user test account from the reporter test account.
 - Expected result:
   - detection event is created with `USER_REPORT`
-  - the same verification flow starts
-  - report details appear in the admin-facing context
+  - no restricted role is applied
+  - no verification thread is created by default
+  - an observed alert appears with report details and moderator action buttons
+  - `Dismiss...` supports dismiss, false positive, and undo
+  - `Restrict` creates a user-visible verification thread
+  - `Ban` bans and logs the action without creating a verification thread first
 
 ### 8. GPT verification-thread analysis flow
 

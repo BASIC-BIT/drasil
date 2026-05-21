@@ -341,6 +341,32 @@ export class SecurityActionService implements ISecurityActionService {
     }
   }
 
+  private async upsertReportObservedAlertOrActiveCase(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    detectionEventId: string
+  ): Promise<void> {
+    const activeVerificationEvent =
+      await this.verificationEventRepository.findActiveByUserAndServer(member.id, member.guild.id);
+
+    if (!activeVerificationEvent) {
+      await this.notificationManager.upsertObservedDetectionNotification(member, detectionResult);
+      return;
+    }
+
+    const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
+      detectionEventId,
+      activeVerificationEvent.id
+    );
+    if (!linkedDetectionEvent) {
+      throw new Error(
+        `Failed to link report detection event ${detectionEventId} to verification event ${activeVerificationEvent.id}`
+      );
+    }
+
+    await this.upsertNotification(member, detectionResult, activeVerificationEvent);
+  }
+
   private async getObservedDetectionForMember(
     member: GuildMember,
     detectionEventId: string
@@ -763,7 +789,8 @@ export class SecurityActionService implements ISecurityActionService {
         detectionEventId: detectionEvent.id,
       };
 
-      return await this.handleSuspiciousMember(member, detectionResult, undefined, false);
+      await this.upsertReportObservedAlertOrActiveCase(member, detectionResult, detectionEvent.id);
+      return true;
     } catch (error) {
       console.error(`Failed to handle user report for ${member.user.tag}:`, error);
       throw error;
@@ -840,8 +867,7 @@ export class SecurityActionService implements ISecurityActionService {
           reporter,
           report,
           globalReportId,
-          true,
-          'open_case'
+          true
         );
       }
     }
@@ -873,8 +899,7 @@ export class SecurityActionService implements ISecurityActionService {
         reporter,
         report,
         globalReportId,
-        isLocalReport,
-        responseMode
+        isLocalReport
       );
     }
   }
@@ -885,8 +910,7 @@ export class SecurityActionService implements ISecurityActionService {
     reporter: User | APIUser,
     report: MessageReportContext,
     globalReportId: string,
-    isLocalReport: boolean,
-    responseMode: 'notify_only' | 'open_case'
+    isLocalReport: boolean
   ): Promise<void> {
     const member = await this.fetchManagedReportMember(serverId, targetUser.id);
     if (!member) {
@@ -914,14 +938,14 @@ export class SecurityActionService implements ISecurityActionService {
       detectionEventId: serverDetectionEvent.id,
     };
 
-    if (responseMode === 'notify_only') {
-      try {
-        await this.notificationManager.upsertObservedDetectionNotification(member, detectionResult);
-      } catch (error) {
-        console.error(`Failed to process message report fan-out for guild ${serverId}:`, error);
-      }
-    } else {
-      await this.handleSuspiciousMember(member, detectionResult, undefined, false);
+    try {
+      await this.upsertReportObservedAlertOrActiveCase(
+        member,
+        detectionResult,
+        serverDetectionEvent.id
+      );
+    } catch (error) {
+      console.error(`Failed to process message report fan-out for guild ${serverId}:`, error);
     }
   }
 
@@ -1086,9 +1110,24 @@ export class SecurityActionService implements ISecurityActionService {
     }
     let actionApplied = false;
     try {
-      await this.ensureObservedCase(member, detectionEvent, false);
+      await this.ensureObservedEntitiesExist(member.guild.id, member.id);
+      const activeVerificationEvent =
+        await this.verificationEventRepository.findActiveByUserAndServer(
+          member.id,
+          member.guild.id
+        );
       await this.userModerationService.banUser(member, reason, moderator, detectionEvent.id);
       actionApplied = true;
+      if (!activeVerificationEvent) {
+        await this.recordObservedAction({
+          serverId: member.guild.id,
+          userId: member.id,
+          moderator,
+          detectionEvent: claimedDetectionEvent,
+          actionType: AdminActionType.BAN,
+          notes: reason,
+        });
+      }
       await this.notificationManager.markObservedDetectionActionTaken(
         detectionEvent.id,
         'banned this user',

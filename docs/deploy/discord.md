@@ -58,7 +58,7 @@ Modes:
 
 - `off`: default. Store the global report signal only.
 - `notify_only`: post an observe-only notification to that server's observed/admin notification channel.
-- `open_case`: open a review-only pending case in that server without restricting the user.
+- `open_case`: post a moderator-facing alert with case actions in that server without restricting the user or creating a thread by default.
 
 External reports never apply automatic restrictions. Moderators must review and choose any action.
 
