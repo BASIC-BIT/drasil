@@ -297,6 +297,26 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it('fails user report submission when the observed alert cannot be delivered', async () => {
+    const guildId = 'guild-report-alert-fails';
+    const userId = 'user-report-alert-fails';
+    const reporterId = 'reporter-alert-fails';
+    const member = buildMember(guildId, userId);
+    notificationManager.upsertObservedDetectionNotification.mockResolvedValueOnce(null);
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        buildService().handleUserReport(member, { id: reporterId } as User, 'reported')
+      ).rejects.toThrow('Failed to send or update report observed alert');
+    } finally {
+      consoleError.mockRestore();
+    }
+
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+  });
+
   it('records a user-installed message report without opening a server case', async () => {
     const service = buildService();
 

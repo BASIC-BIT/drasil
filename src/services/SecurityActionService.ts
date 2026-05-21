@@ -350,7 +350,11 @@ export class SecurityActionService implements ISecurityActionService {
       await this.verificationEventRepository.findActiveByUserAndServer(member.id, member.guild.id);
 
     if (!activeVerificationEvent) {
-      await this.notificationManager.upsertObservedDetectionNotification(member, detectionResult);
+      const notificationMessage =
+        await this.notificationManager.upsertObservedDetectionNotification(member, detectionResult);
+      if (!notificationMessage) {
+        throw new Error('Failed to send or update report observed alert');
+      }
       return;
     }
 
