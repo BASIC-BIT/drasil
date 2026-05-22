@@ -87,6 +87,7 @@ describe('SecurityActionService (unit)', () => {
 
     adminActionService = {
       recordAction: jest.fn().mockResolvedValue({} as any),
+      getActionsForUser: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<IAdminActionService>;
   });
 
@@ -250,7 +251,7 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('creates a review-only pending case for user report', async () => {
+  it('posts an observed alert for user report without opening a case', async () => {
     const guildId = 'guild-3';
     const userId = 'user-3';
     const reporterId = 'reporter-1';
@@ -284,19 +285,37 @@ describe('SecurityActionService (unit)', () => {
       userId,
       guildId
     );
-    expect(verificationEvents).toHaveLength(1);
-    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(verificationEvents).toHaveLength(0);
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
-    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledWith(
       member,
-      expect.objectContaining({ id: verificationEvents[0].id }),
       expect.objectContaining({
         triggerSource: DetectionType.USER_REPORT,
         triggerContent: 'reported',
-      }),
-      undefined
+      })
     );
+  });
+
+  it('fails user report submission when the observed alert cannot be delivered', async () => {
+    const guildId = 'guild-report-alert-fails';
+    const userId = 'user-report-alert-fails';
+    const reporterId = 'reporter-alert-fails';
+    const member = buildMember(guildId, userId);
+    notificationManager.upsertObservedDetectionNotification.mockResolvedValueOnce(null);
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        buildService().handleUserReport(member, { id: reporterId } as User, 'reported')
+      ).rejects.toThrow('Failed to send or update report observed alert');
+    } finally {
+      consoleError.mockRestore();
+    }
+
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
   });
 
   it('records a user-installed message report without opening a server case', async () => {
@@ -333,7 +352,7 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
 
-  it('opens review-only cases for message reports from the same guild', async () => {
+  it('posts observed alerts for message reports from the same guild', async () => {
     const guildId = 'guild-local-message';
     const userId = 'user-local-message';
     const member = buildMember(guildId, userId);
@@ -394,22 +413,20 @@ describe('SecurityActionService (unit)', () => {
       userId,
       guildId
     );
-    expect(verificationEvents).toHaveLength(1);
-    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(verificationEvents).toHaveLength(0);
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
-    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledWith(
       member,
-      expect.objectContaining({ id: verificationEvents[0].id }),
       expect.objectContaining({
         triggerSource: DetectionType.USER_REPORT,
         triggerContent: 'local suspicious message',
-      }),
-      undefined
+      })
     );
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
 
-  it('opens local message report cases even when the target has no stored member row', async () => {
+  it('posts local message report alerts even when the target has no stored member row', async () => {
     const guildId = 'guild-local-untracked-message';
     const userId = 'user-local-untracked-message';
     const member = buildMember(guildId, userId);
@@ -451,16 +468,15 @@ describe('SecurityActionService (unit)', () => {
       userId,
       guildId
     );
-    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents).toHaveLength(0);
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
-    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledWith(
       member,
-      expect.objectContaining({ id: verificationEvents[0].id }),
       expect.objectContaining({
         triggerSource: DetectionType.USER_REPORT,
         triggerContent: 'reported from native context menu',
-      }),
-      undefined
+      })
     );
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
@@ -505,7 +521,7 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
 
-  it('opens review-only cases in opted-in servers for external message reports', async () => {
+  it('posts observed alerts in open-case opted-in servers for external message reports', async () => {
     const member = buildMember('guild-external-2', 'user-7');
     await serverRepository.upsertByGuildId('guild-external-2', {
       settings: {
@@ -538,17 +554,15 @@ describe('SecurityActionService (unit)', () => {
       'user-7',
       'guild-external-2'
     );
-    expect(verificationEvents).toHaveLength(1);
-    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(verificationEvents).toHaveLength(0);
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
-    expect(threadManager.createReportReviewThread).toHaveBeenCalledWith(
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledWith(
       member,
-      expect.objectContaining({ id: verificationEvents[0].id }),
       expect.objectContaining({
         triggerSource: DetectionType.USER_REPORT,
         triggerContent: 'external suspicious DM',
-      }),
-      undefined
+      })
     );
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
@@ -622,7 +636,7 @@ describe('SecurityActionService (unit)', () => {
     }
   });
 
-  it('propagates open-case fan-out errors instead of silently leaving partial state', async () => {
+  it('continues open-case message report fan-out when one server notification fails', async () => {
     const member = buildMember('guild-external-fail', 'user-9');
     await serverRepository.upsertByGuildId('guild-external-fail', {
       settings: {
@@ -639,7 +653,9 @@ describe('SecurityActionService (unit)', () => {
         }),
       },
     } as unknown as Client;
-    threadManager.createReportReviewThread.mockRejectedValueOnce(new Error('thread unavailable'));
+    notificationManager.upsertObservedDetectionNotification.mockRejectedValueOnce(
+      new Error('notification unavailable')
+    );
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const service = buildService(client);
 
@@ -654,7 +670,12 @@ describe('SecurityActionService (unit)', () => {
             content: 'external suspicious DM',
           }
         )
-      ).rejects.toThrow('thread unavailable');
+      ).resolves.toBe(true);
+      expect(consoleError).toHaveBeenCalledWith(
+        'Failed to process message report fan-out for guild guild-external-fail:',
+        expect.any(Error)
+      );
+      expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
     } finally {
       consoleError.mockRestore();
     }
@@ -824,7 +845,7 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('opens a new pending case when a user report follows a resolved case', async () => {
+  it('posts an observed alert when a user report follows a resolved case', async () => {
     const guildId = 'guild-4c';
     const userId = 'user-4c';
     const reporterId = 'reporter-3';
@@ -851,14 +872,18 @@ describe('SecurityActionService (unit)', () => {
       userId,
       guildId
     );
-    expect(verificationEvents).toHaveLength(2);
-    expect(verificationEvents.map((event) => event.status).sort()).toEqual([
-      VerificationStatus.PENDING,
-      VerificationStatus.VERIFIED,
-    ]);
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].status).toBe(VerificationStatus.VERIFIED);
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
-    expect(threadManager.createReportReviewThread).toHaveBeenCalledTimes(1);
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'new report',
+      })
+    );
   });
 
   it('opens a new pending case when a manual flag follows a resolved case', async () => {
@@ -1212,15 +1237,6 @@ describe('SecurityActionService (unit)', () => {
     const moderator = { id: 'admin-observed' } as User;
     const reporter = { id: 'reporter-observed' } as User;
     const member = buildMember(guildId, userId);
-    threadManager.createReportReviewThread.mockImplementationOnce(async (_member, event) => {
-      await verificationEventRepository.update(event.id, {
-        thread_id: 'review-thread-1',
-        metadata: {
-          [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
-        },
-      });
-      return { id: 'review-thread-1' } as any;
-    });
     const service = buildService();
 
     await service.handleUserReport(member, reporter, 'suspicious DM');
@@ -1228,7 +1244,18 @@ describe('SecurityActionService (unit)', () => {
     const reportDetection = detectionEvents.find(
       (event) => event.detection_type === DetectionType.USER_REPORT
     );
-    threadManager.createReportReviewThread.mockClear();
+    const reviewEvent = await verificationEventRepository.createFromDetection(
+      reportDetection!.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(reviewEvent.id, {
+      thread_id: 'review-thread-1',
+      metadata: {
+        [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
+      },
+    });
     threadManager.createVerificationThread.mockClear();
 
     await service.restrictObservedDetection(member, reportDetection!.id, moderator);
@@ -1238,7 +1265,7 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
   });
 
-  it('uses a verification thread when banning an observed user report', async () => {
+  it('bans an observed user report without creating a verification thread', async () => {
     const guildId = 'guild-observed-report-ban';
     const userId = 'user-observed-report-ban';
     const moderator = { id: 'admin-observed' } as User;
@@ -1261,7 +1288,7 @@ describe('SecurityActionService (unit)', () => {
     );
 
     expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
-    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(userModerationService.banUser).toHaveBeenCalledWith(
       member,
       'Confirmed scam',
@@ -1273,23 +1300,22 @@ describe('SecurityActionService (unit)', () => {
       'banned this user',
       moderator
     );
+    expect(adminActionService.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action_type: AdminActionType.BAN,
+        detection_event_id: detectionEvent.id,
+        verification_event_id: null,
+        notes: 'Confirmed scam',
+      })
+    );
   });
 
-  it('upgrades an existing report review thread when banning a user report', async () => {
+  it('does not upgrade an existing report review thread when banning a user report', async () => {
     const guildId = 'guild-observed-existing-report-ban';
     const userId = 'user-observed-existing-report-ban';
     const moderator = { id: 'admin-observed' } as User;
     const reporter = { id: 'reporter-observed' } as User;
     const member = buildMember(guildId, userId);
-    threadManager.createReportReviewThread.mockImplementationOnce(async (_member, event) => {
-      await verificationEventRepository.update(event.id, {
-        thread_id: 'review-thread-1',
-        metadata: {
-          [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
-        },
-      });
-      return { id: 'review-thread-1' } as any;
-    });
     const service = buildService();
 
     await service.handleUserReport(member, reporter, 'suspicious DM');
@@ -1297,19 +1323,74 @@ describe('SecurityActionService (unit)', () => {
     const reportDetection = detectionEvents.find(
       (event) => event.detection_type === DetectionType.USER_REPORT
     );
-    threadManager.createReportReviewThread.mockClear();
+    const reviewEvent = await verificationEventRepository.createFromDetection(
+      reportDetection!.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(reviewEvent.id, {
+      thread_id: 'review-thread-1',
+      metadata: {
+        [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
+      },
+    });
     threadManager.createVerificationThread.mockClear();
 
     await service.banObservedDetection(member, reportDetection!.id, moderator, 'Confirmed scam');
 
     expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
-    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(userModerationService.banUser).toHaveBeenCalledWith(
       member,
       'Confirmed scam',
       moderator,
       reportDetection!.id
     );
+    expect(adminActionService.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action_type: AdminActionType.BAN,
+        detection_event_id: reportDetection!.id,
+        verification_event_id: reviewEvent.id,
+        notes: 'Confirmed scam',
+      })
+    );
+  });
+
+  it('does not duplicate observed ban audit when ban service already records it', async () => {
+    const guildId = 'guild-observed-ban-existing-audit';
+    const userId = 'user-observed-ban-existing-audit';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    adminActionService.getActionsForUser.mockResolvedValueOnce([
+      {
+        detection_event_id: detectionEvent.id,
+        action_type: AdminActionType.BAN,
+      } as any,
+    ]);
+
+    await buildService().banObservedDetection(
+      member,
+      detectionEvent.id,
+      moderator,
+      'Confirmed scam'
+    );
+
+    expect(adminActionService.recordAction).not.toHaveBeenCalled();
   });
 
   it('keeps an observed restrict claim when audit fails after restricting', async () => {

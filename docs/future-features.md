@@ -29,3 +29,7 @@ Right now the message sent in the thread to verify the user is static - it'd be 
 
 This is a MONSTEROUSLY big feature, and shouldn't be worked on until everything else is airtight.
 Make a website for configuring the bot, verifying users, etc.
+
+## Report review UX polish
+
+Improve the report alert action labels and external-report reporter confirmation. See `docs/report-ux-journeys.md` for the persona journeys, tradeoffs, and proposed follow-up work.
