@@ -9,6 +9,11 @@ Related docs:
 - `docs/release-checklist.md`
 - `docs/test-cases.md`
 - `docs/workflow.md`
+- `docs/qa/manual-qa-cards.md` for card-based release smoke testing
+- `docs/qa/release-readiness-gaps.md` for large-server rollout gaps
+- `docs/qa/faceless-rollout-plan.md` for the low-attention production rollout path
+
+For high-confidence release testing, prefer `docs/qa/manual-qa-cards.md`. This file is the shorter walkthrough; the card runbook is the stricter go/no-go procedure.
 
 ## Test setup
 

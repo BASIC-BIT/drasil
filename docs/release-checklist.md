@@ -7,6 +7,9 @@ This is intended to be concise and actionable. For flow details see:
 - `docs/workflow.md`
 - `docs/test-cases.md`
 - `docs/manual-qa.md`
+- `docs/qa/manual-qa-cards.md`
+- `docs/qa/release-readiness-gaps.md`
+- `docs/qa/faceless-rollout-plan.md`
 
 ## Pre-flight
 
@@ -65,6 +68,7 @@ Configure the bot (current UX is via `/config`):
 Use `docs/test-cases.md` as the authoritative list. Minimum set:
 
 - If you want a step-by-step runbook instead of a short checklist, use `docs/manual-qa.md`.
+- If you are validating reports, external reports, or large-server rollout confidence, use the stricter card runbook in `docs/qa/manual-qa-cards.md`.
 
 - Suspicious message:
   - user restricted
@@ -86,6 +90,11 @@ Use `docs/test-cases.md` as the authoritative list. Minimum set:
 Privacy check:
 
 - Verify the restricted user can only see their own verification thread.
+
+Large-server go/no-go:
+
+- Close or explicitly accept the P0 items in `docs/qa/release-readiness-gaps.md`.
+- Start production rollout from the conservative phases in `docs/qa/faceless-rollout-plan.md`.
 
 ## Common failure modes
 

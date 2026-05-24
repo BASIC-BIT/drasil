@@ -4,6 +4,8 @@
 
 For a real-server walkthrough, use `docs/manual-qa.md`.
 
+For release confidence on reporting, external reports, or large-server rollout, use the card runbook in `docs/qa/manual-qa-cards.md`.
+
 - Suspicious message: user gets restricted, verification thread auto-created, admin notification sent.
 - Additional suspicious message while pending: no new verification event; notification updated.
 - New suspicious message after verification resolved: new verification event and new notification message.
