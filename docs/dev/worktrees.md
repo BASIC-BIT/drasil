@@ -53,7 +53,30 @@ Avoid sharing `node_modules/` between worktrees.
 
 ## Safe `.env` handling
 
-`.env` is gitignored. For each worktree, copy `.env.example` to `.env` and fill values locally.
+`.env` is gitignored. For Drasil Dev, hydrate it from AWS Secrets Manager after dependencies are installed:
+
+```bash
+npm run dev:env
+```
+
+Defaults:
+
+- AWS region: `us-east-1`
+- Environment: `dev`
+- Discord token secret: `drasil/dev/DISCORD_TOKEN`
+- OpenAI key secret: `drasil/dev/OPENAI_API_KEY`
+- Local Prisma password secret: `drasil/dev/PRISMA_DB_PASSWORD`
+- Local Supabase database: `127.0.0.1:54322/postgres`
+
+Override with environment variables when needed:
+
+- `AWS_REGION`
+- `DRASIL_ENV`
+- `DRASIL_DISCORD_TOKEN_SECRET`
+- `DRASIL_OPENAI_SECRET`
+- `DRASIL_PRISMA_PASSWORD_SECRET`
+
+Manual fallback: copy `.env.example` to `.env` and fill values locally.
 
 Command examples:
 
