@@ -56,12 +56,6 @@ import {
   VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY,
 } from '../utils/verificationThreadAnalysisSettings';
 import {
-  SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID,
-  SETUP_VERIFICATION_CHANNEL_FIELD_ID,
-  SETUP_VERIFICATION_MODAL_ID,
-  SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
-} from '../constants/setupVerificationWizard';
-import {
   AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY,
   DETECTION_RESPONSE_MODE_SETTING_KEY,
   DETECTION_RESPONSE_MODES,
@@ -90,6 +84,13 @@ dotenv.config();
 const REPORT_USER_CONTEXT_COMMAND_NAME = 'Report User';
 const REPORT_MESSAGE_CONTEXT_COMMAND_NAME = 'Report Message';
 const USER_INSTALL_REPORTING_ENABLED_ENV = 'DRASIL_USER_INSTALL_REPORTING_ENABLED';
+const DRASIL_GUILD_INSTALL_PERMISSIONS =
+  PermissionFlagsBits.ManageRoles |
+  PermissionFlagsBits.BanMembers |
+  PermissionFlagsBits.ViewChannel |
+  PermissionFlagsBits.SendMessages |
+  PermissionFlagsBits.ManageThreads |
+  PermissionFlagsBits.CreatePrivateThreads;
 
 function isUserInstallReportingEnabled(): boolean {
   return process.env[USER_INSTALL_REPORTING_ENABLED_ENV] === 'true';
@@ -159,6 +160,8 @@ export class CommandHandler implements ICommandHandler {
         .addStringOption((option) =>
           option.setName('reason').setDescription('Reason for the ban').setRequired(false)
         )
+        .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+        .setContexts(InteractionContextType.Guild)
         .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
       new SlashCommandBuilder()
         .setName('report')
@@ -172,10 +175,35 @@ export class CommandHandler implements ICommandHandler {
             .setDescription('What happened?')
             .setRequired(false)
             .setMaxLength(USER_REPORT_REASON_MAX_LENGTH)
-        ),
+        )
+        .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+        .setContexts(InteractionContextType.Guild),
       new SlashCommandBuilder()
         .setName('setupverification')
-        .setDescription('Set up a dedicated verification channel for restricted users'),
+        .setDescription('Set up a dedicated verification channel for restricted users')
+        .addRoleOption((option) =>
+          option
+            .setName('restricted-role')
+            .setDescription('Role to apply while a user is restricted')
+            .setRequired(true)
+        )
+        .addChannelOption((option) =>
+          option
+            .setName('admin-channel')
+            .setDescription('Moderator-only channel for Drasil alerts')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(true)
+        )
+        .addChannelOption((option) =>
+          option
+            .setName('verification-channel')
+            .setDescription('Channel where verification threads are created; omit to auto-create')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(false)
+        )
+        .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+        .setContexts(InteractionContextType.Guild)
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
       new SlashCommandBuilder()
         .setName('config')
         .setDescription('Configure server settings')
@@ -489,7 +517,9 @@ export class CommandHandler implements ICommandHandler {
                     .setMaxValue(MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT)
                 )
             )
-        ),
+        )
+        .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+        .setContexts(InteractionContextType.Guild),
       new SlashCommandBuilder() // Added flaguser command
         .setName('flaguser')
         .setDescription('Manually flag a user as suspicious and start verification.')
@@ -499,10 +529,12 @@ export class CommandHandler implements ICommandHandler {
         .addStringOption((option) =>
           option.setName('reason').setDescription('Optional reason for flagging').setRequired(false)
         )
+        .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+        .setContexts(InteractionContextType.Guild)
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // Require Admin perms
       new SlashCommandBuilder() // Added setupreportbutton command
         .setName('setupreportbutton')
-        .setDescription('Sends the message containing the "Report User" button to a channel.')
+        .setDescription('Sends report instructions to a channel.')
         .addChannelOption((option) =>
           option
             .setName('channel')
@@ -510,6 +542,8 @@ export class CommandHandler implements ICommandHandler {
             .addChannelTypes(ChannelType.GuildText) // Only allow text channels
             .setRequired(true)
         )
+        .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+        .setContexts(InteractionContextType.Guild)
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // Require Admin perms
       new ContextMenuCommandBuilder()
         .setName(REPORT_USER_CONTEXT_COMMAND_NAME)
@@ -645,10 +679,7 @@ export class CommandHandler implements ICommandHandler {
     // Get the GuildMember
     const guild = interaction.guild;
     if (!guild) {
-      await interaction.reply({
-        content: 'This command can only be used in a server.',
-        flags: MessageFlags.Ephemeral,
-      });
+      await this.replyGuildInstallRequired(interaction);
       return;
     }
 
@@ -697,10 +728,7 @@ export class CommandHandler implements ICommandHandler {
   private async handleReportCommand(interaction: ChatInputCommandInteraction): Promise<void> {
     const guild = interaction.guild;
     if (!guild) {
-      await interaction.reply({
-        content: 'This command can only be used in a server.',
-        flags: MessageFlags.Ephemeral,
-      });
+      await this.replyGuildInstallRequired(interaction);
       return;
     }
 
@@ -758,10 +786,7 @@ export class CommandHandler implements ICommandHandler {
   ): Promise<void> {
     const guild = interaction.guild;
     if (!guild) {
-      await interaction.reply({
-        content: 'This command can only be used in a server.',
-        flags: MessageFlags.Ephemeral,
-      });
+      await this.replyGuildInstallRequired(interaction);
       return;
     }
 
@@ -985,10 +1010,7 @@ export class CommandHandler implements ICommandHandler {
   ): Promise<void> {
     const guild = interaction.guild;
     if (!guild) {
-      await interaction.reply({
-        content: 'This command can only be used in a server.',
-        flags: MessageFlags.Ephemeral,
-      });
+      await this.replyGuildInstallRequired(interaction);
       return;
     }
 
@@ -1015,61 +1037,65 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
-    const serverConfig = this.configService.getCachedServerConfig(guild.id) ?? {
-      restricted_role_id: null,
-      admin_channel_id: null,
-      verification_channel_id: null,
-    };
-
-    const modal = new ModalBuilder()
-      .setCustomId(SETUP_VERIFICATION_MODAL_ID)
-      .setTitle('Setup Verification Wizard');
-
-    const restrictedRoleInput = new TextInputBuilder()
-      .setCustomId(SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID)
-      .setLabel('Restricted role (ID or mention)')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('123456789012345678 or <@&123...>')
-      .setRequired(true);
-
-    if (serverConfig.restricted_role_id) {
-      restrictedRoleInput.setValue(serverConfig.restricted_role_id);
-    }
-
-    const adminChannelInput = new TextInputBuilder()
-      .setCustomId(SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID)
-      .setLabel('Admin channel (ID or mention)')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('123456789012345678 or <#123...>')
-      .setRequired(true);
-
-    if (serverConfig.admin_channel_id) {
-      adminChannelInput.setValue(serverConfig.admin_channel_id);
-    }
-
-    const verificationChannelInput = new TextInputBuilder()
-      .setCustomId(SETUP_VERIFICATION_CHANNEL_FIELD_ID)
-      .setLabel('Verification channel (optional)')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Leave blank to auto-create')
-      .setRequired(false);
-
-    if (serverConfig.verification_channel_id) {
-      verificationChannelInput.setValue(serverConfig.verification_channel_id);
-    }
-
-    modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(restrictedRoleInput),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(adminChannelInput),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(verificationChannelInput)
-    );
-
     try {
-      await interaction.showModal(modal);
+      const restrictedRole = interaction.options.getRole('restricted-role', true);
+      const adminChannel = interaction.options.getChannel('admin-channel', true);
+      const verificationChannel = interaction.options.getChannel('verification-channel');
+
+      if (adminChannel.type !== ChannelType.GuildText) {
+        await interaction.reply({
+          content: 'Admin channel must be a text channel.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (verificationChannel && verificationChannel.type !== ChannelType.GuildText) {
+        await interaction.reply({
+          content: 'Verification channel must be a text channel.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      let verificationChannelId = verificationChannel?.id ?? null;
+      let verificationChannelWasCreated = false;
+
+      if (!verificationChannelId) {
+        const createdChannelId = await this.notificationManager.setupVerificationChannel(
+          guild,
+          restrictedRole.id,
+          false
+        );
+        if (!createdChannelId) {
+          throw new Error('Failed to create a verification channel during setup.');
+        }
+        verificationChannelId = createdChannelId;
+        verificationChannelWasCreated = true;
+      }
+
+      await this.configService.updateServerConfig(guild.id, {
+        restricted_role_id: restrictedRole.id,
+        admin_channel_id: adminChannel.id,
+        verification_channel_id: verificationChannelId,
+      });
+
+      const verificationChannelMessage = verificationChannelWasCreated
+        ? `Created verification channel: <#${verificationChannelId}>`
+        : `Verification channel: <#${verificationChannelId}>`;
+
+      await interaction.reply({
+        content:
+          'Setup complete.\n' +
+          `Restricted role: <@&${restrictedRole.id}>\n` +
+          `Admin channel: <#${adminChannel.id}>\n` +
+          `${verificationChannelMessage}`,
+        flags: MessageFlags.Ephemeral,
+      });
     } catch (error) {
-      console.error('Failed to show setup verification modal:', error);
+      console.error('Failed to complete setup verification command:', error);
       const errorResponse = {
-        content: 'Failed to open setup verification wizard. Please try again.',
+        content: 'Failed to complete setup verification. Please check permissions and try again.',
         flags: MessageFlags.Ephemeral,
       } as const;
 
@@ -1089,10 +1115,7 @@ export class CommandHandler implements ICommandHandler {
     // Check if the interaction is in a guild
     const guild = interaction.guild;
     if (!guild) {
-      await interaction.reply({
-        content: 'This command can only be used in a server.',
-        flags: MessageFlags.Ephemeral,
-      });
+      await this.replyGuildInstallRequired(interaction);
       return;
     }
 
@@ -1886,10 +1909,7 @@ export class CommandHandler implements ICommandHandler {
     // Check if the interaction is in a guild
     const guild = interaction.guild;
     if (!guild) {
-      await interaction.reply({
-        content: 'This command can only be used in a server.',
-        flags: MessageFlags.Ephemeral,
-      });
+      await this.replyGuildInstallRequired(interaction);
       return;
     }
 
@@ -1945,10 +1965,7 @@ export class CommandHandler implements ICommandHandler {
     // Check if the interaction is in a guild
     const guild = interaction.guild;
     if (!guild) {
-      await interaction.reply({
-        content: 'This command can only be used in a server.',
-        flags: MessageFlags.Ephemeral,
-      });
+      await this.replyGuildInstallRequired(interaction);
       return;
     }
 
@@ -1979,10 +1996,11 @@ export class CommandHandler implements ICommandHandler {
     // Create the embed
     const embed = new EmbedBuilder()
       .setColor(0x0099ff)
-      .setTitle('Report a User')
+      .setTitle('How to Report a User')
       .setDescription(
         'If you see a user violating server rules or engaging in suspicious activity, ' +
-          'please use the button below to submit a report. ' +
+          'use `/report` so Discord gives you a user picker and reason field. ' +
+          'You can also right-click a user and choose `Apps` -> `Report User`. ' +
           'Your report will be reviewed by the moderation team.'
       )
       .setFooter({ text: 'Your reports help keep the community safe!' });
@@ -1990,9 +2008,9 @@ export class CommandHandler implements ICommandHandler {
     // Create the button
     const reportButton = new ButtonBuilder()
       .setCustomId('report_user_initiate') // Unique ID for the button interaction
-      .setLabel('Report User')
-      .setStyle(ButtonStyle.Danger) // Use Danger style for reporting
-      .setEmoji('⚠️'); // Optional emoji
+      .setLabel('How to report')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('ℹ️');
 
     // Create an action row for the button
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(reportButton);
@@ -2003,7 +2021,7 @@ export class CommandHandler implements ICommandHandler {
 
       // Confirm to the admin
       await interaction.reply({
-        content: `✅ Report button message sent successfully to ${channel}.`,
+        content: `Report instructions sent successfully to ${channel}.`,
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
@@ -2014,5 +2032,34 @@ export class CommandHandler implements ICommandHandler {
         flags: MessageFlags.Ephemeral,
       });
     }
+  }
+
+  private async replyGuildInstallRequired(
+    interaction: ChatInputCommandInteraction | UserContextMenuCommandInteraction
+  ): Promise<void> {
+    const installLink = this.getGuildInstallLink();
+    const content = interaction.guildId
+      ? `Drasil is not installed in this server yet. Ask a server admin to install it${installLink ? `: ${installLink}` : '.'}`
+      : `This command can only be used in a server where Drasil is installed${installLink ? `: ${installLink}` : '.'}`;
+
+    await interaction.reply({
+      content,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  private getGuildInstallLink(): string | null {
+    const clientId = this.client.user?.id;
+    if (!clientId) {
+      return null;
+    }
+
+    const params = new URLSearchParams({
+      client_id: clientId,
+      scope: 'bot applications.commands',
+      permissions: DRASIL_GUILD_INSTALL_PERMISSIONS.toString(),
+    });
+
+    return `https://discord.com/oauth2/authorize?${params.toString()}`;
   }
 }

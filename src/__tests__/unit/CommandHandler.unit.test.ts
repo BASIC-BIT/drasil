@@ -1,13 +1,13 @@
 import {
   ApplicationCommandType,
   ApplicationIntegrationType,
+  ChannelType,
   InteractionContextType,
   MessageFlags,
   PermissionFlagsBits,
   User,
 } from 'discord.js';
 import { CommandHandler } from '../../controllers/CommandHandler';
-import { SETUP_VERIFICATION_MODAL_ID } from '../../constants/setupVerificationWizard';
 import {
   EXPECTED_TOPICS_SETTING_KEY,
   SERVER_ABOUT_SETTING_KEY,
@@ -36,6 +36,7 @@ describe('CommandHandler (unit)', () => {
     resetHeuristicSettings: jest.Mock;
     handleUserReport: jest.Mock;
     handleMessageReport: jest.Mock;
+    setupVerificationChannel: jest.Mock;
   }>;
 
   const originalUserInstallReportingEnabled = process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED;
@@ -90,17 +91,27 @@ describe('CommandHandler (unit)', () => {
       handleMessageReport: overrides.handleMessageReport ?? jest.fn().mockResolvedValue(true),
     } as any;
 
+    const notificationManager = {
+      setupVerificationChannel:
+        overrides.setupVerificationChannel ?? jest.fn().mockResolvedValue('created-channel-1'),
+    } as any;
+    const client = {
+      user: { id: 'client-1' },
+    } as any;
+
     return {
       handler: new CommandHandler(
+        client,
         {} as any,
         {} as any,
-        {} as any,
-        {} as any,
+        notificationManager,
         configService,
         userModerationService,
         securityActionService
       ),
+      client,
       userModerationService,
+      notificationManager,
       configService,
       securityActionService,
     };
@@ -115,6 +126,25 @@ describe('CommandHandler (unit)', () => {
     expect(banCommand.default_member_permissions).toBe(PermissionFlagsBits.BanMembers.toString());
   });
 
+  it('registers server-only slash commands as guild install commands', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+
+    for (const name of [
+      'ban',
+      'report',
+      'setupverification',
+      'config',
+      'flaguser',
+      'setupreportbutton',
+    ]) {
+      const command = commands.find((c) => c.name === name);
+      expect(command).toBeDefined();
+      expect(command.integration_types).toEqual([ApplicationIntegrationType.GuildInstall]);
+      expect(command.contexts).toEqual([InteractionContextType.Guild]);
+    }
+  });
+
   it('registers /report without default moderation permissions', () => {
     const { handler } = buildHandler();
     const commands = (handler as any).commands as any[];
@@ -122,9 +152,47 @@ describe('CommandHandler (unit)', () => {
 
     expect(reportCommand).toBeDefined();
     expect(reportCommand.default_member_permissions).toBeUndefined();
+    expect(reportCommand.integration_types).toEqual([ApplicationIntegrationType.GuildInstall]);
+    expect(reportCommand.contexts).toEqual([InteractionContextType.Guild]);
     expect(reportCommand.options.map((option: any) => option.name)).toEqual(['user', 'reason']);
     expect(reportCommand.options.find((option: any) => option.name === 'reason').max_length).toBe(
       USER_REPORT_REASON_MAX_LENGTH
+    );
+  });
+
+  it('registers /setupverification with typed role and channel options', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const setupCommand = commands.find((c) => c.name === 'setupverification');
+
+    expect(setupCommand).toBeDefined();
+    expect(setupCommand.default_member_permissions).toBe(
+      PermissionFlagsBits.Administrator.toString()
+    );
+    expect(setupCommand.options.map((option: any) => option.name)).toEqual([
+      'restricted-role',
+      'admin-channel',
+      'verification-channel',
+    ]);
+  });
+
+  it('explains when a guild-only slash command is used before Drasil is installed', async () => {
+    const { handler } = buildHandler();
+    const interaction = {
+      commandName: 'report',
+      guild: null,
+      guildId: 'guild-1',
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Drasil is not installed in this server yet.'),
+      flags: MessageFlags.Ephemeral,
+    });
+    expect(interaction.reply.mock.calls[0][0].content).toContain(
+      'https://discord.com/oauth2/authorize?'
     );
   });
 
@@ -723,13 +791,9 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
-  it('shows setup verification modal for admins', async () => {
-    const getCachedServerConfig = jest.fn().mockReturnValue({
-      restricted_role_id: 'role-1',
-      admin_channel_id: 'channel-1',
-      verification_channel_id: 'channel-2',
-    });
-    const { handler, configService } = buildHandler({ getCachedServerConfig });
+  it('configures verification from typed command options for admins', async () => {
+    const updateServerConfig = jest.fn().mockResolvedValue({});
+    const { handler, configService, notificationManager } = buildHandler({ updateServerConfig });
 
     const guild = {
       id: 'guild-1',
@@ -741,18 +805,75 @@ describe('CommandHandler (unit)', () => {
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
       },
+      options: {
+        getRole: jest.fn().mockReturnValue({ id: 'role-1' }),
+        getChannel: jest.fn((name: string) => {
+          if (name === 'admin-channel') {
+            return { id: 'channel-1', type: ChannelType.GuildText };
+          }
+          if (name === 'verification-channel') {
+            return { id: 'channel-2', type: ChannelType.GuildText };
+          }
+          return null;
+        }),
+      },
       reply: jest.fn().mockResolvedValue(undefined),
-      showModal: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.getCachedServerConfig).toHaveBeenCalledWith('guild-1');
-    expect(interaction.reply).not.toHaveBeenCalled();
-    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      restricted_role_id: 'role-1',
+      admin_channel_id: 'channel-1',
+      verification_channel_id: 'channel-2',
+    });
+    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content:
+        'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
 
-    const modalArg = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
-    expect(modalArg.toJSON().custom_id).toBe(SETUP_VERIFICATION_MODAL_ID);
+  it('auto-creates verification channel when setupverification omits it', async () => {
+    const setupVerificationChannel = jest.fn().mockResolvedValue('created-channel-1');
+    const { handler, configService } = buildHandler({ setupVerificationChannel });
+
+    const guild = {
+      id: 'guild-1',
+    } as any;
+
+    const interaction = {
+      commandName: 'setupverification',
+      guild,
+      memberPermissions: {
+        has: jest.fn().mockReturnValue(true),
+      },
+      options: {
+        getRole: jest.fn().mockReturnValue({ id: 'role-1' }),
+        getChannel: jest.fn((name: string) => {
+          if (name === 'admin-channel') {
+            return { id: 'channel-1', type: ChannelType.GuildText };
+          }
+          return null;
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(setupVerificationChannel).toHaveBeenCalledWith(guild, 'role-1', false);
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      restricted_role_id: 'role-1',
+      admin_channel_id: 'channel-1',
+      verification_channel_id: 'created-channel-1',
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content:
+        'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nCreated verification channel: <#created-channel-1>',
+      flags: MessageFlags.Ephemeral,
+    });
   });
 
   it('falls back to member fetch when setupverification memberPermissions is null', async () => {
@@ -778,15 +899,30 @@ describe('CommandHandler (unit)', () => {
       channelId: 'channel-1',
       user: { id: 'admin-1' },
       memberPermissions: null,
+      options: {
+        getRole: jest.fn().mockReturnValue({ id: 'role-1' }),
+        getChannel: jest.fn((name: string) => {
+          if (name === 'admin-channel') {
+            return { id: 'channel-1', type: ChannelType.GuildText };
+          }
+          if (name === 'verification-channel') {
+            return { id: 'channel-2', type: ChannelType.GuildText };
+          }
+          return null;
+        }),
+      },
       reply: jest.fn().mockResolvedValue(undefined),
-      showModal: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     await handler.handleSlashCommand(interaction);
 
     expect(guild.members.fetch).toHaveBeenCalledWith('admin-1');
     expect(permissionsIn).toHaveBeenCalledWith('channel-1');
-    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content:
+        'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
+      flags: MessageFlags.Ephemeral,
+    });
   });
 
   it('handles /config heuristic set-threshold', async () => {

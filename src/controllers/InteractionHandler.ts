@@ -37,7 +37,6 @@ import {
   REPORT_MESSAGE_MODAL_PREFIX,
   REPORT_MESSAGE_REASON_FIELD_ID,
   USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH,
-  USER_REPORT_REASON_MAX_LENGTH,
 } from '../utils/userReportSettings';
 import {
   parseChannelId,
@@ -424,42 +423,11 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async handleReportUserInitiate(interaction: ButtonInteraction): Promise<void> {
-    const reasonRequired = getUserReportSettings(
-      interaction.guildId
-        ? this.configService.getCachedServerConfig(interaction.guildId)?.settings
-        : undefined
-    ).reasonRequired;
-
-    // Create the modal
-    const modal = new ModalBuilder()
-      .setCustomId('report_user_modal_submit') // Unique ID for the modal submission
-      .setTitle('Report a User');
-
-    // Create the target user input field
-    const targetUserInput = new TextInputBuilder()
-      .setCustomId('report_target_user_input') // Changed ID
-      .setLabel('User ID, mention, or username')
-      .setPlaceholder('123456789012345678, @username, or username')
-      .setStyle(TextInputStyle.Short) // Use Short style for ID/Tag
-      .setRequired(true);
-    const targetUserRow = new ActionRowBuilder<TextInputBuilder>().addComponents(targetUserInput);
-
-    // Create the reason text input
-    const reasonInput = new TextInputBuilder()
-      .setCustomId('report_reason')
-      .setLabel('Reason')
-      .setStyle(TextInputStyle.Paragraph) // Allow multi-line input
-      .setPlaceholder('What happened? Include links or message context if useful.')
-      .setMaxLength(USER_REPORT_REASON_MAX_LENGTH)
-      .setRequired(reasonRequired);
-
-    const reasonRow = new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput);
-
-    // Add components to the modal
-    modal.addComponents(targetUserRow, reasonRow); // Use the correct row
-
-    // Show the modal to the user
-    await interaction.showModal(modal);
+    await interaction.reply({
+      content:
+        "Use `/report` and choose the user from Discord's user picker, or right-click the user and choose `Apps` -> `Report User`. Discord buttons cannot collect a typed user argument safely.",
+      flags: MessageFlags.Ephemeral,
+    });
   }
 
   public async handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
