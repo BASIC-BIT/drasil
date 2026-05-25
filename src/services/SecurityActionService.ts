@@ -361,16 +361,24 @@ export class SecurityActionService implements ISecurityActionService {
       at: new Date().toISOString(),
     });
 
-    const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
+    const fallbackEvent = {
+      ...verificationEvent,
       metadata: updatedMetadata as VerificationEvent['metadata'],
-    });
+    };
 
-    return (
-      updatedEvent ?? {
-        ...verificationEvent,
+    try {
+      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
         metadata: updatedMetadata as VerificationEvent['metadata'],
-      }
-    );
+      });
+
+      return updatedEvent ?? fallbackEvent;
+    } catch (recordError) {
+      console.error(
+        `Failed to record ${action} failure for verification event ${verificationEvent.id}; continuing notification:`,
+        recordError
+      );
+      return fallbackEvent;
+    }
   }
 
   private async tryRestrictUser(

@@ -197,6 +197,41 @@ describe('SecurityActionService (unit)', () => {
     expect(serverMember?.verification_status).toBe(VerificationStatus.PENDING);
   });
 
+  it('continues notification when recording a restriction failure fails', async () => {
+    const guildId = 'guild-restrict-record-fails';
+    const userId = 'user-restrict-record-fails';
+    const member = buildMember(guildId, userId);
+    const message = buildMessage(guildId, 'channel-1');
+    userModerationService.restrictUser.mockRejectedValueOnce(new Error('Missing Permissions'));
+    jest.spyOn(verificationEventRepository, 'update').mockRejectedValueOnce(new Error('DB down'));
+
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: message.content,
+    };
+
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(
+        buildService().handleSuspiciousMessage(member, detectionResult, message)
+      ).resolves.toBe(true);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+
+    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+
+    const notifiedVerificationEvent =
+      notificationManager.upsertSuspiciousUserNotification.mock.calls[0][2];
+    expect(getVerificationActionFailures(notifiedVerificationEvent.metadata)).toEqual([
+      expect.objectContaining({ action: 'restrict', message: 'Missing Permissions' }),
+    ]);
+  });
+
   it('continues case notification when verification thread creation fails', async () => {
     const guildId = 'guild-thread-fails';
     const userId = 'user-thread-fails';
