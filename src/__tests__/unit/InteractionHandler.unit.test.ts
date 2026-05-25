@@ -24,10 +24,7 @@ import {
   SETUP_VERIFICATION_MODAL_ID,
   SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
 } from '../../constants/setupVerificationWizard';
-import {
-  USER_REPORT_REASON_MAX_LENGTH,
-  USER_REPORT_REASON_REQUIRED_SETTING_KEY,
-} from '../../utils/userReportSettings';
+import { USER_REPORT_REASON_REQUIRED_SETTING_KEY } from '../../utils/userReportSettings';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -1365,13 +1362,7 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
-  it('routes report button clicks to show the report modal', async () => {
-    configService.getCachedServerConfig.mockReturnValue({
-      settings: {
-        [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
-      },
-    } as any);
-
+  it('routes report button clicks to typed report command guidance', async () => {
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -1388,20 +1379,13 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(interaction.reply).not.toHaveBeenCalled();
-    expect(interaction.showModal).toHaveBeenCalledTimes(1);
-
-    const modalArg = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
-    const modalJson = modalArg.toJSON();
-    expect(modalJson.custom_id).toBe('report_user_modal_submit');
-    expect(modalJson.components[0].components[0].label).toBe('User ID, mention, or username');
-    expect(modalJson.components[0].components[0].placeholder).toBe(
-      '123456789012345678, @username, or username'
-    );
-    expect(modalJson.components[1].components[0].label).toBe('Reason');
-    expect(modalJson.components[1].components[0].max_length).toBe(USER_REPORT_REASON_MAX_LENGTH);
-    expect(modalJson.components[1].components[0].required).toBe(true);
-    expect(configService.getCachedServerConfig).toHaveBeenCalledWith('guild-1');
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content:
+        "Use `/report` and choose the user from Discord's user picker, or right-click the user and choose `Apps` -> `Report User`. Discord buttons cannot collect a typed user argument safely.",
+      flags: MessageFlags.Ephemeral,
+    });
+    expect(interaction.showModal).not.toHaveBeenCalled();
+    expect(configService.getCachedServerConfig).not.toHaveBeenCalled();
     expect(configService.getServerConfig).not.toHaveBeenCalled();
   });
 });

@@ -31,6 +31,7 @@ import {
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
 import type { VerificationThreadAnalysisResult } from './GPTService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
+import { getVerificationActionFailures } from '../utils/verificationActionFailures';
 
 export interface NotificationButton {
   id: string;
@@ -918,6 +919,17 @@ export class NotificationManager implements INotificationManager {
       });
     }
 
+    const actionFailureFieldValue = this.formatVerificationActionFailureFieldValue(
+      verificationEvent.metadata
+    );
+    if (actionFailureFieldValue) {
+      embed.addFields({
+        name: 'Moderation Action Warning',
+        value: actionFailureFieldValue,
+        inline: false,
+      });
+    }
+
     // Add detection history if we have any
     if (detectionHistory) {
       embed.addFields({
@@ -951,6 +963,28 @@ export class NotificationManager implements INotificationManager {
     }
 
     return embed;
+  }
+
+  private formatVerificationActionFailureFieldValue(metadata: unknown): string | null {
+    const failures = getVerificationActionFailures(metadata);
+    if (failures.length === 0) {
+      return null;
+    }
+
+    const value = failures
+      .slice(-3)
+      .map((failure) => {
+        const timestamp = Math.floor(new Date(failure.at).getTime() / 1000);
+        const action =
+          failure.action === 'restrict' ? 'Apply restricted role' : 'Create case thread';
+        const when = Number.isFinite(timestamp) ? ` <t:${timestamp}:R>` : '';
+        return `Warning: ${action} failed${when}: ${failure.message}`;
+      })
+      .join('\n');
+
+    return this.truncateEmbedFieldValue(
+      `${value}\nCase record was still created so moderators can review and fix permissions.`
+    );
   }
 
   private formatThreadAnalysisFieldValue(analysis: {

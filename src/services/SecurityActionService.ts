@@ -23,6 +23,10 @@ import {
 import { IUserModerationService } from './UserModerationService';
 import { IAdminActionService } from './AdminActionService';
 import { getUserReportSettings } from '../utils/userReportSettings';
+import {
+  appendVerificationActionFailure,
+  type VerificationActionFailureKind,
+} from '../utils/verificationActionFailures';
 /**
  * Interface for the SecurityActionService
  */
@@ -341,6 +345,86 @@ export class SecurityActionService implements ISecurityActionService {
     }
   }
 
+  private formatActionFailureMessage(error: unknown): string {
+    if (error instanceof Error && error.message) {
+      return error.message;
+    }
+
+    return String(error || 'Unknown error');
+  }
+
+  private async recordVerificationActionFailure(
+    verificationEvent: VerificationEvent,
+    action: VerificationActionFailureKind,
+    error: unknown
+  ): Promise<VerificationEvent> {
+    const updatedMetadata = appendVerificationActionFailure(verificationEvent.metadata, {
+      action,
+      message: this.formatActionFailureMessage(error),
+      at: new Date().toISOString(),
+    });
+
+    const fallbackEvent = {
+      ...verificationEvent,
+      metadata: updatedMetadata as VerificationEvent['metadata'],
+    };
+
+    try {
+      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
+        metadata: updatedMetadata as VerificationEvent['metadata'],
+      });
+
+      return updatedEvent ?? fallbackEvent;
+    } catch (recordError) {
+      console.error(
+        `Failed to record ${action} failure for verification event ${verificationEvent.id}; continuing notification:`,
+        recordError
+      );
+      return fallbackEvent;
+    }
+  }
+
+  private async tryRestrictUser(
+    member: GuildMember,
+    verificationEvent: VerificationEvent
+  ): Promise<VerificationEvent> {
+    try {
+      const restricted = await this.userModerationService.restrictUser(member);
+      if (!restricted) {
+        throw new Error(`Failed to restrict user ${member.user.tag}`);
+      }
+      return verificationEvent;
+    } catch (error) {
+      console.error(`Failed to restrict user ${member.user.tag}; continuing case flow:`, error);
+      return this.recordVerificationActionFailure(verificationEvent, 'restrict', error);
+    }
+  }
+
+  private async tryCreateCaseThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult,
+    useReportReviewThread: boolean,
+    sourceMessage?: Message
+  ): Promise<VerificationEvent> {
+    try {
+      await this.createCaseThread(
+        member,
+        verificationEvent,
+        detectionResult,
+        useReportReviewThread,
+        sourceMessage
+      );
+      return verificationEvent;
+    } catch (error) {
+      console.error(
+        `Failed to create case thread for ${member.user.tag}; continuing notification:`,
+        error
+      );
+      return this.recordVerificationActionFailure(verificationEvent, 'thread', error);
+    }
+  }
+
   private async upsertReportObservedAlertOrActiveCase(
     member: GuildMember,
     detectionResult: DetectionResult,
@@ -549,8 +633,7 @@ export class SecurityActionService implements ISecurityActionService {
     const shouldUseReviewThread =
       useReportReviewThread ?? this.shouldUseReportReviewThread(restrictUser, detectionResult);
 
-    // Fail fast: we don't attempt retries or compensation yet.
-    // TODO: Add retries/idempotency and partial failure handling if needed later.
+    // Create durable case state before Discord side effects so moderators see partial failures.
     await this.ensureEntitiesExist(
       member.guild.id,
       member.id,
@@ -568,6 +651,7 @@ export class SecurityActionService implements ISecurityActionService {
       await this.verificationEventRepository.findActiveByUserAndServer(member.id, member.guild.id);
 
     if (activeVerificationEvent) {
+      let notificationVerificationEvent = activeVerificationEvent;
       console.log(
         `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Updating notification.`
       );
@@ -592,17 +676,17 @@ export class SecurityActionService implements ISecurityActionService {
             member.id
           );
           if (serverMember?.is_restricted !== true) {
-            const restricted = await this.userModerationService.restrictUser(member);
-            if (!restricted) {
-              throw new Error(`Failed to restrict user ${member.user.tag}`);
-            }
+            notificationVerificationEvent = await this.tryRestrictUser(
+              member,
+              activeVerificationEvent
+            );
           }
         }
       }
       await this.upsertNotification(
         member,
         detectionResult,
-        activeVerificationEvent,
+        notificationVerificationEvent,
         sourceMessage
       );
       return true;
@@ -612,7 +696,7 @@ export class SecurityActionService implements ISecurityActionService {
       `No active verification found for user ${member.user.tag}. Creating new verification event.`
     );
 
-    const newVerificationEvent = await this.verificationEventRepository.createFromDetection(
+    let newVerificationEvent = await this.verificationEventRepository.createFromDetection(
       detectionEventId,
       member.guild.id,
       member.id,
@@ -630,10 +714,7 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     if (restrictUser) {
-      const restricted = await this.userModerationService.restrictUser(member);
-      if (!restricted) {
-        throw new Error(`Failed to restrict user ${member.user.tag}`);
-      }
+      newVerificationEvent = await this.tryRestrictUser(member, newVerificationEvent);
     } else {
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
         is_restricted: false,
@@ -642,7 +723,7 @@ export class SecurityActionService implements ISecurityActionService {
       });
     }
 
-    await this.createCaseThread(
+    newVerificationEvent = await this.tryCreateCaseThread(
       member,
       newVerificationEvent,
       detectionResult,
