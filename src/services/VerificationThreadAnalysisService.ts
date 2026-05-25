@@ -181,7 +181,11 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       return analysis;
     }
 
-    if (settings.maxAction === 'restrict' && analysis.confidence >= settings.restrictThreshold) {
+    if (
+      settings.maxAction === 'restrict' &&
+      analysis.result === 'likely_suspicious' &&
+      analysis.confidence >= settings.restrictThreshold
+    ) {
       return analysis;
     }
 
