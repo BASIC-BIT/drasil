@@ -283,6 +283,7 @@ describe('ThreadManager (unit)', () => {
       triggerContent: 'suspicious DM',
     });
 
+    expect(guild.members.fetch).not.toHaveBeenCalled();
     expect(thread.members.add).toHaveBeenCalledWith('staff-1');
     expect(thread.members.add).not.toHaveBeenCalledWith(member.id);
     const storedEvent = await verificationEventRepository.findById(event.id);

@@ -202,16 +202,6 @@ export class ThreadManager implements IThreadManager {
       return { addedUserIds: [], warnings };
     }
 
-    try {
-      await guild.members.fetch();
-    } catch (error) {
-      warnings.push('Could not refresh guild members; using cached role membership only.');
-      console.warn(
-        `Failed to refresh guild members for case staff routing in guild ${guild.id}:`,
-        error
-      );
-    }
-
     for (const roleId of settings.roleIds) {
       const role = await guild.roles.fetch(roleId).catch((error) => {
         warnings.push(`Could not fetch responder role ${roleId}.`);

@@ -1,4 +1,4 @@
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import { GuildMember, Message, Client, User, APIUser, InteractionContextType } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import { INotificationManager } from './NotificationManager';
@@ -171,7 +171,7 @@ export class SecurityActionService implements ISecurityActionService {
     @inject(TYPES.ThreadManager) threadManager: IThreadManager,
     @inject(TYPES.UserModerationService) userModerationService: IUserModerationService, // Keep for reopenVerification
     @inject(TYPES.DiscordClient) client: Client,
-    @inject(TYPES.GPTService) gptService?: IGPTService
+    @optional() @inject(TYPES.GPTService) gptService?: IGPTService
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;

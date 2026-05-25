@@ -590,13 +590,15 @@ export class InteractionHandler implements IInteractionHandler {
       return null;
     }
 
-    const attachmentCollection = Reflect.get(message, 'attachments') as
-      | {
+    const attachmentCollection = (
+      message as unknown as {
+        attachments?: {
           values: () => Iterable<
             MessageReportAttachment & { proxyURL?: string; contentType?: string | null }
           >;
-        }
-      | undefined;
+        };
+      }
+    ).attachments;
     const attachments = [...(attachmentCollection?.values() ?? [])].map((attachment) => ({
       id: attachment.id,
       name: attachment.name,
