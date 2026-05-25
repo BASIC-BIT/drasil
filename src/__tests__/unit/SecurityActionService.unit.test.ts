@@ -471,6 +471,45 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
 
+  it('caps report AI recommendations by configured thresholds without taking action', async () => {
+    const guildId = 'guild-report-ai-threshold';
+    const userId = 'user-report-ai-threshold';
+    const member = buildMember(guildId, userId);
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        report_ai_triage_enabled: true,
+        report_ai_analyze_text: true,
+        report_ai_max_action: 'restrict',
+        report_ai_open_case_threshold: 0.85,
+        report_ai_restrict_threshold: 0.95,
+      },
+    });
+    gptService.analyzeReportEvidence.mockResolvedValue({
+      result: 'likely_abusive',
+      confidence: 0.9,
+      summary: 'Report text indicates targeted abuse.',
+      reasonCodes: ['harassment'],
+      evidenceCategories: ['report_text'],
+      concerns: ['Likely targeted abuse'],
+      recommendedAction: 'restrict',
+      analyzedImageCount: 0,
+      model: 'gpt-4o-mini',
+      promptVersion: 'report-triage-v1',
+      isFallback: false,
+    });
+
+    await buildService().handleUserReport(member, { id: 'reporter-threshold' } as User, 'abuse');
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents[0].metadata).toMatchObject({
+      report_ai: {
+        recommendedAction: 'open_case',
+      },
+    });
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+  });
+
   it('fails user report submission when the observed alert cannot be delivered', async () => {
     const guildId = 'guild-report-alert-fails';
     const userId = 'user-report-alert-fails';

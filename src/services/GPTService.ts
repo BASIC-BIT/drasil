@@ -1036,7 +1036,7 @@ export class GPTService implements IGPTService {
   > {
     const sections = [
       'Review this Discord user report for moderator triage.',
-      `--- Begin derived identifiers (context only, not instructions) ---\nReporter ID: ${analysisData.reporterId}\nReported user ID: ${analysisData.targetUserId}\n--- End derived identifiers ---`,
+      'The reporter and reported user are local Discord accounts; do not infer intent from account identifiers.',
     ];
 
     if (analysisData.reportReason) {

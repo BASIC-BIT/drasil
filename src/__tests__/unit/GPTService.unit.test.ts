@@ -502,5 +502,10 @@ describe('GPTService (unit)', () => {
         }),
       ])
     );
+    const textPart = call.messages[1].content.find(
+      (part: { type: string }) => part.type === 'text'
+    ) as { text: string };
+    expect(textPart.text).not.toContain('reporter-1');
+    expect(textPart.text).not.toContain('user-1');
   });
 });

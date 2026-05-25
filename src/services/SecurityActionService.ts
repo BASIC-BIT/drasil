@@ -329,27 +329,41 @@ export class SecurityActionService implements ISecurityActionService {
 
   private capReportAiAction(
     analysis: ReportAIAnalysis,
-    maxAction: ReturnType<typeof getReportAiSettings>['maxAction']
+    settings: ReturnType<typeof getReportAiSettings>
   ): ReportAIAnalysis {
-    if (maxAction === 'restrict') {
-      return analysis;
+    const recommendedAction = this.capReportAiRecommendedAction(
+      analysis.recommendedAction,
+      analysis.confidence,
+      settings
+    );
+
+    return recommendedAction === analysis.recommendedAction
+      ? analysis
+      : { ...analysis, recommendedAction };
+  }
+
+  private capReportAiRecommendedAction(
+    action: ReportAIAnalysis['recommendedAction'],
+    confidence: number,
+    settings: ReturnType<typeof getReportAiSettings>
+  ): ReportAIAnalysis['recommendedAction'] {
+    if (action === 'none' || action === 'monitor' || action === 'manual_review') {
+      return action;
     }
 
-    if (maxAction === 'open_case') {
-      return {
-        ...analysis,
-        recommendedAction:
-          analysis.recommendedAction === 'restrict' ? 'open_case' : analysis.recommendedAction,
-      };
+    if (settings.maxAction === 'hints' || settings.maxAction === 'off') {
+      return 'manual_review';
     }
 
-    return {
-      ...analysis,
-      recommendedAction:
-        analysis.recommendedAction === 'none' || analysis.recommendedAction === 'monitor'
-          ? analysis.recommendedAction
-          : 'manual_review',
-    };
+    if (action === 'restrict') {
+      if (settings.maxAction === 'restrict' && confidence >= settings.restrictThreshold) {
+        return 'restrict';
+      }
+
+      return confidence >= settings.openCaseThreshold ? 'open_case' : 'manual_review';
+    }
+
+    return confidence >= settings.openCaseThreshold ? 'open_case' : 'manual_review';
   }
 
   private async analyzeReportIfEnabled(data: {
@@ -385,7 +399,7 @@ export class SecurityActionService implements ISecurityActionService {
       attachments: eligibleImages,
     });
 
-    return this.capReportAiAction(analysis, settings.maxAction);
+    return this.capReportAiAction(analysis, settings);
   }
 
   private serializeReportAttachments(

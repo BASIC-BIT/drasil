@@ -2,7 +2,7 @@ import { injectable, inject } from 'inversify';
 import type { Message } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import type { IConfigService } from '../config/ConfigService';
-import type { IGPTService } from './GPTService';
+import type { IGPTService, VerificationThreadAnalysisResult } from './GPTService';
 import type { INotificationManager } from './NotificationManager';
 import type { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import type { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
@@ -107,13 +107,14 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     }
 
     const detectionReasons = await this.getDetectionReasons(verificationEvent.detection_event_id);
-    const analysis = await this.gptService.analyzeVerificationThreadResponses({
+    const rawAnalysis = await this.gptService.analyzeVerificationThreadResponses({
       serverId: verificationEvent.server_id,
       userId: verificationEvent.user_id,
       username: message.author.username,
       messages: responses,
       detectionReasons,
     });
+    const analysis = this.capRecommendedAction(rawAnalysis, settings);
 
     const nextAnalyzedMessageIds = [...metadata.analyzedMessageIds, message.id].slice(
       -settings.messageLimit
@@ -170,6 +171,21 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
         this.analysisChains.delete(id);
       }
     }
+  }
+
+  private capRecommendedAction(
+    analysis: VerificationThreadAnalysisResult,
+    settings: ReturnType<typeof getVerificationThreadAnalysisSettings>
+  ): VerificationThreadAnalysisResult {
+    if (analysis.recommendedAction !== 'restrict') {
+      return analysis;
+    }
+
+    if (settings.maxAction === 'restrict' && analysis.confidence >= settings.restrictThreshold) {
+      return analysis;
+    }
+
+    return { ...analysis, recommendedAction: 'manual_review' };
   }
 
   private asObject(value: unknown): Record<string, unknown> | null {

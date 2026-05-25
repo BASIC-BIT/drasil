@@ -531,7 +531,7 @@ export class CommandHandler implements ICommandHandler {
             .addSubcommand((subcommand) =>
               subcommand
                 .setName('ai-set-max-action')
-                .setDescription('Set the maximum AI report triage authority')
+                .setDescription('Set the maximum AI report triage recommendation')
                 .addStringOption((option) =>
                   option
                     .setName('action')
@@ -540,8 +540,8 @@ export class CommandHandler implements ICommandHandler {
                     .addChoices(
                       { name: 'Off', value: 'off' },
                       { name: 'Hints only', value: 'hints' },
-                      { name: 'Open case', value: 'open_case' },
-                      { name: 'Restrict pending review', value: 'restrict' }
+                      { name: 'Recommend open case', value: 'open_case' },
+                      { name: 'Recommend restriction review', value: 'restrict' }
                     )
                 )
             )
@@ -643,7 +643,7 @@ export class CommandHandler implements ICommandHandler {
             .addSubcommand((subcommand) =>
               subcommand
                 .setName('analysis-set-max-action')
-                .setDescription('Set the maximum verification reply AI authority')
+                .setDescription('Set the maximum verification reply AI recommendation')
                 .addStringOption((option) =>
                   option
                     .setName('action')
@@ -652,7 +652,7 @@ export class CommandHandler implements ICommandHandler {
                     .addChoices(
                       { name: 'Off', value: 'off' },
                       { name: 'Hints only', value: 'hints' },
-                      { name: 'Restrict pending review', value: 'restrict' }
+                      { name: 'Recommend restriction review', value: 'restrict' }
                     )
                 )
             )
@@ -1392,7 +1392,7 @@ export class CommandHandler implements ICommandHandler {
       `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
       `Analyze text: \`${settings.analyzeText ? 'yes' : 'no'}\``,
       `Analyze images: \`${settings.analyzeImages ? 'yes' : 'no'}\``,
-      `Max action: \`${settings.maxAction}\``,
+      `Max recommended action: \`${settings.maxAction}\``,
       `Open-case threshold: \`${Math.round(settings.openCaseThreshold * 100)}%\``,
       `Restrict threshold: \`${Math.round(settings.restrictThreshold * 100)}%\``,
       `Max images: \`${settings.maxImages}\``,
@@ -1463,7 +1463,7 @@ export class CommandHandler implements ICommandHandler {
     return [
       `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
       `Message limit: \`${settings.messageLimit}\``,
-      `Max action: \`${settings.maxAction}\``,
+      `Max recommended action: \`${settings.maxAction}\``,
       `Restrict threshold: \`${Math.round(settings.restrictThreshold * 100)}%\``,
     ].join('\n');
   }
