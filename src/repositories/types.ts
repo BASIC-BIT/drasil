@@ -46,6 +46,7 @@ export interface ServerSettings {
   observed_action_ban_requires_reason?: boolean;
   user_report_reason_required?: boolean;
   user_report_external_response_mode?: 'off' | 'notify_only' | 'open_case';
+  analytics_consent_level?: 'off' | 'anonymous' | 'full';
 }
 
 /**

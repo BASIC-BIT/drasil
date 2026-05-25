@@ -43,6 +43,10 @@ import {
   IVerificationThreadAnalysisService,
   VerificationThreadAnalysisService,
 } from '../services/VerificationThreadAnalysisService';
+import {
+  IProductAnalyticsService,
+  ProductAnalyticsService,
+} from '../services/ProductAnalyticsService';
 // Initialize container
 const container = new Container();
 
@@ -179,6 +183,11 @@ function configureServices(container: Container): void {
   container
     .bind<IVerificationThreadAnalysisService>(TYPES.VerificationThreadAnalysisService)
     .to(VerificationThreadAnalysisService)
+    .inSingletonScope();
+
+  container
+    .bind<IProductAnalyticsService>(TYPES.ProductAnalyticsService)
+    .to(ProductAnalyticsService)
     .inSingletonScope();
 }
 

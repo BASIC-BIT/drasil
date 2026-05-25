@@ -1,5 +1,5 @@
 import { GuildMember, User } from 'discord.js';
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import { TYPES } from '../di/symbols';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import { INotificationManager } from './NotificationManager';
@@ -8,6 +8,10 @@ import { IVerificationEventRepository } from '../repositories/VerificationEventR
 import { AdminActionType, VerificationStatus } from '../repositories/types';
 import { IAdminActionService } from './AdminActionService';
 import { IThreadManager } from './ThreadManager';
+import {
+  IProductAnalyticsService,
+  NOOP_PRODUCT_ANALYTICS_SERVICE,
+} from './ProductAnalyticsService';
 
 /**
  * Interface for the UserModerationService
@@ -54,6 +58,7 @@ export class UserModerationService implements IUserModerationService {
   private verificationEventRepository: IVerificationEventRepository;
   private adminActionService: IAdminActionService; // Keep for now, might be replaced by events later
   private threadManager: IThreadManager;
+  private productAnalyticsService: IProductAnalyticsService;
 
   constructor(
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
@@ -62,7 +67,10 @@ export class UserModerationService implements IUserModerationService {
     @inject(TYPES.VerificationEventRepository)
     verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.AdminActionService) adminActionService: IAdminActionService,
-    @inject(TYPES.ThreadManager) threadManager: IThreadManager
+    @inject(TYPES.ThreadManager) threadManager: IThreadManager,
+    @inject(TYPES.ProductAnalyticsService)
+    @optional()
+    productAnalyticsService?: IProductAnalyticsService
   ) {
     this.serverMemberRepository = serverMemberRepository;
     this.notificationManager = notificationManager;
@@ -70,6 +78,27 @@ export class UserModerationService implements IUserModerationService {
     this.verificationEventRepository = verificationEventRepository;
     this.adminActionService = adminActionService;
     this.threadManager = threadManager;
+    this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
+  }
+
+  private captureModerationAction(
+    member: GuildMember,
+    actionType: AdminActionType,
+    moderator?: User,
+    verificationEventId?: string | null,
+    detectionEventId?: string | null
+  ): void {
+    void this.productAnalyticsService.captureUserEvent(
+      member.guild.id,
+      member.id,
+      'moderation action completed',
+      { action_type: actionType },
+      {
+        moderatorId: moderator?.id,
+        verificationEventId: verificationEventId ?? undefined,
+        detectionEventId: detectionEventId ?? undefined,
+      }
+    );
   }
 
   /**
@@ -115,6 +144,13 @@ export class UserModerationService implements IUserModerationService {
       });
 
       console.log(`Successfully restricted user ${member.user.tag}`);
+      this.captureModerationAction(
+        member,
+        AdminActionType.RESTRICT,
+        undefined,
+        verificationEvent?.id,
+        verificationEvent?.detection_event_id
+      );
       return true;
     } catch (error) {
       console.error(`Failed to restrict user ${member.user.tag}:`, error);
@@ -200,6 +236,13 @@ export class UserModerationService implements IUserModerationService {
       });
 
       console.log(`User ${member.user.tag} verification process completed successfully.`);
+      this.captureModerationAction(
+        member,
+        AdminActionType.VERIFY,
+        moderator,
+        verificationEvent.id,
+        verificationEvent.detection_event_id
+      );
       return true; // Verification process completed successfully
     } catch (error) {
       console.error(`Failed to verify user ${member.user.tag}:`, error);
@@ -301,6 +344,13 @@ export class UserModerationService implements IUserModerationService {
         );
       }
 
+      this.captureModerationAction(
+        member,
+        AdminActionType.BAN,
+        moderator,
+        verificationEvent?.id,
+        detectionEventId ?? verificationEvent?.detection_event_id
+      );
       return true; // Ban succeeded
     } catch (error) {
       console.error(`Failed to ban user ${member.user.tag}:`, error);

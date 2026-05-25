@@ -1,4 +1,4 @@
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import { GuildMember, Message, Client, User, APIUser, InteractionContextType } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import { INotificationManager } from './NotificationManager';
@@ -27,6 +27,12 @@ import {
   appendVerificationActionFailure,
   type VerificationActionFailureKind,
 } from '../utils/verificationActionFailures';
+import {
+  IProductAnalyticsService,
+  NOOP_PRODUCT_ANALYTICS_SERVICE,
+  ProductAnalyticsIdentifiers,
+  ProductAnalyticsProperties,
+} from './ProductAnalyticsService';
 /**
  * Interface for the SecurityActionService
  */
@@ -148,6 +154,7 @@ export class SecurityActionService implements ISecurityActionService {
   private threadManager: IThreadManager;
   private userModerationService: IUserModerationService; // Keep for reopenVerification for now
   private client: Client;
+  private productAnalyticsService: IProductAnalyticsService;
 
   constructor(
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
@@ -160,7 +167,10 @@ export class SecurityActionService implements ISecurityActionService {
     @inject(TYPES.AdminActionService) adminActionService: IAdminActionService,
     @inject(TYPES.ThreadManager) threadManager: IThreadManager,
     @inject(TYPES.UserModerationService) userModerationService: IUserModerationService, // Keep for reopenVerification
-    @inject(TYPES.DiscordClient) client: Client
+    @inject(TYPES.DiscordClient) client: Client,
+    @inject(TYPES.ProductAnalyticsService)
+    @optional()
+    productAnalyticsService?: IProductAnalyticsService
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -172,6 +182,7 @@ export class SecurityActionService implements ISecurityActionService {
     this.threadManager = threadManager;
     this.userModerationService = userModerationService; // Keep for reopenVerification
     this.client = client;
+    this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
   }
 
   /**
@@ -604,6 +615,54 @@ export class SecurityActionService implements ISecurityActionService {
     });
   }
 
+  private getConfidenceBucket(confidence: number): string {
+    const percent = Math.round(confidence * 100);
+    if (percent >= 90) return '90-100';
+    if (percent >= 70) return '70-89';
+    if (percent >= 50) return '50-69';
+    return '0-49';
+  }
+
+  private captureMemberAnalytics(
+    member: GuildMember,
+    event: string,
+    properties: ProductAnalyticsProperties = {},
+    identifiers: ProductAnalyticsIdentifiers = {}
+  ): void {
+    void this.productAnalyticsService.captureUserEvent(
+      member.guild.id,
+      member.id,
+      event,
+      properties,
+      identifiers
+    );
+  }
+
+  private captureDetectionCaseAnalytics(
+    member: GuildMember,
+    event: string,
+    detectionResult: DetectionResult,
+    verificationEvent: VerificationEvent,
+    properties: ProductAnalyticsProperties = {}
+  ): void {
+    this.captureMemberAnalytics(
+      member,
+      event,
+      {
+        detection_type: detectionResult.triggerSource,
+        confidence: detectionResult.confidence,
+        confidence_bucket: this.getConfidenceBucket(detectionResult.confidence),
+        restrict_user: properties.restrict_user,
+        report_review_thread: properties.report_review_thread,
+        active_case_existed: properties.active_case_existed,
+      },
+      {
+        detectionEventId: detectionResult.detectionEventId,
+        verificationEventId: verificationEvent.id,
+      }
+    );
+  }
+
   private async hasRecordedObservedAction(
     serverId: string,
     userId: string,
@@ -689,6 +748,17 @@ export class SecurityActionService implements ISecurityActionService {
         notificationVerificationEvent,
         sourceMessage
       );
+      this.captureDetectionCaseAnalytics(
+        member,
+        'verification case updated',
+        detectionResult,
+        notificationVerificationEvent,
+        {
+          restrict_user: restrictUser,
+          report_review_thread: shouldUseReviewThread,
+          active_case_existed: true,
+        }
+      );
       return true;
     }
 
@@ -732,6 +802,17 @@ export class SecurityActionService implements ISecurityActionService {
     );
 
     await this.upsertNotification(member, detectionResult, newVerificationEvent, sourceMessage);
+    this.captureDetectionCaseAnalytics(
+      member,
+      'verification case opened',
+      detectionResult,
+      newVerificationEvent,
+      {
+        restrict_user: restrictUser,
+        report_review_thread: shouldUseReviewThread,
+        active_case_existed: false,
+      }
+    );
 
     return true;
   }
@@ -842,7 +923,21 @@ export class SecurityActionService implements ISecurityActionService {
         detectionEventId: detectionEvent.id,
       };
 
-      return await this.handleSuspiciousMember(member, detectionResult);
+      const handled = await this.handleSuspiciousMember(member, detectionResult);
+      if (handled) {
+        this.captureMemberAnalytics(
+          member,
+          'manual flag submitted',
+          {
+            has_reason: Boolean(reason?.trim()),
+          },
+          {
+            moderatorId: moderator.id,
+            detectionEventId: detectionEvent.id,
+          }
+        );
+      }
+      return handled;
     } catch (error) {
       console.error(`Failed to handle manual flag for ${member.user.tag}:`, error);
       throw error;
@@ -888,6 +983,18 @@ export class SecurityActionService implements ISecurityActionService {
       };
 
       await this.upsertReportObservedAlertOrActiveCase(member, detectionResult, detectionEvent.id);
+      this.captureMemberAnalytics(
+        member,
+        'user report submitted',
+        {
+          report_type: 'user_report',
+          has_reason: Boolean(reason?.trim()),
+        },
+        {
+          reporterId: reporter.id,
+          detectionEventId: detectionEvent.id,
+        }
+      );
       return true;
     } catch (error) {
       console.error(`Failed to handle user report for ${member.user.tag}:`, error);
@@ -1044,6 +1151,20 @@ export class SecurityActionService implements ISecurityActionService {
         detectionResult,
         serverDetectionEvent.id
       );
+      this.captureMemberAnalytics(
+        member,
+        'user report submitted',
+        {
+          report_type: isLocalReport ? 'message_report' : 'external_message_report',
+          has_reason: Boolean(report.reason?.trim()),
+          has_message_content: Boolean(report.content?.trim()),
+        },
+        {
+          reporterId: reporter.id,
+          sourceGuildId: report.guildId === member.guild.id ? report.guildId : undefined,
+          detectionEventId: serverDetectionEvent.id,
+        }
+      );
     } catch (error) {
       console.error(`Failed to process message report fan-out for guild ${serverId}:`, error);
     }
@@ -1129,6 +1250,16 @@ export class SecurityActionService implements ISecurityActionService {
         'opened a verification case',
         moderator
       );
+      this.captureMemberAnalytics(
+        member,
+        'observed detection action completed',
+        { action_type: AdminActionType.OPEN_CASE },
+        {
+          moderatorId: moderator.id,
+          detectionEventId: detectionEvent.id,
+          verificationEventId: verificationEvent.id,
+        }
+      );
       return true;
     } catch (error) {
       if (!actionRecorded) {
@@ -1176,6 +1307,16 @@ export class SecurityActionService implements ISecurityActionService {
         detectionEvent.id,
         'restricted this user',
         moderator
+      );
+      this.captureMemberAnalytics(
+        member,
+        'observed detection action completed',
+        { action_type: AdminActionType.RESTRICT },
+        {
+          moderatorId: moderator.id,
+          detectionEventId: detectionEvent.id,
+          verificationEventId: verificationEvent.id,
+        }
       );
       return true;
     } catch (error) {
@@ -1243,6 +1384,15 @@ export class SecurityActionService implements ISecurityActionService {
         'banned this user',
         moderator
       );
+      this.captureMemberAnalytics(
+        member,
+        'observed detection action completed',
+        { action_type: AdminActionType.BAN },
+        {
+          moderatorId: moderator.id,
+          detectionEventId: detectionEvent.id,
+        }
+      );
       return true;
     } catch (error) {
       if (!actionApplied) {
@@ -1303,6 +1453,16 @@ export class SecurityActionService implements ISecurityActionService {
               : 'Undo Dismissal',
         }
       );
+      void this.productAnalyticsService.captureUserEvent(
+        guildId,
+        userId,
+        'observed detection action completed',
+        { action_type: actionType },
+        {
+          moderatorId: moderator.id,
+          detectionEventId: detectionEvent.id,
+        }
+      );
       return true;
     } catch (error) {
       if (!actionRecorded) {
@@ -1360,6 +1520,19 @@ export class SecurityActionService implements ISecurityActionService {
           ? 'undid the dismissal and reverted the false positive indication'
           : 'undid the dismissal',
         moderator
+      );
+      void this.productAnalyticsService.captureUserEvent(
+        guildId,
+        userId,
+        'observed detection action completed',
+        {
+          action_type: AdminActionType.UNDO_OBSERVED_ACTION,
+          previous_action_type: observedAction,
+        },
+        {
+          moderatorId: moderator.id,
+          detectionEventId: detectionEvent.id,
+        }
       );
       return observedAction;
     } catch (error) {
@@ -1430,6 +1603,18 @@ export class SecurityActionService implements ISecurityActionService {
         new_status: VerificationStatus.PENDING,
         notes: null,
       });
+
+      void this.productAnalyticsService.captureUserEvent(
+        verificationEvent.server_id,
+        verificationEvent.user_id,
+        'moderation action completed',
+        { action_type: AdminActionType.REOPEN },
+        {
+          moderatorId: moderator.id,
+          verificationEventId: verificationEvent.id,
+          detectionEventId: verificationEvent.detection_event_id ?? undefined,
+        }
+      );
 
       return true;
     } catch (error) {

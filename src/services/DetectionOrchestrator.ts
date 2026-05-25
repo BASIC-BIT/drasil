@@ -4,7 +4,7 @@
  * - If borderline or user is new, calls GPTService for more sophisticated analysis
  * - Produces a final label: "OK" or "SUSPICIOUS"
  */
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import { IHeuristicService } from './HeuristicService';
 import { GPTProfileAnalysis, IGPTService, UserProfileData } from './GPTService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
@@ -13,6 +13,10 @@ import { IServerRepository } from '../repositories/ServerRepository'; // Added
 import { TYPES } from '../di/symbols';
 import { meetsConfidenceLevel } from '../utils/confidence';
 import { DetectionType } from '../repositories/types';
+import {
+  IProductAnalyticsService,
+  NOOP_PRODUCT_ANALYTICS_SERVICE,
+} from './ProductAnalyticsService';
 
 export interface DetectionResult {
   label: 'OK' | 'SUSPICIOUS';
@@ -70,6 +74,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
   private detectionEventsRepository: IDetectionEventsRepository;
   private userRepository: IUserRepository; // Added
   private serverRepository: IServerRepository; // Added
+  private productAnalyticsService: IProductAnalyticsService;
 
   // Threshold to determine when to use GPT (0.3-0.7 is borderline)
   private readonly BORDERLINE_LOWER = 0.3;
@@ -84,13 +89,52 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     @inject(TYPES.GPTService) gptService: IGPTService,
     @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
     @inject(TYPES.UserRepository) userRepository: IUserRepository, // Added
-    @inject(TYPES.ServerRepository) serverRepository: IServerRepository // Added
+    @inject(TYPES.ServerRepository) serverRepository: IServerRepository, // Added
+    @inject(TYPES.ProductAnalyticsService)
+    @optional()
+    productAnalyticsService?: IProductAnalyticsService
   ) {
     this.heuristicService = heuristicService;
     this.gptService = gptService;
     this.detectionEventsRepository = detectionEventsRepository;
     this.userRepository = userRepository; // Added
     this.serverRepository = serverRepository; // Added
+    this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
+  }
+
+  private getConfidenceBucket(confidence: number): string {
+    const percent = Math.round(confidence * 100);
+    if (percent >= 90) return '90-100';
+    if (percent >= 70) return '70-89';
+    if (percent >= 50) return '50-69';
+    return '0-49';
+  }
+
+  private captureSuspiciousDetection(
+    serverId: string,
+    userId: string,
+    detectionResult: DetectionResult,
+    gptAnalysis?: GPTProfileAnalysis,
+    profileData?: UserProfileData
+  ): void {
+    void this.productAnalyticsService.captureUserEvent(
+      serverId,
+      userId,
+      'detection flagged',
+      {
+        detection_type: detectionResult.triggerSource,
+        confidence: detectionResult.confidence,
+        confidence_bucket: this.getConfidenceBucket(detectionResult.confidence),
+        reason_count: detectionResult.reasons.length,
+        profile_context_available: profileData !== undefined,
+        gpt_used: gptAnalysis !== undefined,
+        gpt_result: gptAnalysis?.result,
+        gpt_primary_signal: gptAnalysis?.primarySignal,
+        gpt_reason_codes: gptAnalysis?.reasonCodes,
+        gpt_is_fallback: gptAnalysis?.isFallback,
+      },
+      { detectionEventId: detectionResult.detectionEventId }
+    );
   }
   /**
    * Ensures user and server entities exist in the database.
@@ -255,6 +299,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         });
 
         result.detectionEventId = createdEvent.id;
+        this.captureSuspiciousDetection(serverId, userId, result, gptAnalysis, profileData);
       }
       return result;
     } catch (error) {
@@ -340,6 +385,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         });
 
         initialResult.detectionEventId = createdEvent.id;
+        this.captureSuspiciousDetection(serverId, userId, initialResult, gptAnalysis, profileData);
       }
 
       return initialResult;

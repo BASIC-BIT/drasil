@@ -79,6 +79,7 @@
     "inversify": "^7.2.0",
     "openai": "^4.89.0",
     "pg": "^8.20.0",
+    "posthog-node": "^5.35.1",
     "prisma": "^7.8.0",
     "reflect-metadata": "^0.2.2",
     "zod": "^3.25.76"
