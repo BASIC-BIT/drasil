@@ -590,16 +590,7 @@ export class InteractionHandler implements IInteractionHandler {
       return null;
     }
 
-    const attachmentCollection = (
-      message as unknown as {
-        attachments?: {
-          values: () => Iterable<
-            MessageReportAttachment & { proxyURL?: string; contentType?: string | null }
-          >;
-        };
-      }
-    ).attachments;
-    const attachments = [...(attachmentCollection?.values() ?? [])].map((attachment) => ({
+    const attachments = [...message.attachments.values()].map((attachment) => ({
       id: attachment.id,
       name: attachment.name,
       url: attachment.url,

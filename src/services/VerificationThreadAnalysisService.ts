@@ -255,6 +255,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
               recommendedAction:
                 latestAnalysis.recommendedAction === 'none' ||
                 latestAnalysis.recommendedAction === 'ask_followup' ||
+                latestAnalysis.recommendedAction === 'manual_review' ||
                 latestAnalysis.recommendedAction === 'restrict'
                   ? latestAnalysis.recommendedAction
                   : 'manual_review',

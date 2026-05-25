@@ -982,6 +982,12 @@ export class SecurityActionService implements ISecurityActionService {
         targetUserId: member.id,
         reporterId: reporter.id,
         reason,
+      }).catch((error) => {
+        console.warn(
+          `Report AI analysis failed for guild ${member.guild.id}; continuing without AI triage:`,
+          error
+        );
+        return undefined;
       });
       const detectionEvent = await this.detectionEventsRepository.create({
         server_id: member.guild.id,
@@ -1220,6 +1226,12 @@ export class SecurityActionService implements ISecurityActionService {
           reason: report.reason,
           reportedMessageContent: report.content,
           attachments,
+        }).catch((error) => {
+          console.warn(
+            `Report AI analysis failed for guild ${member.guild.id}; continuing without AI triage:`,
+            error
+          );
+          return undefined;
         })
       : undefined;
     if (reportAiAnalysis) {

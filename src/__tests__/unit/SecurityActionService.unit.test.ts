@@ -510,6 +510,36 @@ describe('SecurityActionService (unit)', () => {
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
   });
 
+  it('continues storing user reports when report AI analysis fails', async () => {
+    const guildId = 'guild-report-ai-fails';
+    const userId = 'user-report-ai-fails';
+    const member = buildMember(guildId, userId);
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        report_ai_triage_enabled: true,
+        report_ai_analyze_text: true,
+      },
+    });
+    gptService.analyzeReportEvidence.mockRejectedValueOnce(new Error('OpenAI unavailable'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        buildService().handleUserReport(member, { id: 'reporter-ai-fails' } as User, 'reported')
+      ).resolves.toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents).toHaveLength(1);
+    expect(detectionEvents[0].metadata?.report_ai).toBeUndefined();
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ triggerSource: DetectionType.USER_REPORT })
+    );
+  });
+
   it('fails user report submission when the observed alert cannot be delivered', async () => {
     const guildId = 'guild-report-alert-fails';
     const userId = 'user-report-alert-fails';
@@ -636,6 +666,55 @@ describe('SecurityActionService (unit)', () => {
       })
     );
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+  });
+
+  it('continues storing local message reports when report AI analysis fails', async () => {
+    const guildId = 'guild-local-message-ai-fails';
+    const userId = 'user-local-message-ai-fails';
+    const member = buildMember(guildId, userId);
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: 'off',
+        report_ai_triage_enabled: true,
+        report_ai_analyze_text: true,
+      },
+    });
+    const client = {
+      guilds: {
+        fetch: jest.fn().mockResolvedValue({
+          members: {
+            fetch: jest.fn().mockResolvedValue(member),
+          },
+        }),
+      },
+    } as unknown as Client;
+    gptService.analyzeReportEvidence.mockRejectedValueOnce(new Error('OpenAI unavailable'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        buildService(client).handleMessageReport(
+          { id: userId, username: 'target-user' } as User,
+          { id: 'reporter-local-message' } as User,
+          {
+            messageId: 'message-local',
+            channelId: 'channel-local',
+            guildId,
+            content: 'local suspicious message',
+          }
+        )
+      ).resolves.toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents).toHaveLength(1);
+    expect(detectionEvents[0].metadata?.report_ai).toBeUndefined();
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ triggerSource: DetectionType.USER_REPORT })
+    );
   });
 
   it('posts local message report alerts even when the target has no stored member row', async () => {
