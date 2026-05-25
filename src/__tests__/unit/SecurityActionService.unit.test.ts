@@ -18,6 +18,7 @@ import {
 import { IUserModerationService } from '../../services/UserModerationService';
 import { IAdminActionService } from '../../services/AdminActionService';
 import { USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY } from '../../utils/userReportSettings';
+import { getVerificationActionFailures } from '../../utils/verificationActionFailures';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -151,6 +152,79 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues case notification when automatic restriction fails', async () => {
+    const guildId = 'guild-restrict-fails';
+    const userId = 'user-restrict-fails';
+    const member = buildMember(guildId, userId);
+    const message = buildMessage(guildId, 'channel-1');
+    userModerationService.restrictUser.mockRejectedValueOnce(new Error('Missing Permissions'));
+
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: message.content,
+    };
+
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(
+        buildService().handleSuspiciousMessage(member, detectionResult, message)
+      ).resolves.toBe(true);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+
+    const notifiedVerificationEvent =
+      notificationManager.upsertSuspiciousUserNotification.mock.calls[0][2];
+    expect(getVerificationActionFailures(notifiedVerificationEvent.metadata)).toEqual([
+      expect.objectContaining({ action: 'restrict', message: 'Missing Permissions' }),
+    ]);
+
+    const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
+    expect(serverMember?.is_restricted).toBe(false);
+    expect(serverMember?.verification_status).toBe(VerificationStatus.PENDING);
+  });
+
+  it('continues case notification when verification thread creation fails', async () => {
+    const guildId = 'guild-thread-fails';
+    const userId = 'user-thread-fails';
+    const member = buildMember(guildId, userId);
+    const message = buildMessage(guildId, 'channel-1');
+    threadManager.createVerificationThread.mockRejectedValueOnce(new Error('Missing Access'));
+
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: message.content,
+    };
+
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(
+        buildService().handleSuspiciousMessage(member, detectionResult, message)
+      ).resolves.toBe(true);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+
+    const notifiedVerificationEvent =
+      notificationManager.upsertSuspiciousUserNotification.mock.calls[0][2];
+    expect(getVerificationActionFailures(notifiedVerificationEvent.metadata)).toEqual([
+      expect.objectContaining({ action: 'thread', message: 'Missing Access' }),
+    ]);
   });
 
   it('updates notification without creating a new verification', async () => {

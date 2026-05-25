@@ -10,6 +10,7 @@ import {
   VerificationStatus,
 } from '../../repositories/types';
 import { IConfigService } from '../../config/ConfigService';
+import { VERIFICATION_ACTION_FAILURES_METADATA_KEY } from '../../utils/verificationActionFailures';
 
 type MockTextChannel = {
   send: jest.Mock;
@@ -128,6 +129,44 @@ describe('NotificationManager (unit)', () => {
     expect(labels).toEqual(
       expect.arrayContaining(['Verify User', 'Ban User', 'Create Thread', 'View Full History'])
     );
+  });
+
+  it('renders moderation action warnings on suspicious user notifications', async () => {
+    const member = buildMember('guild-1', 'user-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+    };
+
+    const sentMessage: MockMessage = { id: 'message-1', edit: jest.fn() };
+    adminChannel.send.mockResolvedValue(sentMessage);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({
+      metadata: {
+        [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: [
+          {
+            action: 'restrict',
+            message: 'Missing Permissions',
+            at: '2026-05-25T00:00:00.000Z',
+          },
+        ],
+      },
+    });
+
+    await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
+
+    const sendArgs = adminChannel.send.mock.calls[0][0] as { embeds: EmbedBuilder[] };
+    const warningField = sendArgs.embeds[0].data.fields?.find(
+      (field) => field.name === 'Moderation Action Warning'
+    );
+
+    expect(warningField?.value).toContain('Apply restricted role failed');
+    expect(warningField?.value).toContain('Missing Permissions');
+    expect(warningField?.value).toContain('Case record was still created');
   });
 
   it('pings the admin notification role when configured and sending new notification', async () => {
