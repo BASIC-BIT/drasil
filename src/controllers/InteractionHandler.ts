@@ -51,6 +51,9 @@ dotenv.config();
 
 const OBSERVED_ACTION_MODAL_REASON_FIELD_ID = 'observed_ban_reason';
 const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notification';
+const VERIFICATION_BAN_MODAL_PREFIX = 'verification:ban_modal';
+const VERIFICATION_BAN_NOTES_FIELD_ID = 'verification_ban_notes';
+const VERIFICATION_BAN_DEFAULT_REASON = 'Banned by moderator during verification';
 
 type UserResolution =
   | { status: 'found'; userId: string }
@@ -161,7 +164,7 @@ export class InteractionHandler implements IInteractionHandler {
             );
             return;
           }
-          await this.handleBanButton(interaction, guildId, targetUserId);
+          await this.handleBanButton(interaction, targetUserId);
           break;
         case 'thread':
           if (
@@ -245,31 +248,20 @@ export class InteractionHandler implements IInteractionHandler {
     }
   }
 
-  private async handleBanButton(
-    interaction: ButtonInteraction,
-    guildId: string,
-    userId: string
-  ): Promise<void> {
-    await interaction.deferUpdate();
+  private async handleBanButton(interaction: ButtonInteraction, userId: string): Promise<void> {
+    const modal = new ModalBuilder()
+      .setCustomId(`${VERIFICATION_BAN_MODAL_PREFIX}:${userId}`)
+      .setTitle('Confirm User Ban');
+    const notesInput = new TextInputBuilder()
+      .setCustomId(VERIFICATION_BAN_NOTES_FIELD_ID)
+      .setLabel('Final notes (optional)')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(false)
+      .setMaxLength(500)
+      .setPlaceholder('Submitting this form bans the user. Add notes for the audit log.');
 
-    try {
-      const guild = await this.client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId);
-
-      const banReason = 'Banned by moderator during verification (button)';
-      await this.userModerationService.banUser(member, banReason, interaction.user);
-
-      await interaction.followUp({
-        content: `User <@${userId}> has been banned from the server.`,
-        flags: MessageFlags.Ephemeral,
-      });
-    } catch (error) {
-      console.error('Error banning user:', error);
-      await interaction.followUp({
-        content: 'An error occurred while banning the user.',
-        flags: MessageFlags.Ephemeral,
-      });
-    }
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(notesInput));
+    await interaction.showModal(modal);
   }
 
   private async handleThreadButton(
@@ -439,6 +431,10 @@ export class InteractionHandler implements IInteractionHandler {
         await this.handleSetupVerificationModalSubmit(interaction);
         return;
       default:
+        if (interaction.customId.startsWith(`${VERIFICATION_BAN_MODAL_PREFIX}:`)) {
+          await this.handleVerificationBanModalSubmit(interaction);
+          return;
+        }
         if (interaction.customId.startsWith(`${REPORT_MESSAGE_MODAL_PREFIX}:`)) {
           await this.handleReportMessageModalSubmit(interaction);
           return;
@@ -450,6 +446,60 @@ export class InteractionHandler implements IInteractionHandler {
         console.log(
           `[InteractionHandler] Ignoring unknown modal submission: ${interaction.customId}`
         );
+    }
+  }
+
+  private async handleVerificationBanModalSubmit(
+    interaction: ModalSubmitInteraction
+  ): Promise<void> {
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: 'This action can only be performed in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const userId = interaction.customId.slice(`${VERIFICATION_BAN_MODAL_PREFIX}:`.length);
+    if (!userId) {
+      await interaction.reply({
+        content: 'Unknown ban action.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (
+      !(await this.hasAnyPermission(interaction, interaction.guildId, [
+        PermissionFlagsBits.BanMembers,
+      ]))
+    ) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need Ban Members permission to ban a user.'
+      );
+      return;
+    }
+
+    const finalNotes = interaction.fields.getTextInputValue(VERIFICATION_BAN_NOTES_FIELD_ID).trim();
+    const banReason = finalNotes || VERIFICATION_BAN_DEFAULT_REASON;
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      const guild = await this.client.guilds.fetch(interaction.guildId);
+      const member = await guild.members.fetch(userId);
+
+      await this.userModerationService.banUser(member, banReason, interaction.user);
+
+      await interaction.editReply({
+        content: `User <@${userId}> has been banned from the server.`,
+      });
+    } catch (error) {
+      console.error('Error banning user:', error);
+      await interaction.editReply({
+        content: 'An error occurred while banning the user.',
+      });
     }
   }
 
