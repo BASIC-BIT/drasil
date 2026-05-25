@@ -82,8 +82,14 @@ export const NOOP_PRODUCT_ANALYTICS_SERVICE: IProductAnalyticsService = {
 };
 
 function readProjectToken(): string | undefined {
-  const token = process.env.POSTHOG_PROJECT_API_KEY ?? process.env.POSTHOG_API_KEY;
-  return token?.trim() || undefined;
+  for (const token of [process.env.POSTHOG_PROJECT_API_KEY, process.env.POSTHOG_API_KEY]) {
+    const trimmedToken = token?.trim();
+    if (trimmedToken) {
+      return trimmedToken;
+    }
+  }
+
+  return undefined;
 }
 
 function sanitizePropertyValue(value: ProductAnalyticsProperties[string]): unknown {

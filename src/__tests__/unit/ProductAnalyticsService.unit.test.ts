@@ -96,4 +96,17 @@ describe('ProductAnalyticsService (unit)', () => {
 
     expect(service.getStatus()).toMatchObject({ configured: false });
   });
+
+  it('falls back to POSTHOG_API_KEY when POSTHOG_PROJECT_API_KEY is blank', async () => {
+    process.env.POSTHOG_PROJECT_API_KEY = ' ';
+    process.env.POSTHOG_API_KEY = 'ph_project_test';
+    const configService = new ConfigService(new InMemoryServerRepository(), buildClient());
+    const service = new ProductAnalyticsService(configService);
+
+    try {
+      expect(service.getStatus()).toMatchObject({ configured: true });
+    } finally {
+      await service.shutdown();
+    }
+  });
 });
