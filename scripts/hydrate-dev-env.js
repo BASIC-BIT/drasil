@@ -32,6 +32,10 @@ function getSecret(secretId) {
   ).trim();
 }
 
+function encodeUrlCredential(value) {
+  return encodeURIComponent(value);
+}
+
 const discordTokenSecret =
   process.env.DRASIL_DISCORD_TOKEN_SECRET || `drasil/${environment}/DISCORD_TOKEN`;
 const openAiSecret = process.env.DRASIL_OPENAI_SECRET || `drasil/${environment}/OPENAI_API_KEY`;
@@ -41,8 +45,8 @@ const prismaPasswordSecret =
 const discordToken = getSecret(discordTokenSecret);
 const openAiKey = getSecret(openAiSecret);
 const prismaPassword = getSecret(prismaPasswordSecret);
-const databaseUrl = `postgresql://prisma:${prismaPassword}@${postgresHost}:${postgresPort}/${postgresDb}?schema=public`;
-const postgresDbUrl = `postgresql://${postgresUser}:${postgresPassword}@${postgresHost}:${postgresPort}/${postgresDb}?schema=public`;
+const databaseUrl = `postgresql://prisma:${encodeUrlCredential(prismaPassword)}@${postgresHost}:${postgresPort}/${postgresDb}?schema=public`;
+const postgresDbUrl = `postgresql://${encodeUrlCredential(postgresUser)}:${encodeUrlCredential(postgresPassword)}@${postgresHost}:${postgresPort}/${postgresDb}?schema=public`;
 
 const lines = [
   '# Local Drasil environment. Gitignored.',
@@ -62,6 +66,9 @@ const lines = [
   '',
 ];
 
+if (fs.existsSync(envPath)) {
+  console.warn(`Warning: overwriting existing ${path.relative(repoRoot, envPath)}.`);
+}
 fs.writeFileSync(envPath, lines.join('\n'), { encoding: 'utf8', mode: 0o600 });
 
 console.log(`Wrote ${path.relative(repoRoot, envPath)} from AWS Secrets Manager.`);

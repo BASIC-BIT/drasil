@@ -385,11 +385,6 @@ export class SecurityActionService implements ISecurityActionService {
       return verificationEvent;
     } catch (error) {
       console.error(`Failed to restrict user ${member.user.tag}; continuing case flow:`, error);
-      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-        is_restricted: false,
-        verification_status: VerificationStatus.PENDING,
-        last_status_change: new Date(),
-      });
       return this.recordVerificationActionFailure(verificationEvent, 'restrict', error);
     }
   }

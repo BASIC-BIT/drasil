@@ -75,6 +75,11 @@ Override with environment variables when needed:
 - `DRASIL_DISCORD_TOKEN_SECRET`
 - `DRASIL_OPENAI_SECRET`
 - `DRASIL_PRISMA_PASSWORD_SECRET`
+- `POSTGRES_HOST`
+- `POSTGRES_PORT`
+- `POSTGRES_DB`
+- `POSTGRES_USER`
+- `POSTGRES_PASSWORD`
 
 Manual fallback: copy `.env.example` to `.env` and fill values locally.
 

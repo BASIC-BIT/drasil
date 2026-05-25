@@ -159,6 +159,10 @@ describe('SecurityActionService (unit)', () => {
     const userId = 'user-restrict-fails';
     const member = buildMember(guildId, userId);
     const message = buildMessage(guildId, 'channel-1');
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      is_restricted: true,
+      verification_status: VerificationStatus.PENDING,
+    });
     userModerationService.restrictUser.mockRejectedValueOnce(new Error('Missing Permissions'));
 
     const detectionResult: DetectionResult = {
@@ -189,7 +193,7 @@ describe('SecurityActionService (unit)', () => {
     ]);
 
     const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
-    expect(serverMember?.is_restricted).toBe(false);
+    expect(serverMember?.is_restricted).toBe(true);
     expect(serverMember?.verification_status).toBe(VerificationStatus.PENDING);
   });
 
