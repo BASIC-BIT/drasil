@@ -276,6 +276,12 @@ export class ProductAnalyticsService implements IProductAnalyticsService {
     try {
       const consentLevel = this.resolveCachedConsentLevel(input.guildId);
       if (!consentLevel) {
+        if (process.env.POSTHOG_DEBUG === 'true') {
+          console.debug('[posthog] skipping event; guild config not cached', {
+            event: input.event,
+            guild_id_hash: hashIdentifier(input.guildId),
+          });
+        }
         return;
       }
 

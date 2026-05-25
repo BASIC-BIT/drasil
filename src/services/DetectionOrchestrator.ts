@@ -12,6 +12,7 @@ import { IUserRepository } from '../repositories/UserRepository'; // Added
 import { IServerRepository } from '../repositories/ServerRepository'; // Added
 import { TYPES } from '../di/symbols';
 import { meetsConfidenceLevel } from '../utils/confidence';
+import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { DetectionType } from '../repositories/types';
 import {
   IProductAnalyticsService,
@@ -102,14 +103,6 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
   }
 
-  private getConfidenceBucket(confidence: number): string {
-    const percent = Math.round(confidence * 100);
-    if (percent >= 90) return '90-100';
-    if (percent >= 70) return '70-89';
-    if (percent >= 50) return '50-69';
-    return '0-49';
-  }
-
   private captureSuspiciousDetection(
     serverId: string,
     userId: string,
@@ -124,7 +117,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       {
         detection_type: detectionResult.triggerSource,
         confidence: detectionResult.confidence,
-        confidence_bucket: this.getConfidenceBucket(detectionResult.confidence),
+        confidence_bucket: getConfidenceBucket(detectionResult.confidence),
         reason_count: detectionResult.reasons.length,
         profile_context_available: profileData !== undefined,
         gpt_used: gptAnalysis !== undefined,

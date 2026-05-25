@@ -33,6 +33,7 @@ import {
   ProductAnalyticsIdentifiers,
   ProductAnalyticsProperties,
 } from './ProductAnalyticsService';
+import { getConfidenceBucket } from '../utils/analyticsHelpers';
 /**
  * Interface for the SecurityActionService
  */
@@ -615,14 +616,6 @@ export class SecurityActionService implements ISecurityActionService {
     });
   }
 
-  private getConfidenceBucket(confidence: number): string {
-    const percent = Math.round(confidence * 100);
-    if (percent >= 90) return '90-100';
-    if (percent >= 70) return '70-89';
-    if (percent >= 50) return '50-69';
-    return '0-49';
-  }
-
   private captureMemberAnalytics(
     member: GuildMember,
     event: string,
@@ -651,7 +644,7 @@ export class SecurityActionService implements ISecurityActionService {
       {
         detection_type: detectionResult.triggerSource,
         confidence: detectionResult.confidence,
-        confidence_bucket: this.getConfidenceBucket(detectionResult.confidence),
+        confidence_bucket: getConfidenceBucket(detectionResult.confidence),
         restrict_user: properties.restrict_user,
         report_review_thread: properties.report_review_thread,
         active_case_existed: properties.active_case_existed,

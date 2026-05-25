@@ -109,4 +109,27 @@ describe('ProductAnalyticsService (unit)', () => {
       await service.shutdown();
     }
   });
+
+  it('logs a debug message when database-backed guild config is not cached', async () => {
+    process.env.POSTHOG_PROJECT_API_KEY = 'ph_project_test';
+    process.env.POSTHOG_DEBUG = 'true';
+    const consoleDebugSpy = jest.spyOn(console, 'debug').mockImplementation(() => undefined);
+    const configService = new ConfigService(new InMemoryServerRepository(), buildClient());
+    const service = new ProductAnalyticsService(configService);
+
+    try {
+      await service.captureGuildEvent('guild-uncached', 'guild installed');
+
+      expect(consoleDebugSpy).toHaveBeenCalledWith(
+        '[posthog] skipping event; guild config not cached',
+        {
+          event: 'guild installed',
+          guild_id_hash: expect.any(String),
+        }
+      );
+    } finally {
+      await service.shutdown();
+      consoleDebugSpy.mockRestore();
+    }
+  });
 });
