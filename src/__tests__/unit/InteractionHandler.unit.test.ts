@@ -62,13 +62,17 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
   return interaction as unknown as ButtonInteraction;
 };
 
-const grantInteractionPermissions = (interaction: ButtonInteraction): void => {
+const grantInteractionPermissions = (
+  interaction: ButtonInteraction | ModalSubmitInteraction
+): void => {
   Object.assign(interaction, {
     memberPermissions: { has: jest.fn().mockReturnValue(true) },
   });
 };
 
-const grantOnlyBanMembersPermission = (interaction: ButtonInteraction): void => {
+const grantOnlyBanMembersPermission = (
+  interaction: ButtonInteraction | ModalSubmitInteraction
+): void => {
   Object.assign(interaction, {
     memberPermissions: {
       has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.BanMembers),
@@ -198,7 +202,7 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
-  it('handles ban button by calling UserModerationService', async () => {
+  it('shows a confirmation modal for the ban button', async () => {
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -216,11 +220,12 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(userModerationService.banUser).toHaveBeenCalledTimes(1);
-    expect(interaction.followUp).toHaveBeenCalledWith({
-      content: 'User <@user-1> has been banned from the server.',
-      flags: MessageFlags.Ephemeral,
-    });
+    expect(userModerationService.banUser).not.toHaveBeenCalled();
+    expect(interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+    const modal = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
+    expect(modal.toJSON().custom_id).toBe('verification:ban_modal:user-1');
+    expect(JSON.stringify(modal.toJSON())).toContain('Final notes (optional)');
   });
 
   it('handles thread button and creates a verification thread', async () => {
@@ -428,7 +433,7 @@ describe('InteractionHandler (unit)', () => {
     }
   );
 
-  it('allows ban button with only BanMembers permission', async () => {
+  it('allows ban confirmation with only BanMembers permission', async () => {
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -446,7 +451,84 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(userModerationService.banUser).toHaveBeenCalledTimes(1);
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+    expect(userModerationService.banUser).not.toHaveBeenCalled();
+  });
+
+  it('submits verifier ban modal with final notes', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = {
+      customId: 'verification:ban_modal:user-1',
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn(() => 'admin final notes'),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+    grantOnlyBanMembersPermission(interaction);
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(userModerationService.banUser).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'admin final notes',
+      interaction.user
+    );
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'User <@user-1> has been banned from the server.',
+    });
+  });
+
+  it('submits verifier ban modal with the default reason when notes are blank', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = {
+      customId: 'verification:ban_modal:user-1',
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn(() => '   '),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+    grantOnlyBanMembersPermission(interaction);
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(userModerationService.banUser).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'Banned by moderator during verification',
+      interaction.user
+    );
   });
 
   it('handles observed open case button', async () => {
