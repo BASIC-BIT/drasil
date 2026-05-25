@@ -818,6 +818,8 @@ describe('CommandHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -828,10 +830,13 @@ describe('CommandHandler (unit)', () => {
       verification_channel_id: 'channel-2',
     });
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      updateServerConfig.mock.invocationCallOrder[0]
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -859,20 +864,25 @@ describe('CommandHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     await handler.handleSlashCommand(interaction);
 
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      setupVerificationChannel.mock.invocationCallOrder[0]
+    );
     expect(setupVerificationChannel).toHaveBeenCalledWith(guild, 'role-1', false);
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       restricted_role_id: 'role-1',
       admin_channel_id: 'channel-1',
       verification_channel_id: 'created-channel-1',
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nCreated verification channel: <#created-channel-1>',
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -912,16 +922,18 @@ describe('CommandHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     await handler.handleSlashCommand(interaction);
 
     expect(guild.members.fetch).toHaveBeenCalledWith('admin-1');
     expect(permissionsIn).toHaveBeenCalledWith('channel-1');
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
-      flags: MessageFlags.Ephemeral,
     });
   });
 

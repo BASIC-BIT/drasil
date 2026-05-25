@@ -1058,6 +1058,8 @@ export class CommandHandler implements ICommandHandler {
         return;
       }
 
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
       let verificationChannelId = verificationChannel?.id ?? null;
       let verificationChannelWasCreated = false;
 
@@ -1084,25 +1086,23 @@ export class CommandHandler implements ICommandHandler {
         ? `Created verification channel: <#${verificationChannelId}>`
         : `Verification channel: <#${verificationChannelId}>`;
 
-      await interaction.reply({
+      await interaction.editReply({
         content:
           'Setup complete.\n' +
           `Restricted role: <@&${restrictedRole.id}>\n` +
           `Admin channel: <#${adminChannel.id}>\n` +
           `${verificationChannelMessage}`,
-        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
       console.error('Failed to complete setup verification command:', error);
       const errorResponse = {
         content: 'Failed to complete setup verification. Please check permissions and try again.',
-        flags: MessageFlags.Ephemeral,
       } as const;
 
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(errorResponse);
+        await interaction.editReply(errorResponse);
       } else {
-        await interaction.reply(errorResponse);
+        await interaction.reply({ ...errorResponse, flags: MessageFlags.Ephemeral });
       }
     }
   }
