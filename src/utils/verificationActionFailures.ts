@@ -1,7 +1,9 @@
 export const VERIFICATION_ACTION_FAILURES_METADATA_KEY = 'action_failures';
 
+export type VerificationActionFailureKind = 'restrict' | 'thread';
+
 export interface VerificationActionFailure {
-  action: string;
+  action: VerificationActionFailureKind;
   message: string;
   at: string;
 }
@@ -14,6 +16,10 @@ function metadataToRecord(metadata: unknown): Record<string, unknown> {
   return { ...(metadata as Record<string, unknown>) };
 }
 
+function isVerificationActionFailureKind(value: unknown): value is VerificationActionFailureKind {
+  return value === 'restrict' || value === 'thread';
+}
+
 function isVerificationActionFailure(value: unknown): value is VerificationActionFailure {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false;
@@ -21,7 +27,7 @@ function isVerificationActionFailure(value: unknown): value is VerificationActio
 
   const candidate = value as Record<string, unknown>;
   return (
-    typeof candidate.action === 'string' &&
+    isVerificationActionFailureKind(candidate.action) &&
     typeof candidate.message === 'string' &&
     typeof candidate.at === 'string'
   );

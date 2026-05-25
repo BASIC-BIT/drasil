@@ -23,7 +23,10 @@ import {
 import { IUserModerationService } from './UserModerationService';
 import { IAdminActionService } from './AdminActionService';
 import { getUserReportSettings } from '../utils/userReportSettings';
-import { appendVerificationActionFailure } from '../utils/verificationActionFailures';
+import {
+  appendVerificationActionFailure,
+  type VerificationActionFailureKind,
+} from '../utils/verificationActionFailures';
 /**
  * Interface for the SecurityActionService
  */
@@ -352,7 +355,7 @@ export class SecurityActionService implements ISecurityActionService {
 
   private async recordVerificationActionFailure(
     verificationEvent: VerificationEvent,
-    action: string,
+    action: VerificationActionFailureKind,
     error: unknown
   ): Promise<VerificationEvent> {
     const updatedMetadata = appendVerificationActionFailure(verificationEvent.metadata, {
