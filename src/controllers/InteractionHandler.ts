@@ -28,7 +28,10 @@ import { IUserModerationService } from '../services/UserModerationService';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { IThreadManager } from '../services/ThreadManager';
 import { IAdminActionRepository } from '../repositories/AdminActionRepository';
-import { ISecurityActionService } from '../services/SecurityActionService';
+import {
+  ISecurityActionService,
+  type MessageReportAttachment,
+} from '../services/SecurityActionService';
 import { IConfigService } from '../config/ConfigService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import {
@@ -495,14 +498,21 @@ export class InteractionHandler implements IInteractionHandler {
           ? undefined
           : (contextNumber as InteractionContextType);
 
-      await this.securityActionService.handleMessageReport(targetUser, interaction.user, {
+      const reportPayload = {
         messageId,
         channelId,
         guildId,
         content: message?.content.slice(0, USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH),
         reason,
         interactionContext,
-      });
+        ...(message?.attachments.length ? { attachments: message.attachments } : {}),
+      };
+
+      await this.securityActionService.handleMessageReport(
+        targetUser,
+        interaction.user,
+        reportPayload
+      );
 
       await interaction.editReply({
         content: `Thank you for your report regarding <@${targetUserId}>. It has been submitted for review.`,
@@ -519,14 +529,34 @@ export class InteractionHandler implements IInteractionHandler {
   private async fetchReportMessage(
     channelId: string,
     messageId: string
-  ): Promise<{ content: string } | null> {
+  ): Promise<{ content: string; attachments: MessageReportAttachment[] } | null> {
     const channel = await this.client.channels.fetch(channelId).catch(() => null);
     if (!channel || !('messages' in channel)) {
       return null;
     }
 
     const message = await channel.messages.fetch(messageId).catch(() => null);
-    return typeof message?.content === 'string' ? { content: message.content } : null;
+    if (!message || typeof message.content !== 'string') {
+      return null;
+    }
+
+    const attachmentCollection = Reflect.get(message, 'attachments') as
+      | {
+          values: () => Iterable<
+            MessageReportAttachment & { proxyURL?: string; contentType?: string | null }
+          >;
+        }
+      | undefined;
+    const attachments = [...(attachmentCollection?.values() ?? [])].map((attachment) => ({
+      id: attachment.id,
+      name: attachment.name,
+      url: attachment.url,
+      proxyUrl: attachment.proxyURL,
+      contentType: attachment.contentType ?? undefined,
+      size: attachment.size,
+    }));
+
+    return { content: message.content, attachments };
   }
 
   private async handleReportUserModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {

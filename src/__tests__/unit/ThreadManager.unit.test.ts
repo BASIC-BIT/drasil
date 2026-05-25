@@ -1,5 +1,6 @@
 import { ChannelType, Guild, GuildMember, ThreadChannel, User } from 'discord.js';
 import {
+  CASE_STAFF_ROUTING_METADATA_KEY,
   REPORT_REVIEW_THREAD_TYPE,
   ThreadManager,
   VERIFICATION_THREAD_TYPE,
@@ -229,6 +230,66 @@ describe('ThreadManager (unit)', () => {
         users: [],
         roles: [],
         repliedUser: false,
+      },
+    });
+  });
+
+  it('adds configured case responder role members to private report review threads', async () => {
+    const staffMember = { id: 'staff-1' };
+    const guild = {
+      id: 'guild-1',
+      name: 'Test Guild',
+      members: {
+        fetch: jest.fn().mockResolvedValue(undefined),
+      },
+      roles: {
+        fetch: jest.fn().mockResolvedValue({
+          members: new Map([['staff-1', staffMember]]),
+        }),
+      },
+    } as any;
+    const member = {
+      ...buildMember('guild-1', 'user-1'),
+      guild,
+    } as GuildMember;
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      settings: {
+        case_responder_role_ids: ['123456789012345678'],
+        case_responder_routing_mode: 'ping_and_add_members',
+        case_responder_thread_member_cap: 5,
+      },
+    });
+
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    await manager.createReportReviewThread(member, event, {
+      label: 'SUSPICIOUS',
+      confidence: 1.0,
+      reasons: ['Reported by user reporter-1. Reason: suspicious DM'],
+      triggerSource: DetectionType.USER_REPORT,
+      triggerContent: 'suspicious DM',
+    });
+
+    expect(thread.members.add).toHaveBeenCalledWith('staff-1');
+    expect(thread.members.add).not.toHaveBeenCalledWith(member.id);
+    const storedEvent = await verificationEventRepository.findById(event.id);
+    expect(storedEvent?.metadata).toMatchObject({
+      [CASE_STAFF_ROUTING_METADATA_KEY]: {
+        addedUserIds: ['staff-1'],
+        warnings: [],
       },
     });
   });

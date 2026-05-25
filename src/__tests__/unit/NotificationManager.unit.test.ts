@@ -210,6 +210,44 @@ describe('NotificationManager (unit)', () => {
     });
   });
 
+  it('pings configured case responder roles with constrained allowed mentions', async () => {
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      admin_notification_role_id: 'role-1',
+      settings: {
+        case_responder_role_ids: ['123456789012345678', '234567890123456789'],
+        case_responder_routing_mode: 'ping_only',
+      },
+    } as any);
+
+    const member = buildMember('guild-1', 'user-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+    };
+
+    const sentMessage: MockMessage = { id: 'message-1', edit: jest.fn() };
+    adminChannel.send.mockResolvedValue(sentMessage);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({ thread_id: null });
+
+    await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
+
+    const sendArgs = adminChannel.send.mock.calls[0][0] as {
+      content?: string;
+      allowedMentions?: { roles?: string[] };
+    };
+    expect(sendArgs.content).toBe('<@&role-1> <@&123456789012345678> <@&234567890123456789>');
+    expect(sendArgs.allowedMentions?.roles).toEqual([
+      'role-1',
+      '123456789012345678',
+      '234567890123456789',
+    ]);
+  });
+
   it('sends an observe-only detection notification with action buttons', async () => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       admin_notification_role_id: 'role-1',
@@ -672,9 +710,16 @@ describe('NotificationManager (unit)', () => {
     await manager.updateVerificationThreadAnalysis(
       verificationEvent,
       {
-        result: 'OK',
+        result: 'likely_legitimate',
         confidence: 0.72,
         summary: 'Responses match what legitimate users normally say here.',
+        reasonCodes: ['normal_context'],
+        legitimacySignals: ['Specific server context matched'],
+        suspicionSignals: [],
+        recommendedAction: 'none',
+        model: GPT_PROFILE_MODEL,
+        promptVersion: 'verification-thread-legitimacy-v2',
+        isFallback: false,
       },
       2
     );
@@ -683,11 +728,12 @@ describe('NotificationManager (unit)', () => {
     const fields = editArgs.embeds[0].data.fields ?? [];
     const analysisField = fields.find((field) => field.name === 'AI Thread Analysis');
 
-    expect(analysisField?.value).toContain('Result: **OK** (72% confidence)');
+    expect(analysisField?.value).toContain('Result: **likely_legitimate** (72% confidence)');
     expect(analysisField?.value).toContain('Analyzed responses: 2');
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'
     );
+    expect(analysisField?.value).toContain('Reason codes: normal_context');
   });
 
   it('displays fallback GPT diagnostics as unavailable', async () => {
@@ -765,7 +811,7 @@ describe('NotificationManager (unit)', () => {
     const fields = editArgs.embeds[0].data.fields ?? [];
     const analysisField = fields.find((field) => field.name === 'AI Thread Analysis');
 
-    expect(analysisField?.value).toContain('Result: **OK** (72% confidence)');
+    expect(analysisField?.value).toContain('Result: **likely_legitimate** (72% confidence)');
     expect(analysisField?.value).toContain('Analyzed responses: 2');
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'

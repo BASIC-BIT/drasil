@@ -15,9 +15,14 @@ import {
 interface ThreadAnalysisMetadata {
   analyzedMessageIds: string[];
   latestAnalysis?: {
-    result: 'OK' | 'SUSPICIOUS';
+    result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
     confidence: number;
     summary: string;
+    reasonCodes: string[];
+    legitimacySignals: string[];
+    suspicionSignals: string[];
+    recommendedNextQuestion?: string;
+    recommendedAction: 'none' | 'ask_followup' | 'manual_review' | 'restrict';
     analyzedMessageCount: number;
   };
 }
@@ -80,7 +85,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
 
     const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
     const settings = getVerificationThreadAnalysisSettings(serverConfig.settings);
-    if (!settings.enabled) {
+    if (!settings.enabled || settings.maxAction === 'off') {
       return;
     }
 
@@ -135,6 +140,11 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
               result: analysis.result,
               confidence: analysis.confidence,
               summary: analysis.summary,
+              reasonCodes: analysis.reasonCodes,
+              legitimacySignals: analysis.legitimacySignals,
+              suspicionSignals: analysis.suspicionSignals,
+              recommendedNextQuestion: analysis.recommendedNextQuestion,
+              recommendedAction: analysis.recommendedAction,
               analyzedMessageCount: responses.length,
             },
           },
@@ -179,19 +189,55 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
         )
       : [];
     const latestAnalysis = this.asObject(threadAnalysis?.latestAnalysis);
+    const rawResult = latestAnalysis?.result;
+    const result =
+      rawResult === 'likely_legitimate' ||
+      rawResult === 'needs_review' ||
+      rawResult === 'likely_suspicious'
+        ? rawResult
+        : rawResult === 'OK'
+          ? 'likely_legitimate'
+          : rawResult === 'SUSPICIOUS'
+            ? 'likely_suspicious'
+            : null;
 
     return {
       analyzedMessageIds,
       latestAnalysis:
         latestAnalysis &&
-        (latestAnalysis.result === 'OK' || latestAnalysis.result === 'SUSPICIOUS') &&
+        result &&
         typeof latestAnalysis.confidence === 'number' &&
         typeof latestAnalysis.summary === 'string' &&
         typeof latestAnalysis.analyzedMessageCount === 'number'
           ? {
-              result: latestAnalysis.result,
+              result,
               confidence: latestAnalysis.confidence,
               summary: latestAnalysis.summary,
+              reasonCodes: Array.isArray(latestAnalysis.reasonCodes)
+                ? latestAnalysis.reasonCodes.filter(
+                    (value): value is string => typeof value === 'string'
+                  )
+                : [],
+              legitimacySignals: Array.isArray(latestAnalysis.legitimacySignals)
+                ? latestAnalysis.legitimacySignals.filter(
+                    (value): value is string => typeof value === 'string'
+                  )
+                : [],
+              suspicionSignals: Array.isArray(latestAnalysis.suspicionSignals)
+                ? latestAnalysis.suspicionSignals.filter(
+                    (value): value is string => typeof value === 'string'
+                  )
+                : [],
+              recommendedNextQuestion:
+                typeof latestAnalysis.recommendedNextQuestion === 'string'
+                  ? latestAnalysis.recommendedNextQuestion
+                  : undefined,
+              recommendedAction:
+                latestAnalysis.recommendedAction === 'none' ||
+                latestAnalysis.recommendedAction === 'ask_followup' ||
+                latestAnalysis.recommendedAction === 'restrict'
+                  ? latestAnalysis.recommendedAction
+                  : 'manual_review',
               analyzedMessageCount: latestAnalysis.analyzedMessageCount,
             }
           : undefined,

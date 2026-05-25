@@ -50,6 +50,7 @@ describe('SecurityActionService (unit)', () => {
   let threadManager: jest.Mocked<IThreadManager>;
   let userModerationService: jest.Mocked<IUserModerationService>;
   let adminActionService: jest.Mocked<IAdminActionService>;
+  let gptService: { analyzeReportEvidence: jest.Mock };
 
   beforeEach(() => {
     detectionEventsRepository = new InMemoryDetectionEventsRepository();
@@ -90,6 +91,9 @@ describe('SecurityActionService (unit)', () => {
       recordAction: jest.fn().mockResolvedValue({} as any),
       getActionsForUser: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<IAdminActionService>;
+    gptService = {
+      analyzeReportEvidence: jest.fn(),
+    };
   });
 
   const buildService = (client: Client = {} as Client): SecurityActionService =>
@@ -103,7 +107,8 @@ describe('SecurityActionService (unit)', () => {
       adminActionService,
       threadManager,
       userModerationService,
-      client
+      client,
+      gptService as any
     );
 
   it('creates detection and verification when none exists', async () => {
@@ -409,6 +414,61 @@ describe('SecurityActionService (unit)', () => {
         triggerContent: 'reported',
       })
     );
+  });
+
+  it('stores enabled report AI triage as sanitized detection metadata and notification context', async () => {
+    const guildId = 'guild-report-ai';
+    const userId = 'user-report-ai';
+    const reporterId = 'reporter-ai';
+    const member = buildMember(guildId, userId);
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        report_ai_triage_enabled: true,
+        report_ai_analyze_text: true,
+        report_ai_max_action: 'hints',
+      },
+    });
+    gptService.analyzeReportEvidence.mockResolvedValue({
+      result: 'likely_abusive',
+      confidence: 0.96,
+      summary: 'Report text indicates targeted abuse.',
+      reasonCodes: ['harassment'],
+      evidenceCategories: ['report_text'],
+      concerns: ['Likely targeted abuse'],
+      recommendedAction: 'restrict',
+      analyzedImageCount: 0,
+      model: 'gpt-4o-mini',
+      promptVersion: 'report-triage-v1',
+      isFallback: false,
+    });
+
+    await buildService().handleUserReport(member, { id: reporterId } as User, 'targeted abuse');
+
+    expect(gptService.analyzeReportEvidence).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverId: guildId,
+        targetUserId: userId,
+        reporterId,
+        reportReason: 'targeted abuse',
+      })
+    );
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents[0].metadata).toMatchObject({
+      report_ai: {
+        result: 'likely_abusive',
+        recommendedAction: 'manual_review',
+      },
+    });
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({
+        reportAiAnalysis: expect.objectContaining({
+          result: 'likely_abusive',
+          recommendedAction: 'manual_review',
+        }),
+      })
+    );
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
 
   it('fails user report submission when the observed alert cannot be delivered', async () => {

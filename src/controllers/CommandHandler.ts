@@ -51,7 +51,10 @@ import {
 } from '../utils/serverContextSettings';
 import {
   getVerificationThreadAnalysisSettings,
+  isVerificationAiMaxAction,
   MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT,
+  VERIFICATION_AI_MAX_ACTIONS,
+  VERIFICATION_AI_MAX_ACTION_SETTING_KEY,
   VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY,
   VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY,
 } from '../utils/verificationThreadAnalysisSettings';
@@ -76,6 +79,25 @@ import {
   USER_REPORT_REASON_MAX_LENGTH,
   USER_REPORT_REASON_REQUIRED_SETTING_KEY,
 } from '../utils/userReportSettings';
+import {
+  CASE_RESPONDER_ROLE_IDS_SETTING_KEY,
+  CASE_RESPONDER_ROUTING_MODE_SETTING_KEY,
+  CASE_RESPONDER_ROUTING_MODES,
+  CASE_RESPONDER_THREAD_MEMBER_CAP_SETTING_KEY,
+  getCaseResponderSettings,
+  isCaseResponderRoutingMode,
+  MAX_CASE_RESPONDER_THREAD_MEMBER_CAP,
+  normalizeCaseResponderRoleIds,
+} from '../utils/caseResponderSettings';
+import {
+  getReportAiSettings,
+  isReportAiMaxAction,
+  REPORT_AI_ANALYZE_IMAGES_SETTING_KEY,
+  REPORT_AI_ANALYZE_TEXT_SETTING_KEY,
+  REPORT_AI_MAX_ACTIONS,
+  REPORT_AI_MAX_ACTION_SETTING_KEY,
+  REPORT_AI_TRIAGE_ENABLED_SETTING_KEY,
+} from '../utils/reportAiSettings';
 import 'reflect-metadata';
 
 // Load environment variables
@@ -391,6 +413,65 @@ export class CommandHandler implements ICommandHandler {
         )
         .addSubcommandGroup((group) =>
           group
+            .setName('case-staff')
+            .setDescription('Manage case responder staff routing')
+            .addSubcommand((subcommand) =>
+              subcommand.setName('view').setDescription('View case responder role settings')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('add-role')
+                .setDescription('Add a case responder role')
+                .addRoleOption((option) =>
+                  option
+                    .setName('role')
+                    .setDescription('Role to notify for cases')
+                    .setRequired(true)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('remove-role')
+                .setDescription('Remove a case responder role')
+                .addRoleOption((option) =>
+                  option
+                    .setName('role')
+                    .setDescription('Role to remove from case notifications')
+                    .setRequired(true)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('set-routing')
+                .setDescription('Set case responder routing mode')
+                .addStringOption((option) =>
+                  option
+                    .setName('mode')
+                    .setDescription('off, ping_only, or ping_and_add_members')
+                    .setRequired(true)
+                    .addChoices(
+                      { name: 'Off', value: 'off' },
+                      { name: 'Ping only', value: 'ping_only' },
+                      { name: 'Ping and add members', value: 'ping_and_add_members' }
+                    )
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('set-member-cap')
+                .setDescription('Set max staff members added to a private case thread')
+                .addIntegerOption((option) =>
+                  option
+                    .setName('value')
+                    .setDescription('Max members to add per responder role')
+                    .setRequired(true)
+                    .setMinValue(1)
+                    .setMaxValue(MAX_CASE_RESPONDER_THREAD_MEMBER_CAP)
+                )
+            )
+        )
+        .addSubcommandGroup((group) =>
+          group
             .setName('report')
             .setDescription('Manage user report settings')
             .addSubcommand((subcommand) =>
@@ -419,6 +500,48 @@ export class CommandHandler implements ICommandHandler {
                       { name: 'Off', value: 'off' },
                       { name: 'Notify only', value: 'notify_only' },
                       { name: 'Open case', value: 'open_case' }
+                    )
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand.setName('ai-view').setDescription('View AI report triage settings')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand.setName('ai-enable').setDescription('Enable AI report triage')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand.setName('ai-disable').setDescription('Disable AI report triage')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand.setName('ai-text-enable').setDescription('Analyze report/message text')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand.setName('ai-text-disable').setDescription('Do not analyze report text')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('ai-images-enable')
+                .setDescription('Analyze eligible image evidence')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('ai-images-disable')
+                .setDescription('Do not analyze image evidence')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('ai-set-max-action')
+                .setDescription('Set the maximum AI report triage authority')
+                .addStringOption((option) =>
+                  option
+                    .setName('action')
+                    .setDescription('off, hints, open_case, or restrict')
+                    .setRequired(true)
+                    .addChoices(
+                      { name: 'Off', value: 'off' },
+                      { name: 'Hints only', value: 'hints' },
+                      { name: 'Open case', value: 'open_case' },
+                      { name: 'Restrict pending review', value: 'restrict' }
                     )
                 )
             )
@@ -515,6 +638,22 @@ export class CommandHandler implements ICommandHandler {
                     .setRequired(true)
                     .setMinValue(1)
                     .setMaxValue(MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('analysis-set-max-action')
+                .setDescription('Set the maximum verification reply AI authority')
+                .addStringOption((option) =>
+                  option
+                    .setName('action')
+                    .setDescription('off, hints, or restrict')
+                    .setRequired(true)
+                    .addChoices(
+                      { name: 'Off', value: 'off' },
+                      { name: 'Hints only', value: 'hints' },
+                      { name: 'Restrict pending review', value: 'restrict' }
+                    )
                 )
             )
         )
@@ -1140,6 +1279,11 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    if (subcommandGroup === 'case-staff') {
+      await this.handleCaseStaffConfigCommand(interaction, guild.id);
+      return;
+    }
+
     if (subcommandGroup === 'report') {
       await this.handleReportConfigCommand(interaction, guild.id);
       return;
@@ -1231,6 +1375,30 @@ export class CommandHandler implements ICommandHandler {
     ].join('\n');
   }
 
+  private formatCaseResponderSettings(
+    guildId: string,
+    settings: ReturnType<typeof getCaseResponderSettings>
+  ): string {
+    return [
+      `Responder roles: ${settings.roleIds.length ? settings.roleIds.map((roleId) => `<@&${roleId}>`).join(', ') : '`none`'}`,
+      `Routing mode: \`${settings.routingMode}\``,
+      `Thread member cap: \`${settings.threadMemberCap}\``,
+      `Guild ID: \`${guildId}\``,
+    ].join('\n');
+  }
+
+  private formatReportAiSettings(settings: ReturnType<typeof getReportAiSettings>): string {
+    return [
+      `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
+      `Analyze text: \`${settings.analyzeText ? 'yes' : 'no'}\``,
+      `Analyze images: \`${settings.analyzeImages ? 'yes' : 'no'}\``,
+      `Max action: \`${settings.maxAction}\``,
+      `Open-case threshold: \`${Math.round(settings.openCaseThreshold * 100)}%\``,
+      `Restrict threshold: \`${Math.round(settings.restrictThreshold * 100)}%\``,
+      `Max images: \`${settings.maxImages}\``,
+    ].join('\n');
+  }
+
   private formatVerificationPromptPreview(template: string): string {
     return this.truncatePreview(template, 1200);
   }
@@ -1295,6 +1463,8 @@ export class CommandHandler implements ICommandHandler {
     return [
       `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
       `Message limit: \`${settings.messageLimit}\``,
+      `Max action: \`${settings.maxAction}\``,
+      `Restrict threshold: \`${Math.round(settings.restrictThreshold * 100)}%\``,
     ].join('\n');
   }
 
@@ -1459,6 +1629,109 @@ export class CommandHandler implements ICommandHandler {
     }
   }
 
+  private async handleCaseStaffConfigCommand(
+    interaction: ChatInputCommandInteraction,
+    guildId: string
+  ): Promise<void> {
+    const subcommand = interaction.options.getSubcommand(true);
+
+    try {
+      switch (subcommand) {
+        case 'view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const settings = getCaseResponderSettings(serverConfig.settings);
+          await interaction.reply({
+            content:
+              'Current case responder settings:\n\n' +
+              this.formatCaseResponderSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'add-role':
+        case 'remove-role': {
+          const role = interaction.options.getRole('role', true);
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const currentRoleIds = normalizeCaseResponderRoleIds(
+            serverConfig.settings[CASE_RESPONDER_ROLE_IDS_SETTING_KEY]
+          );
+          const nextRoleIds =
+            subcommand === 'add-role'
+              ? Array.from(new Set([...currentRoleIds, role.id]))
+              : currentRoleIds.filter((roleId) => roleId !== role.id);
+
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [CASE_RESPONDER_ROLE_IDS_SETTING_KEY]: nextRoleIds,
+          });
+          const settings = getCaseResponderSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated case responder roles.\n\n' +
+              this.formatCaseResponderSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-routing': {
+          const mode = interaction.options.getString('mode', true);
+          if (!isCaseResponderRoutingMode(mode)) {
+            throw new Error(
+              `Invalid routing mode. Use one of: ${CASE_RESPONDER_ROUTING_MODES.join(', ')}`
+            );
+          }
+
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [CASE_RESPONDER_ROUTING_MODE_SETTING_KEY]: mode,
+          });
+          const settings = getCaseResponderSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated case responder routing.\n\n' +
+              this.formatCaseResponderSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-member-cap': {
+          const value = interaction.options.getInteger('value', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [CASE_RESPONDER_THREAD_MEMBER_CAP_SETTING_KEY]: value,
+          });
+          const settings = getCaseResponderSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated case responder thread member cap.\n\n' +
+              this.formatCaseResponderSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        default:
+          await interaction.reply({
+            content: 'Unsupported case-staff subcommand.',
+            flags: MessageFlags.Ephemeral,
+          });
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'An error occurred while processing case staff settings.';
+      await interaction.reply({
+        content: `Failed to process case staff settings: ${errorMessage}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
   private async handleReportConfigCommand(
     interaction: ChatInputCommandInteraction,
     guildId: string
@@ -1470,10 +1743,13 @@ export class CommandHandler implements ICommandHandler {
         case 'view': {
           const serverConfig = await this.configService.getServerConfig(guildId);
           const settings = getUserReportSettings(serverConfig.settings);
+          const aiSettings = getReportAiSettings(serverConfig.settings);
           await interaction.reply({
             content:
               'Current user report settings:\n\n' +
-              this.formatUserReportSettings(guildId, settings),
+              this.formatUserReportSettings(guildId, settings) +
+              '\n\nAI report triage:\n' +
+              this.formatReportAiSettings(aiSettings),
             flags: MessageFlags.Ephemeral,
           });
           return;
@@ -1510,6 +1786,83 @@ export class CommandHandler implements ICommandHandler {
             content:
               'Updated user report settings.\n\n' +
               this.formatUserReportSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'ai-view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const settings = getReportAiSettings(serverConfig.settings);
+          await interaction.reply({
+            content: 'AI report triage settings:\n\n' + this.formatReportAiSettings(settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'ai-enable':
+        case 'ai-disable': {
+          const enabled = subcommand === 'ai-enable';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [REPORT_AI_TRIAGE_ENABLED_SETTING_KEY]: enabled,
+          });
+          const settings = getReportAiSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `${enabled ? 'Enabled' : 'Disabled'} AI report triage.\n\n` +
+              this.formatReportAiSettings(settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'ai-text-enable':
+        case 'ai-text-disable': {
+          const enabled = subcommand === 'ai-text-enable';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [REPORT_AI_ANALYZE_TEXT_SETTING_KEY]: enabled,
+          });
+          const settings = getReportAiSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `${enabled ? 'Enabled' : 'Disabled'} AI report text analysis.\n\n` +
+              this.formatReportAiSettings(settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'ai-images-enable':
+        case 'ai-images-disable': {
+          const enabled = subcommand === 'ai-images-enable';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [REPORT_AI_ANALYZE_IMAGES_SETTING_KEY]: enabled,
+          });
+          const settings = getReportAiSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `${enabled ? 'Enabled' : 'Disabled'} AI report image analysis.\n\n` +
+              this.formatReportAiSettings(settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'ai-set-max-action': {
+          const action = interaction.options.getString('action', true);
+          if (!isReportAiMaxAction(action)) {
+            throw new Error(
+              `Invalid AI report max action. Use one of: ${REPORT_AI_MAX_ACTIONS.join(', ')}`
+            );
+          }
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [REPORT_AI_MAX_ACTION_SETTING_KEY]: action,
+          });
+          const settings = getReportAiSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated AI report triage max action.\n\n' + this.formatReportAiSettings(settings),
             flags: MessageFlags.Ephemeral,
           });
           return;
@@ -1735,6 +2088,27 @@ export class CommandHandler implements ICommandHandler {
           await interaction.reply({
             content:
               '✅ Updated verification reply AI analysis message limit.\n\n' +
+              `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'analysis-set-max-action': {
+          const action = interaction.options.getString('action', true);
+          if (!isVerificationAiMaxAction(action)) {
+            throw new Error(
+              `Invalid verification AI max action. Use one of: ${VERIFICATION_AI_MAX_ACTIONS.join(', ')}`
+            );
+          }
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [VERIFICATION_AI_MAX_ACTION_SETTING_KEY]: action,
+          });
+          const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
+
+          await interaction.reply({
+            content:
+              '✅ Updated verification reply AI max action.\n\n' +
               `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
             flags: MessageFlags.Ephemeral,
           });
