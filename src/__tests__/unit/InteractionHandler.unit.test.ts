@@ -531,6 +531,51 @@ describe('InteractionHandler (unit)', () => {
     );
   });
 
+  it('rejects verifier ban modal submission without BanMembers permission', async () => {
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: { has: jest.fn().mockReturnValue(false) },
+        }),
+      },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = {
+      customId: 'verification:ban_modal:user-1',
+      guildId: 'guild-1',
+      user: { id: 'viewer-1' } as User,
+      memberPermissions: { has: jest.fn().mockReturnValue(false) },
+      fields: {
+        getTextInputValue: jest.fn(),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(userModerationService.banUser).not.toHaveBeenCalled();
+    expect(interaction.fields.getTextInputValue).not.toHaveBeenCalled();
+    expect(interaction.deferReply).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'You need Ban Members permission to ban a user.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('handles observed open case button', async () => {
     const handler = new InteractionHandler(
       client,
