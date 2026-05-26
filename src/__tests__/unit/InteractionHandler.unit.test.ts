@@ -120,6 +120,8 @@ describe('InteractionHandler (unit)', () => {
       banObservedDetection: jest.fn().mockResolvedValue(true),
       dismissObservedDetection: jest.fn().mockResolvedValue(true),
       undoObservedDetectionAction: jest.fn().mockResolvedValue(AdminActionType.DISMISS),
+      excludeDetectionFromAccounting: jest.fn().mockResolvedValue({} as any),
+      restoreDetectionAccounting: jest.fn().mockResolvedValue({} as any),
       reopenVerification: jest.fn().mockResolvedValue(true),
     };
     notificationManager = {

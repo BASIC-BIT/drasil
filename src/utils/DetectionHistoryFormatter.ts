@@ -1,4 +1,5 @@
 import { DetectionEvent } from '../repositories/types';
+import { formatDetectionAccountingStatus } from './detectionEventAccounting';
 
 /**
  * Formats detection events into a readable text file format
@@ -34,9 +35,11 @@ export class DetectionHistoryFormatter {
 
     events.forEach((event, index) => {
       content += `[Event ${index + 1}]\n`;
+      content += `ID: ${event.id}\n`;
       content += `Time: ${new Date(event.detected_at).toISOString()}\n`;
       content += `Type: ${event.detection_type}\n`;
       content += `Confidence: ${(event.confidence * 100).toFixed(0)}%\n`;
+      content += `Accounting: ${formatDetectionAccountingStatus(event)}\n`;
 
       // event.reasons is guaranteed to be an array by DetectionEvent type,
       // so the truthiness check `event.reasons &&` is unnecessary.

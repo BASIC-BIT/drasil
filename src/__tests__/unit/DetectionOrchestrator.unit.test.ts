@@ -202,6 +202,42 @@ describe('DetectionOrchestrator (unit)', () => {
     expect(events).toHaveLength(2);
   });
 
+  it('does not count false-positive detections toward future suspicion', async () => {
+    await detectionEventsRepository.create({
+      server_id: serverId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.9,
+      reasons: ['Previous high-confidence detection'],
+      detected_at: new Date(),
+      metadata: { observed_action: 'false_positive' },
+    });
+
+    heuristicService.analyzeMessage.mockReturnValue({ result: 'OK', reasons: [] });
+
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository
+    );
+
+    const profile: UserProfileData = {
+      username: 'restored-user',
+      accountCreatedAt: new Date('2020-01-01T00:00:00.000Z'),
+      joinedServerAt: new Date('2020-01-01T00:00:00.000Z'),
+      recentMessages: [],
+    };
+
+    const result = await orchestrator.detectMessage(serverId, userId, 'Set tonight!', profile);
+
+    expect(result.label).toBe('OK');
+    expect(result.reasons).not.toContain('Recent suspicious activity');
+    expect(profile.pastDetectionCount).toBe(0);
+    expect(profile.recentHighConfidenceDetectionCount).toBe(0);
+  });
+
   it('does not reduce message suspicion when GPT analysis is unavailable', async () => {
     heuristicService.analyzeMessage.mockReturnValue({
       result: 'SUSPICIOUS',
