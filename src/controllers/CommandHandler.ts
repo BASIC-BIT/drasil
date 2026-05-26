@@ -26,7 +26,7 @@ import {
   TextInputStyle,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import { IHeuristicService } from '../services/HeuristicService';
 import { UserProfileData } from '../services/GPTService';
 import { IDetectionOrchestrator } from '../services/DetectionOrchestrator';
@@ -59,6 +59,12 @@ import {
   VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY,
 } from '../utils/verificationThreadAnalysisSettings';
 import {
+  ANALYTICS_CONSENT_LEVELS,
+  ANALYTICS_CONSENT_SETTING_KEY,
+  getAnalyticsSettings,
+  isAnalyticsConsentLevel,
+} from '../utils/analyticsSettings';
+import {
   AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY,
   DETECTION_RESPONSE_MODE_SETTING_KEY,
   DETECTION_RESPONSE_MODES,
@@ -79,6 +85,10 @@ import {
   USER_REPORT_REASON_MAX_LENGTH,
   USER_REPORT_REASON_REQUIRED_SETTING_KEY,
 } from '../utils/userReportSettings';
+import {
+  IProductAnalyticsService,
+  NOOP_PRODUCT_ANALYTICS_SERVICE,
+} from '../services/ProductAnalyticsService';
 import {
   CASE_RESPONDER_ROLE_IDS_SETTING_KEY,
   CASE_RESPONDER_ROUTING_MODE_SETTING_KEY,
@@ -152,6 +162,7 @@ export class CommandHandler implements ICommandHandler {
   private configService: IConfigService;
   private userModerationService: IUserModerationService;
   private securityActionService: ISecurityActionService;
+  private productAnalyticsService: IProductAnalyticsService;
   private commands: RESTPostAPIApplicationCommandsJSONBody[];
 
   constructor(
@@ -161,7 +172,10 @@ export class CommandHandler implements ICommandHandler {
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
     @inject(TYPES.ConfigService) configService: IConfigService,
     @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
-    @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService
+    @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService,
+    @inject(TYPES.ProductAnalyticsService)
+    @optional()
+    productAnalyticsService?: IProductAnalyticsService
   ) {
     this.client = client;
     this.heuristicService = heuristicService;
@@ -170,6 +184,7 @@ export class CommandHandler implements ICommandHandler {
     this.configService = configService;
     this.userModerationService = userModerationService;
     this.securityActionService = securityActionService;
+    this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
 
     // Define slash commands
     this.commands = [
@@ -542,6 +557,30 @@ export class CommandHandler implements ICommandHandler {
                       { name: 'Hints only', value: 'hints' },
                       { name: 'Recommend open case', value: 'open_case' },
                       { name: 'Recommend restriction review', value: 'restrict' }
+                    )
+                )
+            )
+        )
+        .addSubcommandGroup((group) =>
+          group
+            .setName('analytics')
+            .setDescription('Manage Drasil product analytics sharing')
+            .addSubcommand((subcommand) =>
+              subcommand.setName('view').setDescription('View product analytics sharing settings')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('set-level')
+                .setDescription('Choose what this server shares with Drasil maintainers')
+                .addStringOption((option) =>
+                  option
+                    .setName('level')
+                    .setDescription('off, anonymous, or full')
+                    .setRequired(true)
+                    .addChoices(
+                      { name: 'Off', value: 'off' },
+                      { name: 'Anonymous statistics', value: 'anonymous' },
+                      { name: 'Full statistics', value: 'full' }
                     )
                 )
             )
@@ -1220,6 +1259,16 @@ export class CommandHandler implements ICommandHandler {
         admin_channel_id: adminChannel.id,
         verification_channel_id: verificationChannelId,
       });
+      void this.productAnalyticsService.captureGuildEvent(
+        guild.id,
+        'verification setup completed',
+        {
+          verification_channel_created: verificationChannelWasCreated,
+          verification_channel_configured: Boolean(verificationChannelId),
+          admin_channel_configured: true,
+          restricted_role_configured: true,
+        }
+      );
 
       const verificationChannelMessage = verificationChannelWasCreated
         ? `Created verification channel: <#${verificationChannelId}>`
@@ -1286,6 +1335,11 @@ export class CommandHandler implements ICommandHandler {
 
     if (subcommandGroup === 'report') {
       await this.handleReportConfigCommand(interaction, guild.id);
+      return;
+    }
+
+    if (subcommandGroup === 'analytics') {
+      await this.handleAnalyticsConfigCommand(interaction, guild.id);
       return;
     }
 
@@ -1371,6 +1425,25 @@ export class CommandHandler implements ICommandHandler {
     return [
       `Report reason required: \`${settings.reasonRequired ? 'yes' : 'no'}\``,
       `External reports: \`${settings.externalResponseMode}\``,
+      `Guild ID: \`${guildId}\``,
+    ].join('\n');
+  }
+
+  private formatAnalyticsSettings(
+    guildId: string,
+    settings: ReturnType<typeof getAnalyticsSettings>
+  ): string {
+    const runtimeStatus = this.productAnalyticsService.getStatus();
+    const runtimeLine = runtimeStatus.configured
+      ? `PostHog export: \`configured\` (${runtimeStatus.host})`
+      : `PostHog export: \`inactive\` (${runtimeStatus.reason ?? 'not configured'})`;
+
+    return [
+      `Sharing level: \`${settings.consentLevel}\``,
+      runtimeLine,
+      'Anonymous shares hashed IDs and aggregate event properties only.',
+      'Full may include raw Discord IDs for future cross-network verification features.',
+      `Available levels: ${ANALYTICS_CONSENT_LEVELS.map((level) => `\`${level}\``).join(', ')}`,
       `Guild ID: \`${guildId}\``,
     ].join('\n');
   }
@@ -1883,6 +1956,101 @@ export class CommandHandler implements ICommandHandler {
         content: `Failed to process report settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       });
+    }
+  }
+
+  private async handleAnalyticsConfigCommand(
+    interaction: ChatInputCommandInteraction,
+    guildId: string
+  ): Promise<void> {
+    const subcommand = interaction.options.getSubcommand(true);
+
+    try {
+      switch (subcommand) {
+        case 'view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const settings = getAnalyticsSettings(serverConfig.settings);
+          await interaction.reply({
+            content:
+              'Current product analytics sharing settings:\n\n' +
+              this.formatAnalyticsSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-level': {
+          const level = interaction.options.getString('level', true);
+          if (!isAnalyticsConsentLevel(level)) {
+            throw new Error(
+              `Invalid analytics sharing level. Use one of: ${ANALYTICS_CONSENT_LEVELS.join(', ')}`
+            );
+          }
+
+          if (level === 'full' && interaction.guild?.ownerId !== interaction.user.id) {
+            await interaction.reply({
+              content:
+                'Only the server owner can enable full analytics sharing because it may include raw Discord IDs.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          const currentConfig = await this.configService.getServerConfig(guildId);
+          const previousSettings = getAnalyticsSettings(currentConfig.settings);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [ANALYTICS_CONSENT_SETTING_KEY]: level,
+          });
+          const settings = getAnalyticsSettings(updated.settings);
+
+          if (settings.consentLevel !== 'off') {
+            void this.productAnalyticsService.captureGuildEvent(
+              guildId,
+              'analytics consent updated',
+              {
+                previous_consent_level: previousSettings.consentLevel,
+                new_consent_level: settings.consentLevel,
+              },
+              { moderatorId: interaction.user.id }
+            );
+          }
+
+          await interaction.reply({
+            content:
+              'Updated product analytics sharing settings.\n\n' +
+              this.formatAnalyticsSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        default:
+          await interaction.reply({
+            content: 'Unsupported analytics subcommand.',
+            flags: MessageFlags.Ephemeral,
+          });
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'An error occurred while processing analytics settings.';
+      const errorResponse = {
+        content: `Failed to process analytics settings: ${errorMessage}`,
+        flags: MessageFlags.Ephemeral,
+      } as const;
+
+      try {
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp(errorResponse);
+        } else {
+          await interaction.reply(errorResponse);
+        }
+      } catch (replyError) {
+        console.warn('Failed to send analytics settings error response:', replyError);
+      }
     }
   }
 

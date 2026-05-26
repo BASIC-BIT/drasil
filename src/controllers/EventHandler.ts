@@ -8,7 +8,7 @@ import {
   PermissionFlagsBits,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import { UserProfileData } from '../services/GPTService';
 import { DetectionResult, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { INotificationManager } from '../services/NotificationManager';
@@ -23,6 +23,10 @@ import {
   DetectionResponseSettings,
   getDetectionResponseSettings,
 } from '../utils/detectionResponseSettings';
+import {
+  IProductAnalyticsService,
+  NOOP_PRODUCT_ANALYTICS_SERVICE,
+} from '../services/ProductAnalyticsService';
 
 const RECENT_USER_CONTEXT_MESSAGE_LIMIT = 5;
 const RECENT_USER_CONTEXT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -65,6 +69,7 @@ export class EventHandler implements IEventHandler {
   private commandHandler: ICommandHandler;
   private interactionHandler: IInteractionHandler;
   private verificationThreadAnalysisService: IVerificationThreadAnalysisService;
+  private productAnalyticsService: IProductAnalyticsService;
   private serverConfigWarmups: Set<string> = new Set();
   private configInitializePromise: Promise<void> | null = null;
   private recentMessagesByServer: Map<string, Map<string, RecentUserMessageContext[]>> = new Map();
@@ -79,7 +84,10 @@ export class EventHandler implements IEventHandler {
     @inject(TYPES.CommandHandler) commandHandler: ICommandHandler,
     @inject(TYPES.InteractionHandler) interactionHandler: IInteractionHandler,
     @inject(TYPES.VerificationThreadAnalysisService)
-    verificationThreadAnalysisService: IVerificationThreadAnalysisService
+    verificationThreadAnalysisService: IVerificationThreadAnalysisService,
+    @inject(TYPES.ProductAnalyticsService)
+    @optional()
+    productAnalyticsService?: IProductAnalyticsService
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -89,6 +97,7 @@ export class EventHandler implements IEventHandler {
     this.commandHandler = commandHandler;
     this.interactionHandler = interactionHandler;
     this.verificationThreadAnalysisService = verificationThreadAnalysisService;
+    this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -597,6 +606,7 @@ export class EventHandler implements IEventHandler {
       console.log(`Created default configuration for guild: ${guild.name} (${guild.id})`);
 
       // Set up verification channel if auto_setup is enabled globally
+      let verificationChannelWasCreated = false;
       if (globalConfig.getSettings().autoSetupVerificationChannels) {
         const restrictedRoleId = config.restricted_role_id;
         if (restrictedRoleId) {
@@ -610,10 +620,16 @@ export class EventHandler implements IEventHandler {
             await this.configService.updateServerConfig(guild.id, {
               verification_channel_id: channelId,
             });
+            verificationChannelWasCreated = true;
             console.log(`Set up verification channel for guild: ${guild.name} (${guild.id})`);
           }
         }
       }
+
+      void this.productAnalyticsService.captureGuildEvent(guild.id, 'guild installed', {
+        auto_setup_verification_channels: globalConfig.getSettings().autoSetupVerificationChannels,
+        verification_channel_auto_created: verificationChannelWasCreated,
+      });
     } catch (error) {
       console.error(`Failed to handle new guild ${guild.id}:`, error);
     }

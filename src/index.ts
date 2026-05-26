@@ -3,6 +3,7 @@ import * as dotenv from 'dotenv';
 import { TYPES } from './di/symbols';
 import type { IBot } from './Bot';
 import { initPhoenixTracing } from './observability/phoenix';
+import type { IProductAnalyticsService } from './services/ProductAnalyticsService';
 
 // Load environment variables
 dotenv.config();
@@ -28,6 +29,9 @@ async function bootstrap(): Promise<void> {
 
     // Get the bot instance from the container
     const bot = container.get<IBot>(TYPES.Bot);
+    const productAnalyticsService = container.get<IProductAnalyticsService>(
+      TYPES.ProductAnalyticsService
+    );
 
     // Start the bot
     await bot.startBot();
@@ -35,7 +39,7 @@ async function bootstrap(): Promise<void> {
     console.log('Bot initialized and running!');
 
     // Handle graceful shutdown
-    setupGracefulShutdown(bot);
+    setupGracefulShutdown(bot, productAnalyticsService);
   } catch (error) {
     console.error('Error starting bot:', error);
     process.exit(1);
@@ -46,28 +50,28 @@ async function bootstrap(): Promise<void> {
  * Set up handlers for graceful shutdown
  * @param bot The bot instance
  */
-function setupGracefulShutdown(bot: IBot): void {
+function setupGracefulShutdown(bot: IBot, productAnalyticsService: IProductAnalyticsService): void {
   // Handle graceful shutdown on SIGINT and SIGTERM
   process.on('SIGINT', async () => {
     console.log('Received SIGINT signal. Shutting down gracefully...');
-    await shutdown(bot);
+    await shutdown(bot, productAnalyticsService);
   });
 
   process.on('SIGTERM', async () => {
     console.log('Received SIGTERM signal. Shutting down gracefully...');
-    await shutdown(bot);
+    await shutdown(bot, productAnalyticsService);
   });
 
   // Handle uncaught exceptions
   process.on('uncaughtException', async (error) => {
     console.error('Uncaught exception:', error);
-    await shutdown(bot);
+    await shutdown(bot, productAnalyticsService);
   });
 
   // Handle unhandled promise rejections
   process.on('unhandledRejection', async (reason) => {
     console.error('Unhandled promise rejection:', reason);
-    await shutdown(bot);
+    await shutdown(bot, productAnalyticsService);
   });
 }
 
@@ -75,10 +79,14 @@ function setupGracefulShutdown(bot: IBot): void {
  * Clean shutdown procedure
  * @param bot The bot instance
  */
-async function shutdown(bot: IBot): Promise<void> {
+async function shutdown(
+  bot: IBot,
+  productAnalyticsService: IProductAnalyticsService
+): Promise<void> {
   try {
     console.log('Cleaning up resources...');
     await bot.destroy();
+    await productAnalyticsService.shutdown();
     console.log('Bot disconnected and resources released.');
 
     // Exit with success code
