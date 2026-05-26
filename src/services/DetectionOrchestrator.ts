@@ -135,17 +135,17 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       // Ensure server and user exist before proceeding
       await this.ensureEntitiesExist(serverId, userId, profileData?.username); // Use optional chaining
 
-      // First, check recent detection history
-      const recentEvents = await this.detectionEventsRepository.findByServerAndUser(
+      // First, check detection history that still counts toward future suspicion.
+      const countedEvents = await this.detectionEventsRepository.findCountedByServerAndUser(
         serverId,
         userId
       );
-      const recentSuspiciousEvents = recentEvents.filter((event) =>
+      const recentSuspiciousEvents = countedEvents.filter((event) =>
         meetsConfidenceLevel(event.confidence, 'High')
       );
 
       if (profileData) {
-        profileData.pastDetectionCount = recentEvents.length;
+        profileData.pastDetectionCount = countedEvents.length;
         profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
       }
 
@@ -287,14 +287,14 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       // Ensure server and user exist before proceeding
       await this.ensureEntitiesExist(serverId, userId, profileData.username); // Use params
 
-      const recentEvents = await this.detectionEventsRepository.findByServerAndUser(
+      const countedEvents = await this.detectionEventsRepository.findCountedByServerAndUser(
         serverId,
         userId
       );
-      const recentSuspiciousEvents = recentEvents.filter((event) =>
+      const recentSuspiciousEvents = countedEvents.filter((event) =>
         meetsConfidenceLevel(event.confidence, 'High')
       );
-      profileData.pastDetectionCount = recentEvents.length;
+      profileData.pastDetectionCount = countedEvents.length;
       profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
 
       // Use the analyzeProfile method from the interface

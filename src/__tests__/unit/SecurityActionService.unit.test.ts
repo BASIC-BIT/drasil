@@ -1350,6 +1350,10 @@ describe('SecurityActionService (unit)', () => {
     expect(updatedDetection?.metadata).toMatchObject({
       observed_action: AdminActionType.FALSE_POSITIVE,
       observed_action_by: moderator.id,
+      excluded_from_accounting: true,
+      accounting_exclusion_scope: 'server',
+      accounting_excluded_by: moderator.id,
+      accounting_exclusion_reason: 'Marked false positive',
     });
     expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
       detectionEvent.id,
@@ -1357,6 +1361,128 @@ describe('SecurityActionService (unit)', () => {
       moderator,
       { undoButtonLabel: 'Undo False Positive' }
     );
+  });
+
+  it('marks an existing detection as ignored for future accounting', async () => {
+    const guildId = 'guild-audit-ignore';
+    const userId = 'user-audit-ignore';
+    const moderator = { id: 'admin-audit' } as User;
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.92,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+
+    const updatedDetection = await buildService().excludeDetectionFromAccounting(
+      guildId,
+      detectionEvent.id,
+      moderator,
+      'testing false positive'
+    );
+
+    expect(updatedDetection?.metadata).toMatchObject({
+      excluded_from_accounting: true,
+      accounting_exclusion_scope: 'server',
+      accounting_excluded_by: moderator.id,
+      accounting_exclusion_reason: 'testing false positive',
+    });
+    expect(adminActionService.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detection_event_id: detectionEvent.id,
+        action_type: AdminActionType.FALSE_POSITIVE,
+        notes: 'testing false positive',
+      })
+    );
+    await expect(
+      detectionEventsRepository.findCountedByServerAndUser(guildId, userId)
+    ).resolves.toHaveLength(0);
+  });
+
+  it('allows configured global admins to ignore global detections', async () => {
+    const originalGlobalAdmins = process.env.DRASIL_GLOBAL_ADMIN_IDS;
+    process.env.DRASIL_GLOBAL_ADMIN_IDS = 'admin-global';
+    const moderator = { id: 'admin-global' } as User;
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: null,
+      user_id: 'user-global',
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1,
+      reasons: ['External report'],
+      detected_at: new Date(),
+    });
+
+    try {
+      const updatedDetection = await buildService().excludeDetectionFromAccounting(
+        'guild-context',
+        detectionEvent.id,
+        moderator,
+        'global test false positive'
+      );
+
+      expect(updatedDetection?.metadata).toMatchObject({
+        excluded_from_accounting: true,
+        accounting_exclusion_scope: 'global',
+        accounting_excluded_by: moderator.id,
+        accounting_exclusion_reason: 'global test false positive',
+      });
+      expect(adminActionService.recordAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          server_id: null,
+          user_id: 'user-global',
+          action_type: AdminActionType.FALSE_POSITIVE,
+        })
+      );
+    } finally {
+      if (originalGlobalAdmins === undefined) {
+        delete process.env.DRASIL_GLOBAL_ADMIN_IDS;
+      } else {
+        process.env.DRASIL_GLOBAL_ADMIN_IDS = originalGlobalAdmins;
+      }
+    }
+  });
+
+  it('restores an ignored detection to future accounting', async () => {
+    const guildId = 'guild-audit-restore';
+    const userId = 'user-audit-restore';
+    const moderator = { id: 'admin-audit' } as User;
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.92,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+      metadata: {
+        excluded_from_accounting: true,
+        accounting_exclusion_scope: 'server',
+        accounting_excluded_by: 'previous-admin',
+        accounting_excluded_at: new Date().toISOString(),
+        accounting_exclusion_reason: 'Marked false positive',
+      },
+    });
+
+    const updatedDetection = await buildService().restoreDetectionAccounting(
+      guildId,
+      detectionEvent.id,
+      moderator,
+      'restored after review'
+    );
+
+    expect(updatedDetection?.metadata?.excluded_from_accounting).toBeUndefined();
+    expect(updatedDetection?.metadata?.accounting_exclusion_scope).toBeUndefined();
+    expect(adminActionService.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detection_event_id: detectionEvent.id,
+        action_type: AdminActionType.UNDO_OBSERVED_ACTION,
+        notes: 'restored after review',
+      })
+    );
+    await expect(
+      detectionEventsRepository.findCountedByServerAndUser(guildId, userId)
+    ).resolves.toHaveLength(1);
   });
 
   it('undoes an observed false positive dismissal and restores actions', async () => {
@@ -1374,6 +1500,11 @@ describe('SecurityActionService (unit)', () => {
         observed_action: AdminActionType.FALSE_POSITIVE,
         observed_action_by: 'previous-admin',
         observed_action_at: new Date().toISOString(),
+        excluded_from_accounting: true,
+        accounting_exclusion_scope: 'server',
+        accounting_excluded_by: 'previous-admin',
+        accounting_excluded_at: new Date().toISOString(),
+        accounting_exclusion_reason: 'Marked false positive',
       },
     });
 
@@ -1388,6 +1519,8 @@ describe('SecurityActionService (unit)', () => {
     const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
     expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
     expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
+    expect(updatedDetection?.metadata?.excluded_from_accounting).toBeUndefined();
+    expect(updatedDetection?.metadata?.accounting_exclusion_scope).toBeUndefined();
     expect(adminActionService.recordAction).toHaveBeenCalledWith(
       expect.objectContaining({
         detection_event_id: detectionEvent.id,

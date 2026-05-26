@@ -659,6 +659,48 @@ export class CommandHandler implements ICommandHandler {
         )
         .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
         .setContexts(InteractionContextType.Guild),
+      new SlashCommandBuilder()
+        .setName('audit')
+        .setDescription('Audit detection accounting')
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('ignore-detection')
+            .setDescription('Exclude a detection event from future suspicion accounting')
+            .addStringOption((option) =>
+              option
+                .setName('detection-id')
+                .setDescription('Detection event ID from the history export')
+                .setRequired(true)
+            )
+            .addStringOption((option) =>
+              option
+                .setName('reason')
+                .setDescription('Why this detection should not count')
+                .setRequired(false)
+                .setMaxLength(500)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('restore-detection')
+            .setDescription('Restore a detection event to future suspicion accounting')
+            .addStringOption((option) =>
+              option
+                .setName('detection-id')
+                .setDescription('Detection event ID from the history export')
+                .setRequired(true)
+            )
+            .addStringOption((option) =>
+              option
+                .setName('reason')
+                .setDescription('Why this detection should count again')
+                .setRequired(false)
+                .setMaxLength(500)
+            )
+        )
+        .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+        .setContexts(InteractionContextType.Guild)
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
       new SlashCommandBuilder() // Added flaguser command
         .setName('flaguser')
         .setDescription('Manually flag a user as suspicious and start verification.')
@@ -755,6 +797,10 @@ export class CommandHandler implements ICommandHandler {
 
       case 'config':
         await this.handleConfigCommand(interaction);
+        break;
+
+      case 'audit':
+        await this.handleAuditCommand(interaction);
         break;
 
       case 'flaguser': // Added case for flaguser
@@ -1243,6 +1289,77 @@ export class CommandHandler implements ICommandHandler {
       } else {
         await interaction.reply({ ...errorResponse, flags: MessageFlags.Ephemeral });
       }
+    }
+  }
+
+  private async handleAuditCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+    const guild = interaction.guild;
+    if (!guild) {
+      await this.replyGuildInstallRequired(interaction);
+      return;
+    }
+
+    let hasManageGuildPermission = interaction.memberPermissions?.has(
+      PermissionFlagsBits.ManageGuild
+    );
+    if (hasManageGuildPermission === undefined) {
+      const invokingMember = await guild.members.fetch(interaction.user.id).catch(() => null);
+      hasManageGuildPermission = invokingMember
+        ? invokingMember.permissionsIn(interaction.channelId).has(PermissionFlagsBits.ManageGuild)
+        : false;
+    }
+
+    if (!hasManageGuildPermission) {
+      await interaction.reply({
+        content: 'You need Manage Server permission to audit detection accounting.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const subcommand = interaction.options.getSubcommand(true);
+    const detectionEventId = interaction.options.getString('detection-id', true).trim();
+    const reason = interaction.options.getString('reason')?.trim() || undefined;
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      if (subcommand === 'ignore-detection') {
+        const updatedDetection = await this.securityActionService.excludeDetectionFromAccounting(
+          guild.id,
+          detectionEventId,
+          interaction.user,
+          reason
+        );
+        await interaction.editReply({
+          content: updatedDetection
+            ? `Detection ${detectionEventId} is now ignored for future accounting.`
+            : `Detection ${detectionEventId} was not found or is not auditable from this server.`,
+        });
+        return;
+      }
+
+      if (subcommand === 'restore-detection') {
+        const updatedDetection = await this.securityActionService.restoreDetectionAccounting(
+          guild.id,
+          detectionEventId,
+          interaction.user,
+          reason
+        );
+        await interaction.editReply({
+          content: updatedDetection
+            ? `Detection ${detectionEventId} now counts toward future accounting again.`
+            : `Detection ${detectionEventId} was not found or is not auditable from this server.`,
+        });
+        return;
+      }
+
+      await interaction.editReply({ content: 'Unsupported /audit subcommand.' });
+    } catch (error) {
+      console.error(`Failed to audit detection ${detectionEventId}:`, error);
+      await interaction.editReply({
+        content: 'Failed to update detection accounting. Please try again later.',
+      });
     }
   }
 

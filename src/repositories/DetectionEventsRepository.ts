@@ -1,8 +1,16 @@
 import { injectable, inject } from 'inversify';
-import { Prisma, PrismaClient, detection_type } from '../db/prisma';
+import { Prisma, PrismaClient, admin_action_type, detection_type } from '../db/prisma';
 import { DetectionEvent } from './types'; // Keep existing domain types
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository'; // Keep using RepositoryError
+import {
+  DETECTION_ACCOUNTING_EXCLUDED_AT_METADATA_KEY,
+  DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY,
+  DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY,
+  DETECTION_ACCOUNTING_EXCLUSION_REASON_METADATA_KEY,
+  DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY,
+  isDetectionEventExcludedFromAccounting,
+} from '../utils/detectionEventAccounting';
 
 /**
  * Interface for Detection Events Repository (Remains the same)
@@ -10,6 +18,7 @@ import { RepositoryError } from './BaseRepository'; // Keep using RepositoryErro
 export interface IDetectionEventsRepository {
   create(data: Partial<DetectionEvent>): Promise<DetectionEvent>;
   findByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]>;
+  findCountedByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]>;
   findRecentByServer(serverId: string, limit?: number): Promise<DetectionEvent[]>;
   recordAdminAction(
     id: string,
@@ -24,6 +33,11 @@ export interface IDetectionEventsRepository {
     detectionEventId: string,
     metadata: Record<string, unknown>
   ): Promise<DetectionEvent | null>;
+  markExcludedFromAccounting(
+    detectionEventId: string,
+    metadata: Record<string, unknown>
+  ): Promise<DetectionEvent | null>;
+  clearAccountingExclusion(detectionEventId: string): Promise<DetectionEvent | null>;
   claimObservedAction(
     detectionEventId: string,
     metadata: Record<string, unknown>
@@ -138,6 +152,39 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
   }
 
   /**
+   * Find detection events that still count toward future suspicion/accounting.
+   * Full audit history remains available through findByServerAndUser.
+   */
+  async findCountedByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]> {
+    try {
+      const events = await this.prisma.detection_events.findMany({
+        where: {
+          server_id: serverId,
+          user_id: userId,
+        },
+        include: {
+          admin_actions: {
+            where: {
+              action_type: {
+                in: [admin_action_type.false_positive, admin_action_type.undo_observed_action],
+              },
+            },
+            orderBy: { action_at: 'desc' },
+          },
+        },
+        orderBy: {
+          detected_at: 'desc',
+        },
+      });
+      return events.filter(
+        (event) => !isDetectionEventExcludedFromAccounting(event)
+      ) as DetectionEvent[];
+    } catch (error) {
+      this.handleError(error, 'findCountedByServerAndUser');
+    }
+  }
+
+  /**
    * Find recent detection events for a server
    */
   async findRecentByServer(serverId: string, limit: number = 50): Promise<DetectionEvent[]> {
@@ -224,6 +271,54 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
     }
   }
 
+  async markExcludedFromAccounting(
+    detectionEventId: string,
+    metadata: Record<string, unknown>
+  ): Promise<DetectionEvent | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<DetectionEvent[]>`
+        UPDATE detection_events
+        SET metadata = COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify(metadata)}::jsonb
+        WHERE id = ${detectionEventId}::uuid
+        RETURNING *
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'markExcludedFromAccounting');
+    }
+  }
+
+  async clearAccountingExclusion(detectionEventId: string): Promise<DetectionEvent | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<DetectionEvent[]>`
+        UPDATE detection_events
+        SET metadata = CASE
+          WHEN COALESCE(metadata, '{}'::jsonb)->>'observed_action' = 'false_positive'
+          THEN COALESCE(metadata, '{}'::jsonb)
+            - 'observed_action'
+            - 'observed_action_by'
+            - 'observed_action_at'
+            - ${DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUDED_AT_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUSION_REASON_METADATA_KEY}
+          ELSE COALESCE(metadata, '{}'::jsonb)
+            - ${DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUDED_AT_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUSION_REASON_METADATA_KEY}
+        END
+        WHERE id = ${detectionEventId}::uuid
+        RETURNING *
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'clearAccountingExclusion');
+    }
+  }
+
   async claimObservedAction(
     detectionEventId: string,
     metadata: Record<string, unknown>
@@ -250,10 +345,21 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
     try {
       const rows = await this.prisma.$queryRaw<DetectionEvent[]>`
         UPDATE detection_events
-        SET metadata = COALESCE(metadata, '{}'::jsonb)
-          - 'observed_action'
-          - 'observed_action_by'
-          - 'observed_action_at'
+        SET metadata = CASE
+          WHEN ${actionType} = 'false_positive' THEN COALESCE(metadata, '{}'::jsonb)
+            - 'observed_action'
+            - 'observed_action_by'
+            - 'observed_action_at'
+            - ${DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUDED_AT_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUSION_REASON_METADATA_KEY}
+          ELSE COALESCE(metadata, '{}'::jsonb)
+            - 'observed_action'
+            - 'observed_action_by'
+            - 'observed_action_at'
+        END
         WHERE id = ${detectionEventId}::uuid
           AND COALESCE(metadata, '{}'::jsonb)->>'observed_action' = ${actionType}
           AND COALESCE(metadata, '{}'::jsonb)->>'observed_action_by' = ${adminId}
@@ -272,10 +378,22 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
     try {
       const rows = await this.prisma.$queryRaw<DetectionEvent[]>`
         UPDATE detection_events
-        SET metadata = COALESCE(metadata, '{}'::jsonb)
-          - 'observed_action'
-          - 'observed_action_by'
-          - 'observed_action_at'
+        SET metadata = CASE
+          WHEN COALESCE(metadata, '{}'::jsonb)->>'observed_action' = 'false_positive'
+          THEN COALESCE(metadata, '{}'::jsonb)
+            - 'observed_action'
+            - 'observed_action_by'
+            - 'observed_action_at'
+            - ${DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUDED_AT_METADATA_KEY}
+            - ${DETECTION_ACCOUNTING_EXCLUSION_REASON_METADATA_KEY}
+          ELSE COALESCE(metadata, '{}'::jsonb)
+            - 'observed_action'
+            - 'observed_action_by'
+            - 'observed_action_at'
+        END
         WHERE id = ${detectionEventId}::uuid
           AND COALESCE(metadata, '{}'::jsonb)->>'observed_action' IN (${Prisma.join(actionTypes)})
         RETURNING *

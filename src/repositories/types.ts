@@ -163,8 +163,8 @@ export interface VerificationEvent {
 
 export interface AdminAction {
   id: string;
-  server_id: string;
-  user_id: string;
+  server_id: string | null;
+  user_id: string | null;
   admin_id: string;
   verification_event_id: string | null;
   detection_event_id: string | null;

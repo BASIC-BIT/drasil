@@ -37,6 +37,8 @@ describe('CommandHandler (unit)', () => {
     handleUserReport: jest.Mock;
     handleMessageReport: jest.Mock;
     setupVerificationChannel: jest.Mock;
+    excludeDetectionFromAccounting: jest.Mock;
+    restoreDetectionAccounting: jest.Mock;
   }>;
 
   const originalUserInstallReportingEnabled = process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED;
@@ -89,6 +91,10 @@ describe('CommandHandler (unit)', () => {
     const securityActionService = {
       handleUserReport: overrides.handleUserReport ?? jest.fn().mockResolvedValue(true),
       handleMessageReport: overrides.handleMessageReport ?? jest.fn().mockResolvedValue(true),
+      excludeDetectionFromAccounting:
+        overrides.excludeDetectionFromAccounting ?? jest.fn().mockResolvedValue({ id: 'det-1' }),
+      restoreDetectionAccounting:
+        overrides.restoreDetectionAccounting ?? jest.fn().mockResolvedValue({ id: 'det-1' }),
     } as any;
 
     const notificationManager = {
@@ -135,6 +141,7 @@ describe('CommandHandler (unit)', () => {
       'report',
       'setupverification',
       'config',
+      'audit',
       'flaguser',
       'setupreportbutton',
     ]) {
@@ -176,6 +183,21 @@ describe('CommandHandler (unit)', () => {
     ]);
   });
 
+  it('registers /audit detection accounting subcommands', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const auditCommand = commands.find((c) => c.name === 'audit');
+
+    expect(auditCommand).toBeDefined();
+    expect(auditCommand.default_member_permissions).toBe(
+      PermissionFlagsBits.ManageGuild.toString()
+    );
+    expect(auditCommand.options.map((option: any) => option.name)).toEqual([
+      'ignore-detection',
+      'restore-detection',
+    ]);
+  });
+
   it('explains when a guild-only slash command is used before Drasil is installed', async () => {
     const { handler } = buildHandler();
     const interaction = {
@@ -194,6 +216,41 @@ describe('CommandHandler (unit)', () => {
     expect(interaction.reply.mock.calls[0][0].content).toContain(
       'https://discord.com/oauth2/authorize?'
     );
+  });
+
+  it('handles /audit ignore-detection for users with Manage Server permission', async () => {
+    const excludeDetectionFromAccounting = jest.fn().mockResolvedValue({ id: 'det-1' });
+    const { handler, securityActionService } = buildHandler({ excludeDetectionFromAccounting });
+
+    const interaction = {
+      commandName: 'audit',
+      guild: { id: 'guild-1' },
+      channelId: 'channel-1',
+      user: { id: 'admin-1' },
+      memberPermissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ManageGuild),
+      },
+      options: {
+        getSubcommand: jest.fn().mockReturnValue('ignore-detection'),
+        getString: jest.fn((name: string) =>
+          name === 'detection-id' ? 'det-1' : 'testing false positive'
+        ),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(securityActionService.excludeDetectionFromAccounting).toHaveBeenCalledWith(
+      'guild-1',
+      'det-1',
+      interaction.user,
+      'testing false positive'
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Detection det-1 is now ignored for future accounting.',
+    });
   });
 
   it('registers guild-only Report User context command', () => {

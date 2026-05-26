@@ -29,14 +29,14 @@ export class AdminActionService implements IAdminActionService {
   async recordAction(data: AdminActionCreate): Promise<AdminAction> {
     // Ensure server and user exist
     const [server, user] = await Promise.all([
-      this.serverRepository.findById(data.server_id),
-      this.userRepository.findById(data.user_id),
+      data.server_id ? this.serverRepository.findById(data.server_id) : Promise.resolve(null),
+      data.user_id ? this.userRepository.findById(data.user_id) : Promise.resolve(null),
     ]);
 
-    if (!server) {
+    if (data.server_id && !server) {
       throw new Error(`Server ${data.server_id} not found`);
     }
-    if (!user) {
+    if (data.user_id && !user) {
       throw new Error(`User ${data.user_id} not found`);
     }
 

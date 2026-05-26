@@ -33,6 +33,14 @@ import {
   USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY,
   USER_REPORT_REASON_REQUIRED_SETTING_KEY,
 } from '../../utils/userReportSettings';
+import {
+  DETECTION_ACCOUNTING_EXCLUDED_AT_METADATA_KEY,
+  DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY,
+  DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY,
+  DETECTION_ACCOUNTING_EXCLUSION_REASON_METADATA_KEY,
+  DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY,
+  isDetectionEventExcludedFromAccounting,
+} from '../../utils/detectionEventAccounting';
 
 const toTimestamp = (value: string | Date | null | undefined): number => {
   if (!value) {
@@ -105,6 +113,18 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
   async findByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]> {
     return this.events
       .filter((event) => event.server_id === serverId && event.user_id === userId)
+      .sort((a, b) => toTimestamp(b.detected_at) - toTimestamp(a.detected_at))
+      .map((event) => ({ ...event }));
+  }
+
+  async findCountedByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]> {
+    return this.events
+      .filter(
+        (event) =>
+          event.server_id === serverId &&
+          event.user_id === userId &&
+          !isDetectionEventExcludedFromAccounting(event)
+      )
       .sort((a, b) => toTimestamp(b.detected_at) - toTimestamp(a.detected_at))
       .map((event) => ({ ...event }));
   }
@@ -187,6 +207,52 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     return { ...updated };
   }
 
+  async markExcludedFromAccounting(
+    detectionEventId: string,
+    metadata: Record<string, unknown>
+  ): Promise<DetectionEvent | null> {
+    const eventIndex = this.events.findIndex((item) => item.id === detectionEventId);
+    if (eventIndex === -1) {
+      return null;
+    }
+
+    const updated = {
+      ...this.events[eventIndex],
+      metadata: {
+        ...(this.events[eventIndex].metadata ?? {}),
+        ...metadata,
+      },
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
+  async clearAccountingExclusion(detectionEventId: string): Promise<DetectionEvent | null> {
+    const eventIndex = this.events.findIndex((item) => item.id === detectionEventId);
+    if (eventIndex === -1) {
+      return null;
+    }
+
+    const metadata = { ...(this.events[eventIndex].metadata ?? {}) };
+    if (metadata.observed_action === 'false_positive') {
+      delete metadata.observed_action;
+      delete metadata.observed_action_by;
+      delete metadata.observed_action_at;
+    }
+    delete metadata[DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY];
+    delete metadata[DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY];
+    delete metadata[DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY];
+    delete metadata[DETECTION_ACCOUNTING_EXCLUDED_AT_METADATA_KEY];
+    delete metadata[DETECTION_ACCOUNTING_EXCLUSION_REASON_METADATA_KEY];
+
+    const updated = {
+      ...this.events[eventIndex],
+      metadata,
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
   async claimObservedAction(
     detectionEventId: string,
     metadata: Record<string, unknown>
@@ -234,6 +300,13 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     delete metadata.observed_action;
     delete metadata.observed_action_by;
     delete metadata.observed_action_at;
+    if (actionType === 'false_positive') {
+      delete metadata[DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY];
+      delete metadata[DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY];
+      delete metadata[DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY];
+      delete metadata[DETECTION_ACCOUNTING_EXCLUDED_AT_METADATA_KEY];
+      delete metadata[DETECTION_ACCOUNTING_EXCLUSION_REASON_METADATA_KEY];
+    }
     const updated = {
       ...this.events[eventIndex],
       metadata,
@@ -257,9 +330,17 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     }
 
     const metadata = { ...existingMetadata };
+    const wasFalsePositive = existingMetadata.observed_action === 'false_positive';
     delete metadata.observed_action;
     delete metadata.observed_action_by;
     delete metadata.observed_action_at;
+    if (wasFalsePositive) {
+      delete metadata[DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY];
+      delete metadata[DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY];
+      delete metadata[DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY];
+      delete metadata[DETECTION_ACCOUNTING_EXCLUDED_AT_METADATA_KEY];
+      delete metadata[DETECTION_ACCOUNTING_EXCLUSION_REASON_METADATA_KEY];
+    }
     const updated = {
       ...this.events[eventIndex],
       metadata,

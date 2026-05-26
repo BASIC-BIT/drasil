@@ -33,6 +33,7 @@ import {
   appendVerificationActionFailure,
   type VerificationActionFailureKind,
 } from '../utils/verificationActionFailures';
+import { createAccountingExclusionMetadata } from '../utils/detectionEventAccounting';
 /**
  * Interface for the SecurityActionService
  */
@@ -120,6 +121,20 @@ export interface ISecurityActionService {
     detectionEventId: string,
     moderator: User
   ): Promise<AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE | null>;
+
+  excludeDetectionFromAccounting(
+    guildId: string,
+    detectionEventId: string,
+    moderator: User,
+    reason?: string
+  ): Promise<DetectionEvent | null>;
+
+  restoreDetectionAccounting(
+    guildId: string,
+    detectionEventId: string,
+    moderator: User,
+    reason?: string
+  ): Promise<DetectionEvent | null>;
 
   /**
    * Reopens a verification event, and re-restricts the user (or unbans them?)
@@ -591,6 +606,36 @@ export class SecurityActionService implements ISecurityActionService {
     return detectionEvent;
   }
 
+  private async getAuditDetectionForModerator(
+    guildId: string,
+    detectionEventId: string,
+    moderatorId: string
+  ): Promise<DetectionEvent | null> {
+    const detectionEvent = await this.detectionEventsRepository.findById(detectionEventId);
+    if (!detectionEvent?.user_id) {
+      return null;
+    }
+
+    return detectionEvent.server_id === guildId || this.isGlobalAuditAdmin(moderatorId)
+      ? detectionEvent
+      : null;
+  }
+
+  private isGlobalAuditAdmin(userId: string): boolean {
+    return (process.env.DRASIL_GLOBAL_ADMIN_IDS ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0)
+      .includes(userId);
+  }
+
+  private async ensureAuditEntitiesExist(detectionEvent: DetectionEvent): Promise<void> {
+    await this.userRepository.getOrCreateUser(detectionEvent.user_id);
+    if (detectionEvent.server_id) {
+      await this.ensureObservedEntitiesExist(detectionEvent.server_id, detectionEvent.user_id);
+    }
+  }
+
   private async ensureObservedCase(
     member: GuildMember,
     detectionEvent: DetectionEvent,
@@ -636,11 +681,20 @@ export class SecurityActionService implements ISecurityActionService {
     moderator: User,
     actionType: AdminActionType
   ): Promise<DetectionEvent | null> {
-    return this.detectionEventsRepository.claimObservedAction(detectionEvent.id, {
+    const metadata: Record<string, unknown> = {
       observed_action: actionType,
       observed_action_by: moderator.id,
       observed_action_at: new Date().toISOString(),
-    });
+    };
+
+    if (actionType === AdminActionType.FALSE_POSITIVE) {
+      Object.assign(
+        metadata,
+        createAccountingExclusionMetadata(moderator.id, 'Marked false positive')
+      );
+    }
+
+    return this.detectionEventsRepository.claimObservedAction(detectionEvent.id, metadata);
   }
 
   private async releaseDetectionMetadataForObservedAction(
@@ -697,7 +751,7 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   private async recordObservedAction(data: {
-    serverId: string;
+    serverId: string | null;
     userId: string;
     moderator: User;
     detectionEvent: DetectionEvent;
@@ -1531,6 +1585,67 @@ export class SecurityActionService implements ISecurityActionService {
       }
       throw error;
     }
+  }
+
+  public async excludeDetectionFromAccounting(
+    guildId: string,
+    detectionEventId: string,
+    moderator: User,
+    reason?: string
+  ): Promise<DetectionEvent | null> {
+    const detectionEvent = await this.getAuditDetectionForModerator(
+      guildId,
+      detectionEventId,
+      moderator.id
+    );
+    if (!detectionEvent) {
+      return null;
+    }
+
+    const accountingReason = reason?.trim() || 'Marked false positive';
+    const accountingScope = detectionEvent.server_id ? 'server' : 'global';
+    await this.ensureAuditEntitiesExist(detectionEvent);
+    await this.recordObservedAction({
+      serverId: detectionEvent.server_id,
+      userId: detectionEvent.user_id,
+      moderator,
+      detectionEvent,
+      actionType: AdminActionType.FALSE_POSITIVE,
+      notes: accountingReason,
+    });
+
+    return this.detectionEventsRepository.markExcludedFromAccounting(
+      detectionEvent.id,
+      createAccountingExclusionMetadata(moderator.id, accountingReason, accountingScope)
+    );
+  }
+
+  public async restoreDetectionAccounting(
+    guildId: string,
+    detectionEventId: string,
+    moderator: User,
+    reason?: string
+  ): Promise<DetectionEvent | null> {
+    const detectionEvent = await this.getAuditDetectionForModerator(
+      guildId,
+      detectionEventId,
+      moderator.id
+    );
+    if (!detectionEvent) {
+      return null;
+    }
+
+    await this.ensureAuditEntitiesExist(detectionEvent);
+    await this.recordObservedAction({
+      serverId: detectionEvent.server_id,
+      userId: detectionEvent.user_id,
+      moderator,
+      detectionEvent,
+      actionType: AdminActionType.UNDO_OBSERVED_ACTION,
+      notes: reason?.trim() || 'Restored detection to future accounting.',
+    });
+
+    return this.detectionEventsRepository.clearAccountingExclusion(detectionEvent.id);
   }
 
   // TODO: Refactor reopenVerification to use events

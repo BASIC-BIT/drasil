@@ -79,6 +79,30 @@ describe('AdminActionService (unit)', () => {
     expect(action.action_type).toBe(AdminActionType.VERIFY);
   });
 
+  it('records global admin action without a server', async () => {
+    const adminActionRepository = new InMemoryAdminActionRepository();
+    const userRepository = new InMemoryUserRepository();
+    const serverRepository = new InMemoryServerRepository();
+    const service = new AdminActionService(adminActionRepository, userRepository, serverRepository);
+
+    await userRepository.getOrCreateUser('user-global', 'test-user');
+
+    const action = await service.recordAction({
+      server_id: null,
+      user_id: 'user-global',
+      admin_id: 'admin-global',
+      verification_event_id: null,
+      detection_event_id: 'det-global',
+      action_type: AdminActionType.FALSE_POSITIVE,
+      previous_status: null,
+      new_status: null,
+      notes: 'global false positive',
+    });
+
+    expect(action.server_id).toBeNull();
+    expect(action.action_type).toBe(AdminActionType.FALSE_POSITIVE);
+  });
+
   it('formats action summary with status change and notes', () => {
     const adminActionRepository = new InMemoryAdminActionRepository();
     const userRepository = new InMemoryUserRepository();

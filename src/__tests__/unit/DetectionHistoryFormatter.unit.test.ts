@@ -37,10 +37,38 @@ describe('DetectionHistoryFormatter (unit)', () => {
     const output = DetectionHistoryFormatter.formatHistory('user-1', events, 'server-1');
 
     expect(output).toContain('Detection History for User <@user-1>');
+    expect(output).toContain('ID: event-2');
     expect(output.indexOf('Type: suspicious_content')).toBeLessThan(
       output.indexOf('Type: message_frequency')
     );
     expect(output).toContain('Message Link: https://discord.com/channels/server-1/chan-1/msg-1');
     expect(output).toContain('Message Content: free discord nitro');
+  });
+
+  it('marks false positives as excluded from future accounting', () => {
+    const output = DetectionHistoryFormatter.formatHistory(
+      'user-1',
+      [
+        {
+          id: 'event-1',
+          server_id: 'server-1',
+          user_id: 'user-1',
+          detection_type: DetectionType.SUSPICIOUS_CONTENT,
+          confidence: 0.9,
+          reasons: ['Keyword'],
+          detected_at: new Date('2024-01-02T00:00:00.000Z'),
+          thread_id: null,
+          message_id: null,
+          channel_id: null,
+          latest_verification_event_id: null,
+          metadata: { observed_action: 'false_positive' },
+        },
+      ],
+      'server-1'
+    );
+
+    expect(output).toContain(
+      'Accounting: excluded from server future accounting (Marked false positive)'
+    );
   });
 });

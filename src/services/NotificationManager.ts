@@ -35,6 +35,7 @@ import { getDetectionResponseSettings } from '../utils/detectionResponseSettings
 import { getVerificationActionFailures } from '../utils/verificationActionFailures';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { CASE_STAFF_ROUTING_METADATA_KEY } from './ThreadManager';
+import { isDetectionEventExcludedFromAccounting } from '../utils/detectionEventAccounting';
 
 export interface NotificationButton {
   id: string;
@@ -734,7 +735,7 @@ export class NotificationManager implements INotificationManager {
     const detectionHistory = recentEvents
       .map((event) => {
         const timestamp = Math.floor(new Date(event.detected_at).getTime() / 1000);
-        return `• <t:${timestamp}:R>: ${event.detection_type} (${Math.round(event.confidence * 100)}% confidence)`;
+        return `• <t:${timestamp}:R>: ${event.detection_type} (${Math.round(event.confidence * 100)}% confidence)${this.formatAccountingSuffix(event)}`;
       })
       .join('\n');
 
@@ -895,6 +896,9 @@ export class NotificationManager implements INotificationManager {
       member.guild.id,
       member.id
     );
+    const countedDetectionEvents = detectionEvents.filter(
+      (event) => !isDetectionEventExcludedFromAccounting(event)
+    );
 
     // Format detection history
     let detectionHistory = '';
@@ -916,6 +920,7 @@ export class NotificationManager implements INotificationManager {
             entry += ` - [View Message](https://discord.com/channels/${member.guild.id}/${event.channel_id}/${event.message_id})`;
           }
           entry += ` (${(event.confidence * 100).toFixed(0)}% confidence)`;
+          entry += this.formatAccountingSuffix(event);
           return entry;
         })
         .join('\n');
@@ -938,8 +943,8 @@ export class NotificationManager implements INotificationManager {
       .setColor(embedColor)
       .setTitle('Suspicious User Detected')
       .setDescription(
-        detectionEvents.length > 1
-          ? `<@${member.id}> has been flagged as suspicious ${detectionEvents.length} times.`
+        countedDetectionEvents.length > 1
+          ? `<@${member.id}> has been flagged as suspicious ${countedDetectionEvents.length} times.`
           : `<@${member.id}> has been flagged as suspicious.`
       )
       .setThumbnail(member.user.displayAvatarURL())
@@ -1177,6 +1182,10 @@ export class NotificationManager implements INotificationManager {
         `Summary: ${analysis.summary}`,
       ].join('\n')
     );
+  }
+
+  private formatAccountingSuffix(event: DetectionEvent): string {
+    return isDetectionEventExcludedFromAccounting(event) ? ' - ignored for future accounting' : '';
   }
 
   private getThreadAnalysisMetadata(
