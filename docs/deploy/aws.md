@@ -69,11 +69,13 @@ applying `infra/aws/prod` so this stack reuses it.
 
 ## 3) Set production secrets
 
-Terraform creates three Secrets Manager secrets:
+Terraform creates these Secrets Manager secrets:
 
 - `drasil/prod/DISCORD_TOKEN`
 - `drasil/prod/OPENAI_API_KEY`
 - `drasil/prod/DATABASE_URL`
+- `drasil/prod/OBSERVABILITY_HASH_KEY`
+- `drasil/prod/POSTHOG_PROJECT_API_KEY`
 
 Set their values (console or CLI). Example:
 
@@ -84,6 +86,11 @@ aws secretsmanager put-secret-value \
 ```
 
 Repeat for the other secrets.
+
+`POSTHOG_PROJECT_API_KEY` is the PostHog project token used by the server SDK.
+`OBSERVABILITY_HASH_KEY` should be a high-entropy random value that stays stable
+for the environment so anonymous analytics identifiers remain stable across task
+restarts.
 
 ## 4) Configure GitHub Actions deploy variables
 
@@ -105,7 +112,7 @@ It will:
 
 - build and push the container image to ECR
 - tag it with the commit SHA
-- register a new ECS task definition revision pinned to that image
+- register a new ECS task definition revision pinned to that image, using the latest active task definition in the service family as the baseline
 - update the ECS service to the new task definition and wait for it to stabilize
 
 ## 6) Observability and cost controls
@@ -126,6 +133,7 @@ Re-run the deploy workflow and set the `ref` input to an older commit SHA. The w
 - The Terraform-managed task definition uses a placeholder image tag (`:bootstrap`). The deploy workflow registers task definitions using immutable commit SHA tags.
 - `desired_count` defaults to `1` for production uptime. If you are bootstrapping before the first image push, set `desired_count=0` temporarily and switch back to `1` after the first deploy.
 - The ECS service task definition is updated by the deploy workflow; Terraform intentionally ignores `task_definition` drift to avoid fighting deploys.
+- After Terraform changes task definition environment variables or secrets, run `terraform apply`, then run the deploy workflow so the service adopts a new image revision based on Terraform's latest task definition revision.
 - If/when we add sharding, we can increase `desired_count` and/or move to a more controlled rollout.
 - If you prefer private subnets, add a NAT Gateway and set `assign_public_ip = false` in `infra/aws/prod/main.tf`.
 - Secrets Manager automatic rotation is intentionally not configured yet; it requires a rotation Lambda and an ops runbook.
