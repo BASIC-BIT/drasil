@@ -732,12 +732,7 @@ export class SecurityActionService implements ISecurityActionService {
     moderator: User,
     actionType: AdminActionType
   ): Promise<void> {
-    const metadata =
-      detectionEvent.metadata &&
-      typeof detectionEvent.metadata === 'object' &&
-      !Array.isArray(detectionEvent.metadata)
-        ? detectionEvent.metadata
-        : {};
+    const metadata = this.getDetectionMetadataSnapshot(detectionEvent);
 
     await this.detectionEventsRepository.claimObservedAction(detectionEvent.id, {
       observed_action: actionType,
@@ -750,6 +745,21 @@ export class SecurityActionService implements ISecurityActionService {
           ? metadata.observed_action_at
           : new Date().toISOString(),
     });
+  }
+
+  private getDetectionMetadataSnapshot(detectionEvent: DetectionEvent): Record<string, unknown> {
+    return detectionEvent.metadata &&
+      typeof detectionEvent.metadata === 'object' &&
+      !Array.isArray(detectionEvent.metadata)
+      ? { ...detectionEvent.metadata }
+      : {};
+  }
+
+  private async rollbackDetectionMetadata(detectionEvent: DetectionEvent): Promise<void> {
+    await this.detectionEventsRepository.updateMetadata(
+      detectionEvent.id,
+      this.getDetectionMetadataSnapshot(detectionEvent)
+    );
   }
 
   private hasObservedAction(detectionEvent: DetectionEvent): boolean {
@@ -1777,19 +1787,29 @@ export class SecurityActionService implements ISecurityActionService {
     const accountingReason = reason?.trim() || 'Marked false positive';
     const accountingScope = detectionEvent.server_id ? 'server' : 'global';
     await this.ensureAuditEntitiesExist(detectionEvent);
-    await this.recordObservedAction({
-      serverId: detectionEvent.server_id,
-      userId: detectionEvent.user_id,
-      moderator,
-      detectionEvent,
-      actionType: AdminActionType.FALSE_POSITIVE,
-      notes: accountingReason,
-    });
-
-    return this.detectionEventsRepository.markExcludedFromAccounting(
+    const updatedDetectionEvent = await this.detectionEventsRepository.markExcludedFromAccounting(
       detectionEvent.id,
       createAccountingExclusionMetadata(moderator.id, accountingReason, accountingScope)
     );
+    if (!updatedDetectionEvent) {
+      return null;
+    }
+
+    try {
+      await this.recordObservedAction({
+        serverId: detectionEvent.server_id,
+        userId: detectionEvent.user_id,
+        moderator,
+        detectionEvent: updatedDetectionEvent,
+        actionType: AdminActionType.FALSE_POSITIVE,
+        notes: accountingReason,
+      });
+    } catch (error) {
+      await this.rollbackDetectionMetadata(detectionEvent);
+      throw error;
+    }
+
+    return updatedDetectionEvent;
   }
 
   public async restoreDetectionAccounting(
@@ -1808,16 +1828,40 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     await this.ensureAuditEntitiesExist(detectionEvent);
-    await this.recordObservedAction({
-      serverId: detectionEvent.server_id,
-      userId: detectionEvent.user_id,
-      moderator,
-      detectionEvent,
-      actionType: AdminActionType.UNDO_OBSERVED_ACTION,
-      notes: reason?.trim() || 'Restored detection to future accounting.',
-    });
+    const observedAction = this.getObservedAction(detectionEvent);
+    const updatedDetectionEvent = await this.detectionEventsRepository.clearAccountingExclusion(
+      detectionEvent.id
+    );
+    if (!updatedDetectionEvent) {
+      return null;
+    }
 
-    return this.detectionEventsRepository.clearAccountingExclusion(detectionEvent.id);
+    let actionRecorded = false;
+    try {
+      await this.recordObservedAction({
+        serverId: detectionEvent.server_id,
+        userId: detectionEvent.user_id,
+        moderator,
+        detectionEvent: updatedDetectionEvent,
+        actionType: AdminActionType.UNDO_OBSERVED_ACTION,
+        notes: reason?.trim() || 'Restored detection to future accounting.',
+      });
+      actionRecorded = true;
+      if (observedAction === AdminActionType.FALSE_POSITIVE) {
+        await this.notificationManager.restoreObservedDetectionActions(
+          detectionEvent.id,
+          'restored this detection to future accounting',
+          moderator
+        );
+      }
+    } catch (error) {
+      if (!actionRecorded) {
+        await this.rollbackDetectionMetadata(detectionEvent);
+      }
+      throw error;
+    }
+
+    return updatedDetectionEvent;
   }
 
   // TODO: Refactor reopenVerification to use events

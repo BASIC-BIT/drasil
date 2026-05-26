@@ -125,6 +125,7 @@ export interface DetectionEvent {
   detected_at: string | Date;
   latest_verification_event_id: string | null;
   metadata?: Record<string, unknown>;
+  admin_actions?: AdminAction[];
 }
 
 export enum VerificationStatus {
