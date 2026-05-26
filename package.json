@@ -24,7 +24,7 @@
     "format:check": "prettier --check \"**/*.{ts,js,json,md,mjs}\"",
     "check": "npm run lint:fix && npm run build && npm test",
     "check:full": "npm run format:check && npm run check && npm run test:integration",
-    "check:ci": "npm run format:check && npm run lint && npm run build && npm test && npm run test:integration",
+    "check:ci": "npm run format:check && npm run lint && npm run build && npm test && npm run test:integration && npm run db:check:rls",
     "prisma:generate": "node scripts/prisma-generate.js",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
@@ -33,6 +33,7 @@
     "prisma:format": "prisma format",
     "db:seed": "prisma db seed",
     "db:reset:local": "npx supabase db reset --local && node scripts/create-prisma-user.js && prisma migrate reset && npm run db:seed",
+    "db:check:rls": "node scripts/check-public-rls.js",
     "intel:upload": "node scripts/upload-intel-case.js"
   },
   "keywords": [
