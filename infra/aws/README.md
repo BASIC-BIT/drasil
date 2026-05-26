@@ -35,6 +35,10 @@ terraform apply
 
 4. Set secret values in AWS Secrets Manager (created by Terraform) and then deploy the container image.
 
+The production stack creates Secrets Manager entries for `DISCORD_TOKEN`,
+`OPENAI_API_KEY`, `DATABASE_URL`, `OBSERVABILITY_HASH_KEY`, and
+`POSTHOG_PROJECT_API_KEY`.
+
 ## Optional intelligence bucket
 
 Use `infra/aws/intel` when you want a lightweight private bucket for screenshots and case JSON.

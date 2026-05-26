@@ -52,6 +52,24 @@ variable "container_insights" {
   default     = true
 }
 
+variable "posthog_host" {
+  type        = string
+  description = "PostHog ingestion host for product analytics. Use https://eu.i.posthog.com instead when EU data residency is required."
+  default     = "https://us.i.posthog.com"
+}
+
+variable "posthog_product_analytics_enabled" {
+  type        = bool
+  description = "Whether the Drasil product analytics exporter is enabled when a PostHog project API key is configured."
+  default     = true
+}
+
+variable "posthog_debug" {
+  type        = bool
+  description = "Enable PostHog SDK debug logging in the ECS task. Keep false in production except during short smoke tests."
+  default     = false
+}
+
 variable "github_repo" {
   type        = string
   description = "GitHub repo in OWNER/REPO format used to restrict OIDC role assumption."

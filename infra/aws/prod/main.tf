@@ -172,6 +172,20 @@ resource "aws_secretsmanager_secret" "database_url" {
   kms_key_id              = aws_kms_key.prod.arn
 }
 
+resource "aws_secretsmanager_secret" "observability_hash_key" {
+  name = "${local.secrets_prefix}/OBSERVABILITY_HASH_KEY"
+  #checkov:skip=CKV2_AWS_57:Automatic rotation requires dedicated rotation Lambda + runbook and is deferred intentionally.
+  recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.prod.arn
+}
+
+resource "aws_secretsmanager_secret" "posthog_project_api_key" {
+  name = "${local.secrets_prefix}/POSTHOG_PROJECT_API_KEY"
+  #checkov:skip=CKV2_AWS_57:Automatic rotation requires dedicated rotation Lambda + runbook and is deferred intentionally.
+  recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.prod.arn
+}
+
 resource "aws_default_security_group" "main" {
   vpc_id = aws_vpc.main.id
 
@@ -211,7 +225,9 @@ data "aws_iam_policy_document" "ecs_task_execution_secrets" {
     resources = [
       aws_secretsmanager_secret.discord_token.arn,
       aws_secretsmanager_secret.openai_api_key.arn,
-      aws_secretsmanager_secret.database_url.arn
+      aws_secretsmanager_secret.database_url.arn,
+      aws_secretsmanager_secret.observability_hash_key.arn,
+      aws_secretsmanager_secret.posthog_project_api_key.arn
     ]
   }
 
@@ -283,6 +299,18 @@ resource "aws_ecs_task_definition" "bot" {
         {
           name  = "DRASIL_USER_INSTALL_REPORTING_ENABLED"
           value = "true"
+        },
+        {
+          name  = "POSTHOG_HOST"
+          value = var.posthog_host
+        },
+        {
+          name  = "POSTHOG_PRODUCT_ANALYTICS_ENABLED"
+          value = tostring(var.posthog_product_analytics_enabled)
+        },
+        {
+          name  = "POSTHOG_DEBUG"
+          value = tostring(var.posthog_debug)
         }
       ]
       secrets = [
@@ -297,6 +325,14 @@ resource "aws_ecs_task_definition" "bot" {
         {
           name      = "DATABASE_URL"
           valueFrom = aws_secretsmanager_secret.database_url.arn
+        },
+        {
+          name      = "OBSERVABILITY_HASH_KEY"
+          valueFrom = aws_secretsmanager_secret.observability_hash_key.arn
+        },
+        {
+          name      = "POSTHOG_PROJECT_API_KEY"
+          valueFrom = aws_secretsmanager_secret.posthog_project_api_key.arn
         }
       ]
       logConfiguration = {

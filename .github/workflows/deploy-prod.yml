@@ -131,7 +131,11 @@ jobs:
           set -euo pipefail
 
           CURRENT_TD_ARN="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query 'services[0].taskDefinition' --output text)"
-          aws ecs describe-task-definition --task-definition "$CURRENT_TD_ARN" --query 'taskDefinition' > taskdef.json
+          CURRENT_TD_FAMILY="$(aws ecs describe-task-definition --task-definition "$CURRENT_TD_ARN" --query 'taskDefinition.family' --output text)"
+          BASE_TD_ARN="$(aws ecs describe-task-definition --task-definition "$CURRENT_TD_FAMILY" --query 'taskDefinition.taskDefinitionArn' --output text)"
+
+          echo "Using task definition baseline: $BASE_TD_ARN"
+          aws ecs describe-task-definition --task-definition "$BASE_TD_ARN" --query 'taskDefinition' > taskdef.json
 
           jq --arg IMAGE "$IMAGE" '
             .containerDefinitions |= map(if .name == "drasil" then .image = $IMAGE else . end)
