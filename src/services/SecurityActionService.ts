@@ -1,4 +1,4 @@
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import { GuildMember, Message, Client, User, APIUser, InteractionContextType } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import { INotificationManager } from './NotificationManager';
@@ -23,6 +23,12 @@ import {
 import { IUserModerationService } from './UserModerationService';
 import { IAdminActionService } from './AdminActionService';
 import { getUserReportSettings } from '../utils/userReportSettings';
+import type { IGPTService, ReportAIAnalysis } from './GPTService';
+import {
+  getReportAiSettings,
+  ReportAttachmentMetadata,
+  selectEligibleReportImageAttachments,
+} from '../utils/reportAiSettings';
 import {
   appendVerificationActionFailure,
   type VerificationActionFailureKind,
@@ -129,8 +135,11 @@ export interface MessageReportContext {
   guildId?: string;
   content?: string;
   reason?: string;
+  attachments?: MessageReportAttachment[];
   interactionContext?: InteractionContextType;
 }
+
+export type MessageReportAttachment = ReportAttachmentMetadata;
 
 /**
  * SecurityActionService - Coordinates calls to various services based upon actions that occurred
@@ -148,6 +157,7 @@ export class SecurityActionService implements ISecurityActionService {
   private threadManager: IThreadManager;
   private userModerationService: IUserModerationService; // Keep for reopenVerification for now
   private client: Client;
+  private gptService?: IGPTService;
 
   constructor(
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
@@ -160,7 +170,8 @@ export class SecurityActionService implements ISecurityActionService {
     @inject(TYPES.AdminActionService) adminActionService: IAdminActionService,
     @inject(TYPES.ThreadManager) threadManager: IThreadManager,
     @inject(TYPES.UserModerationService) userModerationService: IUserModerationService, // Keep for reopenVerification
-    @inject(TYPES.DiscordClient) client: Client
+    @inject(TYPES.DiscordClient) client: Client,
+    @optional() @inject(TYPES.GPTService) gptService?: IGPTService
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -172,6 +183,7 @@ export class SecurityActionService implements ISecurityActionService {
     this.threadManager = threadManager;
     this.userModerationService = userModerationService; // Keep for reopenVerification
     this.client = client;
+    this.gptService = gptService;
   }
 
   /**
@@ -302,7 +314,109 @@ export class SecurityActionService implements ISecurityActionService {
       triggerSource: detectionEvent.detection_type,
       triggerContent: content ?? '',
       detectionEventId: detectionEvent.id,
+      reportAiAnalysis: this.getReportAiAnalysisFromMetadata(metadata),
     };
+  }
+
+  private getReportAiAnalysisFromMetadata(
+    metadata: Record<string, unknown>
+  ): ReportAIAnalysis | undefined {
+    const reportAi = metadata.report_ai;
+    return reportAi && typeof reportAi === 'object' && !Array.isArray(reportAi)
+      ? (reportAi as ReportAIAnalysis)
+      : undefined;
+  }
+
+  private capReportAiAction(
+    analysis: ReportAIAnalysis,
+    settings: ReturnType<typeof getReportAiSettings>
+  ): ReportAIAnalysis {
+    const recommendedAction = this.capReportAiRecommendedAction(
+      analysis.recommendedAction,
+      analysis.confidence,
+      settings
+    );
+
+    return recommendedAction === analysis.recommendedAction
+      ? analysis
+      : { ...analysis, recommendedAction };
+  }
+
+  private capReportAiRecommendedAction(
+    action: ReportAIAnalysis['recommendedAction'],
+    confidence: number,
+    settings: ReturnType<typeof getReportAiSettings>
+  ): ReportAIAnalysis['recommendedAction'] {
+    if (action === 'none' || action === 'monitor' || action === 'manual_review') {
+      return action;
+    }
+
+    if (settings.maxAction === 'hints' || settings.maxAction === 'off') {
+      return 'manual_review';
+    }
+
+    if (action === 'restrict') {
+      if (settings.maxAction === 'restrict' && confidence >= settings.restrictThreshold) {
+        return 'restrict';
+      }
+
+      return confidence >= settings.openCaseThreshold ? 'open_case' : 'manual_review';
+    }
+
+    return confidence >= settings.openCaseThreshold ? 'open_case' : 'manual_review';
+  }
+
+  private async analyzeReportIfEnabled(data: {
+    serverId: string;
+    targetUserId: string;
+    reporterId: string;
+    reason?: string;
+    reportedMessageContent?: string;
+    attachments?: MessageReportAttachment[];
+  }): Promise<ReportAIAnalysis | undefined> {
+    const server = await this.serverRepository.findByGuildId(data.serverId);
+    const settings = getReportAiSettings(server?.settings);
+    if (!settings.enabled || settings.maxAction === 'off') {
+      return undefined;
+    }
+    if (!this.gptService) {
+      return undefined;
+    }
+
+    const eligibleImages = selectEligibleReportImageAttachments(data.attachments, settings);
+    const reportReason = settings.analyzeText ? data.reason : undefined;
+    const reportedMessageContent = settings.analyzeText ? data.reportedMessageContent : undefined;
+    if (!reportReason && !reportedMessageContent && eligibleImages.length === 0) {
+      return undefined;
+    }
+
+    const analysis = await this.gptService.analyzeReportEvidence({
+      serverId: data.serverId,
+      targetUserId: data.targetUserId,
+      reporterId: data.reporterId,
+      reportReason,
+      reportedMessageContent,
+      attachments: eligibleImages,
+    });
+
+    return this.capReportAiAction(analysis, settings);
+  }
+
+  private serializeReportAttachments(
+    attachments: MessageReportAttachment[] | undefined
+  ): MessageReportAttachment[] | undefined {
+    if (!attachments?.length) {
+      return undefined;
+    }
+
+    return attachments.map((attachment) => ({
+      id: attachment.id,
+      name: attachment.name,
+      url: attachment.url,
+      proxyUrl: attachment.proxyUrl,
+      contentType: attachment.contentType,
+      size: attachment.size,
+    }));
   }
 
   private shouldUseReportReviewThread(
@@ -863,6 +977,18 @@ export class SecurityActionService implements ISecurityActionService {
       );
 
       const reasonText = reason ? `Reason: ${reason}` : 'No reason provided.';
+      const reportAiAnalysis = await this.analyzeReportIfEnabled({
+        serverId: member.guild.id,
+        targetUserId: member.id,
+        reporterId: reporter.id,
+        reason,
+      }).catch((error) => {
+        console.warn(
+          `Report AI analysis failed for guild ${member.guild.id}; continuing without AI triage:`,
+          error
+        );
+        return undefined;
+      });
       const detectionEvent = await this.detectionEventsRepository.create({
         server_id: member.guild.id,
         user_id: member.id,
@@ -875,6 +1001,7 @@ export class SecurityActionService implements ISecurityActionService {
           reporterId: reporter.id,
           content: reason ?? 'User report',
           reason: reason ?? reasonText,
+          ...(reportAiAnalysis ? { report_ai: reportAiAnalysis } : {}),
         },
       });
 
@@ -885,6 +1012,7 @@ export class SecurityActionService implements ISecurityActionService {
         triggerSource: DetectionType.USER_REPORT,
         triggerContent: reason ?? 'User report',
         detectionEventId: detectionEvent.id,
+        reportAiAnalysis,
       };
 
       await this.upsertReportObservedAlertOrActiveCase(member, detectionResult, detectionEvent.id);
@@ -918,6 +1046,8 @@ export class SecurityActionService implements ISecurityActionService {
       if (report.channelId) metadata.channelId = report.channelId;
       if (report.content) metadata.content = report.content;
       if (report.reason) metadata.reason = report.reason;
+      const attachments = this.serializeReportAttachments(report.attachments);
+      if (attachments) metadata.attachments = attachments;
       if (report.interactionContext !== undefined) {
         metadata.interactionContext = report.interactionContext;
       }
@@ -1025,6 +1155,12 @@ export class SecurityActionService implements ISecurityActionService {
       isLocalReport
     );
     const reasonText = report.reason ? ` Reason: ${report.reason}` : '';
+    const eventMetadata =
+      serverDetectionEvent.metadata &&
+      typeof serverDetectionEvent.metadata === 'object' &&
+      !Array.isArray(serverDetectionEvent.metadata)
+        ? serverDetectionEvent.metadata
+        : {};
     const detectionResult: DetectionResult = {
       label: 'SUSPICIOUS',
       confidence: 1.0,
@@ -1036,6 +1172,7 @@ export class SecurityActionService implements ISecurityActionService {
       triggerSource: DetectionType.USER_REPORT,
       triggerContent: report.reason || report.content || 'Message report',
       detectionEventId: serverDetectionEvent.id,
+      reportAiAnalysis: this.getReportAiAnalysisFromMetadata(eventMetadata),
     };
 
     try {
@@ -1075,8 +1212,30 @@ export class SecurityActionService implements ISecurityActionService {
     if (report.channelId) metadata.sourceChannelId = report.channelId;
     if (report.content) metadata.content = report.content;
     if (report.reason) metadata.reason = report.reason;
+    const attachments = this.serializeReportAttachments(report.attachments);
+    if (attachments) metadata.attachments = attachments;
     if (report.interactionContext !== undefined) {
       metadata.interactionContext = report.interactionContext;
+    }
+
+    const reportAiAnalysis = isLocalReport
+      ? await this.analyzeReportIfEnabled({
+          serverId: member.guild.id,
+          targetUserId: member.id,
+          reporterId: reporter.id,
+          reason: report.reason,
+          reportedMessageContent: report.content,
+          attachments,
+        }).catch((error) => {
+          console.warn(
+            `Report AI analysis failed for guild ${member.guild.id}; continuing without AI triage:`,
+            error
+          );
+          return undefined;
+        })
+      : undefined;
+    if (reportAiAnalysis) {
+      metadata.report_ai = reportAiAnalysis;
     }
 
     return await this.detectionEventsRepository.create({

@@ -173,9 +173,17 @@ describe('VerificationThreadAnalysisService (unit)', () => {
 
     const gptService = {
       analyzeVerificationThreadResponses: jest.fn().mockResolvedValue({
-        result: 'OK',
+        result: 'likely_legitimate',
         confidence: 0.67,
         summary: 'Looks like a real user answering normally.',
+        reasonCodes: ['server_context_match'],
+        legitimacySignals: ['Mentions weekly speedrun races'],
+        suspicionSignals: [],
+        recommendedNextQuestion: 'Which category do you run?',
+        recommendedAction: 'ask_followup',
+        model: 'gpt-4o-mini',
+        promptVersion: 'verification-thread-legitimacy-v2',
+        isFallback: false,
       }),
     } as any;
     const notificationManager = {
@@ -227,7 +235,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     );
     expect(notificationManager.updateVerificationThreadAnalysis).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
-      expect.objectContaining({ result: 'OK' }),
+      expect.objectContaining({ result: 'likely_legitimate', recommendedAction: 'ask_followup' }),
       2
     );
 
@@ -236,13 +244,181 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       thread_analysis: {
         analyzedMessageIds: ['msg-1'],
         latestAnalysis: {
-          result: 'OK',
+          result: 'likely_legitimate',
           confidence: 0.67,
           summary: 'Looks like a real user answering normally.',
+          reasonCodes: ['server_context_match'],
+          legitimacySignals: ['Mentions weekly speedrun races'],
+          suspicionSignals: [],
+          recommendedNextQuestion: 'Which category do you run?',
+          recommendedAction: 'ask_followup',
           analyzedMessageCount: 2,
         },
       },
     });
+  });
+
+  it('downgrades verification restrict recommendations when max action is hints', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const detectionEvent = await detectionRepo.create({
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Recent suspicious activity'],
+    });
+    const verificationEvent = await verificationRepo.createFromDetection(
+      detectionEvent.id,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      notification_message_id: 'notif-1',
+    });
+
+    const gptService = {
+      analyzeVerificationThreadResponses: jest.fn().mockResolvedValue({
+        result: 'likely_suspicious',
+        confidence: 0.99,
+        summary: 'Responses look evasive.',
+        reasonCodes: ['evasive_reply'],
+        legitimacySignals: [],
+        suspicionSignals: ['Does not answer server-specific prompt'],
+        recommendedAction: 'restrict',
+        model: 'gpt-4o-mini',
+        promptVersion: 'verification-thread-legitimacy-v2',
+        isFallback: false,
+      }),
+    } as any;
+    const notificationManager = {
+      updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+    } as any;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          verification_ai_thread_analysis_enabled: true,
+          verification_ai_thread_analysis_message_limit: 3,
+          verification_ai_max_action: 'hints',
+        },
+      }),
+    } as any;
+    const service = new VerificationThreadAnalysisService(
+      configService,
+      gptService,
+      notificationManager,
+      verificationRepo,
+      detectionRepo
+    );
+
+    const { message, messages } = buildMessage();
+    messages.set('msg-1', {
+      id: 'msg-1',
+      author: { id: 'user-1' },
+      content: 'why do you need to know',
+      createdTimestamp: 2,
+    });
+
+    await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+    expect(notificationManager.updateVerificationThreadAnalysis).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      expect.objectContaining({ recommendedAction: 'manual_review' }),
+      1
+    );
+
+    const updated = await verificationRepo.findById(verificationEvent.id);
+    expect(updated?.metadata).toMatchObject({
+      thread_analysis: {
+        latestAnalysis: {
+          recommendedAction: 'manual_review',
+        },
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: 'confidence is below the restrict threshold',
+      result: 'likely_suspicious',
+      confidence: 0.94,
+    },
+    {
+      name: 'result is not suspicious',
+      result: 'likely_legitimate',
+      confidence: 0.99,
+    },
+  ])('downgrades verification restrict recommendations when $name', async (analysisCase) => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const detectionEvent = await detectionRepo.create({
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Recent suspicious activity'],
+    });
+    const verificationEvent = await verificationRepo.createFromDetection(
+      detectionEvent.id,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      notification_message_id: 'notif-1',
+    });
+
+    const gptService = {
+      analyzeVerificationThreadResponses: jest.fn().mockResolvedValue({
+        result: analysisCase.result,
+        confidence: analysisCase.confidence,
+        summary: 'Responses need review.',
+        reasonCodes: ['reply_review_needed'],
+        legitimacySignals: [],
+        suspicionSignals: ['Does not answer server-specific prompt'],
+        recommendedAction: 'restrict',
+        model: 'gpt-4o-mini',
+        promptVersion: 'verification-thread-legitimacy-v2',
+        isFallback: false,
+      }),
+    } as any;
+    const notificationManager = {
+      updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+    } as any;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          verification_ai_thread_analysis_enabled: true,
+          verification_ai_thread_analysis_message_limit: 3,
+          verification_ai_max_action: 'restrict',
+          verification_ai_restrict_threshold: 0.95,
+        },
+      }),
+    } as any;
+    const service = new VerificationThreadAnalysisService(
+      configService,
+      gptService,
+      notificationManager,
+      verificationRepo,
+      detectionRepo
+    );
+
+    const { message, messages } = buildMessage();
+    messages.set('msg-1', {
+      id: 'msg-1',
+      author: { id: 'user-1' },
+      content: 'why do you need to know',
+      createdTimestamp: 2,
+    });
+
+    await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+    expect(notificationManager.updateVerificationThreadAnalysis).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      expect.objectContaining({ recommendedAction: 'manual_review' }),
+      1
+    );
   });
 
   it('stops analyzing once the configured message limit is reached', async () => {

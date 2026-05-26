@@ -1,6 +1,7 @@
 import { injectable, inject } from 'inversify';
 import {
   Client,
+  Guild,
   GuildMember,
   Message,
   ThreadChannel,
@@ -21,10 +22,12 @@ import {
   VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY,
 } from '../utils/verificationPromptTemplate';
 import { DetectionResult } from './DetectionOrchestrator';
+import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 
 export const VERIFICATION_THREAD_TYPE_METADATA_KEY = 'thread_type';
 export const VERIFICATION_THREAD_TYPE = 'verification';
 export const REPORT_REVIEW_THREAD_TYPE = 'report_review';
+export const CASE_STAFF_ROUTING_METADATA_KEY = 'case_staff_routing';
 
 /**
  * Interface for NotificationManager service
@@ -153,7 +156,8 @@ export class ThreadManager implements IThreadManager {
   private async storeThreadId(
     verificationEvent: VerificationEvent,
     threadId: string,
-    threadType: typeof VERIFICATION_THREAD_TYPE | typeof REPORT_REVIEW_THREAD_TYPE
+    threadType: typeof VERIFICATION_THREAD_TYPE | typeof REPORT_REVIEW_THREAD_TYPE,
+    extraMetadata: Record<string, unknown> = {}
   ): Promise<void> {
     const metadata =
       verificationEvent.metadata &&
@@ -166,8 +170,95 @@ export class ThreadManager implements IThreadManager {
     verificationEvent.metadata = {
       ...metadata,
       [VERIFICATION_THREAD_TYPE_METADATA_KEY]: threadType,
+      ...extraMetadata,
     };
     await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
+  }
+
+  private async addCaseResponderMembers(
+    guild: Guild,
+    thread: ThreadChannel,
+    excludedUserIds: readonly string[]
+  ): Promise<{ addedUserIds: string[]; warnings: string[] }> {
+    const warnings: string[] = [];
+    const addedUserIds = new Set<string>();
+    const excluded = new Set(excludedUserIds);
+    const serverConfig = await this.configService.getServerConfig(guild.id).catch((error) => {
+      warnings.push('Could not load case responder settings; staff member auto-add skipped.');
+      console.warn(
+        `Failed to load case responder settings for guild ${guild.id}; skipping staff routing:`,
+        error
+      );
+      return null;
+    });
+
+    if (!serverConfig) {
+      return { addedUserIds: [], warnings };
+    }
+
+    const settings = getCaseResponderSettings(serverConfig.settings);
+
+    if (settings.routingMode !== 'ping_and_add_members' || settings.roleIds.length === 0) {
+      return { addedUserIds: [], warnings };
+    }
+
+    for (const roleId of settings.roleIds) {
+      const role = await guild.roles.fetch(roleId).catch((error) => {
+        warnings.push(`Could not fetch responder role ${roleId}.`);
+        console.warn(`Failed to fetch case responder role ${roleId} in guild ${guild.id}:`, error);
+        return null;
+      });
+      if (!role) {
+        continue;
+      }
+
+      const roleMemberIds = [...role.members.values()]
+        .map((roleMember) => roleMember.id)
+        .filter((userId) => !excluded.has(userId));
+
+      if (roleMemberIds.length > settings.threadMemberCap) {
+        warnings.push(
+          `Responder role ${roleId} has ${roleMemberIds.length} cached members, above cap ${settings.threadMemberCap}; ping-only fallback used for that role.`
+        );
+        continue;
+      }
+
+      for (const userId of roleMemberIds) {
+        if (addedUserIds.has(userId)) {
+          continue;
+        }
+
+        try {
+          await thread.members.add(userId);
+          addedUserIds.add(userId);
+        } catch (error) {
+          warnings.push(`Could not add responder member ${userId} from role ${roleId}.`);
+          console.warn(
+            `Failed to add case responder member ${userId} to thread ${thread.id}:`,
+            error
+          );
+        }
+      }
+    }
+
+    return { addedUserIds: [...addedUserIds], warnings };
+  }
+
+  private buildCaseStaffRoutingMetadata(routingResult: {
+    addedUserIds: string[];
+    warnings: string[];
+  }): Record<string, unknown> {
+    if (routingResult.addedUserIds.length === 0 && routingResult.warnings.length === 0) {
+      return {};
+    }
+
+    return {
+      [CASE_STAFF_ROUTING_METADATA_KEY]: {
+        addedUserIds: routingResult.addedUserIds,
+        warnings: routingResult.warnings,
+        at: new Date().toISOString(),
+      },
+    };
   }
 
   /**
@@ -227,6 +318,8 @@ export class ThreadManager implements IThreadManager {
         );
       }
 
+      const routingResult = await this.addCaseResponderMembers(member.guild, thread, [member.id]);
+
       const rawInitialPrompt = await this.getInitialVerificationPrompt(member);
       const initialPrompt = enforceDiscordMessageLimit(rawInitialPrompt);
       if (initialPrompt.length < rawInitialPrompt.length) {
@@ -247,7 +340,12 @@ export class ThreadManager implements IThreadManager {
       });
 
       // Store thread in the database
-      await this.storeThreadId(verificationEvent, thread.id, VERIFICATION_THREAD_TYPE);
+      await this.storeThreadId(
+        verificationEvent,
+        thread.id,
+        VERIFICATION_THREAD_TYPE,
+        this.buildCaseStaffRoutingMetadata(routingResult)
+      );
 
       return thread;
     } catch (error) {
@@ -296,6 +394,8 @@ export class ThreadManager implements IThreadManager {
         );
       }
 
+      const routingResult = await this.addCaseResponderMembers(member.guild, thread, [member.id]);
+
       await thread.send({
         content: this.buildReportReviewThreadMessage(member, detectionResult, sourceMessage),
         allowedMentions: {
@@ -306,7 +406,12 @@ export class ThreadManager implements IThreadManager {
         },
       });
 
-      await this.storeThreadId(verificationEvent, thread.id, REPORT_REVIEW_THREAD_TYPE);
+      await this.storeThreadId(
+        verificationEvent,
+        thread.id,
+        REPORT_REVIEW_THREAD_TYPE,
+        this.buildCaseStaffRoutingMetadata(routingResult)
+      );
 
       return thread;
     } catch (error) {

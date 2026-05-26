@@ -912,7 +912,10 @@ describe('InteractionHandler (unit)', () => {
     (client as any).channels = {
       fetch: jest.fn().mockResolvedValue({
         messages: {
-          fetch: jest.fn().mockResolvedValue({ content: 'suspicious message' }),
+          fetch: jest.fn().mockResolvedValue({
+            content: 'suspicious message',
+            attachments: new Map(),
+          }),
         },
       }),
     };
