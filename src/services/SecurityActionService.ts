@@ -33,7 +33,10 @@ import {
   appendVerificationActionFailure,
   type VerificationActionFailureKind,
 } from '../utils/verificationActionFailures';
-import { createAccountingExclusionMetadata } from '../utils/detectionEventAccounting';
+import {
+  createAccountingExclusionMetadata,
+  withDetectionTestingMetadata,
+} from '../utils/detectionEventAccounting';
 import {
   IProductAnalyticsService,
   NOOP_PRODUCT_ANALYTICS_SERVICE,
@@ -271,7 +274,10 @@ export class SecurityActionService implements ISecurityActionService {
       detected_at: new Date(),
       message_id: messageId,
       channel_id: channelId,
-      metadata: messageContent ? { content: messageContent } : undefined,
+      metadata: withDetectionTestingMetadata(
+        messageContent ? { content: messageContent } : undefined,
+        'server'
+      ),
     });
   }
 
@@ -1088,7 +1094,10 @@ export class SecurityActionService implements ISecurityActionService {
         confidence: 1.0,
         reasons: [`Manually flagged by admin ${moderator.id}. ${reasonText}`],
         detected_at: new Date(),
-        metadata: { type: 'admin_flag', adminId: moderator.id, reason: reason ?? reasonText },
+        metadata: withDetectionTestingMetadata(
+          { type: 'admin_flag', adminId: moderator.id, reason: reason ?? reasonText },
+          'server'
+        ),
       });
 
       const detectionResult: DetectionResult = {
@@ -1154,13 +1163,16 @@ export class SecurityActionService implements ISecurityActionService {
         confidence: 1.0,
         reasons: [`Reported by user ${reporter.id}. ${reasonText}`],
         detected_at: new Date(),
-        metadata: {
-          type: 'user_report',
-          reporterId: reporter.id,
-          content: reason ?? 'User report',
-          reason: reason ?? reasonText,
-          ...(reportAiAnalysis ? { report_ai: reportAiAnalysis } : {}),
-        },
+        metadata: withDetectionTestingMetadata(
+          {
+            type: 'user_report',
+            reporterId: reporter.id,
+            content: reason ?? 'User report',
+            reason: reason ?? reasonText,
+            ...(reportAiAnalysis ? { report_ai: reportAiAnalysis } : {}),
+          },
+          'server'
+        ),
       });
 
       const detectionResult: DetectionResult = {
@@ -1230,7 +1242,7 @@ export class SecurityActionService implements ISecurityActionService {
         reasons: [reason],
         message_id: report.messageId,
         channel_id: report.channelId,
-        metadata,
+        metadata: withDetectionTestingMetadata(metadata, 'global'),
       });
 
       await this.processMessageReportForManagedServers(
@@ -1434,7 +1446,7 @@ export class SecurityActionService implements ISecurityActionService {
       ],
       message_id: isLocalReport ? report.messageId : undefined,
       channel_id: isLocalReport ? report.channelId : undefined,
-      metadata,
+      metadata: withDetectionTestingMetadata(metadata, 'server'),
     });
   }
 

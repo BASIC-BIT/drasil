@@ -14,6 +14,7 @@ import { TYPES } from '../di/symbols';
 import { meetsConfidenceLevel } from '../utils/confidence';
 import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { DetectionType } from '../repositories/types';
+import { withDetectionTestingMetadata } from '../utils/detectionEventAccounting';
 import {
   IProductAnalyticsService,
   NOOP_PRODUCT_ANALYTICS_SERVICE,
@@ -286,10 +287,10 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
           reasons: result.reasons,
           detected_at: new Date(),
           // message_id and channel_id are not needed here; context is available later via event payload
-          metadata: {
+          metadata: withDetectionTestingMetadata({
             content: content,
             ...(gptAnalysis ? { gpt: this.createGptMetadata(gptAnalysis) } : {}),
-          },
+          }),
         });
 
         result.detectionEventId = createdEvent.id;
@@ -375,7 +376,10 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
           reasons: initialResult.reasons,
           detected_at: new Date(),
           // No message_id or channel_id for join events
-          metadata: { join: true, gpt: this.createGptMetadata(gptAnalysis) },
+          metadata: withDetectionTestingMetadata({
+            join: true,
+            gpt: this.createGptMetadata(gptAnalysis),
+          }),
         });
 
         initialResult.detectionEventId = createdEvent.id;
