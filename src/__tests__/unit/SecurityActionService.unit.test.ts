@@ -1089,6 +1089,48 @@ describe('SecurityActionService (unit)', () => {
     expect(threadManager.createVerificationThread).toHaveBeenCalled();
   });
 
+  it('excludes manual admin flags from accounting in detection test mode', async () => {
+    const originalTestMode = process.env.DRASIL_DETECTION_TEST_MODE;
+    const originalTestRunId = process.env.DRASIL_DETECTION_TEST_RUN_ID;
+    process.env.DRASIL_DETECTION_TEST_MODE = 'true';
+    process.env.DRASIL_DETECTION_TEST_RUN_ID = 'manual-flag-test-run';
+    const guildId = 'guild-manual-flag-test-mode';
+    const userId = 'user-manual-flag-test-mode';
+    const moderatorId = 'admin-manual-flag-test-mode';
+    const member = buildMember(guildId, userId);
+
+    try {
+      await buildService().handleManualFlag(member, { id: moderatorId } as User, 'manual flag');
+
+      const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+      expect(detectionEvents).toHaveLength(1);
+      expect(detectionEvents[0].metadata).toMatchObject({
+        type: 'admin_flag',
+        adminId: moderatorId,
+        test_mode: true,
+        test_run_id: 'manual-flag-test-run',
+        excluded_from_accounting: true,
+        accounting_exclusion_scope: 'server',
+        accounting_excluded_by: 'system:test-mode',
+        accounting_exclusion_reason: 'Detection test mode',
+      });
+      await expect(
+        detectionEventsRepository.findCountedByServerAndUser(guildId, userId)
+      ).resolves.toHaveLength(0);
+    } finally {
+      if (originalTestMode === undefined) {
+        delete process.env.DRASIL_DETECTION_TEST_MODE;
+      } else {
+        process.env.DRASIL_DETECTION_TEST_MODE = originalTestMode;
+      }
+      if (originalTestRunId === undefined) {
+        delete process.env.DRASIL_DETECTION_TEST_RUN_ID;
+      } else {
+        process.env.DRASIL_DETECTION_TEST_RUN_ID = originalTestRunId;
+      }
+    }
+  });
+
   it('adds a user report to an existing pending case without creating a duplicate case', async () => {
     const guildId = 'guild-4a';
     const userId = 'user-4a';

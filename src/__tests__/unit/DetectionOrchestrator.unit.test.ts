@@ -537,4 +537,66 @@ describe('DetectionOrchestrator (unit)', () => {
       },
     });
   });
+
+  it('excludes suspicious new joins from accounting in detection test mode', async () => {
+    const originalTestMode = process.env.DRASIL_DETECTION_TEST_MODE;
+    const originalTestRunId = process.env.DRASIL_DETECTION_TEST_RUN_ID;
+    process.env.DRASIL_DETECTION_TEST_MODE = 'true';
+    process.env.DRASIL_DETECTION_TEST_RUN_ID = 'join-test-run';
+    gptService.analyzeProfile.mockResolvedValue(
+      makeGptAnalysis({
+        result: 'SUSPICIOUS',
+        confidence: 0.9,
+        reasons: ['AI analysis flagged user/message context as suspicious'],
+        reasonCodes: ['unusual_username'],
+        primarySignal: 'username',
+        summary: 'Username context looks suspicious.',
+      })
+    );
+
+    try {
+      const orchestrator = new DetectionOrchestrator(
+        heuristicService,
+        gptService,
+        detectionEventsRepository,
+        userRepository,
+        serverRepository
+      );
+
+      const profile: UserProfileData = {
+        username: 'old-user',
+        accountCreatedAt: new Date('2020-01-01T00:00:00.000Z'),
+        joinedServerAt: new Date('2020-01-01T00:00:00.000Z'),
+        recentMessages: [],
+      };
+
+      await orchestrator.detectNewJoin(serverId, userId, profile);
+
+      const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
+      expect(events).toHaveLength(1);
+      expect(events[0].metadata).toMatchObject({
+        join: true,
+        test_mode: true,
+        test_run_id: 'join-test-run',
+        excluded_from_accounting: true,
+        accounting_exclusion_scope: 'server',
+        accounting_excluded_by: 'system:test-mode',
+        accounting_exclusion_reason: 'Detection test mode',
+      });
+      await expect(
+        detectionEventsRepository.findCountedByServerAndUser(serverId, userId)
+      ).resolves.toHaveLength(0);
+    } finally {
+      if (originalTestMode === undefined) {
+        delete process.env.DRASIL_DETECTION_TEST_MODE;
+      } else {
+        process.env.DRASIL_DETECTION_TEST_MODE = originalTestMode;
+      }
+      if (originalTestRunId === undefined) {
+        delete process.env.DRASIL_DETECTION_TEST_RUN_ID;
+      } else {
+        process.env.DRASIL_DETECTION_TEST_RUN_ID = originalTestRunId;
+      }
+    }
+  });
 });
