@@ -1684,10 +1684,20 @@ export class CommandHandler implements ICommandHandler {
         error instanceof Error
           ? error.message
           : 'An error occurred while processing analytics settings.';
-      await interaction.reply({
+      const errorResponse = {
         content: `Failed to process analytics settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
-      });
+      } as const;
+
+      try {
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp(errorResponse);
+        } else {
+          await interaction.reply(errorResponse);
+        }
+      } catch (replyError) {
+        console.warn('Failed to send analytics settings error response:', replyError);
+      }
     }
   }
 

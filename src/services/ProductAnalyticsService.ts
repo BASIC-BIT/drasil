@@ -3,7 +3,11 @@ import { PostHog } from 'posthog-node';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { hashIdentifier } from '../observability/hash';
-import { getAnalyticsSettings, AnalyticsConsentLevel } from '../utils/analyticsSettings';
+import {
+  DEFAULT_ANALYTICS_CONSENT_LEVEL,
+  getAnalyticsSettings,
+  AnalyticsConsentLevel,
+} from '../utils/analyticsSettings';
 
 const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 const MAX_PROPERTY_STRING_LENGTH = 500;
@@ -302,7 +306,7 @@ export class ProductAnalyticsService implements IProductAnalyticsService {
   private resolveCachedConsentLevel(guildId: string): AnalyticsConsentLevel | null {
     const cachedConfig = this.configService.getCachedServerConfig(guildId);
     if (!cachedConfig) {
-      return process.env.DATABASE_URL ? null : 'anonymous';
+      return process.env.DATABASE_URL ? null : DEFAULT_ANALYTICS_CONSENT_LEVEL;
     }
 
     return getAnalyticsSettings(cachedConfig.settings).consentLevel;
