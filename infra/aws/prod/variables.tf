@@ -54,13 +54,13 @@ variable "container_insights" {
 
 variable "posthog_host" {
   type        = string
-  description = "PostHog ingestion host for product analytics."
+  description = "PostHog ingestion host for product analytics. Use https://eu.i.posthog.com instead when EU data residency is required."
   default     = "https://us.i.posthog.com"
 }
 
 variable "posthog_product_analytics_enabled" {
   type        = bool
-  description = "Whether the Drasil product analytics exporter is enabled when a PostHog project token is configured."
+  description = "Whether the Drasil product analytics exporter is enabled when a PostHog project API key is configured."
   default     = true
 }
 

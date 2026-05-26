@@ -87,7 +87,9 @@ aws secretsmanager put-secret-value \
 
 Repeat for the other secrets.
 
-`POSTHOG_PROJECT_API_KEY` is the PostHog project token used by the server SDK.
+`POSTHOG_PROJECT_API_KEY` is the PostHog project API key used by the server SDK.
+The default `POSTHOG_HOST` is the US ingestion endpoint; set `posthog_host` to
+`https://eu.i.posthog.com` before first apply when EU data residency is required.
 `OBSERVABILITY_HASH_KEY` should be a high-entropy random value that stays stable
 for the environment so anonymous analytics identifiers remain stable across task
 restarts.
