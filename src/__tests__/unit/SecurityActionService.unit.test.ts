@@ -416,6 +416,50 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it('excludes user reports from accounting in detection test mode', async () => {
+    const originalTestMode = process.env.DRASIL_DETECTION_TEST_MODE;
+    const originalTestRunId = process.env.DRASIL_DETECTION_TEST_RUN_ID;
+    process.env.DRASIL_DETECTION_TEST_MODE = 'true';
+    process.env.DRASIL_DETECTION_TEST_RUN_ID = 'report-test-run';
+    const guildId = 'guild-report-test-mode';
+    const userId = 'user-report-test-mode';
+    const member = buildMember(guildId, userId);
+
+    try {
+      await buildService().handleUserReport(
+        member,
+        { id: 'reporter-test-mode' } as User,
+        'reported'
+      );
+
+      const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+      expect(detectionEvents).toHaveLength(1);
+      expect(detectionEvents[0].metadata).toMatchObject({
+        type: 'user_report',
+        test_mode: true,
+        test_run_id: 'report-test-run',
+        excluded_from_accounting: true,
+        accounting_exclusion_scope: 'server',
+        accounting_excluded_by: 'system:test-mode',
+        accounting_exclusion_reason: 'Detection test mode',
+      });
+      await expect(
+        detectionEventsRepository.findCountedByServerAndUser(guildId, userId)
+      ).resolves.toHaveLength(0);
+    } finally {
+      if (originalTestMode === undefined) {
+        delete process.env.DRASIL_DETECTION_TEST_MODE;
+      } else {
+        process.env.DRASIL_DETECTION_TEST_MODE = originalTestMode;
+      }
+      if (originalTestRunId === undefined) {
+        delete process.env.DRASIL_DETECTION_TEST_RUN_ID;
+      } else {
+        process.env.DRASIL_DETECTION_TEST_RUN_ID = originalTestRunId;
+      }
+    }
+  });
+
   it('stores enabled report AI triage as sanitized detection metadata and notification context', async () => {
     const guildId = 'guild-report-ai';
     const userId = 'user-report-ai';
@@ -592,6 +636,47 @@ describe('SecurityActionService (unit)', () => {
     });
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+  });
+
+  it('marks user-installed message reports as globally excluded in detection test mode', async () => {
+    const originalTestMode = process.env.DRASIL_DETECTION_TEST_MODE;
+    const originalTestRunId = process.env.DRASIL_DETECTION_TEST_RUN_ID;
+    process.env.DRASIL_DETECTION_TEST_MODE = 'true';
+    process.env.DRASIL_DETECTION_TEST_RUN_ID = 'global-report-test-run';
+
+    try {
+      await buildService().handleMessageReport(
+        { id: 'user-global-test', username: 'target-user' } as User,
+        { id: 'reporter-global-test' } as User,
+        {
+          messageId: 'message-global-test',
+          channelId: 'dm-channel-global-test',
+          content: 'suspicious DM',
+        }
+      );
+
+      const detectionEvent = await detectionEventsRepository.findById('det-1');
+      expect(detectionEvent?.metadata).toMatchObject({
+        type: 'user_installed_message_report',
+        test_mode: true,
+        test_run_id: 'global-report-test-run',
+        excluded_from_accounting: true,
+        accounting_exclusion_scope: 'global',
+        accounting_excluded_by: 'system:test-mode',
+        accounting_exclusion_reason: 'Detection test mode',
+      });
+    } finally {
+      if (originalTestMode === undefined) {
+        delete process.env.DRASIL_DETECTION_TEST_MODE;
+      } else {
+        process.env.DRASIL_DETECTION_TEST_MODE = originalTestMode;
+      }
+      if (originalTestRunId === undefined) {
+        delete process.env.DRASIL_DETECTION_TEST_RUN_ID;
+      } else {
+        process.env.DRASIL_DETECTION_TEST_RUN_ID = originalTestRunId;
+      }
+    }
   });
 
   it('posts observed alerts for message reports from the same guild', async () => {

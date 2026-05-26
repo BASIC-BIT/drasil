@@ -104,6 +104,55 @@ describe('DetectionOrchestrator (unit)', () => {
     expect(events[0].metadata).toMatchObject({ content: 'free nitro' });
   });
 
+  it('excludes new detection events from accounting in detection test mode', async () => {
+    const originalTestMode = process.env.DRASIL_DETECTION_TEST_MODE;
+    const originalTestRunId = process.env.DRASIL_DETECTION_TEST_RUN_ID;
+    process.env.DRASIL_DETECTION_TEST_MODE = 'true';
+    process.env.DRASIL_DETECTION_TEST_RUN_ID = 'unit-run-1';
+    heuristicService.analyzeMessage.mockReturnValue({
+      result: 'SUSPICIOUS',
+      reasons: ['Suspicious keywords'],
+    });
+
+    try {
+      const orchestrator = new DetectionOrchestrator(
+        heuristicService,
+        gptService,
+        detectionEventsRepository,
+        userRepository,
+        serverRepository
+      );
+
+      await orchestrator.detectMessage(serverId, userId, 'free nitro');
+
+      const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
+      expect(events).toHaveLength(1);
+      expect(events[0].metadata).toMatchObject({
+        content: 'free nitro',
+        test_mode: true,
+        test_run_id: 'unit-run-1',
+        excluded_from_accounting: true,
+        accounting_exclusion_scope: 'server',
+        accounting_excluded_by: 'system:test-mode',
+        accounting_exclusion_reason: 'Detection test mode',
+      });
+      await expect(
+        detectionEventsRepository.findCountedByServerAndUser(serverId, userId)
+      ).resolves.toHaveLength(0);
+    } finally {
+      if (originalTestMode === undefined) {
+        delete process.env.DRASIL_DETECTION_TEST_MODE;
+      } else {
+        process.env.DRASIL_DETECTION_TEST_MODE = originalTestMode;
+      }
+      if (originalTestRunId === undefined) {
+        delete process.env.DRASIL_DETECTION_TEST_RUN_ID;
+      } else {
+        process.env.DRASIL_DETECTION_TEST_RUN_ID = originalTestRunId;
+      }
+    }
+  });
+
   it('uses GPT for new accounts and returns suspicious when GPT flags it', async () => {
     heuristicService.analyzeMessage.mockReturnValue({ result: 'OK', reasons: [] });
     gptService.analyzeProfile.mockResolvedValue(

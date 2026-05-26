@@ -5,6 +5,13 @@ export const DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY = 'accounting_exc
 export const DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY = 'accounting_excluded_by';
 export const DETECTION_ACCOUNTING_EXCLUDED_AT_METADATA_KEY = 'accounting_excluded_at';
 export const DETECTION_ACCOUNTING_EXCLUSION_REASON_METADATA_KEY = 'accounting_exclusion_reason';
+export const DETECTION_TEST_MODE_METADATA_KEY = 'test_mode';
+export const DETECTION_TEST_RUN_ID_METADATA_KEY = 'test_run_id';
+export const DRASIL_DETECTION_TEST_MODE_ENV = 'DRASIL_DETECTION_TEST_MODE';
+export const DRASIL_DETECTION_TEST_RUN_ID_ENV = 'DRASIL_DETECTION_TEST_RUN_ID';
+
+const DETECTION_TEST_MODE_EXCLUDED_BY = 'system:test-mode';
+const DETECTION_TEST_MODE_EXCLUSION_REASON = 'Detection test mode';
 
 interface DetectionAccountingAction {
   action_type: string;
@@ -95,6 +102,31 @@ export function createAccountingExclusionMetadata(
     [DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY]: moderatorId,
     [DETECTION_ACCOUNTING_EXCLUDED_AT_METADATA_KEY]: new Date().toISOString(),
     [DETECTION_ACCOUNTING_EXCLUSION_REASON_METADATA_KEY]: reason,
+  };
+}
+
+export function isDetectionTestModeEnabled(): boolean {
+  return process.env[DRASIL_DETECTION_TEST_MODE_ENV] === 'true';
+}
+
+export function withDetectionTestingMetadata(
+  metadata?: Record<string, unknown>,
+  scope = 'server'
+): Record<string, unknown> | undefined {
+  if (!isDetectionTestModeEnabled()) {
+    return metadata;
+  }
+
+  const testRunId = process.env[DRASIL_DETECTION_TEST_RUN_ID_ENV]?.trim();
+  return {
+    ...(metadata ?? {}),
+    [DETECTION_TEST_MODE_METADATA_KEY]: true,
+    ...(testRunId ? { [DETECTION_TEST_RUN_ID_METADATA_KEY]: testRunId } : {}),
+    ...createAccountingExclusionMetadata(
+      DETECTION_TEST_MODE_EXCLUDED_BY,
+      DETECTION_TEST_MODE_EXCLUSION_REASON,
+      scope
+    ),
   };
 }
 
