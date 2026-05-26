@@ -628,9 +628,15 @@ export class SecurityActionService implements ISecurityActionService {
       return null;
     }
 
-    return detectionEvent.server_id === guildId || this.isGlobalAuditAdmin(moderatorId)
-      ? detectionEvent
-      : null;
+    if (detectionEvent.server_id === guildId) {
+      return detectionEvent;
+    }
+
+    if (detectionEvent.server_id === null && this.isGlobalAuditAdmin(moderatorId)) {
+      return detectionEvent;
+    }
+
+    return null;
   }
 
   private isGlobalAuditAdmin(userId: string): boolean {

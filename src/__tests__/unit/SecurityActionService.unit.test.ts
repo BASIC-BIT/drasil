@@ -1444,6 +1444,41 @@ describe('SecurityActionService (unit)', () => {
     }
   });
 
+  it('does not let global admins audit another server detection from the wrong guild', async () => {
+    const originalGlobalAdmins = process.env.DRASIL_GLOBAL_ADMIN_IDS;
+    process.env.DRASIL_GLOBAL_ADMIN_IDS = 'admin-global';
+    const moderator = { id: 'admin-global' } as User;
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: 'owning-guild',
+      user_id: 'user-cross-server',
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.95,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+
+    try {
+      const updatedDetection = await buildService().excludeDetectionFromAccounting(
+        'other-guild',
+        detectionEvent.id,
+        moderator,
+        'cross-guild attempt'
+      );
+
+      expect(updatedDetection).toBeNull();
+      expect(adminActionService.recordAction).not.toHaveBeenCalled();
+      await expect(
+        detectionEventsRepository.findCountedByServerAndUser('owning-guild', 'user-cross-server')
+      ).resolves.toHaveLength(1);
+    } finally {
+      if (originalGlobalAdmins === undefined) {
+        delete process.env.DRASIL_GLOBAL_ADMIN_IDS;
+      } else {
+        process.env.DRASIL_GLOBAL_ADMIN_IDS = originalGlobalAdmins;
+      }
+    }
+  });
+
   it('restores an ignored detection to future accounting', async () => {
     const guildId = 'guild-audit-restore';
     const userId = 'user-audit-restore';
