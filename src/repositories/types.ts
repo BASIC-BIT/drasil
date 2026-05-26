@@ -38,6 +38,8 @@ export interface ServerSettings {
   expected_topics?: string[]; // Topics, keywords, or links expected from legitimate users
   verification_ai_thread_analysis_enabled?: boolean; // Whether to analyze replies in verification threads
   verification_ai_thread_analysis_message_limit?: number; // Max flagged-user thread messages to analyze
+  verification_ai_max_action?: 'off' | 'hints' | 'restrict';
+  verification_ai_restrict_threshold?: number;
   detection_response_mode?: 'off' | 'record_only' | 'notify_only' | 'open_case' | 'restrict';
   observed_detection_notification_channel_id?: string | null;
   observed_detection_min_confidence_threshold?: number;
@@ -47,6 +49,17 @@ export interface ServerSettings {
   user_report_reason_required?: boolean;
   user_report_external_response_mode?: 'off' | 'notify_only' | 'open_case';
   analytics_consent_level?: 'off' | 'anonymous' | 'full';
+  case_responder_role_ids?: string[];
+  case_responder_routing_mode?: 'off' | 'ping_only' | 'ping_and_add_members';
+  case_responder_thread_member_cap?: number;
+  report_ai_triage_enabled?: boolean;
+  report_ai_analyze_text?: boolean;
+  report_ai_analyze_images?: boolean;
+  report_ai_max_action?: 'off' | 'hints' | 'open_case' | 'restrict';
+  report_ai_open_case_threshold?: number;
+  report_ai_restrict_threshold?: number;
+  report_ai_max_images?: number;
+  report_ai_max_image_bytes?: number;
 }
 
 /**

@@ -2,7 +2,7 @@ import { injectable, inject } from 'inversify';
 import type { Message } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import type { IConfigService } from '../config/ConfigService';
-import type { IGPTService } from './GPTService';
+import type { IGPTService, VerificationThreadAnalysisResult } from './GPTService';
 import type { INotificationManager } from './NotificationManager';
 import type { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import type { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
@@ -15,9 +15,14 @@ import {
 interface ThreadAnalysisMetadata {
   analyzedMessageIds: string[];
   latestAnalysis?: {
-    result: 'OK' | 'SUSPICIOUS';
+    result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
     confidence: number;
     summary: string;
+    reasonCodes: string[];
+    legitimacySignals: string[];
+    suspicionSignals: string[];
+    recommendedNextQuestion?: string;
+    recommendedAction: 'none' | 'ask_followup' | 'manual_review' | 'restrict';
     analyzedMessageCount: number;
   };
 }
@@ -80,7 +85,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
 
     const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
     const settings = getVerificationThreadAnalysisSettings(serverConfig.settings);
-    if (!settings.enabled) {
+    if (!settings.enabled || settings.maxAction === 'off') {
       return;
     }
 
@@ -102,13 +107,14 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     }
 
     const detectionReasons = await this.getDetectionReasons(verificationEvent.detection_event_id);
-    const analysis = await this.gptService.analyzeVerificationThreadResponses({
+    const rawAnalysis = await this.gptService.analyzeVerificationThreadResponses({
       serverId: verificationEvent.server_id,
       userId: verificationEvent.user_id,
       username: message.author.username,
       messages: responses,
       detectionReasons,
     });
+    const analysis = this.capRecommendedAction(rawAnalysis, settings);
 
     const nextAnalyzedMessageIds = [...metadata.analyzedMessageIds, message.id].slice(
       -settings.messageLimit
@@ -135,6 +141,11 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
               result: analysis.result,
               confidence: analysis.confidence,
               summary: analysis.summary,
+              reasonCodes: analysis.reasonCodes,
+              legitimacySignals: analysis.legitimacySignals,
+              suspicionSignals: analysis.suspicionSignals,
+              recommendedNextQuestion: analysis.recommendedNextQuestion,
+              recommendedAction: analysis.recommendedAction,
               analyzedMessageCount: responses.length,
             },
           },
@@ -162,6 +173,25 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     }
   }
 
+  private capRecommendedAction(
+    analysis: VerificationThreadAnalysisResult,
+    settings: ReturnType<typeof getVerificationThreadAnalysisSettings>
+  ): VerificationThreadAnalysisResult {
+    if (analysis.recommendedAction !== 'restrict') {
+      return analysis;
+    }
+
+    if (
+      settings.maxAction === 'restrict' &&
+      analysis.result === 'likely_suspicious' &&
+      analysis.confidence >= settings.restrictThreshold
+    ) {
+      return analysis;
+    }
+
+    return { ...analysis, recommendedAction: 'manual_review' };
+  }
+
   private asObject(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return null;
@@ -179,19 +209,56 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
         )
       : [];
     const latestAnalysis = this.asObject(threadAnalysis?.latestAnalysis);
+    const rawResult = latestAnalysis?.result;
+    const result =
+      rawResult === 'likely_legitimate' ||
+      rawResult === 'needs_review' ||
+      rawResult === 'likely_suspicious'
+        ? rawResult
+        : rawResult === 'OK'
+          ? 'likely_legitimate'
+          : rawResult === 'SUSPICIOUS'
+            ? 'likely_suspicious'
+            : null;
 
     return {
       analyzedMessageIds,
       latestAnalysis:
         latestAnalysis &&
-        (latestAnalysis.result === 'OK' || latestAnalysis.result === 'SUSPICIOUS') &&
+        result &&
         typeof latestAnalysis.confidence === 'number' &&
         typeof latestAnalysis.summary === 'string' &&
         typeof latestAnalysis.analyzedMessageCount === 'number'
           ? {
-              result: latestAnalysis.result,
+              result,
               confidence: latestAnalysis.confidence,
               summary: latestAnalysis.summary,
+              reasonCodes: Array.isArray(latestAnalysis.reasonCodes)
+                ? latestAnalysis.reasonCodes.filter(
+                    (value): value is string => typeof value === 'string'
+                  )
+                : [],
+              legitimacySignals: Array.isArray(latestAnalysis.legitimacySignals)
+                ? latestAnalysis.legitimacySignals.filter(
+                    (value): value is string => typeof value === 'string'
+                  )
+                : [],
+              suspicionSignals: Array.isArray(latestAnalysis.suspicionSignals)
+                ? latestAnalysis.suspicionSignals.filter(
+                    (value): value is string => typeof value === 'string'
+                  )
+                : [],
+              recommendedNextQuestion:
+                typeof latestAnalysis.recommendedNextQuestion === 'string'
+                  ? latestAnalysis.recommendedNextQuestion
+                  : undefined,
+              recommendedAction:
+                latestAnalysis.recommendedAction === 'none' ||
+                latestAnalysis.recommendedAction === 'ask_followup' ||
+                latestAnalysis.recommendedAction === 'manual_review' ||
+                latestAnalysis.recommendedAction === 'restrict'
+                  ? latestAnalysis.recommendedAction
+                  : 'manual_review',
               analyzedMessageCount: latestAnalysis.analyzedMessageCount,
             }
           : undefined,

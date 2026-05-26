@@ -23,15 +23,18 @@ import { DetectionResult } from './DetectionOrchestrator';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import {
   DetectionEvent,
+  Server,
   VerificationStatus,
   AdminActionType,
   VerificationEvent,
   DetectionType,
 } from '../repositories/types';
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
-import type { VerificationThreadAnalysisResult } from './GPTService';
+import type { ReportAIAnalysis, VerificationThreadAnalysisResult } from './GPTService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { getVerificationActionFailures } from '../utils/verificationActionFailures';
+import { getCaseResponderSettings } from '../utils/caseResponderSettings';
+import { CASE_STAFF_ROUTING_METADATA_KEY } from './ThreadManager';
 
 export interface NotificationButton {
   id: string;
@@ -126,9 +129,14 @@ export interface INotificationManager {
 interface ThreadAnalysisMetadata {
   analyzedMessageIds?: unknown;
   latestAnalysis?: {
-    result: 'OK' | 'SUSPICIOUS';
+    result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
     confidence: number;
     summary: string;
+    reasonCodes?: string[];
+    legitimacySignals?: string[];
+    suspicionSignals?: string[];
+    recommendedNextQuestion?: string;
+    recommendedAction?: 'none' | 'ask_followup' | 'manual_review' | 'restrict';
     analyzedMessageCount: number;
   };
 }
@@ -217,10 +225,10 @@ export class NotificationManager implements INotificationManager {
 
       // Create a new message
       const serverConfig = await this.configService.getServerConfig(member.guild.id);
-      const adminNotificationRoleId = serverConfig.admin_notification_role_id;
+      const notificationRoleIds = this.getCaseNotificationRoleIds(serverConfig);
       return await adminChannel.send({
-        content: adminNotificationRoleId ? `<@&${adminNotificationRoleId}>` : undefined,
-        allowedMentions: this.createAdminAllowedMentions(adminNotificationRoleId),
+        content: this.formatRoleMentions(notificationRoleIds),
+        allowedMentions: this.createAdminAllowedMentions(notificationRoleIds),
         embeds: [embed],
         components: [actionRow], // Use the conditionally created action row
       });
@@ -282,10 +290,10 @@ export class NotificationManager implements INotificationManager {
       }
 
       if (!notificationMessage) {
-        const adminNotificationRoleId = serverConfig.admin_notification_role_id;
+        const notificationRoleIds = this.getCaseNotificationRoleIds(serverConfig);
         notificationMessage = await notificationChannel.send({
-          content: adminNotificationRoleId ? `<@&${adminNotificationRoleId}>` : undefined,
-          allowedMentions: this.createAdminAllowedMentions(adminNotificationRoleId),
+          content: this.formatRoleMentions(notificationRoleIds),
+          allowedMentions: this.createAdminAllowedMentions(notificationRoleIds),
           embeds: [embed],
           components,
         });
@@ -544,14 +552,10 @@ export class NotificationManager implements INotificationManager {
       const existingEmbed = message.embeds[0];
       const updatedEmbed = EmbedBuilder.from(existingEmbed);
 
-      const confidencePercent = Math.round(analysis.confidence * 100);
-      const value = this.truncateEmbedFieldValue(
-        [
-          `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
-          `Analyzed responses: ${analyzedMessageCount}`,
-          `Summary: ${analysis.summary}`,
-        ].join('\n')
-      );
+      const value = this.formatThreadAnalysisFieldValue({
+        ...analysis,
+        analyzedMessageCount,
+      });
 
       const field = {
         name: NotificationManager.THREAD_ANALYSIS_FIELD_NAME,
@@ -594,18 +598,46 @@ export class NotificationManager implements INotificationManager {
     return { ...metadata } as Record<string, unknown>;
   }
 
-  private createAdminAllowedMentions(adminNotificationRoleId?: string | null): {
+  private createAdminAllowedMentions(roleIds?: string[] | string | null): {
     parse: [];
     roles: string[];
     users: [];
     repliedUser: false;
   } {
+    const roles = Array.isArray(roleIds)
+      ? roleIds
+      : typeof roleIds === 'string' && roleIds
+        ? [roleIds]
+        : [];
+
     return {
       parse: [],
-      roles: adminNotificationRoleId ? [adminNotificationRoleId] : [],
+      roles,
       users: [],
       repliedUser: false,
     };
+  }
+
+  private getCaseNotificationRoleIds(serverConfig: Server): string[] {
+    const roleIds = new Set<string>();
+    if (serverConfig.admin_notification_role_id) {
+      roleIds.add(serverConfig.admin_notification_role_id);
+    }
+
+    const responderSettings = getCaseResponderSettings(serverConfig.settings);
+    if (responderSettings.routingMode !== 'off') {
+      responderSettings.roleIds.forEach((roleId) => roleIds.add(roleId));
+    }
+
+    return [...roleIds];
+  }
+
+  private formatRoleMentions(roleIds: readonly string[]): string | undefined {
+    if (roleIds.length === 0) {
+      return undefined;
+    }
+
+    return roleIds.map((roleId) => `<@&${roleId}>`).join(' ');
   }
 
   private findRecentObservedDetectionNotification(
@@ -747,6 +779,18 @@ export class NotificationManager implements INotificationManager {
       embed.addFields({
         name: 'AI Analysis',
         value: aiDiagnosticFieldValue,
+        inline: false,
+      });
+    }
+
+    const reportAiFieldValue = this.formatReportAiFieldValue(
+      detectionResult.reportAiAnalysis ??
+        this.findReportAiAnalysis(detectionEvents, detectionResult.detectionEventId)
+    );
+    if (reportAiFieldValue) {
+      embed.addFields({
+        name: 'AI Report Triage',
+        value: reportAiFieldValue,
         inline: false,
       });
     }
@@ -919,6 +963,18 @@ export class NotificationManager implements INotificationManager {
       });
     }
 
+    const reportAiFieldValue = this.formatReportAiFieldValue(
+      detectionResult.reportAiAnalysis ??
+        this.findReportAiAnalysis(detectionEvents, detectionResult.detectionEventId)
+    );
+    if (reportAiFieldValue) {
+      embed.addFields({
+        name: 'AI Report Triage',
+        value: reportAiFieldValue,
+        inline: false,
+      });
+    }
+
     const actionFailureFieldValue = this.formatVerificationActionFailureFieldValue(
       verificationEvent.metadata
     );
@@ -926,6 +982,17 @@ export class NotificationManager implements INotificationManager {
       embed.addFields({
         name: 'Moderation Action Warning',
         value: actionFailureFieldValue,
+        inline: false,
+      });
+    }
+
+    const caseStaffWarningFieldValue = this.formatCaseStaffRoutingWarningFieldValue(
+      verificationEvent.metadata
+    );
+    if (caseStaffWarningFieldValue) {
+      embed.addFields({
+        name: 'Case Staff Routing Warning',
+        value: caseStaffWarningFieldValue,
         inline: false,
       });
     }
@@ -987,20 +1054,108 @@ export class NotificationManager implements INotificationManager {
     );
   }
 
+  private formatCaseStaffRoutingWarningFieldValue(metadata: unknown): string | null {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return null;
+    }
+
+    const routing = (metadata as Record<string, unknown>)[CASE_STAFF_ROUTING_METADATA_KEY];
+    if (!routing || typeof routing !== 'object' || Array.isArray(routing)) {
+      return null;
+    }
+
+    const warnings = (routing as { warnings?: unknown }).warnings;
+    if (!Array.isArray(warnings) || warnings.length === 0) {
+      return null;
+    }
+
+    return this.truncateEmbedFieldValue(
+      warnings
+        .filter((warning): warning is string => typeof warning === 'string' && warning.length > 0)
+        .slice(-3)
+        .map((warning) => `Warning: ${warning}`)
+        .join('\n')
+    );
+  }
+
   private formatThreadAnalysisFieldValue(analysis: {
-    result: 'OK' | 'SUSPICIOUS';
+    result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
     confidence: number;
     summary: string;
+    reasonCodes?: string[];
+    legitimacySignals?: string[];
+    suspicionSignals?: string[];
+    recommendedNextQuestion?: string;
+    recommendedAction?: 'none' | 'ask_followup' | 'manual_review' | 'restrict';
     analyzedMessageCount: number;
   }): string {
     const confidencePercent = Math.round(analysis.confidence * 100);
-    return this.truncateEmbedFieldValue(
-      [
-        `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
-        `Analyzed responses: ${analysis.analyzedMessageCount}`,
-        `Summary: ${analysis.summary}`,
-      ].join('\n')
-    );
+    const lines = [
+      `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
+      `Analyzed responses: ${analysis.analyzedMessageCount}`,
+      `Summary: ${analysis.summary}`,
+    ];
+    if (analysis.reasonCodes?.length) {
+      lines.push(`Reason codes: ${analysis.reasonCodes.join(', ')}`);
+    }
+    if (analysis.legitimacySignals?.length) {
+      lines.push(`Legitimacy signals: ${analysis.legitimacySignals.join('; ')}`);
+    }
+    if (analysis.suspicionSignals?.length) {
+      lines.push(`Suspicion signals: ${analysis.suspicionSignals.join('; ')}`);
+    }
+    if (analysis.recommendedNextQuestion) {
+      lines.push(`Next question: ${analysis.recommendedNextQuestion}`);
+    }
+    if (analysis.recommendedAction) {
+      lines.push(`Recommended action: ${analysis.recommendedAction}`);
+    }
+
+    return this.truncateEmbedFieldValue(lines.join('\n'));
+  }
+
+  private findReportAiAnalysis(
+    detectionEvents: DetectionEvent[],
+    detectionEventId?: string
+  ): ReportAIAnalysis | null {
+    const candidates = detectionEventId
+      ? detectionEvents.filter((event) => event.id === detectionEventId)
+      : detectionEvents;
+
+    for (const event of candidates) {
+      const metadata = this.metadataToRecord(event.metadata);
+      const reportAi = metadata.report_ai;
+      if (reportAi && typeof reportAi === 'object' && !Array.isArray(reportAi)) {
+        return reportAi as ReportAIAnalysis;
+      }
+    }
+
+    return null;
+  }
+
+  private formatReportAiFieldValue(analysis: ReportAIAnalysis | null): string | null {
+    if (!analysis) {
+      return null;
+    }
+
+    const confidencePercent = Math.round(analysis.confidence * 100);
+    const lines = [
+      `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
+      `Summary: ${analysis.summary}`,
+      `Recommended action: ${analysis.recommendedAction}`,
+      `Images analyzed: ${analysis.analyzedImageCount}`,
+    ];
+    if (analysis.reasonCodes.length) {
+      lines.push(`Reason codes: ${analysis.reasonCodes.join(', ')}`);
+    }
+    if (analysis.evidenceCategories.length) {
+      lines.push(`Evidence: ${analysis.evidenceCategories.join(', ')}`);
+    }
+    if (analysis.concerns.length) {
+      lines.push(`Concerns: ${analysis.concerns.join('; ')}`);
+    }
+
+    return this.truncateEmbedFieldValue(lines.join('\n'));
   }
 
   private formatGptDiagnosticFieldValue(detectionResult: DetectionResult): string | null {
@@ -1036,7 +1191,71 @@ export class NotificationManager implements INotificationManager {
       return null;
     }
 
-    return threadAnalysis as ThreadAnalysisMetadata;
+    const metadataRecord = threadAnalysis as ThreadAnalysisMetadata;
+    const latestAnalysis =
+      metadataRecord.latestAnalysis &&
+      typeof metadataRecord.latestAnalysis === 'object' &&
+      !Array.isArray(metadataRecord.latestAnalysis)
+        ? (metadataRecord.latestAnalysis as Record<string, unknown>)
+        : null;
+    if (!latestAnalysis) {
+      return metadataRecord;
+    }
+
+    const rawResult = latestAnalysis.result;
+    const result =
+      rawResult === 'likely_legitimate' ||
+      rawResult === 'needs_review' ||
+      rawResult === 'likely_suspicious'
+        ? rawResult
+        : rawResult === 'OK'
+          ? 'likely_legitimate'
+          : rawResult === 'SUSPICIOUS'
+            ? 'likely_suspicious'
+            : null;
+
+    if (
+      !result ||
+      typeof latestAnalysis.confidence !== 'number' ||
+      typeof latestAnalysis.summary !== 'string' ||
+      typeof latestAnalysis.analyzedMessageCount !== 'number'
+    ) {
+      return metadataRecord;
+    }
+
+    return {
+      ...metadataRecord,
+      latestAnalysis: {
+        result,
+        confidence: latestAnalysis.confidence,
+        summary: latestAnalysis.summary,
+        reasonCodes: Array.isArray(latestAnalysis.reasonCodes)
+          ? latestAnalysis.reasonCodes.filter((value): value is string => typeof value === 'string')
+          : [],
+        legitimacySignals: Array.isArray(latestAnalysis.legitimacySignals)
+          ? latestAnalysis.legitimacySignals.filter(
+              (value): value is string => typeof value === 'string'
+            )
+          : [],
+        suspicionSignals: Array.isArray(latestAnalysis.suspicionSignals)
+          ? latestAnalysis.suspicionSignals.filter(
+              (value): value is string => typeof value === 'string'
+            )
+          : [],
+        recommendedNextQuestion:
+          typeof latestAnalysis.recommendedNextQuestion === 'string'
+            ? latestAnalysis.recommendedNextQuestion
+            : undefined,
+        recommendedAction:
+          latestAnalysis.recommendedAction === 'none' ||
+          latestAnalysis.recommendedAction === 'ask_followup' ||
+          latestAnalysis.recommendedAction === 'manual_review' ||
+          latestAnalysis.recommendedAction === 'restrict'
+            ? latestAnalysis.recommendedAction
+            : 'manual_review',
+        analyzedMessageCount: latestAnalysis.analyzedMessageCount,
+      },
+    };
   }
 
   /**

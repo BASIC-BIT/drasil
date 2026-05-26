@@ -6,7 +6,7 @@
  */
 import { injectable, inject, optional } from 'inversify';
 import { IHeuristicService } from './HeuristicService';
-import { GPTProfileAnalysis, IGPTService, UserProfileData } from './GPTService';
+import { GPTProfileAnalysis, IGPTService, ReportAIAnalysis, UserProfileData } from './GPTService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { IUserRepository } from '../repositories/UserRepository'; // Added
 import { IServerRepository } from '../repositories/ServerRepository'; // Added
@@ -28,6 +28,7 @@ export interface DetectionResult {
   profileData?: UserProfileData;
   detectionEventId?: string;
   gptAnalysis?: GPTProfileAnalysis;
+  reportAiAnalysis?: ReportAIAnalysis;
 }
 
 /**
