@@ -41,6 +41,10 @@ import {
   DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY,
   isDetectionEventExcludedFromAccounting,
 } from '../../utils/detectionEventAccounting';
+import {
+  ANALYTICS_CONSENT_SETTING_KEY,
+  DEFAULT_ANALYTICS_CONSENT_LEVEL,
+} from '../../utils/analyticsSettings';
 
 const toTimestamp = (value: string | Date | null | undefined): number => {
   if (!value) {
@@ -69,6 +73,7 @@ const baseSettings: ServerSettings = {
   [OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY]: false,
   [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: DEFAULT_USER_REPORT_REASON_REQUIRED,
   [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: DEFAULT_USER_REPORT_EXTERNAL_RESPONSE_MODE,
+  [ANALYTICS_CONSENT_SETTING_KEY]: DEFAULT_ANALYTICS_CONSENT_LEVEL,
 };
 
 const defaultHeuristicThreshold = globalSettings.defaultServerSettings.messageThreshold;

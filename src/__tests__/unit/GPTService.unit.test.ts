@@ -203,6 +203,31 @@ describe('GPTService (unit)', () => {
     expect(result.reasons).toEqual(['AI analysis flagged insufficient context as suspicious']);
   });
 
+  it('drops unrecognized profile reason codes before exposing diagnostics', async () => {
+    const create = jest.fn().mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              result: 'SUSPICIOUS',
+              confidence: 0.9,
+              summary: 'Several suspicious categories were present.',
+              reason_codes: ['suspicious_keyword', 'username_john123_suspicious'],
+              primary_signal: 'message_content',
+            }),
+          },
+        },
+      ],
+    });
+
+    const openai = { chat: { completions: { create } } } as unknown as OpenAI;
+    const service = new GPTService(openai);
+
+    const result = await service.analyzeProfile(makeProfile());
+
+    expect(result.reasonCodes).toEqual(['suspicious_keyword']);
+  });
+
   it('strips quoted text from model summaries', async () => {
     const create = jest.fn().mockResolvedValue({
       choices: [

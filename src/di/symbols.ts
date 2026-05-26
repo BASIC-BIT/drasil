@@ -19,6 +19,7 @@ export const TYPES = {
   SecurityActionService: Symbol.for('SecurityActionService'),
   UserModerationService: Symbol.for('UserModerationService'),
   VerificationThreadAnalysisService: Symbol.for('VerificationThreadAnalysisService'),
+  ProductAnalyticsService: Symbol.for('ProductAnalyticsService'),
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),

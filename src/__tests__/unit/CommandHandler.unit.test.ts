@@ -1288,6 +1288,46 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('does not rethrow if an analytics command reply failure also prevents the error reply', async () => {
+    const { handler } = buildHandler();
+    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      replied: false,
+      deferred: false,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('analytics'),
+        getSubcommand: jest.fn().mockReturnValue('view'),
+      },
+      reply: jest.fn().mockRejectedValue(new Error('reply failed')),
+      followUp: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    try {
+      await expect(handler.handleSlashCommand(interaction)).resolves.toBeUndefined();
+
+      expect(interaction.reply).toHaveBeenCalledTimes(2);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        'Failed to send analytics settings error response:',
+        expect.any(Error)
+      );
+    } finally {
+      consoleWarnSpy.mockRestore();
+    }
+  });
+
   it('handles /config verification prompt-view', async () => {
     const getServerConfig = jest.fn().mockResolvedValue({
       settings: {
