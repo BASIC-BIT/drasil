@@ -973,7 +973,7 @@ describe('CommandHandler (unit)', () => {
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nCreated verification channel: <#created-channel-1>',
+        'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nCreated or reused verification channel: <#created-channel-1>',
     });
   });
 
@@ -1231,7 +1231,7 @@ describe('CommandHandler (unit)', () => {
       allowedMentions: { parse: [] },
     });
     expect(interaction.editReply.mock.calls[0][0].content).toContain(
-      'Created verification channel: <#created-channel-1>'
+      'Created or reused verification channel: <#created-channel-1>'
     );
   });
 

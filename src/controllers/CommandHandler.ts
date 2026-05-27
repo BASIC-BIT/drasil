@@ -1394,7 +1394,7 @@ export class CommandHandler implements ICommandHandler {
       );
 
       const verificationChannelMessage = verificationChannelWasCreated
-        ? `Created verification channel: <#${verificationChannelId}>`
+        ? `Created or reused verification channel: <#${verificationChannelId}>`
         : `Verification channel: <#${verificationChannelId}>`;
 
       const responseLines = [
@@ -1701,7 +1701,7 @@ export class CommandHandler implements ICommandHandler {
         'Setup complete.',
         `${restrictedRoleWasCreated ? 'Created restricted role' : 'Restricted role'}: <@&${restrictedRole.id}>`,
         `Admin channel: <#${adminChannel.id}>`,
-        `${verificationChannelWasCreated ? 'Created verification channel' : 'Verification channel'}: <#${verificationChannelId}>`,
+        `${verificationChannelWasCreated ? 'Created or reused verification channel' : 'Verification channel'}: <#${verificationChannelId}>`,
       ];
 
       if (reportInstructionsLine) {
