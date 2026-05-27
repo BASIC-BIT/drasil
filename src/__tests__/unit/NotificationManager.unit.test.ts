@@ -1,4 +1,12 @@
-import { EmbedBuilder, Guild, GuildMember, Message, TextChannel, User } from 'discord.js';
+import {
+  ChannelType,
+  EmbedBuilder,
+  Guild,
+  GuildMember,
+  Message,
+  TextChannel,
+  User,
+} from 'discord.js';
 import { NotificationManager } from '../../services/NotificationManager';
 import { InMemoryDetectionEventsRepository } from '../fakes/inMemoryRepositories';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
@@ -22,6 +30,20 @@ type MockMessage = {
   embeds?: EmbedBuilder[];
   edit: jest.Mock;
 };
+
+type MockGuildChannel = {
+  id: string;
+  name?: string;
+  type?: ChannelType;
+};
+
+type MockChannelPredicate = Parameters<MockGuildChannel[]['find']>[0];
+
+const buildChannelCollection = (channels: MockGuildChannel[]) => ({
+  find: jest.fn((predicate: MockChannelPredicate) =>
+    channels.find((channel, index, array) => predicate(channel, index, array))
+  ),
+});
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -80,6 +102,7 @@ describe('NotificationManager (unit)', () => {
         admin_notification_role_id: null,
         settings: {},
       } as any),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
     } as unknown as IConfigService;
   });
 
@@ -816,5 +839,34 @@ describe('NotificationManager (unit)', () => {
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'
     );
+  });
+
+  it('reuses an existing verification text channel instead of creating a duplicate', async () => {
+    const existingChannel = {
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+    };
+    const createChannel = jest.fn();
+    const fetchChannels = jest.fn().mockResolvedValue(buildChannelCollection([existingChannel]));
+    const guild = {
+      id: 'guild-1',
+      channels: {
+        cache: buildChannelCollection([]),
+        fetch: fetchChannels,
+        create: createChannel,
+      },
+    } as unknown as Guild;
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    const channelId = await manager.setupVerificationChannel(guild, 'restricted-role-1');
+
+    expect(channelId).toBe('verification-channel-1');
+    expect(fetchChannels).toHaveBeenCalledTimes(1);
+    expect(createChannel).not.toHaveBeenCalled();
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      verification_channel_id: 'verification-channel-1',
+    });
   });
 });

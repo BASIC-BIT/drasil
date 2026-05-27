@@ -13,6 +13,7 @@ import {
   ChannelType,
   PermissionFlagsBits,
   GuildChannelCreateOptions,
+  GuildBasedChannel,
   ButtonInteraction,
   MessageFlags,
   TextChannel,
@@ -36,6 +37,8 @@ import { getVerificationActionFailures } from '../utils/verificationActionFailur
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { CASE_STAFF_ROUTING_METADATA_KEY } from './ThreadManager';
 import { isDetectionEventExcludedFromAccounting } from '../utils/detectionEventAccounting';
+
+const VERIFICATION_CHANNEL_NAME = 'verification';
 
 export interface NotificationButton {
   id: string;
@@ -1381,6 +1384,17 @@ export class NotificationManager implements INotificationManager {
     }
 
     try {
+      const existingVerificationChannel = await this.findExistingVerificationChannel(guild);
+      if (existingVerificationChannel) {
+        if (persistConfig) {
+          await this.configService.updateServerConfig(guild.id, {
+            verification_channel_id: existingVerificationChannel.id,
+          });
+        }
+
+        return existingVerificationChannel.id;
+      }
+
       // Create permission overwrites for the channel
       const permissionOverwrites = [
         // Default role (everyone) - deny access
@@ -1440,7 +1454,7 @@ export class NotificationManager implements INotificationManager {
 
       // Create the verification channel
       const channelOptions: GuildChannelCreateOptions = {
-        name: 'verification',
+        name: VERIFICATION_CHANNEL_NAME,
         type: ChannelType.GuildText,
         permissionOverwrites: permissionOverwrites,
         topic:
@@ -1460,6 +1474,29 @@ export class NotificationManager implements INotificationManager {
       console.error('Failed to set up verification channel:', error);
       return null;
     }
+  }
+
+  private async findExistingVerificationChannel(guild: Guild): Promise<TextChannel | null> {
+    const cachedChannel = guild.channels.cache.find((channel) =>
+      this.isVerificationTextChannel(channel)
+    );
+    if (cachedChannel) {
+      return cachedChannel;
+    }
+
+    const fetchedChannels = await guild.channels.fetch().catch((error) => {
+      console.warn(
+        'Failed to fetch channels while checking for existing verification channel:',
+        error
+      );
+      return null;
+    });
+
+    return fetchedChannels?.find((channel) => this.isVerificationTextChannel(channel)) ?? null;
+  }
+
+  private isVerificationTextChannel(channel: GuildBasedChannel | null): channel is TextChannel {
+    return channel?.type === ChannelType.GuildText && channel.name === VERIFICATION_CHANNEL_NAME;
   }
 
   /**

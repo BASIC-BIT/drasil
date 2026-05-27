@@ -4,9 +4,12 @@ import { DetectionType } from '../../repositories/types';
 
 describe('EventHandler (unit)', () => {
   function buildHandler(overrides?: {
+    client?: Record<string, unknown>;
     detectionOrchestrator?: Record<string, jest.Mock>;
     configService?: Record<string, jest.Mock>;
+    notificationManager?: Record<string, jest.Mock>;
   }): EventHandler {
+    const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
     const detectionOrchestrator = overrides?.detectionOrchestrator ?? {
       detectMessage: jest.fn().mockResolvedValue({
         label: 'OK',
@@ -28,20 +31,26 @@ describe('EventHandler (unit)', () => {
       initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
+        restricted_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
         settings: {
           detection_response_mode: 'notify_only',
           min_confidence_threshold: 70,
         },
       }),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const notificationManager = overrides?.notificationManager ?? {
+      upsertObservedDetectionNotification: jest.fn(),
+      setupVerificationChannel: jest.fn(),
     };
 
     return new EventHandler(
-      { on: jest.fn() } as any,
+      client as any,
       detectionOrchestrator as any,
-      {
-        upsertObservedDetectionNotification: jest.fn(),
-        setupVerificationChannel: jest.fn(),
-      } as any,
+      notificationManager as any,
       configService as any,
       { handleSuspiciousMessage: jest.fn(), openCaseForSuspiciousMessage: jest.fn() } as any,
       { handleTestCommands: jest.fn(), registerCommands: jest.fn() } as any,
@@ -349,5 +358,133 @@ describe('EventHandler (unit)', () => {
         username: 'test-user',
       })
     );
+  });
+
+  it('sends a setup nudge to the audit-log installer on guild create', async () => {
+    const installer = {
+      id: 'installer-1',
+      bot: false,
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        restricted_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
+        settings: {},
+      }),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const notificationManager = {
+      upsertObservedDetectionNotification: jest.fn(),
+      setupVerificationChannel: jest.fn(),
+    };
+    const handler = buildHandler({ configService, notificationManager });
+    const auditEntries = [
+      {
+        target: { id: 'bot-1' },
+        executor: installer,
+      },
+    ];
+    const guild = {
+      id: 'guild-1',
+      name: 'Test Guild',
+      fetchAuditLogs: jest.fn().mockResolvedValue({
+        entries: {
+          find: jest.fn((predicate: NonNullable<Parameters<typeof auditEntries.find>[0]>) =>
+            auditEntries.find(predicate)
+          ),
+        },
+      }),
+      fetchOwner: jest.fn(),
+    } as any;
+
+    await (handler as any).handleGuildCreate(guild);
+
+    expect(installer.send).toHaveBeenCalledWith(expect.stringContaining('/config setup'));
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      setup_nudge_last_attempt_at: expect.any(String),
+      setup_nudge_last_recipient_id: 'installer-1',
+      setup_nudge_last_result: 'sent',
+      setup_nudge_last_source: 'audit_log_installer',
+    });
+    expect(guild.fetchOwner).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the guild owner when installer attribution is unavailable', async () => {
+    const ownerUser = {
+      id: 'owner-1',
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        restricted_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
+        settings: {},
+      }),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const handler = buildHandler({ configService });
+    const guild = {
+      id: 'guild-1',
+      name: 'Test Guild',
+      fetchAuditLogs: jest.fn().mockRejectedValue(new Error('missing permission')),
+      fetchOwner: jest.fn().mockResolvedValue({ user: ownerUser }),
+    } as any;
+
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await (handler as any).handleGuildCreate(guild);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    expect(ownerUser.send).toHaveBeenCalledWith(expect.stringContaining('/config validate'));
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      setup_nudge_last_attempt_at: expect.any(String),
+      setup_nudge_last_recipient_id: 'owner-1',
+      setup_nudge_last_result: 'sent',
+      setup_nudge_last_source: 'owner',
+    });
+  });
+
+  it('suppresses repeated setup nudges after a recent attempt', async () => {
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        restricted_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
+        settings: {
+          setup_nudge_last_attempt_at: new Date().toISOString(),
+        },
+      }),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const handler = buildHandler({ configService });
+    const guild = {
+      id: 'guild-1',
+      name: 'Test Guild',
+      fetchAuditLogs: jest.fn(),
+      fetchOwner: jest.fn(),
+    } as any;
+
+    await (handler as any).handleGuildCreate(guild);
+
+    expect(guild.fetchAuditLogs).not.toHaveBeenCalled();
+    expect(guild.fetchOwner).not.toHaveBeenCalled();
+    expect(configService.updateServerSettings).not.toHaveBeenCalled();
   });
 });

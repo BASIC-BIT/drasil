@@ -1,4 +1,5 @@
 import {
+  AuditLogEvent,
   Client,
   Message,
   GuildMember,
@@ -27,6 +28,7 @@ import {
   IProductAnalyticsService,
   NOOP_PRODUCT_ANALYTICS_SERVICE,
 } from '../services/ProductAnalyticsService';
+import { Server } from '../repositories/types';
 
 const RECENT_USER_CONTEXT_MESSAGE_LIMIT = 5;
 const RECENT_USER_CONTEXT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -34,6 +36,21 @@ const RECENT_USER_CONTEXT_CLEANUP_INTERVAL_MS = 60 * 1000;
 const RECENT_USER_CONTEXT_MAX_USERS_PER_SERVER = 1000;
 const RECENT_USER_CONTEXT_MAX_SERVERS = 100;
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
+const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
+
+type SetupNudgeSource = 'audit_log_installer' | 'owner';
+type SetupNudgeResult = 'sent' | 'dm_failed' | 'no_recipient';
+
+interface SetupNudgeRecipient {
+  readonly user: SetupNudgeUser;
+  readonly source: SetupNudgeSource;
+}
+
+interface SetupNudgeUser {
+  readonly id: string;
+  readonly bot?: boolean;
+  send(content: string): Promise<unknown>;
+}
 
 interface RecentUserMessageContext {
   content: string;
@@ -602,7 +619,7 @@ export class EventHandler implements IEventHandler {
       console.log(`Bot joined new guild: ${guild.name} (${guild.id})`);
 
       // Create default configuration for the new guild
-      const config = await this.configService.getServerConfig(guild.id);
+      let config = await this.configService.getServerConfig(guild.id);
       console.log(`Created default configuration for guild: ${guild.name} (${guild.id})`);
 
       // Set up verification channel if auto_setup is enabled globally
@@ -620,6 +637,7 @@ export class EventHandler implements IEventHandler {
             await this.configService.updateServerConfig(guild.id, {
               verification_channel_id: channelId,
             });
+            config = { ...config, verification_channel_id: channelId };
             verificationChannelWasCreated = true;
             console.log(`Set up verification channel for guild: ${guild.name} (${guild.id})`);
           }
@@ -630,8 +648,113 @@ export class EventHandler implements IEventHandler {
         auto_setup_verification_channels: globalConfig.getSettings().autoSetupVerificationChannels,
         verification_channel_auto_created: verificationChannelWasCreated,
       });
+
+      await this.maybeSendSetupNudge(guild, config);
     } catch (error) {
       console.error(`Failed to handle new guild ${guild.id}:`, error);
     }
+  }
+
+  private async maybeSendSetupNudge(guild: Guild, config: Server): Promise<void> {
+    if (!this.isSetupIncomplete(config)) {
+      return;
+    }
+
+    if (this.wasSetupNudgeRecentlyAttempted(config.settings.setup_nudge_last_attempt_at)) {
+      return;
+    }
+
+    const recipient = await this.resolveSetupNudgeRecipient(guild);
+    const attemptedAt = new Date().toISOString();
+    let result: SetupNudgeResult = 'no_recipient';
+
+    if (recipient) {
+      try {
+        await recipient.user.send(this.buildSetupNudgeMessage(guild));
+        result = 'sent';
+      } catch (error) {
+        result = 'dm_failed';
+        console.warn(`Failed to DM setup nudge for guild ${guild.id}:`, error);
+      }
+    }
+
+    await this.configService.updateServerSettings(guild.id, {
+      setup_nudge_last_attempt_at: attemptedAt,
+      setup_nudge_last_recipient_id: recipient?.user.id ?? null,
+      setup_nudge_last_result: result,
+      setup_nudge_last_source: recipient?.source ?? null,
+    });
+  }
+
+  private isSetupIncomplete(config: Server): boolean {
+    return (
+      !config.restricted_role_id || !config.admin_channel_id || !config.verification_channel_id
+    );
+  }
+
+  private wasSetupNudgeRecentlyAttempted(lastAttemptAt: string | null | undefined): boolean {
+    if (!lastAttemptAt) {
+      return false;
+    }
+
+    const attemptedAtMs = Date.parse(lastAttemptAt);
+    if (Number.isNaN(attemptedAtMs)) {
+      return false;
+    }
+
+    return Date.now() - attemptedAtMs < SETUP_NUDGE_SUPPRESSION_MS;
+  }
+
+  private async resolveSetupNudgeRecipient(guild: Guild): Promise<SetupNudgeRecipient | null> {
+    const auditLogInstaller = await this.resolveAuditLogInstaller(guild);
+    if (auditLogInstaller) {
+      return auditLogInstaller;
+    }
+
+    return this.resolveOwnerRecipient(guild);
+  }
+
+  private async resolveAuditLogInstaller(guild: Guild): Promise<SetupNudgeRecipient | null> {
+    const botUserId = this.client.user?.id;
+    if (!botUserId) {
+      return null;
+    }
+
+    try {
+      const auditLogs = await guild.fetchAuditLogs({
+        type: AuditLogEvent.BotAdd,
+        limit: 5,
+      });
+      const installEntry = auditLogs.entries.find(
+        (entry) => entry.target?.id === botUserId && entry.executor && !entry.executor.bot
+      );
+
+      return installEntry?.executor
+        ? { user: installEntry.executor, source: 'audit_log_installer' }
+        : null;
+    } catch (error) {
+      console.warn(`Could not read bot install audit log for guild ${guild.id}:`, error);
+      return null;
+    }
+  }
+
+  private async resolveOwnerRecipient(guild: Guild): Promise<SetupNudgeRecipient | null> {
+    try {
+      const owner = await guild.fetchOwner();
+      return { user: owner.user, source: 'owner' };
+    } catch (error) {
+      console.warn(`Could not resolve owner for setup nudge in guild ${guild.id}:`, error);
+      return null;
+    }
+  }
+
+  private buildSetupNudgeMessage(guild: Guild): string {
+    return [
+      `Thanks for installing Drasil in ${guild.name}.`,
+      'Finish setup by running `/config setup admin-channel:<moderator-channel>` in the server.',
+      'Omit `restricted-role` and `verification-channel` if you want Drasil to create safe defaults.',
+      'Add `report-channel:<channel>` if you want Drasil to create or update report instructions.',
+      'Run `/config validate` afterwards to check permissions, channels, and role hierarchy.',
+    ].join('\n');
   }
 }

@@ -90,6 +90,10 @@ import {
   NOOP_PRODUCT_ANALYTICS_SERVICE,
 } from '../services/ProductAnalyticsService';
 import {
+  ISetupDiagnosticsService,
+  SetupDiagnosticReport,
+} from '../services/SetupDiagnosticsService';
+import {
   CASE_RESPONDER_ROLE_IDS_SETTING_KEY,
   CASE_RESPONDER_ROUTING_MODE_SETTING_KEY,
   CASE_RESPONDER_ROUTING_MODES,
@@ -119,10 +123,15 @@ const USER_INSTALL_REPORTING_ENABLED_ENV = 'DRASIL_USER_INSTALL_REPORTING_ENABLE
 const DRASIL_GUILD_INSTALL_PERMISSIONS =
   PermissionFlagsBits.ManageRoles |
   PermissionFlagsBits.BanMembers |
+  PermissionFlagsBits.ViewAuditLog |
+  PermissionFlagsBits.ManageChannels |
   PermissionFlagsBits.ViewChannel |
   PermissionFlagsBits.SendMessages |
   PermissionFlagsBits.ManageThreads |
   PermissionFlagsBits.CreatePrivateThreads;
+const REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY = 'report_instructions_channel_id';
+const REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY = 'report_instructions_message_id';
+const DEFAULT_RESTRICTED_ROLE_NAME = 'Drasil Restricted';
 
 function isUserInstallReportingEnabled(): boolean {
   return process.env[USER_INSTALL_REPORTING_ENABLED_ENV] === 'true';
@@ -163,6 +172,7 @@ export class CommandHandler implements ICommandHandler {
   private userModerationService: IUserModerationService;
   private securityActionService: ISecurityActionService;
   private productAnalyticsService: IProductAnalyticsService;
+  private setupDiagnosticsService?: ISetupDiagnosticsService;
   private commands: RESTPostAPIApplicationCommandsJSONBody[];
 
   constructor(
@@ -175,7 +185,10 @@ export class CommandHandler implements ICommandHandler {
     @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService,
     @inject(TYPES.ProductAnalyticsService)
     @optional()
-    productAnalyticsService?: IProductAnalyticsService
+    productAnalyticsService?: IProductAnalyticsService,
+    @inject(TYPES.SetupDiagnosticsService)
+    @optional()
+    setupDiagnosticsService?: ISetupDiagnosticsService
   ) {
     this.client = client;
     this.heuristicService = heuristicService;
@@ -185,6 +198,7 @@ export class CommandHandler implements ICommandHandler {
     this.userModerationService = userModerationService;
     this.securityActionService = securityActionService;
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
+    this.setupDiagnosticsService = setupDiagnosticsService;
 
     // Define slash commands
     this.commands = [
@@ -244,6 +258,50 @@ export class CommandHandler implements ICommandHandler {
       new SlashCommandBuilder()
         .setName('config')
         .setDescription('Configure server settings')
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('validate')
+            .setDescription('Check Drasil setup, permissions, channels, and role hierarchy')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('setup')
+            .setDescription('Configure required Drasil channels and restricted role')
+            .addChannelOption((option) =>
+              option
+                .setName('admin-channel')
+                .setDescription('Moderator-only channel for Drasil alerts')
+                .addChannelTypes(ChannelType.GuildText)
+                .setRequired(true)
+            )
+            .addRoleOption((option) =>
+              option
+                .setName('restricted-role')
+                .setDescription('Existing restricted role; omit to create a default one')
+                .setRequired(false)
+            )
+            .addStringOption((option) =>
+              option
+                .setName('restricted-role-name')
+                .setDescription('Name to use when creating the default restricted role')
+                .setRequired(false)
+                .setMaxLength(100)
+            )
+            .addChannelOption((option) =>
+              option
+                .setName('verification-channel')
+                .setDescription('Existing verification channel; omit to auto-create')
+                .addChannelTypes(ChannelType.GuildText)
+                .setRequired(false)
+            )
+            .addChannelOption((option) =>
+              option
+                .setName('report-channel')
+                .setDescription('Optional channel for Drasil report instructions')
+                .addChannelTypes(ChannelType.GuildText)
+                .setRequired(false)
+            )
+        )
         .addSubcommand((subcommand) =>
           subcommand
             .setName('set')
@@ -1284,6 +1342,25 @@ export class CommandHandler implements ICommandHandler {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+      const candidateReport = this.setupDiagnosticsService
+        ? await this.setupDiagnosticsService.validateSetupCandidate(guild, {
+            restrictedRoleId: restrictedRole.id,
+            willCreateRestrictedRole: false,
+            adminChannelId: adminChannel.id,
+            verificationChannelId: verificationChannel?.id ?? null,
+            willCreateVerificationChannel: !verificationChannel,
+            reportInstructionsChannelId: null,
+          })
+        : null;
+
+      if (candidateReport && candidateReport.errorCount > 0) {
+        await interaction.editReply({
+          content: `Setup not saved. Fix the errors below and rerun setup.\n\n${this.formatSetupDiagnosticsReport(candidateReport)}`,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
       let verificationChannelId = verificationChannel?.id ?? null;
       let verificationChannelWasCreated = false;
 
@@ -1320,12 +1397,19 @@ export class CommandHandler implements ICommandHandler {
         ? `Created verification channel: <#${verificationChannelId}>`
         : `Verification channel: <#${verificationChannelId}>`;
 
+      const responseLines = [
+        'Setup complete.',
+        `Restricted role: <@&${restrictedRole.id}>`,
+        `Admin channel: <#${adminChannel.id}>`,
+        verificationChannelMessage,
+      ];
+
+      if (candidateReport && candidateReport.warningCount > 0) {
+        responseLines.push('', this.formatSetupDiagnosticsReport(candidateReport));
+      }
+
       await interaction.editReply({
-        content:
-          'Setup complete.\n' +
-          `Restricted role: <@&${restrictedRole.id}>\n` +
-          `Admin channel: <#${adminChannel.id}>\n` +
-          `${verificationChannelMessage}`,
+        content: this.truncatePreview(responseLines.join('\n'), 1900),
       });
     } catch (error) {
       console.error('Failed to complete setup verification command:', error);
@@ -1466,6 +1550,16 @@ export class CommandHandler implements ICommandHandler {
     }
 
     const subcommand = interaction.options.getSubcommand(false);
+    if (subcommand === 'setup') {
+      await this.handleConfigSetupCommand(interaction, guild);
+      return;
+    }
+
+    if (subcommand === 'validate') {
+      await this.handleConfigValidateCommand(interaction, guild);
+      return;
+    }
+
     if (subcommand !== 'set') {
       await interaction.reply({
         content: 'Unsupported /config subcommand.',
@@ -1493,6 +1587,190 @@ export class CommandHandler implements ICommandHandler {
         flags: MessageFlags.Ephemeral,
       });
     }
+  }
+
+  private async handleConfigSetupCommand(
+    interaction: ChatInputCommandInteraction,
+    guild: NonNullable<ChatInputCommandInteraction['guild']>
+  ): Promise<void> {
+    if (!this.setupDiagnosticsService) {
+      await interaction.reply({
+        content: 'Setup diagnostics are not available in this runtime.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const adminChannel = interaction.options.getChannel('admin-channel', true);
+    const existingRestrictedRole = interaction.options.getRole('restricted-role');
+    const requestedRoleName = interaction.options.getString('restricted-role-name')?.trim() || null;
+    const verificationChannel = interaction.options.getChannel('verification-channel');
+    const reportChannel = interaction.options.getChannel('report-channel');
+
+    if (adminChannel.type !== ChannelType.GuildText) {
+      await interaction.reply({
+        content: 'Admin channel must be a text channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (verificationChannel && verificationChannel.type !== ChannelType.GuildText) {
+      await interaction.reply({
+        content: 'Verification channel must be a text channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (reportChannel && reportChannel.type !== ChannelType.GuildText) {
+      await interaction.reply({
+        content: 'Report channel must be a text channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (existingRestrictedRole && requestedRoleName) {
+      await interaction.reply({
+        content: '`restricted-role-name` only applies when Drasil creates the restricted role.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const candidateReport = await this.setupDiagnosticsService.validateSetupCandidate(guild, {
+      restrictedRoleId: existingRestrictedRole?.id ?? null,
+      willCreateRestrictedRole: !existingRestrictedRole,
+      adminChannelId: adminChannel.id,
+      verificationChannelId: verificationChannel?.id ?? null,
+      willCreateVerificationChannel: !verificationChannel,
+      reportInstructionsChannelId: reportChannel?.id ?? null,
+    });
+
+    if (candidateReport.errorCount > 0) {
+      await interaction.editReply({
+        content: `Setup not saved. Fix the errors below and rerun /config setup.\n\n${this.formatSetupDiagnosticsReport(candidateReport)}`,
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+
+    try {
+      const restrictedRole =
+        existingRestrictedRole ??
+        (await guild.roles.create({
+          name: requestedRoleName ?? DEFAULT_RESTRICTED_ROLE_NAME,
+          permissions: [],
+          reason: `Drasil setup requested by ${interaction.user.tag}`,
+        }));
+      const restrictedRoleWasCreated = !existingRestrictedRole;
+      let verificationChannelId = verificationChannel?.id ?? null;
+      let verificationChannelWasCreated = false;
+
+      if (!verificationChannelId) {
+        verificationChannelId = await this.notificationManager.setupVerificationChannel(
+          guild,
+          restrictedRole.id,
+          false
+        );
+        if (!verificationChannelId) {
+          throw new Error('Failed to create a verification channel during setup.');
+        }
+        verificationChannelWasCreated = true;
+      }
+
+      await this.configService.updateServerConfig(guild.id, {
+        restricted_role_id: restrictedRole.id,
+        admin_channel_id: adminChannel.id,
+        verification_channel_id: verificationChannelId,
+      });
+
+      let reportInstructionsLine: string | null = null;
+      if (reportChannel) {
+        const result = await this.upsertReportInstructionsMessage(
+          guild.id,
+          reportChannel as TextChannel
+        );
+        reportInstructionsLine = `Report instructions ${result.action}: <#${reportChannel.id}>`;
+      }
+
+      const lines = [
+        'Setup complete.',
+        `${restrictedRoleWasCreated ? 'Created restricted role' : 'Restricted role'}: <@&${restrictedRole.id}>`,
+        `Admin channel: <#${adminChannel.id}>`,
+        `${verificationChannelWasCreated ? 'Created verification channel' : 'Verification channel'}: <#${verificationChannelId}>`,
+      ];
+
+      if (reportInstructionsLine) {
+        lines.push(reportInstructionsLine);
+      }
+
+      if (candidateReport.warningCount > 0) {
+        lines.push('', this.formatSetupDiagnosticsReport(candidateReport));
+      }
+
+      await interaction.editReply({
+        content: this.truncatePreview(lines.join('\n'), 1900),
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error(`Failed to complete config setup for guild ${guild.id}:`, error);
+      await interaction.editReply({
+        content: 'Failed to complete setup. Please check permissions and try again.',
+      });
+    }
+  }
+
+  private async handleConfigValidateCommand(
+    interaction: ChatInputCommandInteraction,
+    guild: NonNullable<ChatInputCommandInteraction['guild']>
+  ): Promise<void> {
+    if (!this.setupDiagnosticsService) {
+      await interaction.reply({
+        content: 'Setup diagnostics are not available in this runtime.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      const report = await this.setupDiagnosticsService.validateGuildSetup(guild);
+      await interaction.editReply({
+        content: this.formatSetupDiagnosticsReport(report),
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error(`Failed to validate setup for guild ${guild.id}:`, error);
+      await interaction.editReply({
+        content: 'Failed to validate setup. Please try again later.',
+      });
+    }
+  }
+
+  private formatSetupDiagnosticsReport(report: SetupDiagnosticReport): string {
+    const status =
+      report.errorCount > 0
+        ? `Setup validation failed with ${report.errorCount} error(s) and ${report.warningCount} warning(s).`
+        : report.warningCount > 0
+          ? `Setup validation passed with ${report.warningCount} warning(s).`
+          : 'Setup validation passed with no issues.';
+
+    if (report.issues.length === 0) {
+      return `${status}\nGuild ID: \`${report.guildId}\``;
+    }
+
+    const issueLines = report.issues.map(
+      (issue) => `[${issue.severity.toUpperCase()}] ${issue.message}`
+    );
+    return this.truncatePreview(
+      [status, `Guild ID: \`${report.guildId}\``, ...issueLines].join('\n'),
+      1900
+    );
   }
 
   private formatKeywordSummary(keywords: readonly string[]): string {
@@ -2652,6 +2930,65 @@ export class CommandHandler implements ICommandHandler {
 
     const targetChannel = channel as TextChannel;
 
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      const result = await this.upsertReportInstructionsMessage(guild.id, targetChannel);
+
+      await interaction.editReply({
+        content: `Report instructions ${result.action} successfully in ${channel}.`,
+      });
+    } catch (error) {
+      console.error('Failed to upsert report button message:', error);
+      await interaction.editReply({
+        content:
+          '❌ Failed to send or update the message. Please ensure the bot has permissions to send messages in that channel.',
+      });
+    }
+  }
+
+  private async upsertReportInstructionsMessage(
+    guildId: string,
+    targetChannel: TextChannel
+  ): Promise<{ action: 'sent' | 'updated' | 'recreated'; messageId: string }> {
+    const messagePayload = this.buildReportInstructionsMessagePayload();
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    const existingChannelId = serverConfig.settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
+    const existingMessageId = serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
+    let messageId: string;
+    let action: 'sent' | 'updated' | 'recreated' = 'sent';
+
+    if (existingChannelId === targetChannel.id && existingMessageId) {
+      const existingMessage = await targetChannel.messages
+        .fetch(existingMessageId)
+        .catch(() => null);
+
+      if (existingMessage) {
+        await existingMessage.edit(messagePayload);
+        messageId = existingMessage.id;
+        action = 'updated';
+      } else {
+        const sentMessage = await targetChannel.send(messagePayload);
+        messageId = sentMessage.id;
+        action = 'recreated';
+      }
+    } else {
+      const sentMessage = await targetChannel.send(messagePayload);
+      messageId = sentMessage.id;
+    }
+
+    await this.configService.updateServerSettings(guildId, {
+      [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: targetChannel.id,
+      [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: messageId,
+    });
+
+    return { action, messageId };
+  }
+
+  private buildReportInstructionsMessagePayload(): {
+    embeds: EmbedBuilder[];
+    components: ActionRowBuilder<ButtonBuilder>[];
+  } {
     // Create the embed
     const embed = new EmbedBuilder()
       .setColor(0x0099ff)
@@ -2674,23 +3011,7 @@ export class CommandHandler implements ICommandHandler {
     // Create an action row for the button
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(reportButton);
 
-    try {
-      // Send the message to the target channel
-      await targetChannel.send({ embeds: [embed], components: [row] });
-
-      // Confirm to the admin
-      await interaction.reply({
-        content: `Report instructions sent successfully to ${channel}.`,
-        flags: MessageFlags.Ephemeral,
-      });
-    } catch (error) {
-      console.error('Failed to send report button message:', error);
-      await interaction.reply({
-        content:
-          '❌ Failed to send the message. Please ensure the bot has permissions to send messages in that channel.',
-        flags: MessageFlags.Ephemeral,
-      });
-    }
+    return { embeds: [embed], components: [row] };
   }
 
   private async replyGuildInstallRequired(

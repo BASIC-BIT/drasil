@@ -50,10 +50,14 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 
 ### 1. Verification setup sanity check
 
-- Run `/setupverification` if the staging server is not configured yet.
+- Run `/config setup admin-channel:<channel>` if the staging server is not configured yet.
+- Omit `restricted-role` to verify Drasil can create the default restricted role, or pass an existing role when testing role reuse.
+- Omit `verification-channel` to verify Drasil can create or reuse the `verification` channel, or pass an existing text channel when testing channel reuse.
+- Run `/config validate` after setup.
 - Confirm the restricted role, admin channel, and verification channel are configured.
 - Expected result:
   - commands succeed without permission errors
+  - setup hard errors block saving and warnings do not
   - the bot can post in the admin channel
   - the bot can create private verification threads
 
@@ -109,10 +113,11 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 
 ### 7. User report flow
 
-- Run `/setupreportbutton` if needed.
+- Run `/config setup report-channel:<channel>` or `/setupreportbutton` if needed.
 - Submit a report against the suspicious-user test account from the reporter test account.
 - Expected result:
   - detection event is created with `USER_REPORT`
+  - rerunning report setup updates the existing instructions message instead of duplicating it
   - no restricted role is applied
   - no verification thread is created by default
   - an observed alert appears with report details and moderator action buttons

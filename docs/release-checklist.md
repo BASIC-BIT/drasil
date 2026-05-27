@@ -48,17 +48,19 @@ npx prisma migrate deploy
 
 ## Server setup (staging)
 
-Create:
+Create or choose:
 
 - Restricted role (limited permissions).
 - Admin channel (mods only).
-- Verification channel (where the bot creates verification threads).
+- Verification channel (where the bot creates verification threads), or let setup create/reuse `verification`.
 
-Configure the bot (current UX is via `/config`):
+Configure and validate the bot:
 
-- `restricted_role_id`
-- `admin_channel_id`
-- `verification_channel_id`
+- Run `/config setup admin-channel:<channel>`.
+- Pass `restricted-role:<role>` only when reusing an existing role; otherwise Drasil creates `Drasil Restricted`.
+- Pass `verification-channel:<channel>` only when reusing an existing channel; otherwise Drasil creates/reuses `verification`.
+- Optionally pass `report-channel:<channel>` to create/update report instructions.
+- Run `/config validate` and fix all errors before smoke tests.
 
 ## Smoke tests (end-to-end)
 
