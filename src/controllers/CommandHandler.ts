@@ -2992,11 +2992,12 @@ export class CommandHandler implements ICommandHandler {
     // Create the embed
     const embed = new EmbedBuilder()
       .setColor(0x0099ff)
-      .setTitle('How to Report a User')
+      .setTitle('Report a User')
       .setDescription(
         'If you see a user violating server rules or engaging in suspicious activity, ' +
-          'use `/report` so Discord gives you a user picker and reason field. ' +
-          'You can also right-click a user and choose `Apps` -> `Report User`. ' +
+          'use the button below to choose the user and submit the report. ' +
+          'You can also use `/report` for the same user picker and reason field, or ' +
+          'right-click a user and choose `Apps` -> `Report User`. ' +
           'Your report will be reviewed by the moderation team.'
       )
       .setFooter({ text: 'Your reports help keep the community safe!' });
@@ -3004,9 +3005,8 @@ export class CommandHandler implements ICommandHandler {
     // Create the button
     const reportButton = new ButtonBuilder()
       .setCustomId('report_user_initiate') // Unique ID for the button interaction
-      .setLabel('How to report')
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji('ℹ️');
+      .setLabel('Report a user')
+      .setStyle(ButtonStyle.Primary);
 
     // Create an action row for the button
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(reportButton);

@@ -1350,6 +1350,13 @@ describe('CommandHandler (unit)', () => {
       embeds: expect.any(Array),
       components: expect.any(Array),
     });
+    const messagePayload = (existingMessage.edit as jest.Mock).mock.calls[0][0] as any;
+    expect(messagePayload.embeds[0].toJSON().title).toBe('Report a User');
+    const buttonJson = messagePayload.components[0].toJSON().components[0];
+    expect(buttonJson).toMatchObject({
+      custom_id: 'report_user_initiate',
+      label: 'Report a user',
+    });
     expect(targetChannel.send).not.toHaveBeenCalled();
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: 'channel-1',

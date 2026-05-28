@@ -149,6 +149,8 @@ export class EventHandler implements IEventHandler {
         await this.commandHandler.handleMessageContextMenuCommand(interaction);
       } else if (interaction.isButton()) {
         await this.interactionHandler.handleButtonInteraction(interaction);
+      } else if (interaction.isUserSelectMenu()) {
+        await this.interactionHandler.handleUserSelectMenuInteraction(interaction);
       } else if (interaction.isModalSubmit()) {
         // Added check for modal submit
         await this.interactionHandler.handleModalSubmit(interaction);
