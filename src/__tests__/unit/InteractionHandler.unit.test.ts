@@ -858,6 +858,8 @@ describe('InteractionHandler (unit)', () => {
           return 'reported';
         }),
       },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
       followUp: jest.fn().mockResolvedValue(undefined),
       replied: false,
@@ -871,10 +873,13 @@ describe('InteractionHandler (unit)', () => {
       interaction.user,
       'reported'
     );
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      (client.guilds.fetch as jest.Mock).mock.invocationCallOrder[0]
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Thank you for your report regarding <@123456789012345678>. It has been submitted for review.',
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -914,6 +919,8 @@ describe('InteractionHandler (unit)', () => {
           return 'reported';
         }),
       },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
       followUp: jest.fn().mockResolvedValue(undefined),
       replied: false,
@@ -923,9 +930,8 @@ describe('InteractionHandler (unit)', () => {
     await handler.handleModalSubmit(interaction);
 
     expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Could not find a user matching "123456789012345678" in this server.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -1041,6 +1047,8 @@ describe('InteractionHandler (unit)', () => {
           return 'reported';
         }),
       },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
       followUp: jest.fn().mockResolvedValue(undefined),
       replied: false,
@@ -1108,6 +1116,8 @@ describe('InteractionHandler (unit)', () => {
           return 'reported';
         }),
       },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
       followUp: jest.fn().mockResolvedValue(undefined),
       replied: false,
@@ -1182,6 +1192,8 @@ describe('InteractionHandler (unit)', () => {
           return 'reported';
         }),
       },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
       followUp: jest.fn().mockResolvedValue(undefined),
       replied: false,
@@ -1191,9 +1203,8 @@ describe('InteractionHandler (unit)', () => {
     await handler.handleModalSubmit(interaction);
 
     expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Multiple users match that name. Please use their ID or @mention instead.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -1227,6 +1238,8 @@ describe('InteractionHandler (unit)', () => {
           return '   ';
         }),
       },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
       followUp: jest.fn().mockResolvedValue(undefined),
       replied: false,
@@ -1236,9 +1249,8 @@ describe('InteractionHandler (unit)', () => {
     await handler.handleModalSubmit(interaction);
 
     expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Please include a reason for this report.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -1273,6 +1285,8 @@ describe('InteractionHandler (unit)', () => {
           return 'reported';
         }),
       },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
       followUp: jest.fn().mockResolvedValue(undefined),
       replied: false,
@@ -1282,9 +1296,8 @@ describe('InteractionHandler (unit)', () => {
     await handler.handleModalSubmit(interaction);
 
     expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'You cannot report yourself.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -1607,6 +1620,8 @@ describe('InteractionHandler (unit)', () => {
       fields: {
         getTextInputValue: jest.fn(() => 'selected report reason'),
       },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
       reply: jest.fn().mockResolvedValue(undefined),
       followUp: jest.fn().mockResolvedValue(undefined),
       replied: false,
@@ -1620,10 +1635,13 @@ describe('InteractionHandler (unit)', () => {
       interaction.user,
       'selected report reason'
     );
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      (client.guilds.fetch as jest.Mock).mock.invocationCallOrder[0]
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Thank you for your report regarding <@123456789012345678>. It has been submitted for review.',
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });

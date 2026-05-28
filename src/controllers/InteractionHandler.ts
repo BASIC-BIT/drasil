@@ -710,11 +710,12 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
       const reasonRequired = await this.getUserReportReasonRequired(interaction.guildId);
       if (reasonRequired && !reason) {
-        await interaction.reply({
+        await interaction.editReply({
           content: 'Please include a reason for this report.',
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -724,17 +725,15 @@ export class InteractionHandler implements IInteractionHandler {
         targetUserInputString
       );
       if (targetUserResolution.status === 'not_found') {
-        await interaction.reply({
+        await interaction.editReply({
           content: `Could not find a user matching "${targetUserInputString}".`,
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
       if (targetUserResolution.status === 'ambiguous') {
-        await interaction.reply({
+        await interaction.editReply({
           content: 'Multiple users match that name. Please use their ID or @mention instead.',
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -742,9 +741,8 @@ export class InteractionHandler implements IInteractionHandler {
       const targetUserId = targetUserResolution.userId;
 
       if (targetUserId === interaction.user.id) {
-        await interaction.reply({
+        await interaction.editReply({
           content: 'You cannot report yourself.',
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -752,18 +750,16 @@ export class InteractionHandler implements IInteractionHandler {
       const guild = await this.client.guilds.fetch(interaction.guildId);
       const member = await guild.members.fetch(targetUserId).catch(() => null);
       if (!member) {
-        await interaction.reply({
+        await interaction.editReply({
           content: `Could not find a user matching "${targetUserInputString}" in this server.`,
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
       await this.securityActionService.handleUserReport(member, interaction.user, reason);
 
-      await interaction.reply({
+      await interaction.editReply({
         content: `Thank you for your report regarding <@${targetUserId}>. It has been submitted for review.`,
-        flags: MessageFlags.Ephemeral,
         allowedMentions: { parse: [] },
       });
     } catch (error) {
@@ -772,6 +768,10 @@ export class InteractionHandler implements IInteractionHandler {
         await interaction.reply({
           content: 'An error occurred while submitting your report. Please try again later.',
           flags: MessageFlags.Ephemeral,
+        });
+      } else if (interaction.deferred) {
+        await interaction.editReply({
+          content: 'An error occurred while submitting your report. Please try again later.',
         });
       } else {
         await interaction.followUp({
@@ -805,14 +805,6 @@ export class InteractionHandler implements IInteractionHandler {
     try {
       const reason =
         interaction.fields.getTextInputValue(REPORT_USER_REASON_FIELD_ID).trim() || undefined;
-      const reasonRequired = await this.getUserReportReasonRequired(interaction.guildId);
-      if (reasonRequired && !reason) {
-        await interaction.reply({
-          content: 'Please include a reason for this report.',
-          flags: MessageFlags.Ephemeral,
-        });
-        return;
-      }
 
       if (targetUserId === interaction.user.id) {
         await interaction.reply({
@@ -822,12 +814,21 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const reasonRequired = await this.getUserReportReasonRequired(interaction.guildId);
+      if (reasonRequired && !reason) {
+        await interaction.editReply({
+          content: 'Please include a reason for this report.',
+        });
+        return;
+      }
+
       const guild = await this.client.guilds.fetch(interaction.guildId);
       const member = await guild.members.fetch(targetUserId).catch(() => null);
       if (!member) {
-        await interaction.reply({
+        await interaction.editReply({
           content: `Could not find <@${targetUserId}> in this server.`,
-          flags: MessageFlags.Ephemeral,
           allowedMentions: { parse: [] },
         });
         return;
@@ -835,9 +836,8 @@ export class InteractionHandler implements IInteractionHandler {
 
       await this.securityActionService.handleUserReport(member, interaction.user, reason);
 
-      await interaction.reply({
+      await interaction.editReply({
         content: `Thank you for your report regarding <@${targetUserId}>. It has been submitted for review.`,
-        flags: MessageFlags.Ephemeral,
         allowedMentions: { parse: [] },
       });
     } catch (error) {
@@ -846,6 +846,10 @@ export class InteractionHandler implements IInteractionHandler {
         await interaction.reply({
           content: 'An error occurred while submitting your report. Please try again later.',
           flags: MessageFlags.Ephemeral,
+        });
+      } else if (interaction.deferred) {
+        await interaction.editReply({
+          content: 'An error occurred while submitting your report. Please try again later.',
         });
       } else {
         await interaction.followUp({

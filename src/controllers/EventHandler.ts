@@ -651,7 +651,8 @@ export class EventHandler implements IEventHandler {
         verification_channel_auto_created: verificationChannelWasCreated,
       });
 
-      await this.maybeSendSetupNudge(guild, config);
+      const finalConfig = await this.configService.getServerConfig(guild.id).catch(() => config);
+      await this.maybeSendSetupNudge(guild, finalConfig);
     } catch (error) {
       console.error(`Failed to handle new guild ${guild.id}:`, error);
     }
