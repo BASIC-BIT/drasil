@@ -1755,6 +1755,60 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('reports /config setup preflight failures after deferring', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const validateSetupCandidate = jest
+      .fn()
+      .mockRejectedValue(new Error('diagnostics unavailable'));
+    const updateServerConfig = jest.fn().mockResolvedValue({});
+    const { handler, configService, notificationManager } = buildHandler({
+      validateSetupCandidate,
+      updateServerConfig,
+    });
+    const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
+    const restrictedRole = { id: 'role-1' } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+      roles: {
+        create: jest.fn(),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1', tag: 'Admin#0001' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue(null),
+        getSubcommand: jest.fn().mockReturnValue('setup'),
+        getChannel: jest.fn((name: string) => (name === 'admin-channel' ? adminChannel : null)),
+        getRole: jest.fn().mockReturnValue(restrictedRole),
+        getString: jest.fn().mockReturnValue(null),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(guild.roles.create).not.toHaveBeenCalled();
+    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Failed to complete setup. Please check permissions and try again.',
+      allowedMentions: { parse: [] },
+    });
+    consoleError.mockRestore();
+  });
+
   it('updates the existing report instructions message instead of sending a duplicate', async () => {
     const existingMessage = {
       id: 'message-1',

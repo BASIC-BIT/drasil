@@ -1695,34 +1695,34 @@ export class CommandHandler implements ICommandHandler {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const verificationChannelCandidate = await this.resolveVerificationChannelCandidate(
-      guild,
-      verificationChannel?.id ?? null
-    );
-
-    const candidateReport = await this.setupDiagnosticsService.validateSetupCandidate(guild, {
-      restrictedRoleId: existingRestrictedRole?.id ?? null,
-      willCreateRestrictedRole: !existingRestrictedRole,
-      adminChannelId: adminChannel.id,
-      verificationChannelId: verificationChannelCandidate.channelId,
-      willCreateVerificationChannel: !verificationChannelCandidate.channelId,
-      ...(verificationChannelCandidate.willSyncPermissions
-        ? { willSyncVerificationChannelPermissions: true }
-        : {}),
-      reportInstructionsChannelId: reportChannel?.id ?? null,
-    });
-
-    if (candidateReport.errorCount > 0) {
-      await interaction.editReply({
-        content: `Setup not saved. Fix the errors below and rerun /config setup.\n\n${this.formatSetupDiagnosticsReport(candidateReport)}`,
-        allowedMentions: { parse: [] },
-      });
-      return;
-    }
-
     let setupFailureDetail: string | null = null;
 
     try {
+      const verificationChannelCandidate = await this.resolveVerificationChannelCandidate(
+        guild,
+        verificationChannel?.id ?? null
+      );
+
+      const candidateReport = await this.setupDiagnosticsService.validateSetupCandidate(guild, {
+        restrictedRoleId: existingRestrictedRole?.id ?? null,
+        willCreateRestrictedRole: !existingRestrictedRole,
+        adminChannelId: adminChannel.id,
+        verificationChannelId: verificationChannelCandidate.channelId,
+        willCreateVerificationChannel: !verificationChannelCandidate.channelId,
+        ...(verificationChannelCandidate.willSyncPermissions
+          ? { willSyncVerificationChannelPermissions: true }
+          : {}),
+        reportInstructionsChannelId: reportChannel?.id ?? null,
+      });
+
+      if (candidateReport.errorCount > 0) {
+        await interaction.editReply({
+          content: `Setup not saved. Fix the errors below and rerun /config setup.\n\n${this.formatSetupDiagnosticsReport(candidateReport)}`,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
       let createdRestrictedRole: Role | null = null;
       const createdSetupArtifacts: { verificationChannelId?: string } = {};
       let restrictedRole = existingRestrictedRole;
