@@ -1664,6 +1664,7 @@ export class CommandHandler implements ICommandHandler {
 
     try {
       let createdRestrictedRole: Role | null = null;
+      const createdSetupArtifacts: { verificationChannelId?: string } = {};
       let restrictedRole = existingRestrictedRole;
       if (!restrictedRole) {
         createdRestrictedRole = await guild.roles.create({
@@ -1682,7 +1683,10 @@ export class CommandHandler implements ICommandHandler {
         verificationChannelId = await this.notificationManager.setupVerificationChannel(
           guild,
           restrictedRole.id,
-          false
+          false,
+          (channelId) => {
+            createdSetupArtifacts.verificationChannelId = channelId;
+          }
         );
         if (!verificationChannelId) {
           if (createdRestrictedRole) {
@@ -1699,11 +1703,44 @@ export class CommandHandler implements ICommandHandler {
         verificationChannelWasCreated = true;
       }
 
-      await this.configService.updateServerConfig(guild.id, {
-        restricted_role_id: restrictedRole.id,
-        admin_channel_id: adminChannel.id,
-        verification_channel_id: verificationChannelId,
-      });
+      try {
+        await this.configService.updateServerConfig(guild.id, {
+          restricted_role_id: restrictedRole.id,
+          admin_channel_id: adminChannel.id,
+          verification_channel_id: verificationChannelId,
+        });
+      } catch (error) {
+        const rollbackDetails = ['Configuration could not be saved.'];
+        const createdVerificationChannelId = createdSetupArtifacts.verificationChannelId;
+
+        if (createdVerificationChannelId) {
+          const rolledBack = await this.rollbackCreatedVerificationChannel(
+            guild,
+            createdVerificationChannelId
+          );
+          rollbackDetails.push(
+            rolledBack
+              ? 'The newly created verification channel was removed.'
+              : `The newly created verification channel <#${createdVerificationChannelId}> could not be removed; delete it before rerunning setup.`
+          );
+        }
+
+        if (createdRestrictedRole) {
+          const rolledBack = await this.rollbackCreatedRestrictedRole(
+            createdRestrictedRole,
+            guild.id,
+            'Rolling back Drasil setup after config save failed'
+          );
+          rollbackDetails.push(
+            rolledBack
+              ? 'The newly created restricted role was removed.'
+              : `The newly created restricted role <@&${restrictedRole.id}> could not be removed; delete it or pass it as restricted-role when rerunning setup.`
+          );
+        }
+
+        setupFailureDetail = rollbackDetails.join(' ');
+        throw error;
+      }
 
       let reportInstructionsLine: string | null = null;
       let reportInstructionsWarningLine: string | null = null;
@@ -1756,12 +1793,41 @@ export class CommandHandler implements ICommandHandler {
     }
   }
 
-  private async rollbackCreatedRestrictedRole(role: Role, guildId: string): Promise<boolean> {
+  private async rollbackCreatedRestrictedRole(
+    role: Role,
+    guildId: string,
+    reason = 'Rolling back Drasil setup after verification channel setup failed'
+  ): Promise<boolean> {
     try {
-      await role.delete('Rolling back Drasil setup after verification channel setup failed');
+      await role.delete(reason);
       return true;
     } catch (error) {
       console.error(`Failed to roll back restricted role ${role.id} for guild ${guildId}:`, error);
+      return false;
+    }
+  }
+
+  private async rollbackCreatedVerificationChannel(
+    guild: NonNullable<ChatInputCommandInteraction['guild']>,
+    channelId: string
+  ): Promise<boolean> {
+    try {
+      const channel =
+        guild.channels.cache.get(channelId) ?? (await guild.channels.fetch(channelId));
+      if (!channel || channel.type !== ChannelType.GuildText) {
+        console.error(
+          `Could not find text verification channel ${channelId} to roll back for guild ${guild.id}`
+        );
+        return false;
+      }
+
+      await channel.delete('Rolling back Drasil setup after config save failed');
+      return true;
+    } catch (error) {
+      console.error(
+        `Failed to roll back verification channel ${channelId} for guild ${guild.id}:`,
+        error
+      );
       return false;
     }
   }

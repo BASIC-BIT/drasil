@@ -89,7 +89,8 @@ export interface INotificationManager {
   setupVerificationChannel(
     guild: Guild,
     restrictedRoleId: string,
-    persistConfig?: boolean
+    persistConfig?: boolean,
+    onChannelCreated?: (channelId: string) => void
   ): Promise<string | null>;
 
   /**
@@ -1377,7 +1378,8 @@ export class NotificationManager implements INotificationManager {
   public async setupVerificationChannel(
     guild: Guild,
     restrictedRoleId: string,
-    persistConfig = true
+    persistConfig = true,
+    onChannelCreated?: (channelId: string) => void
   ): Promise<string | null> {
     if (!restrictedRoleId) {
       console.error('Restricted role ID is required to set up verification channel');
@@ -1415,6 +1417,7 @@ export class NotificationManager implements INotificationManager {
       };
 
       const verificationChannel = await guild.channels.create(channelOptions);
+      onChannelCreated?.(verificationChannel.id);
 
       if (persistConfig) {
         await this.configService.updateServerConfig(guild.id, {

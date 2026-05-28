@@ -1222,7 +1222,8 @@ describe('CommandHandler (unit)', () => {
     expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
       guild,
       'created-role-1',
-      false
+      false,
+      expect.any(Function)
     );
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       restricted_role_id: 'created-role-1',
@@ -1298,6 +1299,98 @@ describe('CommandHandler (unit)', () => {
       content: expect.stringContaining('newly created restricted role was removed'),
       allowedMentions: { parse: [] },
     });
+    consoleError.mockRestore();
+  });
+
+  it('rolls back created setup artifacts when config saving fails', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const createdChannel = {
+      id: 'created-channel-1',
+      type: ChannelType.GuildText,
+      delete: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const setupVerificationChannel = jest
+      .fn()
+      .mockImplementation(async (_guild, _roleId, _persistConfig, onChannelCreated) => {
+        onChannelCreated?.('created-channel-1');
+        return 'created-channel-1';
+      });
+    const validateSetupCandidate = jest.fn().mockResolvedValue({
+      guildId: 'guild-1',
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      issues: [],
+      errorCount: 0,
+      warningCount: 0,
+    });
+    const updateServerConfig = jest.fn().mockRejectedValue(new Error('database unavailable'));
+    const { handler, configService } = buildHandler({
+      setupVerificationChannel,
+      validateSetupCandidate,
+      updateServerConfig,
+    });
+    const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
+    const createdRole = {
+      id: 'created-role-1',
+      delete: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+      roles: {
+        create: jest.fn().mockResolvedValue(createdRole),
+      },
+      channels: {
+        cache: {
+          get: jest.fn().mockReturnValue(createdChannel),
+        },
+        fetch: jest.fn(),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1', tag: 'Admin#0001' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue(null),
+        getSubcommand: jest.fn().mockReturnValue('setup'),
+        getChannel: jest.fn((name: string) => (name === 'admin-channel' ? adminChannel : null)),
+        getRole: jest.fn().mockReturnValue(null),
+        getString: jest.fn().mockReturnValue(null),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      restricted_role_id: 'created-role-1',
+      admin_channel_id: 'admin-channel-1',
+      verification_channel_id: 'created-channel-1',
+    });
+    expect(createdChannel.delete).toHaveBeenCalledWith(
+      'Rolling back Drasil setup after config save failed'
+    );
+    expect(createdRole.delete).toHaveBeenCalledWith(
+      'Rolling back Drasil setup after config save failed'
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Configuration could not be saved.'),
+      allowedMentions: { parse: [] },
+    });
+    expect(interaction.editReply.mock.calls[0][0].content).toContain(
+      'newly created verification channel was removed'
+    );
+    expect(interaction.editReply.mock.calls[0][0].content).toContain(
+      'newly created restricted role was removed'
+    );
     consoleError.mockRestore();
   });
 
