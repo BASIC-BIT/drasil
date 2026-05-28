@@ -3043,13 +3043,12 @@ export class CommandHandler implements ICommandHandler {
     existingChannelId: string | null | undefined,
     existingMessageId: string | null | undefined
   ): Promise<void> {
-    const channelManager = (this.client as unknown as { channels?: Client['channels'] }).channels;
-    if (!existingChannelId || !existingMessageId || !channelManager) {
+    if (!existingChannelId || !existingMessageId) {
       return;
     }
 
     try {
-      const existingChannel = await channelManager.fetch(existingChannelId).catch(() => null);
+      const existingChannel = await this.client.channels.fetch(existingChannelId).catch(() => null);
       if (!existingChannel || !('messages' in existingChannel)) {
         return;
       }

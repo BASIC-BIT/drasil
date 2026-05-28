@@ -466,14 +466,6 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async handleReportUserSelect(interaction: UserSelectMenuInteraction): Promise<void> {
-    if (!interaction.guildId) {
-      await interaction.reply({
-        content: 'This menu can only be used in a server.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
     const targetUserId = interaction.values[0];
     if (!targetUserId) {
       await interaction.reply({
@@ -491,7 +483,7 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const reasonRequired = await this.getUserReportReasonRequired(interaction.guildId);
+    const reasonRequired = await this.getUserReportReasonRequired(interaction.guildId ?? undefined);
     const modal = this.buildReportUserReasonModal(targetUserId, reasonRequired);
     await interaction.showModal(modal);
   }

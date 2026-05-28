@@ -55,6 +55,12 @@ const ADMIN_CHANNEL_PERMISSIONS: readonly PermissionRequirement[] = [
     severity: 'error',
     codeSuffix: 'send',
   },
+  {
+    permission: PermissionFlagsBits.EmbedLinks,
+    label: 'Embed Links',
+    severity: 'error',
+    codeSuffix: 'embed-links',
+  },
 ];
 
 const VERIFICATION_CHANNEL_PERMISSIONS: readonly PermissionRequirement[] = [
