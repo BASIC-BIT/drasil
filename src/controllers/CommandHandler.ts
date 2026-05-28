@@ -21,6 +21,7 @@ import {
   ChannelType, // Added
   EmbedBuilder, // Added
   TextChannel, // Added
+  Role,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -1659,15 +1660,21 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    let setupFailureDetail: string | null = null;
+
     try {
-      const restrictedRole =
-        existingRestrictedRole ??
-        (await guild.roles.create({
+      let createdRestrictedRole: Role | null = null;
+      let restrictedRole = existingRestrictedRole;
+      if (!restrictedRole) {
+        createdRestrictedRole = await guild.roles.create({
           name: requestedRoleName ?? DEFAULT_RESTRICTED_ROLE_NAME,
           permissions: [],
           reason: `Drasil setup requested by ${interaction.user.tag}`,
-        }));
-      const restrictedRoleWasCreated = !existingRestrictedRole;
+        });
+        restrictedRole = createdRestrictedRole;
+      }
+
+      const restrictedRoleWasCreated = Boolean(createdRestrictedRole);
       let verificationChannelId = verificationChannel?.id ?? null;
       let verificationChannelWasCreated = false;
 
@@ -1678,6 +1685,15 @@ export class CommandHandler implements ICommandHandler {
           false
         );
         if (!verificationChannelId) {
+          if (createdRestrictedRole) {
+            const rolledBack = await this.rollbackCreatedRestrictedRole(
+              createdRestrictedRole,
+              guild.id
+            );
+            setupFailureDetail = rolledBack
+              ? 'Verification channel setup failed. The newly created restricted role was removed.'
+              : `Verification channel setup failed. The newly created restricted role <@&${restrictedRole.id}> could not be removed; delete it or pass it as restricted-role when rerunning setup.`;
+          }
           throw new Error('Failed to create a verification channel during setup.');
         }
         verificationChannelWasCreated = true;
@@ -1732,8 +1748,21 @@ export class CommandHandler implements ICommandHandler {
     } catch (error) {
       console.error(`Failed to complete config setup for guild ${guild.id}:`, error);
       await interaction.editReply({
-        content: 'Failed to complete setup. Please check permissions and try again.',
+        content: setupFailureDetail
+          ? `Failed to complete setup. ${setupFailureDetail}`
+          : 'Failed to complete setup. Please check permissions and try again.',
+        allowedMentions: { parse: [] },
       });
+    }
+  }
+
+  private async rollbackCreatedRestrictedRole(role: Role, guildId: string): Promise<boolean> {
+    try {
+      await role.delete('Rolling back Drasil setup after verification channel setup failed');
+      return true;
+    } catch (error) {
+      console.error(`Failed to roll back restricted role ${role.id} for guild ${guildId}:`, error);
+      return false;
     }
   }
 

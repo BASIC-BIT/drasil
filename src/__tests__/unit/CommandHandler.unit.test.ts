@@ -1238,6 +1238,69 @@ describe('CommandHandler (unit)', () => {
     );
   });
 
+  it('rolls back a created restricted role when verification channel setup fails', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const setupVerificationChannel = jest.fn().mockResolvedValue(null);
+    const validateSetupCandidate = jest.fn().mockResolvedValue({
+      guildId: 'guild-1',
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      issues: [],
+      errorCount: 0,
+      warningCount: 0,
+    });
+    const updateServerConfig = jest.fn().mockResolvedValue({});
+    const { handler, configService } = buildHandler({
+      setupVerificationChannel,
+      validateSetupCandidate,
+      updateServerConfig,
+    });
+    const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
+    const createdRole = {
+      id: 'created-role-1',
+      delete: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+      roles: {
+        create: jest.fn().mockResolvedValue(createdRole),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1', tag: 'Admin#0001' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue(null),
+        getSubcommand: jest.fn().mockReturnValue('setup'),
+        getChannel: jest.fn((name: string) => (name === 'admin-channel' ? adminChannel : null)),
+        getRole: jest.fn().mockReturnValue(null),
+        getString: jest.fn().mockReturnValue(null),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(createdRole.delete).toHaveBeenCalledWith(
+      'Rolling back Drasil setup after verification channel setup failed'
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('newly created restricted role was removed'),
+      allowedMentions: { parse: [] },
+    });
+    consoleError.mockRestore();
+  });
+
   it('keeps /config setup saved when optional report instructions fail', async () => {
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const validateSetupCandidate = jest.fn().mockResolvedValue({
