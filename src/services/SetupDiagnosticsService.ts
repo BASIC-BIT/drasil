@@ -66,6 +66,12 @@ const VERIFICATION_CHANNEL_PERMISSIONS: readonly PermissionRequirement[] = [
     codeSuffix: 'create-private-threads',
   },
   {
+    permission: PermissionFlagsBits.SendMessagesInThreads,
+    label: 'Send Messages in Threads',
+    severity: 'error',
+    codeSuffix: 'send-messages-in-threads',
+  },
+  {
     permission: PermissionFlagsBits.ManageThreads,
     label: 'Manage Threads',
     severity: 'warning',

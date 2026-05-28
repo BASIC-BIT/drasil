@@ -928,6 +928,7 @@ describe('CommandHandler (unit)', () => {
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
+      allowedMentions: { parse: [] },
     });
   });
 
@@ -974,6 +975,7 @@ describe('CommandHandler (unit)', () => {
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nCreated or reused verification channel: <#created-channel-1>',
+      allowedMentions: { parse: [] },
     });
   });
 
@@ -1025,6 +1027,7 @@ describe('CommandHandler (unit)', () => {
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
+      allowedMentions: { parse: [] },
     });
   });
 
@@ -1233,6 +1236,93 @@ describe('CommandHandler (unit)', () => {
     expect(interaction.editReply.mock.calls[0][0].content).toContain(
       'Created or reused verification channel: <#created-channel-1>'
     );
+  });
+
+  it('keeps /config setup saved when optional report instructions fail', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const validateSetupCandidate = jest.fn().mockResolvedValue({
+      guildId: 'guild-1',
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      issues: [],
+      errorCount: 0,
+      warningCount: 0,
+    });
+    const updateServerConfig = jest.fn().mockResolvedValue({});
+    const updateServerSettings = jest.fn().mockResolvedValue({});
+    const getServerConfig = jest.fn().mockResolvedValue({ settings: {} });
+    const { handler, configService } = buildHandler({
+      validateSetupCandidate,
+      updateServerConfig,
+      updateServerSettings,
+      getServerConfig,
+    });
+    const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
+    const verificationChannel = {
+      id: 'verification-channel-1',
+      type: ChannelType.GuildText,
+    } as any;
+    const reportChannel = {
+      id: 'report-channel-1',
+      type: ChannelType.GuildText,
+      send: jest.fn().mockRejectedValue(new Error('missing embed links')),
+    } as any;
+    const restrictedRole = { id: 'role-1' } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+      roles: {
+        create: jest.fn(),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1', tag: 'Admin#0001' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue(null),
+        getSubcommand: jest.fn().mockReturnValue('setup'),
+        getChannel: jest.fn((name: string) => {
+          if (name === 'admin-channel') {
+            return adminChannel;
+          }
+          if (name === 'verification-channel') {
+            return verificationChannel;
+          }
+          if (name === 'report-channel') {
+            return reportChannel;
+          }
+          return null;
+        }),
+        getRole: jest.fn().mockReturnValue(restrictedRole),
+        getString: jest.fn().mockReturnValue(null),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      restricted_role_id: 'role-1',
+      admin_channel_id: 'admin-channel-1',
+      verification_channel_id: 'verification-channel-1',
+    });
+    expect(reportChannel.send).toHaveBeenCalledTimes(1);
+    expect(configService.updateServerSettings).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining(
+        'Core setup was saved, but report instructions were not updated'
+      ),
+      allowedMentions: { parse: [] },
+    });
+    consoleError.mockRestore();
   });
 
   it('blocks /config setup when candidate diagnostics have hard errors', async () => {

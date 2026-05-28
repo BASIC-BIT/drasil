@@ -842,15 +842,25 @@ describe('NotificationManager (unit)', () => {
   });
 
   it('reuses an existing verification text channel instead of creating a duplicate', async () => {
+    const overwriteSet = jest.fn().mockResolvedValue(undefined);
     const existingChannel = {
       id: 'verification-channel-1',
       name: 'verification',
       type: ChannelType.GuildText,
+      permissionOverwrites: {
+        set: overwriteSet,
+      },
     };
     const createChannel = jest.fn();
     const fetchChannels = jest.fn().mockResolvedValue(buildChannelCollection([existingChannel]));
     const guild = {
       id: 'guild-1',
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: {
+          filter: jest.fn().mockReturnValue([]),
+        },
+      },
       channels: {
         cache: buildChannelCollection([]),
         fetch: fetchChannels,
@@ -864,6 +874,13 @@ describe('NotificationManager (unit)', () => {
 
     expect(channelId).toBe('verification-channel-1');
     expect(fetchChannels).toHaveBeenCalledTimes(1);
+    expect(overwriteSet).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'guild-1' }),
+        expect.objectContaining({ id: 'restricted-role-1' }),
+      ]),
+      'Sync Drasil verification channel permissions'
+    );
     expect(createChannel).not.toHaveBeenCalled();
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       verification_channel_id: 'verification-channel-1',

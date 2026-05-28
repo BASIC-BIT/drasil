@@ -1405,11 +1405,12 @@ export class CommandHandler implements ICommandHandler {
       ];
 
       if (candidateReport && candidateReport.warningCount > 0) {
-        responseLines.push('', this.formatSetupDiagnosticsReport(candidateReport));
+        this.appendSetupDiagnosticsReport(responseLines, candidateReport);
       }
 
       await interaction.editReply({
         content: this.truncatePreview(responseLines.join('\n'), 1900),
+        allowedMentions: { parse: [] },
       });
     } catch (error) {
       console.error('Failed to complete setup verification command:', error);
@@ -1689,12 +1690,20 @@ export class CommandHandler implements ICommandHandler {
       });
 
       let reportInstructionsLine: string | null = null;
+      let reportInstructionsWarningLine: string | null = null;
       if (reportChannel) {
-        const result = await this.upsertReportInstructionsMessage(
-          guild.id,
-          reportChannel as TextChannel
-        );
-        reportInstructionsLine = `Report instructions ${result.action}: <#${reportChannel.id}>`;
+        try {
+          const result = await this.upsertReportInstructionsMessage(
+            guild.id,
+            reportChannel as TextChannel
+          );
+          reportInstructionsLine = `Report instructions ${result.action}: <#${reportChannel.id}>`;
+        } catch (error) {
+          console.error(`Failed to upsert report instructions for guild ${guild.id}:`, error);
+          reportInstructionsWarningLine =
+            `[WARNING] Core setup was saved, but report instructions were not updated in <#${reportChannel.id}>. ` +
+            'Check Drasil can send messages and embeds there, then rerun setup.';
+        }
       }
 
       const lines = [
@@ -1708,8 +1717,12 @@ export class CommandHandler implements ICommandHandler {
         lines.push(reportInstructionsLine);
       }
 
+      if (reportInstructionsWarningLine) {
+        lines.push(reportInstructionsWarningLine);
+      }
+
       if (candidateReport.warningCount > 0) {
-        lines.push('', this.formatSetupDiagnosticsReport(candidateReport));
+        this.appendSetupDiagnosticsReport(lines, candidateReport);
       }
 
       await interaction.editReply({
@@ -1752,7 +1765,7 @@ export class CommandHandler implements ICommandHandler {
     }
   }
 
-  private formatSetupDiagnosticsReport(report: SetupDiagnosticReport): string {
+  private formatSetupDiagnosticsReport(report: SetupDiagnosticReport, maxLength = 1900): string {
     const status =
       report.errorCount > 0
         ? `Setup validation failed with ${report.errorCount} error(s) and ${report.warningCount} warning(s).`
@@ -1769,8 +1782,19 @@ export class CommandHandler implements ICommandHandler {
     );
     return this.truncatePreview(
       [status, `Guild ID: \`${report.guildId}\``, ...issueLines].join('\n'),
-      1900
+      maxLength
     );
+  }
+
+  private appendSetupDiagnosticsReport(
+    lines: string[],
+    report: SetupDiagnosticReport,
+    maxLength = 1900
+  ): void {
+    const prefix = lines.join('\n');
+    const separatorLength = prefix.length > 0 ? 2 : 0;
+    const budget = Math.max(200, maxLength - prefix.length - separatorLength);
+    lines.push('', this.formatSetupDiagnosticsReport(report, budget));
   }
 
   private formatKeywordSummary(keywords: readonly string[]): string {

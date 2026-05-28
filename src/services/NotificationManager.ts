@@ -14,6 +14,7 @@ import {
   PermissionFlagsBits,
   GuildChannelCreateOptions,
   GuildBasedChannel,
+  OverwriteResolvable,
   ButtonInteraction,
   MessageFlags,
   TextChannel,
@@ -1384,8 +1385,17 @@ export class NotificationManager implements INotificationManager {
     }
 
     try {
+      const permissionOverwrites = this.buildVerificationChannelPermissionOverwrites(
+        guild,
+        restrictedRoleId
+      );
       const existingVerificationChannel = await this.findExistingVerificationChannel(guild);
       if (existingVerificationChannel) {
+        await existingVerificationChannel.permissionOverwrites.set(
+          permissionOverwrites,
+          'Sync Drasil verification channel permissions'
+        );
+
         if (persistConfig) {
           await this.configService.updateServerConfig(guild.id, {
             verification_channel_id: existingVerificationChannel.id,
@@ -1394,63 +1404,6 @@ export class NotificationManager implements INotificationManager {
 
         return existingVerificationChannel.id;
       }
-
-      // Create permission overwrites for the channel
-      const permissionOverwrites = [
-        // Default role (everyone) - deny access
-        {
-          id: guild.roles.everyone.id,
-          deny: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-            PermissionFlagsBits.CreatePublicThreads,
-            PermissionFlagsBits.CreatePrivateThreads,
-          ],
-        },
-        // Restricted role - can view and send messages, but not read history
-        {
-          id: restrictedRoleId,
-          allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory, // TODO: Check if users need to be granted this to see history of private thread
-            PermissionFlagsBits.SendMessagesInThreads,
-          ],
-        },
-        // Bot - full access
-        {
-          id: this.client.user?.id || '',
-          allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-            PermissionFlagsBits.ManageChannels,
-            PermissionFlagsBits.ManageThreads,
-            PermissionFlagsBits.CreatePublicThreads,
-            PermissionFlagsBits.CreatePrivateThreads,
-            PermissionFlagsBits.SendMessagesInThreads,
-            PermissionFlagsBits.ModerateMembers,
-          ],
-        },
-      ];
-
-      // Find admin roles by checking for manage channels permission
-      const adminRoles = guild.roles.cache.filter((role) =>
-        role.permissions.has(PermissionFlagsBits.ManageChannels)
-      );
-
-      // Add admin roles to permission overwrites
-      adminRoles.forEach((role) => {
-        permissionOverwrites.push({
-          id: role.id,
-          allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-          ],
-        });
-      });
 
       // Create the verification channel
       const channelOptions: GuildChannelCreateOptions = {
@@ -1474,6 +1427,71 @@ export class NotificationManager implements INotificationManager {
       console.error('Failed to set up verification channel:', error);
       return null;
     }
+  }
+
+  private buildVerificationChannelPermissionOverwrites(
+    guild: Guild,
+    restrictedRoleId: string
+  ): OverwriteResolvable[] {
+    const permissionOverwrites: OverwriteResolvable[] = [
+      // Default role (everyone) - deny access
+      {
+        id: guild.roles.everyone.id,
+        deny: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.CreatePublicThreads,
+          PermissionFlagsBits.CreatePrivateThreads,
+        ],
+      },
+      // Restricted role - can view and send messages, but not read history
+      {
+        id: restrictedRoleId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory, // TODO: Check if users need to be granted this to see history of private thread
+          PermissionFlagsBits.SendMessagesInThreads,
+        ],
+      },
+    ];
+
+    if (this.client.user?.id) {
+      permissionOverwrites.push({
+        id: this.client.user.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.ManageChannels,
+          PermissionFlagsBits.ManageThreads,
+          PermissionFlagsBits.CreatePublicThreads,
+          PermissionFlagsBits.CreatePrivateThreads,
+          PermissionFlagsBits.SendMessagesInThreads,
+          PermissionFlagsBits.ModerateMembers,
+        ],
+      });
+    }
+
+    // Find admin roles by checking for manage channels permission
+    const adminRoles = guild.roles.cache.filter((role) =>
+      role.permissions.has(PermissionFlagsBits.ManageChannels)
+    );
+
+    // Add admin roles to permission overwrites
+    adminRoles.forEach((role) => {
+      permissionOverwrites.push({
+        id: role.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+        ],
+      });
+    });
+
+    return permissionOverwrites;
   }
 
   private async findExistingVerificationChannel(guild: Guild): Promise<TextChannel | null> {
