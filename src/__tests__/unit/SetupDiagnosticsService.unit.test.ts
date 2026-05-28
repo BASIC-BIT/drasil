@@ -192,15 +192,12 @@ describe('SetupDiagnosticsService (unit)', () => {
     );
   });
 
-  it('requires Manage Channels when setup will sync a configured verification channel', async () => {
-    const { guild, botMember } = buildConfiguredGuild({
-      channelHas: (permission) => permission !== PermissionFlagsBits.SendMessages,
+  it('requires channel-level Manage Channels when setup will sync a configured verification channel', async () => {
+    const { guild } = buildConfiguredGuild({
+      channelHas: (permission) =>
+        permission !== PermissionFlagsBits.SendMessages &&
+        permission !== PermissionFlagsBits.ManageChannels,
     });
-    botMember.permissions.has.mockImplementation(
-      (permission: bigint) =>
-        permission !== PermissionFlagsBits.Administrator &&
-        permission !== PermissionFlagsBits.ManageChannels
-    );
     const configService = {
       getServerConfig: jest.fn(),
     } as any;

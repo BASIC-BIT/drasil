@@ -1320,6 +1320,14 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    if (!this.setupDiagnosticsService) {
+      await interaction.reply({
+        content: 'Setup diagnostics are not available in this runtime.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
     let setupFailureDetail = 'Please check permissions and try again.';
 
     try {
@@ -1338,14 +1346,6 @@ export class CommandHandler implements ICommandHandler {
       if (verificationChannel && verificationChannel.type !== ChannelType.GuildText) {
         await interaction.reply({
           content: 'Verification channel must be a text channel.',
-          flags: MessageFlags.Ephemeral,
-        });
-        return;
-      }
-
-      if (!this.setupDiagnosticsService) {
-        await interaction.reply({
-          content: 'Setup diagnostics are not available in this runtime.',
           flags: MessageFlags.Ephemeral,
         });
         return;

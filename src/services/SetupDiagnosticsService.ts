@@ -86,6 +86,15 @@ const VERIFICATION_CHANNEL_PERMISSIONS: readonly PermissionRequirement[] = [
   },
 ];
 
+const VERIFICATION_CHANNEL_SYNC_PERMISSIONS: readonly PermissionRequirement[] = [
+  {
+    permission: PermissionFlagsBits.ManageChannels,
+    label: 'Manage Channels',
+    severity: 'error',
+    codeSuffix: 'sync-manage-channels',
+  },
+];
+
 @injectable()
 export class SetupDiagnosticsService implements ISetupDiagnosticsService {
   constructor(@inject(TYPES.ConfigService) private readonly configService: IConfigService) {}
@@ -335,20 +344,11 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         candidate.verificationChannelId,
         'verification-channel',
         'Verification channel',
-        candidate.willSyncVerificationChannelPermissions ? [] : VERIFICATION_CHANNEL_PERMISSIONS,
+        candidate.willSyncVerificationChannelPermissions
+          ? VERIFICATION_CHANNEL_SYNC_PERMISSIONS
+          : VERIFICATION_CHANNEL_PERMISSIONS,
         issues
       );
-      if (
-        candidate.willSyncVerificationChannelPermissions &&
-        !botMember.permissions.has(PermissionFlagsBits.ManageChannels)
-      ) {
-        issues.push({
-          severity: 'error',
-          code: 'verification-channel-sync-manage-channels',
-          message:
-            'Drasil is missing Manage Channels, so it cannot sync the configured verification channel permissions.',
-        });
-      }
       return;
     }
 
