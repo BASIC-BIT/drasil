@@ -1343,6 +1343,14 @@ export class CommandHandler implements ICommandHandler {
         return;
       }
 
+      if (!this.setupDiagnosticsService) {
+        await interaction.reply({
+          content: 'Setup diagnostics are not available in this runtime.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       const verificationChannelCandidate = await this.resolveVerificationChannelCandidate(
@@ -1350,21 +1358,19 @@ export class CommandHandler implements ICommandHandler {
         verificationChannel?.id ?? null
       );
 
-      const candidateReport = this.setupDiagnosticsService
-        ? await this.setupDiagnosticsService.validateSetupCandidate(guild, {
-            restrictedRoleId: restrictedRole.id,
-            willCreateRestrictedRole: false,
-            adminChannelId: adminChannel.id,
-            verificationChannelId: verificationChannelCandidate.channelId,
-            willCreateVerificationChannel: !verificationChannelCandidate.channelId,
-            ...(verificationChannelCandidate.willSyncPermissions
-              ? { willSyncVerificationChannelPermissions: true }
-              : {}),
-            reportInstructionsChannelId: null,
-          })
-        : null;
+      const candidateReport = await this.setupDiagnosticsService.validateSetupCandidate(guild, {
+        restrictedRoleId: restrictedRole.id,
+        willCreateRestrictedRole: false,
+        adminChannelId: adminChannel.id,
+        verificationChannelId: verificationChannelCandidate.channelId,
+        willCreateVerificationChannel: !verificationChannelCandidate.channelId,
+        ...(verificationChannelCandidate.willSyncPermissions
+          ? { willSyncVerificationChannelPermissions: true }
+          : {}),
+        reportInstructionsChannelId: null,
+      });
 
-      if (candidateReport && candidateReport.errorCount > 0) {
+      if (candidateReport.errorCount > 0) {
         await interaction.editReply({
           content: `Setup not saved. Fix the errors below and rerun setup.\n\n${this.formatSetupDiagnosticsReport(candidateReport)}`,
           allowedMentions: { parse: [] },
@@ -1447,7 +1453,7 @@ export class CommandHandler implements ICommandHandler {
         verificationChannelMessage,
       ];
 
-      if (candidateReport && candidateReport.warningCount > 0) {
+      if (candidateReport.warningCount > 0) {
         this.appendSetupDiagnosticsReport(responseLines, candidateReport);
       }
 

@@ -37,6 +37,7 @@ describe('CommandHandler (unit)', () => {
     handleUserReport: jest.Mock;
     handleMessageReport: jest.Mock;
     setupVerificationChannel: jest.Mock;
+    setupDiagnosticsService: any | null;
     validateGuildSetup: jest.Mock;
     validateSetupCandidate: jest.Mock;
     excludeDetectionFromAccounting: jest.Mock;
@@ -103,26 +104,29 @@ describe('CommandHandler (unit)', () => {
       setupVerificationChannel:
         overrides.setupVerificationChannel ?? jest.fn().mockResolvedValue('created-channel-1'),
     } as any;
-    const setupDiagnosticsService = {
-      validateGuildSetup:
-        overrides.validateGuildSetup ??
-        jest.fn().mockResolvedValue({
-          guildId: 'guild-1',
-          checkedAt: new Date('2026-01-01T00:00:00.000Z'),
-          issues: [],
-          errorCount: 0,
-          warningCount: 0,
-        }),
-      validateSetupCandidate:
-        overrides.validateSetupCandidate ??
-        jest.fn().mockResolvedValue({
-          guildId: 'guild-1',
-          checkedAt: new Date('2026-01-01T00:00:00.000Z'),
-          issues: [],
-          errorCount: 0,
-          warningCount: 0,
-        }),
-    } as any;
+    const setupDiagnosticsService =
+      overrides.setupDiagnosticsService === null
+        ? undefined
+        : ({
+            validateGuildSetup:
+              overrides.validateGuildSetup ??
+              jest.fn().mockResolvedValue({
+                guildId: 'guild-1',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+                issues: [],
+                errorCount: 0,
+                warningCount: 0,
+              }),
+            validateSetupCandidate:
+              overrides.validateSetupCandidate ??
+              jest.fn().mockResolvedValue({
+                guildId: 'guild-1',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+                issues: [],
+                errorCount: 0,
+                warningCount: 0,
+              }),
+          } as any);
     const client = {
       user: { id: 'client-1' },
     } as any;
@@ -1052,6 +1056,44 @@ describe('CommandHandler (unit)', () => {
     expect(interaction.editReply.mock.calls[0][0].content).toContain(
       'Synced verification channel permissions: <#configured-channel-1>'
     );
+  });
+
+  it('blocks setupverification when setup diagnostics are unavailable', async () => {
+    const { handler, configService, notificationManager } = buildHandler({
+      setupDiagnosticsService: null,
+    });
+    const guild = {
+      id: 'guild-1',
+    } as any;
+    const interaction = {
+      commandName: 'setupverification',
+      guild,
+      memberPermissions: {
+        has: jest.fn().mockReturnValue(true),
+      },
+      options: {
+        getRole: jest.fn().mockReturnValue({ id: 'role-1' }),
+        getChannel: jest.fn((name: string) => {
+          if (name === 'admin-channel') {
+            return { id: 'channel-1', type: ChannelType.GuildText };
+          }
+          return null;
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Setup diagnostics are not available in this runtime.',
+      flags: MessageFlags.Ephemeral,
+    });
+    expect(interaction.deferReply).not.toHaveBeenCalled();
+    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+    expect(configService.updateServerConfig).not.toHaveBeenCalled();
   });
 
   it('rolls back a created setupverification channel when config saving fails', async () => {
