@@ -500,6 +500,61 @@ describe('EventHandler (unit)', () => {
     });
   });
 
+  it('does not fail guild create when setup nudge metadata cannot be saved', async () => {
+    const installer = {
+      id: 'installer-1',
+      bot: false,
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        restricted_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
+        settings: {},
+      }),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockRejectedValue(new Error('database unavailable')),
+    };
+    const handler = buildHandler({ configService });
+    const auditEntries = [
+      {
+        target: { id: 'bot-1' },
+        executor: installer,
+      },
+    ];
+    const guild = {
+      id: 'guild-1',
+      name: 'Test Guild',
+      fetchAuditLogs: jest.fn().mockResolvedValue({
+        entries: {
+          find: jest.fn((predicate: NonNullable<Parameters<typeof auditEntries.find>[0]>) =>
+            auditEntries.find(predicate)
+          ),
+        },
+      }),
+      fetchOwner: jest.fn(),
+    } as any;
+
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await (handler as any).handleGuildCreate(guild);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    expect(installer.send).toHaveBeenCalledWith(expect.stringContaining('/config setup'));
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      setup_nudge_last_attempt_at: expect.any(String),
+      setup_nudge_last_recipient_id: 'installer-1',
+      setup_nudge_last_result: 'sent',
+      setup_nudge_last_source: 'audit_log_installer',
+    });
+  });
+
   it('suppresses repeated setup nudges after a recent attempt', async () => {
     const configService = {
       initialize: jest.fn().mockResolvedValue(undefined),

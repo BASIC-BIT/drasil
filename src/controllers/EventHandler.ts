@@ -681,12 +681,16 @@ export class EventHandler implements IEventHandler {
       }
     }
 
-    await this.configService.updateServerSettings(guild.id, {
-      setup_nudge_last_attempt_at: attemptedAt,
-      setup_nudge_last_recipient_id: recipient?.user.id ?? null,
-      setup_nudge_last_result: result,
-      setup_nudge_last_source: recipient?.source ?? null,
-    });
+    try {
+      await this.configService.updateServerSettings(guild.id, {
+        setup_nudge_last_attempt_at: attemptedAt,
+        setup_nudge_last_recipient_id: recipient?.user.id ?? null,
+        setup_nudge_last_result: result,
+        setup_nudge_last_source: recipient?.source ?? null,
+      });
+    } catch (error) {
+      console.warn(`Failed to record setup nudge metadata for guild ${guild.id}:`, error);
+    }
   }
 
   private isSetupIncomplete(config: Server): boolean {

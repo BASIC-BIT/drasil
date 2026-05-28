@@ -1373,7 +1373,9 @@ export class CommandHandler implements ICommandHandler {
       }
 
       let verificationChannelId = verificationChannel?.id ?? null;
-      let verificationChannelWasCreated = false;
+      let verificationChannelAction: 'configured' | 'created' | 'synced' = verificationChannel
+        ? 'configured'
+        : 'created';
       const createdSetupArtifacts: { verificationChannelId?: string } = {};
 
       if (!verificationChannelId) {
@@ -1398,7 +1400,7 @@ export class CommandHandler implements ICommandHandler {
           throw new Error('Failed to create a verification channel during setup.');
         }
         verificationChannelId = createdChannelId;
-        verificationChannelWasCreated = true;
+        verificationChannelAction = verificationChannelCandidate.channelId ? 'synced' : 'created';
       }
 
       try {
@@ -1424,16 +1426,19 @@ export class CommandHandler implements ICommandHandler {
         guild.id,
         'verification setup completed',
         {
-          verification_channel_created: verificationChannelWasCreated,
+          verification_channel_created: verificationChannelAction === 'created',
           verification_channel_configured: Boolean(verificationChannelId),
           admin_channel_configured: true,
           restricted_role_configured: true,
         }
       );
 
-      const verificationChannelMessage = verificationChannelWasCreated
-        ? `Created or reused verification channel: <#${verificationChannelId}>`
-        : `Verification channel: <#${verificationChannelId}>`;
+      const verificationChannelMessage =
+        verificationChannelAction === 'created'
+          ? `Created verification channel: <#${verificationChannelId}>`
+          : verificationChannelAction === 'synced'
+            ? `Synced verification channel permissions: <#${verificationChannelId}>`
+            : `Verification channel: <#${verificationChannelId}>`;
 
       const responseLines = [
         'Setup complete.',
@@ -1746,7 +1751,9 @@ export class CommandHandler implements ICommandHandler {
 
       const restrictedRoleWasCreated = Boolean(createdRestrictedRole);
       let verificationChannelId = verificationChannel?.id ?? null;
-      let verificationChannelWasCreated = false;
+      let verificationChannelAction: 'configured' | 'created' | 'synced' = verificationChannel
+        ? 'configured'
+        : 'created';
 
       if (!verificationChannelId) {
         const onChannelCreated = (channelId: string): void => {
@@ -1778,7 +1785,7 @@ export class CommandHandler implements ICommandHandler {
           }
           throw new Error('Failed to create a verification channel during setup.');
         }
-        verificationChannelWasCreated = true;
+        verificationChannelAction = verificationChannelCandidate.channelId ? 'synced' : 'created';
       }
 
       try {
@@ -1841,7 +1848,7 @@ export class CommandHandler implements ICommandHandler {
         'Setup complete.',
         `${restrictedRoleWasCreated ? 'Created restricted role' : 'Restricted role'}: <@&${restrictedRole.id}>`,
         `Admin channel: <#${adminChannel.id}>`,
-        `${verificationChannelWasCreated ? 'Created or reused verification channel' : 'Verification channel'}: <#${verificationChannelId}>`,
+        `${verificationChannelAction === 'created' ? 'Created verification channel' : verificationChannelAction === 'synced' ? 'Synced verification channel permissions' : 'Verification channel'}: <#${verificationChannelId}>`,
       ];
 
       if (reportInstructionsLine) {
