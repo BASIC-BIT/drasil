@@ -841,7 +841,7 @@ describe('NotificationManager (unit)', () => {
     );
   });
 
-  it('reuses an existing verification text channel instead of creating a duplicate', async () => {
+  it('reuses the configured verification text channel instead of creating a duplicate', async () => {
     const overwriteSet = jest.fn().mockResolvedValue(undefined);
     const existingChannel = {
       id: 'verification-channel-1',
@@ -852,7 +852,11 @@ describe('NotificationManager (unit)', () => {
       },
     };
     const createChannel = jest.fn();
-    const fetchChannels = jest.fn().mockResolvedValue(buildChannelCollection([existingChannel]));
+    const fetchChannel = jest.fn().mockResolvedValue(existingChannel);
+    configService.getServerConfig = jest.fn().mockResolvedValue({
+      verification_channel_id: 'verification-channel-1',
+      settings: {},
+    } as any);
     const guild = {
       id: 'guild-1',
       roles: {
@@ -863,7 +867,7 @@ describe('NotificationManager (unit)', () => {
       },
       channels: {
         cache: buildChannelCollection([]),
-        fetch: fetchChannels,
+        fetch: fetchChannel,
         create: createChannel,
       },
     } as unknown as Guild;
@@ -873,7 +877,7 @@ describe('NotificationManager (unit)', () => {
     const channelId = await manager.setupVerificationChannel(guild, 'restricted-role-1');
 
     expect(channelId).toBe('verification-channel-1');
-    expect(fetchChannels).toHaveBeenCalledTimes(1);
+    expect(fetchChannel).toHaveBeenCalledWith('verification-channel-1');
     expect(overwriteSet).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ id: 'guild-1' }),
@@ -885,5 +889,47 @@ describe('NotificationManager (unit)', () => {
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       verification_channel_id: 'verification-channel-1',
     });
+  });
+
+  it('does not reuse an arbitrary channel named verification without a stored config id', async () => {
+    const overwriteSet = jest.fn().mockResolvedValue(undefined);
+    const existingChannel = {
+      id: 'unrelated-verification-channel',
+      name: 'verification',
+      type: ChannelType.GuildText,
+      permissionOverwrites: {
+        set: overwriteSet,
+      },
+    };
+    const createdChannel = { id: 'created-channel-1' };
+    const createChannel = jest.fn().mockResolvedValue(createdChannel);
+    const fetchChannel = jest.fn();
+    configService.getServerConfig = jest.fn().mockResolvedValue({
+      verification_channel_id: null,
+      settings: {},
+    } as any);
+    const guild = {
+      id: 'guild-1',
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: {
+          filter: jest.fn().mockReturnValue([]),
+        },
+      },
+      channels: {
+        cache: buildChannelCollection([existingChannel]),
+        fetch: fetchChannel,
+        create: createChannel,
+      },
+    } as unknown as Guild;
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    const channelId = await manager.setupVerificationChannel(guild, 'restricted-role-1');
+
+    expect(channelId).toBe('created-channel-1');
+    expect(fetchChannel).not.toHaveBeenCalled();
+    expect(overwriteSet).not.toHaveBeenCalled();
+    expect(createChannel).toHaveBeenCalledWith(expect.objectContaining({ name: 'verification' }));
   });
 });

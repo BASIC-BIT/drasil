@@ -1576,6 +1576,76 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('deletes old report instructions when moving them to a new channel', async () => {
+    const oldMessage = {
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
+    const oldChannel = {
+      messages: {
+        fetch: jest.fn().mockResolvedValue(oldMessage),
+      },
+    };
+    const targetChannel = {
+      id: 'new-channel-1',
+      type: ChannelType.GuildText,
+      messages: {
+        fetch: jest.fn(),
+      },
+      send: jest.fn().mockResolvedValue({ id: 'new-message-1' }),
+      toString: () => '<#new-channel-1>',
+    } as any;
+    const getServerConfig = jest.fn().mockResolvedValue({
+      settings: {
+        report_instructions_channel_id: 'old-channel-1',
+        report_instructions_message_id: 'old-message-1',
+      },
+    });
+    const updateServerSettings = jest.fn().mockResolvedValue({});
+    const { handler, configService, client } = buildHandler({
+      getServerConfig,
+      updateServerSettings,
+    });
+    client.channels = {
+      fetch: jest.fn().mockResolvedValue(oldChannel),
+    };
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'setupreportbutton',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getChannel: jest.fn().mockReturnValue(targetChannel),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(client.channels.fetch).toHaveBeenCalledWith('old-channel-1');
+    expect(oldChannel.messages.fetch).toHaveBeenCalledWith('old-message-1');
+    expect(oldMessage.delete).toHaveBeenCalledTimes(1);
+    expect(targetChannel.send).toHaveBeenCalledWith({
+      embeds: expect.any(Array),
+      components: expect.any(Array),
+    });
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      report_instructions_channel_id: 'new-channel-1',
+      report_instructions_message_id: 'new-message-1',
+    });
+  });
+
   it('handles /config heuristic set-threshold', async () => {
     const updateHeuristicSettings = jest.fn().mockResolvedValue({
       messageThreshold: 8,

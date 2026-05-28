@@ -3026,6 +3026,7 @@ export class CommandHandler implements ICommandHandler {
         action = 'recreated';
       }
     } else {
+      await this.deleteStaleReportInstructionsMessage(existingChannelId, existingMessageId);
       const sentMessage = await targetChannel.send(messagePayload);
       messageId = sentMessage.id;
     }
@@ -3036,6 +3037,32 @@ export class CommandHandler implements ICommandHandler {
     });
 
     return { action, messageId };
+  }
+
+  private async deleteStaleReportInstructionsMessage(
+    existingChannelId: string | null | undefined,
+    existingMessageId: string | null | undefined
+  ): Promise<void> {
+    const channelManager = (this.client as unknown as { channels?: Client['channels'] }).channels;
+    if (!existingChannelId || !existingMessageId || !channelManager) {
+      return;
+    }
+
+    try {
+      const existingChannel = await channelManager.fetch(existingChannelId).catch(() => null);
+      if (!existingChannel || !('messages' in existingChannel)) {
+        return;
+      }
+
+      const existingMessage = await existingChannel.messages
+        .fetch(existingMessageId)
+        .catch(() => null);
+      await existingMessage?.delete().catch((error) => {
+        console.warn('Failed to delete stale report instructions message:', error);
+      });
+    } catch (error) {
+      console.warn('Failed to clean up stale report instructions message:', error);
+    }
   }
 
   private buildReportInstructionsMessagePayload(): {
