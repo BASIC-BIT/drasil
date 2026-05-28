@@ -1259,7 +1259,7 @@ describe('CommandHandler (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'config',
-      user: { id: 'admin-1', tag: 'Admin#0001' },
+      user: { id: 'admin-1', username: 'Admin', tag: 'Admin#0001' },
       guild,
       options: {
         getSubcommandGroup: jest.fn().mockReturnValue(null),
@@ -1346,7 +1346,7 @@ describe('CommandHandler (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'config',
-      user: { id: 'admin-1', tag: 'Admin#0001' },
+      user: { id: 'admin-1', username: 'Admin', tag: 'Admin#0001' },
       guild,
       options: {
         getSubcommandGroup: jest.fn().mockReturnValue(null),
@@ -1412,7 +1412,7 @@ describe('CommandHandler (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'config',
-      user: { id: 'admin-1', tag: 'Admin#0001' },
+      user: { id: 'admin-1', username: 'Admin', tag: 'Admin#0001' },
       guild,
       options: {
         getSubcommandGroup: jest.fn().mockReturnValue(null),
@@ -1431,7 +1431,7 @@ describe('CommandHandler (unit)', () => {
     expect(guild.roles.create).toHaveBeenCalledWith({
       name: 'Drasil Restricted',
       permissions: [],
-      reason: 'Drasil setup requested by Admin#0001',
+      reason: 'Drasil setup requested by Admin',
     });
     expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
       guild,
@@ -1489,7 +1489,7 @@ describe('CommandHandler (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'config',
-      user: { id: 'admin-1', tag: 'Admin#0001' },
+      user: { id: 'admin-1', username: 'Admin', tag: 'Admin#0001' },
       guild,
       options: {
         getSubcommandGroup: jest.fn().mockReturnValue(null),
@@ -1568,7 +1568,7 @@ describe('CommandHandler (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'config',
-      user: { id: 'admin-1', tag: 'Admin#0001' },
+      user: { id: 'admin-1', username: 'Admin', tag: 'Admin#0001' },
       guild,
       options: {
         getSubcommandGroup: jest.fn().mockReturnValue(null),
@@ -1652,7 +1652,7 @@ describe('CommandHandler (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'config',
-      user: { id: 'admin-1', tag: 'Admin#0001' },
+      user: { id: 'admin-1', username: 'Admin', tag: 'Admin#0001' },
       guild,
       options: {
         getSubcommandGroup: jest.fn().mockReturnValue(null),
@@ -1732,7 +1732,7 @@ describe('CommandHandler (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'config',
-      user: { id: 'admin-1', tag: 'Admin#0001' },
+      user: { id: 'admin-1', username: 'Admin', tag: 'Admin#0001' },
       guild,
       options: {
         getSubcommandGroup: jest.fn().mockReturnValue(null),
@@ -1784,7 +1784,7 @@ describe('CommandHandler (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'config',
-      user: { id: 'admin-1', tag: 'Admin#0001' },
+      user: { id: 'admin-1', username: 'Admin', tag: 'Admin#0001' },
       guild,
       options: {
         getSubcommandGroup: jest.fn().mockReturnValue(null),

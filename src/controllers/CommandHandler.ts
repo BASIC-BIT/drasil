@@ -1739,7 +1739,7 @@ export class CommandHandler implements ICommandHandler {
         createdRestrictedRole = await guild.roles.create({
           name: requestedRoleName ?? DEFAULT_RESTRICTED_ROLE_NAME,
           permissions: [],
-          reason: `Drasil setup requested by ${interaction.user.tag}`,
+          reason: `Drasil setup requested by ${interaction.user.username}`,
         });
         restrictedRole = createdRestrictedRole;
       }
