@@ -1320,6 +1320,8 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    let setupFailureDetail = 'Please check permissions and try again.';
+
     try {
       const restrictedRole = interaction.options.getRole('restricted-role', true);
       const adminChannel = interaction.options.getChannel('admin-channel', true);
@@ -1372,12 +1374,16 @@ export class CommandHandler implements ICommandHandler {
 
       let verificationChannelId = verificationChannel?.id ?? null;
       let verificationChannelWasCreated = false;
+      const createdSetupArtifacts: { verificationChannelId?: string } = {};
 
       if (!verificationChannelId) {
         const createdChannelId = await this.notificationManager.setupVerificationChannel(
           guild,
           restrictedRole.id,
-          false
+          false,
+          (channelId) => {
+            createdSetupArtifacts.verificationChannelId = channelId;
+          }
         );
         if (!createdChannelId) {
           throw new Error('Failed to create a verification channel during setup.');
@@ -1386,11 +1392,25 @@ export class CommandHandler implements ICommandHandler {
         verificationChannelWasCreated = true;
       }
 
-      await this.configService.updateServerConfig(guild.id, {
-        restricted_role_id: restrictedRole.id,
-        admin_channel_id: adminChannel.id,
-        verification_channel_id: verificationChannelId,
-      });
+      try {
+        await this.configService.updateServerConfig(guild.id, {
+          restricted_role_id: restrictedRole.id,
+          admin_channel_id: adminChannel.id,
+          verification_channel_id: verificationChannelId,
+        });
+      } catch (error) {
+        const createdVerificationChannelId = createdSetupArtifacts.verificationChannelId;
+        if (createdVerificationChannelId) {
+          const rolledBack = await this.rollbackCreatedVerificationChannel(
+            guild,
+            createdVerificationChannelId
+          );
+          setupFailureDetail = rolledBack
+            ? 'Configuration could not be saved. The newly created verification channel was removed.'
+            : `Configuration could not be saved. The newly created verification channel <#${createdVerificationChannelId}> could not be removed; delete it before rerunning setup.`;
+        }
+        throw error;
+      }
       void this.productAnalyticsService.captureGuildEvent(
         guild.id,
         'verification setup completed',
@@ -1424,7 +1444,7 @@ export class CommandHandler implements ICommandHandler {
     } catch (error) {
       console.error('Failed to complete setup verification command:', error);
       const errorResponse = {
-        content: 'Failed to complete setup verification. Please check permissions and try again.',
+        content: `Failed to complete setup verification. ${setupFailureDetail}`,
       } as const;
 
       if (interaction.replied || interaction.deferred) {

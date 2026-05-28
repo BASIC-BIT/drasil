@@ -966,7 +966,12 @@ describe('CommandHandler (unit)', () => {
     expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
       setupVerificationChannel.mock.invocationCallOrder[0]
     );
-    expect(setupVerificationChannel).toHaveBeenCalledWith(guild, 'role-1', false);
+    expect(setupVerificationChannel).toHaveBeenCalledWith(
+      guild,
+      'role-1',
+      false,
+      expect.any(Function)
+    );
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       restricted_role_id: 'role-1',
       admin_channel_id: 'channel-1',
@@ -1037,7 +1042,79 @@ describe('CommandHandler (unit)', () => {
       willSyncVerificationChannelPermissions: true,
       reportInstructionsChannelId: null,
     });
-    expect(setupVerificationChannel).toHaveBeenCalledWith(guild, 'role-1', false);
+    expect(setupVerificationChannel).toHaveBeenCalledWith(
+      guild,
+      'role-1',
+      false,
+      expect.any(Function)
+    );
+  });
+
+  it('rolls back a created setupverification channel when config saving fails', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const createdChannel = {
+      id: 'created-channel-1',
+      type: ChannelType.GuildText,
+      delete: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const setupVerificationChannel = jest
+      .fn()
+      .mockImplementation(async (_guild, _roleId, _persistConfig, onChannelCreated) => {
+        onChannelCreated?.('created-channel-1');
+        return 'created-channel-1';
+      });
+    const updateServerConfig = jest.fn().mockRejectedValue(new Error('database unavailable'));
+    const { handler, configService } = buildHandler({
+      setupVerificationChannel,
+      updateServerConfig,
+    });
+    const guild = {
+      id: 'guild-1',
+      channels: {
+        cache: {
+          get: jest.fn().mockReturnValue(createdChannel),
+        },
+        fetch: jest.fn(),
+      },
+    } as any;
+    const interaction: any = {
+      commandName: 'setupverification',
+      guild,
+      memberPermissions: {
+        has: jest.fn().mockReturnValue(true),
+      },
+      options: {
+        getRole: jest.fn().mockReturnValue({ id: 'role-1' }),
+        getChannel: jest.fn((name: string) => {
+          if (name === 'admin-channel') {
+            return { id: 'channel-1', type: ChannelType.GuildText };
+          }
+          return null;
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockImplementation(async () => {
+        interaction.deferred = true;
+      }),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    };
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      restricted_role_id: 'role-1',
+      admin_channel_id: 'channel-1',
+      verification_channel_id: 'created-channel-1',
+    });
+    expect(createdChannel.delete).toHaveBeenCalledWith(
+      'Rolling back Drasil setup after config save failed'
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('newly created verification channel was removed'),
+    });
+    consoleError.mockRestore();
   });
 
   it('falls back to member fetch when setupverification memberPermissions is null', async () => {
