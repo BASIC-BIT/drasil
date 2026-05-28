@@ -457,6 +457,49 @@ describe('EventHandler (unit)', () => {
     });
   });
 
+  it('skips setup nudge when the fallback owner is a bot', async () => {
+    const ownerUser = {
+      id: 'owner-bot-1',
+      bot: true,
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        restricted_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
+        settings: {},
+      }),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const handler = buildHandler({ configService });
+    const guild = {
+      id: 'guild-1',
+      name: 'Test Guild',
+      fetchAuditLogs: jest.fn().mockRejectedValue(new Error('missing permission')),
+      fetchOwner: jest.fn().mockResolvedValue({ user: ownerUser }),
+    } as any;
+
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await (handler as any).handleGuildCreate(guild);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    expect(ownerUser.send).not.toHaveBeenCalled();
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      setup_nudge_last_attempt_at: expect.any(String),
+      setup_nudge_last_recipient_id: null,
+      setup_nudge_last_result: 'no_recipient',
+      setup_nudge_last_source: null,
+    });
+  });
+
   it('suppresses repeated setup nudges after a recent attempt', async () => {
     const configService = {
       initialize: jest.fn().mockResolvedValue(undefined),

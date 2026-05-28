@@ -1377,14 +1377,23 @@ export class CommandHandler implements ICommandHandler {
       const createdSetupArtifacts: { verificationChannelId?: string } = {};
 
       if (!verificationChannelId) {
-        const createdChannelId = await this.notificationManager.setupVerificationChannel(
-          guild,
-          restrictedRole.id,
-          false,
-          (channelId) => {
-            createdSetupArtifacts.verificationChannelId = channelId;
-          }
-        );
+        const onChannelCreated = (channelId: string): void => {
+          createdSetupArtifacts.verificationChannelId = channelId;
+        };
+        const createdChannelId = verificationChannelCandidate.channelId
+          ? await this.notificationManager.setupVerificationChannel(
+              guild,
+              restrictedRole.id,
+              false,
+              onChannelCreated,
+              verificationChannelCandidate.channelId
+            )
+          : await this.notificationManager.setupVerificationChannel(
+              guild,
+              restrictedRole.id,
+              false,
+              onChannelCreated
+            );
         if (!createdChannelId) {
           throw new Error('Failed to create a verification channel during setup.');
         }
@@ -1740,14 +1749,23 @@ export class CommandHandler implements ICommandHandler {
       let verificationChannelWasCreated = false;
 
       if (!verificationChannelId) {
-        verificationChannelId = await this.notificationManager.setupVerificationChannel(
-          guild,
-          restrictedRole.id,
-          false,
-          (channelId) => {
-            createdSetupArtifacts.verificationChannelId = channelId;
-          }
-        );
+        const onChannelCreated = (channelId: string): void => {
+          createdSetupArtifacts.verificationChannelId = channelId;
+        };
+        verificationChannelId = verificationChannelCandidate.channelId
+          ? await this.notificationManager.setupVerificationChannel(
+              guild,
+              restrictedRole.id,
+              false,
+              onChannelCreated,
+              verificationChannelCandidate.channelId
+            )
+          : await this.notificationManager.setupVerificationChannel(
+              guild,
+              restrictedRole.id,
+              false,
+              onChannelCreated
+            );
         if (!verificationChannelId) {
           if (createdRestrictedRole) {
             const rolledBack = await this.rollbackCreatedRestrictedRole(

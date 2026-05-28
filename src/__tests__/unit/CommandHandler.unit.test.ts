@@ -1046,7 +1046,8 @@ describe('CommandHandler (unit)', () => {
       guild,
       'role-1',
       false,
-      expect.any(Function)
+      expect.any(Function),
+      'configured-channel-1'
     );
   });
 
@@ -1374,7 +1375,8 @@ describe('CommandHandler (unit)', () => {
       guild,
       'role-1',
       false,
-      expect.any(Function)
+      expect.any(Function),
+      'configured-channel-1'
     );
   });
 

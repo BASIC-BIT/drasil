@@ -90,7 +90,8 @@ export interface INotificationManager {
     guild: Guild,
     restrictedRoleId: string,
     persistConfig?: boolean,
-    onChannelCreated?: (channelId: string) => void
+    onChannelCreated?: (channelId: string) => void,
+    configuredVerificationChannelId?: string
   ): Promise<string | null>;
 
   /**
@@ -1379,7 +1380,8 @@ export class NotificationManager implements INotificationManager {
     guild: Guild,
     restrictedRoleId: string,
     persistConfig = true,
-    onChannelCreated?: (channelId: string) => void
+    onChannelCreated?: (channelId: string) => void,
+    configuredVerificationChannelId?: string
   ): Promise<string | null> {
     if (!restrictedRoleId) {
       console.error('Restricted role ID is required to set up verification channel');
@@ -1391,7 +1393,10 @@ export class NotificationManager implements INotificationManager {
         guild,
         restrictedRoleId
       );
-      const configuredVerificationChannel = await this.findConfiguredVerificationChannel(guild);
+      const configuredVerificationChannel = await this.findConfiguredVerificationChannel(
+        guild,
+        configuredVerificationChannelId
+      );
       if (configuredVerificationChannel) {
         await configuredVerificationChannel.permissionOverwrites.set(
           permissionOverwrites,
@@ -1497,15 +1502,22 @@ export class NotificationManager implements INotificationManager {
     return permissionOverwrites;
   }
 
-  private async findConfiguredVerificationChannel(guild: Guild): Promise<TextChannel | null> {
-    const serverConfig = await this.configService.getServerConfig(guild.id).catch((error) => {
-      console.warn(
-        'Failed to load server config while checking for an existing verification channel:',
-        error
-      );
-      return null;
-    });
-    const verificationChannelId = serverConfig?.verification_channel_id;
+  private async findConfiguredVerificationChannel(
+    guild: Guild,
+    resolvedVerificationChannelId?: string
+  ): Promise<TextChannel | null> {
+    let verificationChannelId = resolvedVerificationChannelId ?? null;
+    if (!verificationChannelId) {
+      const serverConfig = await this.configService.getServerConfig(guild.id).catch((error) => {
+        console.warn(
+          'Failed to load server config while checking for an existing verification channel:',
+          error
+        );
+        return null;
+      });
+      verificationChannelId = serverConfig?.verification_channel_id ?? null;
+    }
+
     if (!verificationChannelId) {
       return null;
     }

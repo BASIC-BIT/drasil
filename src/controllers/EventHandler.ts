@@ -744,6 +744,9 @@ export class EventHandler implements IEventHandler {
   private async resolveOwnerRecipient(guild: Guild): Promise<SetupNudgeRecipient | null> {
     try {
       const owner = await guild.fetchOwner();
+      if (owner.user.bot) {
+        return null;
+      }
       return { user: owner.user, source: 'owner' };
     } catch (error) {
       console.warn(`Could not resolve owner for setup nudge in guild ${guild.id}:`, error);
