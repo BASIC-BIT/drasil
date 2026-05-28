@@ -979,6 +979,67 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('validates setupverification against a configured verification channel when omitted', async () => {
+    const setupVerificationChannel = jest.fn().mockResolvedValue('configured-channel-1');
+    const validateSetupCandidate = jest.fn().mockResolvedValue({
+      guildId: 'guild-1',
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      issues: [],
+      errorCount: 0,
+      warningCount: 0,
+    });
+    const getServerConfig = jest.fn().mockResolvedValue({
+      verification_channel_id: 'configured-channel-1',
+      settings: {},
+    });
+    const { handler, setupDiagnosticsService } = buildHandler({
+      setupVerificationChannel,
+      validateSetupCandidate,
+      getServerConfig,
+    });
+    const guild = {
+      id: 'guild-1',
+      channels: {
+        fetch: jest.fn().mockResolvedValue({
+          id: 'configured-channel-1',
+          type: ChannelType.GuildText,
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'setupverification',
+      guild,
+      memberPermissions: {
+        has: jest.fn().mockReturnValue(true),
+      },
+      options: {
+        getRole: jest.fn().mockReturnValue({ id: 'role-1' }),
+        getChannel: jest.fn((name: string) => {
+          if (name === 'admin-channel') {
+            return { id: 'channel-1', type: ChannelType.GuildText };
+          }
+          return null;
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(setupDiagnosticsService.validateSetupCandidate).toHaveBeenCalledWith(guild, {
+      restrictedRoleId: 'role-1',
+      willCreateRestrictedRole: false,
+      adminChannelId: 'channel-1',
+      verificationChannelId: 'configured-channel-1',
+      willCreateVerificationChannel: false,
+      willSyncVerificationChannelPermissions: true,
+      reportInstructionsChannelId: null,
+    });
+    expect(setupVerificationChannel).toHaveBeenCalledWith(guild, 'role-1', false);
+  });
+
   it('falls back to member fetch when setupverification memberPermissions is null', async () => {
     const permissionsIn = jest.fn().mockReturnValue({
       has: jest.fn().mockReturnValue(true),
@@ -1164,6 +1225,80 @@ describe('CommandHandler (unit)', () => {
       content: expect.stringContaining('Setup complete.'),
       allowedMentions: { parse: [] },
     });
+  });
+
+  it('validates /config setup against a configured verification channel when omitted', async () => {
+    const setupVerificationChannel = jest.fn().mockResolvedValue('configured-channel-1');
+    const validateSetupCandidate = jest.fn().mockResolvedValue({
+      guildId: 'guild-1',
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      issues: [],
+      errorCount: 0,
+      warningCount: 0,
+    });
+    const getServerConfig = jest.fn().mockResolvedValue({
+      verification_channel_id: 'configured-channel-1',
+      settings: {},
+    });
+    const { handler, setupDiagnosticsService } = buildHandler({
+      setupVerificationChannel,
+      validateSetupCandidate,
+      getServerConfig,
+    });
+    const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
+    const restrictedRole = { id: 'role-1' } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+      roles: {
+        create: jest.fn(),
+      },
+      channels: {
+        fetch: jest.fn().mockResolvedValue({
+          id: 'configured-channel-1',
+          type: ChannelType.GuildText,
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1', tag: 'Admin#0001' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue(null),
+        getSubcommand: jest.fn().mockReturnValue('setup'),
+        getChannel: jest.fn((name: string) => (name === 'admin-channel' ? adminChannel : null)),
+        getRole: jest.fn().mockReturnValue(restrictedRole),
+        getString: jest.fn().mockReturnValue(null),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(setupDiagnosticsService.validateSetupCandidate).toHaveBeenCalledWith(guild, {
+      restrictedRoleId: 'role-1',
+      willCreateRestrictedRole: false,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: 'configured-channel-1',
+      willCreateVerificationChannel: false,
+      willSyncVerificationChannelPermissions: true,
+      reportInstructionsChannelId: null,
+    });
+    expect(setupVerificationChannel).toHaveBeenCalledWith(
+      guild,
+      'role-1',
+      false,
+      expect.any(Function)
+    );
   });
 
   it('handles /config setup by creating the default restricted role and verification channel', async () => {

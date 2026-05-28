@@ -27,6 +27,7 @@ export interface SetupCandidate {
   readonly adminChannelId: string | null;
   readonly verificationChannelId?: string | null;
   readonly willCreateVerificationChannel?: boolean;
+  readonly willSyncVerificationChannelPermissions?: boolean;
   readonly reportInstructionsChannelId?: string | null;
 }
 
@@ -334,7 +335,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         candidate.verificationChannelId,
         'verification-channel',
         'Verification channel',
-        VERIFICATION_CHANNEL_PERMISSIONS,
+        candidate.willSyncVerificationChannelPermissions ? [] : VERIFICATION_CHANNEL_PERMISSIONS,
         issues
       );
       return;

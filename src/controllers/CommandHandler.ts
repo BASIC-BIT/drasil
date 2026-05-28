@@ -1343,13 +1343,21 @@ export class CommandHandler implements ICommandHandler {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+      const verificationChannelCandidate = await this.resolveVerificationChannelCandidate(
+        guild,
+        verificationChannel?.id ?? null
+      );
+
       const candidateReport = this.setupDiagnosticsService
         ? await this.setupDiagnosticsService.validateSetupCandidate(guild, {
             restrictedRoleId: restrictedRole.id,
             willCreateRestrictedRole: false,
             adminChannelId: adminChannel.id,
-            verificationChannelId: verificationChannel?.id ?? null,
-            willCreateVerificationChannel: !verificationChannel,
+            verificationChannelId: verificationChannelCandidate.channelId,
+            willCreateVerificationChannel: !verificationChannelCandidate.channelId,
+            ...(verificationChannelCandidate.willSyncPermissions
+              ? { willSyncVerificationChannelPermissions: true }
+              : {}),
             reportInstructionsChannelId: null,
           })
         : null;
@@ -1591,6 +1599,30 @@ export class CommandHandler implements ICommandHandler {
     }
   }
 
+  private async resolveVerificationChannelCandidate(
+    guild: NonNullable<ChatInputCommandInteraction['guild']>,
+    explicitVerificationChannelId: string | null
+  ): Promise<{ channelId: string | null; willSyncPermissions: boolean }> {
+    if (explicitVerificationChannelId) {
+      return { channelId: explicitVerificationChannelId, willSyncPermissions: false };
+    }
+
+    const serverConfig = await this.configService.getServerConfig(guild.id).catch(() => null);
+    const configuredVerificationChannelId = serverConfig?.verification_channel_id ?? null;
+    if (!configuredVerificationChannelId) {
+      return { channelId: null, willSyncPermissions: false };
+    }
+
+    const configuredChannel = await guild.channels
+      .fetch(configuredVerificationChannelId)
+      .catch(() => null);
+    if (configuredChannel?.type !== ChannelType.GuildText) {
+      return { channelId: null, willSyncPermissions: false };
+    }
+
+    return { channelId: configuredVerificationChannelId, willSyncPermissions: true };
+  }
+
   private async handleConfigSetupCommand(
     interaction: ChatInputCommandInteraction,
     guild: NonNullable<ChatInputCommandInteraction['guild']>
@@ -1643,12 +1675,20 @@ export class CommandHandler implements ICommandHandler {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+    const verificationChannelCandidate = await this.resolveVerificationChannelCandidate(
+      guild,
+      verificationChannel?.id ?? null
+    );
+
     const candidateReport = await this.setupDiagnosticsService.validateSetupCandidate(guild, {
       restrictedRoleId: existingRestrictedRole?.id ?? null,
       willCreateRestrictedRole: !existingRestrictedRole,
       adminChannelId: adminChannel.id,
-      verificationChannelId: verificationChannel?.id ?? null,
-      willCreateVerificationChannel: !verificationChannel,
+      verificationChannelId: verificationChannelCandidate.channelId,
+      willCreateVerificationChannel: !verificationChannelCandidate.channelId,
+      ...(verificationChannelCandidate.willSyncPermissions
+        ? { willSyncVerificationChannelPermissions: true }
+        : {}),
       reportInstructionsChannelId: reportChannel?.id ?? null,
     });
 

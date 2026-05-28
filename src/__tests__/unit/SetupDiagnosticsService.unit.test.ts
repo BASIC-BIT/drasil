@@ -191,4 +191,34 @@ describe('SetupDiagnosticsService (unit)', () => {
       'verification-channel-create-manage-channels'
     );
   });
+
+  it('does not require Manage Channels when setup will sync a configured verification channel', async () => {
+    const { guild, botMember } = buildConfiguredGuild({
+      channelHas: (permission) => permission !== PermissionFlagsBits.SendMessages,
+    });
+    botMember.permissions.has.mockImplementation(
+      (permission: bigint) =>
+        permission !== PermissionFlagsBits.Administrator &&
+        permission !== PermissionFlagsBits.ManageChannels
+    );
+    const configService = {
+      getServerConfig: jest.fn(),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateSetupCandidate(guild, {
+      restrictedRoleId: 'role-1',
+      willCreateRestrictedRole: false,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: 'verification-channel-1',
+      willCreateVerificationChannel: false,
+      willSyncVerificationChannelPermissions: true,
+      reportInstructionsChannelId: null,
+    });
+
+    expect(report.issues.map((issue) => issue.code)).not.toContain(
+      'verification-channel-create-manage-channels'
+    );
+    expect(report.issues.map((issue) => issue.code)).not.toContain('verification-channel-send');
+  });
 });
