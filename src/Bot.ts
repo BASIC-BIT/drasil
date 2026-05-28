@@ -44,10 +44,10 @@ export class Bot implements IBot {
     if (!token) {
       throw new Error('DISCORD_TOKEN environment variable not set');
     }
+    await this.eventHandler.setupEventHandlers();
+
     await this.client.login(token);
     console.log('Bot started and logged in!');
-
-    await this.eventHandler.setupEventHandlers();
   }
 
   /**

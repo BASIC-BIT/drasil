@@ -71,8 +71,8 @@ High-signal manual and automated test ideas live in `docs/test-cases.md`.
 ## Usage
 
 - Invite the bot to your server.
-- Follow the setup instructions below
-- Use the `/config` command to set up server-specific settings
+- Run `/config setup` to configure the restricted role and channels.
+- Run `/config validate` after permission or channel changes.
 - Update other config as needed (spam thresholds, OpenAI prompts).
 - Let the bot automatically classify new users or run the `/verify` command for manual overrides.
 
@@ -80,27 +80,30 @@ High-signal manual and automated test ideas live in `docs/test-cases.md`.
 
 ### Server Configuration
 
-1. **Create a Restricted Role**:
-   - Create a role in your Discord server that has limited permissions
-   - Take note of the role ID (enable Developer Mode in Discord Settings -> Advanced, then right-click the role and select "Copy ID")
-   - Use the `/config key:restricted_role_id value:<role-id>` command to set this value
+1. **Run Unified Setup**:
+   - Use `/config setup admin-channel:<channel>`.
+   - Optionally pass `restricted-role:<role>` to use an existing restricted role.
+   - Omit `restricted-role` to let Drasil create `Drasil Restricted`.
+   - Optionally pass `verification-channel:<channel>` to reuse an existing verification channel.
+   - Omit `verification-channel` to let Drasil create or reuse a `verification` text channel.
+   - Optionally pass `report-channel:<channel>` to create or update the report instructions message.
 
-2. **Create an Admin Channel**:
-   - Create a channel that only moderators/admins have access to
-   - This channel will receive notifications about suspicious users with interactive buttons
-   - Use the `/config key:admin_channel_id value:<channel-id>` command to set this value
+2. **Validate Setup**:
+   - Use `/config validate` after setup, permission changes, or channel changes.
+   - Hard errors block `/config setup` from saving.
+   - Warnings are shown but do not block saving.
 
-3. **Create a Verification Channel**:
-   - Create a channel visible only to admins and users with the restricted role
-   - Configure so restricted users can't see message history
-   - This is where verification threads will be created
-   - Use the `/config key:verification_channel_id value:<channel-id>` command to set this value
+3. **Legacy Direct Setup**:
+   - `/setupverification` and `/setupreportbutton` still exist for now.
+   - Prefer `/config setup` for new servers.
 
 ### Slash Commands
 
 The bot automatically registers the following slash commands during startup:
 
-- `/config key:value value:value` - Configure server-specific settings
+- `/config setup` - Configure required Drasil channels and restricted role
+- `/config validate` - Check setup, permissions, channels, and role hierarchy
+- `/config set key:<key> value:<value>` - Configure low-level server settings
 
 Slash commands are automatically registered when the bot starts up. There's no need for manual registration.
 

@@ -13,6 +13,8 @@ import {
   ChannelType,
   PermissionFlagsBits,
   GuildChannelCreateOptions,
+  GuildBasedChannel,
+  OverwriteResolvable,
   ButtonInteraction,
   MessageFlags,
   TextChannel,
@@ -36,6 +38,8 @@ import { getVerificationActionFailures } from '../utils/verificationActionFailur
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { CASE_STAFF_ROUTING_METADATA_KEY } from './ThreadManager';
 import { isDetectionEventExcludedFromAccounting } from '../utils/detectionEventAccounting';
+
+const VERIFICATION_CHANNEL_NAME = 'verification';
 
 export interface NotificationButton {
   id: string;
@@ -85,7 +89,9 @@ export interface INotificationManager {
   setupVerificationChannel(
     guild: Guild,
     restrictedRoleId: string,
-    persistConfig?: boolean
+    persistConfig?: boolean,
+    onChannelCreated?: (channelId: string) => void,
+    configuredVerificationChannelId?: string
   ): Promise<string | null>;
 
   /**
@@ -1373,7 +1379,9 @@ export class NotificationManager implements INotificationManager {
   public async setupVerificationChannel(
     guild: Guild,
     restrictedRoleId: string,
-    persistConfig = true
+    persistConfig = true,
+    onChannelCreated?: (channelId: string) => void,
+    configuredVerificationChannelId?: string
   ): Promise<string | null> {
     if (!restrictedRoleId) {
       console.error('Restricted role ID is required to set up verification channel');
@@ -1381,66 +1389,32 @@ export class NotificationManager implements INotificationManager {
     }
 
     try {
-      // Create permission overwrites for the channel
-      const permissionOverwrites = [
-        // Default role (everyone) - deny access
-        {
-          id: guild.roles.everyone.id,
-          deny: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-            PermissionFlagsBits.CreatePublicThreads,
-            PermissionFlagsBits.CreatePrivateThreads,
-          ],
-        },
-        // Restricted role - can view and send messages, but not read history
-        {
-          id: restrictedRoleId,
-          allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory, // TODO: Check if users need to be granted this to see history of private thread
-            PermissionFlagsBits.SendMessagesInThreads,
-          ],
-        },
-        // Bot - full access
-        {
-          id: this.client.user?.id || '',
-          allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-            PermissionFlagsBits.ManageChannels,
-            PermissionFlagsBits.ManageThreads,
-            PermissionFlagsBits.CreatePublicThreads,
-            PermissionFlagsBits.CreatePrivateThreads,
-            PermissionFlagsBits.SendMessagesInThreads,
-            PermissionFlagsBits.ModerateMembers,
-          ],
-        },
-      ];
-
-      // Find admin roles by checking for manage channels permission
-      const adminRoles = guild.roles.cache.filter((role) =>
-        role.permissions.has(PermissionFlagsBits.ManageChannels)
+      const permissionOverwrites = this.buildVerificationChannelPermissionOverwrites(
+        guild,
+        restrictedRoleId
       );
+      const configuredVerificationChannel = await this.findConfiguredVerificationChannel(
+        guild,
+        configuredVerificationChannelId
+      );
+      if (configuredVerificationChannel) {
+        await configuredVerificationChannel.permissionOverwrites.set(
+          permissionOverwrites,
+          'Sync Drasil verification channel permissions'
+        );
 
-      // Add admin roles to permission overwrites
-      adminRoles.forEach((role) => {
-        permissionOverwrites.push({
-          id: role.id,
-          allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-          ],
-        });
-      });
+        if (persistConfig) {
+          await this.configService.updateServerConfig(guild.id, {
+            verification_channel_id: configuredVerificationChannel.id,
+          });
+        }
+
+        return configuredVerificationChannel.id;
+      }
 
       // Create the verification channel
       const channelOptions: GuildChannelCreateOptions = {
-        name: 'verification',
+        name: VERIFICATION_CHANNEL_NAME,
         type: ChannelType.GuildText,
         permissionOverwrites: permissionOverwrites,
         topic:
@@ -1448,6 +1422,7 @@ export class NotificationManager implements INotificationManager {
       };
 
       const verificationChannel = await guild.channels.create(channelOptions);
+      onChannelCreated?.(verificationChannel.id);
 
       if (persistConfig) {
         await this.configService.updateServerConfig(guild.id, {
@@ -1460,6 +1435,113 @@ export class NotificationManager implements INotificationManager {
       console.error('Failed to set up verification channel:', error);
       return null;
     }
+  }
+
+  private buildVerificationChannelPermissionOverwrites(
+    guild: Guild,
+    restrictedRoleId: string
+  ): OverwriteResolvable[] {
+    const permissionOverwrites: OverwriteResolvable[] = [
+      // Default role (everyone) - deny access
+      {
+        id: guild.roles.everyone.id,
+        deny: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.CreatePublicThreads,
+          PermissionFlagsBits.CreatePrivateThreads,
+        ],
+      },
+      // Restricted role - can view and send messages, but not read history
+      {
+        id: restrictedRoleId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory, // TODO: Check if users need to be granted this to see history of private thread
+          PermissionFlagsBits.SendMessagesInThreads,
+        ],
+      },
+    ];
+
+    if (this.client.user?.id) {
+      permissionOverwrites.push({
+        id: this.client.user.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.ManageChannels,
+          PermissionFlagsBits.ManageThreads,
+          PermissionFlagsBits.CreatePublicThreads,
+          PermissionFlagsBits.CreatePrivateThreads,
+          PermissionFlagsBits.SendMessagesInThreads,
+          PermissionFlagsBits.ModerateMembers,
+        ],
+      });
+    }
+
+    // Find admin roles by checking for manage channels permission
+    const adminRoles = guild.roles.cache.filter((role) =>
+      role.permissions.has(PermissionFlagsBits.ManageChannels)
+    );
+
+    // Add admin roles to permission overwrites
+    adminRoles.forEach((role) => {
+      permissionOverwrites.push({
+        id: role.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+        ],
+      });
+    });
+
+    return permissionOverwrites;
+  }
+
+  private async findConfiguredVerificationChannel(
+    guild: Guild,
+    resolvedVerificationChannelId?: string
+  ): Promise<TextChannel | null> {
+    let verificationChannelId = resolvedVerificationChannelId ?? null;
+    if (!verificationChannelId) {
+      const serverConfig = await this.configService.getServerConfig(guild.id).catch((error) => {
+        console.warn(
+          'Failed to load server config while checking for an existing verification channel:',
+          error
+        );
+        return null;
+      });
+      verificationChannelId = serverConfig?.verification_channel_id ?? null;
+    }
+
+    if (!verificationChannelId) {
+      return null;
+    }
+
+    const cachedChannel = guild.channels.cache.find(
+      (channel) => channel.id === verificationChannelId
+    );
+    if (this.isTextChannel(cachedChannel)) {
+      return cachedChannel;
+    }
+
+    const fetchedChannel = await guild.channels.fetch(verificationChannelId).catch((error) => {
+      console.warn(
+        'Failed to fetch configured verification channel while setting up permissions:',
+        error
+      );
+      return null;
+    });
+
+    return this.isTextChannel(fetchedChannel) ? fetchedChannel : null;
+  }
+
+  private isTextChannel(channel: GuildBasedChannel | null | undefined): channel is TextChannel {
+    return channel?.type === ChannelType.GuildText;
   }
 
   /**

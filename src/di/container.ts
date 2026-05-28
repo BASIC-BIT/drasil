@@ -47,6 +47,10 @@ import {
   IProductAnalyticsService,
   ProductAnalyticsService,
 } from '../services/ProductAnalyticsService';
+import {
+  ISetupDiagnosticsService,
+  SetupDiagnosticsService,
+} from '../services/SetupDiagnosticsService';
 // Initialize container
 const container = new Container();
 
@@ -188,6 +192,11 @@ function configureServices(container: Container): void {
   container
     .bind<IProductAnalyticsService>(TYPES.ProductAnalyticsService)
     .to(ProductAnalyticsService)
+    .inSingletonScope();
+
+  container
+    .bind<ISetupDiagnosticsService>(TYPES.SetupDiagnosticsService)
+    .to(SetupDiagnosticsService)
     .inSingletonScope();
 }
 

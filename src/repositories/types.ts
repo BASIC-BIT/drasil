@@ -60,6 +60,12 @@ export interface ServerSettings {
   report_ai_restrict_threshold?: number;
   report_ai_max_images?: number;
   report_ai_max_image_bytes?: number;
+  report_instructions_channel_id?: string | null;
+  report_instructions_message_id?: string | null;
+  setup_nudge_last_attempt_at?: string | null;
+  setup_nudge_last_recipient_id?: string | null;
+  setup_nudge_last_result?: 'sent' | 'dm_failed' | 'no_recipient' | null;
+  setup_nudge_last_source?: 'audit_log_installer' | 'owner' | null;
 }
 
 /**
