@@ -483,8 +483,7 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const reasonRequired = await this.getUserReportReasonRequired(interaction.guildId ?? undefined);
-    const modal = this.buildReportUserReasonModal(targetUserId, reasonRequired);
+    const modal = this.buildReportUserReasonModal(targetUserId, false);
     await interaction.showModal(modal);
   }
 

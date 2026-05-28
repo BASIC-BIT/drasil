@@ -1592,6 +1592,8 @@ describe('InteractionHandler (unit)', () => {
       label: 'Reason (optional)',
       required: false,
     });
+    expect(configService.getCachedServerConfig).not.toHaveBeenCalled();
+    expect(configService.getServerConfig).not.toHaveBeenCalled();
   });
 
   it('submits a report from the selected user reason modal', async () => {

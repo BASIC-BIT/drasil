@@ -192,7 +192,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     );
   });
 
-  it('does not require Manage Channels when setup will sync a configured verification channel', async () => {
+  it('requires Manage Channels when setup will sync a configured verification channel', async () => {
     const { guild, botMember } = buildConfiguredGuild({
       channelHas: (permission) => permission !== PermissionFlagsBits.SendMessages,
     });
@@ -216,8 +216,8 @@ describe('SetupDiagnosticsService (unit)', () => {
       reportInstructionsChannelId: null,
     });
 
-    expect(report.issues.map((issue) => issue.code)).not.toContain(
-      'verification-channel-create-manage-channels'
+    expect(report.issues.map((issue) => issue.code)).toContain(
+      'verification-channel-sync-manage-channels'
     );
     expect(report.issues.map((issue) => issue.code)).not.toContain('verification-channel-send');
   });

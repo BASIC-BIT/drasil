@@ -338,6 +338,17 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         candidate.willSyncVerificationChannelPermissions ? [] : VERIFICATION_CHANNEL_PERMISSIONS,
         issues
       );
+      if (
+        candidate.willSyncVerificationChannelPermissions &&
+        !botMember.permissions.has(PermissionFlagsBits.ManageChannels)
+      ) {
+        issues.push({
+          severity: 'error',
+          code: 'verification-channel-sync-manage-channels',
+          message:
+            'Drasil is missing Manage Channels, so it cannot sync the configured verification channel permissions.',
+        });
+      }
       return;
     }
 
