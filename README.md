@@ -86,12 +86,14 @@ High-signal manual and automated test ideas live in `docs/test-cases.md`.
    - Omit `restricted-role` to let Drasil create `Drasil Restricted`.
    - Optionally pass `verification-channel:<channel>` to reuse an existing verification channel.
    - Omit `verification-channel` to let Drasil create or reuse a `verification` text channel.
+   - If multiple `#verification` channels exist, pass `verification-channel:<channel>` explicitly.
    - Optionally pass `report-channel:<channel>` to create or update the report instructions message.
 
 2. **Validate Setup**:
    - Use `/config validate` after setup, permission changes, or channel changes.
    - Hard errors block `/config setup` from saving.
    - Warnings are shown but do not block saving.
+   - Use `/config warnings view` to inspect owner/installer setup warning DMs; use `owner-dm-suppress`, `owner-dm-disable`, or `owner-dm-enable` to control them.
 
 3. **Legacy Direct Setup**:
    - `/setupverification` and `/setupreportbutton` still exist for now.
@@ -103,6 +105,7 @@ The bot automatically registers the following slash commands during startup:
 
 - `/config setup` - Configure required Drasil channels and restricted role
 - `/config validate` - Check setup, permissions, channels, and role hierarchy
+- `/config warnings` - View or pause setup warning DMs sent to the owner/installer
 - `/config set key:<key> value:<value>` - Configure low-level server settings
 
 Slash commands are automatically registered when the bot starts up. There's no need for manual registration.

@@ -145,6 +145,63 @@ describe('SetupDiagnosticsService (unit)', () => {
     expect(report.errorCount).toBeGreaterThanOrEqual(1);
   });
 
+  it('requires read message history in configured verification channels', async () => {
+    const { guild } = buildConfiguredGuild({
+      channelHas: (permission) => permission !== PermissionFlagsBits.ReadMessageHistory,
+    });
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        restricted_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateGuildSetup(guild);
+
+    expect(report.issues.map((issue) => issue.code)).toContain(
+      'verification-channel-read-message-history'
+    );
+    expect(report.errorCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('warns for unmentionable admin notification and missing case responder roles', async () => {
+    const { guild, restrictedRole } = buildConfiguredGuild({
+      channelHas: (permission) => permission !== PermissionFlagsBits.MentionEveryone,
+    });
+    const notifyRole = { id: 'notify-role-1', mentionable: false };
+    guild.roles.fetch.mockImplementation((roleId: string) => {
+      if (roleId === 'role-1') {
+        return Promise.resolve(restrictedRole);
+      }
+      if (roleId === 'notify-role-1') {
+        return Promise.resolve(notifyRole);
+      }
+      return Promise.resolve(null);
+    });
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        restricted_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        admin_notification_role_id: 'notify-role-1',
+        settings: { case_responder_role_ids: ['234567890123456789'] },
+      }),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateGuildSetup(guild);
+
+    expect(report.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['admin-notification-role-mention', 'case-responder-role-not-found'])
+    );
+    expect(report.warningCount).toBeGreaterThanOrEqual(2);
+  });
+
   it('validates setup candidates that create the restricted role and verification channel', async () => {
     const { guild } = buildConfiguredGuild();
     const configService = {

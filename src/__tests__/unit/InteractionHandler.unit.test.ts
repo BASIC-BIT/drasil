@@ -1368,13 +1368,17 @@ describe('InteractionHandler (unit)', () => {
       content:
         'Setup complete.\nRestricted role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nVerification channel: <#123456789012345680>',
       flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
     });
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
   });
 
   it('auto-creates verification channel when field is blank', async () => {
-    (notificationManager.setupVerificationChannel as jest.Mock).mockResolvedValue(
-      '123456789012345681'
+    (notificationManager.setupVerificationChannel as jest.Mock).mockImplementation(
+      async (_guild, _roleId, _persist, onChannelCreated) => {
+        onChannelCreated?.('123456789012345681');
+        return '123456789012345681';
+      }
     );
 
     (client.guilds.fetch as jest.Mock).mockResolvedValue({
@@ -1429,7 +1433,8 @@ describe('InteractionHandler (unit)', () => {
     expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
       expect.anything(),
       '123456789012345678',
-      false
+      false,
+      expect.any(Function)
     );
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       restricted_role_id: '123456789012345678',
@@ -1440,6 +1445,112 @@ describe('InteractionHandler (unit)', () => {
       content:
         'Setup complete.\nRestricted role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nCreated verification channel: <#123456789012345681>',
       flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('rolls back an auto-created verification channel when final setup diagnostics fail', async () => {
+    const createdChannel = {
+      id: '123456789012345681',
+      type: ChannelType.GuildText,
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
+    (notificationManager.setupVerificationChannel as jest.Mock).mockImplementation(
+      async (_guild, _roleId, _persist, onChannelCreated) => {
+        onChannelCreated?.('123456789012345681');
+        return '123456789012345681';
+      }
+    );
+    const setupDiagnosticsService = {
+      validateSetupCandidate: jest
+        .fn()
+        .mockResolvedValueOnce({
+          guildId: 'guild-1',
+          checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+          issues: [],
+          errorCount: 0,
+          warningCount: 0,
+        })
+        .mockResolvedValueOnce({
+          guildId: 'guild-1',
+          checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+          issues: [
+            {
+              severity: 'error',
+              code: 'verification-channel-send',
+              message: 'Drasil is missing Send Messages in the verification channel.',
+            },
+          ],
+          errorCount: 1,
+          warningCount: 0,
+        }),
+    } as any;
+
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+      roles: {
+        fetch: jest.fn().mockResolvedValue({ id: '123456789012345678' }),
+      },
+      channels: {
+        fetch: jest.fn((id: string) => {
+          if (id === '123456789012345679') {
+            return Promise.resolve({ id, type: ChannelType.GuildText });
+          }
+          if (id === '123456789012345681') {
+            return Promise.resolve(createdChannel);
+          }
+          return Promise.resolve(null);
+        }),
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      setupDiagnosticsService
+    );
+    const interaction = {
+      customId: SETUP_VERIFICATION_MODAL_ID,
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID) {
+            return '123456789012345678';
+          }
+          if (id === SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID) {
+            return '123456789012345679';
+          }
+          return '';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(createdChannel.delete).toHaveBeenCalledWith(
+      'Rolling back Drasil setup after final validation failed'
+    );
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining(
+        'Created verification channel <#123456789012345681> was removed.'
+      ),
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
     });
   });
 

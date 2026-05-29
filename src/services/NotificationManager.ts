@@ -1519,6 +1519,15 @@ export class NotificationManager implements INotificationManager {
     }
 
     if (!verificationChannelId) {
+      const matchingChannels = this.findMatchingVerificationChannels(guild);
+      if (matchingChannels.length === 1) {
+        return matchingChannels[0];
+      }
+      if (matchingChannels.length > 1) {
+        console.warn(
+          `Multiple #${VERIFICATION_CHANNEL_NAME} channels found in guild ${guild.id}; require an explicit verification channel.`
+        );
+      }
       return null;
     }
 
@@ -1538,6 +1547,47 @@ export class NotificationManager implements INotificationManager {
     });
 
     return this.isTextChannel(fetchedChannel) ? fetchedChannel : null;
+  }
+
+  private findMatchingVerificationChannels(guild: Guild): TextChannel[] {
+    const guildLike = guild as { channels?: { cache?: unknown } };
+    const values = this.getCachedChannelValues(
+      guildLike.channels?.cache,
+      (channel) =>
+        this.isTextChannel(channel as GuildBasedChannel | null | undefined) &&
+        (channel as TextChannel).name === VERIFICATION_CHANNEL_NAME
+    );
+
+    return values.filter(
+      (channel): channel is TextChannel =>
+        this.isTextChannel(channel as GuildBasedChannel | null | undefined) &&
+        (channel as TextChannel).name === VERIFICATION_CHANNEL_NAME
+    );
+  }
+
+  private getCachedChannelValues(
+    cache: unknown,
+    fallbackPredicate: (channel: unknown) => boolean
+  ): unknown[] {
+    const cacheWithValues = cache as { values?: unknown } | null;
+    if (typeof cacheWithValues?.values === 'function') {
+      return [...(cacheWithValues.values as () => Iterable<unknown>)()];
+    }
+
+    const cacheWithFind = cache as { find?: unknown } | null;
+    if (typeof cacheWithFind?.find === 'function') {
+      const found = (cacheWithFind.find as (predicate: (channel: unknown) => boolean) => unknown)(
+        fallbackPredicate
+      );
+      return found ? [found] : [];
+    }
+
+    const iterableCache = cache as { [Symbol.iterator]?: unknown } | null;
+    if (typeof iterableCache?.[Symbol.iterator] === 'function') {
+      return [...(cache as Iterable<unknown>)];
+    }
+
+    return [];
   }
 
   private isTextChannel(channel: GuildBasedChannel | null | undefined): channel is TextChannel {

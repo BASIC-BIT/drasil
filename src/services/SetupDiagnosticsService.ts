@@ -4,6 +4,7 @@ import { IConfigService } from '../config/ConfigService';
 import { Server } from '../repositories/types';
 import { TYPES } from '../di/symbols';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
+import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 
 export type SetupDiagnosticSeverity = 'error' | 'warning';
 
@@ -67,6 +68,12 @@ const ADMIN_CHANNEL_PERMISSIONS: readonly PermissionRequirement[] = [
 const VERIFICATION_CHANNEL_PERMISSIONS: readonly PermissionRequirement[] = [
   ...ADMIN_CHANNEL_PERMISSIONS,
   {
+    permission: PermissionFlagsBits.ReadMessageHistory,
+    label: 'Read Message History',
+    severity: 'error',
+    codeSuffix: 'read-message-history',
+  },
+  {
     permission: PermissionFlagsBits.CreatePrivateThreads,
     label: 'Create Private Threads',
     severity: 'error',
@@ -124,6 +131,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       ADMIN_CHANNEL_PERMISSIONS,
       issues
     );
+    await this.checkAdminNotificationRole(guild, botMember, serverConfig, issues);
     await this.checkConfiguredTextChannel(
       guild,
       botMember,
@@ -158,6 +166,8 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         issues
       );
     }
+
+    await this.checkCaseResponderRoles(guild, serverConfig, issues);
 
     return this.toReport(guild.id, issues);
   }
@@ -326,7 +336,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       issues.push({
         severity: 'error',
         code: 'restricted-role-hierarchy',
-        message: `Drasil's highest role must be above restricted role <@&${restrictedRole.id}>.`,
+        message: `Move the Drasil role above the selected restricted role <@&${restrictedRole.id}>.`,
       });
     }
   }
@@ -368,6 +378,81 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         message:
           'Drasil is missing Manage Channels, so it cannot create the verification channel automatically.',
       });
+    }
+  }
+
+  private async checkAdminNotificationRole(
+    guild: Guild,
+    botMember: GuildMember,
+    serverConfig: Server,
+    issues: SetupDiagnosticIssue[]
+  ): Promise<void> {
+    const roleId = serverConfig.admin_notification_role_id;
+    if (!roleId) {
+      return;
+    }
+
+    const role = await guild.roles.fetch(roleId).catch(() => null);
+    if (!role) {
+      issues.push({
+        severity: 'warning',
+        code: 'admin-notification-role-not-found',
+        message: `Admin notification role ${roleId} no longer exists.`,
+      });
+      return;
+    }
+
+    const adminChannelId = serverConfig.admin_channel_id;
+    const channel = adminChannelId
+      ? await guild.channels.fetch(adminChannelId).catch(() => null)
+      : null;
+    if (!channel || channel.type !== ChannelType.GuildText) {
+      return;
+    }
+
+    const canMentionRole =
+      role.mentionable ||
+      (channel as TextChannel).permissionsFor(botMember).has(PermissionFlagsBits.MentionEveryone);
+    if (!canMentionRole) {
+      issues.push({
+        severity: 'warning',
+        code: 'admin-notification-role-mention',
+        message: `Drasil may not be able to mention admin notification role <@&${role.id}> in <#${channel.id}>. Make the role mentionable or grant Mention Everyone.`,
+      });
+    }
+  }
+
+  private async checkCaseResponderRoles(
+    guild: Guild,
+    serverConfig: Server,
+    issues: SetupDiagnosticIssue[]
+  ): Promise<void> {
+    const settings = getCaseResponderSettings(serverConfig.settings);
+    if (settings.roleIds.length === 0) {
+      return;
+    }
+
+    for (const roleId of settings.roleIds) {
+      const role = await guild.roles.fetch(roleId).catch(() => null);
+      if (!role) {
+        issues.push({
+          severity: 'warning',
+          code: 'case-responder-role-not-found',
+          message: `Case responder role ${roleId} no longer exists.`,
+        });
+        continue;
+      }
+
+      if (
+        settings.routingMode === 'ping_and_add_members' &&
+        role.members.size > settings.threadMemberCap
+      ) {
+        issues.push({
+          severity: 'warning',
+          code: 'case-responder-role-member-cap',
+          message: `Case responder role <@&${role.id}> has ${role.members.size} cached members, above cap ${settings.threadMemberCap}; Drasil will ping the role instead of adding every member to case threads.`,
+        });
+      }
     }
   }
 

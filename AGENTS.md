@@ -90,6 +90,11 @@ If the user says "Reset the database", run `npm run db:reset:local`.
 - Workflow: `.github/workflows/ci.yml`
 - Gates: build, format check, lint, tests against Postgres service.
 
+## Deployment
+
+- Production auto-deploys on pushes to `main` via `.github/workflows/deploy-prod.yml`: build/push the commit-SHA ECR image, run Prisma migrations, update the ECS service, and wait for service stability. Manual `workflow_dispatch` can deploy a specific ref for rollback or recovery.
+- Promotion note: current source is `.github/workflows/deploy-prod.yml` plus `docs/deploy/aws.md`; target is repo `AGENTS.md` because agents repeatedly need this short repo-specific fact during rollout planning. Over-promotion cost is one visible deployment bullet; demotion path is moving details back to `docs/deploy/aws.md` if this grows; verification signal is `gh run list --workflow "Deploy (prod)" --branch main`, including PR #90's successful push-triggered deploy.
+
 ## Contribution workflow
 
 - Track work with GitHub issues.

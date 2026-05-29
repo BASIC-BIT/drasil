@@ -16,9 +16,10 @@ import {
   UserSelectMenuInteraction,
   ModalSubmitInteraction,
   ButtonStyle,
+  Guild,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import { INotificationManager } from '../services/NotificationManager';
 import { TYPES } from '../di/symbols';
 import { AdminActionType, VerificationStatus } from '../repositories/types';
@@ -33,6 +34,7 @@ import {
   type MessageReportAttachment,
 } from '../services/SecurityActionService';
 import { IConfigService } from '../config/ConfigService';
+import { ISetupDiagnosticsService } from '../services/SetupDiagnosticsService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import {
   DEFAULT_USER_REPORT_REASON_REQUIRED,
@@ -100,6 +102,7 @@ export class InteractionHandler implements IInteractionHandler {
   private verificationEventRepository: IVerificationEventRepository;
   private threadManager: IThreadManager;
   private adminActionRepository: IAdminActionRepository;
+  private setupDiagnosticsService?: ISetupDiagnosticsService;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -110,7 +113,10 @@ export class InteractionHandler implements IInteractionHandler {
     @inject(TYPES.VerificationEventRepository)
     verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.ThreadManager) threadManager: IThreadManager,
-    @inject(TYPES.AdminActionRepository) adminActionRepository: IAdminActionRepository
+    @inject(TYPES.AdminActionRepository) adminActionRepository: IAdminActionRepository,
+    @inject(TYPES.SetupDiagnosticsService)
+    @optional()
+    setupDiagnosticsService?: ISetupDiagnosticsService
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -120,6 +126,7 @@ export class InteractionHandler implements IInteractionHandler {
     this.verificationEventRepository = verificationEventRepository;
     this.threadManager = threadManager;
     this.adminActionRepository = adminActionRepository;
+    this.setupDiagnosticsService = setupDiagnosticsService;
   }
 
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
@@ -1321,6 +1328,9 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
+    let setupFailureDetail = 'Please check permissions and try again.';
+    const createdSetupArtifacts: { verificationChannelId?: string } = {};
+
     try {
       const guild = await this.client.guilds.fetch(interaction.guildId);
       const moderator = await guild.members.fetch(interaction.user.id).catch(() => null);
@@ -1363,23 +1373,100 @@ export class InteractionHandler implements IInteractionHandler {
           return;
         }
       } else {
+        if (this.setupDiagnosticsService) {
+          const report = await this.setupDiagnosticsService.validateSetupCandidate(guild, {
+            restrictedRoleId,
+            willCreateRestrictedRole: false,
+            adminChannelId,
+            verificationChannelId: null,
+            willCreateVerificationChannel: true,
+            reportInstructionsChannelId: null,
+          });
+          if (report.errorCount > 0) {
+            await interaction.reply({
+              content:
+                'Setup not saved. Fix these errors before completing setup:\n' +
+                report.issues
+                  .filter((issue) => issue.severity === 'error')
+                  .map((issue) => `- ${issue.message}`)
+                  .join('\n'),
+              flags: MessageFlags.Ephemeral,
+              allowedMentions: { parse: [] },
+            });
+            return;
+          }
+        }
+
         const createdChannelId = await this.notificationManager.setupVerificationChannel(
           guild,
           restrictedRoleId,
-          false
+          false,
+          (channelId) => {
+            createdSetupArtifacts.verificationChannelId = channelId;
+          }
         );
         if (!createdChannelId) {
           throw new Error('Failed to create a verification channel during setup.');
         }
         verificationChannelId = createdChannelId;
-        verificationChannelWasCreated = true;
+        verificationChannelWasCreated = Boolean(createdSetupArtifacts.verificationChannelId);
       }
 
-      await this.configService.updateServerConfig(interaction.guildId, {
-        restricted_role_id: restrictedRoleId,
-        admin_channel_id: adminChannelId,
-        verification_channel_id: verificationChannelId,
-      });
+      if (this.setupDiagnosticsService) {
+        const report = await this.setupDiagnosticsService.validateSetupCandidate(guild, {
+          restrictedRoleId,
+          willCreateRestrictedRole: false,
+          adminChannelId,
+          verificationChannelId,
+          willCreateVerificationChannel: false,
+          reportInstructionsChannelId: null,
+        });
+        if (report.errorCount > 0) {
+          let rollbackDetail = '';
+          if (createdSetupArtifacts.verificationChannelId) {
+            const rolledBack = await this.rollbackCreatedVerificationChannel(
+              guild,
+              createdSetupArtifacts.verificationChannelId,
+              'Rolling back Drasil setup after final validation failed'
+            );
+            rollbackDetail = rolledBack
+              ? `\nCreated verification channel <#${createdSetupArtifacts.verificationChannelId}> was removed.`
+              : `\nCreated verification channel <#${createdSetupArtifacts.verificationChannelId}> could not be removed; delete it before rerunning setup.`;
+          }
+          await interaction.reply({
+            content:
+              'Setup not saved. Fix these errors before completing setup:\n' +
+              report.issues
+                .filter((issue) => issue.severity === 'error')
+                .map((issue) => `- ${issue.message}`)
+                .join('\n') +
+              rollbackDetail,
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+      }
+
+      try {
+        await this.configService.updateServerConfig(interaction.guildId, {
+          restricted_role_id: restrictedRoleId,
+          admin_channel_id: adminChannelId,
+          verification_channel_id: verificationChannelId,
+        });
+      } catch (error) {
+        if (createdSetupArtifacts.verificationChannelId) {
+          const rolledBack = await this.rollbackCreatedVerificationChannel(
+            guild,
+            createdSetupArtifacts.verificationChannelId,
+            'Rolling back Drasil setup after config save failed'
+          );
+          setupFailureDetail = rolledBack
+            ? 'Configuration could not be saved. The newly created verification channel was removed.'
+            : `Configuration could not be saved. The newly created verification channel <#${createdSetupArtifacts.verificationChannelId}> could not be removed; delete it before rerunning setup.`;
+        }
+        throw error;
+      }
 
       const verificationChannelMessage = verificationChannelWasCreated
         ? `Created verification channel: <#${verificationChannelId}>`
@@ -1392,6 +1479,7 @@ export class InteractionHandler implements IInteractionHandler {
           `Admin channel: <#${adminChannelId}>\n` +
           `${verificationChannelMessage}`,
         flags: MessageFlags.Ephemeral,
+        allowedMentions: { parse: [] },
       });
     } catch (error) {
       console.error(
@@ -1399,7 +1487,7 @@ export class InteractionHandler implements IInteractionHandler {
         error
       );
       const errorResponse = {
-        content: 'Failed to complete setup verification. Please check permissions and try again.',
+        content: `Failed to complete setup verification. ${setupFailureDetail}`,
         flags: MessageFlags.Ephemeral,
       } as const;
 
@@ -1408,6 +1496,28 @@ export class InteractionHandler implements IInteractionHandler {
       } else {
         await interaction.reply(errorResponse);
       }
+    }
+  }
+
+  private async rollbackCreatedVerificationChannel(
+    guild: Guild,
+    channelId: string,
+    reason: string
+  ): Promise<boolean> {
+    try {
+      const channel = await guild.channels.fetch(channelId).catch(() => null);
+      const deletableChannel = channel as {
+        delete?: (deleteReason?: string) => Promise<unknown>;
+      } | null;
+      if (!deletableChannel?.delete) {
+        return false;
+      }
+
+      await deletableChannel.delete(reason);
+      return true;
+    } catch (error) {
+      console.error(`Failed to roll back verification channel ${channelId}:`, error);
+      return false;
     }
   }
 
