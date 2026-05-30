@@ -16,6 +16,7 @@ import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { DetectionType } from '../repositories/types';
 import {
   isDetectionEventExcludedFromAccounting,
+  isDetectionEventMarkedFalsePositive,
   withDetectionTestingMetadata,
 } from '../utils/detectionEventAccounting';
 import {
@@ -184,7 +185,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         (event) => !isDetectionEventExcludedFromAccounting(event)
       );
       const falsePositiveEvents = allServerEvents.filter((event) =>
-        isDetectionEventExcludedFromAccounting(event)
+        isDetectionEventMarkedFalsePositive(event)
       );
       const recentSuspiciousEvents = countedEvents.filter((event) =>
         meetsConfidenceLevel(event.confidence, 'High')
@@ -343,7 +344,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         (event) => !isDetectionEventExcludedFromAccounting(event)
       );
       const falsePositiveEvents = allServerEvents.filter((event) =>
-        isDetectionEventExcludedFromAccounting(event)
+        isDetectionEventMarkedFalsePositive(event)
       );
       const recentSuspiciousEvents = countedEvents.filter((event) =>
         meetsConfidenceLevel(event.confidence, 'High')

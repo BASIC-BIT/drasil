@@ -13,6 +13,10 @@ import {
   InMemoryServerRepository,
   InMemoryUserRepository,
 } from '../fakes/inMemoryRepositories';
+import {
+  DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY,
+  DETECTION_TEST_MODE_METADATA_KEY,
+} from '../../utils/detectionEventAccounting';
 
 describe('DetectionOrchestrator (unit)', () => {
   const serverId = 'server-1';
@@ -323,6 +327,49 @@ describe('DetectionOrchestrator (unit)', () => {
       expect.objectContaining({
         pastDetectionCount: 0,
         pastFalsePositiveDetectionCount: 1,
+        recentHighConfidenceDetectionCount: 0,
+      })
+    );
+  });
+
+  it('does not count non-false-positive exclusions as false-positive GPT context', async () => {
+    await detectionEventsRepository.create({
+      server_id: serverId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.9,
+      reasons: ['Detection test run'],
+      detected_at: new Date(),
+      metadata: {
+        [DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY]: true,
+        [DETECTION_TEST_MODE_METADATA_KEY]: true,
+      },
+    });
+
+    heuristicService.analyzeMessage.mockReturnValue({ result: 'OK', reasons: [] });
+    gptService.analyzeProfile.mockResolvedValue(makeGptAnalysis());
+
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository
+    );
+
+    const profile: UserProfileData = {
+      username: 'new-user',
+      accountCreatedAt: new Date(),
+      joinedServerAt: new Date(),
+      recentMessages: [],
+    };
+
+    await orchestrator.detectMessage(serverId, userId, 'hello', profile);
+
+    expect(gptService.analyzeProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pastDetectionCount: 0,
+        pastFalsePositiveDetectionCount: 0,
         recentHighConfidenceDetectionCount: 0,
       })
     );
