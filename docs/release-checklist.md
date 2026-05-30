@@ -28,7 +28,7 @@ Bot permissions (minimum practical set):
 
 - Manage Roles (assign/remove restricted role)
 - Ban Members (ban flow)
-- View Channels / Send Messages (admin + verification channels)
+- View Channels / Send Messages / Read Message History (admin + verification channels)
 - Manage Threads + Create Private Threads (verification threads)
 
 Role hierarchy:
@@ -57,8 +57,9 @@ Create or choose:
 Configure and validate the bot:
 
 - Run `/config setup admin-channel:<channel>`.
-- Pass `restricted-role:<role>` only when reusing an existing role; otherwise Drasil creates `Drasil Restricted`.
+- Pass `restricted-role:<role>` only when choosing a specific existing role; otherwise Drasil reuses a configured/default `Drasil Restricted` role or creates it if missing.
 - Pass `verification-channel:<channel>` only when reusing an existing channel; otherwise Drasil creates/reuses `verification`.
+- If multiple `#verification` channels exist, pass `verification-channel:<channel>` explicitly.
 - Optionally pass `report-channel:<channel>` to create/update report instructions.
 - Run `/config validate` and fix all errors before smoke tests.
 

@@ -8,6 +8,7 @@ describe('EventHandler (unit)', () => {
     detectionOrchestrator?: Record<string, jest.Mock>;
     configService?: Record<string, jest.Mock>;
     notificationManager?: Record<string, jest.Mock>;
+    setupDiagnosticsService?: Record<string, jest.Mock>;
   }): EventHandler {
     const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
     const detectionOrchestrator = overrides?.detectionOrchestrator ?? {
@@ -55,7 +56,9 @@ describe('EventHandler (unit)', () => {
       { handleSuspiciousMessage: jest.fn(), openCaseForSuspiciousMessage: jest.fn() } as any,
       { handleTestCommands: jest.fn(), registerCommands: jest.fn() } as any,
       { handleButtonInteraction: jest.fn(), handleModalSubmit: jest.fn() } as any,
-      { handleThreadMessage: jest.fn().mockResolvedValue(false) } as any
+      { handleThreadMessage: jest.fn().mockResolvedValue(false) } as any,
+      undefined,
+      overrides?.setupDiagnosticsService as any
     );
   }
 
@@ -584,5 +587,204 @@ describe('EventHandler (unit)', () => {
     expect(guild.fetchAuditLogs).not.toHaveBeenCalled();
     expect(guild.fetchOwner).not.toHaveBeenCalled();
     expect(configService.updateServerSettings).not.toHaveBeenCalled();
+  });
+
+  it('sends a detection-time setup warning when diagnostics have errors', async () => {
+    const installer = {
+      id: 'installer-1',
+      bot: false,
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        restricted_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
+        settings: {},
+      }),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const setupDiagnosticsService = {
+      validateGuildSetup: jest.fn().mockResolvedValue({
+        guildId: 'guild-1',
+        checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+        issues: [
+          {
+            severity: 'error',
+            code: 'restricted-role-missing',
+            message: 'Restricted role is not configured.',
+          },
+        ],
+        errorCount: 1,
+        warningCount: 0,
+      }),
+    };
+    const handler = buildHandler({ configService, setupDiagnosticsService });
+    const guild = {
+      id: 'guild-1',
+      name: 'Test Guild',
+      fetchAuditLogs: jest.fn().mockResolvedValue({
+        entries: {
+          find: jest.fn().mockReturnValue({ target: { id: 'bot-1' }, executor: installer }),
+        },
+      }),
+      fetchOwner: jest.fn(),
+    } as any;
+
+    await (handler as any).maybeSendDetectionSetupWarning(guild);
+
+    expect(installer.send).toHaveBeenCalledWith(expect.stringContaining('/config validate'));
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      setup_nudge_last_attempt_at: expect.any(String),
+      setup_nudge_last_recipient_id: 'installer-1',
+      setup_nudge_last_result: 'sent',
+      setup_nudge_last_source: 'audit_log_installer',
+      setup_warning_last_fingerprint: 'restricted-role-missing',
+    });
+    expect(installer.send.mock.calls[0][0]).toContain('No message content is included in this DM.');
+  });
+
+  it('skips detection-time setup validation immediately after a warning attempt', async () => {
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        restricted_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
+        settings: {
+          setup_nudge_last_attempt_at: new Date().toISOString(),
+          setup_warning_last_fingerprint: 'restricted-role-missing',
+        },
+      }),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const setupDiagnosticsService = {
+      validateGuildSetup: jest.fn(),
+    };
+    const handler = buildHandler({ configService, setupDiagnosticsService });
+    const guild = {
+      id: 'guild-1',
+      name: 'Test Guild',
+      fetchAuditLogs: jest.fn(),
+      fetchOwner: jest.fn(),
+    } as any;
+
+    await (handler as any).maybeSendDetectionSetupWarning(guild);
+
+    expect(setupDiagnosticsService.validateGuildSetup).not.toHaveBeenCalled();
+    expect(guild.fetchAuditLogs).not.toHaveBeenCalled();
+    expect(guild.fetchOwner).not.toHaveBeenCalled();
+    expect(configService.updateServerSettings).not.toHaveBeenCalled();
+  });
+
+  it('dedupes detection-time setup warnings by recipient and diagnostics fingerprint', async () => {
+    const installer = {
+      id: 'installer-1',
+      bot: false,
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        restricted_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
+        settings: {
+          setup_nudge_last_attempt_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+          setup_nudge_last_recipient_id: 'installer-1',
+          setup_warning_last_fingerprint: 'admin-channel-missing|restricted-role-missing',
+        },
+      }),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const setupDiagnosticsService = {
+      validateGuildSetup: jest.fn().mockResolvedValue({
+        guildId: 'guild-1',
+        checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+        issues: [
+          {
+            severity: 'error',
+            code: 'restricted-role-missing',
+            message: 'Restricted role is not configured.',
+          },
+          {
+            severity: 'error',
+            code: 'admin-channel-missing',
+            message: 'Admin channel is not configured.',
+          },
+        ],
+        errorCount: 2,
+        warningCount: 0,
+      }),
+    };
+    const handler = buildHandler({ configService, setupDiagnosticsService });
+    const guild = {
+      id: 'guild-1',
+      name: 'Test Guild',
+      fetchAuditLogs: jest.fn().mockResolvedValue({
+        entries: {
+          find: jest.fn().mockReturnValue({ target: { id: 'bot-1' }, executor: installer }),
+        },
+      }),
+      fetchOwner: jest.fn(),
+    } as any;
+
+    await (handler as any).maybeSendDetectionSetupWarning(guild);
+
+    expect(setupDiagnosticsService.validateGuildSetup).toHaveBeenCalledWith(guild);
+    expect(installer.send).not.toHaveBeenCalled();
+    expect(configService.updateServerSettings).not.toHaveBeenCalled();
+  });
+
+  it('allows a setup nudge when the resolved recipient changed during suppression window', async () => {
+    const installer = {
+      id: 'installer-2',
+      bot: false,
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        restricted_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
+        settings: {
+          setup_nudge_last_attempt_at: new Date().toISOString(),
+          setup_nudge_last_recipient_id: 'installer-1',
+        },
+      }),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const handler = buildHandler({ configService });
+    const guild = {
+      id: 'guild-1',
+      name: 'Test Guild',
+      fetchAuditLogs: jest.fn().mockResolvedValue({
+        entries: {
+          find: jest.fn().mockReturnValue({ target: { id: 'bot-1' }, executor: installer }),
+        },
+      }),
+      fetchOwner: jest.fn(),
+    } as any;
+
+    await (handler as any).handleGuildCreate(guild);
+
+    expect(installer.send).toHaveBeenCalledWith(expect.stringContaining('/config setup'));
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      setup_nudge_last_attempt_at: expect.any(String),
+      setup_nudge_last_recipient_id: 'installer-2',
+      setup_nudge_last_result: 'sent',
+      setup_nudge_last_source: 'audit_log_installer',
+    });
   });
 });

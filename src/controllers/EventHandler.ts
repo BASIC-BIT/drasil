@@ -29,6 +29,10 @@ import {
   NOOP_PRODUCT_ANALYTICS_SERVICE,
 } from '../services/ProductAnalyticsService';
 import { Server } from '../repositories/types';
+import {
+  ISetupDiagnosticsService,
+  SetupDiagnosticReport,
+} from '../services/SetupDiagnosticsService';
 
 const RECENT_USER_CONTEXT_MESSAGE_LIMIT = 5;
 const RECENT_USER_CONTEXT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -37,6 +41,8 @@ const RECENT_USER_CONTEXT_MAX_USERS_PER_SERVER = 1000;
 const RECENT_USER_CONTEXT_MAX_SERVERS = 100;
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
+const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
+const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
 
 type SetupNudgeSource = 'audit_log_installer' | 'owner';
 type SetupNudgeResult = 'sent' | 'dm_failed' | 'no_recipient';
@@ -87,6 +93,7 @@ export class EventHandler implements IEventHandler {
   private interactionHandler: IInteractionHandler;
   private verificationThreadAnalysisService: IVerificationThreadAnalysisService;
   private productAnalyticsService: IProductAnalyticsService;
+  private setupDiagnosticsService?: ISetupDiagnosticsService;
   private serverConfigWarmups: Set<string> = new Set();
   private configInitializePromise: Promise<void> | null = null;
   private recentMessagesByServer: Map<string, Map<string, RecentUserMessageContext[]>> = new Map();
@@ -104,7 +111,10 @@ export class EventHandler implements IEventHandler {
     verificationThreadAnalysisService: IVerificationThreadAnalysisService,
     @inject(TYPES.ProductAnalyticsService)
     @optional()
-    productAnalyticsService?: IProductAnalyticsService
+    productAnalyticsService?: IProductAnalyticsService,
+    @inject(TYPES.SetupDiagnosticsService)
+    @optional()
+    setupDiagnosticsService?: ISetupDiagnosticsService
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -115,6 +125,7 @@ export class EventHandler implements IEventHandler {
     this.interactionHandler = interactionHandler;
     this.verificationThreadAnalysisService = verificationThreadAnalysisService;
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
+    this.setupDiagnosticsService = setupDiagnosticsService;
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -331,6 +342,16 @@ export class EventHandler implements IEventHandler {
     }
 
     const confidencePercent = detectionResult.confidence * 100;
+    if (
+      responseSettings.mode === 'notify_only' ||
+      responseSettings.mode === 'open_case' ||
+      responseSettings.mode === 'restrict'
+    ) {
+      void this.maybeSendDetectionSetupWarning(member.guild).catch((error) => {
+        console.warn(`Failed to process setup warning for guild ${member.guild.id}:`, error);
+      });
+    }
+
     switch (responseSettings.mode) {
       case 'record_only':
         console.log(
@@ -663,11 +684,24 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    if (this.wasSetupNudgeRecentlyAttempted(config.settings.setup_nudge_last_attempt_at)) {
+    if (
+      !config.settings.setup_nudge_last_recipient_id &&
+      this.wasSetupNudgeRecentlyAttempted(config.settings.setup_nudge_last_attempt_at, null, null)
+    ) {
       return;
     }
 
     const recipient = await this.resolveSetupNudgeRecipient(guild);
+    if (
+      this.wasSetupNudgeRecentlyAttempted(
+        config.settings.setup_nudge_last_attempt_at,
+        config.settings.setup_nudge_last_recipient_id,
+        recipient?.user.id ?? null
+      )
+    ) {
+      return;
+    }
+
     const attemptedAt = new Date().toISOString();
     let result: SetupNudgeResult = 'no_recipient';
 
@@ -693,13 +727,96 @@ export class EventHandler implements IEventHandler {
     }
   }
 
+  private async maybeSendDetectionSetupWarning(guild: Guild): Promise<void> {
+    if (!this.setupDiagnosticsService) {
+      return;
+    }
+
+    const config = await this.configService.getServerConfig(guild.id);
+    // Detection warnings share setup nudge metadata with guild-join nudges to keep
+    // all setup-related DMs under one short burst guard.
+    if (
+      this.wasSetupNudgeAttemptedWithin(
+        config.settings.setup_nudge_last_attempt_at,
+        SETUP_WARNING_VALIDATION_PRECHECK_MS
+      )
+    ) {
+      return;
+    }
+
+    const report = await this.setupDiagnosticsService.validateGuildSetup(guild);
+    if (report.errorCount === 0) {
+      return;
+    }
+
+    const fingerprint = this.createSetupWarningFingerprint(report);
+    const recipient = await this.resolveSetupNudgeRecipient(guild);
+    if (
+      this.wasSetupNudgeRecentlyAttempted(
+        config.settings.setup_nudge_last_attempt_at,
+        config.settings.setup_nudge_last_recipient_id,
+        recipient?.user.id ?? null,
+        config.settings.setup_warning_last_fingerprint,
+        fingerprint
+      )
+    ) {
+      return;
+    }
+
+    const attemptedAt = new Date().toISOString();
+    let result: SetupNudgeResult = 'no_recipient';
+
+    if (recipient) {
+      try {
+        await recipient.user.send(this.buildDetectionSetupWarningMessage(guild, report));
+        result = 'sent';
+      } catch (error) {
+        result = 'dm_failed';
+        console.warn(`Failed to DM detection setup warning for guild ${guild.id}:`, error);
+      }
+    }
+
+    try {
+      await this.configService.updateServerSettings(guild.id, {
+        setup_nudge_last_attempt_at: attemptedAt,
+        setup_nudge_last_recipient_id: recipient?.user.id ?? null,
+        setup_nudge_last_result: result,
+        setup_nudge_last_source: recipient?.source ?? null,
+        [SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY]: fingerprint,
+      });
+    } catch (error) {
+      console.warn(`Failed to record setup warning metadata for guild ${guild.id}:`, error);
+    }
+  }
+
   private isSetupIncomplete(config: Server): boolean {
     return (
       !config.restricted_role_id || !config.admin_channel_id || !config.verification_channel_id
     );
   }
 
-  private wasSetupNudgeRecentlyAttempted(lastAttemptAt: string | null | undefined): boolean {
+  private wasSetupNudgeRecentlyAttempted(
+    lastAttemptAt: string | null | undefined,
+    lastRecipientId: string | null | undefined,
+    currentRecipientId: string | null,
+    lastFingerprint?: string | null,
+    currentFingerprint?: string | null
+  ): boolean {
+    if ((lastRecipientId ?? null) !== currentRecipientId) {
+      return false;
+    }
+
+    if (currentFingerprint && lastFingerprint !== currentFingerprint) {
+      return false;
+    }
+
+    return this.wasSetupNudgeAttemptedWithin(lastAttemptAt, SETUP_NUDGE_SUPPRESSION_MS);
+  }
+
+  private wasSetupNudgeAttemptedWithin(
+    lastAttemptAt: string | null | undefined,
+    windowMs: number
+  ): boolean {
     if (!lastAttemptAt) {
       return false;
     }
@@ -709,7 +826,15 @@ export class EventHandler implements IEventHandler {
       return false;
     }
 
-    return Date.now() - attemptedAtMs < SETUP_NUDGE_SUPPRESSION_MS;
+    return Date.now() - attemptedAtMs < windowMs;
+  }
+
+  private createSetupWarningFingerprint(report: SetupDiagnosticReport): string {
+    return report.issues
+      .filter((issue) => issue.severity === 'error')
+      .map((issue) => issue.code)
+      .sort()
+      .join('|');
   }
 
   private async resolveSetupNudgeRecipient(guild: Guild): Promise<SetupNudgeRecipient | null> {
@@ -765,6 +890,24 @@ export class EventHandler implements IEventHandler {
       'Omit `restricted-role` and `verification-channel` if you want Drasil to create safe defaults.',
       'Add `report-channel:<channel>` if you want Drasil to create or update report instructions.',
       'Run `/config validate` afterwards to check permissions, channels, and role hierarchy.',
+    ].join('\n');
+  }
+
+  private buildDetectionSetupWarningMessage(guild: Guild, report: SetupDiagnosticReport): string {
+    const topIssues = report.issues
+      .filter((issue) => issue.severity === 'error')
+      .slice(0, 5)
+      .map((issue) => `- ${issue.message}`);
+
+    return [
+      `Drasil detected suspicious activity in ${guild.name}, but setup or permissions may prevent the configured response from working.`,
+      'No message content is included in this DM.',
+      '',
+      'Must fix:',
+      ...topIssues,
+      '',
+      'Run `/config validate` in the server for the full checklist.',
+      'Run `/config setup admin-channel:<moderator-channel>` to repair core setup.',
     ].join('\n');
   }
 }

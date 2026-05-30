@@ -92,6 +92,7 @@ import {
 } from '../services/ProductAnalyticsService';
 import {
   ISetupDiagnosticsService,
+  SetupDiagnosticIssue,
   SetupDiagnosticReport,
 } from '../services/SetupDiagnosticsService';
 import {
@@ -133,6 +134,7 @@ const DRASIL_GUILD_INSTALL_PERMISSIONS =
 const REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY = 'report_instructions_channel_id';
 const REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY = 'report_instructions_message_id';
 const DEFAULT_RESTRICTED_ROLE_NAME = 'Drasil Restricted';
+const VERIFICATION_CHANNEL_NAME = 'verification';
 
 function isUserInstallReportingEnabled(): boolean {
   return process.env[USER_INSTALL_REPORTING_ENABLED_ENV] === 'true';
@@ -278,20 +280,20 @@ export class CommandHandler implements ICommandHandler {
             .addRoleOption((option) =>
               option
                 .setName('restricted-role')
-                .setDescription('Existing restricted role; omit to create a default one')
+                .setDescription('Existing restricted role; omit to reuse or create a default one')
                 .setRequired(false)
             )
             .addStringOption((option) =>
               option
                 .setName('restricted-role-name')
-                .setDescription('Name to use when creating the default restricted role')
+                .setDescription('Role name to reuse or create when restricted-role is omitted')
                 .setRequired(false)
                 .setMaxLength(100)
             )
             .addChannelOption((option) =>
               option
                 .setName('verification-channel')
-                .setDescription('Existing verification channel; omit to auto-create')
+                .setDescription('Existing verification channel; omit to reuse/create #verification')
                 .addChannelTypes(ChannelType.GuildText)
                 .setRequired(false)
             )
@@ -1358,6 +1360,19 @@ export class CommandHandler implements ICommandHandler {
         verificationChannel?.id ?? null
       );
 
+      if (verificationChannelCandidate.ambiguousChannelIds.length > 0) {
+        await interaction.editReply({
+          content:
+            `Setup not saved. Multiple #${VERIFICATION_CHANNEL_NAME} channels already exist: ` +
+            verificationChannelCandidate.ambiguousChannelIds
+              .map((channelId) => `<#${channelId}>`)
+              .join(', ') +
+            '. Choose one with `verification-channel` before rerunning setup.',
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
       const candidateReport = await this.setupDiagnosticsService.validateSetupCandidate(guild, {
         restrictedRoleId: restrictedRole.id,
         willCreateRestrictedRole: false,
@@ -1406,7 +1421,44 @@ export class CommandHandler implements ICommandHandler {
           throw new Error('Failed to create a verification channel during setup.');
         }
         verificationChannelId = createdChannelId;
-        verificationChannelAction = verificationChannelCandidate.channelId ? 'synced' : 'created';
+        verificationChannelAction =
+          verificationChannelCandidate.channelId && !createdSetupArtifacts.verificationChannelId
+            ? 'synced'
+            : 'created';
+      }
+
+      const finalCandidateReport = await this.setupDiagnosticsService.validateSetupCandidate(
+        guild,
+        {
+          restrictedRoleId: restrictedRole.id,
+          willCreateRestrictedRole: false,
+          adminChannelId: adminChannel.id,
+          verificationChannelId,
+          willCreateVerificationChannel: false,
+          reportInstructionsChannelId: null,
+        }
+      );
+      if (finalCandidateReport.errorCount > 0) {
+        const createdVerificationChannelId = createdSetupArtifacts.verificationChannelId;
+        if (createdVerificationChannelId) {
+          const rolledBack = await this.rollbackCreatedVerificationChannel(
+            guild,
+            createdVerificationChannelId,
+            'Rolling back Drasil setup after final validation failed'
+          );
+          setupFailureDetail = rolledBack
+            ? 'Final validation failed. The newly created verification channel was removed.'
+            : `Final validation failed. The newly created verification channel <#${createdVerificationChannelId}> could not be removed; delete it before rerunning setup.`;
+        }
+        const rollbackNote =
+          setupFailureDetail !== 'Please check permissions and try again.'
+            ? `\n\n${setupFailureDetail}`
+            : '';
+        await interaction.editReply({
+          content: `Setup not saved. Fix the errors below and rerun setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(finalCandidateReport)}`,
+          allowedMentions: { parse: [] },
+        });
+        return;
       }
 
       try {
@@ -1642,25 +1694,134 @@ export class CommandHandler implements ICommandHandler {
   private async resolveVerificationChannelCandidate(
     guild: NonNullable<ChatInputCommandInteraction['guild']>,
     explicitVerificationChannelId: string | null
-  ): Promise<{ channelId: string | null; willSyncPermissions: boolean }> {
+  ): Promise<{
+    channelId: string | null;
+    willSyncPermissions: boolean;
+    ambiguousChannelIds: readonly string[];
+  }> {
     if (explicitVerificationChannelId) {
-      return { channelId: explicitVerificationChannelId, willSyncPermissions: false };
+      return {
+        channelId: explicitVerificationChannelId,
+        willSyncPermissions: false,
+        ambiguousChannelIds: [],
+      };
     }
 
     const serverConfig = await this.configService.getServerConfig(guild.id).catch(() => null);
     const configuredVerificationChannelId = serverConfig?.verification_channel_id ?? null;
-    if (!configuredVerificationChannelId) {
-      return { channelId: null, willSyncPermissions: false };
+    if (configuredVerificationChannelId) {
+      const configuredChannel = await guild.channels
+        .fetch(configuredVerificationChannelId)
+        .catch(() => null);
+      if (configuredChannel?.type === ChannelType.GuildText) {
+        return {
+          channelId: configuredVerificationChannelId,
+          willSyncPermissions: true,
+          ambiguousChannelIds: [],
+        };
+      }
     }
 
-    const configuredChannel = await guild.channels
-      .fetch(configuredVerificationChannelId)
-      .catch(() => null);
-    if (configuredChannel?.type !== ChannelType.GuildText) {
-      return { channelId: null, willSyncPermissions: false };
+    const matchingChannels = this.findMatchingVerificationChannels(guild);
+    if (matchingChannels.length === 1) {
+      return {
+        channelId: matchingChannels[0].id,
+        willSyncPermissions: true,
+        ambiguousChannelIds: [],
+      };
     }
 
-    return { channelId: configuredVerificationChannelId, willSyncPermissions: true };
+    return {
+      channelId: null,
+      willSyncPermissions: false,
+      ambiguousChannelIds: matchingChannels.map((channel) => channel.id),
+    };
+  }
+
+  private findMatchingVerificationChannels(
+    guild: NonNullable<ChatInputCommandInteraction['guild']>
+  ): TextChannel[] {
+    const guildLike = guild as { channels?: { cache?: unknown } };
+    const values = this.getCachedCollectionValues(guildLike.channels?.cache);
+
+    return values.filter((channel): channel is TextChannel =>
+      this.isVerificationTextChannel(channel)
+    );
+  }
+
+  private getCachedCollectionValues(cache: unknown): unknown[] {
+    const cacheWithValues = cache as { values?: unknown } | null;
+    if (typeof cacheWithValues?.values === 'function') {
+      return [...(cacheWithValues.values as () => Iterable<unknown>)()];
+    }
+
+    const iterableCache = cache as { [Symbol.iterator]?: unknown } | null;
+    if (typeof iterableCache?.[Symbol.iterator] === 'function') {
+      return [...(cache as Iterable<unknown>)];
+    }
+
+    return [];
+  }
+
+  private isVerificationTextChannel(channel: unknown): channel is TextChannel {
+    const maybeChannel = channel as { type?: ChannelType; name?: string } | null;
+    if (!maybeChannel) {
+      return false;
+    }
+
+    return (
+      maybeChannel.type === ChannelType.GuildText && maybeChannel.name === VERIFICATION_CHANNEL_NAME
+    );
+  }
+
+  private async resolveRestrictedRoleCandidate(
+    guild: NonNullable<ChatInputCommandInteraction['guild']>,
+    explicitRestrictedRole: Role | null,
+    requestedRoleName: string | null
+  ): Promise<{ role: Role | null; roleName: string; ambiguousRoleIds: readonly string[] }> {
+    if (explicitRestrictedRole) {
+      return {
+        role: explicitRestrictedRole,
+        roleName: explicitRestrictedRole.name,
+        ambiguousRoleIds: [],
+      };
+    }
+
+    const roleName = requestedRoleName ?? DEFAULT_RESTRICTED_ROLE_NAME;
+    const serverConfig = await this.configService.getServerConfig(guild.id).catch(() => null);
+    const configuredRestrictedRoleId = serverConfig?.restricted_role_id ?? null;
+    if (configuredRestrictedRoleId) {
+      const configuredRole = await guild.roles.fetch(configuredRestrictedRoleId).catch(() => null);
+      if (configuredRole && (!requestedRoleName || configuredRole.name === roleName)) {
+        return { role: configuredRole, roleName: configuredRole.name, ambiguousRoleIds: [] };
+      }
+    }
+
+    const matchingRoles = this.findMatchingRolesByName(guild, roleName);
+    if (matchingRoles.length === 1) {
+      return { role: matchingRoles[0], roleName, ambiguousRoleIds: [] };
+    }
+
+    return {
+      role: null,
+      roleName,
+      ambiguousRoleIds: matchingRoles.map((role) => role.id),
+    };
+  }
+
+  private findMatchingRolesByName(
+    guild: NonNullable<ChatInputCommandInteraction['guild']>,
+    roleName: string
+  ): Role[] {
+    const guildLike = guild as { roles?: { cache?: unknown } };
+    const values = this.getCachedCollectionValues(guildLike.roles?.cache);
+
+    return values.filter((role): role is Role => this.isRoleNamed(role, roleName));
+  }
+
+  private isRoleNamed(role: unknown, roleName: string): role is Role {
+    const maybeRole = role as { name?: string } | null;
+    return Boolean(maybeRole) && maybeRole?.name === roleName;
   }
 
   private async handleConfigSetupCommand(
@@ -1707,7 +1868,7 @@ export class CommandHandler implements ICommandHandler {
 
     if (existingRestrictedRole && requestedRoleName) {
       await interaction.reply({
-        content: '`restricted-role-name` only applies when Drasil creates the restricted role.',
+        content: '`restricted-role-name` cannot be combined with `restricted-role`.',
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -1722,10 +1883,39 @@ export class CommandHandler implements ICommandHandler {
         guild,
         verificationChannel?.id ?? null
       );
+      const restrictedRoleCandidate = await this.resolveRestrictedRoleCandidate(
+        guild,
+        existingRestrictedRole as Role | null,
+        requestedRoleName
+      );
+
+      if (restrictedRoleCandidate.ambiguousRoleIds.length > 0) {
+        await interaction.editReply({
+          content:
+            `Setup not saved. Multiple roles named \`${restrictedRoleCandidate.roleName}\` already exist: ` +
+            restrictedRoleCandidate.ambiguousRoleIds.map((roleId) => `<@&${roleId}>`).join(', ') +
+            '. Choose one with `restricted-role` before rerunning /config setup.',
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      if (verificationChannelCandidate.ambiguousChannelIds.length > 0) {
+        await interaction.editReply({
+          content:
+            `Setup not saved. Multiple #${VERIFICATION_CHANNEL_NAME} channels already exist: ` +
+            verificationChannelCandidate.ambiguousChannelIds
+              .map((channelId) => `<#${channelId}>`)
+              .join(', ') +
+            '. Choose one with `verification-channel` before rerunning /config setup.',
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
 
       const candidateReport = await this.setupDiagnosticsService.validateSetupCandidate(guild, {
-        restrictedRoleId: existingRestrictedRole?.id ?? null,
-        willCreateRestrictedRole: !existingRestrictedRole,
+        restrictedRoleId: restrictedRoleCandidate.role?.id ?? null,
+        willCreateRestrictedRole: !restrictedRoleCandidate.role,
         adminChannelId: adminChannel.id,
         verificationChannelId: verificationChannelCandidate.channelId,
         willCreateVerificationChannel: !verificationChannelCandidate.channelId,
@@ -1745,10 +1935,10 @@ export class CommandHandler implements ICommandHandler {
 
       let createdRestrictedRole: Role | null = null;
       const createdSetupArtifacts: { verificationChannelId?: string } = {};
-      let restrictedRole = existingRestrictedRole;
+      let restrictedRole = restrictedRoleCandidate.role;
       if (!restrictedRole) {
         createdRestrictedRole = await guild.roles.create({
-          name: requestedRoleName ?? DEFAULT_RESTRICTED_ROLE_NAME,
+          name: restrictedRoleCandidate.roleName,
           permissions: [],
           reason: `Drasil setup requested by ${interaction.user.username}`,
         });
@@ -1791,7 +1981,57 @@ export class CommandHandler implements ICommandHandler {
           }
           throw new Error('Failed to create a verification channel during setup.');
         }
-        verificationChannelAction = verificationChannelCandidate.channelId ? 'synced' : 'created';
+        verificationChannelAction =
+          verificationChannelCandidate.channelId && !createdSetupArtifacts.verificationChannelId
+            ? 'synced'
+            : 'created';
+      }
+
+      const finalCandidateReport = await this.setupDiagnosticsService.validateSetupCandidate(
+        guild,
+        {
+          restrictedRoleId: restrictedRole.id,
+          willCreateRestrictedRole: false,
+          adminChannelId: adminChannel.id,
+          verificationChannelId,
+          willCreateVerificationChannel: false,
+          reportInstructionsChannelId: reportChannel?.id ?? null,
+        }
+      );
+      if (finalCandidateReport.errorCount > 0) {
+        const rollbackDetails = ['Final validation failed.'];
+        const createdVerificationChannelId = createdSetupArtifacts.verificationChannelId;
+        if (createdVerificationChannelId) {
+          const rolledBack = await this.rollbackCreatedVerificationChannel(
+            guild,
+            createdVerificationChannelId,
+            'Rolling back Drasil setup after final validation failed'
+          );
+          rollbackDetails.push(
+            rolledBack
+              ? 'The newly created verification channel was removed.'
+              : `The newly created verification channel <#${createdVerificationChannelId}> could not be removed; delete it before rerunning setup.`
+          );
+        }
+        if (createdRestrictedRole) {
+          const rolledBack = await this.rollbackCreatedRestrictedRole(
+            createdRestrictedRole,
+            guild.id,
+            'Rolling back Drasil setup after final validation failed'
+          );
+          rollbackDetails.push(
+            rolledBack
+              ? 'The newly created restricted role was removed.'
+              : `The newly created restricted role <@&${restrictedRole.id}> could not be removed; delete it or pass it as restricted-role when rerunning setup.`
+          );
+        }
+        setupFailureDetail = rollbackDetails.join(' ');
+        const rollbackNote = `\n\n${setupFailureDetail}`;
+        await interaction.editReply({
+          content: `Setup not saved. Fix the errors below and rerun /config setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(finalCandidateReport)}`,
+          allowedMentions: { parse: [] },
+        });
+        return;
       }
 
       try {
@@ -1900,7 +2140,8 @@ export class CommandHandler implements ICommandHandler {
 
   private async rollbackCreatedVerificationChannel(
     guild: NonNullable<ChatInputCommandInteraction['guild']>,
-    channelId: string
+    channelId: string,
+    reason = 'Rolling back Drasil setup after config save failed'
   ): Promise<boolean> {
     try {
       const channel =
@@ -1912,7 +2153,7 @@ export class CommandHandler implements ICommandHandler {
         return false;
       }
 
-      await channel.delete('Rolling back Drasil setup after config save failed');
+      await channel.delete(reason);
       return true;
     } catch (error) {
       console.error(
@@ -1963,13 +2204,80 @@ export class CommandHandler implements ICommandHandler {
       return `${status}\nGuild ID: \`${report.guildId}\``;
     }
 
-    const issueLines = report.issues.map(
-      (issue) => `[${issue.severity.toUpperCase()}] ${issue.message}`
-    );
+    const errors = report.issues.filter((issue) => issue.severity === 'error');
+    const warnings = report.issues.filter((issue) => issue.severity === 'warning');
+    const remediationLines = this.formatSetupRemediationLines(errors);
+    const issueLines = [
+      ...(errors.length > 0
+        ? ['Must fix before saving:', ...errors.map((issue) => `- [ERROR] ${issue.message}`)]
+        : []),
+      ...(warnings.length > 0
+        ? ['Saved but warnings:', ...warnings.map((issue) => `- [WARNING] ${issue.message}`)]
+        : []),
+      ...(remediationLines.length > 0
+        ? ['', 'Recommended fix:', ...remediationLines.map((line) => `- ${line}`)]
+        : [
+            '',
+            'Next step:',
+            '- Fix the listed Discord roles, channels, or permissions, then rerun `/config validate`.',
+          ]),
+    ];
     return this.truncatePreview(
       [status, `Guild ID: \`${report.guildId}\``, ...issueLines].join('\n'),
       maxLength
     );
+  }
+
+  private formatSetupRemediationLines(issues: readonly SetupDiagnosticIssue[]): readonly string[] {
+    const codes = new Set(issues.map((issue) => issue.code));
+    const lines = new Set<string>();
+
+    if (
+      this.hasAnySetupIssue(codes, [
+        'restricted-role-missing',
+        'restricted-role-not-found',
+        'admin-channel-missing',
+        'admin-channel-not-found',
+        'verification-channel-missing',
+        'verification-channel-not-found',
+      ])
+    ) {
+      lines.add(
+        'Run `/config setup admin-channel:<moderator-channel>` to repair core setup. Omit `restricted-role` and `verification-channel` to let Drasil reuse safe defaults or create them.'
+      );
+    }
+
+    if (codes.has('verification-channel-create-manage-channels')) {
+      lines.add(
+        'Grant Drasil Manage Channels, or pass `verification-channel:<channel>` to use an existing text channel.'
+      );
+    }
+
+    if (codes.has('restricted-role-hierarchy')) {
+      lines.add('Move the Drasil bot role above the restricted role in Discord role settings.');
+    }
+
+    if (codes.has('restricted-role-managed') || codes.has('restricted-role-everyone')) {
+      lines.add(
+        'Choose a normal assignable restricted role with `/config setup restricted-role:<role>`.'
+      );
+    }
+
+    if (
+      [...codes].some((code) =>
+        /-(view|send|embed-links|read-message-history|create-private-threads|send-messages-in-threads|manage-threads|sync-manage-channels)$/.test(
+          code
+        )
+      )
+    ) {
+      lines.add('Grant the listed channel permission to Drasil, then rerun `/config validate`.');
+    }
+
+    return [...lines];
+  }
+
+  private hasAnySetupIssue(codes: ReadonlySet<string>, expectedCodes: readonly string[]): boolean {
+    return expectedCodes.some((code) => codes.has(code));
   }
 
   private appendSetupDiagnosticsReport(
@@ -3184,8 +3492,15 @@ export class CommandHandler implements ICommandHandler {
       }
     } else {
       await this.deleteStaleReportInstructionsMessage(existingChannelId, existingMessageId);
-      const sentMessage = await targetChannel.send(messagePayload);
-      messageId = sentMessage.id;
+      const existingMessage = await this.findExistingReportInstructionsMessage(targetChannel);
+      if (existingMessage) {
+        await existingMessage.edit(messagePayload);
+        messageId = existingMessage.id;
+        action = 'updated';
+      } else {
+        const sentMessage = await targetChannel.send(messagePayload);
+        messageId = sentMessage.id;
+      }
     }
 
     await this.configService.updateServerSettings(guildId, {
@@ -3194,6 +3509,34 @@ export class CommandHandler implements ICommandHandler {
     });
 
     return { action, messageId };
+  }
+
+  private async findExistingReportInstructionsMessage(
+    targetChannel: TextChannel
+  ): Promise<Message | null> {
+    const botUserId = this.client.user?.id;
+    if (!botUserId) {
+      return null;
+    }
+
+    const messageManager = (targetChannel as { messages?: Pick<TextChannel['messages'], 'fetch'> })
+      .messages;
+    if (!messageManager || typeof messageManager.fetch !== 'function') {
+      return null;
+    }
+
+    const messages = await Promise.resolve(messageManager.fetch({ limit: 50 })).catch(() => null);
+    if (!messages) {
+      return null;
+    }
+
+    return (
+      messages.find(
+        (message) =>
+          message.author.id === botUserId &&
+          message.embeds.some((embed) => embed.title === 'Report a User')
+      ) ?? null
+    );
   }
 
   private async deleteStaleReportInstructionsMessage(
