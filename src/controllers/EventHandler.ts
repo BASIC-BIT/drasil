@@ -733,6 +733,8 @@ export class EventHandler implements IEventHandler {
     }
 
     const config = await this.configService.getServerConfig(guild.id);
+    // Detection warnings share setup nudge metadata with guild-join nudges to keep
+    // all setup-related DMs under one short burst guard.
     if (
       this.wasSetupNudgeAttemptedWithin(
         config.settings.setup_nudge_last_attempt_at,

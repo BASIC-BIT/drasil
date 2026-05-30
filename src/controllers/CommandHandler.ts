@@ -1792,7 +1792,7 @@ export class CommandHandler implements ICommandHandler {
     const configuredRestrictedRoleId = serverConfig?.restricted_role_id ?? null;
     if (configuredRestrictedRoleId) {
       const configuredRole = await guild.roles.fetch(configuredRestrictedRoleId).catch(() => null);
-      if (configuredRole) {
+      if (configuredRole && (!requestedRoleName || configuredRole.name === roleName)) {
         return { role: configuredRole, roleName: configuredRole.name, ambiguousRoleIds: [] };
       }
     }

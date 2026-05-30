@@ -1673,6 +1673,92 @@ describe('CommandHandler (unit)', () => {
     expect(interaction.editReply.mock.calls[0][0].content).not.toContain('Created restricted role');
   });
 
+  it('honors restricted-role-name over a differently named configured role', async () => {
+    const setupVerificationChannel = jest.fn().mockResolvedValue('created-channel-1');
+    const validateSetupCandidate = jest.fn().mockResolvedValue({
+      guildId: 'guild-1',
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      issues: [],
+      errorCount: 0,
+      warningCount: 0,
+    });
+    const updateServerConfig = jest.fn().mockResolvedValue({});
+    const getServerConfig = jest.fn().mockResolvedValue({
+      restricted_role_id: 'old-role-1',
+      verification_channel_id: null,
+      settings: {},
+    });
+    const { handler, configService, setupDiagnosticsService } = buildHandler({
+      setupVerificationChannel,
+      validateSetupCandidate,
+      updateServerConfig,
+      getServerConfig,
+    });
+    const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
+    const configuredRole = { id: 'old-role-1', name: 'Old Restricted' } as any;
+    const namedRole = { id: 'named-role-1', name: 'New Restricted' } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+      roles: {
+        fetch: jest.fn().mockResolvedValue(configuredRole),
+        cache: new Map([
+          ['old-role-1', configuredRole],
+          ['named-role-1', namedRole],
+        ]),
+        create: jest.fn(),
+      },
+      channels: {
+        cache: new Map(),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1', username: 'Admin', tag: 'Admin#0001' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue(null),
+        getSubcommand: jest.fn().mockReturnValue('setup'),
+        getChannel: jest.fn((name: string) => (name === 'admin-channel' ? adminChannel : null)),
+        getRole: jest.fn().mockReturnValue(null),
+        getString: jest.fn((name: string) =>
+          name === 'restricted-role-name' ? 'New Restricted' : null
+        ),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(guild.roles.fetch).toHaveBeenCalledWith('old-role-1');
+    expect(guild.roles.create).not.toHaveBeenCalled();
+    expect(setupDiagnosticsService.validateSetupCandidate).toHaveBeenCalledWith(guild, {
+      restrictedRoleId: 'named-role-1',
+      willCreateRestrictedRole: false,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: null,
+    });
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      restricted_role_id: 'named-role-1',
+      admin_channel_id: 'admin-channel-1',
+      verification_channel_id: 'created-channel-1',
+    });
+    expect(interaction.editReply.mock.calls[0][0].content).toContain(
+      'Restricted role: <@&named-role-1>'
+    );
+    expect(interaction.editReply.mock.calls[0][0].content).not.toContain('<@&old-role-1>');
+  });
+
   it('blocks /config setup when multiple verification channels are ambiguous', async () => {
     const validateSetupCandidate = jest.fn().mockResolvedValue({
       guildId: 'guild-1',
