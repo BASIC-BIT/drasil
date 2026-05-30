@@ -1443,14 +1443,19 @@ export class CommandHandler implements ICommandHandler {
         if (createdVerificationChannelId) {
           const rolledBack = await this.rollbackCreatedVerificationChannel(
             guild,
-            createdVerificationChannelId
+            createdVerificationChannelId,
+            'Rolling back Drasil setup after final validation failed'
           );
           setupFailureDetail = rolledBack
             ? 'Final validation failed. The newly created verification channel was removed.'
             : `Final validation failed. The newly created verification channel <#${createdVerificationChannelId}> could not be removed; delete it before rerunning setup.`;
         }
+        const rollbackNote =
+          setupFailureDetail !== 'Please check permissions and try again.'
+            ? `\n\n${setupFailureDetail}`
+            : '';
         await interaction.editReply({
-          content: `Setup not saved. Fix the errors below and rerun setup.\n\n${this.formatSetupDiagnosticsReport(finalCandidateReport)}`,
+          content: `Setup not saved. Fix the errors below and rerun setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(finalCandidateReport)}`,
           allowedMentions: { parse: [] },
         });
         return;
@@ -2036,8 +2041,9 @@ export class CommandHandler implements ICommandHandler {
           );
         }
         setupFailureDetail = rollbackDetails.join(' ');
+        const rollbackNote = `\n\n${setupFailureDetail}`;
         await interaction.editReply({
-          content: `Setup not saved. Fix the errors below and rerun /config setup.\n\n${this.formatSetupDiagnosticsReport(finalCandidateReport)}`,
+          content: `Setup not saved. Fix the errors below and rerun /config setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(finalCandidateReport)}`,
           allowedMentions: { parse: [] },
         });
         return;
@@ -3528,16 +3534,13 @@ export class CommandHandler implements ICommandHandler {
       return null;
     }
 
-    const messageManager = (targetChannel as { messages?: { fetch?: unknown } }).messages;
-    if (typeof messageManager?.fetch !== 'function') {
+    const messageManager = (targetChannel as { messages?: Pick<TextChannel['messages'], 'fetch'> })
+      .messages;
+    if (!messageManager || typeof messageManager.fetch !== 'function') {
       return null;
     }
 
-    const messages = await Promise.resolve(
-      (
-        messageManager.fetch as (options: { limit: number }) => Promise<{ find: Message[]['find'] }>
-      )({ limit: 50 })
-    ).catch(() => null);
+    const messages = await Promise.resolve(messageManager.fetch({ limit: 50 })).catch(() => null);
     if (!messages) {
       return null;
     }

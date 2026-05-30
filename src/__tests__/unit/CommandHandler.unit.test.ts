@@ -1270,6 +1270,91 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('surfaces rollback details when final setupverification diagnostics fail', async () => {
+    const setupVerificationChannel = jest
+      .fn()
+      .mockImplementation(async (_guild, _roleId, _persistConfig, onChannelCreated) => {
+        onChannelCreated?.('created-channel-1');
+        return 'created-channel-1';
+      });
+    const validateSetupCandidate = jest
+      .fn()
+      .mockResolvedValueOnce({
+        guildId: 'guild-1',
+        checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+        issues: [],
+        errorCount: 0,
+        warningCount: 0,
+      })
+      .mockResolvedValueOnce({
+        guildId: 'guild-1',
+        checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+        issues: [
+          {
+            severity: 'error',
+            code: 'verification-channel-send',
+            message:
+              'Drasil is missing Send Messages in verification channel <#created-channel-1>.',
+          },
+        ],
+        errorCount: 1,
+        warningCount: 0,
+      });
+    const updateServerConfig = jest.fn().mockResolvedValue({});
+    const { handler, configService } = buildHandler({
+      setupVerificationChannel,
+      validateSetupCandidate,
+      updateServerConfig,
+    });
+    const createdChannel = {
+      id: 'created-channel-1',
+      type: ChannelType.GuildText,
+      delete: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const guild = {
+      id: 'guild-1',
+      channels: {
+        cache: {
+          get: jest.fn().mockReturnValue(createdChannel),
+        },
+        fetch: jest.fn(),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'setupverification',
+      guild,
+      memberPermissions: {
+        has: jest.fn().mockReturnValue(true),
+      },
+      options: {
+        getRole: jest.fn().mockReturnValue({ id: 'role-1' }),
+        getChannel: jest.fn((name: string) => {
+          if (name === 'admin-channel') {
+            return { id: 'channel-1', type: ChannelType.GuildText };
+          }
+          return null;
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(createdChannel.delete).toHaveBeenCalledWith(
+      'Rolling back Drasil setup after final validation failed'
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Setup not saved.'),
+      allowedMentions: { parse: [] },
+    });
+    expect(interaction.editReply.mock.calls[0][0].content).toContain(
+      'Final validation failed. The newly created verification channel was removed.'
+    );
+  });
+
   it('handles /config setup with an existing restricted role and channels', async () => {
     const validateSetupCandidate = jest.fn().mockResolvedValue({
       guildId: 'guild-1',
@@ -1905,6 +1990,13 @@ describe('CommandHandler (unit)', () => {
       content: expect.stringContaining('Setup not saved.'),
       allowedMentions: { parse: [] },
     });
+    expect(interaction.editReply.mock.calls[0][0].content).toContain('Final validation failed.');
+    expect(interaction.editReply.mock.calls[0][0].content).toContain(
+      'The newly created verification channel was removed.'
+    );
+    expect(interaction.editReply.mock.calls[0][0].content).toContain(
+      'The newly created restricted role was removed.'
+    );
   });
 
   it('keeps /config setup saved when optional report instructions fail', async () => {
