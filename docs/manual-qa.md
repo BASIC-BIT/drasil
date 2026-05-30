@@ -51,7 +51,7 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 ### 1. Verification setup sanity check
 
 - Run `/config setup admin-channel:<channel>` if the staging server is not configured yet.
-- Omit `restricted-role` to verify Drasil can create the default restricted role, or pass an existing role when testing role reuse.
+- Omit `restricted-role` to verify Drasil can reuse or create the default restricted role, or pass an existing role when testing role selection.
 - Omit `verification-channel` to verify Drasil can create or reuse the `verification` channel, or pass an existing text channel when testing channel reuse.
 - If multiple `#verification` channels exist, confirm setup blocks saving until `verification-channel:<channel>` is provided.
 - Run `/config validate` after setup.

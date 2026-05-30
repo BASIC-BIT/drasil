@@ -1501,6 +1501,93 @@ describe('CommandHandler (unit)', () => {
     );
   });
 
+  it('reuses an existing default restricted role when no role is configured', async () => {
+    const setupVerificationChannel = jest.fn().mockResolvedValue('created-channel-1');
+    const validateSetupCandidate = jest.fn().mockResolvedValue({
+      guildId: 'guild-1',
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      issues: [],
+      errorCount: 0,
+      warningCount: 0,
+    });
+    const updateServerConfig = jest.fn().mockResolvedValue({});
+    const getServerConfig = jest.fn().mockResolvedValue({
+      restricted_role_id: 'missing-role-1',
+      verification_channel_id: null,
+      settings: {},
+    });
+    const { handler, configService, notificationManager, setupDiagnosticsService } = buildHandler({
+      setupVerificationChannel,
+      validateSetupCandidate,
+      updateServerConfig,
+      getServerConfig,
+    });
+    const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
+    const defaultRole = { id: 'default-role-1', name: 'Drasil Restricted' } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+      roles: {
+        fetch: jest.fn().mockResolvedValue(null),
+        cache: new Map([['default-role-1', defaultRole]]),
+        create: jest.fn(),
+      },
+      channels: {
+        cache: new Map(),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1', username: 'Admin', tag: 'Admin#0001' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue(null),
+        getSubcommand: jest.fn().mockReturnValue('setup'),
+        getChannel: jest.fn((name: string) => (name === 'admin-channel' ? adminChannel : null)),
+        getRole: jest.fn().mockReturnValue(null),
+        getString: jest.fn().mockReturnValue(null),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(guild.roles.fetch).toHaveBeenCalledWith('missing-role-1');
+    expect(guild.roles.create).not.toHaveBeenCalled();
+    expect(setupDiagnosticsService.validateSetupCandidate).toHaveBeenCalledWith(guild, {
+      restrictedRoleId: 'default-role-1',
+      willCreateRestrictedRole: false,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: null,
+    });
+    expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
+      guild,
+      'default-role-1',
+      false,
+      expect.any(Function)
+    );
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      restricted_role_id: 'default-role-1',
+      admin_channel_id: 'admin-channel-1',
+      verification_channel_id: 'created-channel-1',
+    });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Restricted role: <@&default-role-1>'),
+      allowedMentions: { parse: [] },
+    });
+    expect(interaction.editReply.mock.calls[0][0].content).not.toContain('Created restricted role');
+  });
+
   it('blocks /config setup when multiple verification channels are ambiguous', async () => {
     const validateSetupCandidate = jest.fn().mockResolvedValue({
       guildId: 'guild-1',
@@ -2377,6 +2464,10 @@ describe('CommandHandler (unit)', () => {
     );
     expect(interaction.editReply.mock.calls[0][0].content).toContain(
       '[WARNING] Drasil is missing View Audit Log.'
+    );
+    expect(interaction.editReply.mock.calls[0][0].content).toContain('Recommended fix:');
+    expect(interaction.editReply.mock.calls[0][0].content).toContain(
+      'Run `/config setup admin-channel:<moderator-channel>` to repair core setup.'
     );
   });
 
