@@ -41,8 +41,6 @@ const RECENT_USER_CONTEXT_MAX_USERS_PER_SERVER = 1000;
 const RECENT_USER_CONTEXT_MAX_SERVERS = 100;
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
-const SETUP_WARNING_OWNER_DM_DISABLED_SETTING_KEY = 'setup_warning_owner_dm_disabled';
-const SETUP_WARNING_SUPPRESSED_UNTIL_SETTING_KEY = 'setup_warning_suppressed_until';
 const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
 
 type SetupNudgeSource = 'audit_log_installer' | 'owner';
@@ -685,10 +683,6 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    if (this.isSetupWarningDmDisabled(config) || this.isSetupWarningSuppressed(config)) {
-      return;
-    }
-
     if (
       !config.settings.setup_nudge_last_recipient_id &&
       this.wasSetupNudgeRecentlyAttempted(config.settings.setup_nudge_last_attempt_at, null, null)
@@ -738,10 +732,6 @@ export class EventHandler implements IEventHandler {
     }
 
     const config = await this.configService.getServerConfig(guild.id);
-    if (this.isSetupWarningDmDisabled(config) || this.isSetupWarningSuppressed(config)) {
-      return;
-    }
-
     const report = await this.setupDiagnosticsService.validateGuildSetup(guild);
     if (report.errorCount === 0) {
       return;
@@ -785,20 +775,6 @@ export class EventHandler implements IEventHandler {
     } catch (error) {
       console.warn(`Failed to record setup warning metadata for guild ${guild.id}:`, error);
     }
-  }
-
-  private isSetupWarningDmDisabled(config: Server): boolean {
-    return config.settings[SETUP_WARNING_OWNER_DM_DISABLED_SETTING_KEY] === true;
-  }
-
-  private isSetupWarningSuppressed(config: Server): boolean {
-    const suppressedUntil = config.settings[SETUP_WARNING_SUPPRESSED_UNTIL_SETTING_KEY];
-    if (typeof suppressedUntil !== 'string') {
-      return false;
-    }
-
-    const suppressedUntilMs = Date.parse(suppressedUntil);
-    return !Number.isNaN(suppressedUntilMs) && Date.now() < suppressedUntilMs;
   }
 
   private isSetupIncomplete(config: Server): boolean {
@@ -913,7 +889,6 @@ export class EventHandler implements IEventHandler {
       '',
       'Run `/config validate` in the server for the full checklist.',
       'Run `/config setup admin-channel:<moderator-channel>` to repair core setup.',
-      'Use `/config warnings owner-dm-suppress` or `/config warnings owner-dm-disable` to pause these DMs.',
     ].join('\n');
   }
 }

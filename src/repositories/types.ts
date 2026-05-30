@@ -66,8 +66,6 @@ export interface ServerSettings {
   setup_nudge_last_recipient_id?: string | null;
   setup_nudge_last_result?: 'sent' | 'dm_failed' | 'no_recipient' | null;
   setup_nudge_last_source?: 'audit_log_installer' | 'owner' | null;
-  setup_warning_owner_dm_disabled?: boolean;
-  setup_warning_suppressed_until?: string | null;
   setup_warning_last_fingerprint?: string | null;
 }
 

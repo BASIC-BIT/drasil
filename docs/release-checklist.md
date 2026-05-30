@@ -62,7 +62,6 @@ Configure and validate the bot:
 - If multiple `#verification` channels exist, pass `verification-channel:<channel>` explicitly.
 - Optionally pass `report-channel:<channel>` to create/update report instructions.
 - Run `/config validate` and fix all errors before smoke tests.
-- Run `/config warnings view` if detection-time setup warning DMs need to be inspected, suppressed, disabled, or re-enabled.
 
 ## Smoke tests (end-to-end)
 

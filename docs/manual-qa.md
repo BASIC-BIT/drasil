@@ -55,14 +55,13 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 - Omit `verification-channel` to verify Drasil can create or reuse the `verification` channel, or pass an existing text channel when testing channel reuse.
 - If multiple `#verification` channels exist, confirm setup blocks saving until `verification-channel:<channel>` is provided.
 - Run `/config validate` after setup.
-- Run `/config warnings view` and confirm owner/installer setup warning DM controls are visible.
 - Confirm the restricted role, admin channel, and verification channel are configured.
 - Expected result:
   - commands succeed without permission errors
   - setup hard errors block saving and warnings do not
   - the bot can post in the admin channel
   - the bot can create private verification threads
-  - detection-time setup warning DMs can be suppressed or disabled without exposing suspicious message content
+  - detection-time setup warning DMs are best-effort, deduped, and do not expose suspicious message content
 
 ### 2. Manual flag happy path
 

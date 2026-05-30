@@ -37,7 +37,6 @@ import { globalConfig } from '../config/GlobalConfig';
 import { IUserModerationService } from '../services/UserModerationService';
 import { ISecurityActionService } from '../services/SecurityActionService';
 import { TYPES } from '../di/symbols';
-import type { ServerSettings } from '../repositories/types';
 import {
   decodeVerificationPromptTemplateInput,
   resolveVerificationPromptTemplate,
@@ -135,9 +134,6 @@ const REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY = 'report_instructions_channel_
 const REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY = 'report_instructions_message_id';
 const DEFAULT_RESTRICTED_ROLE_NAME = 'Drasil Restricted';
 const VERIFICATION_CHANNEL_NAME = 'verification';
-const SETUP_WARNING_OWNER_DM_DISABLED_SETTING_KEY = 'setup_warning_owner_dm_disabled';
-const SETUP_WARNING_SUPPRESSED_UNTIL_SETTING_KEY = 'setup_warning_suppressed_until';
-const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
 
 function isUserInstallReportingEnabled(): boolean {
   return process.env[USER_INSTALL_REPORTING_ENABLED_ENV] === 'true';
@@ -646,37 +642,6 @@ export class CommandHandler implements ICommandHandler {
                       { name: 'Anonymous statistics', value: 'anonymous' },
                       { name: 'Full statistics', value: 'full' }
                     )
-                )
-            )
-        )
-        .addSubcommandGroup((group) =>
-          group
-            .setName('warnings')
-            .setDescription('Manage setup warning DMs')
-            .addSubcommand((subcommand) =>
-              subcommand.setName('view').setDescription('View setup warning DM settings')
-            )
-            .addSubcommand((subcommand) =>
-              subcommand
-                .setName('owner-dm-enable')
-                .setDescription('Enable owner/installer setup warning DMs')
-            )
-            .addSubcommand((subcommand) =>
-              subcommand
-                .setName('owner-dm-disable')
-                .setDescription('Disable owner/installer setup warning DMs')
-            )
-            .addSubcommand((subcommand) =>
-              subcommand
-                .setName('owner-dm-suppress')
-                .setDescription('Suppress owner/installer setup warning DMs temporarily')
-                .addIntegerOption((option) =>
-                  option
-                    .setName('hours')
-                    .setDescription('Hours to suppress setup warning DMs (1-168)')
-                    .setRequired(true)
-                    .setMinValue(1)
-                    .setMaxValue(168)
                 )
             )
         )
@@ -1675,11 +1640,6 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
-    if (subcommandGroup === 'warnings') {
-      await this.handleSetupWarningsConfigCommand(interaction, guild.id);
-      return;
-    }
-
     if (subcommandGroup === 'verification') {
       await this.handleVerificationConfigCommand(interaction, guild.id);
       return;
@@ -2278,45 +2238,6 @@ export class CommandHandler implements ICommandHandler {
       'Anonymous shares hashed IDs and aggregate event properties only.',
       'Full may include raw Discord IDs for future cross-network verification features.',
       `Available levels: ${ANALYTICS_CONSENT_LEVELS.map((level) => `\`${level}\``).join(', ')}`,
-      `Guild ID: \`${guildId}\``,
-    ].join('\n');
-  }
-
-  private formatSetupWarningSettings(guildId: string, settings: ServerSettings): string {
-    const disabled = settings[SETUP_WARNING_OWNER_DM_DISABLED_SETTING_KEY] === true;
-    const suppressedUntil =
-      typeof settings[SETUP_WARNING_SUPPRESSED_UNTIL_SETTING_KEY] === 'string'
-        ? settings[SETUP_WARNING_SUPPRESSED_UNTIL_SETTING_KEY]
-        : null;
-    const lastAttemptAt =
-      typeof settings.setup_nudge_last_attempt_at === 'string'
-        ? settings.setup_nudge_last_attempt_at
-        : null;
-    const lastRecipientId =
-      typeof settings.setup_nudge_last_recipient_id === 'string'
-        ? settings.setup_nudge_last_recipient_id
-        : null;
-    const lastResult =
-      typeof settings.setup_nudge_last_result === 'string'
-        ? settings.setup_nudge_last_result
-        : null;
-    const lastSource =
-      typeof settings.setup_nudge_last_source === 'string'
-        ? settings.setup_nudge_last_source
-        : null;
-    const lastFingerprint =
-      typeof settings[SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY] === 'string'
-        ? settings[SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY]
-        : null;
-
-    return [
-      `Owner/installer setup warning DMs: \`${disabled ? 'disabled' : 'enabled'}\``,
-      `Suppressed until: ${suppressedUntil ? `\`${suppressedUntil}\`` : '`not suppressed`'}`,
-      `Last attempt: ${lastAttemptAt ? `\`${lastAttemptAt}\`` : '`none`'}`,
-      `Last recipient: ${lastRecipientId ? `<@${lastRecipientId}>` : '`none`'}`,
-      `Last result: \`${lastResult ?? 'none'}\``,
-      `Last source: \`${lastSource ?? 'none'}\``,
-      `Last setup issue fingerprint: \`${lastFingerprint ?? 'none'}\``,
       `Guild ID: \`${guildId}\``,
     ].join('\n');
   }
@@ -2924,77 +2845,6 @@ export class CommandHandler implements ICommandHandler {
       } catch (replyError) {
         console.warn('Failed to send analytics settings error response:', replyError);
       }
-    }
-  }
-
-  private async handleSetupWarningsConfigCommand(
-    interaction: ChatInputCommandInteraction,
-    guildId: string
-  ): Promise<void> {
-    const subcommand = interaction.options.getSubcommand(true);
-
-    try {
-      switch (subcommand) {
-        case 'view': {
-          const serverConfig = await this.configService.getServerConfig(guildId);
-          await interaction.reply({
-            content:
-              'Current setup warning settings:\n\n' +
-              this.formatSetupWarningSettings(guildId, serverConfig.settings),
-            flags: MessageFlags.Ephemeral,
-            allowedMentions: { parse: [] },
-          });
-          return;
-        }
-
-        case 'owner-dm-enable':
-        case 'owner-dm-disable': {
-          const disabled = subcommand === 'owner-dm-disable';
-          const updated = await this.configService.updateServerSettings(guildId, {
-            [SETUP_WARNING_OWNER_DM_DISABLED_SETTING_KEY]: disabled,
-            ...(disabled ? {} : { [SETUP_WARNING_SUPPRESSED_UNTIL_SETTING_KEY]: null }),
-          });
-          await interaction.reply({
-            content:
-              `${disabled ? 'Disabled' : 'Enabled'} owner/installer setup warning DMs.\n\n` +
-              this.formatSetupWarningSettings(guildId, updated.settings),
-            flags: MessageFlags.Ephemeral,
-            allowedMentions: { parse: [] },
-          });
-          return;
-        }
-
-        case 'owner-dm-suppress': {
-          const hours = interaction.options.getInteger('hours', true);
-          const suppressedUntil = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
-          const updated = await this.configService.updateServerSettings(guildId, {
-            [SETUP_WARNING_SUPPRESSED_UNTIL_SETTING_KEY]: suppressedUntil,
-          });
-          await interaction.reply({
-            content:
-              `Suppressed owner/installer setup warning DMs for ${hours} hour(s).\n\n` +
-              this.formatSetupWarningSettings(guildId, updated.settings),
-            flags: MessageFlags.Ephemeral,
-            allowedMentions: { parse: [] },
-          });
-          return;
-        }
-
-        default:
-          await interaction.reply({
-            content: 'Unsupported warnings subcommand.',
-            flags: MessageFlags.Ephemeral,
-          });
-      }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : 'An error occurred while processing setup warning settings.';
-      await interaction.reply({
-        content: `Failed to process setup warning settings: ${errorMessage}`,
-        flags: MessageFlags.Ephemeral,
-      });
     }
   }
 
