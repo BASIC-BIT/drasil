@@ -35,6 +35,27 @@ export function isDetectionEventExcludedFromAccounting(event: DetectionAccountin
   return getDetectionEventAccountingStatus(event).excluded;
 }
 
+export function isDetectionEventMarkedFalsePositive(event: DetectionAccountingInput): boolean {
+  const metadata = metadataToRecord(event.metadata);
+  const accountingActions = [...(event.admin_actions ?? [])]
+    .filter(
+      (action) =>
+        action.action_type === AdminActionType.FALSE_POSITIVE ||
+        action.action_type === AdminActionType.UNDO_OBSERVED_ACTION
+    )
+    .sort((a, b) => actionTimestamp(b) - actionTimestamp(a));
+  const latestAccountingAction = accountingActions.length > 0 ? accountingActions[0] : undefined;
+
+  if (latestAccountingAction?.action_type === AdminActionType.UNDO_OBSERVED_ACTION) {
+    return false;
+  }
+
+  return (
+    latestAccountingAction?.action_type === AdminActionType.FALSE_POSITIVE ||
+    metadata.observed_action === AdminActionType.FALSE_POSITIVE
+  );
+}
+
 export function getDetectionEventAccountingStatus(
   event: DetectionAccountingInput
 ): DetectionAccountingStatus {

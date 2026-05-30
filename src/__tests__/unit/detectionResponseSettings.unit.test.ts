@@ -8,10 +8,13 @@ describe('detectionResponseSettings (unit)', () => {
     const settings = getDetectionResponseSettings({ auto_restrict: true });
 
     expect(settings.mode).toBe('restrict');
+    expect(settings.messageMode).toBe('restrict');
+    expect(settings.joinMode).toBe('restrict');
     expect(settings.observedMinConfidenceThreshold).toBe(70);
     expect(settings.observedNotificationWindowMinutes).toBe(60);
     expect(settings.automaticDetectionExemptModerators).toBe(true);
     expect(settings.observedActionBanRequiresReason).toBe(false);
+    expect(settings.moderatorBanActionEnabled).toBe(true);
   });
 
   it('maps legacy auto_restrict=false configs to notify_only', () => {
@@ -27,6 +30,32 @@ describe('detectionResponseSettings (unit)', () => {
     });
 
     expect(settings.mode).toBe('open_case');
+  });
+
+  it('uses per-event response mode overrides when configured', () => {
+    const settings = getDetectionResponseSettings({
+      detection_response_mode: 'notify_only',
+      message_detection_response_mode: 'restrict',
+      join_detection_response_mode: 'open_case',
+    });
+
+    expect(settings.mode).toBe('notify_only');
+    expect(settings.messageMode).toBe('restrict');
+    expect(settings.joinMode).toBe('open_case');
+    expect(
+      getDetectionResponseSettings(
+        { detection_response_mode: 'notify_only', message_detection_response_mode: 'restrict' },
+        'message'
+      ).mode
+    ).toBe('restrict');
+  });
+
+  it('allows moderator ban actions to be disabled', () => {
+    const settings = getDetectionResponseSettings({
+      moderator_ban_action_enabled: false,
+    });
+
+    expect(settings.moderatorBanActionEnabled).toBe(false);
   });
 
   it('allows moderator automatic detection exemption to be disabled', () => {

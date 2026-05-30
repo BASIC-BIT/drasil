@@ -204,6 +204,9 @@ export class NotificationManager implements INotificationManager {
         verificationEvent,
         sourceMessage
       );
+      const serverConfig = await this.configService.getServerConfig(member.guild.id);
+      const responseSettings = getDetectionResponseSettings(serverConfig.settings);
+      const canShowBanAction = await this.canShowModeratorBanAction(member.guild, responseSettings);
 
       // Get detection events
       const detectionEvents = await this.detectionEventsRepository.findByServerAndUser(
@@ -215,7 +218,8 @@ export class NotificationManager implements INotificationManager {
       const actionRow = this.createActionRow(
         member.id,
         detectionEvents,
-        !!verificationEvent.thread_id // Check for truthiness (not null/undefined)
+        !!verificationEvent.thread_id, // Check for truthiness (not null/undefined)
+        canShowBanAction
       );
 
       // If we have an existing message, update it, otherwise create new
@@ -231,7 +235,6 @@ export class NotificationManager implements INotificationManager {
       }
 
       // Create a new message
-      const serverConfig = await this.configService.getServerConfig(member.guild.id);
       const notificationRoleIds = this.getCaseNotificationRoleIds(serverConfig);
       return await adminChannel.send({
         content: this.formatRoleMentions(notificationRoleIds),
@@ -278,8 +281,9 @@ export class NotificationManager implements INotificationManager {
         sourceMessage
       );
       const actionDetectionEventId = detectionResult.detectionEventId ?? detectionEvents[0]?.id;
+      const canShowBanAction = await this.canShowModeratorBanAction(member.guild, responseSettings);
       const components = actionDetectionEventId
-        ? this.createObservedActionRows(member.id, actionDetectionEventId)
+        ? this.createObservedActionRows(member.id, actionDetectionEventId, canShowBanAction)
         : [];
 
       let notificationMessage: Message | null = null;
@@ -343,9 +347,10 @@ export class NotificationManager implements INotificationManager {
       }
 
       const serverConfig = await this.configService.getServerConfig(detectionEvent.server_id);
+      const responseSettings = getDetectionResponseSettings(serverConfig.settings);
       const notificationChannel = await this.getObservedDetectionNotificationChannel(
         detectionEvent.server_id,
-        getDetectionResponseSettings(serverConfig.settings)
+        responseSettings
       );
       if (!notificationChannel) {
         return false;
@@ -414,9 +419,14 @@ export class NotificationManager implements INotificationManager {
       }
 
       const serverConfig = await this.configService.getServerConfig(detectionEvent.server_id);
+      const responseSettings = getDetectionResponseSettings(serverConfig.settings);
+      const guild = await this.fetchGuild(detectionEvent.server_id);
+      const canShowBanAction = guild
+        ? await this.canShowModeratorBanAction(guild, responseSettings)
+        : false;
       const notificationChannel = await this.getObservedDetectionNotificationChannel(
         detectionEvent.server_id,
-        getDetectionResponseSettings(serverConfig.settings)
+        responseSettings
       );
       if (!notificationChannel) {
         return false;
@@ -429,7 +439,11 @@ export class NotificationManager implements INotificationManager {
         return false;
       }
 
-      const components = this.createObservedActionRows(detectionEvent.user_id, detectionEvent.id);
+      const components = this.createObservedActionRows(
+        detectionEvent.user_id,
+        detectionEvent.id,
+        canShowBanAction
+      );
       if (!message.embeds.length) {
         await message.edit({ allowedMentions: { parse: [] }, components });
         return true;
@@ -639,6 +653,33 @@ export class NotificationManager implements INotificationManager {
     return [...roleIds];
   }
 
+  private async canShowModeratorBanAction(
+    guild: Guild,
+    responseSettings: ReturnType<typeof getDetectionResponseSettings>
+  ): Promise<boolean> {
+    if (!responseSettings.moderatorBanActionEnabled) {
+      return false;
+    }
+
+    const botMember =
+      guild.members.me ??
+      (typeof guild.members.fetchMe === 'function'
+        ? await guild.members.fetchMe().catch(() => null)
+        : null);
+    return botMember?.permissions.has(PermissionFlagsBits.BanMembers) ?? false;
+  }
+
+  private async fetchGuild(guildId: string): Promise<Guild | null> {
+    const guildManager = this.client.guilds as unknown as
+      | { fetch?: (guildId: string) => Promise<Guild> }
+      | undefined;
+    if (typeof guildManager?.fetch !== 'function') {
+      return null;
+    }
+
+    return guildManager.fetch(guildId).catch(() => null);
+  }
+
   private formatRoleMentions(roleIds: readonly string[]): string | undefined {
     if (roleIds.length === 0) {
       return undefined;
@@ -818,6 +859,7 @@ export class NotificationManager implements INotificationManager {
     if (!verificationEvent.notification_message_id) {
       throw new Error('No notification message ID found for verification event');
     }
+
     const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
 
     if (!adminChannel) {
@@ -1283,7 +1325,8 @@ export class NotificationManager implements INotificationManager {
   private createActionRow(
     userId: string,
     detectionEvents: DetectionEvent[],
-    hasThread: boolean
+    hasThread: boolean,
+    canShowBanAction: boolean
   ): ActionRowBuilder<ButtonBuilder> {
     // Create action buttons with user ID in the custom ID
     const verifyButton = new ButtonBuilder()
@@ -1291,13 +1334,16 @@ export class NotificationManager implements INotificationManager {
       .setLabel('Verify User')
       .setStyle(ButtonStyle.Success);
 
-    const banButton = new ButtonBuilder()
-      .setCustomId(`ban_${userId}`)
-      .setLabel('Ban User')
-      .setStyle(ButtonStyle.Danger);
-
     // Base buttons
-    const buttons = [verifyButton, banButton];
+    const buttons = [verifyButton];
+    if (canShowBanAction) {
+      buttons.push(
+        new ButtonBuilder()
+          .setCustomId(`ban_${userId}`)
+          .setLabel('Ban User')
+          .setStyle(ButtonStyle.Danger)
+      );
+    }
 
     // Add thread button ONLY if no verification event was found OR if the event exists but has no thread_id yet
     if (!hasThread) {
@@ -1323,32 +1369,41 @@ export class NotificationManager implements INotificationManager {
 
   private createObservedActionRows(
     userId: string,
-    detectionEventId: string
+    detectionEventId: string,
+    canShowBanAction: boolean
   ): ActionRowBuilder<ButtonBuilder>[] {
-    return [
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`observed:open:${userId}:${detectionEventId}`)
-          .setLabel('Open Case')
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId(`observed:restrict:${userId}:${detectionEventId}`)
-          .setLabel('Restrict')
-          .setStyle(ButtonStyle.Danger),
+    const buttons = [
+      new ButtonBuilder()
+        .setCustomId(`observed:open:${userId}:${detectionEventId}`)
+        .setLabel('Open Case')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`observed:restrict:${userId}:${detectionEventId}`)
+        .setLabel('Restrict')
+        .setStyle(ButtonStyle.Danger),
+    ];
+
+    if (canShowBanAction) {
+      buttons.push(
         new ButtonBuilder()
           .setCustomId(`observed:ban:${userId}:${detectionEventId}`)
           .setLabel('Ban')
-          .setStyle(ButtonStyle.Danger),
-        new ButtonBuilder()
-          .setCustomId(`observed:dismiss_menu:${userId}:${detectionEventId}`)
-          .setLabel('Dismiss...')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(`observed:history:${userId}:${detectionEventId}`)
-          .setLabel('History')
-          .setStyle(ButtonStyle.Secondary)
-      ),
-    ];
+          .setStyle(ButtonStyle.Danger)
+      );
+    }
+
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`observed:dismiss_menu:${userId}:${detectionEventId}`)
+        .setLabel('Dismiss...')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`observed:history:${userId}:${detectionEventId}`)
+        .setLabel('History')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    return [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
   }
 
   private createObservedUndoRows(
@@ -1695,25 +1750,40 @@ export class NotificationManager implements INotificationManager {
         ];
         break;
 
-      case VerificationStatus.PENDING:
+      case VerificationStatus.PENDING: {
+        const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
+        const responseSettings = getDetectionResponseSettings(serverConfig.settings);
+        const guild = await this.fetchGuild(verificationEvent.server_id);
+        const canShowBanAction = guild
+          ? await this.canShowModeratorBanAction(guild, responseSettings)
+          : false;
         // Show all buttons
-        components = [
-          new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`verify_${verificationEvent.user_id}`)
-              .setLabel('Verify User')
-              .setStyle(ButtonStyle.Success),
+        const pendingButtons = [
+          new ButtonBuilder()
+            .setCustomId(`verify_${verificationEvent.user_id}`)
+            .setLabel('Verify User')
+            .setStyle(ButtonStyle.Success),
+        ];
+
+        if (canShowBanAction) {
+          pendingButtons.push(
             new ButtonBuilder()
               .setCustomId(`ban_${verificationEvent.user_id}`)
               .setLabel('Ban User')
-              .setStyle(ButtonStyle.Danger),
-            new ButtonBuilder()
-              .setCustomId(`history_${verificationEvent.user_id}`)
-              .setLabel('View Full History')
-              .setStyle(ButtonStyle.Secondary)
-          ),
-        ];
+              .setStyle(ButtonStyle.Danger)
+          );
+        }
+
+        pendingButtons.push(
+          new ButtonBuilder()
+            .setCustomId(`history_${verificationEvent.user_id}`)
+            .setLabel('View Full History')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        components = [new ActionRowBuilder<ButtonBuilder>().addComponents(...pendingButtons)];
         break;
+      }
     }
 
     // Add create thread button if pending and no thread exists

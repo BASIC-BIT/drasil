@@ -196,6 +196,26 @@ describe('CommandHandler (unit)', () => {
     );
   });
 
+  it('denies legacy test commands for non-admin members', async () => {
+    const { handler } = buildHandler();
+    const message = {
+      content: '!test spam',
+      member: {
+        permissions: {
+          has: jest.fn().mockReturnValue(false),
+        },
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleTestCommands(message);
+
+    expect(message.member.permissions.has).toHaveBeenCalledWith(PermissionFlagsBits.Administrator);
+    expect(message.reply).toHaveBeenCalledWith(
+      'You need administrator permissions to use test commands.'
+    );
+  });
+
   it('registers /setupverification with typed role and channel options', () => {
     const { handler } = buildHandler();
     const commands = (handler as any).commands as any[];
@@ -373,12 +393,16 @@ describe('CommandHandler (unit)', () => {
       expect.arrayContaining([
         'view',
         'set-mode',
+        'set-event-mode',
+        'clear-event-mode',
         'set-notification-channel',
         'clear-notification-channel',
         'set-notification-threshold',
         'set-notification-window',
         'moderator-exemption-enable',
         'moderator-exemption-disable',
+        'ban-action-enable',
+        'ban-action-disable',
       ])
     );
   });
@@ -395,7 +419,14 @@ describe('CommandHandler (unit)', () => {
 
     const reportSubcommands = reportGroup.options.map((option: any) => option.name);
     expect(reportSubcommands).toEqual(
-      expect.arrayContaining(['view', 'reason-require', 'reason-optional', 'external-reports'])
+      expect.arrayContaining([
+        'view',
+        'reason-require',
+        'reason-optional',
+        'external-reports',
+        'ai-set-max-images',
+        'ai-set-max-image-mb',
+      ])
     );
   });
 
@@ -481,7 +512,9 @@ describe('CommandHandler (unit)', () => {
     } as any;
 
     const guild = {
+      id: 'guild-1',
       members: {
+        me: { permissions: { has: jest.fn().mockReturnValue(true) } },
         fetch: jest.fn().mockImplementation(async (id: string) => {
           if (id === invoker.id) return invokingMember;
           if (id === targetUser.id) return targetMember;
@@ -522,7 +555,9 @@ describe('CommandHandler (unit)', () => {
     const targetMember = { id: targetUser.id } as any;
 
     const guild = {
+      id: 'guild-1',
       members: {
+        me: { permissions: { has: jest.fn().mockReturnValue(true) } },
         fetch: jest.fn().mockResolvedValue(targetMember),
       },
     } as any;
@@ -2694,6 +2729,94 @@ describe('CommandHandler (unit)', () => {
     });
   });
 
+  it('handles /config detection set-event-mode', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        detection_response_mode: 'notify_only',
+        message_detection_response_mode: 'open_case',
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('detection'),
+        getSubcommand: jest.fn().mockReturnValue('set-event-mode'),
+        getString: jest.fn((name: string) => (name === 'event' ? 'message' : 'open_case')),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      message_detection_response_mode: 'open_case',
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Updated message detection response policy'),
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('handles /config detection clear-event-mode', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('detection'),
+        getSubcommand: jest.fn().mockReturnValue('clear-event-mode'),
+        getString: jest.fn().mockReturnValue('join'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      join_detection_response_mode: null,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Reset join detection response policy to default'),
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
   it('handles /config detection moderator-exemption-disable', async () => {
     const updateServerSettings = jest.fn().mockResolvedValue({
       settings: {
@@ -2732,6 +2855,92 @@ describe('CommandHandler (unit)', () => {
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining('Moderator/admin exemption: `disabled`'),
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('handles /config detection ban-action-disable', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        detection_response_mode: 'notify_only',
+        moderator_ban_action_enabled: false,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('detection'),
+        getSubcommand: jest.fn().mockReturnValue('ban-action-disable'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      moderator_ban_action_enabled: false,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Moderator ban action enabled: `no`'),
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('handles /config detection ban-action-enable', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        detection_response_mode: 'notify_only',
+        moderator_ban_action_enabled: true,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('detection'),
+        getSubcommand: jest.fn().mockReturnValue('ban-action-enable'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      moderator_ban_action_enabled: true,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Moderator ban action enabled: `yes`'),
       flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
@@ -2859,6 +3068,90 @@ describe('CommandHandler (unit)', () => {
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining('External reports: `notify_only`'),
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles /config report ai-set-max-images', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        report_ai_max_images: 6,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('report'),
+        getSubcommand: jest.fn().mockReturnValue('ai-set-max-images'),
+        getInteger: jest.fn().mockReturnValue(6),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      report_ai_max_images: 6,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Max images: `6`'),
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles /config report ai-set-max-image-mb', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        report_ai_max_image_bytes: 15 * 1024 * 1024,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('report'),
+        getSubcommand: jest.fn().mockReturnValue('ai-set-max-image-mb'),
+        getInteger: jest.fn().mockReturnValue(15),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      report_ai_max_image_bytes: 15 * 1024 * 1024,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Max image size: `15 MB`'),
       flags: MessageFlags.Ephemeral,
     });
   });

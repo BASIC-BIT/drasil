@@ -119,6 +119,7 @@ describe('InteractionHandler (unit)', () => {
       guilds: {
         fetch: jest.fn().mockResolvedValue({
           members: {
+            me: { permissions: { has: jest.fn().mockReturnValue(true) } },
             fetch: jest.fn().mockResolvedValue(member),
           },
         }),
@@ -161,7 +162,7 @@ describe('InteractionHandler (unit)', () => {
     configService = {
       initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn(),
-      getServerConfig: jest.fn().mockResolvedValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({ settings: {} }),
       updateServerConfig: jest.fn().mockResolvedValue({}),
       getServerSettings: jest.fn(),
       updateServerSettings: jest.fn(),

@@ -1,5 +1,6 @@
 import {
   Client,
+  Guild,
   Message,
   GuildMember,
   REST,
@@ -69,6 +70,9 @@ import {
   AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY,
   DETECTION_RESPONSE_MODE_SETTING_KEY,
   DETECTION_RESPONSE_MODES,
+  JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY,
+  MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY,
+  MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY,
   OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY,
   OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY,
   OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY,
@@ -112,7 +116,11 @@ import {
   REPORT_AI_ANALYZE_TEXT_SETTING_KEY,
   REPORT_AI_MAX_ACTIONS,
   REPORT_AI_MAX_ACTION_SETTING_KEY,
+  REPORT_AI_MAX_IMAGE_BYTES_SETTING_KEY,
+  REPORT_AI_MAX_IMAGES_SETTING_KEY,
   REPORT_AI_TRIAGE_ENABLED_SETTING_KEY,
+  MAX_REPORT_AI_MAX_IMAGE_BYTES,
+  MAX_REPORT_AI_MAX_IMAGES,
 } from '../utils/reportAiSettings';
 import 'reflect-metadata';
 
@@ -423,6 +431,49 @@ export class CommandHandler implements ICommandHandler {
             )
             .addSubcommand((subcommand) =>
               subcommand
+                .setName('set-event-mode')
+                .setDescription('Override detection response for message or join events')
+                .addStringOption((option) =>
+                  option
+                    .setName('event')
+                    .setDescription('Event type to override')
+                    .setRequired(true)
+                    .addChoices(
+                      { name: 'Message send', value: 'message' },
+                      { name: 'Server join', value: 'join' }
+                    )
+                )
+                .addStringOption((option) =>
+                  option
+                    .setName('mode')
+                    .setDescription('off, record_only, notify_only, open_case, or restrict')
+                    .setRequired(true)
+                    .addChoices(
+                      { name: 'Off', value: 'off' },
+                      { name: 'Record only', value: 'record_only' },
+                      { name: 'Notify only', value: 'notify_only' },
+                      { name: 'Open case', value: 'open_case' },
+                      { name: 'Restrict pending review', value: 'restrict' }
+                    )
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('clear-event-mode')
+                .setDescription('Use the default detection response for message or join events')
+                .addStringOption((option) =>
+                  option
+                    .setName('event')
+                    .setDescription('Event type to reset')
+                    .setRequired(true)
+                    .addChoices(
+                      { name: 'Message send', value: 'message' },
+                      { name: 'Server join', value: 'join' }
+                    )
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
                 .setName('set-notification-channel')
                 .setDescription('Set the observe-only notification channel')
                 .addChannelOption((option) =>
@@ -485,6 +536,16 @@ export class CommandHandler implements ICommandHandler {
               subcommand
                 .setName('ban-reason-optional')
                 .setDescription('Allow the default reason when banning from observed notifications')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('ban-action-enable')
+                .setDescription('Show and allow Drasil moderator ban actions')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('ban-action-disable')
+                .setDescription('Hide and block Drasil moderator ban actions')
             )
         )
         .addSubcommandGroup((group) =>
@@ -619,6 +680,34 @@ export class CommandHandler implements ICommandHandler {
                       { name: 'Recommend open case', value: 'open_case' },
                       { name: 'Recommend restriction review', value: 'restrict' }
                     )
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('ai-set-max-images')
+                .setDescription('Set how many report images AI may analyze')
+                .addIntegerOption((option) =>
+                  option
+                    .setName('value')
+                    .setDescription(`Number of images (0-${MAX_REPORT_AI_MAX_IMAGES})`)
+                    .setRequired(true)
+                    .setMinValue(0)
+                    .setMaxValue(MAX_REPORT_AI_MAX_IMAGES)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('ai-set-max-image-mb')
+                .setDescription('Set max size per report image AI may analyze')
+                .addIntegerOption((option) =>
+                  option
+                    .setName('value')
+                    .setDescription(
+                      `Megabytes per image (1-${MAX_REPORT_AI_MAX_IMAGE_BYTES / (1024 * 1024)})`
+                    )
+                    .setRequired(true)
+                    .setMinValue(1)
+                    .setMaxValue(MAX_REPORT_AI_MAX_IMAGE_BYTES / (1024 * 1024))
                 )
             )
         )
@@ -986,6 +1075,15 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    if (!(await this.canUseModeratorBanAction(guild))) {
+      await interaction.reply({
+        content:
+          'Drasil ban actions are disabled for this server or the bot lacks Ban Members permission.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
     const member = await guild.members.fetch(targetUser.id).catch(() => null);
     if (!member) {
       await interaction.reply({
@@ -1008,6 +1106,21 @@ export class CommandHandler implements ICommandHandler {
         flags: MessageFlags.Ephemeral,
       });
     }
+  }
+
+  private async canUseModeratorBanAction(guild: Guild): Promise<boolean> {
+    const serverConfig = await this.configService.getServerConfig(guild.id);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    if (!settings.moderatorBanActionEnabled) {
+      return false;
+    }
+
+    const botMember =
+      guild.members.me ??
+      (typeof guild.members.fetchMe === 'function'
+        ? await guild.members.fetchMe().catch(() => null)
+        : null);
+    return botMember?.permissions.has(PermissionFlagsBits.BanMembers) ?? false;
   }
 
   private async handleReportCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -1220,6 +1333,11 @@ export class CommandHandler implements ICommandHandler {
 
       if (!message.member) {
         await message.reply('This command can only be used in a server.');
+        return;
+      }
+
+      if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        await message.reply('You need administrator permissions to use test commands.');
         return;
       }
 
@@ -2322,11 +2440,14 @@ export class CommandHandler implements ICommandHandler {
   ): string {
     return [
       `Mode: \`${settings.mode}\``,
+      `Message mode: \`${settings.messageMode}\``,
+      `Join mode: \`${settings.joinMode}\``,
       `Moderator/admin exemption: \`${settings.automaticDetectionExemptModerators ? 'enabled' : 'disabled'}\``,
       `Observed notification channel: ${settings.observedNotificationChannelId ? `<#${settings.observedNotificationChannelId}>` : '`admin_channel_id` fallback'}`,
       `Observed notification threshold: \`${settings.observedMinConfidenceThreshold}%\``,
       `Observed notification window: \`${settings.observedNotificationWindowMinutes} minutes\``,
       `Observed ban reason required: \`${settings.observedActionBanRequiresReason ? 'yes' : 'no'}\``,
+      `Moderator ban action enabled: \`${settings.moderatorBanActionEnabled ? 'yes' : 'no'}\``,
       `Guild ID: \`${guildId}\``,
     ].join('\n');
   }
@@ -2382,6 +2503,7 @@ export class CommandHandler implements ICommandHandler {
       `Open-case threshold: \`${Math.round(settings.openCaseThreshold * 100)}%\``,
       `Restrict threshold: \`${Math.round(settings.restrictThreshold * 100)}%\``,
       `Max images: \`${settings.maxImages}\``,
+      `Max image size: \`${Math.round(settings.maxImageBytes / (1024 * 1024))} MB\``,
     ].join('\n');
   }
 
@@ -2500,6 +2622,58 @@ export class CommandHandler implements ICommandHandler {
           return;
         }
 
+        case 'set-event-mode': {
+          const event = interaction.options.getString('event', true);
+          const mode = interaction.options.getString('mode', true);
+          if (event !== 'message' && event !== 'join') {
+            throw new Error('Invalid event. Use message or join.');
+          }
+          if (!isDetectionResponseMode(mode)) {
+            await interaction.reply({
+              content: `Unsupported detection response mode. Choose one of: ${DETECTION_RESPONSE_MODES.map((value) => `\`${value}\``).join(', ')}`,
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [event === 'message'
+              ? MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY
+              : JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY]: mode,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `Updated ${event} detection response policy.\n\n` +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'clear-event-mode': {
+          const event = interaction.options.getString('event', true);
+          if (event !== 'message' && event !== 'join') {
+            throw new Error('Invalid event. Use message or join.');
+          }
+
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [event === 'message'
+              ? MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY
+              : JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY]: null,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `Reset ${event} detection response policy to default.\n\n` +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
         case 'set-notification-channel': {
           const channel = interaction.options.getChannel('channel', true);
           const updated = await this.configService.updateServerSettings(guildId, {
@@ -2590,6 +2764,23 @@ export class CommandHandler implements ICommandHandler {
           await interaction.reply({
             content:
               'Updated observed notification ban reason policy.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'ban-action-enable':
+        case 'ban-action-disable': {
+          const enabled = subcommand === 'ban-action-enable';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY]: enabled,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated moderator ban action policy.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
             flags: MessageFlags.Ephemeral,
             allowedMentions: { parse: [] },
@@ -2849,6 +3040,35 @@ export class CommandHandler implements ICommandHandler {
           await interaction.reply({
             content:
               'Updated AI report triage max action.\n\n' + this.formatReportAiSettings(settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'ai-set-max-images': {
+          const value = interaction.options.getInteger('value', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [REPORT_AI_MAX_IMAGES_SETTING_KEY]: value,
+          });
+          const settings = getReportAiSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated AI report triage max images.\n\n' + this.formatReportAiSettings(settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'ai-set-max-image-mb': {
+          const value = interaction.options.getInteger('value', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [REPORT_AI_MAX_IMAGE_BYTES_SETTING_KEY]: value * 1024 * 1024,
+          });
+          const settings = getReportAiSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated AI report triage max image size.\n\n' +
+              this.formatReportAiSettings(settings),
             flags: MessageFlags.Ephemeral,
           });
           return;

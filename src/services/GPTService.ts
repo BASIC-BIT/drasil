@@ -103,6 +103,7 @@ export interface UserProfileData {
   hasModerationPermissions?: boolean;
   moderationPermissions?: string[];
   pastDetectionCount?: number;
+  pastFalsePositiveDetectionCount?: number;
   recentHighConfidenceDetectionCount?: number;
   // Add other relevant profile fields as needed
 }
@@ -436,6 +437,7 @@ export class GPTService implements IGPTService {
       `Has moderation/admin permissions: ${profileData.hasModerationPermissions === true ? 'yes' : 'no'}`,
       `Moderation permissions: ${moderationPermissions.length > 0 ? moderationPermissions.join(', ') : 'none'}`,
       `Past suspicious detections in this server: ${profileData.pastDetectionCount ?? 0}`,
+      `Past false-positive detections in this server: ${profileData.pastFalsePositiveDetectionCount ?? 0}`,
       `Recent high-confidence detections in this server: ${profileData.recentHighConfidenceDetectionCount ?? 0}`,
     ];
 

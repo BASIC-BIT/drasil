@@ -90,8 +90,40 @@ describe('EventHandler (unit)', () => {
       guild: { id: 'guild-1' },
       member,
       channel: { isThread: jest.fn().mockReturnValue(false) },
+      reply: jest.fn().mockResolvedValue(undefined),
     } as unknown as Message;
   }
+
+  it('delegates legacy test commands to CommandHandler', async () => {
+    const commandHandler = {
+      handleTestCommands: jest.fn().mockResolvedValue(undefined),
+      registerCommands: jest.fn(),
+    };
+    const handler = new EventHandler(
+      { on: jest.fn(), user: { id: 'bot-1' } } as any,
+      { detectMessage: jest.fn(), detectNewJoin: jest.fn() } as any,
+      {
+        upsertObservedDetectionNotification: jest.fn(),
+        setupVerificationChannel: jest.fn(),
+      } as any,
+      {
+        initialize: jest.fn(),
+        getCachedServerConfig: jest.fn().mockReturnValue({}),
+        getServerConfig: jest.fn(),
+      } as any,
+      { handleSuspiciousMessage: jest.fn(), openCaseForSuspiciousMessage: jest.fn() } as any,
+      commandHandler as any,
+      { handleButtonInteraction: jest.fn(), handleModalSubmit: jest.fn() } as any,
+      { handleThreadMessage: jest.fn().mockResolvedValue(false) } as any
+    );
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.content = '!test spam';
+
+    await (handler as any).handleMessage(message);
+
+    expect(commandHandler.handleTestCommands).toHaveBeenCalledWith(message);
+    expect(message.reply).not.toHaveBeenCalled();
+  });
 
   it('skips automatic message detection for moderation members', async () => {
     const detectionOrchestrator = {

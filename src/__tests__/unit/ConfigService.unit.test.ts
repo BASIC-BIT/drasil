@@ -3,6 +3,7 @@ import { ConfigService } from '../../config/ConfigService';
 import { InMemoryServerRepository } from '../fakes/inMemoryRepositories';
 import { globalConfig } from '../../config/GlobalConfig';
 import { Server } from '../../repositories/types';
+import { getDetectionResponseSettings } from '../../utils/detectionResponseSettings';
 
 const buildClient = (channel?: TextChannel, role?: Role): Client =>
   ({
@@ -220,6 +221,24 @@ describe('ConfigService (unit)', () => {
     expect(updated.settings.auto_restrict).toBe(true);
     expect(updated.settings.min_confidence_threshold).toBe(80);
     expect(updated.heuristic_message_threshold).toBe(2);
+  });
+
+  it('does not persist per-event detection overrides in default server settings', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const discordClient = buildClient();
+    const service = new ConfigService(serverRepository, discordClient);
+
+    await service.getServerConfig('guild-detection-defaults');
+    const updated = await service.updateServerSettings('guild-detection-defaults', {
+      detection_response_mode: 'notify_only',
+      auto_restrict: false,
+    });
+
+    expect(updated.settings.message_detection_response_mode).toBeUndefined();
+    expect(updated.settings.join_detection_response_mode).toBeUndefined();
+    expect(getDetectionResponseSettings(updated.settings, 'message').mode).toBe('notify_only');
+    expect(getDetectionResponseSettings(updated.settings, 'join').mode).toBe('notify_only');
   });
 
   it('fetches admin channel when configured', async () => {

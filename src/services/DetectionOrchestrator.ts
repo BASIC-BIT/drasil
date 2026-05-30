@@ -14,7 +14,11 @@ import { TYPES } from '../di/symbols';
 import { meetsConfidenceLevel } from '../utils/confidence';
 import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { DetectionType } from '../repositories/types';
-import { withDetectionTestingMetadata } from '../utils/detectionEventAccounting';
+import {
+  isDetectionEventExcludedFromAccounting,
+  isDetectionEventMarkedFalsePositive,
+  withDetectionTestingMetadata,
+} from '../utils/detectionEventAccounting';
 import {
   IProductAnalyticsService,
   NOOP_PRODUCT_ANALYTICS_SERVICE,
@@ -173,10 +177,15 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       // Ensure server and user exist before proceeding
       await this.ensureEntitiesExist(serverId, userId, profileData?.username); // Use optional chaining
 
-      // First, check detection history that still counts toward future suspicion.
-      const countedEvents = await this.detectionEventsRepository.findCountedByServerAndUser(
+      const allServerEvents = await this.detectionEventsRepository.findByServerAndUser(
         serverId,
         userId
+      );
+      const countedEvents = allServerEvents.filter(
+        (event) => !isDetectionEventExcludedFromAccounting(event)
+      );
+      const falsePositiveEvents = allServerEvents.filter((event) =>
+        isDetectionEventMarkedFalsePositive(event)
       );
       const recentSuspiciousEvents = countedEvents.filter((event) =>
         meetsConfidenceLevel(event.confidence, 'High')
@@ -184,6 +193,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
 
       if (profileData) {
         profileData.pastDetectionCount = countedEvents.length;
+        profileData.pastFalsePositiveDetectionCount = falsePositiveEvents.length;
         profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
       }
 
@@ -326,14 +336,21 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       // Ensure server and user exist before proceeding
       await this.ensureEntitiesExist(serverId, userId, profileData.username); // Use params
 
-      const countedEvents = await this.detectionEventsRepository.findCountedByServerAndUser(
+      const allServerEvents = await this.detectionEventsRepository.findByServerAndUser(
         serverId,
         userId
+      );
+      const countedEvents = allServerEvents.filter(
+        (event) => !isDetectionEventExcludedFromAccounting(event)
+      );
+      const falsePositiveEvents = allServerEvents.filter((event) =>
+        isDetectionEventMarkedFalsePositive(event)
       );
       const recentSuspiciousEvents = countedEvents.filter((event) =>
         meetsConfidenceLevel(event.confidence, 'High')
       );
       profileData.pastDetectionCount = countedEvents.length;
+      profileData.pastFalsePositiveDetectionCount = falsePositiveEvents.length;
       profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
 
       // Use the analyzeProfile method from the interface
