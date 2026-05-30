@@ -196,6 +196,26 @@ describe('CommandHandler (unit)', () => {
     );
   });
 
+  it('denies legacy test commands for non-admin members', async () => {
+    const { handler } = buildHandler();
+    const message = {
+      content: '!test spam',
+      member: {
+        permissions: {
+          has: jest.fn().mockReturnValue(false),
+        },
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleTestCommands(message);
+
+    expect(message.member.permissions.has).toHaveBeenCalledWith(PermissionFlagsBits.Administrator);
+    expect(message.reply).toHaveBeenCalledWith(
+      'You need administrator permissions to use test commands.'
+    );
+  });
+
   it('registers /setupverification with typed role and channel options', () => {
     const { handler } = buildHandler();
     const commands = (handler as any).commands as any[];
@@ -2878,6 +2898,49 @@ describe('CommandHandler (unit)', () => {
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining('Moderator ban action enabled: `no`'),
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('handles /config detection ban-action-enable', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        detection_response_mode: 'notify_only',
+        moderator_ban_action_enabled: true,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('detection'),
+        getSubcommand: jest.fn().mockReturnValue('ban-action-enable'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      moderator_ban_action_enabled: true,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Moderator ban action enabled: `yes`'),
       flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });

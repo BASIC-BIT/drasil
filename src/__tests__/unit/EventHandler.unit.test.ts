@@ -94,8 +94,11 @@ describe('EventHandler (unit)', () => {
     } as unknown as Message;
   }
 
-  it('denies legacy test commands for non-admin members', async () => {
-    const commandHandler = { handleTestCommands: jest.fn(), registerCommands: jest.fn() };
+  it('delegates legacy test commands to CommandHandler', async () => {
+    const commandHandler = {
+      handleTestCommands: jest.fn().mockResolvedValue(undefined),
+      registerCommands: jest.fn(),
+    };
     const handler = new EventHandler(
       { on: jest.fn(), user: { id: 'bot-1' } } as any,
       { detectMessage: jest.fn(), detectNewJoin: jest.fn() } as any,
@@ -118,10 +121,8 @@ describe('EventHandler (unit)', () => {
 
     await (handler as any).handleMessage(message);
 
-    expect(commandHandler.handleTestCommands).not.toHaveBeenCalled();
-    expect(message.reply).toHaveBeenCalledWith(
-      'You need administrator permissions to use test commands.'
-    );
+    expect(commandHandler.handleTestCommands).toHaveBeenCalledWith(message);
+    expect(message.reply).not.toHaveBeenCalled();
   });
 
   it('skips automatic message detection for moderation members', async () => {

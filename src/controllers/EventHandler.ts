@@ -192,10 +192,6 @@ export class EventHandler implements IEventHandler {
 
     // Handle debug/test commands
     if (message.content.startsWith('!test')) {
-      if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        await message.reply('You need administrator permissions to use test commands.');
-        return;
-      }
       await this.commandHandler.handleTestCommands(message);
       return;
     }
