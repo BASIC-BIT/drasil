@@ -34,10 +34,10 @@ export interface ReportAttachmentMetadata {
 
 export const DEFAULT_REPORT_AI_OPEN_CASE_THRESHOLD = 0.85;
 export const DEFAULT_REPORT_AI_RESTRICT_THRESHOLD = 0.95;
-export const DEFAULT_REPORT_AI_MAX_IMAGES = 2;
-export const DEFAULT_REPORT_AI_MAX_IMAGE_BYTES = 4 * 1024 * 1024;
-export const MAX_REPORT_AI_MAX_IMAGES = 4;
-export const MAX_REPORT_AI_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const DEFAULT_REPORT_AI_MAX_IMAGES = 4;
+export const DEFAULT_REPORT_AI_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const MAX_REPORT_AI_MAX_IMAGES = 8;
+export const MAX_REPORT_AI_MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;

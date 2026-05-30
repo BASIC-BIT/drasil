@@ -192,6 +192,10 @@ export class EventHandler implements IEventHandler {
 
     // Handle debug/test commands
     if (message.content.startsWith('!test')) {
+      if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        await message.reply('You need administrator permissions to use test commands.');
+        return;
+      }
       await this.commandHandler.handleTestCommands(message);
       return;
     }
@@ -226,7 +230,7 @@ export class EventHandler implements IEventHandler {
       }
 
       const serverConfig = await this.configService.getServerConfig(serverId);
-      const responseSettings = getDetectionResponseSettings(serverConfig.settings);
+      const responseSettings = getDetectionResponseSettings(serverConfig.settings, 'message');
       if (responseSettings.mode === 'off') {
         console.log(
           `Automatic detection is disabled for guild ${serverId}; skipping message scan.`
@@ -426,7 +430,7 @@ export class EventHandler implements IEventHandler {
       await this.ensureConfigInitialized();
 
       const serverConfig = await this.configService.getServerConfig(member.guild.id);
-      const responseSettings = getDetectionResponseSettings(serverConfig.settings);
+      const responseSettings = getDetectionResponseSettings(serverConfig.settings, 'join');
       if (responseSettings.mode === 'off') {
         console.log(
           `Automatic detection is disabled for guild ${member.guild.id}; skipping join scan.`

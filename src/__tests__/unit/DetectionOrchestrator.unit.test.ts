@@ -284,7 +284,48 @@ describe('DetectionOrchestrator (unit)', () => {
     expect(result.label).toBe('OK');
     expect(result.reasons).not.toContain('Recent suspicious activity');
     expect(profile.pastDetectionCount).toBe(0);
+    expect(profile.pastFalsePositiveDetectionCount).toBe(1);
     expect(profile.recentHighConfidenceDetectionCount).toBe(0);
+  });
+
+  it('passes false-positive detection history to GPT separately from counted history', async () => {
+    await detectionEventsRepository.create({
+      server_id: serverId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.9,
+      reasons: ['Previous high-confidence detection'],
+      detected_at: new Date(),
+      metadata: { observed_action: 'false_positive' },
+    });
+
+    heuristicService.analyzeMessage.mockReturnValue({ result: 'OK', reasons: [] });
+    gptService.analyzeProfile.mockResolvedValue(makeGptAnalysis());
+
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository
+    );
+
+    const profile: UserProfileData = {
+      username: 'new-user',
+      accountCreatedAt: new Date(),
+      joinedServerAt: new Date(),
+      recentMessages: [],
+    };
+
+    await orchestrator.detectMessage(serverId, userId, 'hello', profile);
+
+    expect(gptService.analyzeProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pastDetectionCount: 0,
+        pastFalsePositiveDetectionCount: 1,
+        recentHighConfidenceDetectionCount: 0,
+      })
+    );
   });
 
   it('does not reduce message suspicion when GPT analysis is unavailable', async () => {

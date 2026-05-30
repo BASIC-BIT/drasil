@@ -1,6 +1,8 @@
 import { ServerSettings } from '../repositories/types';
 
 export const DETECTION_RESPONSE_MODE_SETTING_KEY = 'detection_response_mode';
+export const MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY = 'message_detection_response_mode';
+export const JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY = 'join_detection_response_mode';
 export const OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY =
   'observed_detection_notification_channel_id';
 export const OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY =
@@ -11,6 +13,7 @@ export const AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY =
   'automatic_detection_exempt_moderators';
 export const OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY =
   'observed_action_ban_requires_reason';
+export const MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY = 'moderator_ban_action_enabled';
 
 export const DETECTION_RESPONSE_MODES = [
   'off',
@@ -21,14 +24,19 @@ export const DETECTION_RESPONSE_MODES = [
 ] as const;
 
 export type DetectionResponseMode = (typeof DETECTION_RESPONSE_MODES)[number];
+export type DetectionResponseEvent = 'message' | 'join';
 
 export interface DetectionResponseSettings {
   mode: DetectionResponseMode;
+  defaultMode: DetectionResponseMode;
+  messageMode: DetectionResponseMode;
+  joinMode: DetectionResponseMode;
   observedNotificationChannelId?: string;
   observedMinConfidenceThreshold: number;
   observedNotificationWindowMinutes: number;
   automaticDetectionExemptModerators: boolean;
   observedActionBanRequiresReason: boolean;
+  moderatorBanActionEnabled: boolean;
 }
 
 export const DEFAULT_OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD = 70;
@@ -53,13 +61,23 @@ function readNumberSetting(
   return Math.min(Math.max(value, minimum), maximum);
 }
 
-export function getDetectionResponseSettings(settings: ServerSettings): DetectionResponseSettings {
+export function getDetectionResponseSettings(
+  settings: ServerSettings,
+  event?: DetectionResponseEvent
+): DetectionResponseSettings {
   const configuredMode = settings[DETECTION_RESPONSE_MODE_SETTING_KEY];
-  const mode = isDetectionResponseMode(configuredMode)
+  const defaultMode = isDetectionResponseMode(configuredMode)
     ? configuredMode
     : settings.auto_restrict === false
       ? 'notify_only'
       : 'restrict';
+  const configuredMessageMode = settings[MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY];
+  const configuredJoinMode = settings[JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY];
+  const messageMode = isDetectionResponseMode(configuredMessageMode)
+    ? configuredMessageMode
+    : defaultMode;
+  const joinMode = isDetectionResponseMode(configuredJoinMode) ? configuredJoinMode : defaultMode;
+  const mode = event === 'message' ? messageMode : event === 'join' ? joinMode : defaultMode;
 
   const observedNotificationChannelId =
     typeof settings[OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY] === 'string'
@@ -68,6 +86,9 @@ export function getDetectionResponseSettings(settings: ServerSettings): Detectio
 
   return {
     mode,
+    defaultMode,
+    messageMode,
+    joinMode,
     observedNotificationChannelId: observedNotificationChannelId || undefined,
     observedMinConfidenceThreshold: readNumberSetting(
       settings[OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY],
@@ -85,5 +106,6 @@ export function getDetectionResponseSettings(settings: ServerSettings): Detectio
       settings[AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY] !== false,
     observedActionBanRequiresReason:
       settings[OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY] === true,
+    moderatorBanActionEnabled: settings[MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY] !== false,
   };
 }

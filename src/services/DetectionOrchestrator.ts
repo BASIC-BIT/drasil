@@ -14,7 +14,10 @@ import { TYPES } from '../di/symbols';
 import { meetsConfidenceLevel } from '../utils/confidence';
 import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { DetectionType } from '../repositories/types';
-import { withDetectionTestingMetadata } from '../utils/detectionEventAccounting';
+import {
+  isDetectionEventExcludedFromAccounting,
+  withDetectionTestingMetadata,
+} from '../utils/detectionEventAccounting';
 import {
   IProductAnalyticsService,
   NOOP_PRODUCT_ANALYTICS_SERVICE,
@@ -178,12 +181,20 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         serverId,
         userId
       );
+      const allServerEvents = await this.detectionEventsRepository.findByServerAndUser(
+        serverId,
+        userId
+      );
+      const falsePositiveEvents = allServerEvents.filter((event) =>
+        isDetectionEventExcludedFromAccounting(event)
+      );
       const recentSuspiciousEvents = countedEvents.filter((event) =>
         meetsConfidenceLevel(event.confidence, 'High')
       );
 
       if (profileData) {
         profileData.pastDetectionCount = countedEvents.length;
+        profileData.pastFalsePositiveDetectionCount = falsePositiveEvents.length;
         profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
       }
 
@@ -330,10 +341,18 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         serverId,
         userId
       );
+      const allServerEvents = await this.detectionEventsRepository.findByServerAndUser(
+        serverId,
+        userId
+      );
+      const falsePositiveEvents = allServerEvents.filter((event) =>
+        isDetectionEventExcludedFromAccounting(event)
+      );
       const recentSuspiciousEvents = countedEvents.filter((event) =>
         meetsConfidenceLevel(event.confidence, 'High')
       );
       profileData.pastDetectionCount = countedEvents.length;
+      profileData.pastFalsePositiveDetectionCount = falsePositiveEvents.length;
       profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
 
       // Use the analyzeProfile method from the interface

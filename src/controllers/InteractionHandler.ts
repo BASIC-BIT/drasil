@@ -185,6 +185,14 @@ export class InteractionHandler implements IInteractionHandler {
             );
             return;
           }
+          if (!(await this.canUseModeratorBanAction(guildId))) {
+            await interaction.reply({
+              content:
+                'Drasil ban actions are disabled for this server or the bot lacks Ban Members permission.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
           await this.handleBanButton(interaction, targetUserId);
           break;
         case 'thread':
@@ -572,6 +580,14 @@ export class InteractionHandler implements IInteractionHandler {
       );
       return;
     }
+    if (!(await this.canUseModeratorBanAction(interaction.guildId))) {
+      await interaction.reply({
+        content:
+          'Drasil ban actions are disabled for this server or the bot lacks Ban Members permission.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
 
     const finalNotes = interaction.fields.getTextInputValue(VERIFICATION_BAN_NOTES_FIELD_ID).trim();
     const banReason = finalNotes || VERIFICATION_BAN_DEFAULT_REASON;
@@ -902,6 +918,22 @@ export class InteractionHandler implements IInteractionHandler {
     return permissions.some((permission) => member.permissions.has(permission));
   }
 
+  private async canUseModeratorBanAction(guildId: string): Promise<boolean> {
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    if (!settings.moderatorBanActionEnabled) {
+      return false;
+    }
+
+    const guild = await this.client.guilds.fetch(guildId).catch(() => null);
+    const botMember =
+      guild?.members.me ??
+      (guild && typeof guild.members.fetchMe === 'function'
+        ? await guild.members.fetchMe().catch(() => null)
+        : null);
+    return botMember?.permissions.has(PermissionFlagsBits.BanMembers) ?? false;
+  }
+
   private async replyPermissionDenied(
     interaction: ButtonInteraction | ModalSubmitInteraction,
     message: string,
@@ -997,6 +1029,14 @@ export class InteractionHandler implements IInteractionHandler {
             interaction,
             'You need Ban Members permission to ban a user.'
           );
+          return;
+        }
+        if (!(await this.canUseModeratorBanAction(guildId))) {
+          await interaction.reply({
+            content:
+              'Drasil ban actions are disabled for this server or the bot lacks Ban Members permission.',
+            flags: MessageFlags.Ephemeral,
+          });
           return;
         }
         await this.showObservedBanModal(
@@ -1182,6 +1222,14 @@ export class InteractionHandler implements IInteractionHandler {
         interaction,
         'You need Ban Members permission to ban a user.'
       );
+      return;
+    }
+    if (!(await this.canUseModeratorBanAction(interaction.guildId))) {
+      await interaction.reply({
+        content:
+          'Drasil ban actions are disabled for this server or the bot lacks Ban Members permission.',
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
 

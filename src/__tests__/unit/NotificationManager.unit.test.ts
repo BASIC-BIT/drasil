@@ -50,7 +50,12 @@ const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
     id: userId,
     joinedAt: new Date(),
-    guild: { id: guildId } as Guild,
+    guild: {
+      id: guildId,
+      members: {
+        me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+      },
+    } as unknown as Guild,
     user: {
       id: userId,
       username: 'test-user',
@@ -74,6 +79,16 @@ const buildVerificationEvent = (overrides: Partial<VerificationEvent> = {}): Ver
   resolved_by: overrides.resolved_by ?? null,
   notes: overrides.notes ?? null,
   metadata: overrides.metadata ?? null,
+});
+
+const buildClientWithBotBanPermission = (): unknown => ({
+  guilds: {
+    fetch: jest.fn().mockResolvedValue({
+      members: {
+        me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+      },
+    }),
+  },
 });
 
 const extractLabels = (components: unknown[]): string[] => {
@@ -131,7 +146,11 @@ describe('NotificationManager (unit)', () => {
     const sentMessage: MockMessage = { id: 'message-1', edit: jest.fn() };
     adminChannel.send.mockResolvedValue(sentMessage);
 
-    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const manager = new NotificationManager(
+      buildClientWithBotBanPermission() as any,
+      configService,
+      detectionRepository
+    );
     const verificationEvent = buildVerificationEvent({ thread_id: null });
 
     await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
@@ -168,7 +187,11 @@ describe('NotificationManager (unit)', () => {
     const sentMessage: MockMessage = { id: 'message-1', edit: jest.fn() };
     adminChannel.send.mockResolvedValue(sentMessage);
 
-    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const manager = new NotificationManager(
+      buildClientWithBotBanPermission() as any,
+      configService,
+      detectionRepository
+    );
     const verificationEvent = buildVerificationEvent({
       metadata: {
         [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: [
@@ -196,6 +219,7 @@ describe('NotificationManager (unit)', () => {
   it('pings the admin notification role when configured and sending new notification', async () => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       admin_notification_role_id: 'role-1',
+      settings: {},
     } as any);
 
     const member = buildMember('guild-1', 'user-1');
@@ -210,7 +234,11 @@ describe('NotificationManager (unit)', () => {
     const sentMessage: MockMessage = { id: 'message-1', edit: jest.fn() };
     adminChannel.send.mockResolvedValue(sentMessage);
 
-    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const manager = new NotificationManager(
+      buildClientWithBotBanPermission() as any,
+      configService,
+      detectionRepository
+    );
     const verificationEvent = buildVerificationEvent({ thread_id: null });
 
     await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
@@ -490,7 +518,11 @@ describe('NotificationManager (unit)', () => {
       edit: jest.fn().mockResolvedValue(undefined),
     };
     adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
-    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const manager = new NotificationManager(
+      buildClientWithBotBanPermission() as any,
+      configService,
+      detectionRepository
+    );
 
     const marked = await manager.markObservedDetectionActionTaken(
       detectionEvent.id,
@@ -521,7 +553,11 @@ describe('NotificationManager (unit)', () => {
       edit: jest.fn().mockResolvedValue(undefined),
     };
     adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
-    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const manager = new NotificationManager(
+      buildClientWithBotBanPermission() as any,
+      configService,
+      detectionRepository
+    );
 
     await manager.markObservedDetectionActionTaken(
       detectionEvent.id,
@@ -554,7 +590,11 @@ describe('NotificationManager (unit)', () => {
       edit: jest.fn().mockResolvedValue(undefined),
     };
     adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
-    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const manager = new NotificationManager(
+      buildClientWithBotBanPermission() as any,
+      configService,
+      detectionRepository
+    );
 
     await manager.restoreObservedDetectionActions(detectionEvent.id, 'undid the dismissal', {
       id: 'admin-1',
@@ -577,6 +617,7 @@ describe('NotificationManager (unit)', () => {
   it('does not include a mention payload when editing an existing notification (even if role is configured)', async () => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       admin_notification_role_id: 'role-1',
+      settings: {},
     } as any);
 
     const member = buildMember('guild-2', 'user-2');
@@ -594,7 +635,11 @@ describe('NotificationManager (unit)', () => {
     };
     adminChannel.messages.fetch.mockResolvedValue(existingMessage as unknown as Message<true>);
 
-    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const manager = new NotificationManager(
+      buildClientWithBotBanPermission() as any,
+      configService,
+      detectionRepository
+    );
     const verificationEvent = buildVerificationEvent({
       notification_message_id: 'message-2',
       thread_id: 'thread-1',
@@ -653,7 +698,11 @@ describe('NotificationManager (unit)', () => {
     const message: MockMessage = { edit: jest.fn().mockResolvedValue(undefined) };
     adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
 
-    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const manager = new NotificationManager(
+      buildClientWithBotBanPermission() as any,
+      configService,
+      detectionRepository
+    );
     const verificationEvent = buildVerificationEvent({
       notification_message_id: 'message-3',
       thread_id: null,

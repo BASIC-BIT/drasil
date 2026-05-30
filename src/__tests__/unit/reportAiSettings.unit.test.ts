@@ -11,7 +11,8 @@ describe('reportAiSettings (unit)', () => {
         analyzeText: true,
         analyzeImages: true,
         maxAction: 'hints',
-        maxImages: 2,
+        maxImages: 4,
+        maxImageBytes: 10 * 1024 * 1024,
       })
     );
   });

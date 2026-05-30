@@ -41,11 +41,26 @@ export interface ServerSettings {
   verification_ai_max_action?: 'off' | 'hints' | 'restrict';
   verification_ai_restrict_threshold?: number;
   detection_response_mode?: 'off' | 'record_only' | 'notify_only' | 'open_case' | 'restrict';
+  message_detection_response_mode?:
+    | 'off'
+    | 'record_only'
+    | 'notify_only'
+    | 'open_case'
+    | 'restrict'
+    | null;
+  join_detection_response_mode?:
+    | 'off'
+    | 'record_only'
+    | 'notify_only'
+    | 'open_case'
+    | 'restrict'
+    | null;
   observed_detection_notification_channel_id?: string | null;
   observed_detection_min_confidence_threshold?: number;
   observed_detection_notification_window_minutes?: number;
   automatic_detection_exempt_moderators?: boolean;
   observed_action_ban_requires_reason?: boolean;
+  moderator_ban_action_enabled?: boolean;
   user_report_reason_required?: boolean;
   user_report_external_response_mode?: 'off' | 'notify_only' | 'open_case';
   analytics_consent_level?: 'off' | 'anonymous' | 'full';
