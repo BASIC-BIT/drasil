@@ -176,14 +176,12 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       // Ensure server and user exist before proceeding
       await this.ensureEntitiesExist(serverId, userId, profileData?.username); // Use optional chaining
 
-      // First, check detection history that still counts toward future suspicion.
-      const countedEvents = await this.detectionEventsRepository.findCountedByServerAndUser(
-        serverId,
-        userId
-      );
       const allServerEvents = await this.detectionEventsRepository.findByServerAndUser(
         serverId,
         userId
+      );
+      const countedEvents = allServerEvents.filter(
+        (event) => !isDetectionEventExcludedFromAccounting(event)
       );
       const falsePositiveEvents = allServerEvents.filter((event) =>
         isDetectionEventExcludedFromAccounting(event)
@@ -337,13 +335,12 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       // Ensure server and user exist before proceeding
       await this.ensureEntitiesExist(serverId, userId, profileData.username); // Use params
 
-      const countedEvents = await this.detectionEventsRepository.findCountedByServerAndUser(
-        serverId,
-        userId
-      );
       const allServerEvents = await this.detectionEventsRepository.findByServerAndUser(
         serverId,
         userId
+      );
+      const countedEvents = allServerEvents.filter(
+        (event) => !isDetectionEventExcludedFromAccounting(event)
       );
       const falsePositiveEvents = allServerEvents.filter((event) =>
         isDetectionEventExcludedFromAccounting(event)

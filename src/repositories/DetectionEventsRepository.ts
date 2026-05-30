@@ -140,6 +140,16 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
           server_id: serverId,
           user_id: userId,
         },
+        include: {
+          admin_actions: {
+            where: {
+              action_type: {
+                in: [admin_action_type.false_positive, admin_action_type.undo_observed_action],
+              },
+            },
+            orderBy: { action_at: 'desc' },
+          },
+        },
         orderBy: {
           detected_at: 'desc',
         },
@@ -157,25 +167,7 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
    */
   async findCountedByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]> {
     try {
-      const events = await this.prisma.detection_events.findMany({
-        where: {
-          server_id: serverId,
-          user_id: userId,
-        },
-        include: {
-          admin_actions: {
-            where: {
-              action_type: {
-                in: [admin_action_type.false_positive, admin_action_type.undo_observed_action],
-              },
-            },
-            orderBy: { action_at: 'desc' },
-          },
-        },
-        orderBy: {
-          detected_at: 'desc',
-        },
-      });
+      const events = await this.findByServerAndUser(serverId, userId);
       return events.filter(
         (event) => !isDetectionEventExcludedFromAccounting(event)
       ) as DetectionEvent[];
