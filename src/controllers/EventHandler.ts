@@ -41,6 +41,7 @@ const RECENT_USER_CONTEXT_MAX_USERS_PER_SERVER = 1000;
 const RECENT_USER_CONTEXT_MAX_SERVERS = 100;
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
+const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
 const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
 
 type SetupNudgeSource = 'audit_log_installer' | 'owner';
@@ -732,6 +733,15 @@ export class EventHandler implements IEventHandler {
     }
 
     const config = await this.configService.getServerConfig(guild.id);
+    if (
+      this.wasSetupNudgeAttemptedWithin(
+        config.settings.setup_nudge_last_attempt_at,
+        SETUP_WARNING_VALIDATION_PRECHECK_MS
+      )
+    ) {
+      return;
+    }
+
     const report = await this.setupDiagnosticsService.validateGuildSetup(guild);
     if (report.errorCount === 0) {
       return;
@@ -798,6 +808,13 @@ export class EventHandler implements IEventHandler {
       return false;
     }
 
+    return this.wasSetupNudgeAttemptedWithin(lastAttemptAt, SETUP_NUDGE_SUPPRESSION_MS);
+  }
+
+  private wasSetupNudgeAttemptedWithin(
+    lastAttemptAt: string | null | undefined,
+    windowMs: number
+  ): boolean {
     if (!lastAttemptAt) {
       return false;
     }
@@ -807,7 +824,7 @@ export class EventHandler implements IEventHandler {
       return false;
     }
 
-    return Date.now() - attemptedAtMs < SETUP_NUDGE_SUPPRESSION_MS;
+    return Date.now() - attemptedAtMs < windowMs;
   }
 
   private createSetupWarningFingerprint(report: SetupDiagnosticReport): string {

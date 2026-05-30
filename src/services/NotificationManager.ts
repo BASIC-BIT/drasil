@@ -1551,12 +1551,7 @@ export class NotificationManager implements INotificationManager {
 
   private findMatchingVerificationChannels(guild: Guild): TextChannel[] {
     const guildLike = guild as { channels?: { cache?: unknown } };
-    const values = this.getCachedChannelValues(
-      guildLike.channels?.cache,
-      (channel) =>
-        this.isTextChannel(channel as GuildBasedChannel | null | undefined) &&
-        (channel as TextChannel).name === VERIFICATION_CHANNEL_NAME
-    );
+    const values = this.getCachedChannelValues(guildLike.channels?.cache);
 
     return values.filter(
       (channel): channel is TextChannel =>
@@ -1565,21 +1560,10 @@ export class NotificationManager implements INotificationManager {
     );
   }
 
-  private getCachedChannelValues(
-    cache: unknown,
-    fallbackPredicate: (channel: unknown) => boolean
-  ): unknown[] {
+  private getCachedChannelValues(cache: unknown): unknown[] {
     const cacheWithValues = cache as { values?: unknown } | null;
     if (typeof cacheWithValues?.values === 'function') {
       return [...(cacheWithValues.values as () => Iterable<unknown>)()];
-    }
-
-    const cacheWithFind = cache as { find?: unknown } | null;
-    if (typeof cacheWithFind?.find === 'function') {
-      const found = (cacheWithFind.find as (predicate: (channel: unknown) => boolean) => unknown)(
-        fallbackPredicate
-      );
-      return found ? [found] : [];
     }
 
     const iterableCache = cache as { [Symbol.iterator]?: unknown } | null;

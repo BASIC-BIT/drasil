@@ -40,6 +40,7 @@ type MockGuildChannel = {
 type MockChannelPredicate = Parameters<MockGuildChannel[]['find']>[0];
 
 const buildChannelCollection = (channels: MockGuildChannel[]) => ({
+  values: jest.fn(() => channels.values()),
   find: jest.fn((predicate: MockChannelPredicate) =>
     channels.find((channel, index, array) => predicate(channel, index, array))
   ),

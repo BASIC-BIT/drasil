@@ -1742,30 +1742,17 @@ export class CommandHandler implements ICommandHandler {
     guild: NonNullable<ChatInputCommandInteraction['guild']>
   ): TextChannel[] {
     const guildLike = guild as { channels?: { cache?: unknown } };
-    const values = this.getCachedCollectionValues(guildLike.channels?.cache, (channel) =>
-      this.isVerificationTextChannel(channel)
-    );
+    const values = this.getCachedCollectionValues(guildLike.channels?.cache);
 
     return values.filter((channel): channel is TextChannel =>
       this.isVerificationTextChannel(channel)
     );
   }
 
-  private getCachedCollectionValues(
-    cache: unknown,
-    fallbackPredicate: (channel: unknown) => boolean
-  ): unknown[] {
+  private getCachedCollectionValues(cache: unknown): unknown[] {
     const cacheWithValues = cache as { values?: unknown } | null;
     if (typeof cacheWithValues?.values === 'function') {
       return [...(cacheWithValues.values as () => Iterable<unknown>)()];
-    }
-
-    const cacheWithFind = cache as { find?: unknown } | null;
-    if (typeof cacheWithFind?.find === 'function') {
-      const found = (cacheWithFind.find as (predicate: (channel: unknown) => boolean) => unknown)(
-        fallbackPredicate
-      );
-      return found ? [found] : [];
     }
 
     const iterableCache = cache as { [Symbol.iterator]?: unknown } | null;
@@ -1827,9 +1814,7 @@ export class CommandHandler implements ICommandHandler {
     roleName: string
   ): Role[] {
     const guildLike = guild as { roles?: { cache?: unknown } };
-    const values = this.getCachedCollectionValues(guildLike.roles?.cache, (role) =>
-      this.isRoleNamed(role, roleName)
-    );
+    const values = this.getCachedCollectionValues(guildLike.roles?.cache);
 
     return values.filter((role): role is Role => this.isRoleNamed(role, roleName));
   }

@@ -647,6 +647,41 @@ describe('EventHandler (unit)', () => {
     expect(installer.send.mock.calls[0][0]).toContain('No message content is included in this DM.');
   });
 
+  it('skips detection-time setup validation immediately after a warning attempt', async () => {
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        restricted_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
+        settings: {
+          setup_nudge_last_attempt_at: new Date().toISOString(),
+          setup_warning_last_fingerprint: 'restricted-role-missing',
+        },
+      }),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const setupDiagnosticsService = {
+      validateGuildSetup: jest.fn(),
+    };
+    const handler = buildHandler({ configService, setupDiagnosticsService });
+    const guild = {
+      id: 'guild-1',
+      name: 'Test Guild',
+      fetchAuditLogs: jest.fn(),
+      fetchOwner: jest.fn(),
+    } as any;
+
+    await (handler as any).maybeSendDetectionSetupWarning(guild);
+
+    expect(setupDiagnosticsService.validateGuildSetup).not.toHaveBeenCalled();
+    expect(guild.fetchAuditLogs).not.toHaveBeenCalled();
+    expect(guild.fetchOwner).not.toHaveBeenCalled();
+    expect(configService.updateServerSettings).not.toHaveBeenCalled();
+  });
+
   it('dedupes detection-time setup warnings by recipient and diagnostics fingerprint', async () => {
     const installer = {
       id: 'installer-1',
@@ -662,7 +697,7 @@ describe('EventHandler (unit)', () => {
         admin_channel_id: null,
         verification_channel_id: null,
         settings: {
-          setup_nudge_last_attempt_at: new Date().toISOString(),
+          setup_nudge_last_attempt_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
           setup_nudge_last_recipient_id: 'installer-1',
           setup_warning_last_fingerprint: 'admin-channel-missing|restricted-role-missing',
         },
@@ -703,6 +738,7 @@ describe('EventHandler (unit)', () => {
 
     await (handler as any).maybeSendDetectionSetupWarning(guild);
 
+    expect(setupDiagnosticsService.validateGuildSetup).toHaveBeenCalledWith(guild);
     expect(installer.send).not.toHaveBeenCalled();
     expect(configService.updateServerSettings).not.toHaveBeenCalled();
   });
