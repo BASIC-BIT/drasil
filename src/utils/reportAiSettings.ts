@@ -34,6 +34,7 @@ export interface ReportAttachmentMetadata {
 
 export const DEFAULT_REPORT_AI_OPEN_CASE_THRESHOLD = 0.85;
 export const DEFAULT_REPORT_AI_RESTRICT_THRESHOLD = 0.95;
+export const DEFAULT_REPORT_AI_TRIAGE_ENABLED = true;
 export const DEFAULT_REPORT_AI_MAX_IMAGES = 4;
 export const DEFAULT_REPORT_AI_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_REPORT_AI_MAX_IMAGES = 8;
@@ -69,7 +70,10 @@ export function getReportAiSettings(settings: ServerSettings = {}): ReportAiSett
     : 'hints';
 
   return {
-    enabled: readBoolean(settings[REPORT_AI_TRIAGE_ENABLED_SETTING_KEY], false),
+    enabled: readBoolean(
+      settings[REPORT_AI_TRIAGE_ENABLED_SETTING_KEY],
+      DEFAULT_REPORT_AI_TRIAGE_ENABLED
+    ),
     analyzeText: readBoolean(settings[REPORT_AI_ANALYZE_TEXT_SETTING_KEY], true),
     analyzeImages: readBoolean(settings[REPORT_AI_ANALYZE_IMAGES_SETTING_KEY], true),
     maxAction,

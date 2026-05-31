@@ -23,6 +23,7 @@ import {
   USER_REPORT_REASON_MAX_LENGTH,
   USER_REPORT_REASON_REQUIRED_SETTING_KEY,
 } from '../../utils/userReportSettings';
+import { MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY } from '../../utils/detectionResponseSettings';
 
 describe('CommandHandler (unit)', () => {
   type HandlerOverrides = Partial<{
@@ -36,6 +37,8 @@ describe('CommandHandler (unit)', () => {
     resetHeuristicSettings: jest.Mock;
     handleUserReport: jest.Mock;
     handleMessageReport: jest.Mock;
+    openAdminCase: jest.Mock;
+    intakeRoleMembers: jest.Mock;
     setupVerificationChannel: jest.Mock;
     setupDiagnosticsService: any | null;
     validateGuildSetup: jest.Mock;
@@ -94,6 +97,25 @@ describe('CommandHandler (unit)', () => {
     const securityActionService = {
       handleUserReport: overrides.handleUserReport ?? jest.fn().mockResolvedValue(true),
       handleMessageReport: overrides.handleMessageReport ?? jest.fn().mockResolvedValue(true),
+      openAdminCase: overrides.openAdminCase ?? jest.fn().mockResolvedValue(true),
+      intakeRoleMembers:
+        overrides.intakeRoleMembers ??
+        jest.fn().mockResolvedValue({
+          batchId: 'role-intake-1',
+          roleId: 'role-1',
+          roleName: 'restricted',
+          action: 'open_case',
+          execute: false,
+          totalMembers: 2,
+          eligibleMembers: 1,
+          processed: 1,
+          opened: 0,
+          skippedBots: 1,
+          skippedActiveCases: 0,
+          skippedOverLimit: 0,
+          failed: 0,
+          failures: [],
+        }),
       excludeDetectionFromAccounting:
         overrides.excludeDetectionFromAccounting ?? jest.fn().mockResolvedValue({ id: 'det-1' }),
       restoreDetectionAccounting:
@@ -172,6 +194,7 @@ describe('CommandHandler (unit)', () => {
       'config',
       'audit',
       'flaguser',
+      'case',
       'setupreportbutton',
     ]) {
       const command = commands.find((c) => c.name === name);
@@ -407,6 +430,31 @@ describe('CommandHandler (unit)', () => {
     );
   });
 
+  it('registers /case admin workflows', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const caseCommand = commands.find((c) => c.name === 'case');
+
+    expect(caseCommand).toBeDefined();
+    expect(caseCommand.default_member_permissions).toBe(
+      PermissionFlagsBits.Administrator.toString()
+    );
+    expect(caseCommand.options.map((option: any) => option.name)).toEqual([
+      'open',
+      'restrict',
+      'intake-role',
+    ]);
+
+    const intakeRole = caseCommand.options.find((option: any) => option.name === 'intake-role');
+    expect(intakeRole.options.map((option: any) => option.name)).toEqual([
+      'role',
+      'execute',
+      'action',
+      'limit',
+      'reason',
+    ]);
+  });
+
   it('registers /config report subcommands', () => {
     const { handler } = buildHandler();
     const commands = (handler as any).commands as any[];
@@ -498,7 +546,10 @@ describe('CommandHandler (unit)', () => {
 
   it('falls back to permissionsIn when memberPermissions is null', async () => {
     const banUser = jest.fn().mockResolvedValue(true);
-    const { handler, userModerationService } = buildHandler({ banUser });
+    const getServerConfig = jest.fn().mockResolvedValue({
+      settings: { [MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY]: true },
+    });
+    const { handler, userModerationService } = buildHandler({ banUser, getServerConfig });
 
     const invoker: User = { id: 'user-1' } as User;
     const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
@@ -548,7 +599,10 @@ describe('CommandHandler (unit)', () => {
 
   it('allows /ban for users with BanMembers permission', async () => {
     const banUser = jest.fn().mockResolvedValue(true);
-    const { handler, userModerationService } = buildHandler({ banUser });
+    const getServerConfig = jest.fn().mockResolvedValue({
+      settings: { [MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY]: true },
+    });
+    const { handler, userModerationService } = buildHandler({ banUser, getServerConfig });
 
     const invoker: User = { id: 'user-1' } as User;
     const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
@@ -582,6 +636,186 @@ describe('CommandHandler (unit)', () => {
     expect(userModerationService.banUser).toHaveBeenCalledWith(targetMember, 'reason', invoker);
     expect(interaction.reply).toHaveBeenCalledWith({
       content: `User ${targetUser.tag} has been banned.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('opens an admin review case without restricting via /case open', async () => {
+    const openAdminCase = jest.fn().mockResolvedValue(true);
+    const { handler, securityActionService } = buildHandler({ openAdminCase });
+    const invoker = { id: 'admin-1' } as any;
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const targetMember = { id: targetUser.id } as any;
+    const adminMember = {
+      permissions: { has: jest.fn().mockReturnValue(true) },
+    } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockImplementation(async (id: string) => {
+          if (id === invoker.id) return adminMember;
+          if (id === targetUser.id) return targetMember;
+          return null;
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'case',
+      user: invoker,
+      guild,
+      options: {
+        getSubcommand: jest.fn().mockReturnValue('open'),
+        getUser: jest.fn().mockReturnValue(targetUser),
+        getString: jest.fn().mockReturnValue('manual review'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(securityActionService.openAdminCase).toHaveBeenCalledWith(targetMember, invoker, {
+      action: 'open_case',
+      reason: 'manual review',
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Opened a review case for target#0001.',
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('opens and restricts an admin case via /case restrict', async () => {
+    const openAdminCase = jest.fn().mockResolvedValue(true);
+    const { handler, securityActionService } = buildHandler({ openAdminCase });
+    const invoker = { id: 'admin-1' } as any;
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const targetMember = { id: targetUser.id } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest
+          .fn()
+          .mockImplementation(async (id: string) =>
+            id === invoker.id
+              ? { permissions: { has: jest.fn().mockReturnValue(true) } }
+              : targetMember
+          ),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'case',
+      user: invoker,
+      guild,
+      options: {
+        getSubcommand: jest.fn().mockReturnValue('restrict'),
+        getUser: jest.fn().mockReturnValue(targetUser),
+        getString: jest.fn().mockReturnValue('restricted review'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(securityActionService.openAdminCase).toHaveBeenCalledWith(targetMember, invoker, {
+      action: 'restrict',
+      reason: 'restricted review',
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Opened a case for target#0001 and restricted them pending review.',
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('dry-runs restricted role intake via /case intake-role', async () => {
+    const intakeRoleMembers = jest.fn().mockResolvedValue({
+      batchId: 'role-intake-1',
+      roleId: 'role-1',
+      roleName: 'restricted',
+      action: 'open_case',
+      execute: false,
+      totalMembers: 3,
+      eligibleMembers: 2,
+      processed: 2,
+      opened: 0,
+      skippedBots: 1,
+      skippedActiveCases: 0,
+      skippedOverLimit: 0,
+      failed: 0,
+      failures: [],
+    });
+    const { handler, securityActionService } = buildHandler({ intakeRoleMembers });
+    const invoker = { id: 'admin-1' } as any;
+    const role = { id: 'role-1', name: 'restricted' } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: { has: jest.fn().mockReturnValue(true) },
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'case',
+      user: invoker,
+      guild,
+      options: {
+        getSubcommand: jest.fn().mockReturnValue('intake-role'),
+        getRole: jest.fn().mockReturnValue(role),
+        getBoolean: jest.fn().mockReturnValue(false),
+        getInteger: jest.fn().mockReturnValue(2),
+        getString: jest.fn((name: string) =>
+          name === 'action' ? 'open_case' : 'restricted role cleanup'
+        ),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(securityActionService.intakeRoleMembers).toHaveBeenCalledWith({
+      role,
+      moderator: invoker,
+      reason: 'restricted role cleanup',
+      action: 'open_case',
+      execute: false,
+      limit: 2,
+    });
+    expect(interaction.editReply.mock.calls[0][0].content).toContain('Role intake dry run');
+    expect(interaction.editReply.mock.calls[0][0].content).toContain(
+      'Re-run with `execute: true` to open cases.'
+    );
+  });
+
+  it('denies /case commands for non-admin members', async () => {
+    const openAdminCase = jest.fn().mockResolvedValue(true);
+    const { handler, securityActionService } = buildHandler({ openAdminCase });
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: { has: jest.fn().mockReturnValue(false) },
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'case',
+      user: { id: 'user-1' },
+      guild,
+      options: {
+        getSubcommand: jest.fn().mockReturnValue('open'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(securityActionService.openAdminCase).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'You need administrator permissions to use this command.',
       flags: MessageFlags.Ephemeral,
     });
   });

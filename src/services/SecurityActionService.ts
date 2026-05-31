@@ -1,5 +1,13 @@
 import { injectable, inject, optional } from 'inversify';
-import { GuildMember, Message, Client, User, APIUser, InteractionContextType } from 'discord.js';
+import {
+  GuildMember,
+  Message,
+  Client,
+  User,
+  APIUser,
+  InteractionContextType,
+  Role,
+} from 'discord.js';
 import { TYPES } from '../di/symbols';
 import { INotificationManager } from './NotificationManager';
 import { DetectionResult } from './DetectionOrchestrator';
@@ -87,6 +95,10 @@ export interface ISecurityActionService {
    */
   handleManualFlag(member: GuildMember, moderator: User, reason?: string): Promise<boolean>;
 
+  openAdminCase(member: GuildMember, moderator: User, options: AdminCaseOptions): Promise<boolean>;
+
+  intakeRoleMembers(options: RoleIntakeOptions): Promise<RoleIntakeResult>;
+
   /**
    * Handle a user report submitted via modal
    */
@@ -165,6 +177,46 @@ export interface MessageReportContext {
 }
 
 export type MessageReportAttachment = ReportAttachmentMetadata;
+
+export type AdminCaseAction = 'open_case' | 'restrict';
+
+export interface AdminCaseOptions {
+  reason?: string;
+  action: AdminCaseAction;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RoleIntakeOptions {
+  role: Role;
+  moderator: User;
+  reason?: string;
+  action: AdminCaseAction;
+  execute: boolean;
+  limit?: number;
+  delayMs?: number;
+}
+
+export interface RoleIntakeFailure {
+  userId: string;
+  message: string;
+}
+
+export interface RoleIntakeResult {
+  batchId: string;
+  roleId: string;
+  roleName: string;
+  action: AdminCaseAction;
+  execute: boolean;
+  totalMembers: number;
+  eligibleMembers: number;
+  processed: number;
+  opened: number;
+  skippedBots: number;
+  skippedActiveCases: number;
+  skippedOverLimit: number;
+  failed: number;
+  failures: RoleIntakeFailure[];
+}
 
 /**
  * SecurityActionService - Coordinates calls to various services based upon actions that occurred
@@ -1071,6 +1123,154 @@ export class SecurityActionService implements ISecurityActionService {
       console.error(`Failed to open join case without restriction for ${member.user.tag}:`, error);
       throw error;
     }
+  }
+
+  public async openAdminCase(
+    member: GuildMember,
+    moderator: User,
+    options: AdminCaseOptions
+  ): Promise<boolean> {
+    try {
+      await this.ensureEntitiesExist(
+        member.guild.id,
+        member.id,
+        member.user.username,
+        member.joinedAt?.toISOString()
+      );
+
+      const restrictUser = options.action === 'restrict';
+      const reasonText = options.reason ? `Reason: ${options.reason}` : 'No reason provided.';
+      const detectionEvent = await this.detectionEventsRepository.create({
+        server_id: member.guild.id,
+        user_id: member.id,
+        detection_type: DetectionType.GPT_ANALYSIS,
+        confidence: 1.0,
+        reasons: [`Admin case opened by ${moderator.id}. ${reasonText}`],
+        detected_at: new Date(),
+        metadata: withDetectionTestingMetadata(
+          {
+            type: 'admin_case',
+            adminId: moderator.id,
+            action: options.action,
+            reason: options.reason ?? reasonText,
+            ...options.metadata,
+          },
+          'server'
+        ),
+      });
+
+      const detectionResult: DetectionResult = {
+        label: 'SUSPICIOUS',
+        confidence: 1.0,
+        reasons: [`Admin case opened by ${moderator.id}. ${reasonText}`],
+        triggerSource: DetectionType.GPT_ANALYSIS,
+        triggerContent: options.reason ?? 'Admin-opened case',
+        detectionEventId: detectionEvent.id,
+      };
+
+      const handled = await this.handleSuspiciousMember(
+        member,
+        detectionResult,
+        undefined,
+        restrictUser
+      );
+      if (handled) {
+        this.captureMemberAnalytics(
+          member,
+          restrictUser ? 'admin case opened with restriction' : 'admin case opened',
+          {
+            has_reason: Boolean(options.reason?.trim()),
+            bulk_intake: options.metadata?.bulk_intake === true,
+          },
+          {
+            moderatorId: moderator.id,
+            detectionEventId: detectionEvent.id,
+          }
+        );
+      }
+      return handled;
+    } catch (error) {
+      console.error(`Failed to open admin case for ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
+  public async intakeRoleMembers(options: RoleIntakeOptions): Promise<RoleIntakeResult> {
+    const batchId = `role-intake-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const limit = Math.max(1, Math.min(options.limit ?? 250, 250));
+    const delayMs = Math.max(0, options.delayMs ?? 250);
+
+    await options.role.guild.members.fetch();
+    const allMembers = [...options.role.members.values()].sort((a, b) => a.id.localeCompare(b.id));
+    const nonBotMembers = allMembers.filter((member) => !member.user.bot);
+    const selectedMembers = nonBotMembers.slice(0, limit);
+    const result: RoleIntakeResult = {
+      batchId,
+      roleId: options.role.id,
+      roleName: options.role.name,
+      action: options.action,
+      execute: options.execute,
+      totalMembers: allMembers.length,
+      eligibleMembers: nonBotMembers.length,
+      processed: selectedMembers.length,
+      opened: 0,
+      skippedBots: allMembers.length - nonBotMembers.length,
+      skippedActiveCases: 0,
+      skippedOverLimit: Math.max(0, nonBotMembers.length - selectedMembers.length),
+      failed: 0,
+      failures: [],
+    };
+
+    for (const member of selectedMembers) {
+      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+      if (activeCase) {
+        result.skippedActiveCases += 1;
+        continue;
+      }
+
+      if (!options.execute) {
+        continue;
+      }
+
+      try {
+        const opened = await this.openAdminCase(member, options.moderator, {
+          action: options.action,
+          reason: options.reason,
+          metadata: {
+            type: 'admin_role_intake',
+            bulk_intake: true,
+            batchId,
+            sourceRoleId: options.role.id,
+            sourceRoleName: options.role.name,
+          },
+        });
+        if (opened) {
+          result.opened += 1;
+        } else {
+          result.failed += 1;
+          result.failures.push({ userId: member.id, message: 'Case flow returned false' });
+        }
+      } catch (error) {
+        result.failed += 1;
+        result.failures.push({
+          userId: member.id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      if (delayMs > 0) {
+        await this.sleep(delayMs);
+      }
+    }
+
+    return result;
+  }
+
+  private async sleep(delayMs: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
   public async handleManualFlag(

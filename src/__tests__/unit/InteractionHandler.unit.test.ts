@@ -25,6 +25,7 @@ import {
   SETUP_VERIFICATION_MODAL_ID,
   SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
 } from '../../constants/setupVerificationWizard';
+import { MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY } from '../../utils/detectionResponseSettings';
 import { USER_REPORT_REASON_REQUIRED_SETTING_KEY } from '../../utils/userReportSettings';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
@@ -137,6 +138,8 @@ describe('InteractionHandler (unit)', () => {
       openCaseForSuspiciousMessage: jest.fn().mockResolvedValue(true),
       openCaseForSuspiciousJoin: jest.fn().mockResolvedValue(true),
       handleManualFlag: jest.fn().mockResolvedValue(true),
+      openAdminCase: jest.fn().mockResolvedValue(true),
+      intakeRoleMembers: jest.fn().mockResolvedValue({} as any),
       handleUserReport: jest.fn().mockResolvedValue(true),
       handleMessageReport: jest.fn().mockResolvedValue(true),
       openObservedDetectionCase: jest.fn().mockResolvedValue(true),
@@ -203,6 +206,12 @@ describe('InteractionHandler (unit)', () => {
     };
   });
 
+  const enableModeratorBanActions = (): void => {
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      settings: { [MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY]: true },
+    });
+  };
+
   it('handles verify button by calling UserModerationService', async () => {
     const handler = new InteractionHandler(
       client,
@@ -229,6 +238,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('shows a confirmation modal for the ban button', async () => {
+    enableModeratorBanActions();
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -460,6 +470,7 @@ describe('InteractionHandler (unit)', () => {
   );
 
   it('allows ban confirmation with only BanMembers permission', async () => {
+    enableModeratorBanActions();
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -482,6 +493,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('submits verifier ban modal with final notes', async () => {
+    enableModeratorBanActions();
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -522,6 +534,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('submits verifier ban modal with the default reason when notes are blank', async () => {
+    enableModeratorBanActions();
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -633,7 +646,10 @@ describe('InteractionHandler (unit)', () => {
 
   it('shows observed ban modal using configured reason policy', async () => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
-      settings: { observed_action_ban_requires_reason: true },
+      settings: {
+        [MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY]: true,
+        observed_action_ban_requires_reason: true,
+      },
     });
     const handler = new InteractionHandler(
       client,
