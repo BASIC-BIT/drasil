@@ -58,6 +58,8 @@ describe('GPTService (unit)', () => {
     expect(call.model).toBe(GPT_PROFILE_MODEL);
     expect(call.text.format.type).toBe('json_schema');
     expect(call.store).toBe(false);
+    expect(call.temperature).toBeUndefined();
+    expect(call.reasoning).toEqual({ effort: 'low' });
   });
 
   it('parses structured OK profile analysis', async () => {
@@ -462,6 +464,34 @@ describe('GPTService (unit)', () => {
 
       expect(result.model).toBe('gpt-5.4');
       expect(parse.mock.calls[0][0].model).toBe('gpt-5.4');
+      expect(parse.mock.calls[0][0].temperature).toBeUndefined();
+    } finally {
+      if (originalValue === undefined) {
+        delete process.env[OPENAI_MODERATION_MODEL_ENV];
+      } else {
+        process.env[OPENAI_MODERATION_MODEL_ENV] = originalValue;
+      }
+    }
+  });
+
+  it('keeps temperature for non-gpt-5 model overrides', async () => {
+    const originalValue = process.env[OPENAI_MODERATION_MODEL_ENV];
+    process.env[OPENAI_MODERATION_MODEL_ENV] = 'gpt-4.1-mini';
+    const { openai, parse } = buildOpenAiMock({
+      result: 'OK',
+      confidence: 0.82,
+      summary: 'Context looks normal for the server.',
+      reason_codes: ['normal_context'],
+      primary_signal: 'none',
+    });
+
+    try {
+      const service = new GPTService(openai);
+      await service.analyzeProfile(makeProfile());
+
+      expect(parse.mock.calls[0][0].model).toBe('gpt-4.1-mini');
+      expect(parse.mock.calls[0][0].temperature).toBe(0.3);
+      expect(parse.mock.calls[0][0].reasoning).toBeUndefined();
     } finally {
       if (originalValue === undefined) {
         delete process.env[OPENAI_MODERATION_MODEL_ENV];
