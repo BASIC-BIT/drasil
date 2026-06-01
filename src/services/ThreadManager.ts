@@ -169,6 +169,8 @@ export class ThreadManager implements IThreadManager {
         '- Message links, screenshots, usernames, user IDs, or mentions',
         '- What happened and why it looked suspicious',
         '',
+        'If you opened this by mistake, send `close report`.',
+        '',
         'Moderators can ask follow-up questions here. Do not add the reported user to this thread.',
       ].join('\n')
     );

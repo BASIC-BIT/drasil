@@ -18,6 +18,7 @@ import { IThreadManager } from '../../services/ThreadManager';
 import { IAdminActionRepository } from '../../repositories/AdminActionRepository';
 import { AdminActionType, VerificationEvent, VerificationStatus } from '../../repositories/types';
 import { IConfigService } from '../../config/ConfigService';
+import { IReportIntakeService } from '../../services/ReportIntakeService';
 import {
   SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID,
   SETUP_VERIFICATION_CHANNEL_FIELD_ID,
@@ -42,7 +43,7 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
   const interaction = {
     customId,
     guildId,
-    channel: { type: ChannelType.GuildText },
+    channel: { id: 'channel-1', type: ChannelType.GuildText },
     user,
     deferred: false,
     replied: false,
@@ -176,9 +177,10 @@ describe('InteractionHandler (unit)', () => {
       createReportReviewThread: jest
         .fn()
         .mockResolvedValue({ url: 'https://discord.com/channels/thread-1' } as any),
-      createReportIntakeThread: jest
-        .fn()
-        .mockResolvedValue({ url: 'https://discord.com/channels/report-thread-1' } as any),
+      createReportIntakeThread: jest.fn().mockResolvedValue({
+        id: 'report-thread-1',
+        url: 'https://discord.com/channels/report-thread-1',
+      } as any),
       resolveVerificationThread: jest.fn(),
       reopenVerificationThread: jest.fn(),
     };
@@ -1652,6 +1654,12 @@ describe('InteractionHandler (unit)', () => {
       },
     });
     (configService.getAdminChannel as jest.Mock).mockResolvedValueOnce(adminChannel);
+    const reportIntakeService: jest.Mocked<IReportIntakeService> = {
+      openIntakeFromThread: jest.fn().mockResolvedValue({} as any),
+      handleThreadMessage: jest.fn().mockResolvedValue(false),
+      confirmCandidate: jest.fn().mockResolvedValue({ confirmed: false, message: '' }),
+      markSubmitted: jest.fn().mockResolvedValue(undefined),
+    };
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -1660,7 +1668,9 @@ describe('InteractionHandler (unit)', () => {
       configService,
       verificationEventRepository,
       threadManager,
-      adminActionRepository
+      adminActionRepository,
+      undefined,
+      reportIntakeService
     );
     const interaction = buildInteraction('report_user_initiate', 'guild-1', {
       id: 'reporter-1',
@@ -1673,6 +1683,12 @@ describe('InteractionHandler (unit)', () => {
       interaction.channel,
       reporter
     );
+    expect(reportIntakeService.openIntakeFromThread).toHaveBeenCalledWith({
+      serverId: 'guild-1',
+      reporter,
+      threadId: 'report-thread-1',
+      channelId: expect.any(String),
+    });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Opened a private report thread: https://discord.com/channels/report-thread-1\nPlease put the report context there.',
@@ -1683,5 +1699,58 @@ describe('InteractionHandler (unit)', () => {
       allowedMentions: { parse: [] },
     });
     expect(interaction.showModal).not.toHaveBeenCalled();
+  });
+
+  it('submits a confirmed report intake target through the user report workflow', async () => {
+    const reportIntakeService: jest.Mocked<IReportIntakeService> = {
+      openIntakeFromThread: jest.fn().mockResolvedValue({} as any),
+      handleThreadMessage: jest.fn().mockResolvedValue(false),
+      confirmCandidate: jest.fn().mockResolvedValue({
+        confirmed: true,
+        message: 'confirmed',
+        reason: 'Report intake target confirmed by reporter.',
+      }),
+      markSubmitted: jest.fn().mockResolvedValue(undefined),
+    };
+    const targetMember = buildMember('guild-1', 'user-1');
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      members: { fetch: jest.fn().mockResolvedValue(targetMember) },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      reportIntakeService
+    );
+    const interaction = buildInteraction('report_intake_confirm:intake-1:user-1', 'guild-1', {
+      id: 'reporter-1',
+    } as User);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(reportIntakeService.confirmCandidate).toHaveBeenCalledWith({
+      intakeId: 'intake-1',
+      targetUserId: 'user-1',
+      confirmedById: 'reporter-1',
+    });
+    expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
+      targetMember,
+      interaction.user,
+      'Report intake target confirmed by reporter.'
+    );
+    expect(reportIntakeService.markSubmitted).toHaveBeenCalledWith({
+      intakeId: 'intake-1',
+      targetUserId: 'user-1',
+      submittedById: 'reporter-1',
+    });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Submitted report for <@user-1>.',
+    });
   });
 });

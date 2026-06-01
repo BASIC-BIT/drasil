@@ -4,11 +4,18 @@ import type { IServerMemberRepository } from '../../repositories/ServerMemberRep
 import type { IServerRepository } from '../../repositories/ServerRepository';
 import type { IUserRepository } from '../../repositories/UserRepository';
 import type { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
+import type { IReportIntakeRepository } from '../../repositories/ReportIntakeRepository';
 import { verification_status } from '../../db/prisma';
 import {
   AdminAction,
   AdminActionCreate,
   DetectionEvent,
+  ReportIntake,
+  ReportIntakeCreate,
+  ReportIntakeEvidence,
+  ReportIntakeEvidenceCreate,
+  ReportIntakeStatus,
+  ReportIntakeUpdate,
   Server,
   ServerMember,
   ServerSettings,
@@ -513,6 +520,106 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     updated.updated_at = new Date();
     this.events[eventIndex] = updated;
     return { ...updated };
+  }
+}
+
+export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
+  private intakes: ReportIntake[] = [];
+  private evidence: ReportIntakeEvidence[] = [];
+  private intakeIdCounter = 0;
+  private evidenceIdCounter = 0;
+
+  private nextIntakeId(): string {
+    this.intakeIdCounter += 1;
+    return `intake-${this.intakeIdCounter}`;
+  }
+
+  private nextEvidenceId(): string {
+    this.evidenceIdCounter += 1;
+    return `evidence-${this.evidenceIdCounter}`;
+  }
+
+  async create(data: ReportIntakeCreate): Promise<ReportIntake> {
+    const now = new Date();
+    const intake: ReportIntake = {
+      id: this.nextIntakeId(),
+      server_id: data.serverId,
+      reporter_id: data.reporterId,
+      thread_id: data.threadId ?? null,
+      status: data.status ?? ReportIntakeStatus.COLLECTING_EVIDENCE,
+      summary: data.summary ?? null,
+      confirmed_target_user_id: data.confirmedTargetUserId ?? null,
+      created_at: now,
+      updated_at: now,
+      closed_at: null,
+      metadata: (data.metadata ?? {}) as ReportIntake['metadata'],
+    };
+    this.intakes.push(intake);
+    return { ...intake };
+  }
+
+  async findById(id: string): Promise<ReportIntake | null> {
+    const intake = this.intakes.find((item) => item.id === id);
+    return intake ? { ...intake } : null;
+  }
+
+  async findOpenByThreadId(threadId: string): Promise<ReportIntake | null> {
+    const intake = this.intakes.find(
+      (item) =>
+        item.thread_id === threadId &&
+        [
+          ReportIntakeStatus.COLLECTING_EVIDENCE,
+          ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+          ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+        ].includes(item.status)
+    );
+    return intake ? { ...intake } : null;
+  }
+
+  async update(id: string, data: ReportIntakeUpdate): Promise<ReportIntake | null> {
+    const index = this.intakes.findIndex((item) => item.id === id);
+    if (index === -1) {
+      return null;
+    }
+
+    const existing = this.intakes[index];
+    const updated: ReportIntake = {
+      ...existing,
+      status: data.status ?? existing.status,
+      summary: data.summary !== undefined ? data.summary : existing.summary,
+      confirmed_target_user_id:
+        data.confirmedTargetUserId !== undefined
+          ? data.confirmedTargetUserId
+          : existing.confirmed_target_user_id,
+      closed_at: data.closedAt !== undefined ? data.closedAt : existing.closed_at,
+      metadata:
+        data.metadata !== undefined
+          ? (data.metadata as ReportIntake['metadata'])
+          : existing.metadata,
+      updated_at: new Date(),
+    };
+    this.intakes[index] = updated;
+    return { ...updated };
+  }
+
+  async addEvidence(data: ReportIntakeEvidenceCreate): Promise<ReportIntakeEvidence> {
+    const evidence: ReportIntakeEvidence = {
+      id: this.nextEvidenceId(),
+      intake_id: data.intakeId,
+      kind: data.kind,
+      source_message_id: data.sourceMessageId ?? null,
+      source_channel_id: data.sourceChannelId ?? null,
+      attachment_id: data.attachmentId ?? null,
+      content: data.content ?? null,
+      metadata: (data.metadata ?? {}) as ReportIntakeEvidence['metadata'],
+      created_at: new Date(),
+    };
+    this.evidence.push(evidence);
+    return { ...evidence };
+  }
+
+  async listEvidence(intakeId: string): Promise<ReportIntakeEvidence[]> {
+    return this.evidence.filter((item) => item.intake_id === intakeId).map((item) => ({ ...item }));
   }
 }
 

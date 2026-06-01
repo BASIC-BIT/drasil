@@ -204,6 +204,80 @@ export interface VerificationEventWithActions extends VerificationEvent {
   actions: AdminAction[];
 }
 
+export enum ReportIntakeStatus {
+  COLLECTING_EVIDENCE = 'collecting_evidence',
+  NEEDS_REPORTER_CONFIRMATION = 'needs_reporter_confirmation',
+  NEEDS_ADMIN_CONFIRMATION = 'needs_admin_confirmation',
+  SUBMITTED = 'submitted',
+  CLOSED_BY_REPORTER = 'closed_by_reporter',
+  ACTIONED = 'actioned',
+  EXPIRED = 'expired',
+}
+
+export enum ReportIntakeEvidenceKind {
+  REPORTER_TEXT = 'reporter_text',
+  SCREENSHOT = 'screenshot',
+  MESSAGE_LINK = 'message_link',
+  REPORTED_TEXT = 'reported_text',
+  FOLLOWUP_ANSWER = 'followup_answer',
+  CANDIDATE_CONFIRMATION = 'candidate_confirmation',
+  ADMIN_NOTE = 'admin_note',
+}
+
+export interface ReportIntake {
+  id: string;
+  server_id: string;
+  reporter_id: string;
+  thread_id: string | null;
+  status: ReportIntakeStatus;
+  summary: string | null;
+  confirmed_target_user_id: string | null;
+  created_at: Date | null;
+  updated_at: Date | null;
+  closed_at: Date | null;
+  metadata: Prisma.JsonValue | null;
+}
+
+export interface ReportIntakeEvidence {
+  id: string;
+  intake_id: string;
+  kind: ReportIntakeEvidenceKind;
+  source_message_id: string | null;
+  source_channel_id: string | null;
+  attachment_id: string | null;
+  content: string | null;
+  metadata: Prisma.JsonValue | null;
+  created_at: Date | null;
+}
+
+export interface ReportIntakeCreate {
+  serverId: string;
+  reporterId: string;
+  threadId?: string | null;
+  status?: ReportIntakeStatus;
+  summary?: string | null;
+  confirmedTargetUserId?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface ReportIntakeUpdate {
+  status?: ReportIntakeStatus;
+  summary?: string | null;
+  confirmedTargetUserId?: string | null;
+  closedAt?: Date | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface ReportIntakeEvidenceCreate {
+  intakeId: string;
+  kind: ReportIntakeEvidenceKind;
+  sourceMessageId?: string | null;
+  sourceChannelId?: string | null;
+  attachmentId?: string | null;
+  content?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
 export interface AdminActionCreate extends Omit<
   AdminAction,
   'id' | 'action_at' | 'metadata' | 'detection_event_id'

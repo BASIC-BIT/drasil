@@ -7,6 +7,8 @@ export {
   PrismaClient,
   admin_action_type,
   detection_type,
+  report_intake_evidence_kind,
+  report_intake_status,
   verification_status,
 } from '../generated/prisma/client';
 

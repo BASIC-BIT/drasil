@@ -284,6 +284,11 @@ target came from a validated Discord ID, mention, or message link.
 
 Add or extend server settings for report intake authority.
 
+Current confirmation rule: reporter confirmation is sufficient for all proposed
+candidates. Staff still receives the submitted report through the existing
+observed alert/case workflow; AI must not silently attach or action a target
+without the reporter pressing the confirmation button.
+
 Potential modes:
 
 - `collect_only`: collect evidence, notify moderators, no candidate submission.

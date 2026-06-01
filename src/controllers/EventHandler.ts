@@ -34,6 +34,7 @@ import {
   ISetupDiagnosticsService,
   SetupDiagnosticReport,
 } from '../services/SetupDiagnosticsService';
+import { IReportIntakeService } from '../services/ReportIntakeService';
 
 const RECENT_USER_CONTEXT_MESSAGE_LIMIT = 5;
 const RECENT_USER_CONTEXT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -95,6 +96,7 @@ export class EventHandler implements IEventHandler {
   private verificationThreadAnalysisService: IVerificationThreadAnalysisService;
   private productAnalyticsService: IProductAnalyticsService;
   private setupDiagnosticsService?: ISetupDiagnosticsService;
+  private reportIntakeService?: IReportIntakeService;
   private serverConfigWarmups: Set<string> = new Set();
   private configInitializePromise: Promise<void> | null = null;
   private recentMessagesByServer: Map<string, Map<string, RecentUserMessageContext[]>> = new Map();
@@ -115,7 +117,10 @@ export class EventHandler implements IEventHandler {
     productAnalyticsService?: IProductAnalyticsService,
     @inject(TYPES.SetupDiagnosticsService)
     @optional()
-    setupDiagnosticsService?: ISetupDiagnosticsService
+    setupDiagnosticsService?: ISetupDiagnosticsService,
+    @inject(TYPES.ReportIntakeService)
+    @optional()
+    reportIntakeService?: IReportIntakeService
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -127,6 +132,7 @@ export class EventHandler implements IEventHandler {
     this.verificationThreadAnalysisService = verificationThreadAnalysisService;
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.setupDiagnosticsService = setupDiagnosticsService;
+    this.reportIntakeService = reportIntakeService;
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -214,6 +220,11 @@ export class EventHandler implements IEventHandler {
       if (message.channel.isThread()) {
         const handled = await this.verificationThreadAnalysisService.handleThreadMessage(message);
         if (handled) {
+          return;
+        }
+
+        const reportIntakeHandled = await this.reportIntakeService?.handleThreadMessage(message);
+        if (reportIntakeHandled) {
           return;
         }
       }

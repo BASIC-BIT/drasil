@@ -35,6 +35,10 @@ import {
 } from '../services/SecurityActionService';
 import { IConfigService } from '../config/ConfigService';
 import { ISetupDiagnosticsService } from '../services/SetupDiagnosticsService';
+import {
+  IReportIntakeService,
+  REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX,
+} from '../services/ReportIntakeService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import {
   DEFAULT_USER_REPORT_REASON_REQUIRED,
@@ -96,6 +100,7 @@ export class InteractionHandler implements IInteractionHandler {
   private threadManager: IThreadManager;
   private adminActionRepository: IAdminActionRepository;
   private setupDiagnosticsService?: ISetupDiagnosticsService;
+  private reportIntakeService?: IReportIntakeService;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -109,7 +114,10 @@ export class InteractionHandler implements IInteractionHandler {
     @inject(TYPES.AdminActionRepository) adminActionRepository: IAdminActionRepository,
     @inject(TYPES.SetupDiagnosticsService)
     @optional()
-    setupDiagnosticsService?: ISetupDiagnosticsService
+    setupDiagnosticsService?: ISetupDiagnosticsService,
+    @inject(TYPES.ReportIntakeService)
+    @optional()
+    reportIntakeService?: IReportIntakeService
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -120,6 +128,7 @@ export class InteractionHandler implements IInteractionHandler {
     this.threadManager = threadManager;
     this.adminActionRepository = adminActionRepository;
     this.setupDiagnosticsService = setupDiagnosticsService;
+    this.reportIntakeService = reportIntakeService;
   }
 
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
@@ -138,6 +147,11 @@ export class InteractionHandler implements IInteractionHandler {
       // Exact-match IDs must be routed before parsing action/user IDs.
       if (customId === 'report_user_initiate') {
         await this.handleReportUserInitiate(interaction);
+        return;
+      }
+
+      if (customId.startsWith(`${REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX}:`)) {
+        await this.handleReportIntakeConfirm(interaction, customId);
         return;
       }
 
@@ -476,6 +490,13 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
+    await this.reportIntakeService?.openIntakeFromThread({
+      serverId: guildId,
+      reporter,
+      threadId: thread.id,
+      channelId: interaction.channel.id,
+    });
+
     await interaction.editReply({
       content: `Opened a private report thread: ${thread.url}\nPlease put the report context there.`,
     });
@@ -496,6 +517,63 @@ export class InteractionHandler implements IInteractionHandler {
       });
     } catch (error) {
       console.warn(`Failed to notify admin channel for report intake thread ${thread.id}:`, error);
+    }
+  }
+
+  private async handleReportIntakeConfirm(
+    interaction: ButtonInteraction,
+    customId: string
+  ): Promise<void> {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    if (!this.reportIntakeService) {
+      await interaction.editReply({ content: 'Report intake tracking is not available.' });
+      return;
+    }
+
+    const [, intakeId, targetUserId] = customId.split(':');
+    if (!intakeId || !targetUserId) {
+      await interaction.editReply({ content: 'This report confirmation button is invalid.' });
+      return;
+    }
+
+    const confirmation = await this.reportIntakeService.confirmCandidate({
+      intakeId,
+      targetUserId,
+      confirmedById: interaction.user.id,
+    });
+    if (!confirmation.confirmed || !confirmation.reason) {
+      await interaction.editReply({ content: confirmation.message });
+      return;
+    }
+
+    const guild = await this.client.guilds.fetch(interaction.guildId!);
+    const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
+    if (!targetMember) {
+      await interaction.editReply({
+        content: 'The confirmed target is no longer available in this server.',
+      });
+      return;
+    }
+
+    await this.securityActionService.handleUserReport(
+      targetMember,
+      interaction.user,
+      confirmation.reason
+    );
+    await this.reportIntakeService.markSubmitted({
+      intakeId,
+      targetUserId,
+      submittedById: interaction.user.id,
+    });
+
+    await interaction.editReply({ content: `Submitted report for <@${targetUserId}>.` });
+
+    if (interaction.channel?.isThread?.()) {
+      await interaction.channel.send({
+        content: `Report submitted for <@${targetUserId}>. Moderators have been notified.`,
+        allowedMentions: { parse: [] },
+      });
     }
   }
 

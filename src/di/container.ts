@@ -51,6 +51,15 @@ import {
   ISetupDiagnosticsService,
   SetupDiagnosticsService,
 } from '../services/SetupDiagnosticsService';
+import {
+  IReportIntakeRepository,
+  ReportIntakeRepository,
+} from '../repositories/ReportIntakeRepository';
+import {
+  IReportCandidateService,
+  ReportCandidateService,
+} from '../services/ReportCandidateService';
+import { IReportIntakeService, ReportIntakeService } from '../services/ReportIntakeService';
 // Initialize container
 const container = new Container();
 
@@ -127,6 +136,10 @@ function configureRepositories(container: Container): void {
     .bind<IAdminActionRepository>(TYPES.AdminActionRepository)
     .to(AdminActionRepository)
     .inSingletonScope();
+  container
+    .bind<IReportIntakeRepository>(TYPES.ReportIntakeRepository)
+    .to(ReportIntakeRepository)
+    .inSingletonScope();
 
   // Add more repository bindings as they're refactored
 }
@@ -197,6 +210,16 @@ function configureServices(container: Container): void {
   container
     .bind<ISetupDiagnosticsService>(TYPES.SetupDiagnosticsService)
     .to(SetupDiagnosticsService)
+    .inSingletonScope();
+
+  container
+    .bind<IReportCandidateService>(TYPES.ReportCandidateService)
+    .to(ReportCandidateService)
+    .inSingletonScope();
+
+  container
+    .bind<IReportIntakeService>(TYPES.ReportIntakeService)
+    .to(ReportIntakeService)
     .inSingletonScope();
 }
 
