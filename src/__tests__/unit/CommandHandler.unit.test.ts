@@ -646,14 +646,10 @@ describe('CommandHandler (unit)', () => {
     const invoker = { id: 'admin-1' } as any;
     const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
     const targetMember = { id: targetUser.id } as any;
-    const adminMember = {
-      permissions: { has: jest.fn().mockReturnValue(true) },
-    } as any;
     const guild = {
       id: 'guild-1',
       members: {
         fetch: jest.fn().mockImplementation(async (id: string) => {
-          if (id === invoker.id) return adminMember;
           if (id === targetUser.id) return targetMember;
           return null;
         }),
@@ -663,6 +659,7 @@ describe('CommandHandler (unit)', () => {
       commandName: 'case',
       user: invoker,
       guild,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
       options: {
         getSubcommand: jest.fn().mockReturnValue('open'),
         getUser: jest.fn().mockReturnValue(targetUser),
@@ -673,6 +670,8 @@ describe('CommandHandler (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
+    expect(guild.members.fetch).toHaveBeenCalledWith(targetUser.id);
+    expect(guild.members.fetch).not.toHaveBeenCalledWith(invoker.id);
     expect(securityActionService.openAdminCase).toHaveBeenCalledWith(targetMember, invoker, {
       action: 'open_case',
       reason: 'manual review',

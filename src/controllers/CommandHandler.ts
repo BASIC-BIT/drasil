@@ -3665,6 +3665,19 @@ export class CommandHandler implements ICommandHandler {
     interaction: ChatInputCommandInteraction,
     guild: Guild
   ): Promise<boolean> {
+    const memberPermissions = interaction.memberPermissions;
+    if (memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      return true;
+    }
+
+    if (memberPermissions && !memberPermissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({
+        content: 'You need administrator permissions to use this command.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return false;
+    }
+
     const member = await guild.members.fetch(interaction.user.id).catch(() => null);
     if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
       await interaction.reply({

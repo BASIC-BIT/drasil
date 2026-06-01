@@ -218,6 +218,14 @@ export interface RoleIntakeResult {
   failures: RoleIntakeFailure[];
 }
 
+interface RoleIntakeMemberSelection {
+  totalMembers: number;
+  eligibleMembers: number;
+  selectedMembers: GuildMember[];
+  skippedBots: number;
+  skippedOverLimit: number;
+}
+
 /**
  * SecurityActionService - Coordinates calls to various services based upon actions that occurred
  * This is the service to put all that fancy business logic
@@ -1144,10 +1152,10 @@ export class SecurityActionService implements ISecurityActionService {
         metadata: withDetectionTestingMetadata(
           {
             type: 'admin_case',
+            ...options.metadata,
             adminId: moderator.id,
             action: options.action,
             reason: normalizedReason ?? 'No reason provided.',
-            ...options.metadata,
           },
           'server'
         ),
@@ -1193,24 +1201,21 @@ export class SecurityActionService implements ISecurityActionService {
     const batchId = `role-intake-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const limit = Math.max(1, Math.min(options.limit ?? 250, 250));
     const delayMs = Math.max(0, options.delayMs ?? 250);
-
-    await options.role.guild.members.fetch();
-    const allMembers = [...options.role.members.values()].sort((a, b) => a.id.localeCompare(b.id));
-    const nonBotMembers = allMembers.filter((member) => !member.user.bot);
-    const selectedMembers = nonBotMembers.slice(0, limit);
+    const memberSelection = await this.selectRoleMembersForIntake(options.role, limit);
+    const { selectedMembers } = memberSelection;
     const result: RoleIntakeResult = {
       batchId,
       roleId: options.role.id,
       roleName: options.role.name,
       action: options.action,
       execute: options.execute,
-      totalMembers: allMembers.length,
-      eligibleMembers: nonBotMembers.length,
+      totalMembers: memberSelection.totalMembers,
+      eligibleMembers: memberSelection.eligibleMembers,
       processed: selectedMembers.length,
       opened: 0,
-      skippedBots: allMembers.length - nonBotMembers.length,
+      skippedBots: memberSelection.skippedBots,
       skippedActiveCases: 0,
-      skippedOverLimit: Math.max(0, nonBotMembers.length - selectedMembers.length),
+      skippedOverLimit: memberSelection.skippedOverLimit,
       failed: 0,
       failures: [],
     };
@@ -1220,7 +1225,7 @@ export class SecurityActionService implements ISecurityActionService {
         member.id,
         member.guild.id
       );
-      if (activeCase) {
+      if (activeCase && options.action !== 'restrict') {
         result.skippedActiveCases += 1;
         continue;
       }
@@ -1261,6 +1266,53 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     return result;
+  }
+
+  private async selectRoleMembersForIntake(
+    role: Role,
+    limit: number
+  ): Promise<RoleIntakeMemberSelection> {
+    const selectedMembers: GuildMember[] = [];
+    let totalMembers = 0;
+    let eligibleMembers = 0;
+    let skippedBots = 0;
+    let skippedOverLimit = 0;
+    let after: string | undefined;
+    let hasMoreMembers = true;
+
+    while (hasMoreMembers) {
+      const page = await role.guild.members.list({ after, limit: 1000, cache: false });
+      if (page.size === 0) {
+        break;
+      }
+
+      const pageMembers = [...page.values()].sort((a, b) => a.id.localeCompare(b.id));
+      for (const member of pageMembers) {
+        if (!member.roles.cache.has(role.id)) {
+          continue;
+        }
+
+        totalMembers += 1;
+        if (member.user.bot) {
+          skippedBots += 1;
+          continue;
+        }
+
+        eligibleMembers += 1;
+        if (selectedMembers.length < limit) {
+          selectedMembers.push(member);
+        } else {
+          skippedOverLimit += 1;
+        }
+      }
+
+      after = pageMembers[pageMembers.length - 1]?.id;
+      if (!after || page.size < 1000) {
+        hasMoreMembers = false;
+      }
+    }
+
+    return { totalMembers, eligibleMembers, selectedMembers, skippedBots, skippedOverLimit };
   }
 
   private async sleep(delayMs: number): Promise<void> {
