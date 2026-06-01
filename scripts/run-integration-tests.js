@@ -1,4 +1,5 @@
 const { spawnSync } = require('child_process');
+require('dotenv/config');
 
 process.env.JEST_INTEGRATION = '1';
 

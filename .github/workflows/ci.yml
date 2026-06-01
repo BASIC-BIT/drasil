@@ -45,6 +45,9 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Install Playwright browsers
+        timeout-minutes: 10
+        run: npx playwright install --with-deps chromium
       - name: Install Postgres client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: Wait for Postgres
@@ -57,3 +60,216 @@ jobs:
           exit 1
       - name: Quality gate
         run: npm run check:ci
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: web-playwright-artifacts
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+
+  metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
+      - name: Install scc
+        run: go install github.com/boyter/scc/v3@latest
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install lizard
+        run: python -m pip install "lizard==1.21.6"
+      - name: Run web code metrics
+        run: |
+          export PATH="$HOME/go/bin:$PATH"
+          bash scripts/check-metrics.sh
+
+  snapshot-preview:
+    if: ${{ github.event_name == 'pull_request' && always() }}
+    needs: [build-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Collect changed visual snapshot files
+        id: collect
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$BASE_REF" --depth=1
+
+          if git merge-base "origin/$BASE_REF" HEAD >/dev/null 2>&1; then
+            RANGE="origin/$BASE_REF...HEAD"
+          else
+            RANGE="origin/$BASE_REF..HEAD"
+          fi
+
+          mapfile -t files < <(git diff --name-only --diff-filter=AMRT "$RANGE" -- \
+            "apps/web/e2e/*.spec.ts-snapshots/*.png")
+
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "has_files=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mkdir -p snapshot-preview
+          : > snapshot-preview/files.txt
+          for file in "${files[@]}"; do
+            printf '%s\n' "$file" >> snapshot-preview/files.txt
+            mkdir -p "snapshot-preview/$(dirname "$file")"
+            cp "$file" "snapshot-preview/$file"
+          done
+
+          echo "has_files=true" >> "$GITHUB_OUTPUT"
+      - name: Upload PR snapshot preview artifact
+        id: upload
+        if: steps.collect.outputs.has_files == 'true'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: pr-snapshot-preview
+          if-no-files-found: error
+          retention-days: 7
+          path: snapshot-preview
+      - name: Post snapshot preview comment
+        if: always()
+        uses: actions/github-script@v9
+        env:
+          HAS_FILES: ${{ steps.collect.outputs.has_files }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const marker = '<!-- drasil-snapshot-preview-comment -->';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.issue.number;
+            const headSha = context.payload.pull_request?.head?.sha ?? context.sha;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const hasFiles = process.env.HAS_FILES === 'true';
+            const artifactId = process.env.ARTIFACT_ID;
+
+            let files = [];
+            if (hasFiles && fs.existsSync('snapshot-preview/files.txt')) {
+              files = fs
+                .readFileSync('snapshot-preview/files.txt', 'utf8')
+                .split('\n')
+                .map((value) => value.trim())
+                .filter(Boolean);
+            }
+
+            const lines = files.length === 0
+              ? ['_No changed Playwright visual snapshots._']
+              : files.flatMap((file) => [
+                  `- \`${file}\``,
+                  `![${file}](https://github.com/${owner}/${repo}/blob/${headSha}/${file}?raw=1)`,
+                ]);
+
+            const artifactLine = hasFiles && artifactId
+              ? `Artifact: [pr-snapshot-preview](https://github.com/${owner}/${repo}/actions/runs/${context.runId}/artifacts/${artifactId})`
+              : 'Artifact: not generated';
+
+            const body = [
+              marker,
+              '## Snapshot Preview',
+              hasFiles
+                ? `${files.length} changed Playwright visual snapshot file(s) in this PR.`
+                : 'No changed Playwright visual snapshot files were detected in this PR.',
+              `Run: ${runUrl}`,
+              artifactLine,
+              '',
+              ...lines,
+            ].join('\n');
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker),
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+  deploy-web-prod:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [build-test, metrics]
+    runs-on: ubuntu-latest
+    environment: Deploy - web-prod
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-web-prod
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Validate Vercel configuration
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          : "${VERCEL_TOKEN:?Set VERCEL_TOKEN secret}"
+          : "${VERCEL_ORG_ID:?Set VERCEL_ORG_ID variable}"
+          : "${VERCEL_PROJECT_ID:?Set VERCEL_PROJECT_ID variable}"
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Vercel CLI
+        run: npm install --global vercel@50.32.5
+      - name: Pull production environment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+      - name: Build production deployment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+      - name: Deploy production web
+        id: deploy
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          vercel deploy --prebuilt --prod --archive=tgz --token="$VERCEL_TOKEN" > deployment-url.txt
+          DEPLOYMENT_URL="$(awk 'NF { line=$0 } END { gsub(/\r/, "", line); print line }' deployment-url.txt)"
+          : "${DEPLOYMENT_URL:?Unable to determine deployment URL}"
+          echo "deployment_url=$DEPLOYMENT_URL" >> "$GITHUB_OUTPUT"
+      - name: Deployment summary
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+        run: |
+          {
+            echo "## Web Deploy"
+            echo "- Commit SHA: $(git rev-parse --short HEAD)"
+            echo "- URL: $DEPLOYMENT_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
