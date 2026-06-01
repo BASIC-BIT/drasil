@@ -169,10 +169,7 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
   public async updateGuildSetup(rawUpdate: GuildSetupUpdate): Promise<SetupServerRecord> {
     const update = guildSetupUpdateSchema.parse(rawUpdate);
     const current = await this.getServer(update.guildId);
-    const settings = {
-      ...(current?.settings ?? {}),
-      ...buildSettingsPatch(update),
-    };
+    const settingsPatch = buildSettingsPatch(update);
     const updatedBy = update.updatedBy ?? current?.updated_by ?? null;
 
     const result = await getPostgresPool().query(
@@ -191,7 +188,7 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
         admin_channel_id = excluded.admin_channel_id,
         verification_channel_id = excluded.verification_channel_id,
         admin_notification_role_id = excluded.admin_notification_role_id,
-        settings = excluded.settings,
+        settings = coalesce(servers.settings, '{}'::jsonb) || excluded.settings,
         updated_by = excluded.updated_by,
         updated_at = now()
       returning *`,
@@ -201,7 +198,7 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
         nextOptionalId(update.adminChannelId, current?.admin_channel_id),
         nextOptionalId(update.verificationChannelId, current?.verification_channel_id),
         nextOptionalId(update.adminNotificationRoleId, current?.admin_notification_role_id),
-        JSON.stringify(settings),
+        JSON.stringify(settingsPatch),
         updatedBy,
       ]
     );

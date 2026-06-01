@@ -1,6 +1,7 @@
 import { readOptionalEnv, requireEnv } from './env';
 
 const DEFAULT_DISCORD_API_BASE_URL = 'https://discord.com/api/v10';
+const DISCORD_GUILD_PAGE_LIMIT = 200;
 
 export interface DiscordUser {
   readonly id: string;
@@ -108,11 +109,30 @@ export async function fetchDiscordUser(accessToken: string): Promise<DiscordUser
 }
 
 export async function fetchDiscordGuilds(accessToken: string): Promise<DiscordGuildSummary[]> {
-  const response = await fetch(`${discordApiBaseUrl()}/users/@me/guilds`, {
-    headers: { authorization: `Bearer ${accessToken}` },
-    cache: 'no-store',
-  });
-  return readDiscordJson<DiscordGuildSummary[]>(response);
+  const guilds: DiscordGuildSummary[] = [];
+  let after: string | null = null;
+
+  while (true) {
+    const url = new URL(`${discordApiBaseUrl()}/users/@me/guilds`);
+    url.searchParams.set('limit', String(DISCORD_GUILD_PAGE_LIMIT));
+    if (after) {
+      url.searchParams.set('after', after);
+    }
+
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${accessToken}` },
+      cache: 'no-store',
+    });
+    const page = await readDiscordJson<DiscordGuildSummary[]>(response);
+    guilds.push(...page);
+    if (page.length < DISCORD_GUILD_PAGE_LIMIT) {
+      return guilds;
+    }
+    after = page[page.length - 1]?.id ?? null;
+    if (!after) {
+      return guilds;
+    }
+  }
 }
 
 async function fetchBotJson<T>(path: string): Promise<T> {
