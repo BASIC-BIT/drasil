@@ -114,6 +114,15 @@ export class ReportIntakeService implements IReportIntakeService {
     if (intake.reporter_id !== input.confirmedById) {
       return { confirmed: false, message: 'Only the reporter can confirm this target.' };
     }
+    if (intake.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION) {
+      return {
+        confirmed: false,
+        message: 'That report intake is no longer accepting target confirmations.',
+      };
+    }
+    if (input.targetUserId === input.confirmedById) {
+      return { confirmed: false, message: 'You cannot report yourself.' };
+    }
 
     const metadata = toRecord(intake.metadata);
     if (!this.hasSuggestedCandidate(metadata, input.targetUserId)) {

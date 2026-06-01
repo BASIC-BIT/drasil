@@ -184,6 +184,72 @@ describe('ReportIntakeService', () => {
     );
   });
 
+  it('rejects duplicate confirmations after submission', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+    await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      confirmedById: 'reporter-1',
+    });
+    await service.markSubmitted({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      submittedById: 'reporter-1',
+    });
+
+    const result = await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      confirmedById: 'reporter-1',
+    });
+    const confirmationEvidence = (await reportIntakeRepository.listEvidence(intake.id)).filter(
+      (item) => item.kind === ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION
+    );
+
+    expect(result).toMatchObject({
+      confirmed: false,
+      message: 'That report intake is no longer accepting target confirmations.',
+    });
+    expect(confirmationEvidence).toHaveLength(1);
+  });
+
+  it('rejects reporter self-confirmation', async () => {
+    const selfCandidate = {
+      ...buildCandidate(),
+      candidateId: 'guild-1:reporter-1',
+      discordUserId: 'reporter-1',
+    };
+    const { service, reportIntakeRepository } = buildService({
+      resolvePlatformBackedCandidates: jest.fn().mockResolvedValue([selfCandidate]),
+    });
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+
+    const result = await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'reporter-1',
+      confirmedById: 'reporter-1',
+    });
+    const confirmationEvidence = (await reportIntakeRepository.listEvidence(intake.id)).filter(
+      (item) => item.kind === ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION
+    );
+
+    expect(result).toMatchObject({ confirmed: false, message: 'You cannot report yourself.' });
+    expect(confirmationEvidence).toHaveLength(0);
+  });
+
   it('keeps earlier candidate suggestions after later evidence has no candidates', async () => {
     const { service, reportIntakeRepository } = buildService({
       resolvePlatformBackedCandidates: jest

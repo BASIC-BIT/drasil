@@ -535,6 +535,10 @@ export class InteractionHandler implements IInteractionHandler {
       await interaction.editReply({ content: 'This report confirmation button is invalid.' });
       return;
     }
+    if (targetUserId === interaction.user.id) {
+      await interaction.editReply({ content: 'You cannot report yourself.' });
+      return;
+    }
 
     const confirmation = await this.reportIntakeService.confirmCandidate({
       intakeId,

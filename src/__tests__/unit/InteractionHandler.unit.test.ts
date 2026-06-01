@@ -1753,4 +1753,39 @@ describe('InteractionHandler (unit)', () => {
       content: 'Submitted report for <@user-1>.',
     });
   });
+
+  it('rejects report intake self-confirmations before submitting a report', async () => {
+    const reportIntakeService: jest.Mocked<IReportIntakeService> = {
+      openIntakeFromThread: jest.fn().mockResolvedValue({} as any),
+      handleThreadMessage: jest.fn().mockResolvedValue(false),
+      confirmCandidate: jest.fn().mockResolvedValue({
+        confirmed: true,
+        message: 'confirmed',
+        reason: 'Report intake target confirmed by reporter.',
+      }),
+      markSubmitted: jest.fn().mockResolvedValue(undefined),
+    };
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      reportIntakeService
+    );
+    const interaction = buildInteraction('report_intake_confirm:intake-1:reporter-1', 'guild-1', {
+      id: 'reporter-1',
+    } as User);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(reportIntakeService.confirmCandidate).not.toHaveBeenCalled();
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
+    expect(reportIntakeService.markSubmitted).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({ content: 'You cannot report yourself.' });
+  });
 });
