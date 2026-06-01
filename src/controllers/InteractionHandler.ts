@@ -540,16 +540,6 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const confirmation = await this.reportIntakeService.confirmCandidate({
-      intakeId,
-      targetUserId,
-      confirmedById: interaction.user.id,
-    });
-    if (!confirmation.confirmed || !confirmation.reason) {
-      await interaction.editReply({ content: confirmation.message });
-      return;
-    }
-
     const guildId = interaction.guildId;
     if (!guildId) {
       await interaction.editReply({
@@ -564,6 +554,16 @@ export class InteractionHandler implements IInteractionHandler {
       await interaction.editReply({
         content: 'The confirmed target is no longer available in this server.',
       });
+      return;
+    }
+
+    const confirmation = await this.reportIntakeService.confirmCandidate({
+      intakeId,
+      targetUserId,
+      confirmedById: interaction.user.id,
+    });
+    if (!confirmation.confirmed || !confirmation.reason) {
+      await interaction.editReply({ content: confirmation.message });
       return;
     }
 
