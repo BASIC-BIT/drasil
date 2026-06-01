@@ -4096,9 +4096,10 @@ export class CommandHandler implements ICommandHandler {
       .setTitle('Report a User')
       .setDescription(
         'If you see a user violating server rules or engaging in suspicious activity, ' +
-          'use the button below to choose the user and submit the report. ' +
-          'You can also use `/report` for the same user picker and reason field, or ' +
-          'right-click a user and choose `Apps` -> `Report User`. ' +
+          'use the button below to paste a user ID or mention and add context. ' +
+          'You can also use `/report user:<user>`, right-click a user and choose ' +
+          '`Apps` -> `Report User`, or right-click a message and choose ' +
+          '`Apps` -> `Report Message` so Drasil can include message evidence. ' +
           'Your report will be reviewed by the moderation team.'
       )
       .setFooter({ text: 'Your reports help keep the community safe!' });

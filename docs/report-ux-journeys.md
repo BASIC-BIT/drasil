@@ -39,6 +39,16 @@ The maintainer watching deployments, logs, permissions, and Discord API failures
 Current UX result:
 Good for privacy and low clutter. Reports start as triage alerts instead of creating a thread for every report.
 
+### Guild Report Instructions Button
+
+1. Reporter clicks the report instructions button in a configured report channel.
+2. Drasil opens a typed report form instead of a Discord user select menu.
+3. Reporter pastes a user ID, mention, or exact username and adds context.
+4. The rest of the flow matches guild `/report`.
+
+Current UX result:
+Avoids Discord's limited recent-user picker. IDs and mentions are the reliable path; usernames are a convenience fallback.
+
 ### Guild `Report User`
 
 1. Reporter right-clicks a user and chooses `Apps` -> `Report User`.

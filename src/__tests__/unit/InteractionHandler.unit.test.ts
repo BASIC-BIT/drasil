@@ -8,7 +8,6 @@ import {
   ModalSubmitInteraction,
   PermissionFlagsBits,
   User,
-  UserSelectMenuInteraction,
 } from 'discord.js';
 import { InteractionHandler } from '../../controllers/InteractionHandler';
 import { INotificationManager } from '../../services/NotificationManager';
@@ -62,28 +61,6 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
     showModal: jest.fn().mockResolvedValue(undefined),
   };
   return interaction as unknown as ButtonInteraction;
-};
-
-const buildUserSelectInteraction = (
-  customId: string,
-  guildId: string,
-  user: User,
-  values: string[]
-): UserSelectMenuInteraction => {
-  const interaction = {
-    customId,
-    guildId,
-    user,
-    values,
-    deferred: false,
-    replied: false,
-    reply: jest.fn().mockImplementation(async () => {
-      interaction.replied = true;
-    }),
-    followUp: jest.fn().mockResolvedValue(undefined),
-    showModal: jest.fn().mockResolvedValue(undefined),
-  };
-  return interaction as unknown as UserSelectMenuInteraction;
 };
 
 const grantInteractionPermissions = (
@@ -1662,7 +1639,7 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
-  it('routes report button clicks to a user picker', async () => {
+  it('opens a typed report form from the report button', async () => {
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -1679,104 +1656,22 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(interaction.reply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: 'Choose the user you want to report. Only you can see this picker.',
-        flags: MessageFlags.Ephemeral,
-      })
-    );
-    const replyPayload = (interaction.reply as jest.Mock).mock.calls[0][0] as any;
-    const selectJson = replyPayload.components[0].toJSON().components[0];
-    expect(selectJson.custom_id).toBe('report_user_select');
-    expect(selectJson.placeholder).toBe('Choose the user to report');
-    expect(interaction.showModal).not.toHaveBeenCalled();
-    expect(configService.getCachedServerConfig).not.toHaveBeenCalled();
-    expect(configService.getServerConfig).not.toHaveBeenCalled();
-  });
-
-  it('opens a report reason modal after report user picker selection', async () => {
-    const handler = new InteractionHandler(
-      client,
-      notificationManager,
-      userModerationService,
-      securityActionService,
-      configService,
-      verificationEventRepository,
-      threadManager,
-      adminActionRepository
-    );
-    const interaction = buildUserSelectInteraction(
-      'report_user_select',
-      'guild-1',
-      { id: 'reporter-1' } as User,
-      ['123456789012345678']
-    );
-
-    await handler.handleUserSelectMenuInteraction(interaction);
-
     expect(interaction.showModal).toHaveBeenCalledTimes(1);
     const modal = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
     const modalJson = modal.toJSON();
-    expect(modalJson.custom_id).toBe('report_user_reason_modal:123456789012345678');
-    expect(modalJson.title).toBe('Report User');
+    expect(modalJson.custom_id).toBe('report_user_modal_submit');
+    expect(modalJson.title).toBe('Report a User');
     expect(modalJson.components[0].components[0]).toMatchObject({
+      custom_id: 'report_target_user_input',
+      label: 'User ID, mention, or exact username',
+      required: true,
+    });
+    expect(modalJson.components[1].components[0]).toMatchObject({
       custom_id: 'report_reason',
-      label: 'Reason (optional)',
+      label: 'Context (optional)',
       required: false,
     });
+    expect(interaction.reply).not.toHaveBeenCalled();
     expect(configService.getCachedServerConfig).not.toHaveBeenCalled();
-    expect(configService.getServerConfig).not.toHaveBeenCalled();
-  });
-
-  it('submits a report from the selected user reason modal', async () => {
-    const member = buildMember('guild-1', '123456789012345678');
-    (client.guilds.fetch as jest.Mock).mockResolvedValue({
-      members: {
-        fetch: jest.fn().mockResolvedValue(member),
-      },
-    });
-
-    const handler = new InteractionHandler(
-      client,
-      notificationManager,
-      userModerationService,
-      securityActionService,
-      configService,
-      verificationEventRepository,
-      threadManager,
-      adminActionRepository
-    );
-
-    const interaction = {
-      customId: 'report_user_reason_modal:123456789012345678',
-      guildId: 'guild-1',
-      user: { id: 'reporter-1' } as User,
-      fields: {
-        getTextInputValue: jest.fn(() => 'selected report reason'),
-      },
-      deferReply: jest.fn().mockResolvedValue(undefined),
-      editReply: jest.fn().mockResolvedValue(undefined),
-      reply: jest.fn().mockResolvedValue(undefined),
-      followUp: jest.fn().mockResolvedValue(undefined),
-      replied: false,
-      deferred: false,
-    } as unknown as ModalSubmitInteraction;
-
-    await handler.handleModalSubmit(interaction);
-
-    expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
-      member,
-      interaction.user,
-      'selected report reason'
-    );
-    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
-    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
-      (client.guilds.fetch as jest.Mock).mock.invocationCallOrder[0]
-    );
-    expect(interaction.editReply).toHaveBeenCalledWith({
-      content:
-        'Thank you for your report regarding <@123456789012345678>. It has been submitted for review.',
-      allowedMentions: { parse: [] },
-    });
   });
 });

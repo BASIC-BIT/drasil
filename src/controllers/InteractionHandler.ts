@@ -12,8 +12,6 @@ import {
   ActionRowBuilder,
   InteractionContextType,
   User,
-  UserSelectMenuBuilder,
-  UserSelectMenuInteraction,
   ModalSubmitInteraction,
   ButtonStyle,
   Guild,
@@ -60,9 +58,7 @@ const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notificatio
 const VERIFICATION_BAN_MODAL_PREFIX = 'verification:ban_modal';
 const VERIFICATION_BAN_NOTES_FIELD_ID = 'verification_ban_notes';
 const VERIFICATION_BAN_DEFAULT_REASON = 'Banned by moderator during verification';
-const REPORT_USER_SELECT_CUSTOM_ID = 'report_user_select';
 const REPORT_USER_TYPED_MODAL_ID = 'report_user_modal_submit';
-const REPORT_USER_REASON_MODAL_PREFIX = 'report_user_reason_modal';
 const REPORT_USER_TARGET_FIELD_ID = 'report_target_user_input';
 const REPORT_USER_REASON_FIELD_ID = 'report_reason';
 
@@ -84,11 +80,6 @@ export interface IInteractionHandler {
    * Handle a modal submission interaction
    */
   handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void>; // Added
-
-  /**
-   * Handle a user select menu interaction
-   */
-  handleUserSelectMenuInteraction(interaction: UserSelectMenuInteraction): Promise<void>;
 }
 
 @injectable()
@@ -444,78 +435,34 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async handleReportUserInitiate(interaction: ButtonInteraction): Promise<void> {
-    const userSelect = new UserSelectMenuBuilder()
-      .setCustomId(REPORT_USER_SELECT_CUSTOM_ID)
-      .setPlaceholder('Choose the user to report')
-      .setMinValues(1)
-      .setMaxValues(1);
-    const row = new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(userSelect);
-
-    await interaction.reply({
-      content: 'Choose the user you want to report. Only you can see this picker.',
-      components: [row],
-      flags: MessageFlags.Ephemeral,
-    });
-  }
-
-  public async handleUserSelectMenuInteraction(
-    interaction: UserSelectMenuInteraction
-  ): Promise<void> {
-    if (!interaction.guildId) {
-      await interaction.reply({
-        content: 'This menu can only be used in a server.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    if (interaction.customId !== REPORT_USER_SELECT_CUSTOM_ID) {
-      await interaction.reply({
-        content: 'Unknown menu action',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    await this.handleReportUserSelect(interaction);
-  }
-
-  private async handleReportUserSelect(interaction: UserSelectMenuInteraction): Promise<void> {
-    const targetUserId = interaction.values[0];
-    if (!targetUserId) {
-      await interaction.reply({
-        content: 'Please choose a user to report.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    if (targetUserId === interaction.user.id) {
-      await interaction.reply({
-        content: 'You cannot report yourself.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    const modal = this.buildReportUserReasonModal(targetUserId, false);
-    await interaction.showModal(modal);
-  }
-
-  private buildReportUserReasonModal(targetUserId: string, reasonRequired: boolean): ModalBuilder {
+    const reasonRequired = await this.getUserReportReasonRequired(interaction.guildId ?? undefined);
     const modal = new ModalBuilder()
-      .setCustomId(`${REPORT_USER_REASON_MODAL_PREFIX}:${targetUserId}`)
-      .setTitle('Report User');
+      .setCustomId(REPORT_USER_TYPED_MODAL_ID)
+      .setTitle('Report a User');
+
+    const targetUserInput = new TextInputBuilder()
+      .setCustomId(REPORT_USER_TARGET_FIELD_ID)
+      .setLabel('User ID, mention, or exact username')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Paste a user ID or @mention when possible')
+      .setMaxLength(100)
+      .setRequired(true);
     const reasonInput = new TextInputBuilder()
       .setCustomId(REPORT_USER_REASON_FIELD_ID)
-      .setLabel(reasonRequired ? 'Reason' : 'Reason (optional)')
+      .setLabel(reasonRequired ? 'Context' : 'Context (optional)')
       .setStyle(TextInputStyle.Paragraph)
-      .setPlaceholder('What happened? Include extra context if useful.')
+      .setPlaceholder(
+        'What happened? Include message links, screenshots, or other context if useful.'
+      )
       .setMaxLength(USER_REPORT_REASON_MAX_LENGTH)
       .setRequired(reasonRequired);
 
-    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
-    return modal;
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(targetUserInput),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput)
+    );
+
+    await interaction.showModal(modal);
   }
 
   public async handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
@@ -533,10 +480,6 @@ export class InteractionHandler implements IInteractionHandler {
         }
         if (interaction.customId.startsWith(`${REPORT_MESSAGE_MODAL_PREFIX}:`)) {
           await this.handleReportMessageModalSubmit(interaction);
-          return;
-        }
-        if (interaction.customId.startsWith(`${REPORT_USER_REASON_MODAL_PREFIX}:`)) {
-          await this.handleReportUserReasonModalSubmit(interaction);
           return;
         }
         if (interaction.customId.startsWith('observed:ban_modal:')) {
@@ -786,84 +729,6 @@ export class InteractionHandler implements IInteractionHandler {
       });
     } catch (error) {
       console.error('[InteractionHandler] Error handling report modal submission:', error);
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: 'An error occurred while submitting your report. Please try again later.',
-          flags: MessageFlags.Ephemeral,
-        });
-      } else if (interaction.deferred) {
-        await interaction.editReply({
-          content: 'An error occurred while submitting your report. Please try again later.',
-        });
-      } else {
-        await interaction.followUp({
-          content: 'An error occurred while submitting your report. Please try again later.',
-          flags: MessageFlags.Ephemeral,
-        });
-      }
-    }
-  }
-
-  private async handleReportUserReasonModalSubmit(
-    interaction: ModalSubmitInteraction
-  ): Promise<void> {
-    if (!interaction.guildId) {
-      await interaction.reply({
-        content: 'This action can only be performed in a server.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    const targetUserId = interaction.customId.slice(`${REPORT_USER_REASON_MODAL_PREFIX}:`.length);
-    if (!/^\d{17,19}$/.test(targetUserId)) {
-      await interaction.reply({
-        content: 'This report form is invalid. Please try reporting the user again.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    try {
-      const reason =
-        interaction.fields.getTextInputValue(REPORT_USER_REASON_FIELD_ID).trim() || undefined;
-
-      if (targetUserId === interaction.user.id) {
-        await interaction.reply({
-          content: 'You cannot report yourself.',
-          flags: MessageFlags.Ephemeral,
-        });
-        return;
-      }
-
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-      const reasonRequired = await this.getUserReportReasonRequired(interaction.guildId);
-      if (reasonRequired && !reason) {
-        await interaction.editReply({
-          content: 'Please include a reason for this report.',
-        });
-        return;
-      }
-
-      const guild = await this.client.guilds.fetch(interaction.guildId);
-      const member = await guild.members.fetch(targetUserId).catch(() => null);
-      if (!member) {
-        await interaction.editReply({
-          content: `Could not find <@${targetUserId}> in this server.`,
-          allowedMentions: { parse: [] },
-        });
-        return;
-      }
-
-      await this.securityActionService.handleUserReport(member, interaction.user, reason);
-
-      await interaction.editReply({
-        content: `Thank you for your report regarding <@${targetUserId}>. It has been submitted for review.`,
-        allowedMentions: { parse: [] },
-      });
-    } catch (error) {
-      console.error('[InteractionHandler] Error handling report reason modal submission:', error);
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: 'An error occurred while submitting your report. Please try again later.',
