@@ -5,6 +5,7 @@ import {
   decodeDiscordTokenSession,
   encodeAdminSession,
   encodeDiscordTokenSession,
+  getOauthEncryptionSecret,
 } from './session';
 
 describe('session cookies', () => {
@@ -29,5 +30,12 @@ describe('session cookies', () => {
 
     expect(encoded).not.toContain('discord-access-token');
     expect(decodeDiscordTokenSession(encoded)?.accessToken).toBe('discord-access-token');
+  });
+
+  it('requires a dedicated OAuth encryption key', () => {
+    vi.stubEnv('DRASIL_SESSION_SECRET', 'test-session-secret');
+    vi.stubEnv('DRASIL_OAUTH_ENCRYPTION_KEY', '');
+
+    expect(() => getOauthEncryptionSecret()).toThrow('DRASIL_OAUTH_ENCRYPTION_KEY');
   });
 });

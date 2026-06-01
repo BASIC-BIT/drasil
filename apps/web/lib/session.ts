@@ -6,7 +6,7 @@ import {
   DISCORD_TOKEN_COOKIE,
 } from './cookies';
 import { decodeSignedJson, decryptJson, encodeSignedJson, encryptJson } from './crypto';
-import { isProduction, readOptionalEnv, requireEnv } from './env';
+import { isProduction, requireEnv } from './env';
 
 const adminSessionSchema = z.object({
   userId: z.string(),
@@ -29,7 +29,7 @@ export function getSessionSecret(): string {
 }
 
 export function getOauthEncryptionSecret(): string {
-  return readOptionalEnv('DRASIL_OAUTH_ENCRYPTION_KEY') ?? getSessionSecret();
+  return requireEnv('DRASIL_OAUTH_ENCRYPTION_KEY');
 }
 
 export function createAdminSession(input: {

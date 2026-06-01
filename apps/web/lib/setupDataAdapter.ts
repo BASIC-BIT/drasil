@@ -6,7 +6,7 @@ import {
   type GuildSetupUpdate,
   type SetupServerRecord,
 } from '@drasil/contracts';
-import { readOptionalEnv, requireEnv } from './env';
+import { readOptionalEnv, readOptionalPositiveIntegerEnv, requireEnv } from './env';
 
 export type SetupDataProvider = 'postgres' | 'convex';
 
@@ -72,7 +72,7 @@ function getPostgresPool(): Pool {
   postgresPool = new Pool({
     connectionString: ssl === undefined ? databaseUrl : removeSslModeParam(databaseUrl),
     ssl,
-    max: Number(readOptionalEnv('DRASIL_WEB_PG_POOL_MAX') ?? '5'),
+    max: readOptionalPositiveIntegerEnv('DRASIL_WEB_PG_POOL_MAX', 5),
   });
   return postgresPool;
 }
@@ -173,6 +173,7 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
       ...(current?.settings ?? {}),
       ...buildSettingsPatch(update),
     };
+    const updatedBy = update.updatedBy ?? current?.updated_by ?? null;
 
     const result = await getPostgresPool().query(
       `insert into servers (
@@ -182,14 +183,16 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
         verification_channel_id,
         admin_notification_role_id,
         settings,
+        updated_by,
         updated_at
-      ) values ($1, $2, $3, $4, $5, $6::jsonb, now())
+      ) values ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
       on conflict (guild_id) do update set
         restricted_role_id = excluded.restricted_role_id,
         admin_channel_id = excluded.admin_channel_id,
         verification_channel_id = excluded.verification_channel_id,
         admin_notification_role_id = excluded.admin_notification_role_id,
         settings = excluded.settings,
+        updated_by = excluded.updated_by,
         updated_at = now()
       returning *`,
       [
@@ -199,6 +202,7 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
         nextOptionalId(update.verificationChannelId, current?.verification_channel_id),
         nextOptionalId(update.adminNotificationRoleId, current?.admin_notification_role_id),
         JSON.stringify(settings),
+        updatedBy,
       ]
     );
     return parseServerRow(result.rows[0] as Record<string, unknown>);

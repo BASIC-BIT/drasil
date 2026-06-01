@@ -61,6 +61,7 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
   await service.getDashboard(guildId, token.accessToken);
   const update = guildSetupUpdateSchema.parse({
     guildId,
+    updatedBy: session.userId,
     restrictedRoleId: readOptionalFormString(formData, 'restrictedRoleId'),
     adminChannelId: readOptionalFormString(formData, 'adminChannelId'),
     verificationChannelId: readOptionalFormString(formData, 'verificationChannelId'),

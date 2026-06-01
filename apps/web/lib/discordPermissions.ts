@@ -15,12 +15,23 @@ export const DISCORD_PERMISSIONS = {
 } as const;
 
 const ALL_PERMISSIONS = (1n << 60n) - 1n;
+const DECIMAL_PERMISSIONS_PATTERN = /^\d+$/;
 
 export function parsePermissions(value: string | number | bigint | null | undefined): bigint {
   if (value === null || value === undefined) {
     return 0n;
   }
-  return BigInt(value);
+  if (typeof value === 'bigint') {
+    return value >= 0n ? value : 0n;
+  }
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : 0n;
+  }
+  const normalized = value.trim();
+  if (!DECIMAL_PERMISSIONS_PATTERN.test(normalized)) {
+    return 0n;
+  }
+  return BigInt(normalized);
 }
 
 export function hasPermission(permissions: bigint, permission: bigint): boolean {
@@ -30,7 +41,7 @@ export function hasPermission(permissions: bigint, permission: bigint): boolean 
   return (permissions & permission) === permission;
 }
 
-export function canManageGuild(permissions: string, owner: boolean): boolean {
+export function canManageGuild(permissions: string | null | undefined, owner: boolean): boolean {
   const parsed = parsePermissions(permissions);
   return (
     owner ||

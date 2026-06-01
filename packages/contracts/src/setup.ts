@@ -90,6 +90,7 @@ export const setupDashboardSchema = z.object({
 
 export const guildSetupUpdateSchema = z.object({
   guildId: z.string(),
+  updatedBy: z.string().nullable().optional(),
   restrictedRoleId: z.string().nullable().optional(),
   adminChannelId: z.string().nullable().optional(),
   verificationChannelId: z.string().nullable().optional(),

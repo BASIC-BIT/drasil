@@ -428,7 +428,7 @@ export class SetupDashboardService {
       dashboard: {
         guildId,
         guildName: manageableGuild.name,
-        configured: Boolean(server),
+        configured: Boolean(server?.is_active),
         dataProvider: this.adapter.provider,
         checkedAt: new Date().toISOString(),
         checklist: buildChecklist({ guild: manageableGuild, server, resources, resourcesError }),

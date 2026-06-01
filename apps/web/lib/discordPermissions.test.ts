@@ -14,6 +14,11 @@ describe('discord permission helpers', () => {
     expect(canManageGuild('0', false)).toBe(false);
   });
 
+  it('treats malformed permission payloads as no permissions', () => {
+    expect(canManageGuild('not-a-number', false)).toBe(false);
+    expect(canManageGuild(undefined, false)).toBe(false);
+  });
+
   it('applies channel overwrites in Discord order', () => {
     const guildPermissions = computeGuildPermissions({
       guildId: 'guild',

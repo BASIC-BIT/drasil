@@ -1,18 +1,33 @@
 import {
   createCipheriv,
   createDecipheriv,
-  createHash,
   createHmac,
+  hkdfSync,
   randomBytes,
   timingSafeEqual,
 } from 'node:crypto';
+
+const ENCRYPTION_KEY_SALT = 'drasil-web-cookie-encryption';
+const ENCRYPTION_KEY_INFO = 'drasil-web:aes-256-gcm';
 
 const encodeBase64Url = (value: Buffer | string): string =>
   Buffer.from(value).toString('base64url');
 const decodeBase64Url = (value: string): Buffer => Buffer.from(value, 'base64url');
 
 function deriveEncryptionKey(secret: string): Buffer {
-  return createHash('sha256').update(secret.trim()).digest();
+  const trimmed = secret.trim();
+  if (!trimmed) {
+    throw new Error('Encryption secret is not configured.');
+  }
+  return Buffer.from(
+    hkdfSync(
+      'sha256',
+      Buffer.from(trimmed, 'utf8'),
+      Buffer.from(ENCRYPTION_KEY_SALT, 'utf8'),
+      Buffer.from(ENCRYPTION_KEY_INFO, 'utf8'),
+      32
+    )
+  );
 }
 
 export function signPayload(payload: string, secret: string): string {

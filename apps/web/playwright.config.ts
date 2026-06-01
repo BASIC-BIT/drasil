@@ -4,9 +4,14 @@ const parsedPort = Number(process.env.PLAYWRIGHT_TEST_PORT);
 const port = Number.isFinite(parsedPort) ? parsedPort : 3001;
 const baseURL = `http://127.0.0.1:${port}`;
 const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_SERVER === 'true';
+const processEnv = Object.fromEntries(
+  Object.entries(process.env).filter((entry): entry is [string, string] => {
+    return typeof entry[1] === 'string';
+  })
+);
 
 const webServerEnv: Record<string, string> = {
-  ...process.env,
+  ...processEnv,
   NEXT_PUBLIC_APP_URL: baseURL,
   DISCORD_CLIENT_ID: process.env.DISCORD_CLIENT_ID ?? 'playwright-discord-client',
   DISCORD_CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET ?? 'playwright-discord-secret',

@@ -9,23 +9,44 @@ type PageProps = {
   readonly params: Promise<{ readonly guildId: string }>;
 };
 
-function channelOptions(channels: readonly DiscordChannel[]) {
-  return channels.map((channel) => (
-    <option key={channel.id} value={channel.id}>
-      #{channel.name}
-    </option>
-  ));
+function channelOptions(
+  channels: readonly DiscordChannel[],
+  savedChannelId: string | null | undefined
+) {
+  const savedChannel = savedChannelId
+    ? channels.find((channel) => channel.id === savedChannelId)
+    : null;
+  return [
+    savedChannelId && !savedChannel ? (
+      <option key={`saved-channel-${savedChannelId}`} value={savedChannelId}>
+        Saved channel ({savedChannelId})
+      </option>
+    ) : null,
+    ...channels.map((channel) => (
+      <option key={channel.id} value={channel.id}>
+        #{channel.name}
+      </option>
+    )),
+  ];
 }
 
-function roleOptions(roles: readonly DiscordRole[]) {
-  return roles
+function roleOptions(roles: readonly DiscordRole[], savedRoleId: string | null | undefined) {
+  const selectableRoles = roles
     .filter((role) => !role.managed)
-    .sort((left, right) => right.position - left.position)
-    .map((role) => (
+    .sort((left, right) => right.position - left.position);
+  const savedRole = savedRoleId ? selectableRoles.find((role) => role.id === savedRoleId) : null;
+  return [
+    savedRoleId && !savedRole ? (
+      <option key={`saved-role-${savedRoleId}`} value={savedRoleId}>
+        Saved role ({savedRoleId})
+      </option>
+    ) : null,
+    ...selectableRoles.map((role) => (
       <option key={role.id} value={role.id}>
         @{role.name}
       </option>
-    ));
+    )),
+  ];
 }
 
 export default async function GuildSetupPage({ params }: PageProps) {
@@ -100,7 +121,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
               defaultValue={server?.restricted_role_id ?? ''}
             >
               <option value="">Choose a role</option>
-              {roleOptions(roles)}
+              {roleOptions(roles, server?.restricted_role_id)}
             </select>
           </div>
           <div className="field">
@@ -111,7 +132,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
               defaultValue={server?.admin_channel_id ?? ''}
             >
               <option value="">Choose a channel</option>
-              {channelOptions(channels)}
+              {channelOptions(channels, server?.admin_channel_id)}
             </select>
           </div>
           <div className="field">
@@ -122,7 +143,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
               defaultValue={server?.verification_channel_id ?? ''}
             >
               <option value="">Choose a channel</option>
-              {channelOptions(channels)}
+              {channelOptions(channels, server?.verification_channel_id)}
             </select>
           </div>
           <div className="field">
@@ -133,7 +154,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
               defaultValue={server?.settings.report_instructions_channel_id ?? ''}
             >
               <option value="">Use admin channel</option>
-              {channelOptions(channels)}
+              {channelOptions(channels, server?.settings.report_instructions_channel_id)}
             </select>
           </div>
           <div className="field">
@@ -144,7 +165,10 @@ export default async function GuildSetupPage({ params }: PageProps) {
               defaultValue={server?.settings.observed_detection_notification_channel_id ?? ''}
             >
               <option value="">Use admin channel</option>
-              {channelOptions(channels)}
+              {channelOptions(
+                channels,
+                server?.settings.observed_detection_notification_channel_id
+              )}
             </select>
           </div>
           <div className="field">
@@ -155,7 +179,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
               defaultValue={server?.admin_notification_role_id ?? ''}
             >
               <option value="">No role ping</option>
-              {roleOptions(roles)}
+              {roleOptions(roles, server?.admin_notification_role_id)}
             </select>
           </div>
         </div>
