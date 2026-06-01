@@ -1,0 +1,39 @@
+{
+  "name": "drasil-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test --grep-invert @visual",
+    "test:e2e:visual": "playwright test --grep @visual",
+    "test:e2e:visual:update": "playwright test --grep @visual --update-snapshots"
+  },
+  "dependencies": {
+    "@drasil/contracts": "file:../../packages/contracts",
+    "next": "^16.2.6",
+    "pg": "^8.20.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.23.0",
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.15.6",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9.23.0",
+    "typescript": "^5.5.4",
+    "typescript-eslint": "^8.28.0",
+    "@vitest/coverage-v8": "^4.1.0",
+    "vitest": "^4.1.0"
+  }
+}

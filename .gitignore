@@ -6,6 +6,12 @@ pnpm-lock.yaml
 # TypeScript build output
 dist/
 build/
+.next/
+.vercel/
+apps/web/.next/
+apps/web/.vercel/
+apps/web/playwright-report/
+apps/web/test-results/
 *.tsbuildinfo
 src/generated/prisma/
 
@@ -81,3 +87,5 @@ infra/aws/intel/backend.hcl
 Thumbs.db 
 
 repomix-output.xml
+
+.vercel
