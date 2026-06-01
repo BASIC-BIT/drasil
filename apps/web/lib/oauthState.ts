@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { OAUTH_STATE_MAX_AGE_SECONDS } from './cookies';
-import { decodeSignedJson, encodeSignedJson } from './crypto';
-import { getSessionSecret } from './session';
+import { decryptJson, encryptJson } from './crypto';
+import { getOauthEncryptionSecret } from './session';
 
 const oauthStateSchema = z.object({
   state: z.string(),
@@ -24,14 +24,14 @@ export function createOAuthState(returnTo: string): OAuthState {
 }
 
 export function encodeOAuthState(state: OAuthState): string {
-  return encodeSignedJson(state, getSessionSecret());
+  return encryptJson(state, getOauthEncryptionSecret());
 }
 
 export function decodeOAuthState(value: string | undefined): OAuthState | null {
   if (!value) {
     return null;
   }
-  const parsed = oauthStateSchema.safeParse(decodeSignedJson(value, getSessionSecret()));
+  const parsed = oauthStateSchema.safeParse(decryptJson(value, getOauthEncryptionSecret()));
   if (!parsed.success || parsed.data.expiresAt <= Date.now()) {
     return null;
   }
