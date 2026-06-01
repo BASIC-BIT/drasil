@@ -67,7 +67,7 @@ export class ReportIntakeService implements IReportIntakeService {
     await this.userRepository.getOrCreateUser(
       input.reporter.id,
       input.reporter.user.username,
-      input.reporter.user.createdAt ?? undefined
+      input.reporter.user.createdAt
     );
     await this.serverMemberRepository.getOrCreateMember(
       input.serverId,
@@ -260,7 +260,7 @@ export class ReportIntakeService implements IReportIntakeService {
   ): Promise<ReportAttachmentMetadata[]> {
     const attachments = message.attachments.map((attachment) => ({
       id: attachment.id,
-      name: attachment.name ?? undefined,
+      name: attachment.name,
       url: attachment.url,
       proxyUrl: attachment.proxyURL,
       contentType: attachment.contentType ?? undefined,

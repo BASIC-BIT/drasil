@@ -35,7 +35,7 @@ const buildMessage = (overrides: Record<string, unknown> = {}): Message =>
     },
     author: { id: 'reporter-1', bot: false },
     attachments: {
-      map: jest.fn((callback: (attachment: any) => unknown) => [
+      map: jest.fn((callback: any) => [
         callback({
           id: 'attachment-1',
           name: 'screenshot.png',

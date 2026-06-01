@@ -100,7 +100,7 @@ export class ReportCandidateService implements IReportCandidateService {
 
     for (const link of signals.messageLinks) {
       const linkedMessage = await this.fetchLinkedMessage(message.guild, link);
-      if (!linkedMessage?.author?.id) {
+      if (!linkedMessage) {
         continue;
       }
 
@@ -179,9 +179,9 @@ export class ReportCandidateService implements IReportCandidateService {
       candidateId: `${member.guild.id}:${member.id}`,
       discordUserId: member.id,
       serverId: member.guild.id,
-      username: user.username ?? null,
+      username: user.username,
       globalName: user.globalName ?? null,
-      displayName: member.displayName ?? null,
+      displayName: member.displayName,
       nickname: member.nickname ?? null,
       avatarUrl,
       matchReasons: [reason],

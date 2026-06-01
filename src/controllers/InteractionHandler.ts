@@ -46,7 +46,6 @@ import {
   REPORT_MESSAGE_MODAL_PREFIX,
   REPORT_MESSAGE_REASON_FIELD_ID,
   USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH,
-  USER_REPORT_REASON_MAX_LENGTH,
 } from '../utils/userReportSettings';
 import {
   parseChannelId,
@@ -547,7 +546,15 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const guild = await this.client.guilds.fetch(interaction.guildId!);
+    const guildId = interaction.guildId;
+    if (!guildId) {
+      await interaction.editReply({
+        content: 'Report confirmations can only be used in a server.',
+      });
+      return;
+    }
+
+    const guild = await this.client.guilds.fetch(guildId);
     const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
     if (!targetMember) {
       await interaction.editReply({
@@ -569,12 +576,25 @@ export class InteractionHandler implements IInteractionHandler {
 
     await interaction.editReply({ content: `Submitted report for <@${targetUserId}>.` });
 
-    if (interaction.channel?.isThread?.()) {
-      await interaction.channel.send({
+    const threadChannel = this.getThreadChannel(interaction.channel);
+    if (threadChannel) {
+      await threadChannel.send({
         content: `Report submitted for <@${targetUserId}>. Moderators have been notified.`,
         allowedMentions: { parse: [] },
       });
     }
+  }
+
+  private getThreadChannel(
+    channel: ButtonInteraction['channel']
+  ): Pick<ThreadChannel, 'send'> | null {
+    const isThread = Boolean(
+      channel &&
+      'isThread' in channel &&
+      typeof channel.isThread === 'function' &&
+      channel.isThread()
+    );
+    return isThread ? (channel as unknown as Pick<ThreadChannel, 'send'>) : null;
   }
 
   public async handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
