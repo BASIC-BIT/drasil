@@ -959,22 +959,15 @@ export class SecurityActionService implements ISecurityActionService {
         );
       }
       if (restrictUser) {
-        const initialDetection = activeVerificationEvent.detection_event_id
-          ? await this.detectionEventsRepository.findById(
-              activeVerificationEvent.detection_event_id
-            )
-          : null;
-        if (initialDetection?.detection_type === DetectionType.USER_REPORT) {
-          const serverMember = await this.serverMemberRepository.findByServerAndUser(
-            member.guild.id,
-            member.id
+        const serverMember = await this.serverMemberRepository.findByServerAndUser(
+          member.guild.id,
+          member.id
+        );
+        if (serverMember?.is_restricted !== true) {
+          notificationVerificationEvent = await this.tryRestrictUser(
+            member,
+            activeVerificationEvent
           );
-          if (serverMember?.is_restricted !== true) {
-            notificationVerificationEvent = await this.tryRestrictUser(
-              member,
-              activeVerificationEvent
-            );
-          }
         }
       }
       await this.upsertNotification(
@@ -1139,7 +1132,8 @@ export class SecurityActionService implements ISecurityActionService {
       );
 
       const restrictUser = options.action === 'restrict';
-      const reasonText = options.reason ? `Reason: ${options.reason}` : 'No reason provided.';
+      const normalizedReason = options.reason?.trim() || undefined;
+      const reasonText = normalizedReason ? `Reason: ${normalizedReason}` : 'No reason provided.';
       const detectionEvent = await this.detectionEventsRepository.create({
         server_id: member.guild.id,
         user_id: member.id,
@@ -1152,7 +1146,7 @@ export class SecurityActionService implements ISecurityActionService {
             type: 'admin_case',
             adminId: moderator.id,
             action: options.action,
-            reason: options.reason ?? reasonText,
+            reason: normalizedReason ?? 'No reason provided.',
             ...options.metadata,
           },
           'server'
@@ -1164,7 +1158,7 @@ export class SecurityActionService implements ISecurityActionService {
         confidence: 1.0,
         reasons: [`Admin case opened by ${moderator.id}. ${reasonText}`],
         triggerSource: DetectionType.GPT_ANALYSIS,
-        triggerContent: options.reason ?? 'Admin-opened case',
+        triggerContent: normalizedReason ?? 'Admin-opened case',
         detectionEventId: detectionEvent.id,
       };
 
@@ -1179,7 +1173,7 @@ export class SecurityActionService implements ISecurityActionService {
           member,
           restrictUser ? 'admin case opened with restriction' : 'admin case opened',
           {
-            has_reason: Boolean(options.reason?.trim()),
+            has_reason: Boolean(normalizedReason),
             bulk_intake: options.metadata?.bulk_intake === true,
           },
           {

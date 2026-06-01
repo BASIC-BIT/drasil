@@ -303,6 +303,10 @@ describe('SecurityActionService (unit)', () => {
       userId,
       VerificationStatus.PENDING
     );
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      is_restricted: true,
+      verification_status: VerificationStatus.PENDING,
+    });
 
     const detectionResult: DetectionResult = {
       label: 'SUSPICIOUS',
@@ -430,6 +434,56 @@ describe('SecurityActionService (unit)', () => {
     });
     expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('restricts an existing active admin case when requested', async () => {
+    const guildId = 'guild-admin-restrict-existing-case';
+    const userId = 'user-admin-restrict-existing-case';
+    const moderator = { id: 'admin-restrict-existing-case' } as User;
+    const member = buildMember(guildId, userId);
+    const existingDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.GPT_ANALYSIS,
+      confidence: 1.0,
+      reasons: ['Admin case opened by admin-open-case. No reason provided.'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      existingDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    await buildService().openAdminCase(member, moderator, {
+      action: 'restrict',
+      reason: 'escalated manual review',
+    });
+
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes blank admin case reasons', async () => {
+    const guildId = 'guild-admin-blank-reason';
+    const userId = 'user-admin-blank-reason';
+    const moderator = { id: 'admin-blank-reason' } as User;
+    const member = buildMember(guildId, userId);
+
+    await buildService().openAdminCase(member, moderator, {
+      action: 'open_case',
+      reason: '   ',
+    });
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents[0].metadata).toMatchObject({
+      reason: 'No reason provided.',
+    });
+    expect(detectionEvents[0].reasons[0]).toContain('No reason provided.');
+    const detectionResult = notificationManager.upsertSuspiciousUserNotification.mock.calls[0][1];
+    expect(detectionResult.triggerContent).toBe('Admin-opened case');
   });
 
   it('dry-runs role intake while skipping bots, active cases, and over-limit members', async () => {

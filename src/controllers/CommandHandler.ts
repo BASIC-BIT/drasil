@@ -3787,7 +3787,9 @@ export class CommandHandler implements ICommandHandler {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const action = (interaction.options.getString('action') ?? 'open_case') as AdminCaseAction;
+    const rawAction = interaction.options.getString('action') ?? 'open_case';
+    const action: AdminCaseAction =
+      rawAction === 'open_case' || rawAction === 'restrict' ? rawAction : 'open_case';
     const execute = interaction.options.getBoolean('execute') ?? false;
     const limit = interaction.options.getInteger('limit') ?? undefined;
     const reason = interaction.options.getString('reason')?.trim() || undefined;

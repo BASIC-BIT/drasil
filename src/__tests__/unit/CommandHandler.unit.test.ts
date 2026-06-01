@@ -790,6 +790,62 @@ describe('CommandHandler (unit)', () => {
     );
   });
 
+  it('falls back to opening cases for invalid role intake actions', async () => {
+    const intakeRoleMembers = jest.fn().mockResolvedValue({
+      batchId: 'role-intake-1',
+      roleId: 'role-1',
+      roleName: 'restricted',
+      action: 'open_case',
+      execute: false,
+      totalMembers: 1,
+      eligibleMembers: 1,
+      processed: 1,
+      opened: 0,
+      skippedBots: 0,
+      skippedActiveCases: 0,
+      skippedOverLimit: 0,
+      failed: 0,
+      failures: [],
+    });
+    const { handler, securityActionService } = buildHandler({ intakeRoleMembers });
+    const invoker = { id: 'admin-1' } as any;
+    const role = { id: 'role-1', name: 'restricted' } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: { has: jest.fn().mockReturnValue(true) },
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'case',
+      user: invoker,
+      guild,
+      options: {
+        getSubcommand: jest.fn().mockReturnValue('intake-role'),
+        getRole: jest.fn().mockReturnValue(role),
+        getBoolean: jest.fn().mockReturnValue(false),
+        getInteger: jest.fn().mockReturnValue(undefined),
+        getString: jest.fn((name: string) => (name === 'action' ? 'ban_everyone' : undefined)),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(securityActionService.intakeRoleMembers).toHaveBeenCalledWith({
+      role,
+      moderator: invoker,
+      reason: undefined,
+      action: 'open_case',
+      execute: false,
+      limit: undefined,
+    });
+  });
+
   it('denies /case commands for non-admin members', async () => {
     const openAdminCase = jest.fn().mockResolvedValue(true);
     const { handler, securityActionService } = buildHandler({ openAdminCase });
