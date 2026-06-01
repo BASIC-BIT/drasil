@@ -8,12 +8,26 @@ import prettier from 'eslint-plugin-prettier';
 // Config for JavaScript config files must come first to prevent TypeScript parser from being used on them
 const configs = [
   {
-    ignores: ['dist/**', 'build/**', 'src/generated/prisma/**'],
+    ignores: [
+      'dist/**',
+      'build/**',
+      '.vercel/**',
+      'src/generated/prisma/**',
+      'apps/**',
+      'packages/**',
+    ],
   },
   // Config for JavaScript config files
   {
     files: ['*.js', '*.cjs', '.*.js', '.*.mjs', '.*.cjs'],
-    ignores: ['dist/**', 'build/**', 'src/generated/prisma/**'],
+    ignores: [
+      'dist/**',
+      'build/**',
+      '.vercel/**',
+      'src/generated/prisma/**',
+      'apps/**',
+      'packages/**',
+    ],
     languageOptions: {
       globals: {
         ...globals.node,
@@ -53,7 +67,10 @@ const configs = [
       '**/*.spec.ts',
       'test/**/*',
       'dist/**/*',
+      '.vercel/**/*',
       'src/generated/prisma/**/*',
+      'apps/**/*',
+      'packages/**/*',
     ],
     languageOptions: {
       globals: {
@@ -82,7 +99,13 @@ const configs = [
   // Base JavaScript recommended config
   {
     files: ['**/*.{js,mjs,cjs,ts}'],
-    ignores: ['dist/**/*', 'src/generated/prisma/**/*'],
+    ignores: [
+      'dist/**/*',
+      '.vercel/**/*',
+      'src/generated/prisma/**/*',
+      'apps/**/*',
+      'packages/**/*',
+    ],
     plugins: { js },
     extends: ['js/recommended'],
   },
@@ -95,7 +118,13 @@ const configs = [
       '**/__mocks__/**/*.ts',
       '**/__tests__/**/*.*',
     ],
-    ignores: ['dist/**/*', 'src/generated/prisma/**/*'],
+    ignores: [
+      'dist/**/*',
+      '.vercel/**/*',
+      'src/generated/prisma/**/*',
+      'apps/**/*',
+      'packages/**/*',
+    ],
     languageOptions: {
       globals: {
         ...globals.node,

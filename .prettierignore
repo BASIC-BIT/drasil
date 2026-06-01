@@ -1,6 +1,11 @@
 # Build outputs
 dist/
 build/
+.vercel/
+apps/web/.next/
+apps/web/next-env.d.ts
+apps/web/playwright-report/
+apps/web/test-results/
 src/generated/prisma/
 
 # Dependencies
