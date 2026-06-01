@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:20.19-bookworm-slim AS base
+FROM node:24-bookworm-slim AS base
 
 WORKDIR /app
+
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 
 # Prisma engine generation during npm postinstall needs OpenSSL available.
 RUN apt-get update \

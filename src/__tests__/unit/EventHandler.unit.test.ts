@@ -1,4 +1,4 @@
-import { GuildMember, Message, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
+import { Events, GuildMember, Message, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 import { EventHandler } from '../../controllers/EventHandler';
 import { DetectionType } from '../../repositories/types';
 
@@ -93,6 +93,20 @@ describe('EventHandler (unit)', () => {
       reply: jest.fn().mockResolvedValue(undefined),
     } as unknown as Message;
   }
+
+  it('registers Discord event handlers with current event names', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const handler = buildHandler({ client });
+
+    await handler.setupEventHandlers();
+
+    expect(client.on).toHaveBeenCalledWith(Events.ClientReady, expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith(Events.MessageCreate, expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith(Events.GuildMemberAdd, expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith(Events.InteractionCreate, expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith(Events.GuildCreate, expect.any(Function));
+    expect(client.on).not.toHaveBeenCalledWith('ready', expect.any(Function));
+  });
 
   it('delegates legacy test commands to CommandHandler', async () => {
     const commandHandler = {

@@ -4,7 +4,7 @@ const { Client } = require('pg');
 
 const CLIENT_ROLES = ['anon', 'authenticated'];
 const DEFAULT_DEFAULT_ACL_OWNERS = ['postgres', 'prisma'];
-const TABLE_PRIVILEGE_CANDIDATES = [
+const BASE_TABLE_PRIVILEGES = [
   'SELECT',
   'INSERT',
   'UPDATE',
@@ -12,8 +12,8 @@ const TABLE_PRIVILEGE_CANDIDATES = [
   'TRUNCATE',
   'REFERENCES',
   'TRIGGER',
-  'MAINTAIN',
 ];
+const OPTIONAL_TABLE_PRIVILEGES = ['MAINTAIN'];
 
 function createConnectionConfig() {
   const databaseUrl = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
@@ -52,22 +52,25 @@ function configuredDefaultAclOwners(currentUser) {
 }
 
 async function supportedTablePrivileges(client) {
-  const privileges = [];
+  const supportedOptionalPrivileges = [];
 
-  for (const privilege of TABLE_PRIVILEGE_CANDIDATES) {
+  for (const privilege of OPTIONAL_TABLE_PRIVILEGES) {
     try {
-      await client.query("SELECT has_table_privilege(current_user, 'pg_class'::regclass, $1)", [
+      // Probe privilege support directly instead of inferring it from grants visible to this role.
+      await client.query(`SELECT has_table_privilege('pg_catalog.pg_class'::regclass, $1::text);`, [
         privilege,
       ]);
-      privileges.push(privilege);
+      supportedOptionalPrivileges.push(privilege);
     } catch (error) {
-      if (!error.message.includes('unrecognized privilege type')) {
-        throw error;
+      if (error instanceof Error && error.message.includes('unrecognized privilege type')) {
+        continue;
       }
+
+      throw error;
     }
   }
 
-  return privileges;
+  return [...BASE_TABLE_PRIVILEGES, ...supportedOptionalPrivileges];
 }
 
 async function main() {
