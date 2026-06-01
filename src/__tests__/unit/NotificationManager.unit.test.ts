@@ -19,6 +19,7 @@ import {
 } from '../../repositories/types';
 import { IConfigService } from '../../config/ConfigService';
 import { VERIFICATION_ACTION_FAILURES_METADATA_KEY } from '../../utils/verificationActionFailures';
+import { MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY } from '../../utils/detectionResponseSettings';
 
 type MockTextChannel = {
   send: jest.Mock;
@@ -172,6 +173,38 @@ describe('NotificationManager (unit)', () => {
     expect(labels).toEqual(
       expect.arrayContaining(['Verify User', 'Ban User', 'Create Thread', 'View Full History'])
     );
+  });
+
+  it('hides the ban action when explicitly disabled', async () => {
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      admin_notification_role_id: null,
+      settings: { [MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY]: false },
+    } as any);
+    const member = buildMember('guild-1', 'user-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+    };
+    const sentMessage: MockMessage = { id: 'message-1', edit: jest.fn() };
+    adminChannel.send.mockResolvedValue(sentMessage);
+
+    const manager = new NotificationManager(
+      buildClientWithBotBanPermission() as any,
+      configService,
+      detectionRepository
+    );
+
+    await manager.upsertSuspiciousUserNotification(
+      member,
+      detectionResult,
+      buildVerificationEvent({ thread_id: null })
+    );
+
+    const sendArgs = adminChannel.send.mock.calls[0][0] as { components: unknown[] };
+    expect(extractLabels(sendArgs.components)).not.toContain('Ban User');
   });
 
   it('renders moderation action warnings on suspicious user notifications', async () => {

@@ -17,6 +17,10 @@ describe('ProductAnalyticsService (unit)', () => {
     delete process.env.POSTHOG_PROJECT_API_KEY;
     delete process.env.POSTHOG_API_KEY;
     delete process.env.POSTHOG_PRODUCT_ANALYTICS_ENABLED;
+    delete process.env.POSTHOG_PRODUCT_ANALYTICS_ENVIRONMENT;
+    delete process.env.POSTHOG_ENVIRONMENT;
+    delete process.env.POSTHOG_DEBUG;
+    delete process.env.POSTHOG_HOST;
   });
 
   afterAll(() => {
@@ -77,6 +81,18 @@ describe('ProductAnalyticsService (unit)', () => {
     });
   });
 
+  it('labels payloads with the configured analytics environment', () => {
+    process.env.POSTHOG_PRODUCT_ANALYTICS_ENVIRONMENT = 'local-pr94-smoke';
+
+    const payload = buildProductAnalyticsPayload({
+      consentLevel: 'anonymous',
+      guildId: 'guild-1',
+      event: 'guild installed',
+    });
+
+    expect(payload?.properties.analytics_environment).toBe('local-pr94-smoke');
+  });
+
   it('does not build payloads when consent is off', () => {
     expect(
       buildProductAnalyticsPayload({
@@ -105,6 +121,22 @@ describe('ProductAnalyticsService (unit)', () => {
 
     try {
       expect(service.getStatus()).toMatchObject({ configured: true });
+    } finally {
+      await service.shutdown();
+    }
+  });
+
+  it('reports the configured analytics environment in runtime status', async () => {
+    process.env.POSTHOG_PROJECT_API_KEY = 'ph_project_test';
+    process.env.POSTHOG_PRODUCT_ANALYTICS_ENVIRONMENT = 'local-pr94-smoke';
+    const configService = new ConfigService(new InMemoryServerRepository(), buildClient());
+    const service = new ProductAnalyticsService(configService);
+
+    try {
+      expect(service.getStatus()).toMatchObject({
+        configured: true,
+        environment: 'local-pr94-smoke',
+      });
     } finally {
       await service.shutdown();
     }

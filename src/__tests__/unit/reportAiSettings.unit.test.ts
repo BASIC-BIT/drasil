@@ -4,10 +4,10 @@ import {
 } from '../../utils/reportAiSettings';
 
 describe('reportAiSettings (unit)', () => {
-  it('defaults report AI to disabled hints mode', () => {
+  it('defaults report AI to enabled hints mode', () => {
     expect(getReportAiSettings({})).toEqual(
       expect.objectContaining({
-        enabled: false,
+        enabled: true,
         analyzeText: true,
         analyzeImages: true,
         maxAction: 'hints',

@@ -4,6 +4,8 @@ import { InMemoryServerRepository } from '../fakes/inMemoryRepositories';
 import { globalConfig } from '../../config/GlobalConfig';
 import { Server } from '../../repositories/types';
 import { getDetectionResponseSettings } from '../../utils/detectionResponseSettings';
+import { getReportAiSettings } from '../../utils/reportAiSettings';
+import { getVerificationThreadAnalysisSettings } from '../../utils/verificationThreadAnalysisSettings';
 
 const buildClient = (channel?: TextChannel, role?: Role): Client =>
   ({
@@ -67,6 +69,11 @@ describe('ConfigService (unit)', () => {
       globalConfig.getSettings().defaultServerSettings.messageThreshold
     );
     expect(config.heuristic_suspicious_keywords.length).toBeGreaterThan(0);
+    expect(config.settings.auto_restrict).toBe(true);
+    expect(getDetectionResponseSettings(config.settings).mode).toBe('restrict');
+    expect(getDetectionResponseSettings(config.settings).moderatorBanActionEnabled).toBe(true);
+    expect(getReportAiSettings(config.settings).enabled).toBe(true);
+    expect(getVerificationThreadAnalysisSettings(config.settings).enabled).toBe(true);
   });
 
   it('returns default heuristic settings when guild is not cached', () => {

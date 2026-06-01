@@ -1,5 +1,13 @@
 import { injectable, inject, optional } from 'inversify';
-import { GuildMember, Message, Client, User, APIUser, InteractionContextType } from 'discord.js';
+import {
+  GuildMember,
+  Message,
+  Client,
+  User,
+  APIUser,
+  InteractionContextType,
+  Role,
+} from 'discord.js';
 import { TYPES } from '../di/symbols';
 import { INotificationManager } from './NotificationManager';
 import { DetectionResult } from './DetectionOrchestrator';
@@ -87,6 +95,14 @@ export interface ISecurityActionService {
    */
   handleManualFlag(member: GuildMember, moderator: User, reason?: string): Promise<boolean>;
 
+  openAdminCase(
+    member: GuildMember,
+    moderator: User,
+    options: AdminCaseOptions
+  ): Promise<AdminCaseResult>;
+
+  intakeRoleMembers(options: RoleIntakeOptions): Promise<RoleIntakeResult>;
+
   /**
    * Handle a user report submitted via modal
    */
@@ -165,6 +181,60 @@ export interface MessageReportContext {
 }
 
 export type MessageReportAttachment = ReportAttachmentMetadata;
+
+export type AdminCaseAction = 'open_case' | 'restrict';
+
+export interface AdminCaseOptions {
+  reason?: string;
+  action: AdminCaseAction;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AdminCaseResult {
+  opened: boolean;
+  restrictionAttempted: boolean;
+  restricted: boolean;
+}
+
+export interface RoleIntakeOptions {
+  role: Role;
+  moderator: User;
+  reason?: string;
+  action: AdminCaseAction;
+  execute: boolean;
+  limit?: number;
+  delayMs?: number;
+}
+
+export interface RoleIntakeFailure {
+  userId: string;
+  message: string;
+}
+
+export interface RoleIntakeResult {
+  batchId: string;
+  roleId: string;
+  roleName: string;
+  action: AdminCaseAction;
+  execute: boolean;
+  totalMembers: number;
+  eligibleMembers: number;
+  processed: number;
+  opened: number;
+  skippedBots: number;
+  skippedActiveCases: number;
+  skippedOverLimit: number;
+  failed: number;
+  failures: RoleIntakeFailure[];
+}
+
+interface RoleIntakeMemberSelection {
+  totalMembers: number;
+  eligibleMembers: number;
+  selectedMembers: GuildMember[];
+  skippedBots: number;
+  skippedOverLimit: number;
+}
 
 /**
  * SecurityActionService - Coordinates calls to various services based upon actions that occurred
@@ -870,18 +940,21 @@ export class SecurityActionService implements ISecurityActionService {
     detectionResult: DetectionResult,
     sourceMessage?: Message,
     restrictUser = true,
-    useReportReviewThread?: boolean
+    useReportReviewThread?: boolean,
+    entitiesAlreadyEnsured = false
   ): Promise<boolean> {
     const shouldUseReviewThread =
       useReportReviewThread ?? this.shouldUseReportReviewThread(restrictUser, detectionResult);
 
-    // Create durable case state before Discord side effects so moderators see partial failures.
-    await this.ensureEntitiesExist(
-      member.guild.id,
-      member.id,
-      member.user.username,
-      member.joinedAt?.toISOString()
-    );
+    if (!entitiesAlreadyEnsured) {
+      // Create durable case state before Discord side effects so moderators see partial failures.
+      await this.ensureEntitiesExist(
+        member.guild.id,
+        member.id,
+        member.user.username,
+        member.joinedAt?.toISOString()
+      );
+    }
 
     const detectionEventId = await this.ensureDetectionEventId(
       member,
@@ -907,22 +980,15 @@ export class SecurityActionService implements ISecurityActionService {
         );
       }
       if (restrictUser) {
-        const initialDetection = activeVerificationEvent.detection_event_id
-          ? await this.detectionEventsRepository.findById(
-              activeVerificationEvent.detection_event_id
-            )
-          : null;
-        if (initialDetection?.detection_type === DetectionType.USER_REPORT) {
-          const serverMember = await this.serverMemberRepository.findByServerAndUser(
-            member.guild.id,
-            member.id
+        const serverMember = await this.serverMemberRepository.findByServerAndUser(
+          member.guild.id,
+          member.id
+        );
+        if (serverMember?.is_restricted !== true) {
+          notificationVerificationEvent = await this.tryRestrictUser(
+            member,
+            activeVerificationEvent
           );
-          if (serverMember?.is_restricted !== true) {
-            notificationVerificationEvent = await this.tryRestrictUser(
-              member,
-              activeVerificationEvent
-            );
-          }
         }
       }
       await this.upsertNotification(
@@ -1071,6 +1137,215 @@ export class SecurityActionService implements ISecurityActionService {
       console.error(`Failed to open join case without restriction for ${member.user.tag}:`, error);
       throw error;
     }
+  }
+
+  public async openAdminCase(
+    member: GuildMember,
+    moderator: User,
+    options: AdminCaseOptions
+  ): Promise<AdminCaseResult> {
+    try {
+      await this.ensureEntitiesExist(
+        member.guild.id,
+        member.id,
+        member.user.username,
+        member.joinedAt?.toISOString()
+      );
+
+      const restrictUser = options.action === 'restrict';
+      const normalizedReason = options.reason?.trim() || undefined;
+      const reasonText = normalizedReason ? `Reason: ${normalizedReason}` : 'No reason provided.';
+      const detectionEvent = await this.detectionEventsRepository.create({
+        server_id: member.guild.id,
+        user_id: member.id,
+        detection_type: DetectionType.GPT_ANALYSIS,
+        confidence: 1.0,
+        reasons: [`Admin case opened by ${moderator.id}. ${reasonText}`],
+        detected_at: new Date(),
+        metadata: withDetectionTestingMetadata(
+          {
+            type: 'admin_case',
+            ...options.metadata,
+            adminId: moderator.id,
+            action: options.action,
+            reason: normalizedReason ?? 'No reason provided.',
+          },
+          'server'
+        ),
+      });
+
+      const detectionResult: DetectionResult = {
+        label: 'SUSPICIOUS',
+        confidence: 1.0,
+        reasons: [`Admin case opened by ${moderator.id}. ${reasonText}`],
+        triggerSource: DetectionType.GPT_ANALYSIS,
+        triggerContent: normalizedReason ?? 'Admin-opened case',
+        detectionEventId: detectionEvent.id,
+      };
+
+      const handled = await this.handleSuspiciousMember(
+        member,
+        detectionResult,
+        undefined,
+        restrictUser,
+        undefined,
+        true
+      );
+      if (handled) {
+        this.captureMemberAnalytics(
+          member,
+          restrictUser ? 'admin case opened with restriction' : 'admin case opened',
+          {
+            has_reason: Boolean(normalizedReason),
+            bulk_intake: options.metadata?.bulk_intake === true,
+          },
+          {
+            moderatorId: moderator.id,
+            detectionEventId: detectionEvent.id,
+          }
+        );
+      }
+      const serverMember = restrictUser
+        ? await this.serverMemberRepository.findByServerAndUser(member.guild.id, member.id)
+        : null;
+      return {
+        opened: handled,
+        restrictionAttempted: restrictUser,
+        restricted: serverMember?.is_restricted === true,
+      };
+    } catch (error) {
+      console.error(`Failed to open admin case for ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
+  public async intakeRoleMembers(options: RoleIntakeOptions): Promise<RoleIntakeResult> {
+    const batchId = `role-intake-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const limit = Math.max(1, Math.min(options.limit ?? 250, 250));
+    const delayMs = Math.max(0, options.delayMs ?? 250);
+    const memberSelection = await this.selectRoleMembersForIntake(options.role, limit);
+    const { selectedMembers } = memberSelection;
+    const result: RoleIntakeResult = {
+      batchId,
+      roleId: options.role.id,
+      roleName: options.role.name,
+      action: options.action,
+      execute: options.execute,
+      totalMembers: memberSelection.totalMembers,
+      eligibleMembers: memberSelection.eligibleMembers,
+      processed: selectedMembers.length,
+      opened: 0,
+      skippedBots: memberSelection.skippedBots,
+      skippedActiveCases: 0,
+      skippedOverLimit: memberSelection.skippedOverLimit,
+      failed: 0,
+      failures: [],
+    };
+
+    for (const member of selectedMembers) {
+      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+      if (activeCase && options.action !== 'restrict') {
+        result.skippedActiveCases += 1;
+        continue;
+      }
+
+      if (!options.execute) {
+        continue;
+      }
+
+      try {
+        const caseResult = await this.openAdminCase(member, options.moderator, {
+          action: options.action,
+          reason: options.reason,
+          metadata: {
+            type: 'admin_role_intake',
+            bulk_intake: true,
+            batchId,
+            sourceRoleId: options.role.id,
+            sourceRoleName: options.role.name,
+          },
+        });
+        if (caseResult.opened) {
+          result.opened += 1;
+          if (options.action === 'restrict' && !caseResult.restricted) {
+            result.failed += 1;
+            result.failures.push({
+              userId: member.id,
+              message: 'Case opened but restriction failed',
+            });
+          }
+        } else {
+          result.failed += 1;
+          result.failures.push({ userId: member.id, message: 'Case flow returned false' });
+        }
+      } catch (error) {
+        result.failed += 1;
+        result.failures.push({
+          userId: member.id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      if (delayMs > 0) {
+        await this.sleep(delayMs);
+      }
+    }
+
+    return result;
+  }
+
+  private async selectRoleMembersForIntake(
+    role: Role,
+    limit: number
+  ): Promise<RoleIntakeMemberSelection> {
+    const selectedMembers: GuildMember[] = [];
+    let totalMembers = 0;
+    let eligibleMembers = 0;
+    let skippedBots = 0;
+    let skippedOverLimit = 0;
+    let after: string | undefined;
+    let hasMoreMembers = true;
+
+    while (hasMoreMembers) {
+      const page = await role.guild.members.list({ after, limit: 1000, cache: false });
+      if (page.size === 0) {
+        break;
+      }
+
+      const pageMembers = [...page.values()].sort((a, b) => a.id.localeCompare(b.id));
+      for (const member of pageMembers) {
+        if (!member.roles.cache.has(role.id)) {
+          continue;
+        }
+
+        totalMembers += 1;
+        if (member.user.bot) {
+          skippedBots += 1;
+          continue;
+        }
+
+        eligibleMembers += 1;
+        if (selectedMembers.length < limit) {
+          selectedMembers.push(member);
+        } else {
+          skippedOverLimit += 1;
+        }
+      }
+
+      after = pageMembers[pageMembers.length - 1]?.id;
+      if (!after || page.size < 1000) {
+        hasMoreMembers = false;
+      }
+    }
+
+    return { totalMembers, eligibleMembers, selectedMembers, skippedBots, skippedOverLimit };
+  }
+
+  private async sleep(delayMs: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
   public async handleManualFlag(

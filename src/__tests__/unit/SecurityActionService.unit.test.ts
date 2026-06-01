@@ -40,6 +40,10 @@ const buildMessage = (guildId: string, channelId: string): Message =>
     url: `https://discord.com/channels/${guildId}/${channelId}/message-1`,
   }) as Message;
 
+const addRoleToMember = (member: GuildMember, roleId: string): void => {
+  (member as any).roles = { cache: { has: jest.fn((id: string) => id === roleId) } };
+};
+
 describe('SecurityActionService (unit)', () => {
   let detectionEventsRepository: InMemoryDetectionEventsRepository;
   let serverMemberRepository: InMemoryServerMemberRepository;
@@ -82,7 +86,13 @@ describe('SecurityActionService (unit)', () => {
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
     };
     userModerationService = {
-      restrictUser: jest.fn().mockResolvedValue(true),
+      restrictUser: jest.fn().mockImplementation(async (member: GuildMember) => {
+        await serverMemberRepository.upsertMember(member.guild.id, member.id, {
+          is_restricted: true,
+          verification_status: VerificationStatus.PENDING,
+        });
+        return true;
+      }),
       verifyUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
     };
@@ -92,7 +102,19 @@ describe('SecurityActionService (unit)', () => {
       getActionsForUser: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<IAdminActionService>;
     gptService = {
-      analyzeReportEvidence: jest.fn(),
+      analyzeReportEvidence: jest.fn().mockResolvedValue({
+        result: 'low_risk',
+        confidence: 0.2,
+        summary: 'Report evidence looks low risk, but moderators should review context.',
+        reasonCodes: ['normal_context'],
+        evidenceCategories: [],
+        concerns: [],
+        recommendedAction: 'manual_review',
+        analyzedImageCount: 0,
+        model: 'gpt-5.4-mini',
+        promptVersion: 'report-triage-v1',
+        isFallback: false,
+      }),
     };
   });
 
@@ -291,6 +313,10 @@ describe('SecurityActionService (unit)', () => {
       userId,
       VerificationStatus.PENDING
     );
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      is_restricted: true,
+      verification_status: VerificationStatus.PENDING,
+    });
 
     const detectionResult: DetectionResult = {
       label: 'SUSPICIOUS',
@@ -367,6 +393,300 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens an admin case without restricting the user', async () => {
+    const guildId = 'guild-admin-open-case';
+    const userId = 'user-admin-open-case';
+    const moderator = { id: 'admin-open-case' } as User;
+    const member = buildMember(guildId, userId);
+    const getOrCreateServer = jest.spyOn(serverRepository, 'getOrCreateServer');
+    const getOrCreateUser = jest.spyOn(userRepository, 'getOrCreateUser');
+    const getOrCreateMember = jest.spyOn(serverMemberRepository, 'getOrCreateMember');
+
+    await buildService().openAdminCase(member, moderator, {
+      action: 'open_case',
+      reason: 'manual review',
+    });
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents).toHaveLength(1);
+    expect(detectionEvents[0].metadata).toMatchObject({
+      type: 'admin_case',
+      adminId: moderator.id,
+      action: 'open_case',
+      reason: 'manual review',
+    });
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
+    expect(getOrCreateServer).toHaveBeenCalledTimes(1);
+    expect(getOrCreateUser).toHaveBeenCalledTimes(1);
+    expect(getOrCreateMember).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens an admin case and restricts the user when requested', async () => {
+    const guildId = 'guild-admin-restrict-case';
+    const userId = 'user-admin-restrict-case';
+    const moderator = { id: 'admin-restrict-case' } as User;
+    const member = buildMember(guildId, userId);
+
+    await buildService().openAdminCase(member, moderator, {
+      action: 'restrict',
+      reason: 'high risk manual review',
+    });
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents[0].metadata).toMatchObject({
+      type: 'admin_case',
+      adminId: moderator.id,
+      action: 'restrict',
+    });
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('restricts an existing active admin case when requested', async () => {
+    const guildId = 'guild-admin-restrict-existing-case';
+    const userId = 'user-admin-restrict-existing-case';
+    const moderator = { id: 'admin-restrict-existing-case' } as User;
+    const member = buildMember(guildId, userId);
+    const existingDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.GPT_ANALYSIS,
+      confidence: 1.0,
+      reasons: ['Admin case opened by admin-open-case. No reason provided.'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      existingDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    await buildService().openAdminCase(member, moderator, {
+      action: 'restrict',
+      reason: 'escalated manual review',
+    });
+
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes blank admin case reasons', async () => {
+    const guildId = 'guild-admin-blank-reason';
+    const userId = 'user-admin-blank-reason';
+    const moderator = { id: 'admin-blank-reason' } as User;
+    const member = buildMember(guildId, userId);
+
+    await buildService().openAdminCase(member, moderator, {
+      action: 'open_case',
+      reason: '   ',
+    });
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents[0].metadata).toMatchObject({
+      reason: 'No reason provided.',
+    });
+    expect(detectionEvents[0].reasons[0]).toContain('No reason provided.');
+    const detectionResult = notificationManager.upsertSuspiciousUserNotification.mock.calls[0][1];
+    expect(detectionResult.triggerContent).toBe('Admin-opened case');
+  });
+
+  it('preserves trusted admin case metadata over caller metadata', async () => {
+    const guildId = 'guild-admin-metadata-spoof';
+    const userId = 'user-admin-metadata-spoof';
+    const moderator = { id: 'admin-real' } as User;
+    const member = buildMember(guildId, userId);
+
+    await buildService().openAdminCase(member, moderator, {
+      action: 'open_case',
+      reason: 'real reason',
+      metadata: {
+        type: 'admin_role_intake',
+        adminId: 'admin-spoofed',
+        action: 'restrict',
+        reason: 'spoofed reason',
+      },
+    });
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents[0].metadata).toMatchObject({
+      type: 'admin_role_intake',
+      adminId: 'admin-real',
+      action: 'open_case',
+      reason: 'real reason',
+    });
+  });
+
+  it('dry-runs role intake while skipping bots, active cases, and over-limit members', async () => {
+    const guildId = 'guild-role-intake-dry-run';
+    const activeMember = buildMember(guildId, 'user-active');
+    const selectedMember = buildMember(guildId, 'user-selected');
+    const overLimitMember = buildMember(guildId, 'user-over-limit');
+    const botMember = {
+      ...buildMember(guildId, 'user-bot'),
+      user: { id: 'user-bot', username: 'bot', tag: 'bot#0001', bot: true },
+    } as unknown as GuildMember;
+    const guild = {
+      id: guildId,
+      members: {
+        list: jest.fn().mockResolvedValue(
+          new Map([
+            [activeMember.id, activeMember],
+            [selectedMember.id, selectedMember],
+            [overLimitMember.id, overLimitMember],
+            [botMember.id, botMember],
+          ])
+        ),
+      },
+    } as unknown as Guild;
+    for (const member of [activeMember, selectedMember, overLimitMember, botMember]) {
+      (member as any).guild = guild;
+      addRoleToMember(member, 'role-restricted');
+    }
+    const activeDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: activeMember.id,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['existing case'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      activeDetection.id,
+      guildId,
+      activeMember.id,
+      VerificationStatus.PENDING
+    );
+    const role = {
+      id: 'role-restricted',
+      name: 'restricted',
+      guild,
+    } as unknown as import('discord.js').Role;
+
+    const result = await buildService().intakeRoleMembers({
+      role,
+      moderator: { id: 'admin-role-intake' } as User,
+      action: 'open_case',
+      execute: false,
+      limit: 2,
+      delayMs: 0,
+    });
+
+    expect(guild.members.list).toHaveBeenCalledWith({
+      after: undefined,
+      limit: 1000,
+      cache: false,
+    });
+    expect(result).toMatchObject({
+      roleId: 'role-restricted',
+      roleName: 'restricted',
+      execute: false,
+      totalMembers: 4,
+      eligibleMembers: 3,
+      processed: 2,
+      opened: 0,
+      skippedBots: 1,
+      skippedActiveCases: 1,
+      skippedOverLimit: 1,
+      failed: 0,
+    });
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+  });
+
+  it('executes role intake and records batch provenance metadata', async () => {
+    const guildId = 'guild-role-intake-execute';
+    const member = buildMember(guildId, 'user-role-intake');
+    const guild = {
+      id: guildId,
+      members: { list: jest.fn().mockResolvedValue(new Map([[member.id, member]])) },
+    } as unknown as Guild;
+    (member as any).guild = guild;
+    addRoleToMember(member, 'role-restricted');
+    const role = {
+      id: 'role-restricted',
+      name: 'restricted',
+      guild,
+    } as unknown as import('discord.js').Role;
+    const moderator = { id: 'admin-role-intake' } as User;
+
+    const result = await buildService().intakeRoleMembers({
+      role,
+      moderator,
+      action: 'open_case',
+      execute: true,
+      reason: 'restricted role import',
+      delayMs: 0,
+    });
+
+    expect(result.opened).toBe(1);
+    expect(result.failed).toBe(0);
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, member.id);
+    expect(detectionEvents).toHaveLength(1);
+    expect(detectionEvents[0].metadata).toMatchObject({
+      type: 'admin_role_intake',
+      adminId: moderator.id,
+      bulk_intake: true,
+      batchId: result.batchId,
+      sourceRoleId: 'role-restricted',
+      sourceRoleName: 'restricted',
+    });
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('restricts active cases during role intake when restrict is requested', async () => {
+    const guildId = 'guild-role-intake-restrict-active';
+    const member = buildMember(guildId, 'user-role-intake-active');
+    const guild = {
+      id: guildId,
+      members: { list: jest.fn().mockResolvedValue(new Map([[member.id, member]])) },
+    } as unknown as Guild;
+    (member as any).guild = guild;
+    addRoleToMember(member, 'role-restricted');
+    const role = {
+      id: 'role-restricted',
+      name: 'restricted',
+      guild,
+    } as unknown as import('discord.js').Role;
+    const existingDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: member.id,
+      detection_type: DetectionType.GPT_ANALYSIS,
+      confidence: 1.0,
+      reasons: ['existing active case'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      existingDetection.id,
+      guildId,
+      member.id,
+      VerificationStatus.PENDING
+    );
+
+    const result = await buildService().intakeRoleMembers({
+      role,
+      moderator: { id: 'admin-role-intake' } as User,
+      action: 'restrict',
+      execute: true,
+      delayMs: 0,
+    });
+
+    expect(result.opened).toBe(1);
+    expect(result.skippedActiveCases).toBe(0);
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
   });
 
   it('posts an observed alert for user report without opening a case', async () => {

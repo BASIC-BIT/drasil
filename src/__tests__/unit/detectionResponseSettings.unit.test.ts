@@ -17,6 +17,15 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.moderatorBanActionEnabled).toBe(true);
   });
 
+  it('defaults new configs to restrict with moderator ban actions', () => {
+    const settings = getDetectionResponseSettings({});
+
+    expect(settings.mode).toBe('restrict');
+    expect(settings.messageMode).toBe('restrict');
+    expect(settings.joinMode).toBe('restrict');
+    expect(settings.moderatorBanActionEnabled).toBe(true);
+  });
+
   it('maps legacy auto_restrict=false configs to notify_only', () => {
     const settings = getDetectionResponseSettings({ auto_restrict: false });
 
@@ -56,6 +65,14 @@ describe('detectionResponseSettings (unit)', () => {
     });
 
     expect(settings.moderatorBanActionEnabled).toBe(false);
+  });
+
+  it('allows moderator ban actions to be explicitly enabled', () => {
+    const settings = getDetectionResponseSettings({
+      moderator_ban_action_enabled: true,
+    });
+
+    expect(settings.moderatorBanActionEnabled).toBe(true);
   });
 
   it('allows moderator automatic detection exemption to be disabled', () => {

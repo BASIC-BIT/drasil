@@ -36,7 +36,7 @@ import { INotificationManager } from '../services/NotificationManager';
 import { HeuristicSettings, IConfigService } from '../config/ConfigService';
 import { globalConfig } from '../config/GlobalConfig';
 import { IUserModerationService } from '../services/UserModerationService';
-import { ISecurityActionService } from '../services/SecurityActionService';
+import { AdminCaseAction, ISecurityActionService } from '../services/SecurityActionService';
 import { TYPES } from '../di/symbols';
 import {
   decodeVerificationPromptTemplateInput,
@@ -902,6 +902,87 @@ export class CommandHandler implements ICommandHandler {
         .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
         .setContexts(InteractionContextType.Guild)
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // Require Admin perms
+      new SlashCommandBuilder()
+        .setName('case')
+        .setDescription('Open moderation cases or bulk-intake restricted users')
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('open')
+            .setDescription('Open a moderation case without restricting the user')
+            .addUserOption((option) =>
+              option.setName('user').setDescription('The user to review').setRequired(true)
+            )
+            .addStringOption((option) =>
+              option
+                .setName('reason')
+                .setDescription('Why moderators should review this user')
+                .setRequired(false)
+                .setMaxLength(500)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('restrict')
+            .setDescription('Open a moderation case and restrict the user pending review')
+            .addUserOption((option) =>
+              option
+                .setName('user')
+                .setDescription('The user to restrict and review')
+                .setRequired(true)
+            )
+            .addStringOption((option) =>
+              option
+                .setName('reason')
+                .setDescription('Why moderators should review this user')
+                .setRequired(false)
+                .setMaxLength(500)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('intake-role')
+            .setDescription('Preview or open cases for members currently in a role')
+            .addRoleOption((option) =>
+              option
+                .setName('role')
+                .setDescription('Role to intake; defaults to the configured restricted role')
+                .setRequired(false)
+            )
+            .addBooleanOption((option) =>
+              option
+                .setName('execute')
+                .setDescription('Actually open cases; defaults to false for dry-run preview')
+                .setRequired(false)
+            )
+            .addStringOption((option) =>
+              option
+                .setName('action')
+                .setDescription('Whether to open cases only or restrict users too')
+                .setRequired(false)
+                .addChoices(
+                  { name: 'Open cases only', value: 'open_case' },
+                  { name: 'Restrict pending review', value: 'restrict' }
+                )
+            )
+            .addIntegerOption((option) =>
+              option
+                .setName('limit')
+                .setDescription('Maximum members to intake in this batch, up to 250')
+                .setMinValue(1)
+                .setMaxValue(250)
+                .setRequired(false)
+            )
+            .addStringOption((option) =>
+              option
+                .setName('reason')
+                .setDescription('Reason to attach to each intake case')
+                .setRequired(false)
+                .setMaxLength(500)
+            )
+        )
+        .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+        .setContexts(InteractionContextType.Guild)
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
       new SlashCommandBuilder() // Added setupreportbutton command
         .setName('setupreportbutton')
         .setDescription('Sends report instructions to a channel.')
@@ -994,6 +1075,10 @@ export class CommandHandler implements ICommandHandler {
 
       case 'flaguser': // Added case for flaguser
         await this.handleFlagUserCommand(interaction);
+        break;
+
+      case 'case':
+        await this.handleCaseCommand(interaction);
         break;
 
       case 'setupreportbutton': // Added case for setupreportbutton
@@ -2469,7 +2554,7 @@ export class CommandHandler implements ICommandHandler {
   ): string {
     const runtimeStatus = this.productAnalyticsService.getStatus();
     const runtimeLine = runtimeStatus.configured
-      ? `PostHog export: \`configured\` (${runtimeStatus.host})`
+      ? `PostHog export: \`configured\` (${runtimeStatus.host}, environment: \`${runtimeStatus.environment ?? 'unknown'}\`)`
       : `PostHog export: \`inactive\` (${runtimeStatus.reason ?? 'not configured'})`;
 
     return [
@@ -3574,6 +3659,223 @@ export class CommandHandler implements ICommandHandler {
         flags: MessageFlags.Ephemeral,
       });
     }
+  }
+
+  private async requireAdministrator(
+    interaction: ChatInputCommandInteraction,
+    guild: Guild
+  ): Promise<boolean> {
+    const memberPermissions = interaction.memberPermissions;
+    if (memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      return true;
+    }
+
+    if (memberPermissions && !memberPermissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({
+        content: 'You need administrator permissions to use this command.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return false;
+    }
+
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member || !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({
+        content: 'You need administrator permissions to use this command.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  private async handleCaseCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+    const guild = interaction.guild;
+    if (!guild) {
+      await this.replyGuildInstallRequired(interaction);
+      return;
+    }
+
+    if (!(await this.requireAdministrator(interaction, guild))) {
+      return;
+    }
+
+    const subcommand = interaction.options.getSubcommand(true);
+    if (subcommand === 'open' || subcommand === 'restrict') {
+      await this.handleCaseUserCommand(
+        interaction,
+        guild,
+        subcommand === 'restrict' ? 'restrict' : 'open_case'
+      );
+      return;
+    }
+
+    if (subcommand === 'intake-role') {
+      await this.handleCaseRoleIntakeCommand(interaction, guild);
+      return;
+    }
+
+    await interaction.reply({
+      content: 'Unsupported case subcommand.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  private async handleCaseUserCommand(
+    interaction: ChatInputCommandInteraction,
+    guild: Guild,
+    action: AdminCaseAction
+  ): Promise<void> {
+    const targetUser = interaction.options.getUser('user', true);
+    const reason = interaction.options.getString('reason')?.trim() || undefined;
+    const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+    if (!targetMember) {
+      await interaction.reply({
+        content: `Could not find user ${targetUser.tag} in this server.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      const result = await this.securityActionService.openAdminCase(
+        targetMember,
+        interaction.user,
+        {
+          action,
+          reason,
+        }
+      );
+      if (!result.opened) {
+        throw new Error('Case flow returned false');
+      }
+      const content =
+        action === 'restrict'
+          ? result.restricted
+            ? `Opened a case for ${targetUser.tag} and restricted them pending review.`
+            : `Opened a case for ${targetUser.tag}, but I could not apply the restricted role. Check bot permissions and role hierarchy.`
+          : `Opened a review case for ${targetUser.tag}.`;
+      await interaction.editReply({
+        content,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Failed to open admin case:', error);
+      await interaction.editReply({
+        content: `Failed to open a case for ${targetUser.tag}. Please try again later.`,
+      });
+    }
+  }
+
+  private async resolveRoleIntakeRole(
+    interaction: ChatInputCommandInteraction,
+    guild: Guild
+  ): Promise<Role | null> {
+    const explicitRole = interaction.options.getRole('role');
+    if (explicitRole) {
+      return explicitRole as Role;
+    }
+
+    const serverConfig = await this.configService.getServerConfig(guild.id);
+    if (!serverConfig.restricted_role_id) {
+      return null;
+    }
+
+    return await guild.roles.fetch(serverConfig.restricted_role_id).catch(() => null);
+  }
+
+  private async handleCaseRoleIntakeCommand(
+    interaction: ChatInputCommandInteraction,
+    guild: Guild
+  ): Promise<void> {
+    const role = await this.resolveRoleIntakeRole(interaction, guild);
+    if (!role) {
+      await interaction.reply({
+        content:
+          'No role was provided and this server does not have a configured restricted role. Provide `role` or run setup first.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const rawAction = interaction.options.getString('action') ?? 'open_case';
+    const action: AdminCaseAction =
+      rawAction === 'open_case' || rawAction === 'restrict' ? rawAction : 'open_case';
+    const execute = interaction.options.getBoolean('execute') ?? false;
+    const limit = interaction.options.getInteger('limit') ?? undefined;
+    const reason = interaction.options.getString('reason')?.trim() || undefined;
+
+    try {
+      const result = await this.securityActionService.intakeRoleMembers({
+        role,
+        moderator: interaction.user,
+        reason,
+        action,
+        execute,
+        limit,
+      });
+
+      await interaction.editReply({
+        content: this.formatRoleIntakeResult(result),
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Failed to intake role members:', error);
+      await interaction.editReply({
+        content: `Failed to intake members from ${role.name}. Please check bot permissions and try again.`,
+      });
+    }
+  }
+
+  private formatRoleIntakeResult(result: {
+    batchId: string;
+    roleId: string;
+    roleName: string;
+    action: AdminCaseAction;
+    execute: boolean;
+    totalMembers: number;
+    eligibleMembers: number;
+    processed: number;
+    opened: number;
+    skippedBots: number;
+    skippedActiveCases: number;
+    skippedOverLimit: number;
+    failed: number;
+    failures: Array<{ userId: string; message: string }>;
+  }): string {
+    const mode = result.execute ? 'executed' : 'dry run';
+    const lines = [
+      `Role intake ${mode} for ${result.roleName} (${result.roleId})`,
+      `Batch: ${result.batchId}`,
+      `Action: ${result.action}`,
+      `Total role members: ${result.totalMembers}`,
+      `Eligible non-bot members: ${result.eligibleMembers}`,
+      `Selected for this batch: ${result.processed}`,
+      `Cases opened: ${result.opened}`,
+      `Skipped bots: ${result.skippedBots}`,
+      `Skipped active cases: ${result.skippedActiveCases}`,
+      `Skipped over limit: ${result.skippedOverLimit}`,
+      `Failures: ${result.failed}`,
+    ];
+
+    if (!result.execute) {
+      lines.push('Re-run with `execute: true` to open cases.');
+    }
+    if (result.failures.length > 0) {
+      lines.push(
+        `First failures: ${result.failures
+          .slice(0, 3)
+          .map((failure) => `${failure.userId}: ${failure.message}`)
+          .join('; ')}`
+      );
+    }
+
+    return lines.join('\n');
   }
 
   /**

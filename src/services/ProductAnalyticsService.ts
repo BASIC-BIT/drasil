@@ -11,6 +11,7 @@ import {
 
 const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 const MAX_PROPERTY_STRING_LENGTH = 500;
+const DEFAULT_PRODUCT_ANALYTICS_ENVIRONMENT = 'development';
 
 type AnalyticsPrimitive = string | number | boolean | null;
 export type ProductAnalyticsProperties = Record<
@@ -29,6 +30,7 @@ export interface ProductAnalyticsIdentifiers {
 export interface ProductAnalyticsRuntimeStatus {
   configured: boolean;
   host?: string;
+  environment?: string;
   reason?: string;
 }
 
@@ -127,6 +129,15 @@ function sanitizeProperties(properties: ProductAnalyticsProperties = {}): Record
   return sanitized;
 }
 
+function readProductAnalyticsEnvironment(): string {
+  return (
+    process.env.POSTHOG_PRODUCT_ANALYTICS_ENVIRONMENT?.trim() ||
+    process.env.POSTHOG_ENVIRONMENT?.trim() ||
+    process.env.NODE_ENV?.trim() ||
+    DEFAULT_PRODUCT_ANALYTICS_ENVIRONMENT
+  ).slice(0, MAX_PROPERTY_STRING_LENGTH);
+}
+
 function addIdentifierProperties(
   properties: Record<string, unknown>,
   identifiers: Record<string, string | undefined>,
@@ -165,6 +176,7 @@ export function buildProductAnalyticsPayload(
     ...sanitizeProperties(input.properties),
     app: 'drasil',
     node_env: process.env.NODE_ENV ?? 'development',
+    analytics_environment: readProductAnalyticsEnvironment(),
     analytics_consent_level: input.consentLevel,
     guild_id_hash: guildIdHash,
     $process_person_profile: false,
@@ -226,6 +238,7 @@ export class ProductAnalyticsService implements IProductAnalyticsService {
     }
 
     const host = process.env.POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
+    const environment = readProductAnalyticsEnvironment();
     this.client = new PostHog(projectToken, {
       host,
       disableGeoip: true,
@@ -236,7 +249,7 @@ export class ProductAnalyticsService implements IProductAnalyticsService {
     if (process.env.POSTHOG_DEBUG === 'true') {
       this.client.debug?.();
     }
-    this.status = { configured: true, host };
+    this.status = { configured: true, host, environment };
   }
 
   public getStatus(): ProductAnalyticsRuntimeStatus {

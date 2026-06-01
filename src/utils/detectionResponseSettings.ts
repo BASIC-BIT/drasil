@@ -26,6 +26,9 @@ export const DETECTION_RESPONSE_MODES = [
 export type DetectionResponseMode = (typeof DETECTION_RESPONSE_MODES)[number];
 export type DetectionResponseEvent = 'message' | 'join';
 
+export const DEFAULT_DETECTION_RESPONSE_MODE: DetectionResponseMode = 'restrict';
+export const DEFAULT_MODERATOR_BAN_ACTION_ENABLED = true;
+
 export interface DetectionResponseSettings {
   mode: DetectionResponseMode;
   defaultMode: DetectionResponseMode;
@@ -68,9 +71,11 @@ export function getDetectionResponseSettings(
   const configuredMode = settings[DETECTION_RESPONSE_MODE_SETTING_KEY];
   const defaultMode = isDetectionResponseMode(configuredMode)
     ? configuredMode
-    : settings.auto_restrict === false
-      ? 'notify_only'
-      : 'restrict';
+    : settings.auto_restrict === true
+      ? 'restrict'
+      : settings.auto_restrict === false
+        ? 'notify_only'
+        : DEFAULT_DETECTION_RESPONSE_MODE;
   const configuredMessageMode = settings[MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY];
   const configuredJoinMode = settings[JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY];
   const messageMode = isDetectionResponseMode(configuredMessageMode)
@@ -106,6 +111,7 @@ export function getDetectionResponseSettings(
       settings[AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY] !== false,
     observedActionBanRequiresReason:
       settings[OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY] === true,
-    moderatorBanActionEnabled: settings[MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY] !== false,
+    moderatorBanActionEnabled:
+      settings[MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY] ?? DEFAULT_MODERATOR_BAN_ACTION_ENABLED,
   };
 }
