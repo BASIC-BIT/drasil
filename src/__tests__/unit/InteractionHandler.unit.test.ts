@@ -1701,6 +1701,77 @@ describe('InteractionHandler (unit)', () => {
     expect(interaction.showModal).not.toHaveBeenCalled();
   });
 
+  it('does not create a report intake thread when intake tracking is unavailable', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('report_user_initiate', 'guild-1', {
+      id: 'reporter-1',
+    } as User);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(threadManager.createReportIntakeThread).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Report intake tracking is not available.',
+    });
+  });
+
+  it('cleans up the report intake thread when persistence fails', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const reporter = buildMember('guild-1', 'reporter-1');
+    const thread = {
+      id: 'report-thread-1',
+      url: 'https://discord.com/channels/report-thread-1',
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      members: {
+        fetch: jest.fn().mockResolvedValue(reporter),
+      },
+    });
+    threadManager.createReportIntakeThread.mockResolvedValueOnce(thread as any);
+    const reportIntakeService: jest.Mocked<IReportIntakeService> = {
+      openIntakeFromThread: jest.fn().mockRejectedValue(new Error('database unavailable')),
+      handleThreadMessage: jest.fn().mockResolvedValue(false),
+      confirmCandidate: jest.fn().mockResolvedValue({ confirmed: false, message: '' }),
+      markSubmitted: jest.fn().mockResolvedValue(undefined),
+    };
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      reportIntakeService
+    );
+    const interaction = buildInteraction('report_user_initiate', 'guild-1', {
+      id: 'reporter-1',
+    } as User);
+
+    try {
+      await handler.handleButtonInteraction(interaction);
+    } finally {
+      consoleError.mockRestore();
+    }
+
+    expect(thread.delete).toHaveBeenCalledWith('Report intake failed before persistence.');
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'An error occurred while opening the report thread. Please try again later.',
+    });
+  });
+
   it('submits a confirmed report intake target through the user report workflow', async () => {
     const reportIntakeService: jest.Mocked<IReportIntakeService> = {
       openIntakeFromThread: jest.fn().mockResolvedValue({} as any),

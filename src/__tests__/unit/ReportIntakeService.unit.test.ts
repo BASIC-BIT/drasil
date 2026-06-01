@@ -156,6 +156,37 @@ describe('ReportIntakeService', () => {
     );
   });
 
+  it('records admin notes without prompting reporter confirmation', async () => {
+    const { service, reportIntakeRepository, candidateService } = buildService({
+      extractCandidateSignals: jest.fn().mockReturnValue({
+        mentions: [],
+        explicitUserIds: [],
+        messageLinks: [],
+      }),
+      resolvePlatformBackedCandidates: jest.fn().mockResolvedValue([buildCandidate()]),
+    });
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    const message = buildMessage({
+      id: 'admin-message-1',
+      content: 'Admin note with <@user-1>',
+      author: { id: 'admin-1', bot: false },
+    });
+
+    await service.handleThreadMessage(message);
+
+    const evidence = await reportIntakeRepository.listEvidence(intake.id);
+    const stored = await reportIntakeRepository.findById(intake.id);
+    expect(evidence.map((item) => item.kind)).toContain(ReportIntakeEvidenceKind.ADMIN_NOTE);
+    expect(stored?.status).toBe(ReportIntakeStatus.COLLECTING_EVIDENCE);
+    expect(candidateService.resolvePlatformBackedCandidates).not.toHaveBeenCalled();
+    expect((message.channel as any).send).not.toHaveBeenCalled();
+  });
+
   it('confirms a suggested candidate and builds a submission reason', async () => {
     const { service, reportIntakeRepository } = buildService();
     const intake = await service.openIntakeFromThread({

@@ -227,7 +227,9 @@ export class ReportIntakeService implements IReportIntakeService {
       });
     }
 
-    const candidates = await this.candidateService.resolvePlatformBackedCandidates(message);
+    const candidates = isReporterMessage
+      ? await this.candidateService.resolvePlatformBackedCandidates(message)
+      : [];
     const now = new Date();
     const metadata = toRecord(intake.metadata);
     const nextMetadata = {

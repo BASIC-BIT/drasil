@@ -452,55 +452,79 @@ export class InteractionHandler implements IInteractionHandler {
   private async handleReportUserInitiate(interaction: ButtonInteraction): Promise<void> {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const guildId = interaction.guildId;
-    if (!guildId) {
-      await interaction.editReply({
-        content: 'Report intake threads can only be opened in a server.',
+    let thread: ThreadChannel | null = null;
+    try {
+      if (!this.reportIntakeService) {
+        await interaction.editReply({ content: 'Report intake tracking is not available.' });
+        return;
+      }
+
+      const guildId = interaction.guildId;
+      if (!guildId) {
+        await interaction.editReply({
+          content: 'Report intake threads can only be opened in a server.',
+        });
+        return;
+      }
+
+      if (interaction.channel?.type !== ChannelType.GuildText) {
+        await interaction.editReply({
+          content: 'Report intake threads can only be opened from a server text channel.',
+        });
+        return;
+      }
+
+      const guild = await this.client.guilds.fetch(guildId);
+      const reporter = await guild.members.fetch(interaction.user.id).catch(() => null);
+      if (!reporter) {
+        await interaction.editReply({
+          content:
+            'Could not open a report thread because your server membership could not be loaded.',
+        });
+        return;
+      }
+
+      thread = await this.threadManager.createReportIntakeThread(
+        interaction.channel as TextChannel,
+        reporter
+      );
+      if (!thread) {
+        await interaction.editReply({
+          content:
+            'Could not open a private report thread. Please ask a server admin to check Drasil thread permissions.',
+        });
+        return;
+      }
+
+      await this.reportIntakeService.openIntakeFromThread({
+        serverId: guildId,
+        reporter,
+        threadId: thread.id,
+        channelId: interaction.channel.id,
       });
-      return;
-    }
 
-    if (interaction.channel?.type !== ChannelType.GuildText) {
       await interaction.editReply({
-        content: 'Report intake threads can only be opened from a server text channel.',
+        content: `Opened a private report thread: ${thread.url}\nPlease put the report context there.`,
       });
-      return;
-    }
 
-    const guild = await this.client.guilds.fetch(guildId);
-    const reporter = await guild.members.fetch(interaction.user.id).catch(() => null);
-    if (!reporter) {
+      await this.notifyReportIntakeThreadOpened(guildId, reporter, thread);
+    } catch (error) {
+      console.error('Error opening report intake thread:', error);
+      if (thread) {
+        await this.deleteFailedReportIntakeThread(thread);
+      }
       await interaction.editReply({
-        content:
-          'Could not open a report thread because your server membership could not be loaded.',
+        content: 'An error occurred while opening the report thread. Please try again later.',
       });
-      return;
     }
+  }
 
-    const thread = await this.threadManager.createReportIntakeThread(
-      interaction.channel as TextChannel,
-      reporter
-    );
-    if (!thread) {
-      await interaction.editReply({
-        content:
-          'Could not open a private report thread. Please ask a server admin to check Drasil thread permissions.',
-      });
-      return;
+  private async deleteFailedReportIntakeThread(thread: ThreadChannel): Promise<void> {
+    try {
+      await thread.delete('Report intake failed before persistence.');
+    } catch (error) {
+      console.warn(`Failed to delete unpersisted report intake thread ${thread.id}:`, error);
     }
-
-    await this.reportIntakeService?.openIntakeFromThread({
-      serverId: guildId,
-      reporter,
-      threadId: thread.id,
-      channelId: interaction.channel.id,
-    });
-
-    await interaction.editReply({
-      content: `Opened a private report thread: ${thread.url}\nPlease put the report context there.`,
-    });
-
-    await this.notifyReportIntakeThreadOpened(guildId, reporter, thread);
   }
 
   private async notifyReportIntakeThreadOpened(
