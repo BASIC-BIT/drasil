@@ -42,6 +42,7 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
   const interaction = {
     customId,
     guildId,
+    channel: { type: ChannelType.GuildText },
     user,
     deferred: false,
     replied: false,
@@ -175,6 +176,9 @@ describe('InteractionHandler (unit)', () => {
       createReportReviewThread: jest
         .fn()
         .mockResolvedValue({ url: 'https://discord.com/channels/thread-1' } as any),
+      createReportIntakeThread: jest
+        .fn()
+        .mockResolvedValue({ url: 'https://discord.com/channels/report-thread-1' } as any),
       resolveVerificationThread: jest.fn(),
       reopenVerificationThread: jest.fn(),
     };
@@ -1639,7 +1643,15 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
-  it('opens a typed report form from the report button', async () => {
+  it('opens a private report intake thread from the report button', async () => {
+    const reporter = buildMember('guild-1', 'reporter-1');
+    const adminChannel = { send: jest.fn().mockResolvedValue(undefined) };
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      members: {
+        fetch: jest.fn().mockResolvedValue(reporter),
+      },
+    });
+    (configService.getAdminChannel as jest.Mock).mockResolvedValueOnce(adminChannel);
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -1656,22 +1668,20 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(interaction.showModal).toHaveBeenCalledTimes(1);
-    const modal = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
-    const modalJson = modal.toJSON();
-    expect(modalJson.custom_id).toBe('report_user_modal_submit');
-    expect(modalJson.title).toBe('Report a User');
-    expect(modalJson.components[0].components[0]).toMatchObject({
-      custom_id: 'report_target_user_input',
-      label: 'User ID, mention, or exact username',
-      required: true,
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(threadManager.createReportIntakeThread).toHaveBeenCalledWith(
+      interaction.channel,
+      reporter
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content:
+        'Opened a private report thread: https://discord.com/channels/report-thread-1\nPlease put the report context there.',
     });
-    expect(modalJson.components[1].components[0]).toMatchObject({
-      custom_id: 'report_reason',
-      label: 'Context (optional)',
-      required: false,
+    expect(adminChannel.send).toHaveBeenCalledWith({
+      content:
+        'Report intake thread opened by <@reporter-1>: https://discord.com/channels/report-thread-1',
+      allowedMentions: { parse: [] },
     });
-    expect(interaction.reply).not.toHaveBeenCalled();
-    expect(configService.getCachedServerConfig).not.toHaveBeenCalled();
+    expect(interaction.showModal).not.toHaveBeenCalled();
   });
 });

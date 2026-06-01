@@ -138,7 +138,8 @@ const DRASIL_GUILD_INSTALL_PERMISSIONS =
   PermissionFlagsBits.ViewChannel |
   PermissionFlagsBits.SendMessages |
   PermissionFlagsBits.ManageThreads |
-  PermissionFlagsBits.CreatePrivateThreads;
+  PermissionFlagsBits.CreatePrivateThreads |
+  PermissionFlagsBits.SendMessagesInThreads;
 const REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY = 'report_instructions_channel_id';
 const REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY = 'report_instructions_message_id';
 const DEFAULT_RESTRICTED_ROLE_NAME = 'Drasil Restricted';
@@ -4096,7 +4097,7 @@ export class CommandHandler implements ICommandHandler {
       .setTitle('Report a User')
       .setDescription(
         'If you see a user violating server rules or engaging in suspicious activity, ' +
-          'use the button below to paste a user ID or mention and add context. ' +
+          'use the button below to open a private report thread and add context. ' +
           'You can also use `/report user:<user>`, right-click a user and choose ' +
           '`Apps` -> `Report User`, or right-click a message and choose ' +
           '`Apps` -> `Report Message` so Drasil can include message evidence. ' +

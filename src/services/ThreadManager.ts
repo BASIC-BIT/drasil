@@ -4,6 +4,7 @@ import {
   Guild,
   GuildMember,
   Message,
+  TextChannel,
   ThreadChannel,
   ThreadAutoArchiveDuration,
   ChannelType,
@@ -48,6 +49,11 @@ export interface IThreadManager {
     verificationEvent: VerificationEvent,
     detectionResult: DetectionResult,
     sourceMessage?: Message
+  ): Promise<ThreadChannel | null>;
+
+  createReportIntakeThread(
+    channel: TextChannel,
+    reporter: GuildMember
   ): Promise<ThreadChannel | null>;
 
   /**
@@ -151,6 +157,21 @@ export class ThreadManager implements IThreadManager {
     }
 
     return enforceDiscordMessageLimit(contentLines.join('\n'));
+  }
+
+  private buildReportIntakeThreadMessage(reporter: GuildMember): string {
+    return enforceDiscordMessageLimit(
+      [
+        `Thanks <@${reporter.id}>. Please put the report context in this private thread.`,
+        '',
+        'Useful context includes:',
+        '- Who or what you are reporting, if you know it',
+        '- Message links, screenshots, usernames, user IDs, or mentions',
+        '- What happened and why it looked suspicious',
+        '',
+        'Moderators can ask follow-up questions here. Do not add the reported user to this thread.',
+      ].join('\n')
+    );
   }
 
   private async storeThreadId(
@@ -416,6 +437,48 @@ export class ThreadManager implements IThreadManager {
       return thread;
     } catch (error) {
       console.error('Failed to create report review thread:', error);
+      return null;
+    }
+  }
+
+  public async createReportIntakeThread(
+    channel: TextChannel,
+    reporter: GuildMember
+  ): Promise<ThreadChannel | null> {
+    try {
+      const thread = await channel.threads.create({
+        name: `Report intake: ${reporter.user.username}`,
+        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+        reason: `User-facing report intake thread opened by: ${reporter.user.tag}`,
+        type: ChannelType.PrivateThread,
+      });
+
+      await thread.members.add(reporter.id);
+
+      try {
+        await thread.setInvitable(false, 'Keep report intake thread private');
+      } catch (error) {
+        console.warn(
+          `Failed to set invitable=false for report intake thread ${thread.id} (continuing):`,
+          error
+        );
+      }
+
+      await this.addCaseResponderMembers(reporter.guild, thread, [reporter.id]);
+
+      await thread.send({
+        content: this.buildReportIntakeThreadMessage(reporter),
+        allowedMentions: {
+          parse: [],
+          users: [reporter.id],
+          roles: [],
+          repliedUser: false,
+        },
+      });
+
+      return thread;
+    } catch (error) {
+      console.error('Failed to create report intake thread:', error);
       return null;
     }
   }

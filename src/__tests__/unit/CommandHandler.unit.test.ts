@@ -2735,7 +2735,7 @@ describe('CommandHandler (unit)', () => {
     const messagePayload = (existingMessage.edit as jest.Mock).mock.calls[0][0] as any;
     const embedJson = messagePayload.embeds[0].toJSON();
     expect(embedJson.title).toBe('Report a User');
-    expect(embedJson.description).toContain('paste a user ID or mention');
+    expect(embedJson.description).toContain('open a private report thread');
     expect(embedJson.description).not.toContain('picker');
     const buttonJson = messagePayload.components[0].toJSON().components[0];
     expect(buttonJson).toMatchObject({

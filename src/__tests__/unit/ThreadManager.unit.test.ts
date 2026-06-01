@@ -234,6 +234,39 @@ describe('ThreadManager (unit)', () => {
     });
   });
 
+  it('creates a user-facing report intake thread and adds the reporter', async () => {
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    const reporter = buildMember('guild-1', 'reporter-1');
+
+    const createdThread = await manager.createReportIntakeThread(channel as any, reporter);
+
+    expect(channel.threads.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Report intake: test-user',
+        type: ChannelType.PrivateThread,
+      })
+    );
+    expect(createdThread?.id).toBe('thread-1');
+    expect(thread.members.add).toHaveBeenCalledWith('reporter-1');
+    expect(thread.setInvitable).toHaveBeenCalledWith(false, expect.any(String));
+    expect(thread.send).toHaveBeenCalledWith({
+      content: expect.stringContaining('Please put the report context in this private thread.'),
+      allowedMentions: {
+        parse: [],
+        users: ['reporter-1'],
+        roles: [],
+        repliedUser: false,
+      },
+    });
+  });
+
   it('adds configured case responder role members to private report review threads', async () => {
     const staffMember = { id: 'staff-1' };
     const guild = {

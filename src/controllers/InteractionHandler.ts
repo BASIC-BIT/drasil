@@ -11,6 +11,8 @@ import {
   TextInputStyle,
   ActionRowBuilder,
   InteractionContextType,
+  TextChannel,
+  ThreadChannel,
   User,
   ModalSubmitInteraction,
   ButtonStyle,
@@ -435,34 +437,66 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async handleReportUserInitiate(interaction: ButtonInteraction): Promise<void> {
-    const reasonRequired = await this.getUserReportReasonRequired(interaction.guildId ?? undefined);
-    const modal = new ModalBuilder()
-      .setCustomId(REPORT_USER_TYPED_MODAL_ID)
-      .setTitle('Report a User');
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const targetUserInput = new TextInputBuilder()
-      .setCustomId(REPORT_USER_TARGET_FIELD_ID)
-      .setLabel('User ID, mention, or exact username')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('Paste a user ID or @mention when possible')
-      .setMaxLength(100)
-      .setRequired(true);
-    const reasonInput = new TextInputBuilder()
-      .setCustomId(REPORT_USER_REASON_FIELD_ID)
-      .setLabel(reasonRequired ? 'Context' : 'Context (optional)')
-      .setStyle(TextInputStyle.Paragraph)
-      .setPlaceholder(
-        'What happened? Include message links, screenshots, or other context if useful.'
-      )
-      .setMaxLength(USER_REPORT_REASON_MAX_LENGTH)
-      .setRequired(reasonRequired);
+    const guildId = interaction.guildId;
+    if (!guildId) {
+      await interaction.editReply({
+        content: 'Report intake threads can only be opened in a server.',
+      });
+      return;
+    }
 
-    modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(targetUserInput),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput)
+    if (interaction.channel?.type !== ChannelType.GuildText) {
+      await interaction.editReply({
+        content: 'Report intake threads can only be opened from a server text channel.',
+      });
+      return;
+    }
+
+    const guild = await this.client.guilds.fetch(guildId);
+    const reporter = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!reporter) {
+      await interaction.editReply({
+        content:
+          'Could not open a report thread because your server membership could not be loaded.',
+      });
+      return;
+    }
+
+    const thread = await this.threadManager.createReportIntakeThread(
+      interaction.channel as TextChannel,
+      reporter
     );
+    if (!thread) {
+      await interaction.editReply({
+        content:
+          'Could not open a private report thread. Please ask a server admin to check Drasil thread permissions.',
+      });
+      return;
+    }
 
-    await interaction.showModal(modal);
+    await interaction.editReply({
+      content: `Opened a private report thread: ${thread.url}\nPlease put the report context there.`,
+    });
+
+    await this.notifyReportIntakeThreadOpened(guildId, reporter, thread);
+  }
+
+  private async notifyReportIntakeThreadOpened(
+    guildId: string,
+    reporter: GuildMember,
+    thread: ThreadChannel
+  ): Promise<void> {
+    try {
+      const adminChannel = await this.configService.getAdminChannel(guildId);
+      await adminChannel?.send({
+        content: `Report intake thread opened by <@${reporter.id}>: ${thread.url}`,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.warn(`Failed to notify admin channel for report intake thread ${thread.id}:`, error);
+    }
   }
 
   public async handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {

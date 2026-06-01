@@ -42,12 +42,13 @@ Good for privacy and low clutter. Reports start as triage alerts instead of crea
 ### Guild Report Instructions Button
 
 1. Reporter clicks the report instructions button in a configured report channel.
-2. Drasil opens a typed report form instead of a Discord user select menu.
-3. Reporter pastes a user ID, mention, or exact username and adds context.
-4. The rest of the flow matches guild `/report`.
+2. Drasil opens a private report intake thread and adds the reporter.
+3. Drasil adds configured case responders when responder routing is enabled.
+4. Reporter adds freeform context: who or what they are reporting, message links, screenshots, IDs, mentions, and what happened.
+5. Moderators can ask follow-up questions in the thread and decide whether to open a user-specific case.
 
 Current UX result:
-Avoids Discord's limited recent-user picker. IDs and mentions are the reliable path; usernames are a convenience fallback.
+Avoids Discord's limited recent-user picker. The button is now context intake, not target selection.
 
 ### Guild `Report User`
 
