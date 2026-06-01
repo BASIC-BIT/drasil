@@ -49,6 +49,7 @@ Good for privacy and low clutter. Reports start as triage alerts instead of crea
 
 Current UX result:
 Avoids Discord's limited recent-user picker. The button is now context intake, not target selection.
+See `docs/report-intake-agent-design.md` for the planned VLM/LangGraph follow-up flow.
 
 ### Guild `Report User`
 
