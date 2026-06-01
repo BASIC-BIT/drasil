@@ -52,21 +52,25 @@ function configuredDefaultAclOwners(currentUser) {
 }
 
 async function supportedTablePrivileges(client) {
-  const optionalPrivilegeResult = await client.query(
-    `
-      SELECT DISTINCT privilege_type
-      FROM information_schema.table_privileges
-      WHERE table_schema = 'public'
-        AND privilege_type = ANY($1::text[])
-      ORDER BY privilege_type;
-    `,
-    [OPTIONAL_TABLE_PRIVILEGES]
-  );
+  const supportedOptionalPrivileges = [];
 
-  return [
-    ...BASE_TABLE_PRIVILEGES,
-    ...optionalPrivilegeResult.rows.map((row) => row.privilege_type),
-  ];
+  for (const privilege of OPTIONAL_TABLE_PRIVILEGES) {
+    try {
+      // Probe privilege support directly instead of inferring it from grants visible to this role.
+      await client.query(`SELECT has_table_privilege('pg_catalog.pg_class'::regclass, $1::text);`, [
+        privilege,
+      ]);
+      supportedOptionalPrivileges.push(privilege);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('unrecognized privilege type')) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  return [...BASE_TABLE_PRIVILEGES, ...supportedOptionalPrivileges];
 }
 
 async function main() {

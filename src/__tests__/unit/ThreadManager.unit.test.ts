@@ -299,80 +299,87 @@ describe('ThreadManager (unit)', () => {
     (configService.getServerConfig as jest.Mock).mockRejectedValue(new Error('config failure'));
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const manager = new ThreadManager(
-      {} as any,
-      configService,
-      verificationEventRepository,
-      userRepository,
-      serverRepository,
-      serverMemberRepository
-    );
+    try {
+      const manager = new ThreadManager(
+        {} as any,
+        configService,
+        verificationEventRepository,
+        userRepository,
+        serverRepository,
+        serverMemberRepository
+      );
 
-    const member = buildMember('guild-1', 'user-1');
-    const event = await verificationEventRepository.createFromDetection(
-      null,
-      'guild-1',
-      'user-1',
-      VerificationStatus.PENDING
-    );
+      const member = buildMember('guild-1', 'user-1');
+      const event = await verificationEventRepository.createFromDetection(
+        null,
+        'guild-1',
+        'user-1',
+        VerificationStatus.PENDING
+      );
 
-    await manager.createVerificationThread(member, event);
+      await manager.createVerificationThread(member, event);
 
-    expect(thread.send).toHaveBeenCalledWith({
-      content: renderVerificationPromptTemplate(DEFAULT_VERIFICATION_PROMPT_TEMPLATE, {
-        userMention: `<@${member.id}>`,
-        serverName: member.guild.name,
-      }),
-      allowedMentions: {
-        parse: [],
-        users: [member.id],
-        roles: [],
-        repliedUser: false,
-      },
-    });
-    expect(warnSpy).toHaveBeenCalled();
-    warnSpy.mockRestore();
+      expect(thread.send).toHaveBeenCalledWith({
+        content: renderVerificationPromptTemplate(DEFAULT_VERIFICATION_PROMPT_TEMPLATE, {
+          userMention: `<@${member.id}>`,
+          serverName: member.guild.name,
+        }),
+        allowedMentions: {
+          parse: [],
+          users: [member.id],
+          roles: [],
+          repliedUser: false,
+        },
+      });
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('truncates rendered prompt to Discord content limit', async () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const repeatedPlaceholder = '{user_mention}'.repeat(250);
-    (configService.getServerConfig as jest.Mock).mockResolvedValue({
-      settings: {
-        verification_prompt_template: repeatedPlaceholder,
-      },
-    });
 
-    const manager = new ThreadManager(
-      {} as any,
-      configService,
-      verificationEventRepository,
-      userRepository,
-      serverRepository,
-      serverMemberRepository
-    );
+    try {
+      const repeatedPlaceholder = '{user_mention}'.repeat(250);
+      (configService.getServerConfig as jest.Mock).mockResolvedValue({
+        settings: {
+          verification_prompt_template: repeatedPlaceholder,
+        },
+      });
 
-    const member = buildMember('guild-1', 'user-1');
-    const event = await verificationEventRepository.createFromDetection(
-      null,
-      'guild-1',
-      'user-1',
-      VerificationStatus.PENDING
-    );
+      const manager = new ThreadManager(
+        {} as any,
+        configService,
+        verificationEventRepository,
+        userRepository,
+        serverRepository,
+        serverMemberRepository
+      );
 
-    await manager.createVerificationThread(member, event);
+      const member = buildMember('guild-1', 'user-1');
+      const event = await verificationEventRepository.createFromDetection(
+        null,
+        'guild-1',
+        'user-1',
+        VerificationStatus.PENDING
+      );
 
-    const sendPayload = (thread.send as jest.Mock).mock.calls[0][0] as {
-      content: string;
-    };
-    expect(sendPayload.content.length).toBeLessThanOrEqual(DISCORD_MESSAGE_CONTENT_MAX_LENGTH);
-    expect(sendPayload.content).toContain(
-      '[Verification prompt truncated to fit Discord message limits.]'
-    );
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Verification prompt exceeded Discord content limit')
-    );
-    warnSpy.mockRestore();
+      await manager.createVerificationThread(member, event);
+
+      const sendPayload = (thread.send as jest.Mock).mock.calls[0][0] as {
+        content: string;
+      };
+      expect(sendPayload.content.length).toBeLessThanOrEqual(DISCORD_MESSAGE_CONTENT_MAX_LENGTH);
+      expect(sendPayload.content).toContain(
+        '[Verification prompt truncated to fit Discord message limits.]'
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Verification prompt exceeded Discord content limit')
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('falls back to admin channel when verification channel is missing', async () => {
