@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SetupServerRecord } from '@drasil/contracts';
 import type { DiscordGuildResources, DiscordGuildSummary } from './discordApi';
 import { fetchDiscordGuilds, fetchGuildResources } from './discordApi';
@@ -54,6 +54,10 @@ function createAdapter(server: SetupServerRecord | null): SetupDataAdapter {
 }
 
 describe('SetupDashboardService', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('does not mark inactive server records as configured', async () => {
     vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
     vi.mocked(fetchGuildResources).mockResolvedValue(resources);
@@ -63,5 +67,14 @@ describe('SetupDashboardService', () => {
     await expect(service.getDashboard('guild-1', 'access-token')).resolves.toMatchObject({
       dashboard: { configured: false },
     });
+  });
+
+  it('checks guild management access without fetching live resources', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+
+    const service = new SetupDashboardService(createAdapter(null));
+
+    await expect(service.assertCanManageGuild('guild-1', 'access-token')).resolves.toBe(guild);
+    expect(fetchGuildResources).not.toHaveBeenCalled();
   });
 });

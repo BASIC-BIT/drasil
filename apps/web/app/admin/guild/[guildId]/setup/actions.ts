@@ -41,16 +41,6 @@ function readOptionalFormValue(formData: FormData, key: string): string | undefi
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-function readRoleIds(formData: FormData): string[] | undefined {
-  const values = formData.getAll('caseResponderRoleIds');
-  if (values.length === 0) {
-    return undefined;
-  }
-  return values
-    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-    .map((value) => value.trim());
-}
-
 export async function saveGuildSetup(guildId: string, formData: FormData): Promise<void> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
@@ -58,7 +48,7 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
   }
 
   const service = createSetupDashboardService();
-  await service.getDashboard(guildId, token.accessToken);
+  await service.assertCanManageGuild(guildId, token.accessToken);
   const update = guildSetupUpdateSchema.parse({
     guildId,
     updatedBy: session.userId,
@@ -82,8 +72,6 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
     analyticsConsentLevel: readOptionalFormValue(formData, 'analyticsConsentLevel'),
     reportAiTriageEnabled: formData.get('reportAiTriageEnabled') === 'on',
     reportAiMaxAction: readOptionalFormValue(formData, 'reportAiMaxAction'),
-    caseResponderRoleIds: readRoleIds(formData),
-    caseResponderRoutingMode: readOptionalFormValue(formData, 'caseResponderRoutingMode'),
   });
 
   await service.updateGuildSetup(update);

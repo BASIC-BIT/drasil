@@ -23,7 +23,9 @@ export async function GET(request: NextRequest) {
   const cookieState = decodeOAuthState(request.cookies.get(DISCORD_OAUTH_STATE_COOKIE)?.value);
 
   if (!code || !state || !cookieState || cookieState.state !== state) {
-    return NextResponse.redirect(new URL('/admin?auth=failed', request.url));
+    const response = NextResponse.redirect(new URL('/admin?auth=failed', request.url));
+    response.cookies.set(DISCORD_OAUTH_STATE_COOKIE, '', buildSessionCookieOptions(0));
+    return response;
   }
 
   try {

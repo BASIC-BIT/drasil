@@ -46,7 +46,7 @@ Required web runtime variables:
 - `DISCORD_CLIENT_ID`: Discord OAuth app client ID.
 - `DISCORD_CLIENT_SECRET`: Discord OAuth app client secret.
 - `DRASIL_SESSION_SECRET`: high-entropy cookie signing secret.
-- `DRASIL_OAUTH_ENCRYPTION_KEY`: high-entropy OAuth token encryption secret. If omitted, the session secret is used as fallback, but production should set this separately.
+- `DRASIL_OAUTH_ENCRYPTION_KEY`: high-entropy OAuth token encryption secret. This must be set separately from `DRASIL_SESSION_SECRET`.
 - `DATABASE_URL` or `DRASIL_WEB_DATABASE_URL`: Supabase/Postgres connection string.
 - `DRASIL_WEB_BOT_TOKEN` or `DISCORD_TOKEN`: bot token for live role/channel diagnostics.
 

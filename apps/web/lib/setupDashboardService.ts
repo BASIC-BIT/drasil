@@ -407,13 +407,21 @@ export class SetupDashboardService {
     }));
   }
 
-  public async getDashboard(guildId: string, accessToken: string): Promise<SetupDashboardContext> {
+  public async assertCanManageGuild(
+    guildId: string,
+    accessToken: string
+  ): Promise<DiscordGuildSummary> {
     const manageableGuild = (await fetchDiscordGuilds(accessToken)).find((guild) => {
       return guild.id === guildId && canManageGuild(guild.permissions, guild.owner);
     });
     if (!manageableGuild) {
       throw new Error('You do not have permission to manage this guild.');
     }
+    return manageableGuild;
+  }
+
+  public async getDashboard(guildId: string, accessToken: string): Promise<SetupDashboardContext> {
+    const manageableGuild = await this.assertCanManageGuild(guildId, accessToken);
 
     const server = await this.adapter.getServer(guildId);
     let resources: DiscordGuildResources | null = null;
