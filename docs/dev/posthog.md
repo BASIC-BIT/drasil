@@ -16,6 +16,9 @@ Drasil can export product analytics events to PostHog. This is optional and safe
 POSTHOG_PROJECT_API_KEY=phc_...
 POSTHOG_HOST=https://us.i.posthog.com
 
+# Labels every event so local/dev data stays separate from production.
+POSTHOG_PRODUCT_ANALYTICS_ENVIRONMENT=local
+
 # Optional kill switch. Omit or set true to enable when a token is present.
 POSTHOG_PRODUCT_ANALYTICS_ENABLED=true
 
@@ -24,6 +27,7 @@ POSTHOG_DEBUG=false
 ```
 
 Use `OBSERVABILITY_HASH_KEY` in production if you want anonymous hashed IDs to remain stable across restarts.
+`POSTHOG_PRODUCT_ANALYTICS_ENVIRONMENT` falls back to `POSTHOG_ENVIRONMENT`, then `NODE_ENV`, then `development`.
 
 ## Events
 

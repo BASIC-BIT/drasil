@@ -2554,7 +2554,7 @@ export class CommandHandler implements ICommandHandler {
   ): string {
     const runtimeStatus = this.productAnalyticsService.getStatus();
     const runtimeLine = runtimeStatus.configured
-      ? `PostHog export: \`configured\` (${runtimeStatus.host})`
+      ? `PostHog export: \`configured\` (${runtimeStatus.host}, environment: \`${runtimeStatus.environment ?? 'unknown'}\`)`
       : `PostHog export: \`inactive\` (${runtimeStatus.reason ?? 'not configured'})`;
 
     return [
