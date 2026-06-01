@@ -47,7 +47,7 @@ The bot currently implements the following heuristic checks:
 This project uses npm scripts for common development tasks:
 
 - `npm start`: Runs the bot using `ts-node` (for development).
-- `npm run dev`: Runs the bot using `ts-node-dev` which automatically restarts on file changes.
+- `npm run dev`: Runs the bot with Node's watch mode and automatically restarts on file changes.
 - `npm test`: Runs the Jest test suite.
 - `npm run test:watch`: Runs Jest in watch mode.
 - `npm run build`: Compiles TypeScript code to JavaScript in the `dist/` directory.
