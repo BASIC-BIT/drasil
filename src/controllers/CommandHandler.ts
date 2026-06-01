@@ -3738,8 +3738,10 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
     try {
-      const opened = await this.securityActionService.openAdminCase(
+      const result = await this.securityActionService.openAdminCase(
         targetMember,
         interaction.user,
         {
@@ -3747,22 +3749,23 @@ export class CommandHandler implements ICommandHandler {
           reason,
         }
       );
-      if (!opened) {
+      if (!result.opened) {
         throw new Error('Case flow returned false');
       }
-      await interaction.reply({
-        content:
-          action === 'restrict'
+      const content =
+        action === 'restrict'
+          ? result.restricted
             ? `Opened a case for ${targetUser.tag} and restricted them pending review.`
-            : `Opened a review case for ${targetUser.tag}.`,
-        flags: MessageFlags.Ephemeral,
+            : `Opened a case for ${targetUser.tag}, but I could not apply the restricted role. Check bot permissions and role hierarchy.`
+          : `Opened a review case for ${targetUser.tag}.`;
+      await interaction.editReply({
+        content,
         allowedMentions: { parse: [] },
       });
     } catch (error) {
       console.error('Failed to open admin case:', error);
-      await interaction.reply({
+      await interaction.editReply({
         content: `Failed to open a case for ${targetUser.tag}. Please try again later.`,
-        flags: MessageFlags.Ephemeral,
       });
     }
   }

@@ -95,7 +95,11 @@ export interface ISecurityActionService {
    */
   handleManualFlag(member: GuildMember, moderator: User, reason?: string): Promise<boolean>;
 
-  openAdminCase(member: GuildMember, moderator: User, options: AdminCaseOptions): Promise<boolean>;
+  openAdminCase(
+    member: GuildMember,
+    moderator: User,
+    options: AdminCaseOptions
+  ): Promise<AdminCaseResult>;
 
   intakeRoleMembers(options: RoleIntakeOptions): Promise<RoleIntakeResult>;
 
@@ -184,6 +188,12 @@ export interface AdminCaseOptions {
   reason?: string;
   action: AdminCaseAction;
   metadata?: Record<string, unknown>;
+}
+
+export interface AdminCaseResult {
+  opened: boolean;
+  restrictionAttempted: boolean;
+  restricted: boolean;
 }
 
 export interface RoleIntakeOptions {
@@ -1130,7 +1140,7 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     moderator: User,
     options: AdminCaseOptions
-  ): Promise<boolean> {
+  ): Promise<AdminCaseResult> {
     try {
       await this.ensureEntitiesExist(
         member.guild.id,
@@ -1190,7 +1200,14 @@ export class SecurityActionService implements ISecurityActionService {
           }
         );
       }
-      return handled;
+      const serverMember = restrictUser
+        ? await this.serverMemberRepository.findByServerAndUser(member.guild.id, member.id)
+        : null;
+      return {
+        opened: handled,
+        restrictionAttempted: restrictUser,
+        restricted: serverMember?.is_restricted === true,
+      };
     } catch (error) {
       console.error(`Failed to open admin case for ${member.user.tag}:`, error);
       throw error;
@@ -1235,7 +1252,7 @@ export class SecurityActionService implements ISecurityActionService {
       }
 
       try {
-        const opened = await this.openAdminCase(member, options.moderator, {
+        const caseResult = await this.openAdminCase(member, options.moderator, {
           action: options.action,
           reason: options.reason,
           metadata: {
@@ -1246,8 +1263,15 @@ export class SecurityActionService implements ISecurityActionService {
             sourceRoleName: options.role.name,
           },
         });
-        if (opened) {
+        if (caseResult.opened) {
           result.opened += 1;
+          if (options.action === 'restrict' && !caseResult.restricted) {
+            result.failed += 1;
+            result.failures.push({
+              userId: member.id,
+              message: 'Case opened but restriction failed',
+            });
+          }
         } else {
           result.failed += 1;
           result.failures.push({ userId: member.id, message: 'Case flow returned false' });

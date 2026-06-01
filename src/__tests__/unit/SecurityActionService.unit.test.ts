@@ -86,7 +86,13 @@ describe('SecurityActionService (unit)', () => {
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
     };
     userModerationService = {
-      restrictUser: jest.fn().mockResolvedValue(true),
+      restrictUser: jest.fn().mockImplementation(async (member: GuildMember) => {
+        await serverMemberRepository.upsertMember(member.guild.id, member.id, {
+          is_restricted: true,
+          verification_status: VerificationStatus.PENDING,
+        });
+        return true;
+      }),
       verifyUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
     };
