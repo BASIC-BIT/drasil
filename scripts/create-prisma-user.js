@@ -1,4 +1,3 @@
-/* eslint-env node, commonjs */
 const { Client } = require('pg');
 const dotenv = require('dotenv');
 

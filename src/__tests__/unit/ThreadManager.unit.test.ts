@@ -335,6 +335,7 @@ describe('ThreadManager (unit)', () => {
   });
 
   it('truncates rendered prompt to Discord content limit', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     const repeatedPlaceholder = '{user_mention}'.repeat(250);
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       settings: {
@@ -368,6 +369,10 @@ describe('ThreadManager (unit)', () => {
     expect(sendPayload.content).toContain(
       '[Verification prompt truncated to fit Discord message limits.]'
     );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Verification prompt exceeded Discord content limit')
+    );
+    warnSpy.mockRestore();
   });
 
   it('falls back to admin channel when verification channel is missing', async () => {

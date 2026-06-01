@@ -5,6 +5,7 @@ import {
   GuildMember,
   Interaction,
   Guild,
+  Events,
   MessageFlags,
   PermissionFlagsBits,
 } from 'discord.js';
@@ -129,11 +130,11 @@ export class EventHandler implements IEventHandler {
   }
 
   public async setupEventHandlers(): Promise<void> {
-    this.client.on('ready', this.handleReady.bind(this));
-    this.client.on('messageCreate', this.handleMessage.bind(this));
-    this.client.on('guildMemberAdd', this.handleGuildMemberAdd.bind(this));
-    this.client.on('interactionCreate', this.handleInteraction.bind(this));
-    this.client.on('guildCreate', this.handleGuildCreate.bind(this));
+    this.client.on(Events.ClientReady, this.handleReady.bind(this));
+    this.client.on(Events.MessageCreate, this.handleMessage.bind(this));
+    this.client.on(Events.GuildMemberAdd, this.handleGuildMemberAdd.bind(this));
+    this.client.on(Events.InteractionCreate, this.handleInteraction.bind(this));
+    this.client.on(Events.GuildCreate, this.handleGuildCreate.bind(this));
   }
 
   private async handleReady(): Promise<void> {
