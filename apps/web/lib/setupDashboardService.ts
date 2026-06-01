@@ -367,7 +367,7 @@ function buildChecklist(args: BuildChecklistArgs) {
           'case-responders',
           'Case responder roles',
           'warning',
-          'One or more configured responder roles no longer exists.'
+          'One or more configured responder roles no longer exist.'
         )
   );
 
