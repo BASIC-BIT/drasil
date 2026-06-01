@@ -400,6 +400,9 @@ describe('SecurityActionService (unit)', () => {
     const userId = 'user-admin-open-case';
     const moderator = { id: 'admin-open-case' } as User;
     const member = buildMember(guildId, userId);
+    const getOrCreateServer = jest.spyOn(serverRepository, 'getOrCreateServer');
+    const getOrCreateUser = jest.spyOn(userRepository, 'getOrCreateUser');
+    const getOrCreateMember = jest.spyOn(serverMemberRepository, 'getOrCreateMember');
 
     await buildService().openAdminCase(member, moderator, {
       action: 'open_case',
@@ -423,6 +426,9 @@ describe('SecurityActionService (unit)', () => {
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
+    expect(getOrCreateServer).toHaveBeenCalledTimes(1);
+    expect(getOrCreateUser).toHaveBeenCalledTimes(1);
+    expect(getOrCreateMember).toHaveBeenCalledTimes(1);
   });
 
   it('opens an admin case and restricts the user when requested', async () => {

@@ -138,7 +138,11 @@ describe('InteractionHandler (unit)', () => {
       openCaseForSuspiciousMessage: jest.fn().mockResolvedValue(true),
       openCaseForSuspiciousJoin: jest.fn().mockResolvedValue(true),
       handleManualFlag: jest.fn().mockResolvedValue(true),
-      openAdminCase: jest.fn().mockResolvedValue(true),
+      openAdminCase: jest.fn().mockResolvedValue({
+        opened: true,
+        restrictionAttempted: false,
+        restricted: false,
+      }),
       intakeRoleMembers: jest.fn().mockResolvedValue({} as any),
       handleUserReport: jest.fn().mockResolvedValue(true),
       handleMessageReport: jest.fn().mockResolvedValue(true),

@@ -940,18 +940,21 @@ export class SecurityActionService implements ISecurityActionService {
     detectionResult: DetectionResult,
     sourceMessage?: Message,
     restrictUser = true,
-    useReportReviewThread?: boolean
+    useReportReviewThread?: boolean,
+    entitiesAlreadyEnsured = false
   ): Promise<boolean> {
     const shouldUseReviewThread =
       useReportReviewThread ?? this.shouldUseReportReviewThread(restrictUser, detectionResult);
 
-    // Create durable case state before Discord side effects so moderators see partial failures.
-    await this.ensureEntitiesExist(
-      member.guild.id,
-      member.id,
-      member.user.username,
-      member.joinedAt?.toISOString()
-    );
+    if (!entitiesAlreadyEnsured) {
+      // Create durable case state before Discord side effects so moderators see partial failures.
+      await this.ensureEntitiesExist(
+        member.guild.id,
+        member.id,
+        member.user.username,
+        member.joinedAt?.toISOString()
+      );
+    }
 
     const detectionEventId = await this.ensureDetectionEventId(
       member,
@@ -1184,7 +1187,9 @@ export class SecurityActionService implements ISecurityActionService {
         member,
         detectionResult,
         undefined,
-        restrictUser
+        restrictUser,
+        undefined,
+        true
       );
       if (handled) {
         this.captureMemberAnalytics(
