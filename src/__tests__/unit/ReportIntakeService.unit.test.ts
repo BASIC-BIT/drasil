@@ -184,6 +184,43 @@ describe('ReportIntakeService', () => {
     );
   });
 
+  it('keeps earlier candidate suggestions after later evidence has no candidates', async () => {
+    const { service, reportIntakeRepository } = buildService({
+      resolvePlatformBackedCandidates: jest
+        .fn()
+        .mockResolvedValueOnce([buildCandidate()])
+        .mockResolvedValueOnce([]),
+      extractCandidateSignals: jest.fn().mockReturnValue({
+        mentions: [],
+        explicitUserIds: [],
+        messageLinks: [],
+      }),
+    });
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+
+    await service.handleThreadMessage(buildMessage({ id: 'message-1' }));
+    await service.handleThreadMessage(
+      buildMessage({ id: 'message-2', content: 'Additional context with no identifiable target.' })
+    );
+
+    const stored = await reportIntakeRepository.findById(intake.id);
+    const result = await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      confirmedById: 'reporter-1',
+    });
+
+    expect(stored?.metadata).toMatchObject({
+      candidate_suggestions: [expect.objectContaining({ discordUserId: 'user-1' })],
+    });
+    expect(result.confirmed).toBe(true);
+  });
+
   it('lets the reporter close the intake without deleting evidence', async () => {
     const { service, reportIntakeRepository } = buildService({
       resolvePlatformBackedCandidates: jest.fn().mockResolvedValue([]),

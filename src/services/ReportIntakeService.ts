@@ -220,13 +220,14 @@ export class ReportIntakeService implements IReportIntakeService {
 
     const candidates = await this.candidateService.resolvePlatformBackedCandidates(message);
     const now = new Date();
+    const metadata = toRecord(intake.metadata);
     const nextMetadata = {
-      ...toRecord(intake.metadata),
+      ...metadata,
       last_evidence_message_id: message.id,
       last_evidence_author_id: message.author.id,
       last_evidence_recorded_at: now.toISOString(),
       candidate_signals: signals,
-      candidate_suggestions: candidates,
+      candidate_suggestions: this.mergeCandidateSuggestions(metadata, candidates),
     };
 
     if (isReporterMessage && this.isReporterCloseCommand(trimmedContent)) {
@@ -363,12 +364,30 @@ export class ReportIntakeService implements IReportIntakeService {
       return false;
     }
 
-    return suggestions.some((candidate) => {
-      if (!candidate || typeof candidate !== 'object') {
-        return false;
+    return suggestions.some((candidate) => getCandidateDiscordUserId(candidate) === targetUserId);
+  }
+
+  private mergeCandidateSuggestions(
+    metadata: Record<string, unknown>,
+    candidates: Awaited<ReturnType<IReportCandidateService['resolvePlatformBackedCandidates']>>
+  ): unknown[] {
+    const merged = new Map<string, unknown>();
+    const suggestions = metadata.candidate_suggestions;
+
+    if (Array.isArray(suggestions)) {
+      for (const candidate of suggestions) {
+        const userId = getCandidateDiscordUserId(candidate);
+        if (userId) {
+          merged.set(userId, candidate);
+        }
       }
-      return (candidate as Record<string, unknown>).discordUserId === targetUserId;
-    });
+    }
+
+    for (const candidate of candidates) {
+      merged.set(candidate.discordUserId, candidate);
+    }
+
+    return Array.from(merged.values());
   }
 
   private buildSubmissionReason(
@@ -414,6 +433,15 @@ function sameStringArray(value: unknown, expected: string[]): boolean {
     value.length === expected.length &&
     value.every((item, index) => item === expected[index])
   );
+}
+
+function getCandidateDiscordUserId(candidate: unknown): string | null {
+  if (!candidate || typeof candidate !== 'object') {
+    return null;
+  }
+
+  const value = (candidate as Record<string, unknown>).discordUserId;
+  return typeof value === 'string' ? value : null;
 }
 
 function truncate(value: string, maxLength: number): string {
