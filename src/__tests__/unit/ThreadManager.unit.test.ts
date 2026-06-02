@@ -145,6 +145,40 @@ describe('ThreadManager (unit)', () => {
     });
   });
 
+  it('keeps a created verification thread linked when prompt send fails', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    thread.send.mockRejectedValueOnce(new Error('Missing Send Messages permission'));
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    const member = buildMember('guild-1', 'user-1');
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    try {
+      const createdThread = await manager.createVerificationThread(member, event);
+      const storedEvent = await verificationEventRepository.findById(event.id);
+
+      expect(createdThread).toBeNull();
+      expect(channel.threads.create).toHaveBeenCalled();
+      expect(storedEvent?.thread_id).toBe('thread-1');
+      expect(storedEvent?.metadata).toMatchObject({
+        [VERIFICATION_THREAD_TYPE_METADATA_KEY]: VERIFICATION_THREAD_TYPE,
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('uses custom verification prompt template when configured', async () => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       settings: {
@@ -232,6 +266,46 @@ describe('ThreadManager (unit)', () => {
         repliedUser: false,
       },
     });
+  });
+
+  it('keeps a created report review thread linked when prompt send fails', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    thread.send.mockRejectedValueOnce(new Error('Missing Send Messages permission'));
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    const member = buildMember('guild-1', 'user-1');
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    try {
+      const createdThread = await manager.createReportReviewThread(member, event, {
+        label: 'SUSPICIOUS',
+        confidence: 1.0,
+        reasons: ['Reported by user reporter-1. Reason: suspicious DM'],
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'suspicious DM',
+      });
+      const storedEvent = await verificationEventRepository.findById(event.id);
+
+      expect(createdThread).toBeNull();
+      expect(channel.threads.create).toHaveBeenCalled();
+      expect(storedEvent?.thread_id).toBe('thread-1');
+      expect(storedEvent?.metadata).toMatchObject({
+        [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('creates an inactive report intake thread before adding the reporter', async () => {

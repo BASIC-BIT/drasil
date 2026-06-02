@@ -328,6 +328,10 @@ export class ThreadManager implements IThreadManager {
         type: ChannelType.PrivateThread,
       });
 
+      // Persist the Discord thread before follow-up operations so partial setup
+      // failures do not orphan a thread that was already created.
+      await this.storeThreadId(verificationEvent, thread.id, VERIFICATION_THREAD_TYPE);
+
       // Add the member to the private thread so they can see it
       await thread.members.add(member.id);
 
@@ -409,6 +413,10 @@ export class ThreadManager implements IThreadManager {
         reason: `Review-only report thread for user: ${member.user.tag}`,
         type: ChannelType.PrivateThread,
       });
+
+      // Persist the Discord thread before follow-up operations so partial setup
+      // failures do not orphan a thread that was already created.
+      await this.storeThreadId(verificationEvent, thread.id, REPORT_REVIEW_THREAD_TYPE);
 
       try {
         await thread.setInvitable(false, 'Keep report review thread moderator-only');
