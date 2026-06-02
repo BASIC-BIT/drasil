@@ -198,8 +198,6 @@ export class EventHandler implements IEventHandler {
         }
       } catch (error) {
         console.error('Error handling report intake thread message:', error);
-        this.rememberRecentMessage(message);
-        return;
       }
     }
 

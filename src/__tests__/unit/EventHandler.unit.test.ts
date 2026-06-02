@@ -278,6 +278,43 @@ describe('EventHandler (unit)', () => {
     expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
   });
 
+  it('continues automatic detection when report intake handling fails', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'free nitro',
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const reportIntakeService = {
+      handleThreadMessage: jest.fn().mockRejectedValue(new Error('database unavailable')),
+    };
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.channel = { id: 'thread-1', isThread: jest.fn().mockReturnValue(true) };
+    const handler = buildHandler({ detectionOrchestrator, reportIntakeService });
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await (handler as any).handleMessage(message);
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(reportIntakeService.handleThreadMessage).toHaveBeenCalledWith(message);
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'free nitro',
+      expect.objectContaining({
+        serverId: 'guild-1',
+        userId: 'user-1',
+      })
+    );
+  });
+
   it('passes recent user messages and same-channel context into message detection', async () => {
     const detectionOrchestrator = {
       detectMessage: jest.fn().mockResolvedValue({
