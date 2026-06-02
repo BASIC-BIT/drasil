@@ -1886,27 +1886,27 @@ export class CommandHandler implements ICommandHandler {
     const subcommand = interaction.options.getSubcommand(true);
 
     if (subcommand === 'view') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const serverConfig = await this.configService.getServerConfig(guild.id);
-      await interaction.reply({
+      await interaction.editReply({
         content: this.formatRestrictedLockdownSettings(
           guild.id,
           serverConfig.verification_channel_id,
           serverConfig.settings
         ),
-        flags: MessageFlags.Ephemeral,
         allowedMentions: { parse: [] },
       });
       return;
     }
 
     if (subcommand === 'disable') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await this.configService.updateServerSettings(guild.id, {
         [RESTRICTED_LOCKDOWN_ENABLED_SETTING_KEY]: false,
       });
-      await interaction.reply({
+      await interaction.editReply({
         content:
           'Restricted-role lockdown marked disabled. Existing Discord channel overwrites were not removed.',
-        flags: MessageFlags.Ephemeral,
       });
       return;
     }
