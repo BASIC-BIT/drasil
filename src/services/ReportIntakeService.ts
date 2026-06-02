@@ -288,6 +288,13 @@ export class ReportIntakeService implements IReportIntakeService {
           closed_reason: 'reporter_request',
         },
       });
+      if (hasMessageSend(message.channel)) {
+        await message.channel.send({
+          content: 'Report intake closed. No report has been filed.',
+          components: [],
+          allowedMentions: { parse: [] },
+        });
+      }
       return;
     }
 

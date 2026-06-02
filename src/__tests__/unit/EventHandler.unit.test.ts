@@ -252,6 +252,32 @@ describe('EventHandler (unit)', () => {
     expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
   });
 
+  it('records report intake thread messages from detection-exempt moderators', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn(),
+      getCachedServerConfig: jest.fn().mockReturnValue({
+        settings: { automatic_detection_exempt_moderators: true },
+      }),
+      getServerConfig: jest.fn(),
+    };
+    const reportIntakeService = {
+      handleThreadMessage: jest.fn().mockResolvedValue(true),
+    };
+    const message = buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers)) as any;
+    message.channel = { id: 'thread-1', isThread: jest.fn().mockReturnValue(true) };
+    const handler = buildHandler({ detectionOrchestrator, configService, reportIntakeService });
+
+    await (handler as any).handleMessage(message);
+
+    expect(reportIntakeService.handleThreadMessage).toHaveBeenCalledWith(message);
+    expect(configService.initialize).not.toHaveBeenCalled();
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
+  });
+
   it('passes recent user messages and same-channel context into message detection', async () => {
     const detectionOrchestrator = {
       detectMessage: jest.fn().mockResolvedValue({

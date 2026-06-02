@@ -189,6 +189,20 @@ export class EventHandler implements IEventHandler {
     if (message.author.bot) return;
     if (!message.guild || !message.member) return;
 
+    if (message.channel.isThread()) {
+      try {
+        const reportIntakeHandled = await this.reportIntakeService?.handleThreadMessage(message);
+        if (reportIntakeHandled) {
+          this.rememberRecentMessage(message);
+          return;
+        }
+      } catch (error) {
+        console.error('Error handling report intake thread message:', error);
+        this.rememberRecentMessage(message);
+        return;
+      }
+    }
+
     // Handle ping command via traditional message (kept for backward compatibility)
     if (message.content === '!ping') {
       await message.reply('Pong! Note: Please use slash commands instead (e.g. /ping)');
@@ -220,11 +234,6 @@ export class EventHandler implements IEventHandler {
       if (message.channel.isThread()) {
         const handled = await this.verificationThreadAnalysisService.handleThreadMessage(message);
         if (handled) {
-          return;
-        }
-
-        const reportIntakeHandled = await this.reportIntakeService?.handleThreadMessage(message);
-        if (reportIntakeHandled) {
           return;
         }
       }

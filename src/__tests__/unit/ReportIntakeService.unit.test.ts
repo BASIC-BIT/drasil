@@ -396,12 +396,19 @@ describe('ReportIntakeService', () => {
       channelId: 'channel-1',
     });
 
-    await service.handleThreadMessage(buildMessage({ content: 'close report' }));
+    const message = buildMessage({ content: 'close report' });
+
+    await service.handleThreadMessage(message);
 
     const stored = await reportIntakeRepository.findById(intake.id);
     const evidence = await reportIntakeRepository.listEvidence(intake.id);
     expect(stored?.status).toBe(ReportIntakeStatus.CLOSED_BY_REPORTER);
     expect(stored?.closed_at).toBeInstanceOf(Date);
     expect(evidence).toHaveLength(2);
+    expect((message.channel as any).send).toHaveBeenCalledWith({
+      content: 'Report intake closed. No report has been filed.',
+      components: [],
+      allowedMentions: { parse: [] },
+    });
   });
 });
