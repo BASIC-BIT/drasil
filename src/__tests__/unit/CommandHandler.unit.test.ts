@@ -235,6 +235,13 @@ describe('CommandHandler (unit)', () => {
     expect(lockdownGroup.options.map((option: any) => option.name)).toEqual(
       expect.arrayContaining(['view', 'audit', 'apply', 'disable', 'allow-add', 'allow-remove'])
     );
+    for (const subcommandName of ['allow-add', 'allow-remove']) {
+      const subcommand = lockdownGroup.options.find(
+        (option: any) => option.name === subcommandName
+      );
+      const channelOption = subcommand.options.find((option: any) => option.name === 'channel');
+      expect(channelOption.channel_types).toContain(ChannelType.GuildMedia);
+    }
   });
 
   it('denies legacy test commands for non-admin members', async () => {
@@ -3053,6 +3060,55 @@ describe('CommandHandler (unit)', () => {
     expect(interaction.editReply.mock.calls[0][0].content).toContain(
       'Run `/config setup admin-channel:<moderator-channel>` to repair core setup.'
     );
+  });
+
+  it('defers /config lockdown allow-list updates before saving settings', async () => {
+    const { handler, configService } = buildHandler({
+      getServerConfig: jest.fn().mockResolvedValue({
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    });
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('lockdown'),
+        getSubcommand: jest.fn().mockReturnValue('allow-add'),
+        getChannel: jest
+          .fn()
+          .mockReturnValue({ id: 'media-channel-1', type: ChannelType.GuildMedia }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      restricted_lockdown_allowed_channel_ids: ['media-channel-1'],
+      restricted_lockdown_allowed_category_ids: [],
+    });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      configService.updateServerSettings.mock.invocationCallOrder[0]
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Channel <#media-channel-1> added to'),
+      allowedMentions: { parse: [] },
+    });
   });
 
   it('handles /config detection set-mode', async () => {

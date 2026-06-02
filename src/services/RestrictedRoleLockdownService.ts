@@ -7,6 +7,7 @@ import {
   PermissionOverwriteManager,
   PermissionOverwriteOptions,
   PermissionsBitField,
+  OverwriteType,
   Role,
 } from 'discord.js';
 import { inject, injectable } from 'inversify';
@@ -452,10 +453,13 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
         continue;
       }
 
+      const isMemberOverwrite = overwrite.type === OverwriteType.Member;
+      const mentionPrefix = isMemberOverwrite ? '@' : '@&';
+      const affectedSubject = isMemberOverwrite ? 'That user' : 'Users with that role';
       issues.push({
         severity: 'warning',
         code: 'lockdown-conflicting-view-allow',
-        message: `${this.formatChannel(channel)} has an explicit View Channel allow for <@&${overwrite.id}>. Users with that role may still see it despite the restricted-role deny.`,
+        message: `${this.formatChannel(channel)} has an explicit View Channel allow for <${mentionPrefix}${overwrite.id}>. ${affectedSubject} may still see it despite the restricted-role deny.`,
       });
     }
   }

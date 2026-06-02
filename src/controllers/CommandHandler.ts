@@ -384,7 +384,8 @@ export class CommandHandler implements ICommandHandler {
                       ChannelType.GuildCategory,
                       ChannelType.GuildVoice,
                       ChannelType.GuildStageVoice,
-                      ChannelType.GuildForum
+                      ChannelType.GuildForum,
+                      ChannelType.GuildMedia
                     )
                     .setRequired(true)
                 )
@@ -403,7 +404,8 @@ export class CommandHandler implements ICommandHandler {
                       ChannelType.GuildCategory,
                       ChannelType.GuildVoice,
                       ChannelType.GuildStageVoice,
-                      ChannelType.GuildForum
+                      ChannelType.GuildForum,
+                      ChannelType.GuildMedia
                     )
                     .setRequired(true)
                 )
@@ -1948,6 +1950,8 @@ export class CommandHandler implements ICommandHandler {
     added: boolean
   ): Promise<void> {
     const channel = interaction.options.getChannel('channel', true);
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
     const serverConfig = await this.configService.getServerConfig(guildId);
     const settings = getRestrictedLockdownSettings(serverConfig.settings);
     const isCategory = channel.type === ChannelType.GuildCategory;
@@ -1966,9 +1970,8 @@ export class CommandHandler implements ICommandHandler {
       [RESTRICTED_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY]: [...categoryIds],
     });
 
-    await interaction.reply({
+    await interaction.editReply({
       content: `${isCategory ? 'Category' : 'Channel'} <#${channel.id}> ${added ? 'added to' : 'removed from'} the restricted lockdown allow-list. Run \`/config lockdown audit\` to check for conflicts.`,
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   }

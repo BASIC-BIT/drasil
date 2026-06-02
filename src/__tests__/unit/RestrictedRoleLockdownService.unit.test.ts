@@ -1,4 +1,4 @@
-import { ChannelType, PermissionFlagsBits } from 'discord.js';
+import { ChannelType, OverwriteType, PermissionFlagsBits } from 'discord.js';
 import { RestrictedRoleLockdownService } from '../../services/RestrictedRoleLockdownService';
 
 describe('RestrictedRoleLockdownService (unit)', () => {
@@ -35,9 +35,13 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     parentId?: string | null;
     permissionsLocked?: boolean | null;
     restrictedOverwrite?: ReturnType<typeof createOverwrite>;
+    extraOverwrites?: readonly ReturnType<typeof createOverwrite>[];
   }) => {
     const restrictedOverwrite = options.restrictedOverwrite ?? createOverwrite();
-    const cache = new Map([[restrictedRoleId, restrictedOverwrite]]);
+    const cache = new Map([
+      [restrictedRoleId, restrictedOverwrite],
+      ...(options.extraOverwrites ?? []).map((overwrite) => [overwrite.id, overwrite] as const),
+    ]);
     return {
       id: options.id,
       name: options.name,
@@ -239,5 +243,36 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       restricted_lockdown_enabled: true,
     });
+  });
+
+  it('formats member overwrite conflicts as user mentions', async () => {
+    const memberOverwrite = {
+      ...createOverwrite({ allow: [PermissionFlagsBits.ViewChannel] }),
+      id: 'user-1',
+      type: OverwriteType.Member,
+    };
+    const category = createChannel({
+      id: 'category-1',
+      name: 'public',
+      type: ChannelType.GuildCategory,
+      extraOverwrites: [memberOverwrite],
+    });
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+    });
+    const guild = createGuild([category, verificationChannel]);
+    const service = new RestrictedRoleLockdownService(createConfigService() as any);
+
+    const report = await service.auditGuild(guild);
+
+    expect(report.issues.map((issue) => issue.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          'explicit View Channel allow for <@user-1>. That user may still see it'
+        ),
+      ])
+    );
   });
 });
