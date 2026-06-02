@@ -102,7 +102,11 @@ If the user says "Reset the database", run `npm run db:reset:local`.
 - For parallel work, prefer `git worktree`. See `docs/dev/worktrees.md`.
 - Use one worktree per issue/PR; run `npm ci` per worktree.
 - Avoid running integration tests concurrently across worktrees unless each uses its own database.
-- PRs should link the issue(s), include a test plan, and pass CI (`npm run check:ci`).
+- PRs should link the issue(s) and pass CI (`npm run check:ci`). Do not list routine
+  required merge-gate checks in the PR description; if GitHub requires the check before merge,
+  repeating it in the body is noise. Include verification notes only for non-required manual,
+  exploratory, migration, provider, or production-impact checks that reviewers cannot infer from
+  required CI/status checks.
 - Resolve PR review threads (including AI reviewer threads) before merge.
 - Prefer AI-assisted reviews (Copilot + Greptile) and recycle loops; keep critical context in the PR.
 - Do not merge immediately when checks turn green. After all required checks pass, wait a few

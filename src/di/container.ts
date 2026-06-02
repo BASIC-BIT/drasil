@@ -52,6 +52,10 @@ import {
   SetupDiagnosticsService,
 } from '../services/SetupDiagnosticsService';
 import {
+  IRestrictedRoleLockdownService,
+  RestrictedRoleLockdownService,
+} from '../services/RestrictedRoleLockdownService';
+import {
   IReportIntakeRepository,
   ReportIntakeRepository,
 } from '../repositories/ReportIntakeRepository';
@@ -210,6 +214,11 @@ function configureServices(container: Container): void {
   container
     .bind<ISetupDiagnosticsService>(TYPES.SetupDiagnosticsService)
     .to(SetupDiagnosticsService)
+    .inSingletonScope();
+
+  container
+    .bind<IRestrictedRoleLockdownService>(TYPES.RestrictedRoleLockdownService)
+    .to(RestrictedRoleLockdownService)
     .inSingletonScope();
 
   container

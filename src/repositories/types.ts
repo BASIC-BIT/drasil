@@ -77,6 +77,9 @@ export interface ServerSettings {
   report_ai_max_image_bytes?: number;
   report_instructions_channel_id?: string | null;
   report_instructions_message_id?: string | null;
+  restricted_lockdown_enabled?: boolean;
+  restricted_lockdown_allowed_channel_ids?: string[];
+  restricted_lockdown_allowed_category_ids?: string[];
   setup_nudge_last_attempt_at?: string | null;
   setup_nudge_last_recipient_id?: string | null;
   setup_nudge_last_result?: 'sent' | 'dm_failed' | 'no_recipient' | null;
