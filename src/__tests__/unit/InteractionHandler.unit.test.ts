@@ -1987,7 +1987,8 @@ describe('InteractionHandler (unit)', () => {
     });
     expect(reportIntakeService.markSubmitted).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'An error occurred while submitting this report. Please try again later.',
+      content:
+        'The report target was confirmed, but Drasil could not finish submitting it automatically. A moderator can review the intake thread.',
     });
     expect(interaction.followUp).not.toHaveBeenCalled();
   });

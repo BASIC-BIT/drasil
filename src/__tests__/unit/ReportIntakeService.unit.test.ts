@@ -267,6 +267,37 @@ describe('ReportIntakeService', () => {
     expect(confirmationEvidence).toHaveLength(1);
   });
 
+  it('rejects repeat confirmations after the target is locked', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+    await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      confirmedById: 'reporter-1',
+    });
+
+    const result = await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      confirmedById: 'reporter-1',
+    });
+    const confirmationEvidence = (await reportIntakeRepository.listEvidence(intake.id)).filter(
+      (item) => item.kind === ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION
+    );
+
+    expect(result).toMatchObject({
+      confirmed: false,
+      message: 'That report target has already been confirmed.',
+    });
+    expect(confirmationEvidence).toHaveLength(1);
+  });
+
   it('marks an intake as failed when opening cannot complete', async () => {
     const { service, reportIntakeRepository } = buildService();
     const intake = await service.openIntakeFromThread({

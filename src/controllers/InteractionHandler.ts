@@ -581,6 +581,7 @@ export class InteractionHandler implements IInteractionHandler {
     customId: string
   ): Promise<void> {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    let targetConfirmed = false;
 
     try {
       if (!this.reportIntakeService) {
@@ -624,6 +625,7 @@ export class InteractionHandler implements IInteractionHandler {
         await interaction.editReply({ content: confirmation.message });
         return;
       }
+      targetConfirmed = true;
 
       await this.securityActionService.handleUserReport(
         targetMember,
@@ -648,7 +650,9 @@ export class InteractionHandler implements IInteractionHandler {
     } catch (error) {
       console.error('Error confirming report intake target:', error);
       await interaction.editReply({
-        content: 'An error occurred while submitting this report. Please try again later.',
+        content: targetConfirmed
+          ? 'The report target was confirmed, but Drasil could not finish submitting it automatically. A moderator can review the intake thread.'
+          : 'An error occurred while submitting this report. Please try again later.',
       });
     }
   }
