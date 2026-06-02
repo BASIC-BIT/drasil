@@ -37,6 +37,10 @@ export interface OpenReportIntakeInput {
 
 export interface IReportIntakeService {
   openIntakeFromThread(input: OpenReportIntakeInput): Promise<ReportIntake>;
+  findOpenIntakeForReporter(input: {
+    serverId: string;
+    reporterId: string;
+  }): Promise<ReportIntake | null>;
   handleThreadMessage(message: Message): Promise<boolean>;
   confirmCandidate(input: {
     intakeId: string;
@@ -48,6 +52,7 @@ export interface IReportIntakeService {
     targetUserId: string;
     submittedById: string;
   }): Promise<void>;
+  markOpenFailed(input: { intakeId: string; reason: string }): Promise<void>;
 }
 
 @injectable()
@@ -86,6 +91,16 @@ export class ReportIntakeService implements IReportIntakeService {
         opened_at: new Date().toISOString(),
       },
     });
+  }
+
+  async findOpenIntakeForReporter(input: {
+    serverId: string;
+    reporterId: string;
+  }): Promise<ReportIntake | null> {
+    return this.reportIntakeRepository.findOpenByReporterAndServer(
+      input.serverId,
+      input.reporterId
+    );
   }
 
   async handleThreadMessage(message: Message): Promise<boolean> {
@@ -182,6 +197,23 @@ export class ReportIntakeService implements IReportIntakeService {
     });
   }
 
+  async markOpenFailed(input: { intakeId: string; reason: string }): Promise<void> {
+    const intake = await this.reportIntakeRepository.findById(input.intakeId);
+    if (!intake) {
+      return;
+    }
+
+    await this.reportIntakeRepository.update(input.intakeId, {
+      status: ReportIntakeStatus.EXPIRED,
+      closedAt: new Date(),
+      metadata: {
+        ...toRecord(intake.metadata),
+        open_failed_reason: input.reason,
+        open_failed_at: new Date().toISOString(),
+      },
+    });
+  }
+
   private async recordMessageEvidence(intake: ReportIntake, message: Message): Promise<void> {
     const isReporterMessage = message.author.id === intake.reporter_id;
     const trimmedContent = message.content.trim();
@@ -208,6 +240,7 @@ export class ReportIntakeService implements IReportIntakeService {
         sourceChannelId: message.channelId,
         content: link.url,
         metadata: {
+          author_id: message.author.id,
           guild_id: link.guildId,
           channel_id: link.channelId,
           message_id: link.messageId,
@@ -223,7 +256,7 @@ export class ReportIntakeService implements IReportIntakeService {
         sourceMessageId: message.id,
         sourceChannelId: message.channelId,
         attachmentId: attachment.id ?? null,
-        metadata: { ...attachment },
+        metadata: { ...attachment, author_id: message.author.id },
       });
     }
 

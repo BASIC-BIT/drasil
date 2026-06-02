@@ -234,7 +234,7 @@ describe('ThreadManager (unit)', () => {
     });
   });
 
-  it('creates a user-facing report intake thread and adds the reporter', async () => {
+  it('creates an inactive report intake thread before adding the reporter', async () => {
     const manager = new ThreadManager(
       {} as any,
       configService,
@@ -254,8 +254,26 @@ describe('ThreadManager (unit)', () => {
       })
     );
     expect(createdThread?.id).toBe('thread-1');
-    expect(thread.members.add).toHaveBeenCalledWith('reporter-1');
     expect(thread.setInvitable).toHaveBeenCalledWith(false, expect.any(String));
+    expect(thread.members.add).not.toHaveBeenCalled();
+    expect(thread.send).not.toHaveBeenCalled();
+  });
+
+  it('activates a report intake thread by adding the reporter and welcome message', async () => {
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    const reporter = buildMember('guild-1', 'reporter-1');
+
+    const activated = await manager.activateReportIntakeThread(thread, reporter);
+
+    expect(activated).toBe(true);
+    expect(thread.members.add).toHaveBeenCalledWith('reporter-1');
     expect(thread.send).toHaveBeenCalledWith({
       content: expect.stringContaining('Please put the report context in this private thread.'),
       allowedMentions: {

@@ -484,6 +484,17 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
+      const existingIntake = await this.reportIntakeService.findOpenIntakeForReporter({
+        serverId: guildId,
+        reporterId: reporter.id,
+      });
+      if (existingIntake) {
+        await interaction.editReply({
+          content: this.buildExistingReportIntakeMessage(guildId, existingIntake.thread_id),
+        });
+        return;
+      }
+
       thread = await this.threadManager.createReportIntakeThread(
         interaction.channel as TextChannel,
         reporter
@@ -496,12 +507,26 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
-      await this.reportIntakeService.openIntakeFromThread({
+      const intake = await this.reportIntakeService.openIntakeFromThread({
         serverId: guildId,
         reporter,
         threadId: thread.id,
         channelId: interaction.channel.id,
       });
+
+      const activated = await this.threadManager.activateReportIntakeThread(thread, reporter);
+      if (!activated) {
+        await this.reportIntakeService.markOpenFailed({
+          intakeId: intake.id,
+          reason: 'thread_activation_failed',
+        });
+        await this.deleteFailedReportIntakeThread(thread);
+        await interaction.editReply({
+          content:
+            'Could not prepare the private report thread. Please ask a server admin to check Drasil thread permissions.',
+        });
+        return;
+      }
 
       await interaction.editReply({
         content: `Opened a private report thread: ${thread.url}\nPlease put the report context there.`,
@@ -519,11 +544,19 @@ export class InteractionHandler implements IInteractionHandler {
     }
   }
 
+  private buildExistingReportIntakeMessage(guildId: string, threadId: string | null): string {
+    if (threadId) {
+      return `You already have an open report thread: https://discord.com/channels/${guildId}/${threadId}\nPlease continue there, or send \`close report\` in that thread if it was opened by mistake.`;
+    }
+
+    return 'You already have an open report intake. Please continue in the existing report thread, or send `close report` if it was opened by mistake.';
+  }
+
   private async deleteFailedReportIntakeThread(thread: ThreadChannel): Promise<void> {
     try {
-      await thread.delete('Report intake failed before persistence.');
+      await thread.delete('Report intake setup failed before reporter activation.');
     } catch (error) {
-      console.warn(`Failed to delete unpersisted report intake thread ${thread.id}:`, error);
+      console.warn(`Failed to delete failed report intake thread ${thread.id}:`, error);
     }
   }
 

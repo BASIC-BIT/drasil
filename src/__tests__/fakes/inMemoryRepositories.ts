@@ -576,6 +576,23 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     return intake ? { ...intake } : null;
   }
 
+  async findOpenByReporterAndServer(
+    serverId: string,
+    reporterId: string
+  ): Promise<ReportIntake | null> {
+    const intake = this.intakes.find(
+      (item) =>
+        item.server_id === serverId &&
+        item.reporter_id === reporterId &&
+        [
+          ReportIntakeStatus.COLLECTING_EVIDENCE,
+          ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+          ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+        ].includes(item.status)
+    );
+    return intake ? { ...intake } : null;
+  }
+
   async update(id: string, data: ReportIntakeUpdate): Promise<ReportIntake | null> {
     const index = this.intakes.findIndex((item) => item.id === id);
     if (index === -1) {

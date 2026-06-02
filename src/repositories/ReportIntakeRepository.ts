@@ -26,6 +26,7 @@ export interface IReportIntakeRepository {
   create(data: ReportIntakeCreate): Promise<ReportIntake>;
   findById(id: string): Promise<ReportIntake | null>;
   findOpenByThreadId(threadId: string): Promise<ReportIntake | null>;
+  findOpenByReporterAndServer(serverId: string, reporterId: string): Promise<ReportIntake | null>;
   update(id: string, data: ReportIntakeUpdate): Promise<ReportIntake | null>;
   addEvidence(data: ReportIntakeEvidenceCreate): Promise<ReportIntakeEvidence>;
   listEvidence(intakeId: string): Promise<ReportIntakeEvidence[]>;
@@ -90,6 +91,25 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
       return intake as ReportIntake | null;
     } catch (error) {
       this.handleError(error, 'findOpenReportIntakeByThreadId');
+    }
+  }
+
+  async findOpenByReporterAndServer(
+    serverId: string,
+    reporterId: string
+  ): Promise<ReportIntake | null> {
+    try {
+      const intake = await this.prisma.report_intakes.findFirst({
+        where: {
+          server_id: serverId,
+          reporter_id: reporterId,
+          status: { in: OPEN_INTAKE_STATUSES as report_intake_status[] },
+        },
+        orderBy: { created_at: 'desc' },
+      });
+      return intake as ReportIntake | null;
+    } catch (error) {
+      this.handleError(error, 'findOpenReportIntakeByReporterAndServer');
     }
   }
 

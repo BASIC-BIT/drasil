@@ -181,6 +181,7 @@ describe('InteractionHandler (unit)', () => {
         id: 'report-thread-1',
         url: 'https://discord.com/channels/report-thread-1',
       } as any),
+      activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn(),
       reopenVerificationThread: jest.fn(),
     };
@@ -1656,9 +1657,11 @@ describe('InteractionHandler (unit)', () => {
     (configService.getAdminChannel as jest.Mock).mockResolvedValueOnce(adminChannel);
     const reportIntakeService: jest.Mocked<IReportIntakeService> = {
       openIntakeFromThread: jest.fn().mockResolvedValue({} as any),
+      findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),
       handleThreadMessage: jest.fn().mockResolvedValue(false),
       confirmCandidate: jest.fn().mockResolvedValue({ confirmed: false, message: '' }),
       markSubmitted: jest.fn().mockResolvedValue(undefined),
+      markOpenFailed: jest.fn().mockResolvedValue(undefined),
     };
     const handler = new InteractionHandler(
       client,
@@ -1683,12 +1686,20 @@ describe('InteractionHandler (unit)', () => {
       interaction.channel,
       reporter
     );
+    expect(reportIntakeService.findOpenIntakeForReporter).toHaveBeenCalledWith({
+      serverId: 'guild-1',
+      reporterId: 'reporter-1',
+    });
     expect(reportIntakeService.openIntakeFromThread).toHaveBeenCalledWith({
       serverId: 'guild-1',
       reporter,
       threadId: 'report-thread-1',
       channelId: expect.any(String),
     });
+    expect(threadManager.activateReportIntakeThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'report-thread-1' }),
+      reporter
+    );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Opened a private report thread: https://discord.com/channels/report-thread-1\nPlease put the report context there.',
@@ -1724,6 +1735,50 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('reuses an existing open report intake for the same reporter', async () => {
+    const reporter = buildMember('guild-1', 'reporter-1');
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      members: {
+        fetch: jest.fn().mockResolvedValue(reporter),
+      },
+    });
+    const reportIntakeService: jest.Mocked<IReportIntakeService> = {
+      openIntakeFromThread: jest.fn().mockResolvedValue({} as any),
+      findOpenIntakeForReporter: jest.fn().mockResolvedValue({
+        id: 'intake-1',
+        thread_id: 'existing-thread-1',
+      } as any),
+      handleThreadMessage: jest.fn().mockResolvedValue(false),
+      confirmCandidate: jest.fn().mockResolvedValue({ confirmed: false, message: '' }),
+      markSubmitted: jest.fn().mockResolvedValue(undefined),
+      markOpenFailed: jest.fn().mockResolvedValue(undefined),
+    };
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      reportIntakeService
+    );
+    const interaction = buildInteraction('report_user_initiate', 'guild-1', {
+      id: 'reporter-1',
+    } as User);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(threadManager.createReportIntakeThread).not.toHaveBeenCalled();
+    expect(reportIntakeService.openIntakeFromThread).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content:
+        'You already have an open report thread: https://discord.com/channels/guild-1/existing-thread-1\nPlease continue there, or send `close report` in that thread if it was opened by mistake.',
+    });
+  });
+
   it('cleans up the report intake thread when persistence fails', async () => {
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const reporter = buildMember('guild-1', 'reporter-1');
@@ -1740,9 +1795,11 @@ describe('InteractionHandler (unit)', () => {
     threadManager.createReportIntakeThread.mockResolvedValueOnce(thread as any);
     const reportIntakeService: jest.Mocked<IReportIntakeService> = {
       openIntakeFromThread: jest.fn().mockRejectedValue(new Error('database unavailable')),
+      findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),
       handleThreadMessage: jest.fn().mockResolvedValue(false),
       confirmCandidate: jest.fn().mockResolvedValue({ confirmed: false, message: '' }),
       markSubmitted: jest.fn().mockResolvedValue(undefined),
+      markOpenFailed: jest.fn().mockResolvedValue(undefined),
     };
     const handler = new InteractionHandler(
       client,
@@ -1766,15 +1823,71 @@ describe('InteractionHandler (unit)', () => {
       consoleError.mockRestore();
     }
 
-    expect(thread.delete).toHaveBeenCalledWith('Report intake failed before persistence.');
+    expect(thread.delete).toHaveBeenCalledWith(
+      'Report intake setup failed before reporter activation.'
+    );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'An error occurred while opening the report thread. Please try again later.',
+    });
+  });
+
+  it('marks the intake failed and deletes the thread when activation fails', async () => {
+    const reporter = buildMember('guild-1', 'reporter-1');
+    const thread = {
+      id: 'report-thread-1',
+      url: 'https://discord.com/channels/report-thread-1',
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      members: {
+        fetch: jest.fn().mockResolvedValue(reporter),
+      },
+    });
+    threadManager.createReportIntakeThread.mockResolvedValueOnce(thread as any);
+    threadManager.activateReportIntakeThread.mockResolvedValueOnce(false);
+    const reportIntakeService: jest.Mocked<IReportIntakeService> = {
+      openIntakeFromThread: jest.fn().mockResolvedValue({ id: 'intake-1' } as any),
+      findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),
+      handleThreadMessage: jest.fn().mockResolvedValue(false),
+      confirmCandidate: jest.fn().mockResolvedValue({ confirmed: false, message: '' }),
+      markSubmitted: jest.fn().mockResolvedValue(undefined),
+      markOpenFailed: jest.fn().mockResolvedValue(undefined),
+    };
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      reportIntakeService
+    );
+    const interaction = buildInteraction('report_user_initiate', 'guild-1', {
+      id: 'reporter-1',
+    } as User);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(reportIntakeService.markOpenFailed).toHaveBeenCalledWith({
+      intakeId: 'intake-1',
+      reason: 'thread_activation_failed',
+    });
+    expect(thread.delete).toHaveBeenCalledWith(
+      'Report intake setup failed before reporter activation.'
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content:
+        'Could not prepare the private report thread. Please ask a server admin to check Drasil thread permissions.',
     });
   });
 
   it('submits a confirmed report intake target through the user report workflow', async () => {
     const reportIntakeService: jest.Mocked<IReportIntakeService> = {
       openIntakeFromThread: jest.fn().mockResolvedValue({} as any),
+      findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),
       handleThreadMessage: jest.fn().mockResolvedValue(false),
       confirmCandidate: jest.fn().mockResolvedValue({
         confirmed: true,
@@ -1782,6 +1895,7 @@ describe('InteractionHandler (unit)', () => {
         reason: 'Report intake target confirmed by reporter.',
       }),
       markSubmitted: jest.fn().mockResolvedValue(undefined),
+      markOpenFailed: jest.fn().mockResolvedValue(undefined),
     };
     const targetMember = buildMember('guild-1', 'user-1');
     (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
@@ -1828,6 +1942,7 @@ describe('InteractionHandler (unit)', () => {
   it('rejects report intake self-confirmations before submitting a report', async () => {
     const reportIntakeService: jest.Mocked<IReportIntakeService> = {
       openIntakeFromThread: jest.fn().mockResolvedValue({} as any),
+      findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),
       handleThreadMessage: jest.fn().mockResolvedValue(false),
       confirmCandidate: jest.fn().mockResolvedValue({
         confirmed: true,
@@ -1835,6 +1950,7 @@ describe('InteractionHandler (unit)', () => {
         reason: 'Report intake target confirmed by reporter.',
       }),
       markSubmitted: jest.fn().mockResolvedValue(undefined),
+      markOpenFailed: jest.fn().mockResolvedValue(undefined),
     };
     const handler = new InteractionHandler(
       client,
@@ -1863,6 +1979,7 @@ describe('InteractionHandler (unit)', () => {
   it('checks target availability before confirming a report intake target', async () => {
     const reportIntakeService: jest.Mocked<IReportIntakeService> = {
       openIntakeFromThread: jest.fn().mockResolvedValue({} as any),
+      findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),
       handleThreadMessage: jest.fn().mockResolvedValue(false),
       confirmCandidate: jest.fn().mockResolvedValue({
         confirmed: true,
@@ -1870,6 +1987,7 @@ describe('InteractionHandler (unit)', () => {
         reason: 'Report intake target confirmed by reporter.',
       }),
       markSubmitted: jest.fn().mockResolvedValue(undefined),
+      markOpenFailed: jest.fn().mockResolvedValue(undefined),
     };
     (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
       members: { fetch: jest.fn().mockRejectedValue(new Error('missing member')) },

@@ -83,6 +83,7 @@ describe('SecurityActionService (unit)', () => {
         .fn()
         .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
       createReportIntakeThread: jest.fn().mockResolvedValue({} as any),
+      activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
     };

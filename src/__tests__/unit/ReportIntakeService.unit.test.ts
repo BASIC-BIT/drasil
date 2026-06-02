@@ -114,12 +114,17 @@ describe('ReportIntakeService', () => {
     });
 
     const stored = await reportIntakeRepository.findOpenByThreadId('thread-1');
+    const openForReporter = await service.findOpenIntakeForReporter({
+      serverId: 'guild-1',
+      reporterId: 'reporter-1',
+    });
     expect(stored).toMatchObject({
       id: intake.id,
       server_id: 'guild-1',
       reporter_id: 'reporter-1',
       status: ReportIntakeStatus.COLLECTING_EVIDENCE,
     });
+    expect(openForReporter?.id).toBe(intake.id);
   });
 
   it('records reporter text, message links, eligible screenshots, and candidate metadata', async () => {
@@ -143,6 +148,16 @@ describe('ReportIntakeService', () => {
       ReportIntakeEvidenceKind.MESSAGE_LINK,
       ReportIntakeEvidenceKind.SCREENSHOT,
     ]);
+    expect(
+      evidence.find((item) => item.kind === ReportIntakeEvidenceKind.MESSAGE_LINK)?.metadata
+    ).toMatchObject({
+      author_id: 'reporter-1',
+    });
+    expect(
+      evidence.find((item) => item.kind === ReportIntakeEvidenceKind.SCREENSHOT)?.metadata
+    ).toMatchObject({
+      author_id: 'reporter-1',
+    });
     expect(stored?.status).toBe(ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION);
     expect(stored?.metadata).toMatchObject({
       candidate_suggestions: [expect.objectContaining({ discordUserId: 'user-1' })],
@@ -249,6 +264,27 @@ describe('ReportIntakeService', () => {
       message: 'That report intake is no longer accepting target confirmations.',
     });
     expect(confirmationEvidence).toHaveLength(1);
+  });
+
+  it('marks an intake as failed when opening cannot complete', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+
+    await service.markOpenFailed({ intakeId: intake.id, reason: 'thread_activation_failed' });
+
+    const stored = await reportIntakeRepository.findById(intake.id);
+    const openForReporter = await service.findOpenIntakeForReporter({
+      serverId: 'guild-1',
+      reporterId: 'reporter-1',
+    });
+    expect(stored?.status).toBe(ReportIntakeStatus.EXPIRED);
+    expect(stored?.metadata).toMatchObject({ open_failed_reason: 'thread_activation_failed' });
+    expect(openForReporter).toBeNull();
   });
 
   it('rejects reporter self-confirmation', async () => {

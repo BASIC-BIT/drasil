@@ -56,6 +56,8 @@ export interface IThreadManager {
     reporter: GuildMember
   ): Promise<ThreadChannel | null>;
 
+  activateReportIntakeThread(thread: ThreadChannel, reporter: GuildMember): Promise<boolean>;
+
   /**
    * Resolve a verification thread
    * @param verificationEvent The verification event
@@ -455,8 +457,6 @@ export class ThreadManager implements IThreadManager {
         type: ChannelType.PrivateThread,
       });
 
-      await thread.members.add(reporter.id);
-
       try {
         await thread.setInvitable(false, 'Keep report intake thread private');
       } catch (error) {
@@ -465,6 +465,20 @@ export class ThreadManager implements IThreadManager {
           error
         );
       }
+
+      return thread;
+    } catch (error) {
+      console.error('Failed to create report intake thread:', error);
+      return null;
+    }
+  }
+
+  public async activateReportIntakeThread(
+    thread: ThreadChannel,
+    reporter: GuildMember
+  ): Promise<boolean> {
+    try {
+      await thread.members.add(reporter.id);
 
       await this.addCaseResponderMembers(reporter.guild, thread, [reporter.id]);
 
@@ -478,10 +492,10 @@ export class ThreadManager implements IThreadManager {
         },
       });
 
-      return thread;
+      return true;
     } catch (error) {
-      console.error('Failed to create report intake thread:', error);
-      return null;
+      console.error(`Failed to activate report intake thread ${thread.id}:`, error);
+      return false;
     }
   }
 
