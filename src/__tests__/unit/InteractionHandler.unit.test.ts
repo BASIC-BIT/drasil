@@ -1939,6 +1939,59 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('edits the deferred reply when report intake submission fails', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const reportIntakeService: jest.Mocked<IReportIntakeService> = {
+      openIntakeFromThread: jest.fn().mockResolvedValue({} as any),
+      findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),
+      handleThreadMessage: jest.fn().mockResolvedValue(false),
+      confirmCandidate: jest.fn().mockResolvedValue({
+        confirmed: true,
+        message: 'confirmed',
+        reason: 'Report intake target confirmed by reporter.',
+      }),
+      markSubmitted: jest.fn().mockResolvedValue(undefined),
+      markOpenFailed: jest.fn().mockResolvedValue(undefined),
+    };
+    const targetMember = buildMember('guild-1', 'user-1');
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      members: { fetch: jest.fn().mockResolvedValue(targetMember) },
+    });
+    securityActionService.handleUserReport.mockRejectedValueOnce(new Error('case creation failed'));
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      reportIntakeService
+    );
+    const interaction = buildInteraction('report_intake_confirm:intake-1:user-1', 'guild-1', {
+      id: 'reporter-1',
+    } as User);
+
+    try {
+      await handler.handleButtonInteraction(interaction);
+    } finally {
+      consoleError.mockRestore();
+    }
+
+    expect(reportIntakeService.confirmCandidate).toHaveBeenCalledWith({
+      intakeId: 'intake-1',
+      targetUserId: 'user-1',
+      confirmedById: 'reporter-1',
+    });
+    expect(reportIntakeService.markSubmitted).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'An error occurred while submitting this report. Please try again later.',
+    });
+    expect(interaction.followUp).not.toHaveBeenCalled();
+  });
+
   it('rejects report intake self-confirmations before submitting a report', async () => {
     const reportIntakeService: jest.Mocked<IReportIntakeService> = {
       openIntakeFromThread: jest.fn().mockResolvedValue({} as any),

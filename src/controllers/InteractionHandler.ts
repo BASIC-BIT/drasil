@@ -582,66 +582,73 @@ export class InteractionHandler implements IInteractionHandler {
   ): Promise<void> {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    if (!this.reportIntakeService) {
-      await interaction.editReply({ content: 'Report intake tracking is not available.' });
-      return;
-    }
+    try {
+      if (!this.reportIntakeService) {
+        await interaction.editReply({ content: 'Report intake tracking is not available.' });
+        return;
+      }
 
-    const [, intakeId, targetUserId] = customId.split(':');
-    if (!intakeId || !targetUserId) {
-      await interaction.editReply({ content: 'This report confirmation button is invalid.' });
-      return;
-    }
-    if (targetUserId === interaction.user.id) {
-      await interaction.editReply({ content: 'You cannot report yourself.' });
-      return;
-    }
+      const [, intakeId, targetUserId] = customId.split(':');
+      if (!intakeId || !targetUserId) {
+        await interaction.editReply({ content: 'This report confirmation button is invalid.' });
+        return;
+      }
+      if (targetUserId === interaction.user.id) {
+        await interaction.editReply({ content: 'You cannot report yourself.' });
+        return;
+      }
 
-    const guildId = interaction.guildId;
-    if (!guildId) {
-      await interaction.editReply({
-        content: 'Report confirmations can only be used in a server.',
+      const guildId = interaction.guildId;
+      if (!guildId) {
+        await interaction.editReply({
+          content: 'Report confirmations can only be used in a server.',
+        });
+        return;
+      }
+
+      const guild = await this.client.guilds.fetch(guildId);
+      const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
+      if (!targetMember) {
+        await interaction.editReply({
+          content: 'The confirmed target is no longer available in this server.',
+        });
+        return;
+      }
+
+      const confirmation = await this.reportIntakeService.confirmCandidate({
+        intakeId,
+        targetUserId,
+        confirmedById: interaction.user.id,
       });
-      return;
-    }
+      if (!confirmation.confirmed || !confirmation.reason) {
+        await interaction.editReply({ content: confirmation.message });
+        return;
+      }
 
-    const guild = await this.client.guilds.fetch(guildId);
-    const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
-    if (!targetMember) {
-      await interaction.editReply({
-        content: 'The confirmed target is no longer available in this server.',
+      await this.securityActionService.handleUserReport(
+        targetMember,
+        interaction.user,
+        confirmation.reason
+      );
+      await this.reportIntakeService.markSubmitted({
+        intakeId,
+        targetUserId,
+        submittedById: interaction.user.id,
       });
-      return;
-    }
 
-    const confirmation = await this.reportIntakeService.confirmCandidate({
-      intakeId,
-      targetUserId,
-      confirmedById: interaction.user.id,
-    });
-    if (!confirmation.confirmed || !confirmation.reason) {
-      await interaction.editReply({ content: confirmation.message });
-      return;
-    }
+      await interaction.editReply({ content: `Submitted report for <@${targetUserId}>.` });
 
-    await this.securityActionService.handleUserReport(
-      targetMember,
-      interaction.user,
-      confirmation.reason
-    );
-    await this.reportIntakeService.markSubmitted({
-      intakeId,
-      targetUserId,
-      submittedById: interaction.user.id,
-    });
-
-    await interaction.editReply({ content: `Submitted report for <@${targetUserId}>.` });
-
-    const threadChannel = this.getThreadChannel(interaction.channel);
-    if (threadChannel) {
-      await threadChannel.send({
-        content: `Report submitted for <@${targetUserId}>. Moderators have been notified.`,
-        allowedMentions: { parse: [] },
+      const threadChannel = this.getThreadChannel(interaction.channel);
+      if (threadChannel) {
+        await threadChannel.send({
+          content: `Report submitted for <@${targetUserId}>. Moderators have been notified.`,
+          allowedMentions: { parse: [] },
+        });
+      }
+    } catch (error) {
+      console.error('Error confirming report intake target:', error);
+      await interaction.editReply({
+        content: 'An error occurred while submitting this report. Please try again later.',
       });
     }
   }

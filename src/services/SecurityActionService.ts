@@ -754,20 +754,21 @@ export class SecurityActionService implements ISecurityActionService {
       throw new Error(`Failed to create or find pending case for ${member.user.tag}`);
     }
 
+    let notificationVerificationEvent = verificationEvent;
     if (
       !verificationEvent.thread_id ||
       (!shouldUseReviewThread && this.hasReportReviewThread(verificationEvent))
     ) {
-      await this.createCaseThread(
+      notificationVerificationEvent = await this.tryCreateCaseThread(
         member,
         verificationEvent,
         detectionResult,
         shouldUseReviewThread
       );
-      await this.upsertNotification(member, detectionResult, verificationEvent);
+      await this.upsertNotification(member, detectionResult, notificationVerificationEvent);
     }
 
-    return verificationEvent;
+    return notificationVerificationEvent;
   }
 
   private async updateDetectionMetadataForObservedAction(

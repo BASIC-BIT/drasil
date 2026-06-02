@@ -2318,6 +2318,65 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
   });
 
+  it('restricts an observed user report even when the missing case thread cannot be recreated', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const guildId = 'guild-observed-report-restrict-thread-fails';
+    const userId = 'user-observed-report-restrict-thread-fails';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1.0,
+      reasons: ['Reported by user reporter-observed. Reason: suspicious DM'],
+      detected_at: new Date(),
+      metadata: { type: 'user_report', reporterId: 'reporter-observed', content: 'suspicious DM' },
+    });
+    const existingCase = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    threadManager.createVerificationThread.mockResolvedValueOnce(null);
+
+    try {
+      await expect(
+        buildService().restrictObservedDetection(member, detectionEvent.id, moderator)
+      ).resolves.toBe(true);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+
+    const updatedCase = await verificationEventRepository.findById(existingCase.id);
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(updatedCase?.thread_id).toBeNull();
+    expect(getVerificationActionFailures(updatedCase?.metadata)).toEqual([
+      expect.objectContaining({
+        action: 'thread',
+        message: 'Failed to create verification thread for test-user#0001',
+      }),
+    ]);
+    expect(updatedDetection?.metadata).toMatchObject({
+      observed_action: AdminActionType.RESTRICT,
+      observed_action_by: moderator.id,
+    });
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ triggerSource: DetectionType.USER_REPORT }),
+      expect.objectContaining({ id: existingCase.id, thread_id: null }),
+      undefined
+    );
+    expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
+      detectionEvent.id,
+      'restricted this user',
+      moderator
+    );
+  });
+
   it('bans an observed user report without creating a verification thread', async () => {
     const guildId = 'guild-observed-report-ban';
     const userId = 'user-observed-report-ban';

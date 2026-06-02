@@ -472,11 +472,13 @@ function hasMessageSend(channel: unknown): channel is MessageSendChannel {
 }
 
 function sameStringArray(value: unknown, expected: string[]): boolean {
-  return (
-    Array.isArray(value) &&
-    value.length === expected.length &&
-    value.every((item, index) => item === expected[index])
-  );
+  if (!Array.isArray(value) || value.length !== expected.length) {
+    return false;
+  }
+
+  const sortedValue = [...value].sort();
+  const sortedExpected = [...expected].sort();
+  return sortedValue.every((item, index) => item === sortedExpected[index]);
 }
 
 function getCandidateDiscordUserId(candidate: unknown): string | null {

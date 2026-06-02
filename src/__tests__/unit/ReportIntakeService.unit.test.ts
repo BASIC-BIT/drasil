@@ -49,13 +49,13 @@ const buildMessage = (overrides: Record<string, unknown> = {}): Message =>
     ...overrides,
   }) as unknown as Message;
 
-const buildCandidate = (): ReportCandidate => ({
-  candidateId: 'guild-1:user-1',
-  discordUserId: 'user-1',
+const buildCandidate = (discordUserId = 'user-1'): ReportCandidate => ({
+  candidateId: `guild-1:${discordUserId}`,
+  discordUserId,
   serverId: 'guild-1',
-  username: 'target-user',
+  username: `target-${discordUserId}`,
   globalName: null,
-  displayName: 'Target User',
+  displayName: `Target ${discordUserId}`,
   nickname: null,
   avatarUrl: null,
   matchReasons: ['validated Discord message link'],
@@ -352,6 +352,31 @@ describe('ReportIntakeService', () => {
       candidate_suggestions: [expect.objectContaining({ discordUserId: 'user-1' })],
     });
     expect(result.confirmed).toBe(true);
+  });
+
+  it('does not repost confirmation prompts for the same candidates in a different order', async () => {
+    const channel = {
+      id: 'thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    const { service } = buildService({
+      resolvePlatformBackedCandidates: jest
+        .fn()
+        .mockResolvedValueOnce([buildCandidate('user-1'), buildCandidate('user-2')])
+        .mockResolvedValueOnce([buildCandidate('user-2'), buildCandidate('user-1')]),
+    });
+    await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+
+    await service.handleThreadMessage(buildMessage({ id: 'message-1', channel }));
+    await service.handleThreadMessage(buildMessage({ id: 'message-2', channel }));
+
+    expect(channel.send).toHaveBeenCalledTimes(1);
   });
 
   it('lets the reporter close the intake without deleting evidence', async () => {
