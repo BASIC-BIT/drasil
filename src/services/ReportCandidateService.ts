@@ -46,6 +46,7 @@ const DISCORD_MESSAGE_LINK_PATTERN =
   /https?:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/channels\/(\d{17,20}|@me)\/(\d{17,20})\/(\d{17,20})/gi;
 const DISCORD_MENTION_PATTERN = /<@!?(\d{17,20})>/g;
 const EXPLICIT_USER_ID_PATTERN = /\b(?:discord\s*)?(?:user\s*)?id[:#\s]+(\d{17,20})\b/gi;
+const STANDALONE_USER_ID_PATTERN = /\b\d{17,20}\b/g;
 
 @injectable()
 export class ReportCandidateService implements IReportCandidateService {
@@ -60,6 +61,13 @@ export class ReportCandidateService implements IReportCandidateService {
 
     for (const match of content.matchAll(EXPLICIT_USER_ID_PATTERN)) {
       explicitUserIds.add(match[1]);
+    }
+
+    const contentWithoutStructuredIds = content
+      .replace(DISCORD_MESSAGE_LINK_PATTERN, ' ')
+      .replace(DISCORD_MENTION_PATTERN, ' ');
+    for (const match of contentWithoutStructuredIds.matchAll(STANDALONE_USER_ID_PATTERN)) {
+      explicitUserIds.add(match[0]);
     }
 
     for (const match of content.matchAll(DISCORD_MESSAGE_LINK_PATTERN)) {

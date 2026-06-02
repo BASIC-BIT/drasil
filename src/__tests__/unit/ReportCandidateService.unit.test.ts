@@ -39,6 +39,17 @@ describe('ReportCandidateService', () => {
     ]);
   });
 
+  it('extracts standalone Discord snowflakes without treating message-link IDs as user IDs', () => {
+    const service = new ReportCandidateService();
+
+    const signals = service.extractCandidateSignals(
+      `Please check ${USER_ID} https://discord.com/channels/333333333333333333/444444444444444444/555555555555555555`
+    );
+
+    expect(signals.explicitUserIds).toEqual([USER_ID]);
+    expect(signals.messageLinks).toHaveLength(1);
+  });
+
   it('resolves mentions to current-server candidates without requiring confirmation', async () => {
     const service = new ReportCandidateService();
     const guild = {

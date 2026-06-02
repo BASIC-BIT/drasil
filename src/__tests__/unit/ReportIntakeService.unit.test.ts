@@ -203,6 +203,32 @@ describe('ReportIntakeService', () => {
     expect((message.channel as any).send).not.toHaveBeenCalled();
   });
 
+  it('preserves reporter candidate signals when an admin adds a note', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+
+    await service.handleThreadMessage(buildMessage({ id: 'message-1' }));
+    await service.handleThreadMessage(
+      buildMessage({
+        id: 'admin-message-1',
+        content: 'Admin note without reporter candidate signals.',
+        author: { id: 'admin-1', bot: false },
+      })
+    );
+
+    const stored = await reportIntakeRepository.findById(intake.id);
+    expect(stored?.metadata).toMatchObject({
+      candidate_signals: {
+        messageLinks: [expect.objectContaining({ messageId: 'source-message-1' })],
+      },
+    });
+  });
+
   it('confirms a suggested candidate and builds a submission reason', async () => {
     const { service, reportIntakeRepository } = buildService();
     const intake = await service.openIntakeFromThread({
@@ -409,6 +435,41 @@ describe('ReportIntakeService', () => {
     await service.handleThreadMessage(buildMessage({ id: 'message-2', channel }));
 
     expect(channel.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows accumulated candidates in later confirmation prompts', async () => {
+    const channel = {
+      id: 'thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    const { service } = buildService({
+      resolvePlatformBackedCandidates: jest
+        .fn()
+        .mockResolvedValueOnce([buildCandidate('user-1')])
+        .mockResolvedValueOnce([buildCandidate('user-2')]),
+    });
+    await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+
+    await service.handleThreadMessage(buildMessage({ id: 'message-1', channel }));
+    await service.handleThreadMessage(buildMessage({ id: 'message-2', channel }));
+
+    expect(channel.send).toHaveBeenCalledTimes(2);
+    expect(channel.send).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('<@user-1>'),
+      })
+    );
+    expect(channel.send).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('<@user-2>'),
+      })
+    );
   });
 
   it('lets the reporter close the intake without deleting evidence', async () => {

@@ -278,13 +278,14 @@ export class ReportIntakeService implements IReportIntakeService {
       : [];
     const now = new Date();
     const metadata = toRecord(intake.metadata);
+    const candidateSuggestions = this.mergeCandidateSuggestions(metadata, candidates);
     const nextMetadata = {
       ...metadata,
       last_evidence_message_id: message.id,
       last_evidence_author_id: message.author.id,
       last_evidence_recorded_at: now.toISOString(),
-      candidate_signals: signals,
-      candidate_suggestions: this.mergeCandidateSuggestions(metadata, candidates),
+      ...(isReporterMessage ? { candidate_signals: signals } : {}),
+      candidate_suggestions: candidateSuggestions,
     };
 
     if (isReporterMessage && this.isReporterCloseCommand(trimmedContent)) {
@@ -309,7 +310,7 @@ export class ReportIntakeService implements IReportIntakeService {
 
     const promptMetadata =
       candidates.length > 0
-        ? await this.sendCandidateConfirmationPrompt(intake, message, candidates)
+        ? await this.sendCandidateConfirmationPrompt(intake, message, candidateSuggestions)
         : {};
 
     const status = this.resolveNextStatus(intake.status, candidates.length);
@@ -434,7 +435,7 @@ export class ReportIntakeService implements IReportIntakeService {
   private mergeCandidateSuggestions(
     metadata: Record<string, unknown>,
     candidates: Awaited<ReturnType<IReportCandidateService['resolvePlatformBackedCandidates']>>
-  ): unknown[] {
+  ): Awaited<ReturnType<IReportCandidateService['resolvePlatformBackedCandidates']>> {
     const merged = new Map<string, unknown>();
     const suggestions = metadata.candidate_suggestions;
 
@@ -451,7 +452,9 @@ export class ReportIntakeService implements IReportIntakeService {
       merged.set(candidate.discordUserId, candidate);
     }
 
-    return Array.from(merged.values());
+    return Array.from(merged.values()) as Awaited<
+      ReturnType<IReportCandidateService['resolvePlatformBackedCandidates']>
+    >;
   }
 
   private buildSubmissionReason(
