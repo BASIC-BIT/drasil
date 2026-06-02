@@ -453,6 +453,7 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     let thread: ThreadChannel | null = null;
+    let intakeActivated = false;
     try {
       if (!this.reportIntakeService) {
         await interaction.editReply({ content: 'Report intake tracking is not available.' });
@@ -521,12 +522,14 @@ export class InteractionHandler implements IInteractionHandler {
           reason: 'thread_activation_failed',
         });
         await this.deleteFailedReportIntakeThread(thread);
+        thread = null;
         await interaction.editReply({
           content:
             'Could not prepare the private report thread. Please ask a server admin to check Drasil thread permissions.',
         });
         return;
       }
+      intakeActivated = true;
 
       await interaction.editReply({
         content: `Opened a private report thread: ${thread.url}\nPlease put the report context there.`,
@@ -535,11 +538,15 @@ export class InteractionHandler implements IInteractionHandler {
       await this.notifyReportIntakeThreadOpened(guildId, reporter, thread);
     } catch (error) {
       console.error('Error opening report intake thread:', error);
-      if (thread) {
+      if (thread && !intakeActivated) {
         await this.deleteFailedReportIntakeThread(thread);
       }
-      await interaction.editReply({
-        content: 'An error occurred while opening the report thread. Please try again later.',
+      const content =
+        intakeActivated && thread
+          ? `Opened a private report thread: ${thread.url}\nPlease put the report context there.`
+          : 'An error occurred while opening the report thread. Please try again later.';
+      await interaction.editReply({ content }).catch((replyError) => {
+        console.warn('Failed to update report intake interaction after setup error:', replyError);
       });
     }
   }

@@ -1884,6 +1884,62 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('keeps an activated report intake thread when the success reply fails', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const reporter = buildMember('guild-1', 'reporter-1');
+    const thread = {
+      id: 'report-thread-1',
+      url: 'https://discord.com/channels/report-thread-1',
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      members: {
+        fetch: jest.fn().mockResolvedValue(reporter),
+      },
+    });
+    threadManager.createReportIntakeThread.mockResolvedValueOnce(thread as any);
+    const reportIntakeService: jest.Mocked<IReportIntakeService> = {
+      openIntakeFromThread: jest.fn().mockResolvedValue({ id: 'intake-1' } as any),
+      findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),
+      handleThreadMessage: jest.fn().mockResolvedValue(false),
+      confirmCandidate: jest.fn().mockResolvedValue({ confirmed: false, message: '' }),
+      markSubmitted: jest.fn().mockResolvedValue(undefined),
+      markOpenFailed: jest.fn().mockResolvedValue(undefined),
+    };
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      reportIntakeService
+    );
+    const interaction = buildInteraction('report_user_initiate', 'guild-1', {
+      id: 'reporter-1',
+    } as User);
+    (interaction.editReply as jest.Mock)
+      .mockRejectedValueOnce(new Error('interaction expired'))
+      .mockResolvedValueOnce(undefined);
+
+    try {
+      await handler.handleButtonInteraction(interaction);
+    } finally {
+      consoleError.mockRestore();
+    }
+
+    expect(threadManager.activateReportIntakeThread).toHaveBeenCalledWith(thread, reporter);
+    expect(thread.delete).not.toHaveBeenCalled();
+    expect(reportIntakeService.markOpenFailed).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenLastCalledWith({
+      content:
+        'Opened a private report thread: https://discord.com/channels/report-thread-1\nPlease put the report context there.',
+    });
+  });
+
   it('submits a confirmed report intake target through the user report workflow', async () => {
     const reportIntakeService: jest.Mocked<IReportIntakeService> = {
       openIntakeFromThread: jest.fn().mockResolvedValue({} as any),
