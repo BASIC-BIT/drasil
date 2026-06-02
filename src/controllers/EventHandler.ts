@@ -29,6 +29,7 @@ import {
   IProductAnalyticsService,
   NOOP_PRODUCT_ANALYTICS_SERVICE,
 } from '../services/ProductAnalyticsService';
+import { REPORT_INTAKE_THREAD_NAME_PREFIX } from '../services/ThreadManager';
 import { Server } from '../repositories/types';
 import {
   ISetupDiagnosticsService,
@@ -198,6 +199,10 @@ export class EventHandler implements IEventHandler {
         }
       } catch (error) {
         console.error('Error handling report intake thread message:', error);
+        if (this.isLikelyReportIntakeThread(message)) {
+          this.rememberRecentMessage(message);
+          return;
+        }
       }
     }
 
@@ -292,6 +297,17 @@ export class EventHandler implements IEventHandler {
     } finally {
       this.rememberRecentMessage(message);
     }
+  }
+
+  private isLikelyReportIntakeThread(message: Message): boolean {
+    if (!message.channel.isThread()) {
+      return false;
+    }
+
+    const channelName = (message.channel as { name?: unknown }).name;
+    return (
+      typeof channelName === 'string' && channelName.startsWith(REPORT_INTAKE_THREAD_NAME_PREFIX)
+    );
   }
 
   private warmServerConfigCache(guildId: string): void {

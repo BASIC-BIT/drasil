@@ -28,6 +28,7 @@ import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 export const VERIFICATION_THREAD_TYPE_METADATA_KEY = 'thread_type';
 export const VERIFICATION_THREAD_TYPE = 'verification';
 export const REPORT_REVIEW_THREAD_TYPE = 'report_review';
+export const REPORT_INTAKE_THREAD_NAME_PREFIX = 'Report intake:';
 export const CASE_STAFF_ROUTING_METADATA_KEY = 'case_staff_routing';
 
 /**
@@ -459,7 +460,7 @@ export class ThreadManager implements IThreadManager {
   ): Promise<ThreadChannel | null> {
     try {
       const thread = await channel.threads.create({
-        name: `Report intake: ${reporter.user.username}`,
+        name: `${REPORT_INTAKE_THREAD_NAME_PREFIX} ${reporter.user.username}`,
         autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
         reason: `User-facing report intake thread opened by: ${reporter.user.tag}`,
         type: ChannelType.PrivateThread,
