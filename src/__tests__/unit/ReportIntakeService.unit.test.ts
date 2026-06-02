@@ -196,8 +196,9 @@ describe('ReportIntakeService', () => {
 
     const evidence = await reportIntakeRepository.listEvidence(intake.id);
     const stored = await reportIntakeRepository.findById(intake.id);
-    expect(evidence.map((item) => item.kind)).toContain(ReportIntakeEvidenceKind.ADMIN_NOTE);
+    expect(evidence.map((item) => item.kind)).toEqual([ReportIntakeEvidenceKind.ADMIN_NOTE]);
     expect(stored?.status).toBe(ReportIntakeStatus.COLLECTING_EVIDENCE);
+    expect(candidateService.extractCandidateSignals).not.toHaveBeenCalled();
     expect(candidateService.resolvePlatformBackedCandidates).not.toHaveBeenCalled();
     expect((message.channel as any).send).not.toHaveBeenCalled();
   });

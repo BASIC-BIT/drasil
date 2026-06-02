@@ -231,7 +231,9 @@ export class ReportIntakeService implements IReportIntakeService {
       });
     }
 
-    const signals = this.candidateService.extractCandidateSignals(trimmedContent);
+    const signals = isReporterMessage
+      ? this.candidateService.extractCandidateSignals(trimmedContent)
+      : { mentions: [], explicitUserIds: [], messageLinks: [] };
     for (const link of signals.messageLinks) {
       await this.reportIntakeRepository.addEvidence({
         intakeId: intake.id,
@@ -248,7 +250,9 @@ export class ReportIntakeService implements IReportIntakeService {
       });
     }
 
-    const eligibleImages = await this.selectEligibleImageAttachments(intake.server_id, message);
+    const eligibleImages = isReporterMessage
+      ? await this.selectEligibleImageAttachments(intake.server_id, message)
+      : [];
     for (const attachment of eligibleImages) {
       await this.reportIntakeRepository.addEvidence({
         intakeId: intake.id,
