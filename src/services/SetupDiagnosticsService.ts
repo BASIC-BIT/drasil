@@ -162,7 +162,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         serverConfig.settings.report_instructions_channel_id,
         'report-instructions-channel',
         'Report instructions channel',
-        ADMIN_CHANNEL_PERMISSIONS,
+        VERIFICATION_CHANNEL_PERMISSIONS,
         issues
       );
     }
@@ -208,7 +208,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         candidate.reportInstructionsChannelId,
         'report-instructions-channel',
         'Report instructions channel',
-        ADMIN_CHANNEL_PERMISSIONS,
+        VERIFICATION_CHANNEL_PERMISSIONS,
         issues
       );
     }

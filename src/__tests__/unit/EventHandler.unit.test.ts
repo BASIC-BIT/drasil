@@ -9,6 +9,7 @@ describe('EventHandler (unit)', () => {
     configService?: Record<string, jest.Mock>;
     notificationManager?: Record<string, jest.Mock>;
     setupDiagnosticsService?: Record<string, jest.Mock>;
+    reportIntakeService?: Record<string, jest.Mock>;
   }): EventHandler {
     const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
     const detectionOrchestrator = overrides?.detectionOrchestrator ?? {
@@ -58,7 +59,8 @@ describe('EventHandler (unit)', () => {
       { handleButtonInteraction: jest.fn(), handleModalSubmit: jest.fn() } as any,
       { handleThreadMessage: jest.fn().mockResolvedValue(false) } as any,
       undefined,
-      overrides?.setupDiagnosticsService as any
+      overrides?.setupDiagnosticsService as any,
+      overrides?.reportIntakeService as any
     );
   }
 
@@ -230,6 +232,114 @@ describe('EventHandler (unit)', () => {
         username: 'test-user',
       })
     );
+  });
+
+  it('records report intake thread messages before automatic detection', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const reportIntakeService = {
+      handleThreadMessage: jest.fn().mockResolvedValue(true),
+    };
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.channel = { id: 'thread-1', isThread: jest.fn().mockReturnValue(true) };
+    const handler = buildHandler({ detectionOrchestrator, reportIntakeService });
+
+    await (handler as any).handleMessage(message);
+
+    expect(reportIntakeService.handleThreadMessage).toHaveBeenCalledWith(message);
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
+  });
+
+  it('records report intake thread messages from detection-exempt moderators', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn(),
+      getCachedServerConfig: jest.fn().mockReturnValue({
+        settings: { automatic_detection_exempt_moderators: true },
+      }),
+      getServerConfig: jest.fn(),
+    };
+    const reportIntakeService = {
+      handleThreadMessage: jest.fn().mockResolvedValue(true),
+    };
+    const message = buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers)) as any;
+    message.channel = { id: 'thread-1', isThread: jest.fn().mockReturnValue(true) };
+    const handler = buildHandler({ detectionOrchestrator, configService, reportIntakeService });
+
+    await (handler as any).handleMessage(message);
+
+    expect(reportIntakeService.handleThreadMessage).toHaveBeenCalledWith(message);
+    expect(configService.initialize).not.toHaveBeenCalled();
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
+  });
+
+  it('continues automatic detection when report intake handling fails', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'free nitro',
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const reportIntakeService = {
+      handleThreadMessage: jest.fn().mockRejectedValue(new Error('database unavailable')),
+    };
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.channel = { id: 'thread-1', isThread: jest.fn().mockReturnValue(true) };
+    const handler = buildHandler({ detectionOrchestrator, reportIntakeService });
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await (handler as any).handleMessage(message);
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(reportIntakeService.handleThreadMessage).toHaveBeenCalledWith(message);
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'free nitro',
+      expect.objectContaining({
+        serverId: 'guild-1',
+        userId: 'user-1',
+      })
+    );
+  });
+
+  it('does not run automatic detection for likely report intake threads when intake handling fails', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const reportIntakeService = {
+      handleThreadMessage: jest.fn().mockRejectedValue(new Error('database unavailable')),
+    };
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.channel = {
+      id: 'thread-1',
+      name: 'Report intake: test-user',
+      isThread: jest.fn().mockReturnValue(true),
+    };
+    const handler = buildHandler({ detectionOrchestrator, reportIntakeService });
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await (handler as any).handleMessage(message);
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(reportIntakeService.handleThreadMessage).toHaveBeenCalledWith(message);
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
   });
 
   it('passes recent user messages and same-channel context into message detection', async () => {

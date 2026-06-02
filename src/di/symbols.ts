@@ -21,6 +21,8 @@ export const TYPES = {
   VerificationThreadAnalysisService: Symbol.for('VerificationThreadAnalysisService'),
   ProductAnalyticsService: Symbol.for('ProductAnalyticsService'),
   SetupDiagnosticsService: Symbol.for('SetupDiagnosticsService'),
+  ReportCandidateService: Symbol.for('ReportCandidateService'),
+  ReportIntakeService: Symbol.for('ReportIntakeService'),
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),
@@ -29,6 +31,7 @@ export const TYPES = {
   ServerMemberRepository: Symbol.for('ServerMemberRepository'),
   PrismaClient: Symbol.for('PrismaClient'),
   DetectionEventsRepository: Symbol.for('DetectionEventsRepository'),
+  ReportIntakeRepository: Symbol.for('ReportIntakeRepository'),
 
   // External dependencies
   DiscordClient: Symbol.for('DiscordClient'),

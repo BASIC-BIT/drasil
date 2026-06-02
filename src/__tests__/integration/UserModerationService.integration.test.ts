@@ -76,6 +76,8 @@ describeIntegration('UserModerationService (integration)', () => {
     threadManager = {
       createVerificationThread: jest.fn().mockResolvedValue({} as any),
       createReportReviewThread: jest.fn().mockResolvedValue({} as any),
+      createReportIntakeThread: jest.fn().mockResolvedValue({} as any),
+      activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
     };

@@ -29,11 +29,13 @@ import {
   IProductAnalyticsService,
   NOOP_PRODUCT_ANALYTICS_SERVICE,
 } from '../services/ProductAnalyticsService';
+import { REPORT_INTAKE_THREAD_NAME_PREFIX } from '../services/ThreadManager';
 import { Server } from '../repositories/types';
 import {
   ISetupDiagnosticsService,
   SetupDiagnosticReport,
 } from '../services/SetupDiagnosticsService';
+import { IReportIntakeService } from '../services/ReportIntakeService';
 
 const RECENT_USER_CONTEXT_MESSAGE_LIMIT = 5;
 const RECENT_USER_CONTEXT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -95,6 +97,7 @@ export class EventHandler implements IEventHandler {
   private verificationThreadAnalysisService: IVerificationThreadAnalysisService;
   private productAnalyticsService: IProductAnalyticsService;
   private setupDiagnosticsService?: ISetupDiagnosticsService;
+  private reportIntakeService?: IReportIntakeService;
   private serverConfigWarmups: Set<string> = new Set();
   private configInitializePromise: Promise<void> | null = null;
   private recentMessagesByServer: Map<string, Map<string, RecentUserMessageContext[]>> = new Map();
@@ -115,7 +118,10 @@ export class EventHandler implements IEventHandler {
     productAnalyticsService?: IProductAnalyticsService,
     @inject(TYPES.SetupDiagnosticsService)
     @optional()
-    setupDiagnosticsService?: ISetupDiagnosticsService
+    setupDiagnosticsService?: ISetupDiagnosticsService,
+    @inject(TYPES.ReportIntakeService)
+    @optional()
+    reportIntakeService?: IReportIntakeService
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -127,6 +133,7 @@ export class EventHandler implements IEventHandler {
     this.verificationThreadAnalysisService = verificationThreadAnalysisService;
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.setupDiagnosticsService = setupDiagnosticsService;
+    this.reportIntakeService = reportIntakeService;
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -161,8 +168,6 @@ export class EventHandler implements IEventHandler {
         await this.commandHandler.handleMessageContextMenuCommand(interaction);
       } else if (interaction.isButton()) {
         await this.interactionHandler.handleButtonInteraction(interaction);
-      } else if (interaction.isUserSelectMenu()) {
-        await this.interactionHandler.handleUserSelectMenuInteraction(interaction);
       } else if (interaction.isModalSubmit()) {
         // Added check for modal submit
         await this.interactionHandler.handleModalSubmit(interaction);
@@ -184,6 +189,22 @@ export class EventHandler implements IEventHandler {
     // Ignore messages from bots (including self)
     if (message.author.bot) return;
     if (!message.guild || !message.member) return;
+
+    if (message.channel.isThread()) {
+      try {
+        const reportIntakeHandled = await this.reportIntakeService?.handleThreadMessage(message);
+        if (reportIntakeHandled) {
+          this.rememberRecentMessage(message);
+          return;
+        }
+      } catch (error) {
+        console.error('Error handling report intake thread message:', error);
+        if (this.isLikelyReportIntakeThread(message)) {
+          this.rememberRecentMessage(message);
+          return;
+        }
+      }
+    }
 
     // Handle ping command via traditional message (kept for backward compatibility)
     if (message.content === '!ping') {
@@ -276,6 +297,17 @@ export class EventHandler implements IEventHandler {
     } finally {
       this.rememberRecentMessage(message);
     }
+  }
+
+  private isLikelyReportIntakeThread(message: Message): boolean {
+    if (!message.channel.isThread()) {
+      return false;
+    }
+
+    const channelName = (message.channel as { name?: unknown }).name;
+    return (
+      typeof channelName === 'string' && channelName.startsWith(REPORT_INTAKE_THREAD_NAME_PREFIX)
+    );
   }
 
   private warmServerConfigCache(guildId: string): void {

@@ -39,6 +39,18 @@ The maintainer watching deployments, logs, permissions, and Discord API failures
 Current UX result:
 Good for privacy and low clutter. Reports start as triage alerts instead of creating a thread for every report.
 
+### Guild Report Instructions Button
+
+1. Reporter clicks the report instructions button in a configured report channel.
+2. Drasil opens a private report intake thread and adds the reporter.
+3. Drasil adds configured case responders when responder routing is enabled.
+4. Reporter adds freeform context: who or what they are reporting, message links, screenshots, IDs, mentions, and what happened.
+5. Moderators can ask follow-up questions in the thread and decide whether to open a user-specific case.
+
+Current UX result:
+Avoids Discord's limited recent-user picker. The button is now context intake, not target selection.
+See `docs/report-intake-agent-design.md` for the planned VLM/LangGraph follow-up flow.
+
 ### Guild `Report User`
 
 1. Reporter right-clicks a user and chooses `Apps` -> `Report User`.
