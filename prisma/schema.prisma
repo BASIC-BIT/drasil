@@ -154,7 +154,6 @@ model report_intakes {
   @@index([server_id], map: "idx_report_intakes_server")
   @@index([reporter_id], map: "idx_report_intakes_reporter")
   @@index([status], map: "idx_report_intakes_status")
-  @@index([thread_id], map: "idx_report_intakes_thread")
 }
 
 model report_intake_evidence {

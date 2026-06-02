@@ -81,13 +81,12 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
 
   async findOpenByThreadId(threadId: string): Promise<ReportIntake | null> {
     try {
-      const intake = await this.prisma.report_intakes.findFirst({
-        where: {
-          thread_id: threadId,
-          status: { in: OPEN_INTAKE_STATUSES as report_intake_status[] },
-        },
-        orderBy: { created_at: 'desc' },
+      const intake = await this.prisma.report_intakes.findUnique({
+        where: { thread_id: threadId },
       });
+      if (!intake || !(OPEN_INTAKE_STATUSES as report_intake_status[]).includes(intake.status)) {
+        return null;
+      }
       return intake as ReportIntake | null;
     } catch (error) {
       this.handleError(error, 'findOpenReportIntakeByThreadId');

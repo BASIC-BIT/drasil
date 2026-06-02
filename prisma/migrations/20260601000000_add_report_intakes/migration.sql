@@ -53,7 +53,6 @@ CREATE UNIQUE INDEX "report_intakes_thread_id_key" ON "report_intakes"("thread_i
 CREATE INDEX "idx_report_intakes_server" ON "report_intakes"("server_id");
 CREATE INDEX "idx_report_intakes_reporter" ON "report_intakes"("reporter_id");
 CREATE INDEX "idx_report_intakes_status" ON "report_intakes"("status");
-CREATE INDEX "idx_report_intakes_thread" ON "report_intakes"("thread_id");
 CREATE INDEX "idx_report_intake_evidence_intake" ON "report_intake_evidence"("intake_id");
 CREATE INDEX "idx_report_intake_evidence_kind" ON "report_intake_evidence"("kind");
 CREATE INDEX "idx_report_intake_evidence_message" ON "report_intake_evidence"("source_message_id");
