@@ -225,6 +225,18 @@ describe('CommandHandler (unit)', () => {
     );
   });
 
+  it('registers restricted-role lockdown config commands', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const configCommand = commands.find((c) => c.name === 'config');
+    const lockdownGroup = configCommand.options.find((option: any) => option.name === 'lockdown');
+
+    expect(lockdownGroup).toBeDefined();
+    expect(lockdownGroup.options.map((option: any) => option.name)).toEqual(
+      expect.arrayContaining(['view', 'audit', 'apply', 'disable', 'allow-add', 'allow-remove'])
+    );
+  });
+
   it('denies legacy test commands for non-admin members', async () => {
     const { handler } = buildHandler();
     const message = {

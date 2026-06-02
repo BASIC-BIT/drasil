@@ -21,6 +21,7 @@ export const TYPES = {
   VerificationThreadAnalysisService: Symbol.for('VerificationThreadAnalysisService'),
   ProductAnalyticsService: Symbol.for('ProductAnalyticsService'),
   SetupDiagnosticsService: Symbol.for('SetupDiagnosticsService'),
+  RestrictedRoleLockdownService: Symbol.for('RestrictedRoleLockdownService'),
   ReportCandidateService: Symbol.for('ReportCandidateService'),
   ReportIntakeService: Symbol.for('ReportIntakeService'),
 
