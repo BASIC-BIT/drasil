@@ -42,6 +42,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     permissionsLocked?: boolean | null;
     restrictedOverwrite?: ReturnType<typeof createOverwrite>;
     extraOverwrites?: readonly ReturnType<typeof createOverwrite>[];
+    keepPermissionsLockedAfterSet?: boolean;
   }) => {
     const restrictedOverwrite = options.restrictedOverwrite ?? createOverwrite();
     const cache = new Map([
@@ -65,7 +66,9 @@ describe('RestrictedRoleLockdownService (unit)', () => {
           return Promise.resolve(undefined);
         }),
         set: jest.fn().mockImplementation(() => {
-          channel.permissionsLocked = false;
+          if (!options.keepPermissionsLockedAfterSet) {
+            channel.permissionsLocked = false;
+          }
           return Promise.resolve(undefined);
         }),
       },
@@ -227,6 +230,40 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       restricted_lockdown_enabled: true,
     });
+  });
+
+  it('continues apply when the immediate re-audit still marks a just-unsynced channel locked', async () => {
+    const category = createChannel({
+      id: 'category-1',
+      name: 'public',
+      type: ChannelType.GuildCategory,
+    });
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+      parentId: 'category-1',
+      permissionsLocked: true,
+      keepPermissionsLockedAfterSet: true,
+    });
+    const guild = createGuild([category, verificationChannel]);
+    const configService = createConfigService();
+    const service = new RestrictedRoleLockdownService(configService as any);
+
+    const report = await service.applyGuild(guild, 'admin-1', { unsyncAllowedChannels: true });
+
+    expect(verificationChannel.permissionOverwrites.set).toHaveBeenCalled();
+    expect(category.permissionOverwrites.edit).toHaveBeenCalledWith(
+      restrictedRoleId,
+      expect.objectContaining({ ViewChannel: false, SendMessages: false }),
+      expect.any(Object)
+    );
+    expect(report.errorCount).toBe(0);
+    expect(report.syncedAllowedChannels).toEqual([]);
+    expect(report.unsyncedAllowedChannels.map((action) => action.channelId)).toEqual([
+      'verification-channel-1',
+    ]);
+    expect(report.appliedActions.map((action) => action.channelId)).toEqual(['category-1']);
   });
 
   it('applies missing lockdown denies and marks lockdown enabled', async () => {

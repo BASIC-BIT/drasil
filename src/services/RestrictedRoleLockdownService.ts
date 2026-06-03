@@ -167,7 +167,10 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
         });
       }
 
-      report = await this.buildReport(guild, false);
+      const recentlyUnsyncedAllowedChannelIds = new Set(
+        unsyncedAllowedChannels.map((action) => action.channelId)
+      );
+      report = await this.buildReport(guild, false, recentlyUnsyncedAllowedChannelIds);
       if (report.errorCount > 0) {
         return { ...report, unsyncedAllowedChannels };
       }
@@ -239,7 +242,11 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
       });
     }
 
-    const refreshed = await this.buildReport(guild, true);
+    const refreshed = await this.buildReport(
+      guild,
+      true,
+      new Set(unsyncedAllowedChannels.map((action) => action.channelId))
+    );
     return this.toReport({
       guildId: guild.id,
       checkedAt: refreshed.checkedAt,
@@ -258,7 +265,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
   private async buildReport(
     guild: Guild,
-    skipSetupChecks: boolean
+    skipSetupChecks: boolean,
+    recentlyUnsyncedAllowedChannelIds: ReadonlySet<string> = new Set()
   ): Promise<RestrictedLockdownReport> {
     const serverConfig = await this.configService.getServerConfig(guild.id);
     const settings = getRestrictedLockdownSettings(serverConfig.settings);
@@ -326,7 +334,12 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
       const parentId = channel.parentId ?? null;
       if (allowedChannelIds.has(channel.id)) {
-        if (parentId && deniedCategoryIds.has(parentId) && channel.permissionsLocked === true) {
+        if (
+          parentId &&
+          deniedCategoryIds.has(parentId) &&
+          channel.permissionsLocked === true &&
+          !recentlyUnsyncedAllowedChannelIds.has(channel.id)
+        ) {
           syncedAllowedChannels.push(this.toPlannedAction(channel, 'channel'));
           issues.push({
             severity: 'error',
