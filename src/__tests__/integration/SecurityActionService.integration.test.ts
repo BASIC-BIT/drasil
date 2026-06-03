@@ -84,6 +84,10 @@ describeIntegration('SecurityActionService (integration)', () => {
       createReportReviewThread: jest
         .fn()
         .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
+      createPrivateEvidenceThread: jest.fn().mockResolvedValue({
+        id: 'evidence-1',
+        url: 'https://discord.com/channels/evidence-1',
+      } as any),
       createReportIntakeThread: jest.fn().mockResolvedValue({} as any),
       activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
@@ -100,6 +104,7 @@ describeIntegration('SecurityActionService (integration)', () => {
       restrictUser: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
+      syncAlreadyBannedUser: jest.fn().mockResolvedValue(1),
     };
   });
 

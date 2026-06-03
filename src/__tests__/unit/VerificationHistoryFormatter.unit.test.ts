@@ -31,6 +31,7 @@ const buildEvent = (
   user_id: 'user-1',
   detection_event_id: null,
   thread_id: 'thread-1',
+  private_evidence_thread_id: null,
   notification_message_id: 'notif-1',
   status: VerificationStatus.VERIFIED,
   created_at: new Date('2024-01-01T00:00:00.000Z'),

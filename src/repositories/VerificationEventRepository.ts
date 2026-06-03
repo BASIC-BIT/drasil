@@ -12,6 +12,7 @@ export interface IVerificationEventRepository {
   ): Promise<VerificationEvent[]>;
   findActiveByUserAndServer(userId: string, serverId: string): Promise<VerificationEvent | null>;
   findByDetectionEvent(detectionEventId: string): Promise<VerificationEvent[]>;
+  findPendingByServer(serverId: string): Promise<VerificationEvent[]>;
   createFromDetection(
     detectionEventId: string | null,
     serverId: string, // Explicitly require server/user IDs
@@ -126,6 +127,21 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
+  async findPendingByServer(serverId: string): Promise<VerificationEvent[]> {
+    try {
+      const events = await this.prisma.verification_events.findMany({
+        where: {
+          server_id: serverId,
+          status: VerificationStatus.PENDING,
+        },
+        orderBy: { updated_at: 'asc' },
+      });
+      return events as VerificationEvent[];
+    } catch (error) {
+      this.handleError(error, 'findPendingByServer');
+    }
+  }
+
   // Modified: Requires serverId and userId explicitly now
   async createFromDetection(
     detectionEventId: string | null,
@@ -191,6 +207,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
       const updateData: Prisma.verification_eventsUpdateInput = {
         // Existing fields
         thread_id: data.thread_id,
+        private_evidence_thread_id: data.private_evidence_thread_id,
         notification_message_id: data.notification_message_id,
         notes: data.notes,
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- data.metadata can be null or undefined

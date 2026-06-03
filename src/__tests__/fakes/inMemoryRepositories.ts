@@ -437,6 +437,15 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       .map((event) => ({ ...event }));
   }
 
+  async findPendingByServer(serverId: string): Promise<VerificationEvent[]> {
+    return this.events
+      .filter(
+        (event) => event.server_id === serverId && event.status === VerificationStatus.PENDING
+      )
+      .sort((a, b) => a.updated_at.getTime() - b.updated_at.getTime())
+      .map((event) => ({ ...event }));
+  }
+
   async createFromDetection(
     detectionEventId: string | null,
     serverId: string,
@@ -450,6 +459,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       user_id: userId,
       detection_event_id: detectionEventId,
       thread_id: null,
+      private_evidence_thread_id: null,
       notification_message_id: null,
       status,
       created_at: now,
@@ -495,6 +505,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     const updated: VerificationEvent = { ...existing };
 
     if (data.thread_id !== undefined) updated.thread_id = data.thread_id;
+    if (data.private_evidence_thread_id !== undefined)
+      updated.private_evidence_thread_id = data.private_evidence_thread_id;
     if (data.notification_message_id !== undefined)
       updated.notification_message_id = data.notification_message_id;
     if (data.notes !== undefined) updated.notes = data.notes;

@@ -37,6 +37,7 @@ const buildMember = (guildId: string, userId: string): GuildMember =>
       username: 'test-user',
       tag: 'test-user#0001',
     } as User,
+    permissions: { has: jest.fn().mockReturnValue(false) },
   }) as unknown as GuildMember;
 
 const buildInteraction = (customId: string, guildId: string, user: User): ButtonInteraction => {
@@ -58,6 +59,9 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
     }),
     followUp: jest.fn().mockResolvedValue(undefined),
     reply: jest.fn().mockImplementation(async () => {
+      interaction.replied = true;
+    }),
+    update: jest.fn().mockImplementation(async () => {
       interaction.replied = true;
     }),
     showModal: jest.fn().mockResolvedValue(undefined),
@@ -110,6 +114,7 @@ describe('InteractionHandler (unit)', () => {
       restrictUser: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
+      syncAlreadyBannedUser: jest.fn().mockResolvedValue(1),
     };
     securityActionService = {
       handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
@@ -173,6 +178,7 @@ describe('InteractionHandler (unit)', () => {
       findActiveByUserAndServer: jest.fn(),
       findByUserAndServer: jest.fn(),
       findByDetectionEvent: jest.fn(),
+      findPendingByServer: jest.fn(),
       createFromDetection: jest.fn(),
       getVerificationHistory: jest.fn(),
       findById: jest.fn(),
@@ -186,6 +192,9 @@ describe('InteractionHandler (unit)', () => {
       createReportReviewThread: jest
         .fn()
         .mockResolvedValue({ url: 'https://discord.com/channels/thread-1' } as any),
+      createPrivateEvidenceThread: jest
+        .fn()
+        .mockResolvedValue({ url: 'https://discord.com/channels/evidence-1' } as any),
       createReportIntakeThread: jest.fn().mockResolvedValue({
         id: 'report-thread-1',
         url: 'https://discord.com/channels/report-thread-1',
@@ -227,7 +236,7 @@ describe('InteractionHandler (unit)', () => {
       threadManager,
       adminActionRepository
     );
-    const interaction = buildInteraction('verify_user-1', 'guild-1', {
+    const interaction = buildInteraction('admin_actions:confirm_verify:case:user-1', 'guild-1', {
       id: 'admin-1',
     } as User);
     grantInteractionPermissions(interaction);
@@ -268,6 +277,93 @@ describe('InteractionHandler (unit)', () => {
     expect(JSON.stringify(modal.toJSON())).toContain('Final notes (optional)');
   });
 
+  it('shows sync existing ban to a Ban Members moderator when a pending case user is already banned', async () => {
+    const verificationEvent: VerificationEvent = {
+      id: 'ver-1',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_event_id: null,
+      thread_id: null,
+      private_evidence_thread_id: null,
+      notification_message_id: 'message-1',
+      status: VerificationStatus.PENDING,
+      created_at: new Date(),
+      updated_at: new Date(),
+      resolved_at: null,
+      resolved_by: null,
+      notes: null,
+      metadata: null,
+    };
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      bans: { fetch: jest.fn().mockResolvedValue({ user: { id: 'user-1' } }) },
+      members: {
+        me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'admin-1')),
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('admin_actions:menu:case:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantOnlyBanMembersPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Discord already shows this user as banned'),
+        components: expect.any(Array),
+        flags: MessageFlags.Ephemeral,
+      })
+    );
+    const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
+    expect(JSON.stringify(reply.components)).toContain('Sync Existing Ban');
+    expect(JSON.stringify(reply.components)).not.toContain('Ban User');
+  });
+
+  it('syncs pending cases for an already-banned user after confirmation', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('admin_actions:confirm_sync_ban:case:user-1', 'guild-1', {
+      id: 'ban-mod-1',
+    } as User);
+    grantOnlyBanMembersPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(userModerationService.syncAlreadyBannedUser).toHaveBeenCalledWith(
+      expect.any(Object),
+      'user-1',
+      interaction.user
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content:
+        'Synced 1 pending verification case for <@user-1> to banned because Discord already has an existing ban.',
+      allowedMentions: { parse: [] },
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('handles thread button and creates a verification thread', async () => {
     const verificationEvent: VerificationEvent = {
       id: 'ver-1',
@@ -275,6 +371,7 @@ describe('InteractionHandler (unit)', () => {
       user_id: 'user-1',
       detection_event_id: null,
       thread_id: null,
+      private_evidence_thread_id: null,
       notification_message_id: 'message-1',
       status: VerificationStatus.PENDING,
       created_at: new Date(),
@@ -296,7 +393,7 @@ describe('InteractionHandler (unit)', () => {
       threadManager,
       adminActionRepository
     );
-    const interaction = buildInteraction('thread_user-1', 'guild-1', {
+    const interaction = buildInteraction('admin_actions:confirm_thread:case:user-1', 'guild-1', {
       id: 'admin-1',
     } as User);
     grantInteractionPermissions(interaction);
@@ -318,6 +415,7 @@ describe('InteractionHandler (unit)', () => {
       user_id: 'user-1',
       detection_event_id: null,
       thread_id: null,
+      private_evidence_thread_id: null,
       notification_message_id: 'message-1',
       status: VerificationStatus.VERIFIED,
       created_at: new Date(),
@@ -339,7 +437,7 @@ describe('InteractionHandler (unit)', () => {
       threadManager,
       adminActionRepository
     );
-    const interaction = buildInteraction('reopen_user-1', 'guild-1', {
+    const interaction = buildInteraction('admin_actions:confirm_reopen:case:user-1', 'guild-1', {
       id: 'admin-1',
     } as User);
     grantInteractionPermissions(interaction);
@@ -630,9 +728,13 @@ describe('InteractionHandler (unit)', () => {
       threadManager,
       adminActionRepository
     );
-    const interaction = buildInteraction('observed:open:user-1:det-1', 'guild-1', {
-      id: 'admin-1',
-    } as User);
+    const interaction = buildInteraction(
+      'admin_actions:confirm_observed_open:observed:user-1:det-1',
+      'guild-1',
+      {
+        id: 'admin-1',
+      } as User
+    );
     grantInteractionPermissions(interaction);
 
     await handler.handleButtonInteraction(interaction);
@@ -689,9 +791,13 @@ describe('InteractionHandler (unit)', () => {
       threadManager,
       adminActionRepository
     );
-    const interaction = buildInteraction('observed:false_positive:user-1:det-1', 'guild-1', {
-      id: 'admin-1',
-    } as User);
+    const interaction = buildInteraction(
+      'admin_actions:confirm_observed_false_positive:observed:user-1:det-1',
+      'guild-1',
+      {
+        id: 'admin-1',
+      } as User
+    );
     grantInteractionPermissions(interaction);
 
     await handler.handleButtonInteraction(interaction);
@@ -746,7 +852,7 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
-  it('acknowledges observed popup action before fetching permissions', async () => {
+  it('shows confirmation for observed popup action before fetching permissions', async () => {
     (client.guilds.fetch as jest.Mock).mockResolvedValue({
       members: {
         fetch: jest.fn().mockResolvedValue({
@@ -764,26 +870,27 @@ describe('InteractionHandler (unit)', () => {
       threadManager,
       adminActionRepository
     );
-    const interaction = buildInteraction('observed:false_positive:user-1:det-1', 'guild-1', {
-      id: 'admin-1',
-    } as User);
+    const interaction = buildInteraction(
+      'admin_actions:observed_false_positive:observed:user-1:det-1',
+      'guild-1',
+      {
+        id: 'admin-1',
+      } as User
+    );
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
-    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
-      (client.guilds.fetch as jest.Mock).mock.invocationCallOrder[0]
+    expect(interaction.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Mark this observed alert'),
+        components: expect.any(Array),
+      })
     );
-    expect(securityActionService.dismissObservedDetection).toHaveBeenCalledWith(
-      'guild-1',
-      'user-1',
-      'det-1',
-      interaction.user,
-      AdminActionType.FALSE_POSITIVE
-    );
+    expect(client.guilds.fetch).not.toHaveBeenCalled();
+    expect(securityActionService.dismissObservedDetection).not.toHaveBeenCalled();
   });
 
-  it('keeps observed popup permission denial private after acknowledgement', async () => {
+  it('keeps confirmed observed action permission denial private', async () => {
     (client.guilds.fetch as jest.Mock).mockResolvedValue({
       members: {
         fetch: jest.fn().mockResolvedValue({
@@ -801,16 +908,19 @@ describe('InteractionHandler (unit)', () => {
       threadManager,
       adminActionRepository
     );
-    const interaction = buildInteraction('observed:dismiss:user-1:det-1', 'guild-1', {
-      id: 'viewer-1',
-    } as User);
+    const interaction = buildInteraction(
+      'admin_actions:confirm_observed_dismiss:observed:user-1:det-1',
+      'guild-1',
+      {
+        id: 'viewer-1',
+      } as User
+    );
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
-    expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'You need moderation permissions to dismiss an alert.',
-      components: [],
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'You need moderation permissions to use this observed action.',
+      flags: MessageFlags.Ephemeral,
     });
     expect(securityActionService.dismissObservedDetection).not.toHaveBeenCalled();
   });
@@ -829,9 +939,13 @@ describe('InteractionHandler (unit)', () => {
       threadManager,
       adminActionRepository
     );
-    const interaction = buildInteraction('observed:undo_dismiss:user-1:det-1', 'guild-1', {
-      id: 'admin-1',
-    } as User);
+    const interaction = buildInteraction(
+      'admin_actions:confirm_observed_undo_dismiss:observed:user-1:det-1',
+      'guild-1',
+      {
+        id: 'admin-1',
+      } as User
+    );
     grantInteractionPermissions(interaction);
 
     await handler.handleButtonInteraction(interaction);
