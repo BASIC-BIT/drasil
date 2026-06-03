@@ -126,8 +126,7 @@ export interface INotificationManager {
   markObservedDetectionActionTaken(
     detectionEventId: string,
     actionDescription: string,
-    admin: User,
-    options?: { undoButtonLabel?: string }
+    admin: User
   ): Promise<boolean>;
 
   restoreObservedDetectionActions(
@@ -321,10 +320,8 @@ export class NotificationManager implements INotificationManager {
   public async markObservedDetectionActionTaken(
     detectionEventId: string,
     actionDescription: string,
-    admin: User,
-    _options?: { undoButtonLabel?: string }
+    admin: User
   ): Promise<boolean> {
-    void _options;
     try {
       const detectionEvent = await this.detectionEventsRepository.findById(detectionEventId);
       if (!detectionEvent?.server_id) {
@@ -483,9 +480,8 @@ export class NotificationManager implements INotificationManager {
 
       let actionLogContent = `• ${this.formatAdminActionEvent(actionTaken, admin.id, timestamp)}`;
 
-      // If a thread was created, update the log entry and add/update a dedicated thread link field
+      // If a thread was created, add/update a dedicated thread link field
       if (thread && actionTaken === AdminActionType.CREATE_THREAD) {
-        actionLogContent = `• ${this.formatAdminActionEvent(actionTaken, admin.id, timestamp)}`;
         const threadField = {
           name: 'Verification Thread',
           value: `[Click here to view the thread](${thread.url})`,

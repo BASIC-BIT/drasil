@@ -2115,13 +2115,7 @@ export class SecurityActionService implements ISecurityActionService {
         actionType === AdminActionType.FALSE_POSITIVE
           ? 'marked this detection as a false positive'
           : 'dismissed this alert',
-        moderator,
-        {
-          undoButtonLabel:
-            actionType === AdminActionType.FALSE_POSITIVE
-              ? 'Undo False Positive'
-              : 'Undo Dismissal',
-        }
+        moderator
       );
       void this.productAnalyticsService.captureUserEvent(
         guildId,

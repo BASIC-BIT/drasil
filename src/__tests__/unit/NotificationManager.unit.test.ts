@@ -608,8 +608,7 @@ describe('NotificationManager (unit)', () => {
     await manager.markObservedDetectionActionTaken(
       detectionEvent.id,
       'marked this detection as a false positive',
-      { id: 'admin-1' } as User,
-      { undoButtonLabel: 'Undo False Positive' }
+      { id: 'admin-1' } as User
     );
 
     const editArgs = message.edit.mock.calls[0][0] as { components: unknown[] };

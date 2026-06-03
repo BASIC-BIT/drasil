@@ -1924,8 +1924,7 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
       detectionEvent.id,
       'marked this detection as a false positive',
-      moderator,
-      { undoButtonLabel: 'Undo False Positive' }
+      moderator
     );
   });
 
