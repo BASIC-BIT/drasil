@@ -26,4 +26,14 @@ CREATE INDEX IF NOT EXISTS idx_message_contexts_server_created_at
   ON public.message_contexts(server_id, created_at DESC);
 
 ALTER TABLE public.message_contexts ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON TABLE public.message_contexts FROM anon, authenticated;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    REVOKE ALL ON TABLE public.message_contexts FROM anon;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    REVOKE ALL ON TABLE public.message_contexts FROM authenticated;
+  END IF;
+END $$;
