@@ -67,6 +67,24 @@ model detection_events {
   @@index([user_id, server_id, detection_type], map: "idx_detection_events_user_server_type")
 }
 
+model message_contexts {
+  id               String   @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  server_id        String
+  user_id          String
+  message_id       String
+  channel_id       String?
+  content_preview  String
+  content_features Json?    @default("{}")
+  created_at       DateTime @db.Timestamptz(6)
+  observed_at      DateTime @default(now()) @db.Timestamptz(6)
+  expires_at       DateTime @db.Timestamptz(6)
+
+  @@unique([server_id, message_id], map: "message_contexts_server_message_key")
+  @@index([expires_at], map: "idx_message_contexts_expires_at")
+  @@index([server_id, user_id, created_at], map: "idx_message_contexts_server_user_created_at")
+  @@index([server_id, created_at], map: "idx_message_contexts_server_created_at")
+}
+
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model server_members {
@@ -226,6 +244,9 @@ enum detection_type {
   new_account
   pattern_match
   user_report
+  admin_case
+  admin_flag
+  role_intake
 }
 
 enum report_intake_status {

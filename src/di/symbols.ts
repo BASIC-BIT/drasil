@@ -33,6 +33,7 @@ export const TYPES = {
   ServerMemberRepository: Symbol.for('ServerMemberRepository'),
   PrismaClient: Symbol.for('PrismaClient'),
   DetectionEventsRepository: Symbol.for('DetectionEventsRepository'),
+  MessageContextRepository: Symbol.for('MessageContextRepository'),
   ReportIntakeRepository: Symbol.for('ReportIntakeRepository'),
 
   // External dependencies
