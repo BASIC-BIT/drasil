@@ -555,7 +555,7 @@ export class SecurityActionService implements ISecurityActionService {
     detectionResult: DetectionResult,
     useReportReviewThread: boolean,
     sourceMessage?: Message
-  ): Promise<void> {
+  ): Promise<VerificationEvent> {
     const thread = useReportReviewThread
       ? await this.threadManager.createReportReviewThread(
           member,
@@ -569,6 +569,71 @@ export class SecurityActionService implements ISecurityActionService {
       const threadKind = useReportReviewThread ? 'report review thread' : 'verification thread';
       throw new Error(`Failed to create ${threadKind} for ${member.user.tag}`);
     }
+
+    return verificationEvent;
+  }
+
+  private async tryCreatePrivateEvidenceThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<VerificationEvent> {
+    try {
+      const thread = await this.threadManager.createPrivateEvidenceThread(
+        member,
+        verificationEvent,
+        detectionResult,
+        sourceMessage
+      );
+      if (!thread) {
+        throw new Error(`Failed to create private evidence thread for ${member.user.tag}`);
+      }
+      return verificationEvent;
+    } catch (error) {
+      console.error(
+        `Failed to create private evidence thread for ${member.user.tag}; continuing case flow:`,
+        error
+      );
+      return this.recordVerificationActionFailure(
+        verificationEvent,
+        'private_evidence_thread',
+        error
+      );
+    }
+  }
+
+  private async ensurePrivateEvidenceThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<VerificationEvent> {
+    if (verificationEvent.private_evidence_thread_id) {
+      return verificationEvent;
+    }
+
+    if (this.hasReportReviewThread(verificationEvent)) {
+      if (!verificationEvent.thread_id) {
+        return verificationEvent;
+      }
+      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
+        private_evidence_thread_id: verificationEvent.thread_id,
+      });
+      return (
+        updatedEvent ?? {
+          ...verificationEvent,
+          private_evidence_thread_id: verificationEvent.thread_id,
+        }
+      );
+    }
+
+    return this.tryCreatePrivateEvidenceThread(
+      member,
+      verificationEvent,
+      detectionResult,
+      sourceMessage
+    );
   }
 
   private formatActionFailureMessage(error: unknown): string {
@@ -634,14 +699,22 @@ export class SecurityActionService implements ISecurityActionService {
     sourceMessage?: Message
   ): Promise<VerificationEvent> {
     try {
-      await this.createCaseThread(
+      let updatedEvent = await this.createCaseThread(
         member,
         verificationEvent,
         detectionResult,
         useReportReviewThread,
         sourceMessage
       );
-      return verificationEvent;
+      if (!useReportReviewThread) {
+        updatedEvent = await this.tryCreatePrivateEvidenceThread(
+          member,
+          updatedEvent,
+          detectionResult,
+          sourceMessage
+        );
+      }
+      return updatedEvent;
     } catch (error) {
       console.error(
         `Failed to create case thread for ${member.user.tag}; continuing notification:`,
@@ -1001,6 +1074,12 @@ export class SecurityActionService implements ISecurityActionService {
           );
         }
       }
+      notificationVerificationEvent = await this.ensurePrivateEvidenceThread(
+        member,
+        notificationVerificationEvent,
+        detectionResult,
+        sourceMessage
+      );
       await this.upsertNotification(
         member,
         detectionResult,
@@ -2036,13 +2115,7 @@ export class SecurityActionService implements ISecurityActionService {
         actionType === AdminActionType.FALSE_POSITIVE
           ? 'marked this detection as a false positive'
           : 'dismissed this alert',
-        moderator,
-        {
-          undoButtonLabel:
-            actionType === AdminActionType.FALSE_POSITIVE
-              ? 'Undo False Positive'
-              : 'Undo Dismissal',
-        }
+        moderator
       );
       void this.productAnalyticsService.captureUserEvent(
         guildId,

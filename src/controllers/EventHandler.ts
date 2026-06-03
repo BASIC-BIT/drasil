@@ -36,6 +36,7 @@ import {
   SetupDiagnosticReport,
 } from '../services/SetupDiagnosticsService';
 import { IReportIntakeService } from '../services/ReportIntakeService';
+import { ICaseReviewReminderService } from '../services/CaseReviewReminderService';
 
 const RECENT_USER_CONTEXT_MESSAGE_LIMIT = 5;
 const RECENT_USER_CONTEXT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -98,6 +99,7 @@ export class EventHandler implements IEventHandler {
   private productAnalyticsService: IProductAnalyticsService;
   private setupDiagnosticsService?: ISetupDiagnosticsService;
   private reportIntakeService?: IReportIntakeService;
+  private caseReviewReminderService?: ICaseReviewReminderService;
   private serverConfigWarmups: Set<string> = new Set();
   private configInitializePromise: Promise<void> | null = null;
   private recentMessagesByServer: Map<string, Map<string, RecentUserMessageContext[]>> = new Map();
@@ -121,7 +123,10 @@ export class EventHandler implements IEventHandler {
     setupDiagnosticsService?: ISetupDiagnosticsService,
     @inject(TYPES.ReportIntakeService)
     @optional()
-    reportIntakeService?: IReportIntakeService
+    reportIntakeService?: IReportIntakeService,
+    @inject(TYPES.CaseReviewReminderService)
+    @optional()
+    caseReviewReminderService?: ICaseReviewReminderService
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -134,6 +139,7 @@ export class EventHandler implements IEventHandler {
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.setupDiagnosticsService = setupDiagnosticsService;
     this.reportIntakeService = reportIntakeService;
+    this.caseReviewReminderService = caseReviewReminderService;
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -156,6 +162,7 @@ export class EventHandler implements IEventHandler {
     await this.ensureConfigInitialized();
 
     await this.commandHandler.registerCommands();
+    this.caseReviewReminderService?.start();
   }
 
   private async handleInteraction(interaction: Interaction): Promise<void> {

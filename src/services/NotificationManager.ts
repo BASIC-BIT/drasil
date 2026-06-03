@@ -38,6 +38,10 @@ import { getVerificationActionFailures } from '../utils/verificationActionFailur
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { CASE_STAFF_ROUTING_METADATA_KEY } from './ThreadManager';
 import { isDetectionEventExcludedFromAccounting } from '../utils/detectionEventAccounting';
+import {
+  buildCaseAdminActionsCustomId,
+  buildObservedAdminActionsCustomId,
+} from '../utils/adminActionCustomIds';
 
 const VERIFICATION_CHANNEL_NAME = 'verification';
 
@@ -122,8 +126,7 @@ export interface INotificationManager {
   markObservedDetectionActionTaken(
     detectionEventId: string,
     actionDescription: string,
-    admin: User,
-    options?: { undoButtonLabel?: string }
+    admin: User
   ): Promise<boolean>;
 
   restoreObservedDetectionActions(
@@ -165,6 +168,7 @@ export class NotificationManager implements INotificationManager {
   private configService: IConfigService;
   private detectionEventsRepository: IDetectionEventsRepository;
   private static readonly THREAD_ANALYSIS_FIELD_NAME = 'AI Thread Analysis';
+  private static readonly LATEST_ADMIN_ACTION_FIELD_NAME = 'Latest Admin Action';
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -205,22 +209,7 @@ export class NotificationManager implements INotificationManager {
         sourceMessage
       );
       const serverConfig = await this.configService.getServerConfig(member.guild.id);
-      const responseSettings = getDetectionResponseSettings(serverConfig.settings);
-      const canShowBanAction = await this.canShowModeratorBanAction(member.guild, responseSettings);
-
-      // Get detection events
-      const detectionEvents = await this.detectionEventsRepository.findByServerAndUser(
-        member.guild.id,
-        member.id
-      );
-
-      // Create the action row, passing the thread status
-      const actionRow = this.createActionRow(
-        member.id,
-        detectionEvents,
-        !!verificationEvent.thread_id, // Check for truthiness (not null/undefined)
-        canShowBanAction
-      );
+      const actionRow = this.createActionRow(member.id);
 
       // If we have an existing message, update it, otherwise create new
       if (verificationEvent.notification_message_id) {
@@ -230,7 +219,7 @@ export class NotificationManager implements INotificationManager {
         return await existingMessage.edit({
           allowedMentions: { parse: [] },
           embeds: [embed],
-          components: [actionRow], // Use the conditionally created action row
+          components: [actionRow],
         });
       }
 
@@ -240,7 +229,7 @@ export class NotificationManager implements INotificationManager {
         content: this.formatRoleMentions(notificationRoleIds),
         allowedMentions: this.createAdminAllowedMentions(notificationRoleIds),
         embeds: [embed],
-        components: [actionRow], // Use the conditionally created action row
+        components: [actionRow],
       });
     } catch (error) {
       console.error('Failed to upsert suspicious user notification:', error);
@@ -281,9 +270,8 @@ export class NotificationManager implements INotificationManager {
         sourceMessage
       );
       const actionDetectionEventId = detectionResult.detectionEventId ?? detectionEvents[0]?.id;
-      const canShowBanAction = await this.canShowModeratorBanAction(member.guild, responseSettings);
       const components = actionDetectionEventId
-        ? this.createObservedActionRows(member.id, actionDetectionEventId, canShowBanAction)
+        ? this.createObservedActionRows(member.id, actionDetectionEventId)
         : [];
 
       let notificationMessage: Message | null = null;
@@ -332,8 +320,7 @@ export class NotificationManager implements INotificationManager {
   public async markObservedDetectionActionTaken(
     detectionEventId: string,
     actionDescription: string,
-    admin: User,
-    options?: { undoButtonLabel?: string }
+    admin: User
   ): Promise<boolean> {
     try {
       const detectionEvent = await this.detectionEventsRepository.findById(detectionEventId);
@@ -382,13 +369,7 @@ export class NotificationManager implements INotificationManager {
         ) ?? [];
       updatedEmbed.setFields(...existingFields, field);
 
-      const components = options?.undoButtonLabel
-        ? this.createObservedUndoRows(
-            detectionEvent.user_id,
-            detectionEvent.id,
-            options.undoButtonLabel
-          )
-        : [];
+      const components = this.createObservedActionRows(detectionEvent.user_id, detectionEvent.id);
 
       await message.edit({
         allowedMentions: { parse: [] },
@@ -420,10 +401,6 @@ export class NotificationManager implements INotificationManager {
 
       const serverConfig = await this.configService.getServerConfig(detectionEvent.server_id);
       const responseSettings = getDetectionResponseSettings(serverConfig.settings);
-      const guild = await this.fetchGuild(detectionEvent.server_id);
-      const canShowBanAction = guild
-        ? await this.canShowModeratorBanAction(guild, responseSettings)
-        : false;
       const notificationChannel = await this.getObservedDetectionNotificationChannel(
         detectionEvent.server_id,
         responseSettings
@@ -439,11 +416,7 @@ export class NotificationManager implements INotificationManager {
         return false;
       }
 
-      const components = this.createObservedActionRows(
-        detectionEvent.user_id,
-        detectionEvent.id,
-        canShowBanAction
-      );
+      const components = this.createObservedActionRows(detectionEvent.user_id, detectionEvent.id);
       if (!message.embeds.length) {
         await message.edit({ allowedMentions: { parse: [] }, components });
         return true;
@@ -501,16 +474,14 @@ export class NotificationManager implements INotificationManager {
       // Create a new embed based on the existing one
       const updatedEmbed = EmbedBuilder.from(existingEmbed);
 
-      // Add or update the Action Log field
       const timestamp = Math.floor(Date.now() / 1000);
       const actionLogField = updatedEmbed.data.fields?.find((field) => field.name === 'Action Log');
+      this.upsertLatestAdminActionField(updatedEmbed, actionTaken, admin.id, timestamp);
 
-      // Create log entry
-      let actionLogContent = `• <@${admin.id}> ${actionTaken} <t:${timestamp}:R>`;
+      let actionLogContent = `• ${this.formatAdminActionEvent(actionTaken, admin.id, timestamp)}`;
 
-      // If a thread was created, update the log entry and add/update a dedicated thread link field
+      // If a thread was created, add/update a dedicated thread link field
       if (thread && actionTaken === AdminActionType.CREATE_THREAD) {
-        actionLogContent = `• <@${admin.id}> created a verification thread <t:${timestamp}:R>`; // Keep log simple
         const threadField = {
           name: 'Verification Thread',
           value: `[Click here to view the thread](${thread.url})`,
@@ -611,6 +582,89 @@ export class NotificationManager implements INotificationManager {
     return `${value.slice(0, maxLength - 3)}...`;
   }
 
+  private formatAdminActionLabel(actionTaken: AdminActionType): string {
+    switch (actionTaken) {
+      case AdminActionType.BAN:
+        return 'Banned';
+      case AdminActionType.VERIFY:
+        return 'Verified';
+      case AdminActionType.CREATE_THREAD:
+        return 'Created verification thread';
+      case AdminActionType.REOPEN:
+        return 'Reopened verification';
+      case AdminActionType.RESTRICT:
+        return 'Restricted';
+      case AdminActionType.OPEN_CASE:
+        return 'Opened case';
+      case AdminActionType.DISMISS:
+        return 'Dismissed alert';
+      case AdminActionType.FALSE_POSITIVE:
+        return 'Marked false positive';
+      case AdminActionType.UNDO_OBSERVED_ACTION:
+        return 'Undid observed action';
+      case AdminActionType.REJECT:
+        return 'Rejected';
+      default:
+        return actionTaken;
+    }
+  }
+
+  private formatAdminActionEvent(
+    actionTaken: AdminActionType,
+    adminId: string,
+    timestamp: number
+  ): string {
+    return `${this.formatAdminActionLabel(actionTaken)} by <@${adminId}> at <t:${timestamp}:F>`;
+  }
+
+  private upsertLatestAdminActionField(
+    embed: EmbedBuilder,
+    actionTaken: AdminActionType,
+    adminId: string,
+    timestamp: number
+  ): void {
+    const field = {
+      name: NotificationManager.LATEST_ADMIN_ACTION_FIELD_NAME,
+      value: this.formatAdminActionEvent(actionTaken, adminId, timestamp),
+      inline: false,
+    };
+    const fields = (embed.data.fields ?? []).filter(
+      (existingField) => existingField.name !== field.name
+    );
+    const confidenceIndex = fields.findIndex(
+      (existingField) => existingField.name === 'Detection Confidence'
+    );
+    const insertIndex = confidenceIndex >= 0 ? confidenceIndex + 1 : 0;
+    fields.splice(insertIndex, 0, field);
+    embed.setFields(...fields);
+  }
+
+  private upsertLatestResolutionField(
+    embed: EmbedBuilder,
+    verificationEvent: VerificationEvent
+  ): void {
+    if (!verificationEvent.resolved_by || !verificationEvent.resolved_at) {
+      return;
+    }
+
+    const actionTaken =
+      verificationEvent.status === VerificationStatus.BANNED
+        ? AdminActionType.BAN
+        : verificationEvent.status === VerificationStatus.VERIFIED
+          ? AdminActionType.VERIFY
+          : null;
+    if (!actionTaken) {
+      return;
+    }
+
+    this.upsertLatestAdminActionField(
+      embed,
+      actionTaken,
+      verificationEvent.resolved_by,
+      Math.floor(verificationEvent.resolved_at.getTime() / 1000)
+    );
+  }
+
   private metadataToRecord(metadata: DetectionEvent['metadata']): Record<string, unknown> {
     if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
       return {};
@@ -651,33 +705,6 @@ export class NotificationManager implements INotificationManager {
     }
 
     return [...roleIds];
-  }
-
-  private async canShowModeratorBanAction(
-    guild: Guild,
-    responseSettings: ReturnType<typeof getDetectionResponseSettings>
-  ): Promise<boolean> {
-    if (!responseSettings.moderatorBanActionEnabled) {
-      return false;
-    }
-
-    const botMember =
-      guild.members.me ??
-      (typeof guild.members.fetchMe === 'function'
-        ? await guild.members.fetchMe().catch(() => null)
-        : null);
-    return botMember?.permissions.has(PermissionFlagsBits.BanMembers) ?? false;
-  }
-
-  private async fetchGuild(guildId: string): Promise<Guild | null> {
-    const guildManager = this.client.guilds as unknown as
-      | { fetch?: (guildId: string) => Promise<Guild> }
-      | undefined;
-    if (typeof guildManager?.fetch !== 'function') {
-      return null;
-    }
-
-    return guildManager.fetch(guildId).catch(() => null);
   }
 
   private formatRoleMentions(roleIds: readonly string[]): string | undefined {
@@ -1007,6 +1034,8 @@ export class NotificationManager implements INotificationManager {
       )
       .setTimestamp();
 
+    this.upsertLatestResolutionField(embed, verificationEvent);
+
     const aiDiagnosticFieldValue = this.formatGptDiagnosticFieldValue(detectionResult);
     if (aiDiagnosticFieldValue) {
       embed.addFields({
@@ -1096,7 +1125,11 @@ export class NotificationManager implements INotificationManager {
       .map((failure) => {
         const timestamp = Math.floor(new Date(failure.at).getTime() / 1000);
         const action =
-          failure.action === 'restrict' ? 'Apply restricted role' : 'Create case thread';
+          failure.action === 'restrict'
+            ? 'Apply restricted role'
+            : failure.action === 'private_evidence_thread'
+              ? 'Create private evidence thread'
+              : 'Create case thread';
         const when = Number.isFinite(timestamp) ? ` <t:${timestamp}:R>` : '';
         return `Warning: ${action} failed${when}: ${failure.message}`;
       })
@@ -1318,109 +1351,27 @@ export class NotificationManager implements INotificationManager {
   /**
    * Creates an action row with admin action buttons
    * @param userId The ID of the user the actions apply to
-   * @param detectionEvents Array of detection events to determine if history button is needed
-   * @param hasThread Whether a verification thread exists for the user
    * @returns An ActionRowBuilder with buttons
    */
-  private createActionRow(
-    userId: string,
-    detectionEvents: DetectionEvent[],
-    hasThread: boolean,
-    canShowBanAction: boolean
-  ): ActionRowBuilder<ButtonBuilder> {
-    // Create action buttons with user ID in the custom ID
-    const verifyButton = new ButtonBuilder()
-      .setCustomId(`verify_${userId}`)
-      .setLabel('Verify User')
-      .setStyle(ButtonStyle.Success);
-
-    // Base buttons
-    const buttons = [verifyButton];
-    if (canShowBanAction) {
-      buttons.push(
-        new ButtonBuilder()
-          .setCustomId(`ban_${userId}`)
-          .setLabel('Ban User')
-          .setStyle(ButtonStyle.Danger)
-      );
-    }
-
-    // Add thread button ONLY if no verification event was found OR if the event exists but has no thread_id yet
-    if (!hasThread) {
-      const threadButton = new ButtonBuilder()
-        .setCustomId(`thread_${userId}`)
-        .setLabel('Create Thread')
-        .setStyle(ButtonStyle.Primary);
-      buttons.push(threadButton);
-    }
-
-    // Add view history button if we have more than 5 detection events
-    if (detectionEvents.length > 5) {
-      const historyButton = new ButtonBuilder()
-        .setCustomId(`history_${userId}`)
-        .setLabel('View Full History')
-        .setStyle(ButtonStyle.Secondary);
-      buttons.push(historyButton);
-    }
-
-    // Add buttons to an action row
-    return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
+  private createActionRow(userId: string): ActionRowBuilder<ButtonBuilder> {
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(buildCaseAdminActionsCustomId(userId))
+        .setLabel('Admin Actions')
+        .setStyle(ButtonStyle.Primary)
+    );
   }
 
   private createObservedActionRows(
     userId: string,
-    detectionEventId: string,
-    canShowBanAction: boolean
-  ): ActionRowBuilder<ButtonBuilder>[] {
-    const buttons = [
-      new ButtonBuilder()
-        .setCustomId(`observed:open:${userId}:${detectionEventId}`)
-        .setLabel('Open Case')
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`observed:restrict:${userId}:${detectionEventId}`)
-        .setLabel('Restrict')
-        .setStyle(ButtonStyle.Danger),
-    ];
-
-    if (canShowBanAction) {
-      buttons.push(
-        new ButtonBuilder()
-          .setCustomId(`observed:ban:${userId}:${detectionEventId}`)
-          .setLabel('Ban')
-          .setStyle(ButtonStyle.Danger)
-      );
-    }
-
-    buttons.push(
-      new ButtonBuilder()
-        .setCustomId(`observed:dismiss_menu:${userId}:${detectionEventId}`)
-        .setLabel('Dismiss...')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId(`observed:history:${userId}:${detectionEventId}`)
-        .setLabel('History')
-        .setStyle(ButtonStyle.Secondary)
-    );
-
-    return [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
-  }
-
-  private createObservedUndoRows(
-    userId: string,
-    detectionEventId: string,
-    undoButtonLabel: string
+    detectionEventId: string
   ): ActionRowBuilder<ButtonBuilder>[] {
     return [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId(`observed:undo_dismiss:${userId}:${detectionEventId}`)
-          .setLabel(undoButtonLabel)
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId(`observed:history:${userId}:${detectionEventId}`)
-          .setLabel('History')
-          .setStyle(ButtonStyle.Secondary)
+          .setCustomId(buildObservedAdminActionsCustomId(userId, detectionEventId))
+          .setLabel('Admin Actions')
+          .setStyle(ButtonStyle.Primary)
       ),
     ];
   }
@@ -1711,91 +1662,10 @@ export class NotificationManager implements INotificationManager {
     verificationEvent: VerificationEvent,
     newStatus: VerificationStatus
   ): Promise<void> {
-    let components: ActionRowBuilder<ButtonBuilder>[] = [];
+    void newStatus;
 
     if (!verificationEvent.notification_message_id) {
       throw new Error('No notification message ID found for verification event');
-    }
-
-    switch (newStatus) {
-      case VerificationStatus.VERIFIED:
-        // Keep history and add reopen button
-        components = [
-          new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`history_${verificationEvent.user_id}`)
-              .setLabel('View Full History')
-              .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-              .setCustomId(`reopen_${verificationEvent.user_id}`)
-              .setLabel('Reopen Verification')
-              .setStyle(ButtonStyle.Primary)
-          ),
-        ];
-        break;
-
-      case VerificationStatus.BANNED:
-        // Keep history and add reopen button
-        components = [
-          new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`history_${verificationEvent.user_id}`)
-              .setLabel('View Full History')
-              .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-              .setCustomId(`reopen_${verificationEvent.user_id}`)
-              .setLabel('Reopen Verification')
-              .setStyle(ButtonStyle.Primary)
-          ),
-        ];
-        break;
-
-      case VerificationStatus.PENDING: {
-        const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
-        const responseSettings = getDetectionResponseSettings(serverConfig.settings);
-        const guild = await this.fetchGuild(verificationEvent.server_id);
-        const canShowBanAction = guild
-          ? await this.canShowModeratorBanAction(guild, responseSettings)
-          : false;
-        // Show all buttons
-        const pendingButtons = [
-          new ButtonBuilder()
-            .setCustomId(`verify_${verificationEvent.user_id}`)
-            .setLabel('Verify User')
-            .setStyle(ButtonStyle.Success),
-        ];
-
-        if (canShowBanAction) {
-          pendingButtons.push(
-            new ButtonBuilder()
-              .setCustomId(`ban_${verificationEvent.user_id}`)
-              .setLabel('Ban User')
-              .setStyle(ButtonStyle.Danger)
-          );
-        }
-
-        pendingButtons.push(
-          new ButtonBuilder()
-            .setCustomId(`history_${verificationEvent.user_id}`)
-            .setLabel('View Full History')
-            .setStyle(ButtonStyle.Secondary)
-        );
-
-        components = [new ActionRowBuilder<ButtonBuilder>().addComponents(...pendingButtons)];
-        break;
-      }
-    }
-
-    // Add create thread button if pending and no thread exists
-    if (newStatus === VerificationStatus.PENDING && !verificationEvent.thread_id) {
-      components.push(
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`thread_${verificationEvent.user_id}`)
-            .setLabel('Create Thread')
-            .setStyle(ButtonStyle.Primary)
-        )
-      );
     }
 
     const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
@@ -1806,6 +1676,9 @@ export class NotificationManager implements INotificationManager {
 
     const message = await adminChannel.messages.fetch(verificationEvent.notification_message_id);
 
-    await message.edit({ allowedMentions: { parse: [] }, components });
+    await message.edit({
+      allowedMentions: { parse: [] },
+      components: [this.createActionRow(verificationEvent.user_id)],
+    });
   }
 }

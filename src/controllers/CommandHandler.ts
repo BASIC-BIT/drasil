@@ -133,6 +133,14 @@ import {
   RESTRICTED_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY,
   RESTRICTED_LOCKDOWN_ENABLED_SETTING_KEY,
 } from '../utils/restrictedLockdownSettings';
+import {
+  CASE_REVIEW_REMINDER_REPEAT_HOURS_SETTING_KEY,
+  CASE_REVIEW_REMINDER_STALE_HOURS_SETTING_KEY,
+  CASE_REVIEW_REMINDERS_ENABLED_SETTING_KEY,
+  getCaseReviewReminderSettings,
+  MAX_CASE_REVIEW_REMINDER_HOURS,
+  MIN_CASE_REVIEW_REMINDER_HOURS,
+} from '../utils/caseReviewReminderSettings';
 import 'reflect-metadata';
 
 // Load environment variables
@@ -690,6 +698,46 @@ export class CommandHandler implements ICommandHandler {
                     .setRequired(true)
                     .setMinValue(1)
                     .setMaxValue(MAX_CASE_RESPONDER_THREAD_MEMBER_CAP)
+                )
+            )
+        )
+        .addSubcommandGroup((group) =>
+          group
+            .setName('case-review')
+            .setDescription('Manage stale case review reminders')
+            .addSubcommand((subcommand) =>
+              subcommand.setName('view').setDescription('View stale case review reminder settings')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand.setName('enable').setDescription('Enable stale case review reminders')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand.setName('disable').setDescription('Disable stale case review reminders')
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('set-stale-hours')
+                .setDescription('Set how old a pending case must be before reminder')
+                .addIntegerOption((option) =>
+                  option
+                    .setName('hours')
+                    .setDescription('Hours before a pending case is stale')
+                    .setRequired(true)
+                    .setMinValue(MIN_CASE_REVIEW_REMINDER_HOURS)
+                    .setMaxValue(MAX_CASE_REVIEW_REMINDER_HOURS)
+                )
+            )
+            .addSubcommand((subcommand) =>
+              subcommand
+                .setName('set-repeat-hours')
+                .setDescription('Set minimum hours between repeated stale reminders')
+                .addIntegerOption((option) =>
+                  option
+                    .setName('hours')
+                    .setDescription('Hours between repeat reminders')
+                    .setRequired(true)
+                    .setMinValue(MIN_CASE_REVIEW_REMINDER_HOURS)
+                    .setMaxValue(MAX_CASE_REVIEW_REMINDER_HOURS)
                 )
             )
         )
@@ -2169,6 +2217,11 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    if (subcommandGroup === 'case-review') {
+      await this.handleCaseReviewConfigCommand(interaction, guild.id);
+      return;
+    }
+
     if (subcommandGroup === 'report') {
       await this.handleReportConfigCommand(interaction, guild.id);
       return;
@@ -3322,6 +3375,101 @@ export class CommandHandler implements ICommandHandler {
         flags: MessageFlags.Ephemeral,
       });
     }
+  }
+
+  private async handleCaseReviewConfigCommand(
+    interaction: ChatInputCommandInteraction,
+    guildId: string
+  ): Promise<void> {
+    const subcommand = interaction.options.getSubcommand(true);
+
+    try {
+      switch (subcommand) {
+        case 'view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const settings = getCaseReviewReminderSettings(serverConfig.settings);
+          await interaction.reply({
+            content:
+              'Current stale case review reminder settings:\n\n' +
+              this.formatCaseReviewReminderSettings(settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'enable':
+        case 'disable': {
+          const enabled = subcommand === 'enable';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [CASE_REVIEW_REMINDERS_ENABLED_SETTING_KEY]: enabled,
+          });
+          const settings = getCaseReviewReminderSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `${enabled ? 'Enabled' : 'Disabled'} stale case review reminders.\n\n` +
+              this.formatCaseReviewReminderSettings(settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'set-stale-hours': {
+          const hours = interaction.options.getInteger('hours', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [CASE_REVIEW_REMINDER_STALE_HOURS_SETTING_KEY]: hours,
+          });
+          const settings = getCaseReviewReminderSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated stale case reminder threshold.\n\n' +
+              this.formatCaseReviewReminderSettings(settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'set-repeat-hours': {
+          const hours = interaction.options.getInteger('hours', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [CASE_REVIEW_REMINDER_REPEAT_HOURS_SETTING_KEY]: hours,
+          });
+          const settings = getCaseReviewReminderSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated stale case reminder repeat interval.\n\n' +
+              this.formatCaseReviewReminderSettings(settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        default:
+          await interaction.reply({
+            content: 'Unsupported case-review subcommand.',
+            flags: MessageFlags.Ephemeral,
+          });
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'An error occurred while processing case review settings.';
+      await interaction.reply({
+        content: `Failed to process case review settings: ${errorMessage}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  private formatCaseReviewReminderSettings(
+    settings: ReturnType<typeof getCaseReviewReminderSettings>
+  ): string {
+    return [
+      `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
+      `Stale threshold: \`${settings.staleHours}h\``,
+      `Repeat interval: \`${settings.repeatHours}h\``,
+      'Reminders post to the admin channel and mention configured case responder roles.',
+    ].join('\n');
   }
 
   private async handleReportConfigCommand(

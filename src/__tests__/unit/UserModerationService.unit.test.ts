@@ -30,6 +30,17 @@ const buildMember = (guildId: string, userId: string): GuildMember =>
     ban: jest.fn().mockResolvedValue(undefined),
   }) as unknown as GuildMember;
 
+const buildGuildWithBan = (guildId: string, userId: string, reason?: string): Guild =>
+  ({
+    id: guildId,
+    bans: {
+      fetch: jest.fn().mockResolvedValue({
+        reason,
+        user: { id: userId, tag: 'test-user#0001' },
+      }),
+    },
+  }) as unknown as Guild;
+
 describe('UserModerationService (unit)', () => {
   let serverMemberRepository: InMemoryServerMemberRepository;
   let verificationEventRepository: InMemoryVerificationEventRepository;
@@ -72,6 +83,7 @@ describe('UserModerationService (unit)', () => {
     threadManager = {
       createVerificationThread: jest.fn().mockResolvedValue({} as any),
       createReportReviewThread: jest.fn().mockResolvedValue({} as any),
+      createPrivateEvidenceThread: jest.fn().mockResolvedValue({} as any),
       createReportIntakeThread: jest.fn().mockResolvedValue({} as any),
       activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
@@ -203,6 +215,140 @@ describe('UserModerationService (unit)', () => {
     );
     expect(notificationManager.logActionToMessage).toHaveBeenCalled();
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
+  });
+
+  it('bans all duplicate pending cases for a user', async () => {
+    const guildId = 'guild-ban-duplicates';
+    const userId = 'user-ban-duplicates';
+    const moderator = { id: 'mod-ban' } as User;
+    const member = buildMember(guildId, userId);
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+
+    const firstDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const secondDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.GPT_ANALYSIS,
+      confidence: 0.9,
+      reasons: ['Manual follow-up'],
+      detected_at: new Date(),
+    });
+    const firstCase = await verificationEventRepository.createFromDetection(
+      firstDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const secondCase = await verificationEventRepository.createFromDetection(
+      secondDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await service.banUser(member, 'banned duplicate cases', moderator);
+
+    await expect(verificationEventRepository.findById(firstCase.id)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.BANNED, resolved_by: moderator.id })
+    );
+    await expect(verificationEventRepository.findById(secondCase.id)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.BANNED, resolved_by: moderator.id })
+    );
+    const pendingCases = (
+      await verificationEventRepository.findByUserAndServer(userId, guildId)
+    ).filter((event) => event.status === VerificationStatus.PENDING);
+    expect(pendingCases).toHaveLength(0);
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledTimes(2);
+    const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
+    expect(adminActions).toHaveLength(2);
+    expect(adminActions.map((action) => action.verification_event_id).sort()).toEqual(
+      [firstCase.id, secondCase.id].sort()
+    );
+  });
+
+  it('syncs all duplicate pending cases for a user Discord already banned', async () => {
+    const guildId = 'guild-sync-ban-duplicates';
+    const userId = 'user-sync-ban-duplicates';
+    const moderator = { id: 'mod-ban' } as User;
+    const guild = buildGuildWithBan(guildId, userId, 'existing Discord ban');
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+
+    const firstDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const secondDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.GPT_ANALYSIS,
+      confidence: 0.9,
+      reasons: ['Manual follow-up'],
+      detected_at: new Date(),
+    });
+    const firstCase = await verificationEventRepository.createFromDetection(
+      firstDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const secondCase = await verificationEventRepository.createFromDetection(
+      secondDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(service.syncAlreadyBannedUser(guild, userId, moderator)).resolves.toBe(2);
+
+    await expect(verificationEventRepository.findById(firstCase.id)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.BANNED, resolved_by: moderator.id })
+    );
+    await expect(verificationEventRepository.findById(secondCase.id)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.BANNED, resolved_by: moderator.id })
+    );
+    const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
+    expect(serverMember?.verification_status).toBe(VerificationStatus.BANNED);
+    expect(serverMember?.is_restricted).toBe(true);
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledTimes(2);
+    const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
+    expect(adminActions).toHaveLength(2);
+    expect(adminActions.map((action) => action.notes)).toEqual([
+      'Synced existing Discord ban: existing Discord ban',
+      'Synced existing Discord ban: existing Discord ban',
+    ]);
   });
 
   it('returns success when post-ban notification updates fail', async () => {

@@ -55,6 +55,12 @@ import {
   SETUP_VERIFICATION_MODAL_ID,
   SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
 } from '../constants/setupVerificationWizard';
+import {
+  ADMIN_ACTION_CUSTOM_ID_PREFIX,
+  buildAdminActionCustomId,
+  parseAdminActionCustomId,
+  type ParsedAdminActionCustomId,
+} from '../utils/adminActionCustomIds';
 // Load environment variables
 dotenv.config();
 
@@ -154,6 +160,11 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
+      if (customId.startsWith(`${ADMIN_ACTION_CUSTOM_ID_PREFIX}:`)) {
+        await this.handleAdminActionsButtonInteraction(interaction, guildId, customId);
+        return;
+      }
+
       if (customId.startsWith('observed:')) {
         await this.handleObservedButtonInteraction(interaction, guildId, customId);
         return;
@@ -179,7 +190,11 @@ export class InteractionHandler implements IInteractionHandler {
             );
             return;
           }
-          await this.handleVerifyButton(interaction, guildId, targetUserId);
+          await this.showLegacyAdminActionConfirmation(interaction, {
+            action: 'verify',
+            surface: 'case',
+            userId: targetUserId,
+          });
           break;
         case 'ban':
           if (
@@ -211,7 +226,11 @@ export class InteractionHandler implements IInteractionHandler {
             );
             return;
           }
-          await this.handleThreadButton(interaction, guildId, targetUserId);
+          await this.showLegacyAdminActionConfirmation(interaction, {
+            action: 'thread',
+            surface: 'case',
+            userId: targetUserId,
+          });
           break;
         case 'history':
           if (
@@ -235,7 +254,11 @@ export class InteractionHandler implements IInteractionHandler {
             );
             return;
           }
-          await this.handleReopenButton(interaction, guildId, targetUserId);
+          await this.showLegacyAdminActionConfirmation(interaction, {
+            action: 'reopen',
+            surface: 'case',
+            userId: targetUserId,
+          });
           break;
         default:
           await interaction.reply({
@@ -254,6 +277,617 @@ export class InteractionHandler implements IInteractionHandler {
       } else {
         await interaction.reply(response);
       }
+    }
+  }
+
+  private async handleAdminActionsButtonInteraction(
+    interaction: ButtonInteraction,
+    guildId: string,
+    customId: string
+  ): Promise<void> {
+    const parsed = parseAdminActionCustomId(customId);
+    if (!parsed) {
+      await interaction.reply({
+        content: 'Unknown admin action.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (parsed.action === 'cancel') {
+      await interaction.update({ content: 'Cancelled.', components: [] });
+      return;
+    }
+
+    if (parsed.action === 'menu') {
+      await this.showAdminActionsMenu(interaction, guildId, parsed);
+      return;
+    }
+
+    if (parsed.action === 'history') {
+      if (!(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to view history.'
+        );
+        return;
+      }
+      if (parsed.surface === 'observed') {
+        await this.notificationManager.handleHistoryButtonClick(interaction, parsed.userId);
+      } else {
+        await this.handleHistoryButton(interaction, guildId, parsed.userId);
+      }
+      return;
+    }
+
+    if (parsed.action === 'ban' || parsed.action === 'observed_ban') {
+      await this.handleAdminActionBan(interaction, guildId, parsed);
+      return;
+    }
+
+    if (parsed.action.startsWith('confirm_')) {
+      await this.executeConfirmedAdminAction(interaction, guildId, parsed);
+      return;
+    }
+
+    const confirmation = this.getAdminActionConfirmation(parsed);
+    if (!confirmation) {
+      await interaction.reply({
+        content: 'Unknown admin action.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await this.showAdminActionConfirmation(interaction, parsed, confirmation);
+  }
+
+  private async showAdminActionsMenu(
+    interaction: ButtonInteraction,
+    guildId: string,
+    parsed: ParsedAdminActionCustomId
+  ): Promise<void> {
+    const hasModerationPermission = await this.hasAnyPermission(
+      interaction,
+      guildId,
+      this.getModerationPermissions()
+    );
+    const hasBanMembersPermission = await this.hasAnyPermission(interaction, guildId, [
+      PermissionFlagsBits.BanMembers,
+    ]);
+
+    if (!hasModerationPermission && !hasBanMembersPermission) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need moderation permissions to use admin actions.'
+      );
+      return;
+    }
+
+    if (parsed.surface === 'observed') {
+      await this.showObservedAdminActionsMenu(interaction, guildId, parsed, {
+        hasModerationPermission,
+        hasBanMembersPermission,
+      });
+      return;
+    }
+
+    const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+      parsed.userId,
+      guildId
+    );
+    const history = await this.verificationEventRepository.findByUserAndServer(
+      parsed.userId,
+      guildId
+    );
+    const pendingCases = history.filter((event) => event.status === VerificationStatus.PENDING);
+    const latestHistoryCase = history.length > 0 ? history[0] : null;
+    const latestCase = activeCase ?? latestHistoryCase;
+    const alreadyBanned =
+      activeCase?.status === VerificationStatus.PENDING && hasBanMembersPermission
+        ? await this.isUserBanned(guildId, parsed.userId)
+        : false;
+    const canBan =
+      hasBanMembersPermission && !alreadyBanned && (await this.canUseModeratorBanAction(guildId));
+
+    const buttons: ButtonBuilder[] = [];
+    if (hasModerationPermission) {
+      buttons.push(this.adminActionButton(parsed, 'history', 'History', ButtonStyle.Secondary));
+    }
+
+    if (activeCase?.status === VerificationStatus.PENDING) {
+      if (hasModerationPermission) {
+        buttons.push(
+          this.adminActionButton(parsed, 'verify', 'Verify User', ButtonStyle.Success),
+          this.adminActionButton(parsed, 'repair', 'Repair Active Case', ButtonStyle.Primary)
+        );
+        if (!activeCase.thread_id) {
+          buttons.push(
+            this.adminActionButton(parsed, 'thread', 'Create Thread', ButtonStyle.Primary)
+          );
+        }
+      }
+      if (alreadyBanned) {
+        buttons.push(
+          this.adminActionButton(parsed, 'sync_ban', 'Sync Existing Ban', ButtonStyle.Danger)
+        );
+      }
+      if (canBan) {
+        buttons.push(this.adminActionButton(parsed, 'ban', 'Ban User...', ButtonStyle.Danger));
+      }
+    } else if (latestCase && hasModerationPermission) {
+      buttons.push(
+        this.adminActionButton(parsed, 'reopen', 'Reopen Verification', ButtonStyle.Primary)
+      );
+    }
+
+    const details = [
+      `Admin actions for <@${parsed.userId}>.`,
+      'Mutating actions require a confirmation step before they run.',
+    ];
+    if (activeCase?.thread_id) {
+      details.push(`Case thread: https://discord.com/channels/${guildId}/${activeCase.thread_id}`);
+    }
+    if (activeCase?.private_evidence_thread_id) {
+      details.push(
+        `Private evidence: https://discord.com/channels/${guildId}/${activeCase.private_evidence_thread_id}`
+      );
+    }
+    if (alreadyBanned) {
+      details.push(
+        'Discord already shows this user as banned. Use Sync Existing Ban to resolve pending case rows without attempting another ban.'
+      );
+    }
+    if (pendingCases.length > 1) {
+      details.push(
+        `Warning: ${pendingCases.length} pending cases exist for this user. Terminal actions will resolve all pending case rows.`
+      );
+      details.push(
+        ...pendingCases
+          .slice(0, 5)
+          .map(
+            (event) =>
+              `Pending case ${event.id}${event.thread_id ? `: https://discord.com/channels/${guildId}/${event.thread_id}` : ''}`
+          )
+      );
+    }
+    if (buttons.length === 0) {
+      details.push('No available actions for your current permissions and this case state.');
+    }
+
+    await interaction.reply({
+      content: details.join('\n'),
+      allowedMentions: { parse: [] },
+      components: this.createButtonRows(buttons),
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  private async showObservedAdminActionsMenu(
+    interaction: ButtonInteraction,
+    guildId: string,
+    parsed: ParsedAdminActionCustomId,
+    permissions: { hasModerationPermission: boolean; hasBanMembersPermission: boolean }
+  ): Promise<void> {
+    if (!parsed.detectionEventId) {
+      await interaction.reply({
+        content: 'This observed action is missing its detection event.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const canBan =
+      permissions.hasBanMembersPermission && (await this.canUseModeratorBanAction(guildId));
+    const buttons: ButtonBuilder[] = [];
+    if (permissions.hasModerationPermission) {
+      buttons.push(
+        this.adminActionButton(parsed, 'observed_open', 'Open Case', ButtonStyle.Primary),
+        this.adminActionButton(parsed, 'observed_restrict', 'Restrict', ButtonStyle.Danger),
+        this.adminActionButton(parsed, 'observed_dismiss', 'Dismiss Alert', ButtonStyle.Secondary),
+        this.adminActionButton(
+          parsed,
+          'observed_false_positive',
+          'False Positive',
+          ButtonStyle.Success
+        ),
+        this.adminActionButton(
+          parsed,
+          'observed_undo_dismiss',
+          'Undo Dismissal',
+          ButtonStyle.Primary
+        ),
+        this.adminActionButton(parsed, 'history', 'History', ButtonStyle.Secondary)
+      );
+    }
+    if (canBan) {
+      if (permissions.hasModerationPermission) {
+        buttons.splice(
+          2,
+          0,
+          this.adminActionButton(parsed, 'observed_ban', 'Ban...', ButtonStyle.Danger)
+        );
+      } else {
+        buttons.push(this.adminActionButton(parsed, 'observed_ban', 'Ban...', ButtonStyle.Danger));
+      }
+    }
+
+    await interaction.reply({
+      content:
+        `Admin actions for observed alert on <@${parsed.userId}>.\nMutating actions require a confirmation step before they run.` +
+        (buttons.length === 0
+          ? '\nNo available actions for your current permissions and this alert state.'
+          : ''),
+      allowedMentions: { parse: [] },
+      components: this.createButtonRows(buttons),
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  private adminActionButton(
+    parsed: ParsedAdminActionCustomId,
+    action: string,
+    label: string,
+    style: ButtonStyle
+  ): ButtonBuilder {
+    return new ButtonBuilder()
+      .setCustomId(
+        buildAdminActionCustomId(action, parsed.surface, parsed.userId, parsed.detectionEventId)
+      )
+      .setLabel(label)
+      .setStyle(style);
+  }
+
+  private createButtonRows(buttons: ButtonBuilder[]): ActionRowBuilder<ButtonBuilder>[] {
+    const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+    for (let index = 0; index < buttons.length; index += 5) {
+      rows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons.slice(index, index + 5))
+      );
+    }
+    return rows;
+  }
+
+  private getAdminActionConfirmation(parsed: ParsedAdminActionCustomId): {
+    label: string;
+    message: string;
+    style: ButtonStyle.Danger | ButtonStyle.Primary | ButtonStyle.Success | ButtonStyle.Secondary;
+  } | null {
+    const target = `<@${parsed.userId}>`;
+    switch (parsed.action) {
+      case 'verify':
+        return {
+          label: 'Confirm Verify',
+          message: `Verify ${target} and remove verification restrictions?`,
+          style: ButtonStyle.Success,
+        };
+      case 'thread':
+        return {
+          label: 'Confirm Create Thread',
+          message: `Create a user-facing verification thread for ${target}?`,
+          style: ButtonStyle.Primary,
+        };
+      case 'repair':
+        return {
+          label: 'Confirm Repair',
+          message: `Repair the active verification case for ${target}?`,
+          style: ButtonStyle.Primary,
+        };
+      case 'sync_ban':
+        return {
+          label: 'Confirm Sync Ban',
+          message: `Sync pending verification cases for ${target} to banned because Discord already has an existing ban?`,
+          style: ButtonStyle.Danger,
+        };
+      case 'reopen':
+        return {
+          label: 'Confirm Reopen',
+          message: `Reopen verification for ${target} and restrict them again?`,
+          style: ButtonStyle.Primary,
+        };
+      case 'observed_open':
+        return {
+          label: 'Confirm Open Case',
+          message: `Open a verification case for observed alert on ${target}?`,
+          style: ButtonStyle.Primary,
+        };
+      case 'observed_restrict':
+        return {
+          label: 'Confirm Restrict',
+          message: `Restrict ${target} and open a verification case from this observed alert?`,
+          style: ButtonStyle.Danger,
+        };
+      case 'observed_dismiss':
+        return {
+          label: 'Confirm Dismiss',
+          message: `Dismiss this observed alert for ${target}?`,
+          style: ButtonStyle.Secondary,
+        };
+      case 'observed_false_positive':
+        return {
+          label: 'Confirm False Positive',
+          message: `Mark this observed alert for ${target} as a false positive?`,
+          style: ButtonStyle.Success,
+        };
+      case 'observed_undo_dismiss':
+        return {
+          label: 'Confirm Undo',
+          message: `Undo a dismissal or false-positive mark for this observed alert on ${target}?`,
+          style: ButtonStyle.Primary,
+        };
+      default:
+        return null;
+    }
+  }
+
+  private async showAdminActionConfirmation(
+    interaction: ButtonInteraction,
+    parsed: ParsedAdminActionCustomId,
+    confirmation: NonNullable<ReturnType<InteractionHandler['getAdminActionConfirmation']>>,
+    options?: { update?: boolean }
+  ): Promise<void> {
+    const confirmAction = `confirm_${parsed.action}`;
+    const components = [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        this.adminActionButton(parsed, confirmAction, confirmation.label, confirmation.style),
+        this.adminActionButton(parsed, 'cancel', 'Cancel', ButtonStyle.Secondary)
+      ),
+    ];
+    const response = {
+      content: confirmation.message,
+      allowedMentions: { parse: [] },
+      components,
+    };
+
+    if (options?.update === false) {
+      await interaction.reply({ ...response, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.update(response);
+  }
+
+  private async showLegacyAdminActionConfirmation(
+    interaction: ButtonInteraction,
+    parsed: ParsedAdminActionCustomId
+  ): Promise<void> {
+    const confirmation = this.getAdminActionConfirmation(parsed);
+    if (!confirmation) {
+      await interaction.reply({
+        content: 'Unknown admin action.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await this.showAdminActionConfirmation(interaction, parsed, confirmation, { update: false });
+  }
+
+  private async handleAdminActionBan(
+    interaction: ButtonInteraction,
+    guildId: string,
+    parsed: ParsedAdminActionCustomId
+  ): Promise<void> {
+    if (!(await this.hasAnyPermission(interaction, guildId, [PermissionFlagsBits.BanMembers]))) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need Ban Members permission to ban a user.'
+      );
+      return;
+    }
+    if (!(await this.canUseModeratorBanAction(guildId))) {
+      await interaction.reply({
+        content:
+          'Drasil ban actions are disabled for this server or the bot lacks Ban Members permission.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (parsed.surface === 'observed') {
+      if (!parsed.detectionEventId) {
+        await interaction.reply({
+          content: 'This observed action is missing its detection event.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      await this.showObservedBanModal(interaction, guildId, parsed.userId, parsed.detectionEventId);
+      return;
+    }
+
+    await this.handleBanButton(interaction, parsed.userId);
+  }
+
+  private async executeConfirmedAdminAction(
+    interaction: ButtonInteraction,
+    guildId: string,
+    parsed: ParsedAdminActionCustomId
+  ): Promise<void> {
+    const action = parsed.action.slice('confirm_'.length);
+    const moderationPermissions = this.getModerationPermissions();
+
+    if (action === 'verify') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to verify a user.'
+        );
+        return;
+      }
+      await this.handleVerifyButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
+    if (action === 'thread') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to create a verification thread.'
+        );
+        return;
+      }
+      await this.handleThreadButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
+    if (action === 'repair') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to repair a verification case.'
+        );
+        return;
+      }
+      await this.handleRepairActiveCaseButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
+    if (action === 'sync_ban') {
+      if (!(await this.hasAnyPermission(interaction, guildId, [PermissionFlagsBits.BanMembers]))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need Ban Members permission to sync an existing ban.'
+        );
+        return;
+      }
+      await this.handleSyncAlreadyBannedButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
+    if (action === 'reopen') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to reopen verification.'
+        );
+        return;
+      }
+      await this.handleReopenButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
+    if (!parsed.detectionEventId) {
+      await interaction.reply({
+        content: 'This observed action is missing its detection event.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (
+      !(await this.hasAnyPermission(interaction, guildId, this.getObservedModerationPermissions()))
+    ) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need moderation permissions to use this observed action.'
+      );
+      return;
+    }
+
+    switch (action) {
+      case 'observed_open':
+        await interaction.deferUpdate();
+        await this.openObservedCase(interaction, guildId, parsed.userId, parsed.detectionEventId);
+        return;
+      case 'observed_restrict':
+        await interaction.deferUpdate();
+        await this.restrictObservedUser(
+          interaction,
+          guildId,
+          parsed.userId,
+          parsed.detectionEventId
+        );
+        return;
+      case 'observed_dismiss':
+      case 'observed_false_positive':
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        await this.dismissObservedDetection(
+          interaction,
+          guildId,
+          parsed.userId,
+          parsed.detectionEventId,
+          action === 'observed_false_positive'
+            ? AdminActionType.FALSE_POSITIVE
+            : AdminActionType.DISMISS
+        );
+        return;
+      case 'observed_undo_dismiss':
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        await this.undoObservedDismissal(
+          interaction,
+          guildId,
+          parsed.userId,
+          parsed.detectionEventId
+        );
+        return;
+      default:
+        await interaction.reply({
+          content: 'Unknown admin action.',
+          flags: MessageFlags.Ephemeral,
+        });
+    }
+  }
+
+  private async handleRepairActiveCaseButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) {
+        throw new Error('Could not find member in guild');
+      }
+
+      const result = await this.securityActionService.repairActiveCase(member);
+      await interaction.followUp({
+        content: result.message,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error('Error repairing active case:', error);
+      await interaction.followUp({
+        content: 'An error occurred while repairing the active case.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  private async handleSyncAlreadyBannedButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      const guild = await this.client.guilds.fetch(guildId);
+      const syncedCount = await this.userModerationService.syncAlreadyBannedUser(
+        guild,
+        userId,
+        interaction.user
+      );
+
+      const caseWord = syncedCount === 1 ? 'case' : 'cases';
+      await interaction.followUp({
+        content:
+          syncedCount === 0
+            ? `No pending verification cases remain for <@${userId}>.`
+            : `Synced ${syncedCount} pending verification ${caseWord} for <@${userId}> to banned because Discord already has an existing ban.`,
+        allowedMentions: { parse: [] },
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error('Error syncing already-banned user:', error);
+      await interaction.followUp({
+        content:
+          'Could not sync the existing ban. Confirm the user is still banned and Drasil can view server bans.',
+        flags: MessageFlags.Ephemeral,
+      });
     }
   }
 
@@ -1010,6 +1644,12 @@ export class InteractionHandler implements IInteractionHandler {
     return botMember?.permissions.has(PermissionFlagsBits.BanMembers) ?? false;
   }
 
+  private async isUserBanned(guildId: string, userId: string): Promise<boolean> {
+    const guild = await this.client.guilds.fetch(guildId).catch(() => null);
+    const ban = await guild?.bans.fetch(userId).catch(() => null);
+    return Boolean(ban);
+  }
+
   private async replyPermissionDenied(
     interaction: ButtonInteraction | ModalSubmitInteraction,
     message: string,
@@ -1076,8 +1716,12 @@ export class InteractionHandler implements IInteractionHandler {
           );
           return;
         }
-        await interaction.deferUpdate();
-        await this.openObservedCase(interaction, guildId, parsed.userId, parsed.detectionEventId);
+        await this.showLegacyAdminActionConfirmation(interaction, {
+          action: 'observed_open',
+          surface: 'observed',
+          userId: parsed.userId,
+          detectionEventId: parsed.detectionEventId,
+        });
         return;
 
       case 'restrict':
@@ -1088,13 +1732,12 @@ export class InteractionHandler implements IInteractionHandler {
           );
           return;
         }
-        await interaction.deferUpdate();
-        await this.restrictObservedUser(
-          interaction,
-          guildId,
-          parsed.userId,
-          parsed.detectionEventId
-        );
+        await this.showLegacyAdminActionConfirmation(interaction, {
+          action: 'observed_restrict',
+          surface: 'observed',
+          userId: parsed.userId,
+          detectionEventId: parsed.detectionEventId,
+        });
         return;
 
       case 'ban':
@@ -1153,7 +1796,6 @@ export class InteractionHandler implements IInteractionHandler {
 
       case 'dismiss':
       case 'false_positive':
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
             interaction,
@@ -1162,19 +1804,16 @@ export class InteractionHandler implements IInteractionHandler {
           );
           return;
         }
-        await this.dismissObservedDetection(
-          interaction,
-          guildId,
-          parsed.userId,
-          parsed.detectionEventId,
-          parsed.action === 'false_positive'
-            ? AdminActionType.FALSE_POSITIVE
-            : AdminActionType.DISMISS
-        );
+        await this.showLegacyAdminActionConfirmation(interaction, {
+          action:
+            parsed.action === 'false_positive' ? 'observed_false_positive' : 'observed_dismiss',
+          surface: 'observed',
+          userId: parsed.userId,
+          detectionEventId: parsed.detectionEventId,
+        });
         return;
 
       case 'undo_dismiss':
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
             interaction,
@@ -1183,12 +1822,12 @@ export class InteractionHandler implements IInteractionHandler {
           );
           return;
         }
-        await this.undoObservedDismissal(
-          interaction,
-          guildId,
-          parsed.userId,
-          parsed.detectionEventId
-        );
+        await this.showLegacyAdminActionConfirmation(interaction, {
+          action: 'observed_undo_dismiss',
+          surface: 'observed',
+          userId: parsed.userId,
+          detectionEventId: parsed.detectionEventId,
+        });
         return;
 
       case 'history':

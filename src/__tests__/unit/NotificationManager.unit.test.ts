@@ -20,6 +20,7 @@ import {
 import { IConfigService } from '../../config/ConfigService';
 import { VERIFICATION_ACTION_FAILURES_METADATA_KEY } from '../../utils/verificationActionFailures';
 import { MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY } from '../../utils/detectionResponseSettings';
+import { parseAdminActionCustomId } from '../../utils/adminActionCustomIds';
 
 type MockTextChannel = {
   send: jest.Mock;
@@ -72,6 +73,7 @@ const buildVerificationEvent = (overrides: Partial<VerificationEvent> = {}): Ver
   user_id: overrides.user_id ?? 'user-1',
   detection_event_id: overrides.detection_event_id ?? null,
   thread_id: overrides.thread_id ?? null,
+  private_evidence_thread_id: overrides.private_evidence_thread_id ?? null,
   notification_message_id: overrides.notification_message_id ?? null,
   status: overrides.status ?? VerificationStatus.PENDING,
   created_at: overrides.created_at ?? new Date(),
@@ -96,6 +98,14 @@ const extractLabels = (components: unknown[]): string[] => {
   return components.flatMap((row) =>
     ((row as { components?: unknown[] }).components ?? []).map(
       (button) => (button as { data?: { label?: string } }).data?.label ?? ''
+    )
+  );
+};
+
+const extractCustomIds = (components: unknown[]): string[] => {
+  return components.flatMap((row) =>
+    ((row as { components?: unknown[] }).components ?? []).map(
+      (button) => (button as { data?: { custom_id?: string } }).data?.custom_id ?? ''
     )
   );
 };
@@ -170,9 +180,12 @@ describe('NotificationManager (unit)', () => {
       repliedUser: false,
     });
     const labels = extractLabels(sendArgs.components);
-    expect(labels).toEqual(
-      expect.arrayContaining(['Verify User', 'Ban User', 'Create Thread', 'View Full History'])
-    );
+    expect(labels).toEqual(['Admin Actions']);
+    expect(parseAdminActionCustomId(extractCustomIds(sendArgs.components)[0])).toEqual({
+      action: 'menu',
+      surface: 'case',
+      userId: 'user-1',
+    });
   });
 
   it('hides the ban action when explicitly disabled', async () => {
@@ -395,12 +408,12 @@ describe('NotificationManager (unit)', () => {
       repliedUser: false,
     });
     expect(sendArgs.components).toHaveLength(1);
-    expect(JSON.stringify(sendArgs.components[0])).toContain(
-      `observed:open:user-1:${detectionEvent.id}`
-    );
-    expect(JSON.stringify(sendArgs.components[0])).toContain(
-      `observed:dismiss_menu:user-1:${detectionEvent.id}`
-    );
+    expect(parseAdminActionCustomId(extractCustomIds(sendArgs.components)[0])).toEqual({
+      action: 'menu',
+      surface: 'observed',
+      userId: 'user-1',
+      detectionEventId: detectionEvent.id,
+    });
     expect(sendArgs.embeds[0].data.title).toBe('Suspicious Activity Observed');
     const fields = sendArgs.embeds[0].data.fields ?? [];
     const reasonsField = fields.find((field) => field.name === 'Reasons');
@@ -595,12 +608,11 @@ describe('NotificationManager (unit)', () => {
     await manager.markObservedDetectionActionTaken(
       detectionEvent.id,
       'marked this detection as a false positive',
-      { id: 'admin-1' } as User,
-      { undoButtonLabel: 'Undo False Positive' }
+      { id: 'admin-1' } as User
     );
 
     const editArgs = message.edit.mock.calls[0][0] as { components: unknown[] };
-    expect(extractLabels(editArgs.components)).toEqual(['Undo False Positive', 'History']);
+    expect(extractLabels(editArgs.components)).toEqual(['Admin Actions']);
   });
 
   it('restores observed action buttons after undo', async () => {
@@ -637,13 +649,7 @@ describe('NotificationManager (unit)', () => {
       components: unknown[];
       embeds: EmbedBuilder[];
     };
-    expect(extractLabels(editArgs.components)).toEqual([
-      'Open Case',
-      'Restrict',
-      'Ban',
-      'Dismiss...',
-      'History',
-    ]);
+    expect(extractLabels(editArgs.components)).toEqual(['Admin Actions']);
     expect(editArgs.embeds[0].data.fields?.[0].name).toBe('Action Reverted');
   });
 
@@ -723,8 +729,7 @@ describe('NotificationManager (unit)', () => {
     expect(editArgs.content).toBeUndefined();
     expect(editArgs.allowedMentions).toEqual({ parse: [] });
     const labels = extractLabels(editArgs.components);
-    expect(labels).toEqual(expect.arrayContaining(['Verify User', 'Ban User']));
-    expect(labels).not.toContain('Create Thread');
+    expect(labels).toEqual(['Admin Actions']);
   });
 
   it('updates notification buttons for pending status with thread action', async () => {
@@ -746,9 +751,7 @@ describe('NotificationManager (unit)', () => {
     expect(message.edit).toHaveBeenCalledTimes(1);
     const editArgs = message.edit.mock.calls[0][0] as { components: unknown[] };
     const labels = extractLabels(editArgs.components);
-    expect(labels).toEqual(
-      expect.arrayContaining(['Verify User', 'Ban User', 'View Full History', 'Create Thread'])
-    );
+    expect(labels).toEqual(['Admin Actions']);
   });
 
   it('updates notification buttons for verified status', async () => {
@@ -765,9 +768,7 @@ describe('NotificationManager (unit)', () => {
     expect(message.edit).toHaveBeenCalledTimes(1);
     const editArgs = message.edit.mock.calls[0][0] as { components: unknown[] };
     const labels = extractLabels(editArgs.components);
-    expect(labels).toEqual(expect.arrayContaining(['View Full History', 'Reopen Verification']));
-    expect(labels).not.toContain('Verify User');
-    expect(labels).not.toContain('Ban User');
+    expect(labels).toEqual(['Admin Actions']);
   });
 
   it('logs action and adds a thread field for create thread', async () => {
@@ -793,11 +794,15 @@ describe('NotificationManager (unit)', () => {
 
     const editArgs = message.edit.mock.calls[0][0] as { embeds: EmbedBuilder[] };
     const fields = editArgs.embeds[0].data.fields ?? [];
+    const latestAction = fields.find((field) => field.name === 'Latest Admin Action');
     const threadField = fields.find((field) => field.name === 'Verification Thread');
     const actionLog = fields.find((field) => field.name === 'Action Log');
 
+    expect(latestAction?.value).toContain('Created verification thread by <@admin-1> at <t:');
+    expect(latestAction?.value).toContain(':F>');
     expect(threadField?.value).toContain('Click here to view the thread');
-    expect(actionLog?.value).toContain('<@admin-1>');
+    expect(actionLog?.value).toContain('Created verification thread by <@admin-1> at <t:');
+    expect(actionLog?.value).toContain(':F>');
   });
 
   it('updates the admin notification with AI thread analysis details', async () => {

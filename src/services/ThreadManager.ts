@@ -28,6 +28,7 @@ import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 export const VERIFICATION_THREAD_TYPE_METADATA_KEY = 'thread_type';
 export const VERIFICATION_THREAD_TYPE = 'verification';
 export const REPORT_REVIEW_THREAD_TYPE = 'report_review';
+export const PRIVATE_EVIDENCE_THREAD_TYPE = 'private_evidence';
 export const REPORT_INTAKE_THREAD_NAME_PREFIX = 'Report intake:';
 export const CASE_STAFF_ROUTING_METADATA_KEY = 'case_staff_routing';
 const FLAGGED_USER_THREAD_ADD_RETRY_DELAYS_MS = [750, 1500, 3000] as const;
@@ -61,6 +62,13 @@ export interface IThreadManager {
   ): Promise<VerificationThreadRepairResult>;
 
   createReportReviewThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<ThreadChannel | null>;
+
+  createPrivateEvidenceThread(
     member: GuildMember,
     verificationEvent: VerificationEvent,
     detectionResult: DetectionResult,
@@ -177,6 +185,39 @@ export class ThreadManager implements IThreadManager {
     return enforceDiscordMessageLimit(contentLines.join('\n'));
   }
 
+  private buildPrivateEvidenceThreadMessage(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): string {
+    const reasonLines = detectionResult.reasons.length
+      ? detectionResult.reasons.map((reason) => `- ${reason}`)
+      : ['- No reason provided.'];
+    const links = [
+      verificationEvent.thread_id
+        ? `User-facing case thread: https://discord.com/channels/${member.guild.id}/${verificationEvent.thread_id}`
+        : null,
+      sourceMessage?.url ? `Source message: ${sourceMessage.url}` : null,
+    ].filter((line): line is string => Boolean(line));
+
+    return enforceDiscordMessageLimit(
+      [
+        `Private evidence workspace for ${member.user.tag} (${member.id}).`,
+        'Admin-only discussion and evidence can be added here. Do not add the user under review to this thread.',
+        '',
+        `Case ID: ${verificationEvent.id}`,
+        ...links,
+        '',
+        'Case details:',
+        ...reasonLines,
+        detectionResult.triggerContent ? `Context: ${detectionResult.triggerContent}` : null,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join('\n')
+    );
+  }
+
   private buildReportIntakeThreadMessage(reporter: GuildMember): string {
     return enforceDiscordMessageLimit(
       [
@@ -214,6 +255,16 @@ export class ThreadManager implements IThreadManager {
       ...extraMetadata,
     };
     await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
+  }
+
+  private async storePrivateEvidenceThreadId(
+    verificationEvent: VerificationEvent,
+    threadId: string
+  ): Promise<void> {
+    verificationEvent.private_evidence_thread_id = threadId;
+    await this.verificationEventRepository.update(verificationEvent.id, {
+      private_evidence_thread_id: threadId,
+    });
   }
 
   private async addCaseResponderMembers(
@@ -388,6 +439,21 @@ export class ThreadManager implements IThreadManager {
     )?.fetch;
     const fetchedChannel = fetchChannel
       ? await fetchChannel.call(this.client.channels, verificationEvent.thread_id).catch(() => null)
+      : null;
+    if (!fetchedChannel) {
+      return null;
+    }
+
+    const maybeThread = fetchedChannel as ThreadChannel;
+    return maybeThread.isThread() ? maybeThread : null;
+  }
+
+  private async fetchThreadById(threadId: string): Promise<ThreadChannel | null> {
+    const fetchChannel = (
+      this.client.channels as { fetch?: (id: string) => Promise<unknown> } | undefined
+    )?.fetch;
+    const fetchedChannel = fetchChannel
+      ? await fetchChannel.call(this.client.channels, threadId).catch(() => null)
       : null;
     if (!fetchedChannel) {
       return null;
@@ -608,6 +674,7 @@ export class ThreadManager implements IThreadManager {
       // failures do not orphan a thread that was already created.
       setupStage = 'store report review thread id';
       await this.storeThreadId(verificationEvent, thread.id, REPORT_REVIEW_THREAD_TYPE);
+      await this.storePrivateEvidenceThreadId(verificationEvent, thread.id);
 
       try {
         await thread.setInvitable(false, 'Keep report review thread moderator-only');
@@ -642,6 +709,90 @@ export class ThreadManager implements IThreadManager {
       return thread;
     } catch (error) {
       console.error('Failed to create report review thread:', error);
+      if (threadWasCreated) {
+        throw this.buildThreadSetupError(setupStage, error);
+      }
+      return null;
+    }
+  }
+
+  public async createPrivateEvidenceThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<ThreadChannel | null> {
+    if (verificationEvent.private_evidence_thread_id) {
+      const existing = await this.fetchThreadById(verificationEvent.private_evidence_thread_id);
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const channel =
+      (await this.configService.getVerificationChannel(member.guild.id)) ||
+      (await this.configService.getAdminChannel(member.guild.id));
+
+    if (!channel) {
+      console.error('No verification or admin channel ID configured');
+      return null;
+    }
+
+    let setupStage = 'prepare private evidence thread records';
+    let threadWasCreated = false;
+
+    try {
+      await this.serverRepository.getOrCreateServer(member.guild.id);
+      await this.userRepository.getOrCreateUser(member.id, member.user.username);
+      await this.serverMemberRepository.getOrCreateMember(
+        member.guild.id,
+        member.id,
+        member.joinedAt ?? undefined
+      );
+
+      setupStage = 'create private evidence thread';
+      const thread = await channel.threads.create({
+        name: `Evidence: ${member.user.username}`,
+        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+        reason: `Private evidence thread for user: ${member.user.tag}`,
+        type: ChannelType.PrivateThread,
+      });
+      threadWasCreated = true;
+
+      setupStage = 'store private evidence thread id';
+      await this.storePrivateEvidenceThreadId(verificationEvent, thread.id);
+
+      try {
+        await thread.setInvitable(false, 'Keep private evidence thread moderator-only');
+      } catch (error) {
+        console.warn(
+          `Failed to set invitable=false for private evidence thread ${thread.id} (continuing):`,
+          error
+        );
+      }
+
+      setupStage = 'route case responders to private evidence thread';
+      await this.addCaseResponderMembers(member.guild, thread, [member.id]);
+
+      setupStage = 'send private evidence thread prompt';
+      await thread.send({
+        content: this.buildPrivateEvidenceThreadMessage(
+          member,
+          verificationEvent,
+          detectionResult,
+          sourceMessage
+        ),
+        allowedMentions: {
+          parse: [],
+          users: [],
+          roles: [],
+          repliedUser: false,
+        },
+      });
+
+      return thread;
+    } catch (error) {
+      console.error('Failed to create private evidence thread:', error);
       if (threadWasCreated) {
         throw this.buildThreadSetupError(setupStage, error);
       }

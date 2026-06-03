@@ -1,11 +1,11 @@
-import { GuildMember, User } from 'discord.js';
+import { Guild, GuildMember, User } from 'discord.js';
 import { injectable, inject, optional } from 'inversify';
 import { TYPES } from '../di/symbols';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
-import { AdminActionType, VerificationStatus } from '../repositories/types';
+import { AdminActionType, VerificationEvent, VerificationStatus } from '../repositories/types';
 import { IAdminActionService } from './AdminActionService';
 import { IThreadManager } from './ThreadManager';
 import {
@@ -45,6 +45,17 @@ export interface IUserModerationService {
     moderator: User,
     detectionEventId?: string
   ): Promise<boolean>;
+
+  /**
+   * Synchronizes pending verification cases when Discord already has an existing ban.
+   */
+  syncAlreadyBannedUser(guild: Guild, userId: string, moderator: User): Promise<number>;
+}
+
+interface ModerationTarget {
+  guildId: string;
+  userId: string;
+  userTag: string;
 }
 
 /**
@@ -99,6 +110,70 @@ export class UserModerationService implements IUserModerationService {
         detectionEventId: detectionEventId ?? undefined,
       }
     );
+  }
+
+  private async getPendingVerificationEvents(member: GuildMember): Promise<VerificationEvent[]> {
+    const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
+      member.id,
+      member.guild.id
+    );
+    return verificationEvents.filter((event) => event.status === VerificationStatus.PENDING);
+  }
+
+  private getModerationTarget(member: GuildMember): ModerationTarget {
+    return {
+      guildId: member.guild.id,
+      userId: member.id,
+      userTag: member.user.tag,
+    };
+  }
+
+  private async finalizeResolvedVerificationEvent(
+    target: ModerationTarget,
+    verificationEvent: VerificationEvent,
+    previousStatus: VerificationStatus,
+    newStatus: VerificationStatus.VERIFIED | VerificationStatus.BANNED,
+    actionType: AdminActionType.VERIFY | AdminActionType.BAN,
+    moderator: User,
+    strictNotification: boolean,
+    options: { notes?: string | null; detectionEventId?: string | null } = {}
+  ): Promise<void> {
+    await this.threadManager.resolveVerificationThread(verificationEvent, newStatus, moderator.id);
+
+    const logged = await this.notificationManager.logActionToMessage(
+      verificationEvent,
+      actionType,
+      moderator
+    );
+    if (!logged && strictNotification) {
+      throw new Error(`Failed to log ${actionType} action for ${target.userTag}`);
+    }
+
+    if (verificationEvent.notification_message_id || strictNotification) {
+      try {
+        await this.notificationManager.updateNotificationButtons(verificationEvent, newStatus);
+      } catch (error) {
+        if (strictNotification) {
+          throw error;
+        }
+        console.warn(
+          `Failed to update notification buttons for duplicate resolved case ${verificationEvent.id}:`,
+          error
+        );
+      }
+    }
+
+    await this.adminActionService.recordAction({
+      server_id: target.guildId,
+      user_id: target.userId,
+      admin_id: moderator.id,
+      verification_event_id: verificationEvent.id,
+      detection_event_id: options.detectionEventId,
+      action_type: actionType,
+      previous_status: previousStatus,
+      new_status: newStatus,
+      notes: options.notes ?? null,
+    });
   }
 
   /**
@@ -166,30 +241,40 @@ export class UserModerationService implements IUserModerationService {
    */
   public async verifyUser(member: GuildMember, moderator: User): Promise<boolean> {
     try {
-      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
-        member.id,
-        member.guild.id
-      );
+      const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
+      const verificationEvent =
+        pendingVerificationEvents.length > 0 ? pendingVerificationEvents[0] : null;
 
       if (!verificationEvent) {
         throw new Error('No active verification event found to verify');
       }
 
-      const previousStatus = verificationEvent.status;
+      const resolvedAt = new Date();
+      const resolvedEvents: Array<{
+        event: VerificationEvent;
+        previousStatus: VerificationStatus;
+      }> = [];
 
-      // Set status and resolution details
-      verificationEvent.status = VerificationStatus.VERIFIED;
-      verificationEvent.resolved_by = moderator.id;
-      verificationEvent.resolved_at = new Date();
-      const updatedEvent = await this.verificationEventRepository.update(
-        verificationEvent.id,
-        verificationEvent
-      );
-
-      if (!updatedEvent) {
-        throw new Error(
-          `Failed to update verification event ${verificationEvent.id} status to VERIFIED.`
+      for (const pendingEvent of pendingVerificationEvents) {
+        const previousStatus = pendingEvent.status;
+        const eventToUpdate = {
+          ...pendingEvent,
+          status: VerificationStatus.VERIFIED,
+          resolved_by: moderator.id,
+          resolved_at: resolvedAt,
+        };
+        const updatedEvent = await this.verificationEventRepository.update(
+          pendingEvent.id,
+          eventToUpdate
         );
+
+        if (!updatedEvent) {
+          throw new Error(
+            `Failed to update verification event ${pendingEvent.id} status to VERIFIED.`
+          );
+        }
+
+        resolvedEvents.push({ event: updatedEvent, previousStatus });
       }
 
       const roleRemoved = await this.roleManager.removeRestrictedRole(member);
@@ -204,36 +289,17 @@ export class UserModerationService implements IUserModerationService {
         last_verified_at: new Date().toISOString(),
       });
 
-      await this.threadManager.resolveVerificationThread(
-        verificationEvent,
-        VerificationStatus.VERIFIED,
-        moderator.id
-      );
-
-      const logged = await this.notificationManager.logActionToMessage(
-        verificationEvent,
-        AdminActionType.VERIFY,
-        moderator
-      );
-      if (!logged) {
-        throw new Error(`Failed to log verify action for ${member.user.tag}`);
+      for (const resolvedEvent of resolvedEvents) {
+        await this.finalizeResolvedVerificationEvent(
+          this.getModerationTarget(member),
+          resolvedEvent.event,
+          resolvedEvent.previousStatus,
+          VerificationStatus.VERIFIED,
+          AdminActionType.VERIFY,
+          moderator,
+          resolvedEvent.event.id === verificationEvent.id
+        );
       }
-
-      await this.notificationManager.updateNotificationButtons(
-        verificationEvent,
-        VerificationStatus.VERIFIED
-      );
-
-      await this.adminActionService.recordAction({
-        server_id: member.guild.id,
-        user_id: member.id,
-        admin_id: moderator.id,
-        verification_event_id: verificationEvent.id,
-        action_type: AdminActionType.VERIFY,
-        previous_status: previousStatus,
-        new_status: VerificationStatus.VERIFIED,
-        notes: null,
-      });
 
       console.log(`User ${member.user.tag} verification process completed successfully.`);
       this.captureModerationAction(
@@ -264,32 +330,36 @@ export class UserModerationService implements IUserModerationService {
     detectionEventId?: string
   ): Promise<boolean> {
     try {
-      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
-        member.id,
-        member.guild.id
-      );
+      const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
+      const verificationEvent =
+        pendingVerificationEvents.length > 0 ? pendingVerificationEvents[0] : null;
+      const resolvedAt = new Date();
+      const resolvedEvents: Array<{
+        event: VerificationEvent;
+        previousStatus: VerificationStatus;
+      }> = [];
 
-      const previousStatus = verificationEvent?.status;
-
-      // Allow banning even if no active verification event exists
-      // if (!verificationEvent) {
-      //   throw new Error('No active verification event found to ban');
-      // }
-
-      // Update verification event status if it exists
-      if (verificationEvent) {
-        verificationEvent.status = VerificationStatus.BANNED;
-        verificationEvent.resolved_by = moderator.id;
-        verificationEvent.resolved_at = new Date();
+      for (const pendingEvent of pendingVerificationEvents) {
+        const previousStatus = pendingEvent.status;
+        const eventToUpdate = {
+          ...pendingEvent,
+          status: VerificationStatus.BANNED,
+          resolved_by: moderator.id,
+          resolved_at: resolvedAt,
+        };
         const updatedEvent = await this.verificationEventRepository.update(
-          verificationEvent.id,
-          verificationEvent
+          pendingEvent.id,
+          eventToUpdate
         );
         if (!updatedEvent) {
           console.warn(
-            `Failed to update verification event ${verificationEvent.id} status to BANNED, but proceeding with ban.`
+            `Failed to update verification event ${pendingEvent.id} status to BANNED, but proceeding with ban.`
           );
+          resolvedEvents.push({ event: eventToUpdate, previousStatus });
+          continue;
         }
+
+        resolvedEvents.push({ event: updatedEvent, previousStatus });
       }
 
       // Perform the ban
@@ -304,38 +374,20 @@ export class UserModerationService implements IUserModerationService {
           last_status_change: new Date(),
         });
 
-        if (verificationEvent) {
-          await this.threadManager.resolveVerificationThread(
-            verificationEvent,
+        for (const resolvedEvent of resolvedEvents) {
+          await this.finalizeResolvedVerificationEvent(
+            this.getModerationTarget(member),
+            resolvedEvent.event,
+            resolvedEvent.previousStatus,
             VerificationStatus.BANNED,
-            moderator.id
-          );
-
-          const logged = await this.notificationManager.logActionToMessage(
-            verificationEvent,
             AdminActionType.BAN,
-            moderator
+            moderator,
+            resolvedEvent.event.id === verificationEvent?.id,
+            {
+              notes: reason,
+              detectionEventId: detectionEventId ?? resolvedEvent.event.detection_event_id,
+            }
           );
-          if (!logged) {
-            throw new Error(`Failed to log ban action for ${member.user.tag}`);
-          }
-
-          await this.notificationManager.updateNotificationButtons(
-            verificationEvent,
-            VerificationStatus.BANNED
-          );
-
-          await this.adminActionService.recordAction({
-            server_id: member.guild.id,
-            user_id: member.id,
-            admin_id: moderator.id,
-            verification_event_id: verificationEvent.id,
-            detection_event_id: detectionEventId,
-            action_type: AdminActionType.BAN,
-            previous_status: previousStatus ?? VerificationStatus.PENDING,
-            new_status: VerificationStatus.BANNED,
-            notes: reason,
-          });
         }
       } catch (postBanError) {
         console.error(
@@ -354,6 +406,107 @@ export class UserModerationService implements IUserModerationService {
       return true; // Ban succeeded
     } catch (error) {
       console.error(`Failed to ban user ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
+  public async syncAlreadyBannedUser(
+    guild: Guild,
+    userId: string,
+    moderator: User
+  ): Promise<number> {
+    try {
+      const existingBan = await guild.bans.fetch(userId).catch(() => null);
+      if (!existingBan) {
+        throw new Error(`User ${userId} is not banned in guild ${guild.id}`);
+      }
+
+      const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
+        userId,
+        guild.id
+      );
+      const pendingVerificationEvents = verificationEvents.filter(
+        (event) => event.status === VerificationStatus.PENDING
+      );
+      if (pendingVerificationEvents.length === 0) {
+        return 0;
+      }
+
+      const resolvedAt = new Date();
+      const resolvedEvents: Array<{
+        event: VerificationEvent;
+        previousStatus: VerificationStatus;
+      }> = [];
+
+      for (const pendingEvent of pendingVerificationEvents) {
+        const previousStatus = pendingEvent.status;
+        const eventToUpdate = {
+          ...pendingEvent,
+          status: VerificationStatus.BANNED,
+          resolved_by: moderator.id,
+          resolved_at: resolvedAt,
+        };
+        const updatedEvent = await this.verificationEventRepository.update(
+          pendingEvent.id,
+          eventToUpdate
+        );
+        resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
+      }
+
+      await this.serverMemberRepository.upsertMember(guild.id, userId, {
+        verification_status: VerificationStatus.BANNED,
+        is_restricted: true,
+        last_status_change: new Date(),
+      });
+
+      const existingBanReason = existingBan.reason?.trim() ?? '';
+      const notes = existingBanReason
+        ? `Synced existing Discord ban: ${existingBanReason}`
+        : 'Synced existing Discord ban.';
+      const target = {
+        guildId: guild.id,
+        userId,
+        userTag: existingBan.user.tag,
+      };
+
+      try {
+        for (const resolvedEvent of resolvedEvents) {
+          await this.finalizeResolvedVerificationEvent(
+            target,
+            resolvedEvent.event,
+            resolvedEvent.previousStatus,
+            VerificationStatus.BANNED,
+            AdminActionType.BAN,
+            moderator,
+            resolvedEvent.event.id === resolvedEvents[0].event.id,
+            {
+              notes,
+              detectionEventId: resolvedEvent.event.detection_event_id,
+            }
+          );
+        }
+      } catch (postSyncError) {
+        console.error(
+          `Existing ban sync succeeded for ${target.userTag}, but post-sync updates failed:`,
+          postSyncError
+        );
+      }
+
+      void this.productAnalyticsService.captureUserEvent(
+        guild.id,
+        userId,
+        'moderation action completed',
+        { action_type: AdminActionType.BAN, synced_already_banned: true },
+        {
+          moderatorId: moderator.id,
+          verificationEventId: resolvedEvents[0].event.id,
+          detectionEventId: resolvedEvents[0].event.detection_event_id ?? undefined,
+        }
+      );
+
+      return resolvedEvents.length;
+    } catch (error) {
+      console.error(`Failed to sync already-banned user ${userId}:`, error);
       throw error;
     }
   }

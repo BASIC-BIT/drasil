@@ -80,6 +80,9 @@ export interface ServerSettings {
   restricted_lockdown_enabled?: boolean;
   restricted_lockdown_allowed_channel_ids?: string[];
   restricted_lockdown_allowed_category_ids?: string[];
+  case_review_reminders_enabled?: boolean;
+  case_review_reminder_stale_hours?: number;
+  case_review_reminder_repeat_hours?: number;
   setup_nudge_last_attempt_at?: string | null;
   setup_nudge_last_recipient_id?: string | null;
   setup_nudge_last_result?: 'sent' | 'dm_failed' | 'no_recipient' | null;
@@ -178,6 +181,7 @@ export interface VerificationEvent {
   user_id: string;
   detection_event_id: string | null;
   thread_id: string | null;
+  private_evidence_thread_id: string | null;
   notification_message_id: string | null;
   status: VerificationStatus;
   created_at: Date; // Use Date type
