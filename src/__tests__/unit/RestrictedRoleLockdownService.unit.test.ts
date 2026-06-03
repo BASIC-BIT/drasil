@@ -43,6 +43,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     restrictedOverwrite?: ReturnType<typeof createOverwrite>;
     extraOverwrites?: readonly ReturnType<typeof createOverwrite>[];
     keepPermissionsLockedAfterSet?: boolean;
+    overwriteSetError?: Error;
   }) => {
     const restrictedOverwrite = options.restrictedOverwrite ?? createOverwrite();
     const cache = new Map([
@@ -66,6 +67,9 @@ describe('RestrictedRoleLockdownService (unit)', () => {
           return Promise.resolve(undefined);
         }),
         set: jest.fn().mockImplementation(() => {
+          if (options.overwriteSetError) {
+            return Promise.reject(options.overwriteSetError);
+          }
           if (!options.keepPermissionsLockedAfterSet) {
             channel.permissionsLocked = false;
           }
@@ -264,6 +268,52 @@ describe('RestrictedRoleLockdownService (unit)', () => {
       'verification-channel-1',
     ]);
     expect(report.appliedActions.map((action) => action.channelId)).toEqual(['category-1']);
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      restricted_lockdown_enabled: true,
+    });
+  });
+
+  it('does not report successfully unsynced channels as synced when another unsync fails', async () => {
+    const category = createChannel({
+      id: 'category-1',
+      name: 'public',
+      type: ChannelType.GuildCategory,
+    });
+    const successfulAllowedChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+      parentId: 'category-1',
+      permissionsLocked: true,
+      keepPermissionsLockedAfterSet: true,
+    });
+    const failedAllowedChannel = createChannel({
+      id: 'report-channel-1',
+      name: 'reports',
+      type: ChannelType.GuildText,
+      parentId: 'category-1',
+      permissionsLocked: true,
+      overwriteSetError: new Error('Missing Permissions'),
+    });
+    const guild = createGuild([category, successfulAllowedChannel, failedAllowedChannel]);
+    const configService = createConfigService({
+      report_instructions_channel_id: 'report-channel-1',
+    });
+    const service = new RestrictedRoleLockdownService(configService as any);
+
+    const report = await service.applyGuild(guild, 'admin-1', { unsyncAllowedChannels: true });
+
+    expect(successfulAllowedChannel.permissionOverwrites.set).toHaveBeenCalled();
+    expect(failedAllowedChannel.permissionOverwrites.set).toHaveBeenCalled();
+    expect(report.unsyncedAllowedChannels.map((action) => action.channelId)).toEqual([
+      'verification-channel-1',
+    ]);
+    expect(report.syncedAllowedChannels.map((action) => action.channelId)).toEqual([
+      'report-channel-1',
+    ]);
+    expect(report.failedActions.map((action) => action.channelId)).toEqual(['report-channel-1']);
+    expect(category.permissionOverwrites.edit).not.toHaveBeenCalled();
+    expect(configService.updateServerSettings).not.toHaveBeenCalled();
   });
 
   it('applies missing lockdown denies and marks lockdown enabled', async () => {
