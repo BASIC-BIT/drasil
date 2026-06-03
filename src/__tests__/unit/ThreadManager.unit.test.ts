@@ -291,6 +291,39 @@ describe('ThreadManager (unit)', () => {
     expect(result.promptSent).toBe(false);
   });
 
+  it('sends a missing prompt when repair finds unrelated bot messages', async () => {
+    (thread.messages.fetch as jest.Mock).mockResolvedValueOnce(
+      new Map([
+        [
+          'message-1',
+          {
+            author: { id: 'bot-1', bot: true },
+            content: 'Case responder routing updated.',
+          },
+        ],
+      ])
+    );
+    const manager = new ThreadManager(
+      { user: { id: 'bot-1' } } as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    const member = buildMember('guild-1', 'user-1');
+    const event = buildVerificationEvent({ thread_id: 'thread-1' });
+
+    const result = await manager.repairVerificationThread(member, event);
+
+    expect(thread.members.add).toHaveBeenCalledWith(member.id);
+    expect(thread.send).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining(`<@${member.id}>`) })
+    );
+    expect(result.promptAlreadyPresent).toBe(false);
+    expect(result.promptSent).toBe(true);
+  });
+
   it('uses custom verification prompt template when configured', async () => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       settings: {

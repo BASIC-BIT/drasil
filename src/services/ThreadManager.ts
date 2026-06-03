@@ -428,11 +428,9 @@ export class ThreadManager implements IThreadManager {
     const botUserId = this.client.user?.id;
 
     return [...messages.values()].some((message) => {
-      if (botUserId && message.author.id === botUserId) {
-        return true;
-      }
-
-      return message.author.bot && message.content.includes(`<@${member.id}>`);
+      const isFromBot =
+        (botUserId && message.author.id === botUserId) || (!botUserId && message.author.bot);
+      return isFromBot && message.content.includes(`<@${member.id}>`);
     });
   }
 
