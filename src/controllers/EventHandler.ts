@@ -7,6 +7,7 @@ import {
   Guild,
   Events,
   MessageFlags,
+  MessageType,
   PermissionFlagsBits,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
@@ -215,6 +216,10 @@ export class EventHandler implements IEventHandler {
     // Handle debug/test commands
     if (message.content.startsWith('!test')) {
       await this.commandHandler.handleTestCommands(message);
+      return;
+    }
+
+    if (message.system || message.type !== MessageType.Default) {
       return;
     }
 

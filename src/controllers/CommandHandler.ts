@@ -364,6 +364,14 @@ export class CommandHandler implements ICommandHandler {
               subcommand
                 .setName('apply')
                 .setDescription('Apply missing restricted-role lockdown denies')
+                .addBooleanOption((option) =>
+                  option
+                    .setName('unsync-allowed')
+                    .setDescription(
+                      'Unsync allowed channels that are synced under denied categories'
+                    )
+                    .setRequired(false)
+                )
             )
             .addSubcommand((subcommand) =>
               subcommand
@@ -1014,6 +1022,17 @@ export class CommandHandler implements ICommandHandler {
                 .setDescription('Why moderators should review this user')
                 .setRequired(false)
                 .setMaxLength(500)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('repair')
+            .setDescription('Repair an active user-facing verification case thread')
+            .addUserOption((option) =>
+              option
+                .setName('user')
+                .setDescription('The user whose active case to repair')
+                .setRequired(true)
             )
         )
         .addSubcommand((subcommand) =>
@@ -1929,7 +1948,9 @@ export class CommandHandler implements ICommandHandler {
     try {
       const report =
         subcommand === 'apply'
-          ? await this.restrictedRoleLockdownService.applyGuild(guild, interaction.user.id)
+          ? await this.restrictedRoleLockdownService.applyGuild(guild, interaction.user.id, {
+              unsyncAllowedChannels: interaction.options.getBoolean('unsync-allowed') ?? false,
+            })
           : await this.restrictedRoleLockdownService.auditGuild(guild);
 
       await interaction.editReply({
@@ -2015,18 +2036,48 @@ export class CommandHandler implements ICommandHandler {
       `Mode: \`${report.enabled ? 'enabled' : 'disabled'}\``,
       `Planned deny writes: \`${report.plannedActions.length}\``,
       `Applied deny writes: \`${report.appliedActions.length}\``,
+      `Unsynced allowed channels: \`${report.unsyncedAllowedChannels.length}\``,
       `Allowed channels: ${this.formatChannelIdList(report.allowedChannelIds)}`,
       `Allowed categories: ${this.formatChannelIdList(report.allowedCategoryIds)}`,
       `Auto-allowed channels: ${this.formatChannelIdList(report.autoAllowedChannelIds)}`,
     ];
 
+    if (report.syncedAllowedChannels.length > 0) {
+      lines.push(
+        '',
+        'Synced allowed-channel blockers:',
+        ...report.syncedAllowedChannels
+          .slice(0, 8)
+          .map((action) => `- #${action.channelName} (${action.channelId})`)
+      );
+      if (report.syncedAllowedChannels.length > 8) {
+        lines.push(`- ... +${report.syncedAllowedChannels.length - 8} more blocker(s)`);
+      }
+    }
+
+    if (report.unsyncedAllowedChannels.length > 0) {
+      lines.push(
+        '',
+        'Allowed channels unsynced before apply:',
+        ...report.unsyncedAllowedChannels
+          .slice(0, 8)
+          .map((action) => `- #${action.channelName} (${action.channelId})`)
+      );
+      if (report.unsyncedAllowedChannels.length > 8) {
+        lines.push(`- ... +${report.unsyncedAllowedChannels.length - 8} more unsynced channel(s)`);
+      }
+    }
+
     if (report.issues.length > 0) {
+      const sortedIssues = [...report.issues].sort((left, right) =>
+        left.severity === right.severity ? 0 : left.severity === 'error' ? -1 : 1
+      );
       lines.push('', 'Issues:');
-      for (const issue of report.issues.slice(0, 12)) {
+      for (const issue of sortedIssues.slice(0, 12)) {
         lines.push(`- [${issue.severity.toUpperCase()}] ${issue.message}`);
       }
-      if (report.issues.length > 12) {
-        lines.push(`- ... +${report.issues.length - 12} more issue(s)`);
+      if (sortedIssues.length > 12) {
+        lines.push(`- ... +${sortedIssues.length - 12} more issue(s)`);
       }
     }
 
@@ -3990,6 +4041,11 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    if (subcommand === 'repair') {
+      await this.handleCaseRepairCommand(interaction, guild);
+      return;
+    }
+
     if (subcommand === 'intake-role') {
       await this.handleCaseRoleIntakeCommand(interaction, guild);
       return;
@@ -4045,6 +4101,50 @@ export class CommandHandler implements ICommandHandler {
       console.error('Failed to open admin case:', error);
       await interaction.editReply({
         content: `Failed to open a case for ${targetUser.tag}. Please try again later.`,
+      });
+    }
+  }
+
+  private async handleCaseRepairCommand(
+    interaction: ChatInputCommandInteraction,
+    guild: Guild
+  ): Promise<void> {
+    const targetUser = interaction.options.getUser('user', true);
+    const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+    if (!targetMember) {
+      await interaction.reply({
+        content: `Could not find user ${targetUser.tag} in this server.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      const result = await this.securityActionService.repairActiveCase(targetMember);
+      const lines = [result.message];
+
+      if (result.threadId) {
+        lines.push(`Thread: https://discord.com/channels/${guild.id}/${result.threadId}`);
+      }
+      lines.push(
+        `Thread created: \`${result.threadCreated ? 'yes' : 'no'}\``,
+        `User added: \`${result.userAdded ? 'yes' : 'no'}\``,
+        `Prompt sent: \`${result.promptSent ? 'yes' : 'no'}\``,
+        `Prompt already present: \`${result.promptAlreadyPresent ? 'yes' : 'no'}\``
+      );
+
+      await interaction.editReply({
+        content: lines.join('\n'),
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Failed to repair active case:', error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      await interaction.editReply({
+        content: `Failed to repair the active case for ${targetUser.tag}: ${message}`,
+        allowedMentions: { parse: [] },
       });
     }
   }

@@ -30,6 +30,15 @@ export const VERIFICATION_THREAD_TYPE = 'verification';
 export const REPORT_REVIEW_THREAD_TYPE = 'report_review';
 export const REPORT_INTAKE_THREAD_NAME_PREFIX = 'Report intake:';
 export const CASE_STAFF_ROUTING_METADATA_KEY = 'case_staff_routing';
+const FLAGGED_USER_THREAD_ADD_RETRY_DELAYS_MS = [750, 1500, 3000] as const;
+
+export interface VerificationThreadRepairResult {
+  threadId: string | null;
+  threadCreated: boolean;
+  userAdded: boolean;
+  promptSent: boolean;
+  promptAlreadyPresent: boolean;
+}
 
 /**
  * Interface for NotificationManager service
@@ -44,6 +53,11 @@ export interface IThreadManager {
     member: GuildMember,
     verificationEvent: VerificationEvent
   ): Promise<ThreadChannel | null>;
+
+  repairVerificationThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent
+  ): Promise<VerificationThreadRepairResult>;
 
   createReportReviewThread(
     member: GuildMember,
@@ -287,6 +301,140 @@ export class ThreadManager implements IThreadManager {
     };
   }
 
+  private buildThreadSetupError(stage: string, error: unknown): Error {
+    const message = error instanceof Error && error.message ? error.message : String(error);
+    return new Error(`Failed to ${stage}: ${message || 'Unknown error'}`);
+  }
+
+  private async wait(delayMs: number): Promise<void> {
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  private async refreshMember(member: GuildMember): Promise<void> {
+    const fetchMember = (member as { fetch?: (force?: boolean) => Promise<GuildMember> }).fetch;
+    if (!fetchMember) {
+      return;
+    }
+
+    await fetchMember.call(member, true).catch((error) => {
+      console.warn(`Failed to refresh member ${member.id} before thread add retry:`, error);
+    });
+  }
+
+  private async addFlaggedUserToVerificationThread(
+    member: GuildMember,
+    thread: ThreadChannel
+  ): Promise<void> {
+    let lastError: unknown;
+
+    try {
+      await thread.members.add(member.id);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+
+    for (const retryDelay of FLAGGED_USER_THREAD_ADD_RETRY_DELAYS_MS) {
+      console.warn(
+        `Failed to add ${member.id} to verification thread ${thread.id}; retrying in ${retryDelay}ms:`,
+        lastError
+      );
+      await this.wait(retryDelay);
+      await this.refreshMember(member);
+
+      try {
+        await thread.members.add(member.id);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError;
+  }
+
+  private async fetchStoredThread(
+    verificationEvent: VerificationEvent
+  ): Promise<ThreadChannel | null> {
+    if (!verificationEvent.thread_id) {
+      return null;
+    }
+
+    const parentChannels: TextChannel[] = [];
+    const verificationChannel = await this.configService.getVerificationChannel(
+      verificationEvent.server_id
+    );
+    if (verificationChannel) {
+      parentChannels.push(verificationChannel);
+    }
+
+    const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
+    if (adminChannel && !parentChannels.some((channel) => channel.id === adminChannel.id)) {
+      parentChannels.push(adminChannel);
+    }
+
+    for (const parentChannel of parentChannels) {
+      const thread = await parentChannel.threads
+        .fetch(verificationEvent.thread_id)
+        .catch(() => null);
+      if (thread?.isThread()) {
+        return thread;
+      }
+    }
+
+    const fetchChannel = (
+      this.client.channels as { fetch?: (id: string) => Promise<unknown> } | undefined
+    )?.fetch;
+    const fetchedChannel = fetchChannel
+      ? await fetchChannel.call(this.client.channels, verificationEvent.thread_id).catch(() => null)
+      : null;
+    if (!fetchedChannel) {
+      return null;
+    }
+
+    const maybeThread = fetchedChannel as ThreadChannel;
+    return maybeThread.isThread() ? maybeThread : null;
+  }
+
+  private async sendInitialVerificationPrompt(
+    member: GuildMember,
+    thread: ThreadChannel
+  ): Promise<void> {
+    const rawInitialPrompt = await this.getInitialVerificationPrompt(member);
+    const initialPrompt = enforceDiscordMessageLimit(rawInitialPrompt);
+    if (initialPrompt.length < rawInitialPrompt.length) {
+      console.warn(
+        `Verification prompt exceeded Discord content limit for guild ${member.guild.id}; truncated before sending.`
+      );
+    }
+
+    await thread.send({
+      content: initialPrompt,
+      allowedMentions: {
+        parse: [],
+        users: [member.id],
+        roles: [],
+        repliedUser: false,
+      },
+    });
+  }
+
+  private async hasInitialVerificationPrompt(
+    member: GuildMember,
+    thread: ThreadChannel
+  ): Promise<boolean> {
+    const messages = await thread.messages.fetch({ limit: 25 });
+    const botUserId = this.client.user?.id;
+
+    return [...messages.values()].some((message) => {
+      if (botUserId && message.author.id === botUserId) {
+        return true;
+      }
+
+      return message.author.bot && message.content.includes(`<@${member.id}>`);
+    });
+  }
+
   /**
    * Creates a thread for a suspicious user in the verification channel
    * @param member The suspicious guild member
@@ -306,6 +454,9 @@ export class ThreadManager implements IThreadManager {
       return null;
     }
 
+    let setupStage = 'prepare verification thread records';
+    let threadWasCreated = false;
+
     try {
       // Ensure the server exists
       await this.serverRepository.getOrCreateServer(member.guild.id);
@@ -321,6 +472,7 @@ export class ThreadManager implements IThreadManager {
       );
 
       // Create a thread for verification
+      setupStage = 'create verification thread';
       const threadName = `Verification: ${member.user.username}`;
       const thread = await channel.threads.create({
         name: threadName,
@@ -328,13 +480,16 @@ export class ThreadManager implements IThreadManager {
         reason: `Verification thread for suspicious user: ${member.user.tag}`,
         type: ChannelType.PrivateThread,
       });
+      threadWasCreated = true;
 
       // Persist the Discord thread before follow-up operations so partial setup
       // failures do not orphan a thread that was already created.
+      setupStage = 'store verification thread id';
       await this.storeThreadId(verificationEvent, thread.id, VERIFICATION_THREAD_TYPE);
 
       // Add the member to the private thread so they can see it
-      await thread.members.add(member.id);
+      setupStage = 'add flagged user to verification thread';
+      await this.addFlaggedUserToVerificationThread(member, thread);
 
       // Lock invites after the flagged user has been added.
       // Some server permission setups allow creating private threads but not managing them;
@@ -348,28 +503,9 @@ export class ThreadManager implements IThreadManager {
         );
       }
 
+      setupStage = 'route case responders to verification thread';
       const routingResult = await this.addCaseResponderMembers(member.guild, thread, [member.id]);
 
-      const rawInitialPrompt = await this.getInitialVerificationPrompt(member);
-      const initialPrompt = enforceDiscordMessageLimit(rawInitialPrompt);
-      if (initialPrompt.length < rawInitialPrompt.length) {
-        console.warn(
-          `Verification prompt exceeded Discord content limit for guild ${member.guild.id}; truncated before sending.`
-        );
-      }
-
-      // Send an initial message to the thread
-      await thread.send({
-        content: initialPrompt,
-        allowedMentions: {
-          parse: [],
-          users: [member.id],
-          roles: [],
-          repliedUser: false,
-        },
-      });
-
-      // Store thread in the database
       await this.storeThreadId(
         verificationEvent,
         thread.id,
@@ -377,11 +513,60 @@ export class ThreadManager implements IThreadManager {
         this.buildCaseStaffRoutingMetadata(routingResult)
       );
 
+      // Send an initial message to the thread
+      setupStage = 'send initial verification prompt';
+      await this.sendInitialVerificationPrompt(member, thread);
+
       return thread;
     } catch (error) {
       console.error('Failed to create verification thread:', error);
+      if (threadWasCreated) {
+        throw this.buildThreadSetupError(setupStage, error);
+      }
       return null;
     }
+  }
+
+  public async repairVerificationThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent
+  ): Promise<VerificationThreadRepairResult> {
+    if (!verificationEvent.thread_id) {
+      const createdThread = await this.createVerificationThread(member, verificationEvent);
+      return {
+        threadId: createdThread?.id ?? null,
+        threadCreated: Boolean(createdThread),
+        userAdded: Boolean(createdThread),
+        promptSent: Boolean(createdThread),
+        promptAlreadyPresent: false,
+      };
+    }
+
+    const thread = await this.fetchStoredThread(verificationEvent);
+    if (!thread) {
+      throw new Error(`Stored verification thread ${verificationEvent.thread_id} was not found.`);
+    }
+
+    if (thread.archived) {
+      await thread.setArchived(false, 'Repair active verification case');
+    }
+    if (thread.locked) {
+      await thread.setLocked(false, 'Repair active verification case');
+    }
+
+    await this.addFlaggedUserToVerificationThread(member, thread);
+    const promptAlreadyPresent = await this.hasInitialVerificationPrompt(member, thread);
+    if (!promptAlreadyPresent) {
+      await this.sendInitialVerificationPrompt(member, thread);
+    }
+
+    return {
+      threadId: thread.id,
+      threadCreated: false,
+      userAdded: true,
+      promptSent: !promptAlreadyPresent,
+      promptAlreadyPresent,
+    };
   }
 
   public async createReportReviewThread(
@@ -399,6 +584,9 @@ export class ThreadManager implements IThreadManager {
       return null;
     }
 
+    let setupStage = 'prepare report review thread records';
+    let threadWasCreated = false;
+
     try {
       await this.serverRepository.getOrCreateServer(member.guild.id);
       await this.userRepository.getOrCreateUser(member.id, member.user.username);
@@ -408,15 +596,18 @@ export class ThreadManager implements IThreadManager {
         member.joinedAt ?? undefined
       );
 
+      setupStage = 'create report review thread';
       const thread = await channel.threads.create({
         name: `Report review: ${member.user.username}`,
         autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
         reason: `Review-only report thread for user: ${member.user.tag}`,
         type: ChannelType.PrivateThread,
       });
+      threadWasCreated = true;
 
       // Persist the Discord thread before follow-up operations so partial setup
       // failures do not orphan a thread that was already created.
+      setupStage = 'store report review thread id';
       await this.storeThreadId(verificationEvent, thread.id, REPORT_REVIEW_THREAD_TYPE);
 
       try {
@@ -428,8 +619,17 @@ export class ThreadManager implements IThreadManager {
         );
       }
 
+      setupStage = 'route case responders to report review thread';
       const routingResult = await this.addCaseResponderMembers(member.guild, thread, [member.id]);
 
+      await this.storeThreadId(
+        verificationEvent,
+        thread.id,
+        REPORT_REVIEW_THREAD_TYPE,
+        this.buildCaseStaffRoutingMetadata(routingResult)
+      );
+
+      setupStage = 'send report review thread prompt';
       await thread.send({
         content: this.buildReportReviewThreadMessage(member, detectionResult, sourceMessage),
         allowedMentions: {
@@ -440,16 +640,12 @@ export class ThreadManager implements IThreadManager {
         },
       });
 
-      await this.storeThreadId(
-        verificationEvent,
-        thread.id,
-        REPORT_REVIEW_THREAD_TYPE,
-        this.buildCaseStaffRoutingMetadata(routingResult)
-      );
-
       return thread;
     } catch (error) {
       console.error('Failed to create report review thread:', error);
+      if (threadWasCreated) {
+        throw this.buildThreadSetupError(setupStage, error);
+      }
       return null;
     }
   }

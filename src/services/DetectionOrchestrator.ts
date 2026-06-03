@@ -269,7 +269,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
 
         result = {
           label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
-          confidence: Math.abs(suspicionScore - 0.5) * 2,
+          confidence: this.toConfidence(suspicionScore),
           reasons: reasons,
           triggerSource: DetectionType.SUSPICIOUS_CONTENT,
           triggerContent: content,
@@ -279,7 +279,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       } else {
         result = {
           label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
-          confidence: Math.abs(suspicionScore - 0.5) * 2,
+          confidence: this.toConfidence(suspicionScore),
           reasons: reasons,
           triggerSource: DetectionType.SUSPICIOUS_CONTENT,
           triggerContent: content,
@@ -375,7 +375,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       // Assign initial result to a variable
       const initialResult: DetectionResult = {
         label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
-        confidence: Math.abs(suspicionScore - 0.5) * 2,
+        confidence: this.toConfidence(suspicionScore),
         reasons: reasons,
         triggerSource: DetectionType.NEW_ACCOUNT,
         triggerContent: 'Server Join',
@@ -429,6 +429,10 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       (now.getTime() - accountCreatedAt.getTime()) / (1000 * 60 * 60 * 24)
     );
     return diffInDays <= this.NEW_ACCOUNT_THRESHOLD_DAYS;
+  }
+
+  private toConfidence(suspicionScore: number): number {
+    return Math.min(1, Math.max(0, Math.abs(suspicionScore - 0.5) * 2));
   }
 
   /**

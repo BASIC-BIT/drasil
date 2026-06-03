@@ -1,4 +1,11 @@
-import { Events, GuildMember, Message, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
+import {
+  Events,
+  GuildMember,
+  Message,
+  MessageType,
+  PermissionFlagsBits,
+  PermissionsBitField,
+} from 'discord.js';
 import { EventHandler } from '../../controllers/EventHandler';
 import { DetectionType } from '../../repositories/types';
 
@@ -89,6 +96,8 @@ describe('EventHandler (unit)', () => {
     return {
       author: { bot: false, id: 'user-1' },
       content: 'free nitro',
+      system: false,
+      type: MessageType.Default,
       guild: { id: 'guild-1' },
       member,
       channel: { isThread: jest.fn().mockReturnValue(false) },
@@ -232,6 +241,21 @@ describe('EventHandler (unit)', () => {
         username: 'test-user',
       })
     );
+  });
+
+  it('skips automatic detection for Discord system messages', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const handler = buildHandler({ detectionOrchestrator });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.system = true;
+    message.type = MessageType.UserJoin;
+
+    await (handler as any).handleMessage(message);
+
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
   });
 
   it('records report intake thread messages before automatic detection', async () => {

@@ -26,6 +26,7 @@ import { IUserRepository } from '../repositories/UserRepository';
 import {
   IThreadManager,
   REPORT_REVIEW_THREAD_TYPE,
+  VerificationThreadRepairResult,
   VERIFICATION_THREAD_TYPE_METADATA_KEY,
 } from './ThreadManager';
 import { IUserModerationService } from './UserModerationService';
@@ -100,6 +101,8 @@ export interface ISecurityActionService {
     moderator: User,
     options: AdminCaseOptions
   ): Promise<AdminCaseResult>;
+
+  repairActiveCase(member: GuildMember): Promise<ActiveCaseRepairResult>;
 
   intakeRoleMembers(options: RoleIntakeOptions): Promise<RoleIntakeResult>;
 
@@ -194,6 +197,12 @@ export interface AdminCaseResult {
   opened: boolean;
   restrictionAttempted: boolean;
   restricted: boolean;
+}
+
+export interface ActiveCaseRepairResult extends VerificationThreadRepairResult {
+  repaired: boolean;
+  message: string;
+  verificationEventId?: string;
 }
 
 export interface RoleIntakeOptions {
@@ -1218,6 +1227,69 @@ export class SecurityActionService implements ISecurityActionService {
       console.error(`Failed to open admin case for ${member.user.tag}:`, error);
       throw error;
     }
+  }
+
+  public async repairActiveCase(member: GuildMember): Promise<ActiveCaseRepairResult> {
+    const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+      member.id,
+      member.guild.id
+    );
+    if (!activeCase) {
+      return {
+        repaired: false,
+        message: `No active verification case found for ${member.user.tag}.`,
+        threadId: null,
+        threadCreated: false,
+        userAdded: false,
+        promptSent: false,
+        promptAlreadyPresent: false,
+      };
+    }
+
+    if (this.hasReportReviewThread(activeCase)) {
+      return {
+        repaired: false,
+        message:
+          'Active case uses a moderator-only report review thread; no user-facing verification thread repair was attempted.',
+        verificationEventId: activeCase.id,
+        threadId: activeCase.thread_id,
+        threadCreated: false,
+        userAdded: false,
+        promptSent: false,
+        promptAlreadyPresent: false,
+      };
+    }
+
+    let repairCase = activeCase;
+    const serverMember = await this.serverMemberRepository.findByServerAndUser(
+      member.guild.id,
+      member.id
+    );
+    if (serverMember?.is_restricted === true) {
+      repairCase = await this.tryRestrictUser(member, activeCase);
+    }
+
+    const threadRepair = await this.threadManager.repairVerificationThread(member, repairCase);
+    if (!threadRepair.threadId) {
+      return {
+        ...threadRepair,
+        repaired: false,
+        message: `Could not create or repair the verification thread for ${member.user.tag}.`,
+        verificationEventId: repairCase.id,
+      };
+    }
+
+    await this.notificationManager.updateNotificationButtons(
+      repairCase,
+      VerificationStatus.PENDING
+    );
+
+    return {
+      ...threadRepair,
+      repaired: true,
+      message: `Repaired active verification case for ${member.user.tag}.`,
+      verificationEventId: repairCase.id,
+    };
   }
 
   public async intakeRoleMembers(options: RoleIntakeOptions): Promise<RoleIntakeResult> {

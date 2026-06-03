@@ -88,6 +88,13 @@ describeIntegration('SecurityActionService (integration)', () => {
       activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
+      repairVerificationThread: jest.fn().mockResolvedValue({
+        threadId: 'thread-1',
+        threadCreated: false,
+        userAdded: true,
+        promptSent: true,
+        promptAlreadyPresent: false,
+      }),
     };
     userModerationService = {
       restrictUser: jest.fn().mockResolvedValue(true),
