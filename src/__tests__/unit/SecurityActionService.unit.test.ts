@@ -528,6 +528,51 @@ describe('SecurityActionService (unit)', () => {
     });
   });
 
+  it('reports thread repair success when notification button update fails', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const guildId = 'guild-case-repair-notification-fails';
+    const userId = 'user-case-repair-notification-fails';
+    const member = buildMember(guildId, userId);
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    verificationEvent.thread_id = 'thread-1';
+    await verificationEventRepository.update(verificationEvent.id, verificationEvent);
+    notificationManager.updateNotificationButtons.mockRejectedValueOnce(
+      new Error('Missing Message')
+    );
+
+    try {
+      const result = await buildService().repairActiveCase(member);
+
+      expect(threadManager.repairVerificationThread).toHaveBeenCalledWith(
+        member,
+        expect.objectContaining({ id: verificationEvent.id, thread_id: 'thread-1' })
+      );
+      expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+        expect.objectContaining({ id: verificationEvent.id }),
+        VerificationStatus.PENDING
+      );
+      expect(result).toMatchObject({
+        repaired: true,
+        verificationEventId: verificationEvent.id,
+        threadId: 'thread-1',
+        userAdded: true,
+        promptSent: true,
+      });
+      expect(result.message).toContain('Notification buttons could not be updated automatically');
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to update notification buttons for repaired case'),
+        expect.any(Error)
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('does not repair moderator-only report review threads as user-facing threads', async () => {
     const guildId = 'guild-case-repair-report-review';
     const userId = 'user-case-repair-report-review';

@@ -1279,15 +1279,24 @@ export class SecurityActionService implements ISecurityActionService {
       };
     }
 
-    await this.notificationManager.updateNotificationButtons(
-      repairCase,
-      VerificationStatus.PENDING
-    );
+    let notificationUpdateMessage = '';
+    try {
+      await this.notificationManager.updateNotificationButtons(
+        repairCase,
+        VerificationStatus.PENDING
+      );
+    } catch (error) {
+      notificationUpdateMessage = ' Notification buttons could not be updated automatically.';
+      console.error(
+        `Failed to update notification buttons for repaired case ${repairCase.id}; continuing repair flow:`,
+        error
+      );
+    }
 
     return {
       ...threadRepair,
       repaired: true,
-      message: `Repaired active verification case for ${member.user.tag}.`,
+      message: `Repaired active verification case for ${member.user.tag}.${notificationUpdateMessage}`,
       verificationEventId: repairCase.id,
     };
   }
