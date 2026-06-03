@@ -76,6 +76,9 @@ describe('ThreadManager (unit)', () => {
       setArchived: jest.fn().mockResolvedValue(undefined),
       setLocked: jest.fn().mockResolvedValue(undefined),
       setInvitable: jest.fn().mockResolvedValue(undefined),
+      messages: {
+        fetch: jest.fn().mockResolvedValue(new Map()),
+      },
       isThread: jest.fn().mockReturnValue(true),
     } as unknown as jest.Mocked<ThreadChannel>;
 
@@ -145,6 +148,45 @@ describe('ThreadManager (unit)', () => {
     });
   });
 
+  it('retries adding the flagged user before sending the verification prompt', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    (thread.members.add as jest.Mock)
+      .mockRejectedValueOnce(new Error('Missing Access'))
+      .mockResolvedValueOnce(undefined);
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    (manager as any).wait = jest.fn().mockResolvedValue(undefined);
+    const member = buildMember('guild-1', 'user-1');
+    const fetch = jest.fn().mockResolvedValue(member);
+    (member as any).fetch = fetch;
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    try {
+      const createdThread = await manager.createVerificationThread(member, event);
+
+      expect(createdThread?.id).toBe('thread-1');
+      expect(thread.members.add).toHaveBeenCalledTimes(2);
+      expect((manager as any).wait).toHaveBeenCalledWith(750);
+      expect(fetch).toHaveBeenCalledWith(true);
+      expect(thread.send).toHaveBeenCalledWith(
+        expect.objectContaining({ content: expect.stringContaining(`<@${member.id}>`) })
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('keeps a created verification thread linked when prompt send fails', async () => {
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     thread.send.mockRejectedValueOnce(new Error('Missing Send Messages permission'));
@@ -165,10 +207,11 @@ describe('ThreadManager (unit)', () => {
     );
 
     try {
-      const createdThread = await manager.createVerificationThread(member, event);
+      await expect(manager.createVerificationThread(member, event)).rejects.toThrow(
+        'Failed to send initial verification prompt'
+      );
       const storedEvent = await verificationEventRepository.findById(event.id);
 
-      expect(createdThread).toBeNull();
       expect(channel.threads.create).toHaveBeenCalled();
       expect(storedEvent?.thread_id).toBe('thread-1');
       expect(storedEvent?.metadata).toMatchObject({
@@ -177,6 +220,108 @@ describe('ThreadManager (unit)', () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it('repairs an existing verification thread by adding the user and sending a missing prompt', async () => {
+    const manager = new ThreadManager(
+      { user: { id: 'bot-1' } } as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    const member = buildMember('guild-1', 'user-1');
+    const event = buildVerificationEvent({ thread_id: 'thread-1' });
+
+    const result = await manager.repairVerificationThread(member, event);
+
+    expect(channel.threads.fetch).toHaveBeenCalledWith('thread-1');
+    expect(thread.members.add).toHaveBeenCalledWith(member.id);
+    expect(thread.messages.fetch).toHaveBeenCalledWith({ limit: 100 });
+    expect(thread.send).toHaveBeenCalledWith({
+      content: renderVerificationPromptTemplate(DEFAULT_VERIFICATION_PROMPT_TEMPLATE, {
+        userMention: `<@${member.id}>`,
+        serverName: member.guild.name,
+      }),
+      allowedMentions: {
+        parse: [],
+        users: [member.id],
+        roles: [],
+        repliedUser: false,
+      },
+    });
+    expect(result).toEqual({
+      threadId: 'thread-1',
+      threadCreated: false,
+      userAdded: true,
+      promptSent: true,
+      promptAlreadyPresent: false,
+    });
+  });
+
+  it('does not duplicate the verification prompt during repair', async () => {
+    (thread.messages.fetch as jest.Mock).mockResolvedValueOnce(
+      new Map([
+        [
+          'message-1',
+          {
+            author: { id: 'bot-1', bot: true },
+            content: '<@user-1> already asked for verification.',
+          },
+        ],
+      ])
+    );
+    const manager = new ThreadManager(
+      { user: { id: 'bot-1' } } as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    const member = buildMember('guild-1', 'user-1');
+    const event = buildVerificationEvent({ thread_id: 'thread-1' });
+
+    const result = await manager.repairVerificationThread(member, event);
+
+    expect(thread.members.add).toHaveBeenCalledWith(member.id);
+    expect(thread.send).not.toHaveBeenCalled();
+    expect(result.promptAlreadyPresent).toBe(true);
+    expect(result.promptSent).toBe(false);
+  });
+
+  it('sends a missing prompt when repair finds unrelated bot messages', async () => {
+    (thread.messages.fetch as jest.Mock).mockResolvedValueOnce(
+      new Map([
+        [
+          'message-1',
+          {
+            author: { id: 'bot-1', bot: true },
+            content: 'Case responder routing updated.',
+          },
+        ],
+      ])
+    );
+    const manager = new ThreadManager(
+      { user: { id: 'bot-1' } } as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    const member = buildMember('guild-1', 'user-1');
+    const event = buildVerificationEvent({ thread_id: 'thread-1' });
+
+    const result = await manager.repairVerificationThread(member, event);
+
+    expect(thread.members.add).toHaveBeenCalledWith(member.id);
+    expect(thread.send).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining(`<@${member.id}>`) })
+    );
+    expect(result.promptAlreadyPresent).toBe(false);
+    expect(result.promptSent).toBe(true);
   });
 
   it('uses custom verification prompt template when configured', async () => {
@@ -288,16 +433,17 @@ describe('ThreadManager (unit)', () => {
     );
 
     try {
-      const createdThread = await manager.createReportReviewThread(member, event, {
-        label: 'SUSPICIOUS',
-        confidence: 1.0,
-        reasons: ['Reported by user reporter-1. Reason: suspicious DM'],
-        triggerSource: DetectionType.USER_REPORT,
-        triggerContent: 'suspicious DM',
-      });
+      await expect(
+        manager.createReportReviewThread(member, event, {
+          label: 'SUSPICIOUS',
+          confidence: 1.0,
+          reasons: ['Reported by user reporter-1. Reason: suspicious DM'],
+          triggerSource: DetectionType.USER_REPORT,
+          triggerContent: 'suspicious DM',
+        })
+      ).rejects.toThrow('Failed to send report review thread prompt');
       const storedEvent = await verificationEventRepository.findById(event.id);
 
-      expect(createdThread).toBeNull();
       expect(channel.threads.create).toHaveBeenCalled();
       expect(storedEvent?.thread_id).toBe('thread-1');
       expect(storedEvent?.metadata).toMatchObject({

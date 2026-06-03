@@ -38,6 +38,7 @@ describe('CommandHandler (unit)', () => {
     handleUserReport: jest.Mock;
     handleMessageReport: jest.Mock;
     openAdminCase: jest.Mock;
+    repairActiveCase: jest.Mock;
     intakeRoleMembers: jest.Mock;
     setupVerificationChannel: jest.Mock;
     setupDiagnosticsService: any | null;
@@ -45,6 +46,7 @@ describe('CommandHandler (unit)', () => {
     validateSetupCandidate: jest.Mock;
     excludeDetectionFromAccounting: jest.Mock;
     restoreDetectionAccounting: jest.Mock;
+    restrictedRoleLockdownService: any;
   }>;
 
   const originalUserInstallReportingEnabled = process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED;
@@ -103,6 +105,18 @@ describe('CommandHandler (unit)', () => {
           opened: true,
           restrictionAttempted: false,
           restricted: false,
+        }),
+      repairActiveCase:
+        overrides.repairActiveCase ??
+        jest.fn().mockResolvedValue({
+          repaired: true,
+          message: 'Repaired active verification case for test-user#0001.',
+          verificationEventId: 'ver-1',
+          threadId: 'thread-1',
+          threadCreated: false,
+          userAdded: true,
+          promptSent: true,
+          promptAlreadyPresent: false,
         }),
       intakeRoleMembers:
         overrides.intakeRoleMembers ??
@@ -169,7 +183,8 @@ describe('CommandHandler (unit)', () => {
         userModerationService,
         securityActionService,
         undefined,
-        setupDiagnosticsService
+        setupDiagnosticsService,
+        overrides.restrictedRoleLockdownService
       ),
       client,
       userModerationService,
@@ -242,6 +257,8 @@ describe('CommandHandler (unit)', () => {
       const channelOption = subcommand.options.find((option: any) => option.name === 'channel');
       expect(channelOption.channel_types).toContain(ChannelType.GuildMedia);
     }
+    const applySubcommand = lockdownGroup.options.find((option: any) => option.name === 'apply');
+    expect(applySubcommand.options.map((option: any) => option.name)).toContain('unsync-allowed');
   });
 
   it('denies legacy test commands for non-admin members', async () => {
@@ -467,8 +484,12 @@ describe('CommandHandler (unit)', () => {
     expect(caseCommand.options.map((option: any) => option.name)).toEqual([
       'open',
       'restrict',
+      'repair',
       'intake-role',
     ]);
+
+    const repair = caseCommand.options.find((option: any) => option.name === 'repair');
+    expect(repair.options.map((option: any) => option.name)).toEqual(['user']);
 
     const intakeRole = caseCommand.options.find((option: any) => option.name === 'intake-role');
     expect(intakeRole.options.map((option: any) => option.name)).toEqual([
@@ -806,6 +827,59 @@ describe('CommandHandler (unit)', () => {
         'Opened a case for target#0001, but I could not apply the restricted role. Check bot permissions and role hierarchy.',
       allowedMentions: { parse: [] },
     });
+  });
+
+  it('repairs an active verification case via /case repair', async () => {
+    const repairActiveCase = jest.fn().mockResolvedValue({
+      repaired: true,
+      message: 'Repaired active verification case for target#0001.',
+      verificationEventId: 'ver-1',
+      threadId: 'thread-1',
+      threadCreated: false,
+      userAdded: true,
+      promptSent: true,
+      promptAlreadyPresent: false,
+    });
+    const { handler, securityActionService } = buildHandler({ repairActiveCase });
+    const invoker = { id: 'admin-1' } as any;
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const targetMember = { id: targetUser.id } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest
+          .fn()
+          .mockImplementation(async (id: string) =>
+            id === invoker.id
+              ? { permissions: { has: jest.fn().mockReturnValue(true) } }
+              : targetMember
+          ),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'case',
+      user: invoker,
+      guild,
+      options: {
+        getSubcommand: jest.fn().mockReturnValue('repair'),
+        getUser: jest.fn().mockReturnValue(targetUser),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(securityActionService.repairActiveCase).toHaveBeenCalledWith(targetMember);
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Prompt sent: `yes`'),
+      allowedMentions: { parse: [] },
+    });
+    expect(interaction.editReply.mock.calls[0][0].content).toContain(
+      'https://discord.com/channels/guild-1/thread-1'
+    );
   });
 
   it('dry-runs restricted role intake via /case intake-role', async () => {
@@ -3195,6 +3269,76 @@ describe('CommandHandler (unit)', () => {
       content: expect.stringContaining('Channel <#media-channel-1> added to'),
       allowedMentions: { parse: [] },
     });
+  });
+
+  it('passes confirmed unsync option and lists lockdown errors before warnings', async () => {
+    const lockdownService = {
+      auditGuild: jest.fn(),
+      applyGuild: jest.fn().mockResolvedValue({
+        guildId: 'guild-1',
+        checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+        enabled: false,
+        allowedChannelIds: ['allowed-channel-1'],
+        allowedCategoryIds: [],
+        autoAllowedChannelIds: ['verification-channel-1'],
+        issues: [
+          {
+            severity: 'warning',
+            code: 'lockdown-warning',
+            message: 'Warning should be listed after blockers.',
+          },
+          {
+            severity: 'error',
+            code: 'lockdown-error',
+            message: 'Allowed channel is synced under a denied category.',
+          },
+        ],
+        plannedActions: [],
+        appliedActions: [],
+        failedActions: [],
+        syncedAllowedChannels: [
+          { scope: 'channel', channelId: 'allowed-channel-1', channelName: 'welcome-center' },
+        ],
+        unsyncedAllowedChannels: [
+          { scope: 'channel', channelId: 'allowed-channel-1', channelName: 'welcome-center' },
+        ],
+        errorCount: 1,
+        warningCount: 1,
+      }),
+    };
+    const { handler } = buildHandler({ restrictedRoleLockdownService: lockdownService });
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('lockdown'),
+        getSubcommand: jest.fn().mockReturnValue('apply'),
+        getBoolean: jest.fn().mockReturnValue(true),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(lockdownService.applyGuild).toHaveBeenCalledWith(guild, 'admin-1', {
+      unsyncAllowedChannels: true,
+    });
+    const content = interaction.editReply.mock.calls[0][0].content as string;
+    expect(content).toContain('Unsynced allowed channels: `1`');
+    expect(content.indexOf('[ERROR]')).toBeLessThan(content.indexOf('[WARNING]'));
   });
 
   it('handles /config detection set-mode', async () => {

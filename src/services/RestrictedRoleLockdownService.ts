@@ -3,6 +3,7 @@ import {
   Guild,
   GuildMember,
   NonThreadGuildBasedChannel,
+  OverwriteResolvable,
   PermissionFlagsBits,
   PermissionOverwriteManager,
   PermissionOverwriteOptions,
@@ -38,6 +39,10 @@ export interface RestrictedLockdownApplyFailure extends RestrictedLockdownPlanne
   readonly message: string;
 }
 
+export interface RestrictedLockdownApplyOptions {
+  readonly unsyncAllowedChannels?: boolean;
+}
+
 export interface RestrictedLockdownReport {
   readonly guildId: string;
   readonly checkedAt: Date;
@@ -49,13 +54,19 @@ export interface RestrictedLockdownReport {
   readonly plannedActions: readonly RestrictedLockdownPlannedAction[];
   readonly appliedActions: readonly RestrictedLockdownPlannedAction[];
   readonly failedActions: readonly RestrictedLockdownApplyFailure[];
+  readonly syncedAllowedChannels: readonly RestrictedLockdownPlannedAction[];
+  readonly unsyncedAllowedChannels: readonly RestrictedLockdownPlannedAction[];
   readonly errorCount: number;
   readonly warningCount: number;
 }
 
 export interface IRestrictedRoleLockdownService {
   auditGuild(guild: Guild): Promise<RestrictedLockdownReport>;
-  applyGuild(guild: Guild, actorId: string): Promise<RestrictedLockdownReport>;
+  applyGuild(
+    guild: Guild,
+    actorId: string,
+    options?: RestrictedLockdownApplyOptions
+  ): Promise<RestrictedLockdownReport>;
 }
 
 interface LockdownPermission {
@@ -116,10 +127,50 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     return this.buildReport(guild, false);
   }
 
-  public async applyGuild(guild: Guild, actorId: string): Promise<RestrictedLockdownReport> {
-    const report = await this.buildReport(guild, false);
+  public async applyGuild(
+    guild: Guild,
+    actorId: string,
+    options: RestrictedLockdownApplyOptions = {}
+  ): Promise<RestrictedLockdownReport> {
+    let report = await this.buildReport(guild, false);
+    let unsyncedAllowedChannels: RestrictedLockdownPlannedAction[] = [];
+
     if (report.errorCount > 0) {
-      return report;
+      const onlySyncedAllowedChannelErrors =
+        report.syncedAllowedChannels.length > 0 &&
+        report.errorCount === report.syncedAllowedChannels.length;
+      if (!options.unsyncAllowedChannels || !onlySyncedAllowedChannelErrors) {
+        return report;
+      }
+
+      const unsyncResult = await this.unsyncAllowedChannelsUnderDeniedCategories(
+        guild,
+        report.syncedAllowedChannels,
+        actorId
+      );
+      unsyncedAllowedChannels = unsyncResult.unsyncedActions;
+
+      if (unsyncResult.failedActions.length > 0) {
+        return this.toReport({
+          guildId: report.guildId,
+          checkedAt: new Date(),
+          enabled: report.enabled,
+          allowedChannelIds: report.allowedChannelIds,
+          allowedCategoryIds: report.allowedCategoryIds,
+          autoAllowedChannelIds: report.autoAllowedChannelIds,
+          issues: [...report.issues, ...this.applyFailuresToIssues(unsyncResult.failedActions)],
+          plannedActions: report.plannedActions,
+          appliedActions: [],
+          failedActions: unsyncResult.failedActions,
+          syncedAllowedChannels: report.syncedAllowedChannels,
+          unsyncedAllowedChannels,
+        });
+      }
+
+      report = await this.buildReport(guild, false);
+      if (report.errorCount > 0) {
+        return { ...report, unsyncedAllowedChannels };
+      }
     }
 
     if (report.plannedActions.length === 0) {
@@ -128,7 +179,7 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
           [RESTRICTED_LOCKDOWN_ENABLED_SETTING_KEY]: true,
         });
       }
-      return { ...report, enabled: true };
+      return { ...report, enabled: true, unsyncedAllowedChannels };
     }
 
     const serverConfig = await this.configService.getServerConfig(guild.id);
@@ -148,6 +199,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
         plannedActions: report.plannedActions,
         appliedActions: [],
         failedActions,
+        syncedAllowedChannels: report.syncedAllowedChannels,
+        unsyncedAllowedChannels,
       });
     }
 
@@ -198,6 +251,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
       plannedActions: refreshed.plannedActions,
       appliedActions,
       failedActions,
+      syncedAllowedChannels: refreshed.syncedAllowedChannels,
+      unsyncedAllowedChannels,
     });
   }
 
@@ -212,6 +267,7 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     ]);
     const issues: RestrictedLockdownIssue[] = [];
     const plannedActions: RestrictedLockdownPlannedAction[] = [];
+    const syncedAllowedChannels: RestrictedLockdownPlannedAction[] = [];
     const botMember = await this.getBotMember(guild);
     const restrictedRole = await this.getRestrictedRole(guild, serverConfig.restricted_role_id);
 
@@ -232,6 +288,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
         plannedActions,
         appliedActions: [],
         failedActions: [],
+        syncedAllowedChannels,
+        unsyncedAllowedChannels: [],
       });
     }
 
@@ -250,7 +308,7 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
       }
 
       deniedCategoryIds.add(category.id);
-      this.checkConflictingRoleAllows(category, restrictedRole.id, issues);
+      this.checkConflictingRoleAllows(guild, botMember, category, restrictedRole.id, issues);
       if (!this.hasRestrictedLockdownDeny(category, restrictedRole.id)) {
         issues.push({
           severity: 'warning',
@@ -269,10 +327,11 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
       const parentId = channel.parentId ?? null;
       if (allowedChannelIds.has(channel.id)) {
         if (parentId && deniedCategoryIds.has(parentId) && channel.permissionsLocked === true) {
+          syncedAllowedChannels.push(this.toPlannedAction(channel, 'channel'));
           issues.push({
             severity: 'error',
             code: 'lockdown-allowed-channel-synced-under-denied-category',
-            message: `Allowed channel ${this.formatChannel(channel)} is synced under a denied category. Move it, allow the category, or manually unsync it before applying lockdown.`,
+            message: `Allowed channel ${this.formatChannel(channel)} is synced under a denied category. Move it, allow the category, or rerun apply with \`unsync-allowed:true\` to copy current parent permissions before applying lockdown.`,
           });
         }
         continue;
@@ -286,7 +345,7 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
         continue;
       }
 
-      this.checkConflictingRoleAllows(channel, restrictedRole.id, issues);
+      this.checkConflictingRoleAllows(guild, botMember, channel, restrictedRole.id, issues);
       if (!this.hasRestrictedLockdownDeny(channel, restrictedRole.id)) {
         issues.push({
           severity: 'warning',
@@ -308,6 +367,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
       plannedActions,
       appliedActions: [],
       failedActions: [],
+      syncedAllowedChannels,
+      unsyncedAllowedChannels: [],
     });
   }
 
@@ -441,6 +502,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
   }
 
   private checkConflictingRoleAllows(
+    guild: Guild,
+    botMember: GuildMember | null,
     channel: LockdownChannel,
     restrictedRoleId: string,
     issues: RestrictedLockdownIssue[]
@@ -454,6 +517,10 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
       }
 
       const isMemberOverwrite = overwrite.type === OverwriteType.Member;
+      if (!isMemberOverwrite && this.shouldSkipRoleAllowWarning(guild, botMember, overwrite.id)) {
+        continue;
+      }
+
       const mentionPrefix = isMemberOverwrite ? '@' : '@&';
       const affectedSubject = isMemberOverwrite ? 'That user' : 'Users with that role';
       issues.push({
@@ -462,6 +529,29 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
         message: `${this.formatChannel(channel)} has an explicit View Channel allow for <${mentionPrefix}${overwrite.id}>. ${affectedSubject} may still see it despite the restricted-role deny.`,
       });
     }
+  }
+
+  private shouldSkipRoleAllowWarning(
+    guild: Guild,
+    botMember: GuildMember | null,
+    roleId: string
+  ): boolean {
+    if (roleId === guild.roles.everyone.id) {
+      return true;
+    }
+
+    const botRoleCache = botMember
+      ? (botMember.roles as { cache?: { has(roleId: string): boolean } }).cache
+      : undefined;
+    if (botRoleCache?.has(roleId)) {
+      return true;
+    }
+
+    const role = (guild.roles as { cache?: { get(roleId: string): Role | undefined } }).cache?.get(
+      roleId
+    );
+    const botRoleId = (role as { tags?: { botId?: string | null } } | undefined)?.tags?.botId;
+    return role?.managed === true || typeof botRoleId === 'string';
   }
 
   private hasRestrictedLockdownDeny(channel: LockdownChannel, restrictedRoleId: string): boolean {
@@ -474,6 +564,92 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     return [...fetchedChannels.values()].filter((channel): channel is LockdownChannel =>
       this.isLockdownChannel(channel)
     );
+  }
+
+  private async unsyncAllowedChannelsUnderDeniedCategories(
+    guild: Guild,
+    syncedAllowedChannels: readonly RestrictedLockdownPlannedAction[],
+    actorId: string
+  ): Promise<{
+    unsyncedActions: RestrictedLockdownPlannedAction[];
+    failedActions: RestrictedLockdownApplyFailure[];
+  }> {
+    const serverConfig = await this.configService.getServerConfig(guild.id);
+    const restrictedRole = await this.getRestrictedRole(guild, serverConfig.restricted_role_id);
+    if (!restrictedRole) {
+      return {
+        unsyncedActions: [],
+        failedActions: syncedAllowedChannels.map((action) => ({
+          ...action,
+          message: 'Restricted role is no longer configured.',
+        })),
+      };
+    }
+
+    const channels = await this.fetchLockdownChannels(guild);
+    const channelById = new Map(channels.map((channel) => [channel.id, channel]));
+    const unsyncedActions: RestrictedLockdownPlannedAction[] = [];
+    const failedActions: RestrictedLockdownApplyFailure[] = [];
+
+    for (const action of syncedAllowedChannels) {
+      const channel = channelById.get(action.channelId);
+      const parent = channel?.parentId ? channelById.get(channel.parentId) : undefined;
+      if (!channel || !parent || parent.type !== ChannelType.GuildCategory) {
+        failedActions.push({
+          ...action,
+          message: 'Allowed channel or parent category was not found.',
+        });
+        continue;
+      }
+
+      try {
+        await channel.permissionOverwrites.set(
+          this.buildUnsyncedAllowedChannelOverwrites(parent, restrictedRole.id),
+          `Drasil restricted-role lockdown unsynced allowed channel by ${actorId}`
+        );
+        unsyncedActions.push(action);
+      } catch (error) {
+        failedActions.push({
+          ...action,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return { unsyncedActions, failedActions };
+  }
+
+  private buildUnsyncedAllowedChannelOverwrites(
+    parent: LockdownChannel,
+    restrictedRoleId: string
+  ): OverwriteResolvable[] {
+    const copiedParentOverwrites: OverwriteResolvable[] = [
+      ...parent.permissionOverwrites.cache.values(),
+    ]
+      .filter((overwrite) => overwrite.id !== restrictedRoleId)
+      .map((overwrite) => ({
+        id: overwrite.id,
+        type: overwrite.type,
+        allow: overwrite.allow.bitfield,
+        deny: overwrite.deny.bitfield,
+      }));
+
+    const restrictedRoleOptions = LOCKDOWN_PERMISSIONS.reduce<PermissionOverwriteOptions>(
+      (options, permission) => {
+        options[permission.option] = true;
+        return options;
+      },
+      {}
+    );
+
+    return [
+      ...copiedParentOverwrites,
+      {
+        id: restrictedRoleId,
+        type: OverwriteType.Role,
+        ...restrictedRoleOptions,
+      },
+    ];
   }
 
   private isLockdownChannel(
@@ -546,6 +722,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     readonly plannedActions: readonly RestrictedLockdownPlannedAction[];
     readonly appliedActions: readonly RestrictedLockdownPlannedAction[];
     readonly failedActions: readonly RestrictedLockdownApplyFailure[];
+    readonly syncedAllowedChannels: readonly RestrictedLockdownPlannedAction[];
+    readonly unsyncedAllowedChannels: readonly RestrictedLockdownPlannedAction[];
   }): RestrictedLockdownReport {
     return {
       ...input,

@@ -122,6 +122,15 @@ describe('InteractionHandler (unit)', () => {
         restrictionAttempted: false,
         restricted: false,
       }),
+      repairActiveCase: jest.fn().mockResolvedValue({
+        repaired: true,
+        message: 'Repaired active verification case for test-user#0001.',
+        threadId: 'thread-1',
+        threadCreated: false,
+        userAdded: true,
+        promptSent: true,
+        promptAlreadyPresent: false,
+      }),
       intakeRoleMembers: jest.fn().mockResolvedValue({} as any),
       handleUserReport: jest.fn().mockResolvedValue(true),
       handleMessageReport: jest.fn().mockResolvedValue(true),
@@ -184,6 +193,13 @@ describe('InteractionHandler (unit)', () => {
       activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn(),
       reopenVerificationThread: jest.fn(),
+      repairVerificationThread: jest.fn().mockResolvedValue({
+        threadId: 'thread-1',
+        threadCreated: false,
+        userAdded: true,
+        promptSent: true,
+        promptAlreadyPresent: false,
+      }),
     };
     adminActionRepository = {
       findByUserAndServer: jest.fn(),

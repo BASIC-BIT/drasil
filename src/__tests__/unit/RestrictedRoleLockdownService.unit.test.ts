@@ -14,14 +14,20 @@ describe('RestrictedRoleLockdownService (unit)', () => {
   ];
 
   const createOverwrite = (
-    options: { allow?: readonly bigint[]; deny?: readonly bigint[] } = {}
+    options: {
+      id?: string;
+      type?: OverwriteType;
+      allow?: readonly bigint[];
+      deny?: readonly bigint[];
+    } = {}
   ) => {
     const allowFlags = new Set(options.allow ?? []);
     const denyFlags = new Set(options.deny ?? []);
     return {
-      id: restrictedRoleId,
-      allow: { has: jest.fn((permission: bigint) => allowFlags.has(permission)) },
-      deny: { has: jest.fn((permission: bigint) => denyFlags.has(permission)) },
+      id: options.id ?? restrictedRoleId,
+      type: options.type ?? OverwriteType.Role,
+      allow: { has: jest.fn((permission: bigint) => allowFlags.has(permission)), bitfield: 0n },
+      deny: { has: jest.fn((permission: bigint) => denyFlags.has(permission)), bitfield: 0n },
       setDeny(permission: bigint): void {
         denyFlags.add(permission);
       },
@@ -42,7 +48,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
       [restrictedRoleId, restrictedOverwrite],
       ...(options.extraOverwrites ?? []).map((overwrite) => [overwrite.id, overwrite] as const),
     ]);
-    return {
+    const channel = {
       id: options.id,
       name: options.name,
       type: options.type,
@@ -58,9 +64,15 @@ describe('RestrictedRoleLockdownService (unit)', () => {
           cache.set(targetRoleId, overwrite);
           return Promise.resolve(undefined);
         }),
+        set: jest.fn().mockImplementation(() => {
+          channel.permissionsLocked = false;
+          return Promise.resolve(undefined);
+        }),
       },
       permissionsFor: jest.fn().mockReturnValue({ has: jest.fn().mockReturnValue(true) }),
     };
+
+    return channel;
   };
 
   const createGuild = (channels: readonly ReturnType<typeof createChannel>[]) => {
@@ -89,6 +101,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
       },
       roles: {
         everyone: { id: 'everyone-role' },
+        cache: new Map(),
         fetch: jest.fn().mockResolvedValue(restrictedRole),
       },
       channels: {
@@ -174,6 +187,46 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     );
     expect(category.permissionOverwrites.edit).not.toHaveBeenCalled();
     expect(configService.updateServerSettings).not.toHaveBeenCalled();
+  });
+
+  it('unsyncs allowed channels only when explicitly confirmed', async () => {
+    const category = createChannel({
+      id: 'category-1',
+      name: 'public',
+      type: ChannelType.GuildCategory,
+    });
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+      parentId: 'category-1',
+      permissionsLocked: true,
+    });
+    const guild = createGuild([category, verificationChannel]);
+    const configService = createConfigService();
+    const service = new RestrictedRoleLockdownService(configService as any);
+
+    const report = await service.applyGuild(guild, 'admin-1', { unsyncAllowedChannels: true });
+
+    expect(verificationChannel.permissionOverwrites.set).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ id: restrictedRoleId, ViewChannel: true, SendMessages: true }),
+      ]),
+      expect.stringContaining('admin-1')
+    );
+    expect(category.permissionOverwrites.edit).toHaveBeenCalledWith(
+      restrictedRoleId,
+      expect.objectContaining({ ViewChannel: false, SendMessages: false }),
+      expect.any(Object)
+    );
+    expect(report.errorCount).toBe(0);
+    expect(report.unsyncedAllowedChannels.map((action) => action.channelId)).toEqual([
+      'verification-channel-1',
+    ]);
+    expect(report.appliedActions.map((action) => action.channelId)).toEqual(['category-1']);
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      restricted_lockdown_enabled: true,
+    });
   });
 
   it('applies missing lockdown denies and marks lockdown enabled', async () => {
@@ -271,6 +324,56 @@ describe('RestrictedRoleLockdownService (unit)', () => {
       expect.arrayContaining([
         expect.stringContaining(
           'explicit View Channel allow for <@user-1>. That user may still see it'
+        ),
+      ])
+    );
+  });
+
+  it('suppresses noisy allow warnings for everyone and managed bot roles', async () => {
+    const everyoneOverwrite = createOverwrite({
+      id: 'everyone-role',
+      type: OverwriteType.Role,
+      allow: [PermissionFlagsBits.ViewChannel],
+    });
+    const managedBotOverwrite = createOverwrite({
+      id: 'bot-role-1',
+      type: OverwriteType.Role,
+      allow: [PermissionFlagsBits.ViewChannel],
+    });
+    const humanRoleOverwrite = createOverwrite({
+      id: 'human-role-1',
+      type: OverwriteType.Role,
+      allow: [PermissionFlagsBits.ViewChannel],
+    });
+    const category = createChannel({
+      id: 'category-1',
+      name: 'public',
+      type: ChannelType.GuildCategory,
+      extraOverwrites: [everyoneOverwrite, managedBotOverwrite, humanRoleOverwrite],
+    });
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+    });
+    const guild = createGuild([category, verificationChannel]);
+    guild.roles.cache = new Map([
+      ['bot-role-1', { id: 'bot-role-1', managed: true }],
+      ['human-role-1', { id: 'human-role-1', managed: false }],
+    ]);
+    const service = new RestrictedRoleLockdownService(createConfigService() as any);
+
+    const report = await service.auditGuild(guild);
+
+    const messages = report.issues.map((issue) => issue.message);
+    expect(messages).not.toEqual(
+      expect.arrayContaining([expect.stringContaining('@&everyone-role')])
+    );
+    expect(messages).not.toEqual(expect.arrayContaining([expect.stringContaining('@&bot-role-1')]));
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          'explicit View Channel allow for <@&human-role-1>. Users with that role may still see it'
         ),
       ])
     );

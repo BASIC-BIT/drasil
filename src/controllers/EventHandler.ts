@@ -218,6 +218,10 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
+    if (message.system) {
+      return;
+    }
+
     // Extract user data for detection
     const userId = message.author.id;
     const serverId = message.guild.id;

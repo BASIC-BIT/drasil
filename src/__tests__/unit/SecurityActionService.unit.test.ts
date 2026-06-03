@@ -86,6 +86,13 @@ describe('SecurityActionService (unit)', () => {
       activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
+      repairVerificationThread: jest.fn().mockResolvedValue({
+        threadId: 'thread-1',
+        threadCreated: false,
+        userAdded: true,
+        promptSent: true,
+        promptAlreadyPresent: false,
+      }),
     };
     userModerationService = {
       restrictUser: jest.fn().mockImplementation(async (member: GuildMember) => {
@@ -482,6 +489,111 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('repairs an active restricted case thread and reapplies the restricted role', async () => {
+    const guildId = 'guild-case-repair';
+    const userId = 'user-case-repair';
+    const member = buildMember(guildId, userId);
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    verificationEvent.thread_id = 'thread-1';
+    await verificationEventRepository.update(verificationEvent.id, verificationEvent);
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      is_restricted: true,
+      verification_status: VerificationStatus.PENDING,
+    });
+
+    const result = await buildService().repairActiveCase(member);
+
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(threadManager.repairVerificationThread).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ id: verificationEvent.id, thread_id: 'thread-1' })
+    );
+    expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      VerificationStatus.PENDING
+    );
+    expect(result).toMatchObject({
+      repaired: true,
+      verificationEventId: verificationEvent.id,
+      threadId: 'thread-1',
+      userAdded: true,
+      promptSent: true,
+    });
+  });
+
+  it('reports thread repair success when notification button update fails', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const guildId = 'guild-case-repair-notification-fails';
+    const userId = 'user-case-repair-notification-fails';
+    const member = buildMember(guildId, userId);
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    verificationEvent.thread_id = 'thread-1';
+    await verificationEventRepository.update(verificationEvent.id, verificationEvent);
+    notificationManager.updateNotificationButtons.mockRejectedValueOnce(
+      new Error('Missing Message')
+    );
+
+    try {
+      const result = await buildService().repairActiveCase(member);
+
+      expect(threadManager.repairVerificationThread).toHaveBeenCalledWith(
+        member,
+        expect.objectContaining({ id: verificationEvent.id, thread_id: 'thread-1' })
+      );
+      expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+        expect.objectContaining({ id: verificationEvent.id }),
+        VerificationStatus.PENDING
+      );
+      expect(result).toMatchObject({
+        repaired: true,
+        verificationEventId: verificationEvent.id,
+        threadId: 'thread-1',
+        userAdded: true,
+        promptSent: true,
+      });
+      expect(result.message).toContain('Notification buttons could not be updated automatically');
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to update notification buttons for repaired case'),
+        expect.any(Error)
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('does not repair moderator-only report review threads as user-facing threads', async () => {
+    const guildId = 'guild-case-repair-report-review';
+    const userId = 'user-case-repair-report-review';
+    const member = buildMember(guildId, userId);
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    verificationEvent.thread_id = 'thread-1';
+    verificationEvent.metadata = {
+      [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
+    };
+    await verificationEventRepository.update(verificationEvent.id, verificationEvent);
+
+    const result = await buildService().repairActiveCase(member);
+
+    expect(threadManager.repairVerificationThread).not.toHaveBeenCalled();
+    expect(result.repaired).toBe(false);
+    expect(result.message).toContain('moderator-only report review thread');
   });
 
   it('normalizes blank admin case reasons', async () => {

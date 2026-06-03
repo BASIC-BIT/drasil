@@ -626,6 +626,38 @@ describe('DetectionOrchestrator (unit)', () => {
     });
   });
 
+  it('clamps suspicious new-join confidence to 100%', async () => {
+    gptService.analyzeProfile.mockResolvedValue(
+      makeGptAnalysis({
+        result: 'SUSPICIOUS',
+        confidence: 0.9,
+        reasons: ['AI analysis flagged user/message context as suspicious'],
+      })
+    );
+
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository
+    );
+
+    const profile: UserProfileData = {
+      username: 'new-user',
+      accountCreatedAt: new Date(),
+      joinedServerAt: new Date(),
+      recentMessages: [],
+    };
+
+    const result = await orchestrator.detectNewJoin(serverId, userId, profile);
+    const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
+
+    expect(result.label).toBe('SUSPICIOUS');
+    expect(result.confidence).toBe(1);
+    expect(events[0].confidence).toBe(1);
+  });
+
   it('excludes suspicious new joins from accounting in detection test mode', async () => {
     const originalTestMode = process.env.DRASIL_DETECTION_TEST_MODE;
     const originalTestRunId = process.env.DRASIL_DETECTION_TEST_RUN_ID;
