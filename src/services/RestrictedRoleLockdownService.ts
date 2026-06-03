@@ -149,25 +149,29 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
         actorId
       );
       unsyncedAllowedChannels = unsyncResult.unsyncedActions;
+      const recentlyUnsyncedAllowedChannelIds = new Set(
+        unsyncedAllowedChannels.map((action) => action.channelId)
+      );
 
       if (unsyncResult.failedActions.length > 0) {
+        const refreshed = await this.buildReport(guild, false, recentlyUnsyncedAllowedChannelIds);
         return this.toReport({
-          guildId: report.guildId,
-          checkedAt: new Date(),
-          enabled: report.enabled,
-          allowedChannelIds: report.allowedChannelIds,
-          allowedCategoryIds: report.allowedCategoryIds,
-          autoAllowedChannelIds: report.autoAllowedChannelIds,
-          issues: [...report.issues, ...this.applyFailuresToIssues(unsyncResult.failedActions)],
-          plannedActions: report.plannedActions,
+          guildId: refreshed.guildId,
+          checkedAt: refreshed.checkedAt,
+          enabled: refreshed.enabled,
+          allowedChannelIds: refreshed.allowedChannelIds,
+          allowedCategoryIds: refreshed.allowedCategoryIds,
+          autoAllowedChannelIds: refreshed.autoAllowedChannelIds,
+          issues: [...refreshed.issues, ...this.applyFailuresToIssues(unsyncResult.failedActions)],
+          plannedActions: refreshed.plannedActions,
           appliedActions: [],
           failedActions: unsyncResult.failedActions,
-          syncedAllowedChannels: report.syncedAllowedChannels,
+          syncedAllowedChannels: refreshed.syncedAllowedChannels,
           unsyncedAllowedChannels,
         });
       }
 
-      report = await this.buildReport(guild, false);
+      report = await this.buildReport(guild, false, recentlyUnsyncedAllowedChannelIds);
       if (report.errorCount > 0) {
         return { ...report, unsyncedAllowedChannels };
       }
@@ -239,7 +243,11 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
       });
     }
 
-    const refreshed = await this.buildReport(guild, true);
+    const refreshed = await this.buildReport(
+      guild,
+      true,
+      new Set(unsyncedAllowedChannels.map((action) => action.channelId))
+    );
     return this.toReport({
       guildId: guild.id,
       checkedAt: refreshed.checkedAt,
@@ -258,7 +266,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
   private async buildReport(
     guild: Guild,
-    skipSetupChecks: boolean
+    skipSetupChecks: boolean,
+    recentlyUnsyncedAllowedChannelIds: ReadonlySet<string> = new Set()
   ): Promise<RestrictedLockdownReport> {
     const serverConfig = await this.configService.getServerConfig(guild.id);
     const settings = getRestrictedLockdownSettings(serverConfig.settings);
@@ -326,7 +335,12 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
       const parentId = channel.parentId ?? null;
       if (allowedChannelIds.has(channel.id)) {
-        if (parentId && deniedCategoryIds.has(parentId) && channel.permissionsLocked === true) {
+        if (
+          parentId &&
+          deniedCategoryIds.has(parentId) &&
+          channel.permissionsLocked === true &&
+          !recentlyUnsyncedAllowedChannelIds.has(channel.id)
+        ) {
           syncedAllowedChannels.push(this.toPlannedAction(channel, 'channel'));
           issues.push({
             severity: 'error',
