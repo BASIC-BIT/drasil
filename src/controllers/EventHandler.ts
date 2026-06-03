@@ -7,7 +7,6 @@ import {
   Guild,
   Events,
   MessageFlags,
-  MessageType,
   PermissionFlagsBits,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
@@ -219,7 +218,7 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    if (message.system || message.type !== MessageType.Default) {
+    if (message.system) {
       return;
     }
 

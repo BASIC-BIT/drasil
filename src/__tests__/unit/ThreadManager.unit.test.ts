@@ -238,7 +238,7 @@ describe('ThreadManager (unit)', () => {
 
     expect(channel.threads.fetch).toHaveBeenCalledWith('thread-1');
     expect(thread.members.add).toHaveBeenCalledWith(member.id);
-    expect(thread.messages.fetch).toHaveBeenCalledWith({ limit: 25 });
+    expect(thread.messages.fetch).toHaveBeenCalledWith({ limit: 100 });
     expect(thread.send).toHaveBeenCalledWith({
       content: renderVerificationPromptTemplate(DEFAULT_VERIFICATION_PROMPT_TEMPLATE, {
         userMention: `<@${member.id}>`,

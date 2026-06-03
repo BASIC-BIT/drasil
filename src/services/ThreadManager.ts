@@ -31,6 +31,7 @@ export const REPORT_REVIEW_THREAD_TYPE = 'report_review';
 export const REPORT_INTAKE_THREAD_NAME_PREFIX = 'Report intake:';
 export const CASE_STAFF_ROUTING_METADATA_KEY = 'case_staff_routing';
 const FLAGGED_USER_THREAD_ADD_RETRY_DELAYS_MS = [750, 1500, 3000] as const;
+const INITIAL_VERIFICATION_PROMPT_SCAN_LIMIT = 100;
 
 export interface VerificationThreadRepairResult {
   threadId: string | null;
@@ -423,7 +424,7 @@ export class ThreadManager implements IThreadManager {
     member: GuildMember,
     thread: ThreadChannel
   ): Promise<boolean> {
-    const messages = await thread.messages.fetch({ limit: 25 });
+    const messages = await thread.messages.fetch({ limit: INITIAL_VERIFICATION_PROMPT_SCAN_LIMIT });
     const botUserId = this.client.user?.id;
 
     return [...messages.values()].some((message) => {

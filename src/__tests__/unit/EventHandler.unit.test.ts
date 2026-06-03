@@ -258,6 +258,34 @@ describe('EventHandler (unit)', () => {
     expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
   });
 
+  it('runs automatic message detection for Discord reply messages', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'free nitro',
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const handler = buildHandler({ detectionOrchestrator });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.type = MessageType.Reply;
+
+    await (handler as any).handleMessage(message);
+
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'free nitro',
+      expect.objectContaining({
+        serverId: 'guild-1',
+        userId: 'user-1',
+      })
+    );
+  });
+
   it('records report intake thread messages before automatic detection', async () => {
     const detectionOrchestrator = {
       detectMessage: jest.fn(),
