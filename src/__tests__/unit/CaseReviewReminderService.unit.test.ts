@@ -84,7 +84,9 @@ describe('CaseReviewReminderService (unit)', () => {
         metadata: expect.objectContaining({
           case_review_last_reminded_at: now.toISOString(),
         }),
-      })
+        updated_at: staleCase.updated_at,
+      }),
+      { touchUpdatedAt: false }
     );
   });
 

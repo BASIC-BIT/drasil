@@ -171,12 +171,17 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
   }
 
   private async stampReminder(event: VerificationEvent, now: Date): Promise<void> {
-    await this.verificationEventRepository.update(event.id, {
-      metadata: {
-        ...this.metadataToRecord(event.metadata),
-        [CASE_REVIEW_LAST_REMINDED_AT_METADATA_KEY]: now.toISOString(),
-      } as VerificationEvent['metadata'],
-    });
+    await this.verificationEventRepository.update(
+      event.id,
+      {
+        metadata: {
+          ...this.metadataToRecord(event.metadata),
+          [CASE_REVIEW_LAST_REMINDED_AT_METADATA_KEY]: now.toISOString(),
+        } as VerificationEvent['metadata'],
+        updated_at: event.updated_at,
+      },
+      { touchUpdatedAt: false }
+    );
   }
 
   private metadataToRecord(metadata: unknown): Record<string, unknown> {

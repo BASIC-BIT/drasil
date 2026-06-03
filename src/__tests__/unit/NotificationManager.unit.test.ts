@@ -20,6 +20,7 @@ import {
 import { IConfigService } from '../../config/ConfigService';
 import { VERIFICATION_ACTION_FAILURES_METADATA_KEY } from '../../utils/verificationActionFailures';
 import { MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY } from '../../utils/detectionResponseSettings';
+import { parseAdminActionCustomId } from '../../utils/adminActionCustomIds';
 
 type MockTextChannel = {
   send: jest.Mock;
@@ -101,6 +102,14 @@ const extractLabels = (components: unknown[]): string[] => {
   );
 };
 
+const extractCustomIds = (components: unknown[]): string[] => {
+  return components.flatMap((row) =>
+    ((row as { components?: unknown[] }).components ?? []).map(
+      (button) => (button as { data?: { custom_id?: string } }).data?.custom_id ?? ''
+    )
+  );
+};
+
 describe('NotificationManager (unit)', () => {
   let detectionRepository: InMemoryDetectionEventsRepository;
   let adminChannel: MockTextChannel;
@@ -172,7 +181,11 @@ describe('NotificationManager (unit)', () => {
     });
     const labels = extractLabels(sendArgs.components);
     expect(labels).toEqual(['Admin Actions']);
-    expect(JSON.stringify(sendArgs.components[0])).toContain('admin_actions:menu:case:user-1');
+    expect(parseAdminActionCustomId(extractCustomIds(sendArgs.components)[0])).toEqual({
+      action: 'menu',
+      surface: 'case',
+      userId: 'user-1',
+    });
   });
 
   it('hides the ban action when explicitly disabled', async () => {
@@ -395,9 +408,12 @@ describe('NotificationManager (unit)', () => {
       repliedUser: false,
     });
     expect(sendArgs.components).toHaveLength(1);
-    expect(JSON.stringify(sendArgs.components[0])).toContain(
-      `admin_actions:menu:observed:user-1:${detectionEvent.id}`
-    );
+    expect(parseAdminActionCustomId(extractCustomIds(sendArgs.components)[0])).toEqual({
+      action: 'menu',
+      surface: 'observed',
+      userId: 'user-1',
+      detectionEventId: detectionEvent.id,
+    });
     expect(sendArgs.embeds[0].data.title).toBe('Suspicious Activity Observed');
     const fields = sendArgs.embeds[0].data.fields ?? [];
     const reasonsField = fields.find((field) => field.name === 'Reasons');

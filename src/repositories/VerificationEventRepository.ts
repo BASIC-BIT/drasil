@@ -22,7 +22,11 @@ export interface IVerificationEventRepository {
   getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]>;
   findById(id: string): Promise<VerificationEvent | null>;
   findByThreadId(threadId: string): Promise<VerificationEvent | null>;
-  update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent | null>; // Return null if not found
+  update(
+    id: string,
+    data: Partial<VerificationEvent>,
+    options?: { touchUpdatedAt?: boolean }
+  ): Promise<VerificationEvent | null>; // Return null if not found
 }
 
 @injectable()
@@ -200,7 +204,11 @@ export class VerificationEventRepository implements IVerificationEventRepository
     return this.findByUserAndServer(userId, serverId, { limit: 100 });
   }
 
-  async update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent | null> {
+  async update(
+    id: string,
+    data: Partial<VerificationEvent>,
+    options: { touchUpdatedAt?: boolean } = {}
+  ): Promise<VerificationEvent | null> {
     try {
       const now = new Date();
       // Map partial VerificationEvent to Prisma update input
@@ -212,7 +220,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
         notes: data.notes,
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- data.metadata can be null or undefined
         metadata: (data.metadata as Prisma.InputJsonValue) ?? undefined, // Handle potential null/undefined
-        updated_at: now, // Always update timestamp
+        updated_at: options.touchUpdatedAt === false ? data.updated_at : now,
       };
 
       // Handle status and resolution fields if provided

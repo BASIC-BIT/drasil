@@ -495,7 +495,11 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return { ...matchingEvents[0] };
   }
 
-  async update(id: string, data: Partial<VerificationEvent>): Promise<VerificationEvent | null> {
+  async update(
+    id: string,
+    data: Partial<VerificationEvent>,
+    options: { touchUpdatedAt?: boolean } = {}
+  ): Promise<VerificationEvent | null> {
     const eventIndex = this.events.findIndex((item) => item.id === id);
     if (eventIndex === -1) {
       return null;
@@ -529,7 +533,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       }
     }
 
-    updated.updated_at = new Date();
+    updated.updated_at =
+      options.touchUpdatedAt === false ? (data.updated_at ?? updated.updated_at) : new Date();
     this.events[eventIndex] = updated;
     return { ...updated };
   }
