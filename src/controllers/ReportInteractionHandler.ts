@@ -208,7 +208,10 @@ export class ReportInteractionHandler {
         targetMember,
         interaction.user,
         confirmation.reason,
-        { intakeId }
+        {
+          intakeId,
+          ...(confirmation.attachments?.length ? { attachments: confirmation.attachments } : {}),
+        }
       );
       if (submission.status === 'failed') {
         throw submission.error;
@@ -250,8 +253,8 @@ export class ReportInteractionHandler {
         return;
       }
 
-      const [, intakeId] = customId.split(':');
-      if (!intakeId) {
+      const [, intakeId, promptToken] = customId.split(':');
+      if (!intakeId || !promptToken) {
         await interaction.editReply({ content: 'This report answer button is invalid.' });
         return;
       }
@@ -259,6 +262,7 @@ export class ReportInteractionHandler {
       const result = await this.reportIntakeService.rejectCandidates({
         intakeId,
         rejectedById: interaction.user.id,
+        promptToken,
       });
       await interaction.editReply({ content: result.message });
 

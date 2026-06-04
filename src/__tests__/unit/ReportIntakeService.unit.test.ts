@@ -170,6 +170,11 @@ describe('ReportIntakeService', () => {
         allowedMentions: { parse: [] },
       })
     );
+    expect((message.channel as any).send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('1. <@user-1>'),
+      })
+    );
   });
 
   it('records admin notes without prompting reporter confirmation', async () => {
@@ -294,7 +299,7 @@ describe('ReportIntakeService', () => {
     expect(confirmationEvidence).toHaveLength(1);
   });
 
-  it('rejects repeat confirmations after the target is locked', async () => {
+  it('lets repeat confirmations retry submission before the intake is submitted', async () => {
     const { service, reportIntakeRepository } = buildService();
     const intake = await service.openIntakeFromThread({
       serverId: 'guild-1',
@@ -319,8 +324,8 @@ describe('ReportIntakeService', () => {
     );
 
     expect(result).toMatchObject({
-      confirmed: false,
-      message: 'That report target has already been confirmed.',
+      confirmed: true,
+      message: 'Confirmed <@user-1> as the report target.',
     });
     expect(confirmationEvidence).toHaveLength(1);
   });
@@ -334,10 +339,14 @@ describe('ReportIntakeService', () => {
       channelId: 'channel-1',
     });
     await service.handleThreadMessage(buildMessage());
+    const storedBeforeReject = await reportIntakeRepository.findById(intake.id);
+    const promptToken = (storedBeforeReject?.metadata as Record<string, unknown>)
+      .last_confirmation_prompt_token as string;
 
     const result = await service.rejectCandidates({
       intakeId: intake.id,
       rejectedById: 'reporter-1',
+      promptToken,
     });
 
     const stored = await reportIntakeRepository.findById(intake.id);
@@ -351,6 +360,39 @@ describe('ReportIntakeService', () => {
     expect(evidence.map((item) => item.kind)).toContain(
       ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION
     );
+  });
+
+  it('rejects the candidate set from the clicked prompt token', async () => {
+    const { service, reportIntakeRepository } = buildService({
+      resolvePlatformBackedCandidates: jest
+        .fn()
+        .mockResolvedValueOnce([buildCandidate('user-1')])
+        .mockResolvedValueOnce([buildCandidate('user-2')]),
+    });
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage({ id: 'message-1' }));
+    const firstStored = await reportIntakeRepository.findById(intake.id);
+    const firstPromptToken = (firstStored?.metadata as Record<string, unknown>)
+      .last_confirmation_prompt_token as string;
+    await service.handleThreadMessage(buildMessage({ id: 'message-2' }));
+
+    const result = await service.rejectCandidates({
+      intakeId: intake.id,
+      rejectedById: 'reporter-1',
+      promptToken: firstPromptToken,
+    });
+
+    const stored = await reportIntakeRepository.findById(intake.id);
+    expect(result).toMatchObject({ rejected: true });
+    expect(stored?.metadata).toMatchObject({
+      candidate_suggestions: [expect.objectContaining({ discordUserId: 'user-2' })],
+      last_rejected_candidate_ids: ['user-1'],
+    });
   });
 
   it('marks an intake as failed when opening cannot complete', async () => {

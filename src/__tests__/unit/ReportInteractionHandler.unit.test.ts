@@ -642,6 +642,14 @@ describe('ReportInteractionHandler (unit)', () => {
       confirmed: true,
       message: 'confirmed',
       reason: 'Report intake target confirmed by reporter.',
+      attachments: [
+        {
+          id: 'attachment-1',
+          url: 'https://cdn.discordapp.com/screenshot.png',
+          contentType: 'image/png',
+          size: 1234,
+        },
+      ],
     });
     const targetMember = buildMember('guild-1', 'user-1');
     (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
@@ -665,6 +673,14 @@ describe('ReportInteractionHandler (unit)', () => {
       {
         reason: 'Report intake target confirmed by reporter.',
         intakeId: 'intake-1',
+        attachments: [
+          {
+            id: 'attachment-1',
+            url: 'https://cdn.discordapp.com/screenshot.png',
+            contentType: 'image/png',
+            size: 1234,
+          },
+        ],
       }
     );
     expect(reportIntakeService.markSubmitted).toHaveBeenCalledWith({
@@ -725,7 +741,7 @@ describe('ReportInteractionHandler (unit)', () => {
     const threadChannel = { isThread: jest.fn().mockReturnValue(true), send: jest.fn() };
     const handler = createHandler(reportIntakeService);
     const interaction = {
-      ...buildInteraction('report_intake_reject:intake-1', 'guild-1', {
+      ...buildInteraction('report_intake_reject:intake-1:prompt-token', 'guild-1', {
         id: 'reporter-1',
       } as User),
       channel: threadChannel,
@@ -736,6 +752,7 @@ describe('ReportInteractionHandler (unit)', () => {
     expect(reportIntakeService.rejectCandidates).toHaveBeenCalledWith({
       intakeId: 'intake-1',
       rejectedById: 'reporter-1',
+      promptToken: 'prompt-token',
     });
     expect(securityActionService.handleConfirmedReportIntake).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({

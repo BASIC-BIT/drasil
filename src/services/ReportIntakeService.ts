@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, GuildMember, Message } from 'discord.js';
 import { injectable, inject } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
@@ -48,10 +49,16 @@ export interface IReportIntakeService {
     intakeId: string;
     targetUserId: string;
     confirmedById: string;
-  }): Promise<{ confirmed: boolean; message: string; reason?: string }>;
+  }): Promise<{
+    confirmed: boolean;
+    message: string;
+    reason?: string;
+    attachments?: ReportAttachmentMetadata[];
+  }>;
   rejectCandidates(input: {
     intakeId: string;
     rejectedById: string;
+    promptToken: string;
   }): Promise<{ rejected: boolean; message: string }>;
   recordAgentAnalysis(input: {
     intakeId: string;
@@ -135,7 +142,12 @@ export class ReportIntakeService implements IReportIntakeService {
     intakeId: string;
     targetUserId: string;
     confirmedById: string;
-  }): Promise<{ confirmed: boolean; message: string; reason?: string }> {
+  }): Promise<{
+    confirmed: boolean;
+    message: string;
+    reason?: string;
+    attachments?: ReportAttachmentMetadata[];
+  }> {
     const intake = await this.reportIntakeRepository.findById(input.intakeId);
     if (!intake) {
       return { confirmed: false, message: 'That report intake could not be found.' };
@@ -153,12 +165,19 @@ export class ReportIntakeService implements IReportIntakeService {
       return { confirmed: false, message: 'You cannot report yourself.' };
     }
     if (intake.confirmed_target_user_id) {
+      if (intake.confirmed_target_user_id === input.targetUserId) {
+        const evidence = await this.reportIntakeRepository.listEvidence(intake.id);
+        return {
+          confirmed: true,
+          message: `Confirmed <@${input.targetUserId}> as the report target.`,
+          reason: this.buildSubmissionReason(intake, evidence),
+          attachments: this.buildSubmissionAttachments(evidence),
+        };
+      }
+
       return {
         confirmed: false,
-        message:
-          intake.confirmed_target_user_id === input.targetUserId
-            ? 'That report target has already been confirmed.'
-            : 'A different report target has already been confirmed for this intake.',
+        message: 'A different report target has already been confirmed for this intake.',
       };
     }
 
@@ -196,12 +215,14 @@ export class ReportIntakeService implements IReportIntakeService {
       confirmed: true,
       message: `Confirmed <@${input.targetUserId}> as the report target.`,
       reason: this.buildSubmissionReason(intake, evidence),
+      attachments: this.buildSubmissionAttachments(evidence),
     };
   }
 
   async rejectCandidates(input: {
     intakeId: string;
     rejectedById: string;
+    promptToken: string;
   }): Promise<{ rejected: boolean; message: string }> {
     const intake = await this.reportIntakeRepository.findById(input.intakeId);
     if (!intake) {
@@ -218,7 +239,15 @@ export class ReportIntakeService implements IReportIntakeService {
     }
 
     const metadata = toRecord(intake.metadata);
-    const rejectedCandidateIds = readStringArray(metadata.last_confirmation_prompt_candidate_ids);
+    const promptCandidateIdsByToken = toRecord(metadata.confirmation_prompt_candidate_ids_by_token);
+    const rejectedCandidateIds = readStringArray(promptCandidateIdsByToken[input.promptToken]);
+    if (rejectedCandidateIds.length === 0) {
+      return {
+        rejected: false,
+        message: 'That target question is no longer current. Please answer the latest prompt.',
+      };
+    }
+
     const remainingCandidates = this.getCandidateSuggestions(metadata).filter(
       (candidate) => !rejectedCandidateIds.includes(candidate.discordUserId)
     );
@@ -497,8 +526,9 @@ export class ReportIntakeService implements IReportIntakeService {
         .setLabel(this.buildCandidateButtonLabel(candidate))
         .setStyle(ButtonStyle.Primary)
     );
+    const promptToken = this.createPromptToken(candidateIds);
     const rejectButton = new ButtonBuilder()
-      .setCustomId(`${REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX}:${intake.id}`)
+      .setCustomId(`${REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX}:${intake.id}:${promptToken}`)
       .setLabel(visibleCandidates.length === 1 ? 'No, not this person' : 'No, none of these')
       .setStyle(ButtonStyle.Secondary);
     const components = [
@@ -514,7 +544,12 @@ export class ReportIntakeService implements IReportIntakeService {
 
     return {
       last_confirmation_prompt_candidate_ids: candidateIds,
+      last_confirmation_prompt_token: promptToken,
       last_confirmation_prompt_at: new Date().toISOString(),
+      confirmation_prompt_candidate_ids_by_token: {
+        ...toRecord(metadata.confirmation_prompt_candidate_ids_by_token),
+        [promptToken]: candidateIds,
+      },
     };
   }
 
@@ -555,7 +590,11 @@ export class ReportIntakeService implements IReportIntakeService {
 
   private formatCandidateLine(candidate: ReportCandidate, index: number): string {
     const reasons = candidate.matchReasons.join(', ') || 'candidate match';
-    return `${index + 1}. <@${candidate.discordUserId}> (${candidate.discordUserId}) - ${reasons}`;
+    return `${index}. <@${candidate.discordUserId}> (${candidate.discordUserId}) - ${reasons}`;
+  }
+
+  private createPromptToken(candidateIds: string[]): string {
+    return createHash('sha256').update(candidateIds.join('\0')).digest('base64url').slice(0, 16);
   }
 
   private buildCandidateButtonLabel(
@@ -618,6 +657,25 @@ export class ReportIntakeService implements IReportIntakeService {
     return lines.join('\n');
   }
 
+  private buildSubmissionAttachments(
+    evidence: Awaited<ReturnType<IReportIntakeRepository['listEvidence']>>
+  ): ReportAttachmentMetadata[] {
+    return evidence
+      .filter((item) => item.kind === ReportIntakeEvidenceKind.SCREENSHOT)
+      .map((item) => {
+        const metadata = toRecord(item.metadata);
+        return {
+          id: readOptionalString(metadata.id) ?? item.attachment_id ?? undefined,
+          name: readOptionalString(metadata.name),
+          url: readOptionalString(metadata.url),
+          proxyUrl: readOptionalString(metadata.proxyUrl),
+          contentType: readOptionalString(metadata.contentType),
+          size: readOptionalNumber(metadata.size),
+        };
+      })
+      .filter((attachment) => Boolean(attachment.url));
+  }
+
   private isReporterCloseCommand(content: string): boolean {
     return REPORT_INTAKE_CLOSE_COMMANDS.has(content.trim().toLowerCase());
   }
@@ -649,6 +707,14 @@ function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
     : [];
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+function readOptionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function isReportCandidate(candidate: unknown): candidate is ReportCandidate {
