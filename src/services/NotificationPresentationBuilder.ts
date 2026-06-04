@@ -80,7 +80,7 @@ export class NotificationPresentationBuilder {
       (a, b) => new Date(b.detected_at).getTime() - new Date(a.detected_at).getTime()
     );
     const detectionHistory = this.formatSuspiciousDetectionHistory(
-      detectionEventsNewestFirst,
+      detectionEvents,
       member.guild.id
     );
 

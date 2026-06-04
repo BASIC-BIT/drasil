@@ -1,4 +1,4 @@
-import { injectable, inject } from 'inversify';
+import { injectable, inject, unmanaged } from 'inversify';
 import {
   Client,
   EmbedBuilder,
@@ -134,16 +134,19 @@ export class NotificationManager implements INotificationManager {
   private client: Client;
   private configService: IConfigService;
   private detectionEventsRepository: IDetectionEventsRepository;
-  private presentationBuilder = new NotificationPresentationBuilder();
+  private presentationBuilder: NotificationPresentationBuilder;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
     @inject(TYPES.ConfigService) configService: IConfigService,
-    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository
+    @inject(TYPES.DetectionEventsRepository) detectionEventsRepository: IDetectionEventsRepository,
+    @unmanaged()
+    presentationBuilder: NotificationPresentationBuilder = new NotificationPresentationBuilder()
   ) {
     this.client = client;
     this.configService = configService;
     this.detectionEventsRepository = detectionEventsRepository;
+    this.presentationBuilder = presentationBuilder;
   }
 
   /**
