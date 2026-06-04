@@ -17,6 +17,7 @@ describe('EventHandler (unit)', () => {
     notificationManager?: Record<string, jest.Mock>;
     setupDiagnosticsService?: Record<string, jest.Mock>;
     reportIntakeService?: Record<string, jest.Mock>;
+    messageContextRepository?: Record<string, jest.Mock>;
   }): EventHandler {
     const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
     const detectionOrchestrator = overrides?.detectionOrchestrator ?? {
@@ -67,7 +68,9 @@ describe('EventHandler (unit)', () => {
       { handleThreadMessage: jest.fn().mockResolvedValue(false) } as any,
       undefined,
       overrides?.setupDiagnosticsService as any,
-      overrides?.reportIntakeService as any
+      overrides?.reportIntakeService as any,
+      undefined,
+      overrides?.messageContextRepository as any
     );
   }
 
@@ -405,7 +408,16 @@ describe('EventHandler (unit)', () => {
       }),
       detectNewJoin: jest.fn(),
     };
-    const handler = buildHandler({ detectionOrchestrator });
+    const messageContextRepository = {
+      findRecentByServerAndUser: jest.fn().mockResolvedValue([
+        {
+          content_preview: 'hello everyone',
+        },
+      ]),
+      recordMessage: jest.fn().mockResolvedValue(undefined),
+      pruneExpired: jest.fn().mockResolvedValue(0),
+    };
+    const handler = buildHandler({ detectionOrchestrator, messageContextRepository });
     const permissions = new PermissionsBitField();
     const firstMessage = buildMessage(permissions) as any;
     firstMessage.id = 'message-1';
@@ -454,6 +466,7 @@ describe('EventHandler (unit)', () => {
         channelContext: ['other_user: We are joking about giveaways'],
       })
     );
+    expect(messageContextRepository.recordMessage).toHaveBeenCalled();
   });
 
   it('loads config before exempting moderators when no cached config exists', async () => {

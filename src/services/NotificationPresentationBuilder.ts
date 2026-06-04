@@ -139,21 +139,17 @@ export class NotificationPresentationBuilder {
       });
     }
 
-    if (detectionHistory) {
-      embed.addFields({ name: 'Detection History', value: detectionHistory, inline: false });
-    }
-
-    if (verificationEvent.thread_id) {
-      const threadStatus =
-        verificationEvent.status === VerificationStatus.VERIFIED ||
-        verificationEvent.status === VerificationStatus.BANNED
-          ? `${verificationEvent.status} by <@${verificationEvent.resolved_by}>`
-          : 'pending';
+    const caseThreadsFieldValue = this.formatCaseThreadsFieldValue(member, verificationEvent);
+    if (caseThreadsFieldValue) {
       embed.addFields({
-        name: 'Verification Status',
-        value: `[Thread](https://discord.com/channels/${member.guild.id}/${verificationEvent.thread_id}) status: ${threadStatus}`,
+        name: 'Case Threads',
+        value: caseThreadsFieldValue,
         inline: false,
       });
+    }
+
+    if (detectionHistory) {
+      embed.addFields({ name: 'Detection History', value: detectionHistory, inline: false });
     }
 
     const persistedThreadAnalysis = this.getThreadAnalysisMetadata(verificationEvent.metadata);
@@ -185,7 +181,7 @@ export class NotificationPresentationBuilder {
     const detectionHistory = recentEvents
       .map((event) => {
         const timestamp = Math.floor(new Date(event.detected_at).getTime() / 1000);
-        return `• <t:${timestamp}:R>: ${event.detection_type} (${Math.round(event.confidence * 100)}% confidence)${this.formatAccountingSuffix(event)}`;
+        return `• <t:${timestamp}:R>: ${this.formatDetectionTypeLabel(event.detection_type)} (${Math.round(event.confidence * 100)}% confidence)${this.formatAccountingSuffix(event)}`;
       })
       .join('\n');
 
@@ -441,7 +437,7 @@ export class NotificationPresentationBuilder {
       .slice(0, 5)
       .map((event) => {
         const timestamp = Math.floor(new Date(event.detected_at).getTime() / 1000);
-        let entry = `• <t:${timestamp}:R>: ${event.detection_type}`;
+        let entry = `• <t:${timestamp}:R>: ${this.formatDetectionTypeLabel(event.detection_type)}`;
         if (event.message_id) {
           entry += ` - [View Message](https://discord.com/channels/${guildId}/${event.channel_id}/${event.message_id})`;
         }
@@ -475,6 +471,15 @@ export class NotificationPresentationBuilder {
     if (detectionResult.triggerSource === DetectionType.USER_REPORT) {
       return `Observed via user report: \`${detectionResult.triggerContent || 'No reason provided'}\``;
     }
+    if (detectionResult.triggerSource === DetectionType.ADMIN_CASE) {
+      return `Observed via admin-opened case: ${detectionResult.triggerContent || 'Manual review'}`;
+    }
+    if (detectionResult.triggerSource === DetectionType.ADMIN_FLAG) {
+      return `Observed via admin flag: ${detectionResult.triggerContent || 'Manual flag'}`;
+    }
+    if (detectionResult.triggerSource === DetectionType.ROLE_INTAKE) {
+      return `Observed via role intake: ${detectionResult.triggerContent || 'Role intake'}`;
+    }
     if (detectionResult.triggerSource === DetectionType.GPT_ANALYSIS) {
       return `Observed via manual review: \`${detectionResult.triggerContent || 'Manual flag'}\``;
     }
@@ -499,6 +504,15 @@ export class NotificationPresentationBuilder {
         ? `\`${detectionResult.triggerContent}\``
         : '`No report reason provided`';
       return `Flagged via user report: ${safeContent}`;
+    }
+    if (detectionResult.triggerSource === DetectionType.ADMIN_CASE) {
+      return `Admin-opened case: ${detectionResult.triggerContent || 'Manual review'}`;
+    }
+    if (detectionResult.triggerSource === DetectionType.ADMIN_FLAG) {
+      return `Admin flag: ${detectionResult.triggerContent || 'Manual flag'}`;
+    }
+    if (detectionResult.triggerSource === DetectionType.ROLE_INTAKE) {
+      return `Role intake: ${detectionResult.triggerContent || 'Role intake'}`;
     }
     if (detectionResult.triggerSource === DetectionType.GPT_ANALYSIS) {
       const safeContent = detectionResult.triggerContent
@@ -637,7 +651,7 @@ export class NotificationPresentationBuilder {
           failure.action === 'restrict'
             ? 'Apply restricted role'
             : failure.action === 'private_evidence_thread'
-              ? 'Create private evidence thread'
+              ? 'Create admin evidence thread'
               : 'Create case thread';
         const when = Number.isFinite(timestamp) ? ` <t:${timestamp}:R>` : '';
         return `Warning: ${action} failed${when}: ${failure.message}`;
@@ -776,6 +790,59 @@ export class NotificationPresentationBuilder {
 
   private formatAccountingSuffix(event: DetectionEvent): string {
     return isDetectionEventExcludedFromAccounting(event) ? ' - ignored for future accounting' : '';
+  }
+
+  private formatDetectionTypeLabel(detectionType: DetectionType): string {
+    switch (detectionType) {
+      case DetectionType.MESSAGE_FREQUENCY:
+        return 'message frequency';
+      case DetectionType.SUSPICIOUS_CONTENT:
+        return 'suspicious content';
+      case DetectionType.GPT_ANALYSIS:
+        return 'GPT analysis';
+      case DetectionType.NEW_ACCOUNT:
+        return 'new account';
+      case DetectionType.PATTERN_MATCH:
+        return 'pattern match';
+      case DetectionType.USER_REPORT:
+        return 'user report';
+      case DetectionType.ADMIN_CASE:
+        return 'admin-opened case';
+      case DetectionType.ADMIN_FLAG:
+        return 'admin flag';
+      case DetectionType.ROLE_INTAKE:
+        return 'role intake';
+      default: {
+        const exhaustive: never = detectionType;
+        return String(exhaustive);
+      }
+    }
+  }
+
+  private formatCaseThreadsFieldValue(
+    member: GuildMember,
+    verificationEvent: VerificationEvent
+  ): string | null {
+    const lines: string[] = [];
+    const threadStatus =
+      verificationEvent.status === VerificationStatus.VERIFIED ||
+      verificationEvent.status === VerificationStatus.BANNED
+        ? `${verificationEvent.status}${verificationEvent.resolved_by ? ` by <@${verificationEvent.resolved_by}>` : ''}`
+        : 'pending';
+
+    if (verificationEvent.thread_id) {
+      lines.push(
+        `Verification/review: [thread](https://discord.com/channels/${member.guild.id}/${verificationEvent.thread_id}) status: ${threadStatus}`
+      );
+    }
+
+    if (verificationEvent.private_evidence_thread_id) {
+      lines.push(
+        `Admin evidence: [thread](https://discord.com/channels/${member.guild.id}/${verificationEvent.private_evidence_thread_id})`
+      );
+    }
+
+    return lines.length > 0 ? lines.join('\n') : null;
   }
 
   private getThreadAnalysisMetadata(

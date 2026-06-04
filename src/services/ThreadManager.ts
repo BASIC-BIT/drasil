@@ -73,6 +73,7 @@ export interface IThreadManager {
     member: GuildMember,
     verificationEvent: VerificationEvent,
     detectionResult: DetectionResult,
+    notificationMessage: Message,
     sourceMessage?: Message
   ): Promise<ThreadChannel | null>;
 
@@ -190,6 +191,7 @@ export class ThreadManager implements IThreadManager {
     member: GuildMember,
     verificationEvent: VerificationEvent,
     detectionResult: DetectionResult,
+    roleMentions: string | null,
     sourceMessage?: Message
   ): string {
     const reasonLines = detectionResult.reasons.length
@@ -204,8 +206,9 @@ export class ThreadManager implements IThreadManager {
 
     return enforceDiscordMessageLimit(
       [
-        `Private evidence workspace for ${member.user.tag} (${member.id}).`,
-        'Admin-only discussion and evidence can be added here. Do not add the user under review to this thread.',
+        roleMentions,
+        `Admin evidence workspace for ${member.user.tag} (${member.id}).`,
+        'Visibility follows the admin notification channel and thread membership. Do not add the user under review to this thread.',
         '',
         `Case ID: ${verificationEvent.id}`,
         ...links,
@@ -217,6 +220,46 @@ export class ThreadManager implements IThreadManager {
         .filter((line): line is string => Boolean(line))
         .join('\n')
     );
+  }
+
+  private async getCaseNotificationRoleIds(guildId: string): Promise<string[]> {
+    const serverConfig = await this.configService.getServerConfig(guildId).catch((error) => {
+      console.warn(`Failed to load case notification roles for guild ${guildId}:`, error);
+      return null;
+    });
+    if (!serverConfig) {
+      return [];
+    }
+
+    const roleIds = new Set<string>();
+    if (serverConfig.admin_notification_role_id) {
+      roleIds.add(serverConfig.admin_notification_role_id);
+    }
+
+    const responderSettings = getCaseResponderSettings(serverConfig.settings);
+    if (responderSettings.routingMode !== 'off') {
+      responderSettings.roleIds.forEach((roleId) => roleIds.add(roleId));
+    }
+
+    return [...roleIds];
+  }
+
+  private formatRoleMentions(roleIds: readonly string[]): string | null {
+    return roleIds.length > 0 ? roleIds.map((roleId) => `<@&${roleId}>`).join(' ') : null;
+  }
+
+  private createAllowedRoleMentions(roleIds: readonly string[]): {
+    parse: [];
+    users: [];
+    roles: string[];
+    repliedUser: false;
+  } {
+    return {
+      parse: [],
+      users: [],
+      roles: [...roleIds],
+      repliedUser: false,
+    };
   }
 
   private buildReportIntakeThreadMessage(reporter: GuildMember): string {
@@ -262,10 +305,39 @@ export class ThreadManager implements IThreadManager {
     verificationEvent: VerificationEvent,
     threadId: string
   ): Promise<void> {
-    verificationEvent.private_evidence_thread_id = threadId;
-    await this.verificationEventRepository.update(verificationEvent.id, {
+    const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
       private_evidence_thread_id: threadId,
     });
+    if (!updatedEvent) {
+      throw new Error(`Verification event ${verificationEvent.id} was not found`);
+    }
+
+    verificationEvent.private_evidence_thread_id =
+      updatedEvent.private_evidence_thread_id ?? threadId;
+  }
+
+  private getAttachedThreadFromMessage(message: Message): ThreadChannel | null {
+    return (message as Message & { thread?: ThreadChannel | null }).thread ?? null;
+  }
+
+  private async fetchAttachedThreadFromMessage(message: Message): Promise<ThreadChannel | null> {
+    const cachedThread = this.getAttachedThreadFromMessage(message);
+    if (cachedThread) {
+      return cachedThread;
+    }
+
+    const fetchMessage = (message as unknown as { fetch?: () => Promise<Message> }).fetch;
+    if (!fetchMessage) {
+      return null;
+    }
+
+    try {
+      const refreshedMessage = await fetchMessage.call(message);
+      return this.getAttachedThreadFromMessage(refreshedMessage);
+    } catch (error) {
+      console.warn('Failed to fetch admin notification message while recovering thread:', error);
+      return null;
+    }
   }
 
   private async addCaseResponderMembers(
@@ -790,7 +862,6 @@ export class ThreadManager implements IThreadManager {
       // failures do not orphan a thread that was already created.
       setupStage = 'store report review thread id';
       await this.storeThreadId(verificationEvent, thread.id, REPORT_REVIEW_THREAD_TYPE);
-      await this.storePrivateEvidenceThreadId(verificationEvent, thread.id);
 
       try {
         await thread.setInvitable(false, 'Keep report review thread moderator-only');
@@ -836,6 +907,7 @@ export class ThreadManager implements IThreadManager {
     member: GuildMember,
     verificationEvent: VerificationEvent,
     detectionResult: DetectionResult,
+    notificationMessage: Message,
     sourceMessage?: Message
   ): Promise<ThreadChannel | null> {
     if (verificationEvent.private_evidence_thread_id) {
@@ -845,16 +917,7 @@ export class ThreadManager implements IThreadManager {
       }
     }
 
-    const channel =
-      (await this.configService.getVerificationChannel(member.guild.id)) ||
-      (await this.configService.getAdminChannel(member.guild.id));
-
-    if (!channel) {
-      console.error('No verification or admin channel ID configured');
-      return null;
-    }
-
-    let setupStage = 'prepare private evidence thread records';
+    let setupStage = 'prepare admin evidence thread records';
     let threadWasCreated = false;
 
     try {
@@ -866,49 +929,49 @@ export class ThreadManager implements IThreadManager {
         member.joinedAt ?? undefined
       );
 
-      setupStage = 'create private evidence thread';
-      const thread = await channel.threads.create({
-        name: `Evidence: ${member.user.username}`,
-        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-        reason: `Private evidence thread for user: ${member.user.tag}`,
-        type: ChannelType.PrivateThread,
-      });
-      threadWasCreated = true;
-
-      setupStage = 'store private evidence thread id';
-      await this.storePrivateEvidenceThreadId(verificationEvent, thread.id);
-
-      try {
-        await thread.setInvitable(false, 'Keep private evidence thread moderator-only');
-      } catch (error) {
-        console.warn(
-          `Failed to set invitable=false for private evidence thread ${thread.id} (continuing):`,
-          error
-        );
+      setupStage = 'recover existing admin evidence thread from admin notification';
+      let thread = await this.fetchAttachedThreadFromMessage(notificationMessage);
+      if (!thread) {
+        setupStage = 'create admin evidence thread from admin notification';
+        // Attached threads keep the admin notification embed visible at the top;
+        // their visibility follows the admin notification channel permissions.
+        try {
+          thread = await notificationMessage.startThread({
+            name: `Evidence: ${member.user.username}`,
+            autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+            reason: `Admin evidence thread for user: ${member.user.tag}`,
+          });
+          threadWasCreated = true;
+        } catch (error) {
+          thread = await this.fetchAttachedThreadFromMessage(notificationMessage);
+          if (!thread) {
+            throw error;
+          }
+        }
       }
 
-      setupStage = 'route case responders to private evidence thread';
+      setupStage = 'store admin evidence thread id';
+      await this.storePrivateEvidenceThreadId(verificationEvent, thread.id);
+
+      setupStage = 'route case responders to admin evidence thread';
       await this.addCaseResponderMembers(member.guild, thread, [member.id]);
 
-      setupStage = 'send private evidence thread prompt';
+      setupStage = 'send admin evidence thread prompt';
+      const roleIds = await this.getCaseNotificationRoleIds(member.guild.id);
       await thread.send({
         content: this.buildPrivateEvidenceThreadMessage(
           member,
           verificationEvent,
           detectionResult,
+          this.formatRoleMentions(roleIds),
           sourceMessage
         ),
-        allowedMentions: {
-          parse: [],
-          users: [],
-          roles: [],
-          repliedUser: false,
-        },
+        allowedMentions: this.createAllowedRoleMentions(roleIds),
       });
 
       return thread;
     } catch (error) {
-      console.error('Failed to create private evidence thread:', error);
+      console.error('Failed to create admin evidence thread:', error);
       if (threadWasCreated) {
         throw this.buildThreadSetupError(setupStage, error);
       }

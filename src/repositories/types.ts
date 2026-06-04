@@ -135,6 +135,9 @@ export enum DetectionType {
   NEW_ACCOUNT = 'new_account',
   PATTERN_MATCH = 'pattern_match',
   USER_REPORT = 'user_report',
+  ADMIN_CASE = 'admin_case',
+  ADMIN_FLAG = 'admin_flag',
+  ROLE_INTAKE = 'role_intake',
 }
 
 /**
@@ -209,6 +212,31 @@ export interface AdminAction {
 
 export interface VerificationEventWithActions extends VerificationEvent {
   actions: AdminAction[];
+}
+
+export interface MessageContext {
+  id: string;
+  server_id: string;
+  user_id: string;
+  message_id: string;
+  channel_id: string | null;
+  content_preview: string;
+  content_features: Record<string, unknown>;
+  created_at: Date;
+  observed_at: Date;
+  expires_at: Date;
+}
+
+export interface MessageContextCreate {
+  serverId: string;
+  userId: string;
+  messageId: string;
+  channelId?: string | null;
+  contentPreview: string;
+  contentFeatures?: Record<string, unknown>;
+  createdAt: Date;
+  observedAt?: Date;
+  expiresAt: Date;
 }
 
 export enum ReportIntakeStatus {

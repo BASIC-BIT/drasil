@@ -37,13 +37,15 @@ import {
 } from '../services/SetupDiagnosticsService';
 import { IReportIntakeService } from '../services/ReportIntakeService';
 import { ICaseReviewReminderService } from '../services/CaseReviewReminderService';
+import {
+  IMessageContextRepository,
+  MESSAGE_CONTEXT_PREVIEW_MAX_LENGTH,
+  MESSAGE_CONTEXT_RETENTION_DAYS,
+  MESSAGE_CONTEXT_USER_LIMIT,
+} from '../repositories/MessageContextRepository';
 
-const RECENT_USER_CONTEXT_MESSAGE_LIMIT = 5;
-const RECENT_USER_CONTEXT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const RECENT_USER_CONTEXT_CLEANUP_INTERVAL_MS = 60 * 1000;
-const RECENT_USER_CONTEXT_MAX_USERS_PER_SERVER = 1000;
-const RECENT_USER_CONTEXT_MAX_SERVERS = 100;
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
+const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
 const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
@@ -60,12 +62,6 @@ interface SetupNudgeUser {
   readonly id: string;
   readonly bot?: boolean;
   send(content: string): Promise<unknown>;
-}
-
-interface RecentUserMessageContext {
-  content: string;
-  createdTimestamp: number;
-  channelId?: string;
 }
 
 type CachedMessageChannel = Message['channel'] & {
@@ -100,10 +96,10 @@ export class EventHandler implements IEventHandler {
   private setupDiagnosticsService?: ISetupDiagnosticsService;
   private reportIntakeService?: IReportIntakeService;
   private caseReviewReminderService?: ICaseReviewReminderService;
+  private messageContextRepository?: IMessageContextRepository;
   private serverConfigWarmups: Set<string> = new Set();
   private configInitializePromise: Promise<void> | null = null;
-  private recentMessagesByServer: Map<string, Map<string, RecentUserMessageContext[]>> = new Map();
-  private lastRecentMessageContextCleanupAt = 0;
+  private lastMessageContextPruneAt = 0;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -126,7 +122,10 @@ export class EventHandler implements IEventHandler {
     reportIntakeService?: IReportIntakeService,
     @inject(TYPES.CaseReviewReminderService)
     @optional()
-    caseReviewReminderService?: ICaseReviewReminderService
+    caseReviewReminderService?: ICaseReviewReminderService,
+    @inject(TYPES.MessageContextRepository)
+    @optional()
+    messageContextRepository?: IMessageContextRepository
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -140,6 +139,7 @@ export class EventHandler implements IEventHandler {
     this.setupDiagnosticsService = setupDiagnosticsService;
     this.reportIntakeService = reportIntakeService;
     this.caseReviewReminderService = caseReviewReminderService;
+    this.messageContextRepository = messageContextRepository;
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -233,8 +233,6 @@ export class EventHandler implements IEventHandler {
     const userId = message.author.id;
     const serverId = message.guild.id;
     const content = message.content;
-    const recentMessages = this.getRecentUserMessages(serverId, userId);
-
     if (this.isAutomaticDetectionExemptByCachedSettings(message.member)) {
       this.rememberRecentMessage(message);
       return;
@@ -272,6 +270,8 @@ export class EventHandler implements IEventHandler {
       ) {
         return;
       }
+
+      const recentMessages = await this.getRecentUserMessages(serverId, userId);
 
       // Get user profile data for detection context
       const profileData = this.extractUserProfileData(message.member, {
@@ -567,25 +567,29 @@ export class EventHandler implements IEventHandler {
     return permissions.filter(({ flag }) => member.permissions.has(flag)).map(({ label }) => label);
   }
 
-  private getRecentUserMessages(serverId: string, userId: string): string[] {
-    const serverMessages = this.recentMessagesByServer.get(serverId);
-    const messages = serverMessages?.get(userId) ?? [];
-    const cutoff = Date.now() - RECENT_USER_CONTEXT_MAX_AGE_MS;
-    const recentMessages = messages.filter((message) => message.createdTimestamp > cutoff);
-
-    if (serverMessages && recentMessages.length !== messages.length) {
-      if (recentMessages.length > 0) {
-        serverMessages.set(userId, recentMessages);
-      } else {
-        serverMessages.delete(userId);
-      }
+  private async getRecentUserMessages(serverId: string, userId: string): Promise<string[]> {
+    if (!this.messageContextRepository) {
+      return [];
     }
 
-    return recentMessages.map((message) => message.content);
+    try {
+      const messages = await this.messageContextRepository.findRecentByServerAndUser(
+        serverId,
+        userId,
+        MESSAGE_CONTEXT_USER_LIMIT
+      );
+      return messages.map((message) => message.content_preview);
+    } catch (error) {
+      console.warn(
+        `Failed to load persistent message context for user ${userId} in guild ${serverId}:`,
+        error
+      );
+      return [];
+    }
   }
 
   private rememberRecentMessage(message: Message): void {
-    if (!message.guild || message.author.bot) {
+    if (!this.messageContextRepository || !message.guild || message.author.bot) {
       return;
     }
 
@@ -595,65 +599,51 @@ export class EventHandler implements IEventHandler {
     }
 
     const now = Date.now();
-    this.pruneRecentMessageContext(now);
+    const expiresAt = new Date(now + MESSAGE_CONTEXT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
-    const serverId = message.guild.id;
-    const userId = message.author.id;
-    const serverMessages =
-      this.recentMessagesByServer.get(serverId) ?? new Map<string, RecentUserMessageContext[]>();
-    const cutoff = now - RECENT_USER_CONTEXT_MAX_AGE_MS;
-    const previousMessages = serverMessages.get(userId) ?? [];
-    const nextMessages = [
-      ...previousMessages.filter((entry) => entry.createdTimestamp > cutoff),
-      {
-        content,
-        createdTimestamp: message.createdTimestamp || now,
+    void this.messageContextRepository
+      .recordMessage({
+        serverId: message.guild.id,
+        userId: message.author.id,
+        messageId: message.id,
         channelId: message.channelId,
-      },
-    ].slice(-RECENT_USER_CONTEXT_MESSAGE_LIMIT);
+        contentPreview: content.slice(0, MESSAGE_CONTEXT_PREVIEW_MAX_LENGTH),
+        contentFeatures: this.extractMessageContextFeatures(message, content),
+        createdAt: new Date(message.createdTimestamp || now),
+        observedAt: new Date(now),
+        expiresAt,
+      })
+      .catch((error) => {
+        console.warn(
+          `Failed to persist message context for ${message.author.id} in guild ${message.guild?.id}:`,
+          error
+        );
+      });
 
-    serverMessages.delete(userId);
-    serverMessages.set(userId, nextMessages);
-    while (serverMessages.size > RECENT_USER_CONTEXT_MAX_USERS_PER_SERVER) {
-      const oldestUserId = serverMessages.keys().next().value as string | undefined;
-      if (!oldestUserId) {
-        break;
-      }
-      serverMessages.delete(oldestUserId);
+    if (now - this.lastMessageContextPruneAt >= MESSAGE_CONTEXT_PRUNE_INTERVAL_MS) {
+      this.lastMessageContextPruneAt = now;
+      void this.messageContextRepository.pruneExpired(new Date(now)).catch((error) => {
+        console.warn('Failed to prune expired message context:', error);
+      });
     }
-
-    this.recentMessagesByServer.set(serverId, serverMessages);
   }
 
-  private pruneRecentMessageContext(now: number): void {
-    if (now - this.lastRecentMessageContextCleanupAt < RECENT_USER_CONTEXT_CLEANUP_INTERVAL_MS) {
-      return;
-    }
-    this.lastRecentMessageContextCleanupAt = now;
+  private extractMessageContextFeatures(
+    message: Message,
+    content: string
+  ): Record<string, unknown> {
+    const urlMatches = content.match(/https?:\/\/\S+|www\.\S+/gi) ?? [];
+    const mentionMatches = content.match(/<[@#&!?]*\d{17,20}>|@(everyone|here)\b/gi) ?? [];
+    const attachmentCount = (message as { attachments?: { size: number } }).attachments?.size ?? 0;
 
-    const cutoff = now - RECENT_USER_CONTEXT_MAX_AGE_MS;
-    for (const [serverId, serverMessages] of this.recentMessagesByServer.entries()) {
-      for (const [userId, messages] of serverMessages.entries()) {
-        const recentMessages = messages.filter((message) => message.createdTimestamp > cutoff);
-        if (recentMessages.length > 0) {
-          serverMessages.set(userId, recentMessages);
-        } else {
-          serverMessages.delete(userId);
-        }
-      }
-
-      if (serverMessages.size === 0) {
-        this.recentMessagesByServer.delete(serverId);
-      }
-    }
-
-    while (this.recentMessagesByServer.size > RECENT_USER_CONTEXT_MAX_SERVERS) {
-      const oldestServerId = this.recentMessagesByServer.keys().next().value as string | undefined;
-      if (!oldestServerId) {
-        break;
-      }
-      this.recentMessagesByServer.delete(oldestServerId);
-    }
+    return {
+      length: content.length,
+      url_count: urlMatches.length,
+      mention_count: mentionMatches.length,
+      attachment_count: attachmentCount,
+      has_discord_invite: /(?:discord\.gg|discord\.com\/invite)\//i.test(content),
+      in_thread: message.channel.isThread(),
+    };
   }
 
   private getCachedChannelContext(message: Message): string[] {
