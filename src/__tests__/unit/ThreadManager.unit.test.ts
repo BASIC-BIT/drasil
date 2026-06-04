@@ -265,6 +265,39 @@ describe('ThreadManager (unit)', () => {
     }
   });
 
+  it('does not claim propagation when parent-channel access cannot be checked', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    (thread.members.add as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('Missing Access'), { code: 50001 })
+    );
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    (manager as any).wait = jest.fn().mockResolvedValue(undefined);
+    const member = buildMember('guild-1', 'user-1');
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    try {
+      await expect(manager.createVerificationThread(member, event)).rejects.toThrow(
+        'parent-channel access could not be verified'
+      );
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
   it('keeps a created verification thread linked when prompt send fails', async () => {
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     thread.send.mockRejectedValueOnce(new Error('Missing Send Messages permission'));

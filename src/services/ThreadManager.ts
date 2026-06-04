@@ -428,6 +428,12 @@ export class ThreadManager implements IThreadManager {
       );
     }
 
+    if (canViewParentChannel === null) {
+      return new Error(
+        `Discord denied adding ${member.id} to the private verification thread, and parent-channel access could not be verified for parent channel ${parentId}. Check both bot and target-user View Channel access on the parent channel before assuming Discord propagation delay. Original Discord error: ${originalError}`
+      );
+    }
+
     return new Error(
       `Discord denied adding ${member.id} to the private verification thread after role and channel access refreshes. This usually means Discord has not propagated the user's parent-channel access yet, not that the bot lost access. Run case repair after propagation. Original Discord error: ${originalError}`
     );
