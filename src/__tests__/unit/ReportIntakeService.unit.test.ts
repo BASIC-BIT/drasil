@@ -362,7 +362,7 @@ describe('ReportIntakeService', () => {
     );
   });
 
-  it('rejects the candidate set from the clicked prompt token', async () => {
+  it('ignores stale prompt tokens after a newer target prompt is shown', async () => {
     const { service, reportIntakeRepository } = buildService({
       resolvePlatformBackedCandidates: jest
         .fn()
@@ -388,10 +388,16 @@ describe('ReportIntakeService', () => {
     });
 
     const stored = await reportIntakeRepository.findById(intake.id);
-    expect(result).toMatchObject({ rejected: true });
+    expect(result).toMatchObject({
+      rejected: false,
+      message: 'That target question is no longer current. Please answer the latest prompt.',
+    });
+    expect(stored?.status).toBe(ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION);
     expect(stored?.metadata).toMatchObject({
-      candidate_suggestions: [expect.objectContaining({ discordUserId: 'user-2' })],
-      last_rejected_candidate_ids: ['user-1'],
+      candidate_suggestions: [
+        expect.objectContaining({ discordUserId: 'user-1' }),
+        expect.objectContaining({ discordUserId: 'user-2' }),
+      ],
     });
   });
 

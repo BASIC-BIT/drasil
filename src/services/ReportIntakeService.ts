@@ -239,6 +239,13 @@ export class ReportIntakeService implements IReportIntakeService {
     }
 
     const metadata = toRecord(intake.metadata);
+    if (metadata.last_confirmation_prompt_token !== input.promptToken) {
+      return {
+        rejected: false,
+        message: 'That target question is no longer current. Please answer the latest prompt.',
+      };
+    }
+
     const promptCandidateIdsByToken = toRecord(metadata.confirmation_prompt_candidate_ids_by_token);
     const rejectedCandidateIds = readStringArray(promptCandidateIdsByToken[input.promptToken]);
     if (rejectedCandidateIds.length === 0) {
