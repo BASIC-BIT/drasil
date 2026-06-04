@@ -122,10 +122,14 @@ Lint strategy:
 - Metrics advisory report now skips tracked-but-deleted paths so pre-commit splits do not produce stale `wc` errors.
 - Interaction setup modal slice implemented: setup verification modal submission and rollback handling moved from `src/controllers/InteractionHandler.ts` to `src/controllers/SetupVerificationModalHandler.ts`.
 - Interaction report slice implemented: report button intake, report-intake confirmation, typed user report modal, message report modal, user resolution, and report reason checks moved to `src/controllers/ReportInteractionHandler.ts`; associated report interaction tests moved to `src/__tests__/unit/ReportInteractionHandler.unit.test.ts`.
-- `InteractionHandler.ts` is now a 1,602-line button/modal router plus remaining admin, observed, setup, and legacy verification flows; `InteractionHandler.unit.test.ts` is now 1,302 lines.
+- `InteractionHandler.ts` is now a 1,616-line button/modal router plus remaining admin, observed, setup, and legacy verification flows; `InteractionHandler.unit.test.ts` is now 1,302 lines.
 - Security role-intake slice implemented: role member selection, dry-run accounting, execution loop, and delay handling moved from `src/services/SecurityActionService.ts` to `src/services/RoleIntakeProcessor.ts`; associated processor tests moved to `src/__tests__/unit/RoleIntakeProcessor.unit.test.ts`.
 - Security report-AI slice implemented: report AI settings lookup, eligible evidence selection, metadata extraction, and recommendation capping moved to `src/services/ReportAiAnalyzer.ts`.
-- `SecurityActionService.ts` is now 2,179 lines and `SecurityActionService.unit.test.ts` is now 2,552 lines.
+- Setup workflow service slice implemented: candidate validation, verification-channel creation/sync, config save, analytics capture, and rollback cleanup moved to `src/services/SetupWorkflowService.ts`; setup command and modal controllers now keep Discord input/reply formatting while sharing workflow mechanics.
+- Report submission service slice implemented: report permission/settings checks and user/message report submission calls moved to `src/services/ReportSubmissionService.ts`, with Discord member/user resolution isolated in `src/services/DiscordUserResolver.ts`.
+- Security report-detection slice implemented: user-report and message-report detection event construction, report attachment metadata serialization, and report AI metadata attachment moved to `src/services/ReportDetectionBuilder.ts`.
+- Observed action correctness fix implemented: observed restrict/ban paths now treat `UserModerationService` boolean `false` returns as failed moderation actions instead of recording success.
+- `SecurityActionService.ts` is now 2,039 lines and `SecurityActionService.unit.test.ts` is now 2,604 lines after adding observed false-return regression coverage.
 - Current largest-file follow-ups after this pass: `SecurityActionService.unit.test.ts`, `SecurityActionService.ts`, `NotificationManager.ts`, `InteractionHandler.ts`, and `CommandHandler.setup.unit.test.ts`.
 
 ## Non-Goals

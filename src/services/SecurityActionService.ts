@@ -50,6 +50,7 @@ import {
 } from './ProductAnalyticsService';
 import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { ReportAiAnalyzer } from './ReportAiAnalyzer';
+import { ReportDetectionBuilder } from './ReportDetectionBuilder';
 import { RoleIntakeProcessor } from './RoleIntakeProcessor';
 /**
  * Interface for the SecurityActionService
@@ -254,6 +255,7 @@ export class SecurityActionService implements ISecurityActionService {
   private gptService?: IGPTService;
   private productAnalyticsService: IProductAnalyticsService;
   private reportAiAnalyzer: ReportAiAnalyzer;
+  private reportDetectionBuilder: ReportDetectionBuilder;
   private roleIntakeProcessor: RoleIntakeProcessor;
 
   constructor(
@@ -286,6 +288,10 @@ export class SecurityActionService implements ISecurityActionService {
     this.gptService = gptService;
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.reportAiAnalyzer = new ReportAiAnalyzer(this.serverRepository, this.gptService);
+    this.reportDetectionBuilder = new ReportDetectionBuilder(
+      this.detectionEventsRepository,
+      this.reportAiAnalyzer
+    );
     this.roleIntakeProcessor = new RoleIntakeProcessor(
       this.verificationEventRepository,
       (member, moderator, options) => this.openAdminCase(member, moderator, options)
@@ -425,23 +431,6 @@ export class SecurityActionService implements ISecurityActionService {
       detectionEventId: detectionEvent.id,
       reportAiAnalysis: this.reportAiAnalyzer.getAnalysisFromMetadata(metadata),
     };
-  }
-
-  private serializeReportAttachments(
-    attachments: MessageReportAttachment[] | undefined
-  ): MessageReportAttachment[] | undefined {
-    if (!attachments?.length) {
-      return undefined;
-    }
-
-    return attachments.map((attachment) => ({
-      id: attachment.id,
-      name: attachment.name,
-      url: attachment.url,
-      proxyUrl: attachment.proxyUrl,
-      contentType: attachment.contentType,
-      size: attachment.size,
-    }));
   }
 
   private shouldUseReportReviewThread(
@@ -601,6 +590,12 @@ export class SecurityActionService implements ISecurityActionService {
     } catch (error) {
       console.error(`Failed to restrict user ${member.user.tag}; continuing case flow:`, error);
       return this.recordVerificationActionFailure(verificationEvent, 'restrict', error);
+    }
+  }
+
+  private requireModerationSuccess(succeeded: boolean, action: string, member: GuildMember): void {
+    if (!succeeded) {
+      throw new Error(`Failed to ${action} user ${member.user.tag}`);
     }
   }
 
@@ -1367,49 +1362,8 @@ export class SecurityActionService implements ISecurityActionService {
         member.joinedAt?.toISOString()
       );
 
-      const reasonText = reason ? `Reason: ${reason}` : 'No reason provided.';
-      const reportAiAnalysis = await this.reportAiAnalyzer
-        .analyzeIfEnabled({
-          serverId: member.guild.id,
-          targetUserId: member.id,
-          reporterId: reporter.id,
-          reason,
-        })
-        .catch((error) => {
-          console.warn(
-            `Report AI analysis failed for guild ${member.guild.id}; continuing without AI triage:`,
-            error
-          );
-          return undefined;
-        });
-      const detectionEvent = await this.detectionEventsRepository.create({
-        server_id: member.guild.id,
-        user_id: member.id,
-        detection_type: DetectionType.USER_REPORT,
-        confidence: 1.0,
-        reasons: [`Reported by user ${reporter.id}. ${reasonText}`],
-        detected_at: new Date(),
-        metadata: withDetectionTestingMetadata(
-          {
-            type: 'user_report',
-            reporterId: reporter.id,
-            content: reason ?? 'User report',
-            reason: reason ?? reasonText,
-            ...(reportAiAnalysis ? { report_ai: reportAiAnalysis } : {}),
-          },
-          'server'
-        ),
-      });
-
-      const detectionResult: DetectionResult = {
-        label: 'SUSPICIOUS',
-        confidence: 1.0,
-        reasons: [`Reported by user ${reporter.id}. ${reasonText}`],
-        triggerSource: DetectionType.USER_REPORT,
-        triggerContent: reason ?? 'User report',
-        detectionEventId: detectionEvent.id,
-        reportAiAnalysis,
-      };
+      const { detectionEvent, detectionResult } =
+        await this.reportDetectionBuilder.createUserReportDetection(member, reporter, reason);
 
       await this.upsertReportObservedAlertOrActiveCase(member, detectionResult, detectionEvent.id);
       this.captureMemberAnalytics(
@@ -1439,37 +1393,11 @@ export class SecurityActionService implements ISecurityActionService {
     try {
       await this.userRepository.getOrCreateUser(targetUser.id, targetUser.username);
 
-      const reasonText = report.reason ? `Reason: ${report.reason}` : 'No reason provided.';
-      const reason = `Message reported by user ${reporter.id}. ${reasonText}`;
-      const isGuildContext =
-        report.interactionContext === InteractionContextType.Guild || !!report.guildId;
-      const metadata: Record<string, unknown> = {
-        type: isGuildContext ? 'guild_message_report' : 'user_installed_message_report',
-        reporterId: reporter.id,
-        targetUserId: targetUser.id,
-        targetUsername: targetUser.username,
-        messageId: report.messageId,
-      };
-      if (report.guildId) metadata.guildId = report.guildId;
-      if (report.channelId) metadata.channelId = report.channelId;
-      if (report.content) metadata.content = report.content;
-      if (report.reason) metadata.reason = report.reason;
-      const attachments = this.serializeReportAttachments(report.attachments);
-      if (attachments) metadata.attachments = attachments;
-      if (report.interactionContext !== undefined) {
-        metadata.interactionContext = report.interactionContext;
-      }
-
-      const globalReport = await this.detectionEventsRepository.create({
-        server_id: null,
-        user_id: targetUser.id,
-        detection_type: DetectionType.USER_REPORT,
-        confidence: 1.0,
-        reasons: [reason],
-        message_id: report.messageId,
-        channel_id: report.channelId,
-        metadata: withDetectionTestingMetadata(metadata, 'global'),
-      });
+      const globalReport = await this.reportDetectionBuilder.createGlobalMessageReportDetection(
+        targetUser,
+        reporter,
+        report
+      );
 
       await this.processMessageReportForManagedServers(
         targetUser,
@@ -1555,33 +1483,20 @@ export class SecurityActionService implements ISecurityActionService {
       return;
     }
 
-    const serverDetectionEvent = await this.createManagedMessageReportDetection(
-      member,
+    const serverDetectionEvent =
+      await this.reportDetectionBuilder.createManagedMessageReportDetection(
+        member,
+        reporter,
+        report,
+        globalReportId,
+        isLocalReport
+      );
+    const detectionResult = this.reportDetectionBuilder.createManagedMessageReportDetectionResult(
+      serverDetectionEvent,
       reporter,
       report,
-      globalReportId,
       isLocalReport
     );
-    const reasonText = report.reason ? ` Reason: ${report.reason}` : '';
-    const eventMetadata =
-      serverDetectionEvent.metadata &&
-      typeof serverDetectionEvent.metadata === 'object' &&
-      !Array.isArray(serverDetectionEvent.metadata)
-        ? serverDetectionEvent.metadata
-        : {};
-    const detectionResult: DetectionResult = {
-      label: 'SUSPICIOUS',
-      confidence: 1.0,
-      reasons: [
-        isLocalReport
-          ? `Message reported in this server by user ${reporter.id}.${reasonText}`
-          : `External DM/GDM report submitted by user ${reporter.id}.${reasonText}`,
-      ],
-      triggerSource: DetectionType.USER_REPORT,
-      triggerContent: report.reason || report.content || 'Message report',
-      detectionEventId: serverDetectionEvent.id,
-      reportAiAnalysis: this.reportAiAnalyzer.getAnalysisFromMetadata(eventMetadata),
-    };
 
     try {
       await this.upsertReportObservedAlertOrActiveCase(
@@ -1614,68 +1529,6 @@ export class SecurityActionService implements ISecurityActionService {
   ): Promise<GuildMember | null> {
     const guild = await this.client.guilds.fetch(guildId).catch(() => null);
     return (await guild?.members.fetch(userId).catch(() => null)) ?? null;
-  }
-
-  private async createManagedMessageReportDetection(
-    member: GuildMember,
-    reporter: User | APIUser,
-    report: MessageReportContext,
-    globalReportId: string,
-    isLocalReport: boolean
-  ): Promise<DetectionEvent> {
-    const metadata: Record<string, unknown> = {
-      type: isLocalReport ? 'message_report' : 'external_message_report',
-      globalReportId,
-      reporterId: reporter.id,
-      targetUserId: member.id,
-      messageId: report.messageId,
-    };
-    if (report.guildId) metadata.sourceGuildId = report.guildId;
-    if (report.channelId) metadata.sourceChannelId = report.channelId;
-    if (report.content) metadata.content = report.content;
-    if (report.reason) metadata.reason = report.reason;
-    const attachments = this.serializeReportAttachments(report.attachments);
-    if (attachments) metadata.attachments = attachments;
-    if (report.interactionContext !== undefined) {
-      metadata.interactionContext = report.interactionContext;
-    }
-
-    const reportAiAnalysis = isLocalReport
-      ? await this.reportAiAnalyzer
-          .analyzeIfEnabled({
-            serverId: member.guild.id,
-            targetUserId: member.id,
-            reporterId: reporter.id,
-            reason: report.reason,
-            reportedMessageContent: report.content,
-            attachments,
-          })
-          .catch((error) => {
-            console.warn(
-              `Report AI analysis failed for guild ${member.guild.id}; continuing without AI triage:`,
-              error
-            );
-            return undefined;
-          })
-      : undefined;
-    if (reportAiAnalysis) {
-      metadata.report_ai = reportAiAnalysis;
-    }
-
-    return await this.detectionEventsRepository.create({
-      server_id: member.guild.id,
-      user_id: member.id,
-      detection_type: DetectionType.USER_REPORT,
-      confidence: 1.0,
-      reasons: [
-        isLocalReport
-          ? `Message reported in this server by user ${reporter.id}.${report.reason ? ` Reason: ${report.reason}` : ''}`
-          : `External DM/GDM report submitted by user ${reporter.id}.${report.reason ? ` Reason: ${report.reason}` : ''}`,
-      ],
-      message_id: isLocalReport ? report.messageId : undefined,
-      channel_id: isLocalReport ? report.channelId : undefined,
-      metadata: withDetectionTestingMetadata(metadata, 'server'),
-    });
   }
 
   public async openObservedDetectionCase(
@@ -1755,7 +1608,8 @@ export class SecurityActionService implements ISecurityActionService {
     let actionApplied = false;
     try {
       const verificationEvent = await this.ensureObservedCase(member, detectionEvent, false);
-      await this.userModerationService.restrictUser(member);
+      const restricted = await this.userModerationService.restrictUser(member);
+      this.requireModerationSuccess(restricted, 'restrict', member);
       actionApplied = true;
       await this.recordObservedAction({
         serverId: member.guild.id,
@@ -1819,7 +1673,13 @@ export class SecurityActionService implements ISecurityActionService {
           member.id,
           member.guild.id
         );
-      await this.userModerationService.banUser(member, reason, moderator, detectionEvent.id);
+      const banned = await this.userModerationService.banUser(
+        member,
+        reason,
+        moderator,
+        detectionEvent.id
+      );
+      this.requireModerationSuccess(banned, 'ban', member);
       actionApplied = true;
       const actionAlreadyRecorded = await this.hasRecordedObservedAction(
         member.guild.id,

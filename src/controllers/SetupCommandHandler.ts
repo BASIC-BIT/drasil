@@ -14,6 +14,7 @@ import {
   SetupDiagnosticIssue,
   SetupDiagnosticReport,
 } from '../services/SetupDiagnosticsService';
+import { SetupWorkflowService } from '../services/SetupWorkflowService';
 import { truncatePreview } from '../utils/textPreview';
 import { ReportInstructionsManager } from './ReportInstructionsManager';
 
@@ -23,14 +24,25 @@ const VERIFICATION_CHANNEL_NAME = 'verification';
 type ReplyGuildInstallRequired = (interaction: ChatInputCommandInteraction) => Promise<void>;
 
 export class SetupCommandHandler {
+  private readonly setupWorkflowService?: SetupWorkflowService;
+
   public constructor(
     private readonly configService: IConfigService,
-    private readonly notificationManager: INotificationManager,
-    private readonly productAnalyticsService: IProductAnalyticsService,
+    notificationManager: INotificationManager,
+    productAnalyticsService: IProductAnalyticsService,
     private readonly setupDiagnosticsService: ISetupDiagnosticsService | undefined,
     private readonly reportInstructionsManager: ReportInstructionsManager,
     private readonly replyGuildInstallRequired: ReplyGuildInstallRequired
-  ) {}
+  ) {
+    this.setupWorkflowService = setupDiagnosticsService
+      ? new SetupWorkflowService(
+          configService,
+          notificationManager,
+          productAnalyticsService,
+          setupDiagnosticsService
+        )
+      : undefined;
+  }
 
   public async handleSetupVerificationCommand(
     interaction: ChatInputCommandInteraction
@@ -64,7 +76,8 @@ export class SetupCommandHandler {
       return;
     }
 
-    if (!this.setupDiagnosticsService) {
+    const setupWorkflowService = this.setupWorkflowService;
+    if (!this.setupDiagnosticsService || !setupWorkflowService) {
       await interaction.reply({
         content: 'Setup diagnostics are not available in this runtime.',
         flags: MessageFlags.Ephemeral,
@@ -115,130 +128,56 @@ export class SetupCommandHandler {
         return;
       }
 
-      const candidateReport = await this.setupDiagnosticsService.validateSetupCandidate(guild, {
-        restrictedRoleId: restrictedRole.id,
-        willCreateRestrictedRole: false,
+      const setupResult = await setupWorkflowService.completeSetup({
+        guild,
+        restrictedRole: restrictedRole as Role,
         adminChannelId: adminChannel.id,
-        verificationChannelId: verificationChannelCandidate.channelId,
-        willCreateVerificationChannel: !verificationChannelCandidate.channelId,
+        initialVerificationChannelId: verificationChannel?.id ?? null,
+        candidateVerificationChannelId: verificationChannelCandidate.channelId,
         ...(verificationChannelCandidate.willSyncPermissions
           ? { willSyncVerificationChannelPermissions: true }
           : {}),
         reportInstructionsChannelId: null,
+        captureAnalytics: true,
       });
 
-      if (candidateReport.errorCount > 0) {
+      if (setupResult.status === 'candidate_validation_failed') {
         await interaction.editReply({
-          content: `Setup not saved. Fix the errors below and rerun setup.\n\n${this.formatSetupDiagnosticsReport(candidateReport)}`,
+          content: `Setup not saved. Fix the errors below and rerun setup.\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
           allowedMentions: { parse: [] },
         });
         return;
       }
 
-      let verificationChannelId = verificationChannel?.id ?? null;
-      let verificationChannelAction: 'configured' | 'created' | 'synced' = verificationChannel
-        ? 'configured'
-        : 'created';
-      const createdSetupArtifacts: { verificationChannelId?: string } = {};
-
-      if (!verificationChannelId) {
-        const onChannelCreated = (channelId: string): void => {
-          createdSetupArtifacts.verificationChannelId = channelId;
-        };
-        const createdChannelId = verificationChannelCandidate.channelId
-          ? await this.notificationManager.setupVerificationChannel(
-              guild,
-              restrictedRole.id,
-              false,
-              onChannelCreated,
-              verificationChannelCandidate.channelId
-            )
-          : await this.notificationManager.setupVerificationChannel(
-              guild,
-              restrictedRole.id,
-              false,
-              onChannelCreated
-            );
-        if (!createdChannelId) {
-          throw new Error('Failed to create a verification channel during setup.');
-        }
-        verificationChannelId = createdChannelId;
-        verificationChannelAction =
-          verificationChannelCandidate.channelId && !createdSetupArtifacts.verificationChannelId
-            ? 'synced'
-            : 'created';
-      }
-
-      const finalCandidateReport = await this.setupDiagnosticsService.validateSetupCandidate(
-        guild,
-        {
-          restrictedRoleId: restrictedRole.id,
-          willCreateRestrictedRole: false,
-          adminChannelId: adminChannel.id,
-          verificationChannelId,
-          willCreateVerificationChannel: false,
-          reportInstructionsChannelId: null,
-        }
-      );
-      if (finalCandidateReport.errorCount > 0) {
-        const createdVerificationChannelId = createdSetupArtifacts.verificationChannelId;
-        if (createdVerificationChannelId) {
-          const rolledBack = await this.rollbackCreatedVerificationChannel(
-            guild,
-            createdVerificationChannelId,
-            'Rolling back Drasil setup after final validation failed'
-          );
-          setupFailureDetail = rolledBack
-            ? 'Final validation failed. The newly created verification channel was removed.'
-            : `Final validation failed. The newly created verification channel <#${createdVerificationChannelId}> could not be removed; delete it before rerunning setup.`;
-        }
+      if (setupResult.status === 'final_validation_failed') {
+        setupFailureDetail = setupResult.setupFailureDetail;
         const rollbackNote =
           setupFailureDetail !== 'Please check permissions and try again.'
             ? `\n\n${setupFailureDetail}`
             : '';
         await interaction.editReply({
-          content: `Setup not saved. Fix the errors below and rerun setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(finalCandidateReport)}`,
+          content: `Setup not saved. Fix the errors below and rerun setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
           allowedMentions: { parse: [] },
         });
         return;
       }
 
-      try {
-        await this.configService.updateServerConfig(guild.id, {
-          restricted_role_id: restrictedRole.id,
-          admin_channel_id: adminChannel.id,
-          verification_channel_id: verificationChannelId,
-        });
-      } catch (error) {
-        const createdVerificationChannelId = createdSetupArtifacts.verificationChannelId;
-        if (createdVerificationChannelId) {
-          const rolledBack = await this.rollbackCreatedVerificationChannel(
-            guild,
-            createdVerificationChannelId
-          );
-          setupFailureDetail = rolledBack
-            ? 'Configuration could not be saved. The newly created verification channel was removed.'
-            : `Configuration could not be saved. The newly created verification channel <#${createdVerificationChannelId}> could not be removed; delete it before rerunning setup.`;
-        }
-        throw error;
+      if (setupResult.status === 'verification_channel_failed') {
+        setupFailureDetail = setupResult.setupFailureDetail;
+        throw setupResult.error;
       }
-      void this.productAnalyticsService.captureGuildEvent(
-        guild.id,
-        'verification setup completed',
-        {
-          verification_channel_created: verificationChannelAction === 'created',
-          verification_channel_configured: Boolean(verificationChannelId),
-          admin_channel_configured: true,
-          restricted_role_configured: true,
-        }
-      );
+
+      if (setupResult.status === 'config_save_failed') {
+        setupFailureDetail = setupResult.setupFailureDetail;
+        throw setupResult.error;
+      }
 
       const verificationChannelMessage =
-        verificationChannelAction === 'created'
-          ? `Created verification channel: <#${verificationChannelId}>`
-          : verificationChannelAction === 'synced'
-            ? `Synced verification channel permissions: <#${verificationChannelId}>`
-            : `Verification channel: <#${verificationChannelId}>`;
+        setupResult.verificationChannelAction === 'created'
+          ? `Created verification channel: <#${setupResult.verificationChannelId}>`
+          : setupResult.verificationChannelAction === 'synced'
+            ? `Synced verification channel permissions: <#${setupResult.verificationChannelId}>`
+            : `Verification channel: <#${setupResult.verificationChannelId}>`;
 
       const responseLines = [
         'Setup complete.',
@@ -247,8 +186,8 @@ export class SetupCommandHandler {
         verificationChannelMessage,
       ];
 
-      if (candidateReport.warningCount > 0) {
-        this.appendSetupDiagnosticsReport(responseLines, candidateReport);
+      if (setupResult.candidateReport.warningCount > 0) {
+        this.appendSetupDiagnosticsReport(responseLines, setupResult.candidateReport);
       }
 
       await interaction.editReply({
@@ -406,7 +345,8 @@ export class SetupCommandHandler {
     interaction: ChatInputCommandInteraction,
     guild: NonNullable<ChatInputCommandInteraction['guild']>
   ): Promise<void> {
-    if (!this.setupDiagnosticsService) {
+    const setupWorkflowService = this.setupWorkflowService;
+    if (!this.setupDiagnosticsService || !setupWorkflowService) {
       await interaction.reply({
         content: 'Setup diagnostics are not available in this runtime.',
         flags: MessageFlags.Ephemeral,
@@ -512,7 +452,6 @@ export class SetupCommandHandler {
       }
 
       let createdRestrictedRole: Role | null = null;
-      const createdSetupArtifacts: { verificationChannelId?: string } = {};
       let restrictedRole = restrictedRoleCandidate.role;
       if (!restrictedRole) {
         createdRestrictedRole = await guild.roles.create({
@@ -523,132 +462,46 @@ export class SetupCommandHandler {
         restrictedRole = createdRestrictedRole;
       }
 
-      const restrictedRoleWasCreated = Boolean(createdRestrictedRole);
-      let verificationChannelId = verificationChannel?.id ?? null;
-      let verificationChannelAction: 'configured' | 'created' | 'synced' = verificationChannel
-        ? 'configured'
-        : 'created';
-
-      if (!verificationChannelId) {
-        const onChannelCreated = (channelId: string): void => {
-          createdSetupArtifacts.verificationChannelId = channelId;
-        };
-        verificationChannelId = verificationChannelCandidate.channelId
-          ? await this.notificationManager.setupVerificationChannel(
-              guild,
-              restrictedRole.id,
-              false,
-              onChannelCreated,
-              verificationChannelCandidate.channelId
-            )
-          : await this.notificationManager.setupVerificationChannel(
-              guild,
-              restrictedRole.id,
-              false,
-              onChannelCreated
-            );
-        if (!verificationChannelId) {
-          if (createdRestrictedRole) {
-            const rolledBack = await this.rollbackCreatedRestrictedRole(
-              createdRestrictedRole,
-              guild.id
-            );
-            setupFailureDetail = rolledBack
-              ? 'Verification channel setup failed. The newly created restricted role was removed.'
-              : `Verification channel setup failed. The newly created restricted role <@&${restrictedRole.id}> could not be removed; delete it or pass it as restricted-role when rerunning setup.`;
-          }
-          throw new Error('Failed to create a verification channel during setup.');
-        }
-        verificationChannelAction =
-          verificationChannelCandidate.channelId && !createdSetupArtifacts.verificationChannelId
-            ? 'synced'
-            : 'created';
-      }
-
-      const finalCandidateReport = await this.setupDiagnosticsService.validateSetupCandidate(
+      const setupResult = await setupWorkflowService.completeSetup({
         guild,
-        {
-          restrictedRoleId: restrictedRole.id,
-          willCreateRestrictedRole: false,
-          adminChannelId: adminChannel.id,
-          verificationChannelId,
-          willCreateVerificationChannel: false,
-          reportInstructionsChannelId: reportChannel?.id ?? null,
-        }
-      );
-      if (finalCandidateReport.errorCount > 0) {
-        const rollbackDetails = ['Final validation failed.'];
-        const createdVerificationChannelId = createdSetupArtifacts.verificationChannelId;
-        if (createdVerificationChannelId) {
-          const rolledBack = await this.rollbackCreatedVerificationChannel(
-            guild,
-            createdVerificationChannelId,
-            'Rolling back Drasil setup after final validation failed'
-          );
-          rollbackDetails.push(
-            rolledBack
-              ? 'The newly created verification channel was removed.'
-              : `The newly created verification channel <#${createdVerificationChannelId}> could not be removed; delete it before rerunning setup.`
-          );
-        }
-        if (createdRestrictedRole) {
-          const rolledBack = await this.rollbackCreatedRestrictedRole(
-            createdRestrictedRole,
-            guild.id,
-            'Rolling back Drasil setup after final validation failed'
-          );
-          rollbackDetails.push(
-            rolledBack
-              ? 'The newly created restricted role was removed.'
-              : `The newly created restricted role <@&${restrictedRole.id}> could not be removed; delete it or pass it as restricted-role when rerunning setup.`
-          );
-        }
-        setupFailureDetail = rollbackDetails.join(' ');
-        const rollbackNote = `\n\n${setupFailureDetail}`;
+        restrictedRole,
+        adminChannelId: adminChannel.id,
+        initialVerificationChannelId: verificationChannel?.id ?? null,
+        candidateVerificationChannelId: verificationChannelCandidate.channelId,
+        ...(verificationChannelCandidate.willSyncPermissions
+          ? { willSyncVerificationChannelPermissions: true }
+          : {}),
+        reportInstructionsChannelId: reportChannel?.id ?? null,
+        candidateReport,
+        createdRestrictedRole,
+      });
+
+      if (setupResult.status === 'candidate_validation_failed') {
         await interaction.editReply({
-          content: `Setup not saved. Fix the errors below and rerun /config setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(finalCandidateReport)}`,
+          content: `Setup not saved. Fix the errors below and rerun /config setup.\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
           allowedMentions: { parse: [] },
         });
         return;
       }
 
-      try {
-        await this.configService.updateServerConfig(guild.id, {
-          restricted_role_id: restrictedRole.id,
-          admin_channel_id: adminChannel.id,
-          verification_channel_id: verificationChannelId,
+      if (setupResult.status === 'final_validation_failed') {
+        setupFailureDetail = setupResult.setupFailureDetail;
+        const rollbackNote = `\n\n${setupFailureDetail}`;
+        await interaction.editReply({
+          content: `Setup not saved. Fix the errors below and rerun /config setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
+          allowedMentions: { parse: [] },
         });
-      } catch (error) {
-        const rollbackDetails = ['Configuration could not be saved.'];
-        const createdVerificationChannelId = createdSetupArtifacts.verificationChannelId;
+        return;
+      }
 
-        if (createdVerificationChannelId) {
-          const rolledBack = await this.rollbackCreatedVerificationChannel(
-            guild,
-            createdVerificationChannelId
-          );
-          rollbackDetails.push(
-            rolledBack
-              ? 'The newly created verification channel was removed.'
-              : `The newly created verification channel <#${createdVerificationChannelId}> could not be removed; delete it before rerunning setup.`
-          );
-        }
+      if (setupResult.status === 'verification_channel_failed') {
+        setupFailureDetail = setupResult.setupFailureDetail;
+        throw setupResult.error;
+      }
 
-        if (createdRestrictedRole) {
-          const rolledBack = await this.rollbackCreatedRestrictedRole(
-            createdRestrictedRole,
-            guild.id,
-            'Rolling back Drasil setup after config save failed'
-          );
-          rollbackDetails.push(
-            rolledBack
-              ? 'The newly created restricted role was removed.'
-              : `The newly created restricted role <@&${restrictedRole.id}> could not be removed; delete it or pass it as restricted-role when rerunning setup.`
-          );
-        }
-
-        setupFailureDetail = rollbackDetails.join(' ');
-        throw error;
+      if (setupResult.status === 'config_save_failed') {
+        setupFailureDetail = setupResult.setupFailureDetail;
+        throw setupResult.error;
       }
 
       let reportInstructionsLine: string | null = null;
@@ -670,9 +523,9 @@ export class SetupCommandHandler {
 
       const lines = [
         'Setup complete.',
-        `${restrictedRoleWasCreated ? 'Created restricted role' : 'Restricted role'}: <@&${restrictedRole.id}>`,
+        `${setupResult.restrictedRoleWasCreated ? 'Created restricted role' : 'Restricted role'}: <@&${setupResult.restrictedRoleId}>`,
         `Admin channel: <#${adminChannel.id}>`,
-        `${verificationChannelAction === 'created' ? 'Created verification channel' : verificationChannelAction === 'synced' ? 'Synced verification channel permissions' : 'Verification channel'}: <#${verificationChannelId}>`,
+        `${setupResult.verificationChannelAction === 'created' ? 'Created verification channel' : setupResult.verificationChannelAction === 'synced' ? 'Synced verification channel permissions' : 'Verification channel'}: <#${setupResult.verificationChannelId}>`,
       ];
 
       if (reportInstructionsLine) {
@@ -683,8 +536,8 @@ export class SetupCommandHandler {
         lines.push(reportInstructionsWarningLine);
       }
 
-      if (candidateReport.warningCount > 0) {
-        this.appendSetupDiagnosticsReport(lines, candidateReport);
+      if (setupResult.candidateReport.warningCount > 0) {
+        this.appendSetupDiagnosticsReport(lines, setupResult.candidateReport);
       }
 
       await interaction.editReply({
@@ -699,46 +552,6 @@ export class SetupCommandHandler {
           : 'Failed to complete setup. Please check permissions and try again.',
         allowedMentions: { parse: [] },
       });
-    }
-  }
-
-  private async rollbackCreatedRestrictedRole(
-    role: Role,
-    guildId: string,
-    reason = 'Rolling back Drasil setup after verification channel setup failed'
-  ): Promise<boolean> {
-    try {
-      await role.delete(reason);
-      return true;
-    } catch (error) {
-      console.error(`Failed to roll back restricted role ${role.id} for guild ${guildId}:`, error);
-      return false;
-    }
-  }
-
-  private async rollbackCreatedVerificationChannel(
-    guild: NonNullable<ChatInputCommandInteraction['guild']>,
-    channelId: string,
-    reason = 'Rolling back Drasil setup after config save failed'
-  ): Promise<boolean> {
-    try {
-      const channel =
-        guild.channels.cache.get(channelId) ?? (await guild.channels.fetch(channelId));
-      if (!channel || channel.type !== ChannelType.GuildText) {
-        console.error(
-          `Could not find text verification channel ${channelId} to roll back for guild ${guild.id}`
-        );
-        return false;
-      }
-
-      await channel.delete(reason);
-      return true;
-    } catch (error) {
-      console.error(
-        `Failed to roll back verification channel ${channelId} for guild ${guild.id}:`,
-        error
-      );
-      return false;
     }
   }
 

@@ -11,16 +11,17 @@ import {
   TextInputStyle,
   UserContextMenuCommandInteraction,
 } from 'discord.js';
-import { IConfigService } from '../config/ConfigService';
-import { ISecurityActionService } from '../services/SecurityActionService';
 import {
-  getUserReportSettings,
   REPORT_MESSAGE_MODAL_PREFIX,
   REPORT_MESSAGE_REASON_FIELD_ID,
   USER_REPORT_REASON_MAX_LENGTH,
 } from '../utils/userReportSettings';
 import { isUserInstallReportingEnabled } from '../utils/userInstallReporting';
 import { ReportInstructionsManager } from './ReportInstructionsManager';
+import {
+  ReportSubmissionService,
+  UserReportSubmissionResult,
+} from '../services/ReportSubmissionService';
 
 type ReplyGuildInstallRequired = (
   interaction: ChatInputCommandInteraction | UserContextMenuCommandInteraction
@@ -28,8 +29,7 @@ type ReplyGuildInstallRequired = (
 
 export class ReportCommandHandler {
   public constructor(
-    private readonly configService: IConfigService,
-    private readonly securityActionService: ISecurityActionService,
+    private readonly reportSubmissionService: ReportSubmissionService,
     private readonly reportInstructionsManager: ReportInstructionsManager,
     private readonly replyGuildInstallRequired: ReplyGuildInstallRequired
   ) {}
@@ -46,48 +46,19 @@ export class ReportCommandHandler {
     const targetUser = interaction.options.getUser('user', true);
     const reason = interaction.options.getString('reason')?.trim() || undefined;
 
-    if (targetUser.id === interaction.user.id) {
-      await interaction.editReply({
-        content: 'You cannot report yourself.',
-      });
-      return;
-    }
-
-    let reportSettings = getUserReportSettings();
-    try {
-      const serverConfig = await this.configService.getServerConfig(guild.id);
-      reportSettings = getUserReportSettings(serverConfig.settings);
-    } catch (error) {
-      console.error(`Failed to load report settings for guild ${guild.id}:`, error);
-    }
-
-    if (reportSettings.reasonRequired && !reason) {
-      await interaction.editReply({
-        content: 'Please include a reason for this report.',
-      });
-      return;
-    }
-
-    const member = await guild.members.fetch(targetUser.id).catch(() => null);
-    if (!member) {
-      await interaction.editReply({
-        content: `Could not find ${targetUser.globalName ?? targetUser.username} in this server.`,
-      });
-      return;
-    }
-
-    try {
-      await this.securityActionService.handleUserReport(member, interaction.user, reason);
-      await interaction.editReply({
-        content: `Thank you for your report regarding <@${targetUser.id}>. It has been submitted for review.`,
-        allowedMentions: { parse: [] },
-      });
-    } catch (error) {
-      console.error(`Failed to handle user report for ${targetUser.id}:`, error);
-      await interaction.editReply({
-        content: 'An error occurred while submitting your report. Please try again later.',
-      });
-    }
+    const result = await this.reportSubmissionService.submitUserReport({
+      guild,
+      reporter: interaction.user,
+      targetUserId: targetUser.id,
+      targetLabel: targetUser.globalName ?? targetUser.username,
+      reason,
+      passUndefinedReason: true,
+    });
+    await this.replyUserReportResult(interaction, result, {
+      reasonRequiredMessage: 'Please include a reason for this report.',
+      memberNotFoundMessage: (label) => `Could not find ${label} in this server.`,
+      failureLogPrefix: `Failed to handle user report for ${targetUser.id}`,
+    });
   }
 
   public async handleReportUserContextCommand(
@@ -102,48 +73,17 @@ export class ReportCommandHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const targetUser = interaction.targetUser;
-    if (targetUser.id === interaction.user.id) {
-      await interaction.editReply({
-        content: 'You cannot report yourself.',
-      });
-      return;
-    }
-
-    let reportSettings = getUserReportSettings();
-    try {
-      const serverConfig = await this.configService.getServerConfig(guild.id);
-      reportSettings = getUserReportSettings(serverConfig.settings);
-    } catch (error) {
-      console.error(`Failed to load report settings for guild ${guild.id}:`, error);
-    }
-
-    if (reportSettings.reasonRequired) {
-      await interaction.editReply({
-        content: 'This server requires a report reason. Please use `/report` instead.',
-      });
-      return;
-    }
-
-    const member = await guild.members.fetch(targetUser.id).catch(() => null);
-    if (!member) {
-      await interaction.editReply({
-        content: `Could not find ${targetUser.globalName ?? targetUser.username} in this server.`,
-      });
-      return;
-    }
-
-    try {
-      await this.securityActionService.handleUserReport(member, interaction.user);
-      await interaction.editReply({
-        content: `Thank you for your report regarding <@${targetUser.id}>. It has been submitted for review.`,
-        allowedMentions: { parse: [] },
-      });
-    } catch (error) {
-      console.error(`Failed to handle context user report for ${targetUser.id}:`, error);
-      await interaction.editReply({
-        content: 'An error occurred while submitting your report. Please try again later.',
-      });
-    }
+    const result = await this.reportSubmissionService.submitUserReport({
+      guild,
+      reporter: interaction.user,
+      targetUserId: targetUser.id,
+      targetLabel: targetUser.globalName ?? targetUser.username,
+    });
+    await this.replyUserReportResult(interaction, result, {
+      reasonRequiredMessage: 'This server requires a report reason. Please use `/report` instead.',
+      memberNotFoundMessage: (label) => `Could not find ${label} in this server.`,
+      failureLogPrefix: `Failed to handle context user report for ${targetUser.id}`,
+    });
   }
 
   public async handleReportMessageContextCommand(
@@ -170,15 +110,7 @@ export class ReportCommandHandler {
     const guildId = interaction.guildId ?? undefined;
     let reasonRequired = false;
     if (guildId) {
-      let reportSettings = getUserReportSettings();
-      try {
-        const serverConfig = await this.configService.getServerConfig(guildId);
-        reportSettings = getUserReportSettings(serverConfig.settings);
-      } catch (error) {
-        console.error(`Failed to load report settings for guild ${guildId}:`, error);
-      }
-
-      reasonRequired = reportSettings.reasonRequired;
+      reasonRequired = await this.reportSubmissionService.getReasonRequired(guildId);
     }
 
     const context = interaction.context ?? 'x';
@@ -252,6 +184,39 @@ export class ReportCommandHandler {
         content:
           '❌ Failed to send or update the message. Please ensure the bot has permissions to send messages in that channel.',
       });
+    }
+  }
+
+  private async replyUserReportResult(
+    interaction: ChatInputCommandInteraction | UserContextMenuCommandInteraction,
+    result: UserReportSubmissionResult,
+    messages: {
+      reasonRequiredMessage: string;
+      memberNotFoundMessage: (label: string) => string;
+      failureLogPrefix: string;
+    }
+  ): Promise<void> {
+    switch (result.status) {
+      case 'submitted':
+        await interaction.editReply({
+          content: `Thank you for your report regarding <@${result.targetUserId}>. It has been submitted for review.`,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      case 'self_report':
+        await interaction.editReply({ content: 'You cannot report yourself.' });
+        return;
+      case 'reason_required':
+        await interaction.editReply({ content: messages.reasonRequiredMessage });
+        return;
+      case 'member_not_found':
+        await interaction.editReply({ content: messages.memberNotFoundMessage(result.label) });
+        return;
+      case 'failed':
+        console.error(`${messages.failureLogPrefix}:`, result.error);
+        await interaction.editReply({
+          content: 'An error occurred while submitting your report. Please try again later.',
+        });
     }
   }
 }

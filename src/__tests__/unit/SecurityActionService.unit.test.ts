@@ -2174,6 +2174,32 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
   });
 
+  it('releases an observed ban claim when the ban service returns false', async () => {
+    const guildId = 'guild-observed-ban-false';
+    const userId = 'user-observed-ban-false';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+    userModerationService.banUser.mockResolvedValueOnce(false);
+
+    await expect(
+      buildService().banObservedDetection(member, detectionEvent.id, moderator, 'Confirmed scam')
+    ).rejects.toThrow('Failed to ban user test-user#0001');
+
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
+    expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
+    expect(adminActionService.recordAction).not.toHaveBeenCalled();
+    expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
+  });
+
   it('keeps an observed ban claim when only notification update fails after banning', async () => {
     const guildId = 'guild-observed-ban-notify-fails';
     const userId = 'user-observed-ban-notify-fails';
@@ -2233,6 +2259,32 @@ describe('SecurityActionService (unit)', () => {
       'restricted this user',
       moderator
     );
+  });
+
+  it('releases an observed restrict claim when restriction returns false', async () => {
+    const guildId = 'guild-observed-restrict-false';
+    const userId = 'user-observed-restrict-false';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+    userModerationService.restrictUser.mockResolvedValueOnce(false);
+
+    await expect(
+      buildService().restrictObservedDetection(member, detectionEvent.id, moderator)
+    ).rejects.toThrow('Failed to restrict user test-user#0001');
+
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
+    expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
+    expect(adminActionService.recordAction).not.toHaveBeenCalled();
+    expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
   });
 
   it('upgrades an existing report review thread when restricting a user report', async () => {

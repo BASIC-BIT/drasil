@@ -27,6 +27,11 @@ import { ISecurityActionService } from '../services/SecurityActionService';
 import { IConfigService } from '../config/ConfigService';
 import { ISetupDiagnosticsService } from '../services/SetupDiagnosticsService';
 import { IReportIntakeService } from '../services/ReportIntakeService';
+import {
+  IProductAnalyticsService,
+  NOOP_PRODUCT_ANALYTICS_SERVICE,
+} from '../services/ProductAnalyticsService';
+import { ReportSubmissionService } from '../services/ReportSubmissionService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { REPORT_MESSAGE_MODAL_PREFIX } from '../utils/userReportSettings';
 import { SETUP_VERIFICATION_MODAL_ID } from '../constants/setupVerificationWizard';
@@ -76,6 +81,7 @@ export class InteractionHandler implements IInteractionHandler {
   private verificationEventRepository: IVerificationEventRepository;
   private threadManager: IThreadManager;
   private adminActionRepository: IAdminActionRepository;
+  private reportSubmissionService: ReportSubmissionService;
   private reportInteractionHandler: ReportInteractionHandler;
   private setupVerificationModalHandler: SetupVerificationModalHandler;
 
@@ -94,7 +100,10 @@ export class InteractionHandler implements IInteractionHandler {
     setupDiagnosticsService?: ISetupDiagnosticsService,
     @inject(TYPES.ReportIntakeService)
     @optional()
-    reportIntakeService?: IReportIntakeService
+    reportIntakeService?: IReportIntakeService,
+    @inject(TYPES.ProductAnalyticsService)
+    @optional()
+    productAnalyticsService?: IProductAnalyticsService
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -104,9 +113,13 @@ export class InteractionHandler implements IInteractionHandler {
     this.verificationEventRepository = verificationEventRepository;
     this.threadManager = threadManager;
     this.adminActionRepository = adminActionRepository;
+    this.reportSubmissionService = new ReportSubmissionService(
+      this.configService,
+      this.securityActionService
+    );
     this.reportInteractionHandler = new ReportInteractionHandler(
       this.client,
-      this.securityActionService,
+      this.reportSubmissionService,
       this.configService,
       this.threadManager,
       reportIntakeService
@@ -115,7 +128,8 @@ export class InteractionHandler implements IInteractionHandler {
       this.client,
       this.notificationManager,
       this.configService,
-      setupDiagnosticsService
+      setupDiagnosticsService,
+      productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE
     );
   }
 

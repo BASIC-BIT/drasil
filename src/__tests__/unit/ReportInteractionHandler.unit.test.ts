@@ -15,6 +15,7 @@ import {
 } from '../../controllers/ReportInteractionHandler';
 import { IConfigService } from '../../config/ConfigService';
 import { IReportIntakeService } from '../../services/ReportIntakeService';
+import { ReportSubmissionService } from '../../services/ReportSubmissionService';
 import { ISecurityActionService } from '../../services/SecurityActionService';
 import { IThreadManager } from '../../services/ThreadManager';
 import {
@@ -126,14 +127,19 @@ describe('ReportInteractionHandler (unit)', () => {
 
   const createHandler = (
     reportIntakeService?: jest.Mocked<IReportIntakeService>
-  ): ReportInteractionHandler =>
-    new ReportInteractionHandler(
+  ): ReportInteractionHandler => {
+    const reportSubmissionService = new ReportSubmissionService(
+      configService,
+      securityActionService
+    );
+    return new ReportInteractionHandler(
       client,
-      securityActionService,
+      reportSubmissionService,
       configService,
       threadManager,
       reportIntakeService
     );
+  };
 
   it('handles report modal submission', async () => {
     const member = buildMember('guild-1', '123456789012345678');

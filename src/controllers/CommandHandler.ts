@@ -25,6 +25,7 @@ import {
 } from '../services/ProductAnalyticsService';
 import { ISetupDiagnosticsService } from '../services/SetupDiagnosticsService';
 import { IRestrictedRoleLockdownService } from '../services/RestrictedRoleLockdownService';
+import { ReportSubmissionService } from '../services/ReportSubmissionService';
 import {
   buildApplicationCommands,
   REPORT_MESSAGE_CONTEXT_COMMAND_NAME,
@@ -94,6 +95,7 @@ export class CommandHandler implements ICommandHandler {
   private moderationCommandHandler: ModerationCommandHandler;
   private reportCommandHandler: ReportCommandHandler;
   private reportInstructionsManager: ReportInstructionsManager;
+  private reportSubmissionService: ReportSubmissionService;
   private setupCommandHandler: SetupCommandHandler;
   private testCommandHandler: TestCommandHandler;
   private commands: RESTPostAPIApplicationCommandsJSONBody[];
@@ -137,6 +139,10 @@ export class CommandHandler implements ICommandHandler {
       restrictedRoleLockdownService
     );
     this.reportInstructionsManager = new ReportInstructionsManager(this.client, this.configService);
+    this.reportSubmissionService = new ReportSubmissionService(
+      this.configService,
+      securityActionService
+    );
     this.moderationCommandHandler = new ModerationCommandHandler(
       this.configService,
       userModerationService,
@@ -144,8 +150,7 @@ export class CommandHandler implements ICommandHandler {
       (interaction) => this.replyGuildInstallRequired(interaction)
     );
     this.reportCommandHandler = new ReportCommandHandler(
-      this.configService,
-      securityActionService,
+      this.reportSubmissionService,
       this.reportInstructionsManager,
       (interaction) => this.replyGuildInstallRequired(interaction)
     );
