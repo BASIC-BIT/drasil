@@ -16,9 +16,9 @@ scc \
 
 echo "== lizard (production complexity/function length) =="
 # Keep this separate from METRIC_PATHS: scc reports package size, while lizard
-# gates only production source paths. TODO(#114): continue ratcheting the CCN
-# baseline from 37 back toward 25 as documented in docs/dev/maintainability.md.
-lizard -C 37 -L 300 -w \
+# gates only production source paths. TODO(#114): continue ratcheting from the
+# documented CCN target once the next non-noisy baseline is available.
+lizard -C 25 -L 300 -w \
   -x "*/node_modules/*" \
   -x "*/.next/*" \
   -x "*/coverage/*" \
