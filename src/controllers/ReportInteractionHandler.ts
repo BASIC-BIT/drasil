@@ -401,7 +401,7 @@ export class ReportInteractionHandler {
         allowedMentions: { parse: [] },
       });
     } catch (error) {
-      console.error('[InteractionHandler] Error handling report modal submission:', error);
+      console.error('[ReportInteractionHandler] Error handling report modal submission:', error);
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: 'An error occurred while submitting your report. Please try again later.',
