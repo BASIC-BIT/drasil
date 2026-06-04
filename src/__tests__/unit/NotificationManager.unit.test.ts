@@ -754,6 +754,49 @@ describe('NotificationManager (unit)', () => {
     expect(labels).toEqual(['Admin Actions']);
   });
 
+  it('removes repaired action warnings without dropping action log fields', async () => {
+    const embed = new EmbedBuilder().setTitle('Suspicious User').addFields(
+      {
+        name: 'Moderation Action Warning',
+        value: 'Warning: Create case thread failed: Missing Access',
+        inline: false,
+      },
+      {
+        name: 'Latest Admin Action',
+        value: 'Reopened verification by <@admin-1> at <t:123:F>',
+        inline: false,
+      },
+      {
+        name: 'Action Log',
+        value: 'Reopened verification by <@admin-1> at <t:123:F>',
+        inline: false,
+      }
+    );
+    const message: MockMessage = {
+      embeds: [embed],
+      edit: jest.fn().mockResolvedValue(undefined),
+    };
+    adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({
+      notification_message_id: 'message-repair',
+      metadata: {},
+    });
+
+    await manager.updateNotificationButtons(verificationEvent, VerificationStatus.PENDING);
+
+    const editArgs = message.edit.mock.calls[0][0] as { embeds: EmbedBuilder[] };
+    const fields = editArgs.embeds[0].data.fields ?? [];
+    expect(fields.find((field) => field.name === 'Moderation Action Warning')).toBeUndefined();
+    expect(fields.find((field) => field.name === 'Latest Admin Action')?.value).toContain(
+      'Reopened verification'
+    );
+    expect(fields.find((field) => field.name === 'Action Log')?.value).toContain(
+      'Reopened verification'
+    );
+  });
+
   it('updates notification buttons for verified status', async () => {
     const message: MockMessage = { edit: jest.fn().mockResolvedValue(undefined) };
     adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);

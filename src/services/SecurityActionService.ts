@@ -32,14 +32,12 @@ import {
 import { IUserModerationService } from './UserModerationService';
 import { IAdminActionService } from './AdminActionService';
 import { getUserReportSettings } from '../utils/userReportSettings';
-import type { IGPTService, ReportAIAnalysis } from './GPTService';
-import {
-  getReportAiSettings,
-  ReportAttachmentMetadata,
-  selectEligibleReportImageAttachments,
-} from '../utils/reportAiSettings';
+import type { IGPTService } from './GPTService';
+import { ReportAttachmentMetadata } from '../utils/reportAiSettings';
 import {
   appendVerificationActionFailure,
+  clearVerificationActionFailures,
+  getVerificationActionFailures,
   type VerificationActionFailureKind,
 } from '../utils/verificationActionFailures';
 import {
@@ -53,6 +51,9 @@ import {
   ProductAnalyticsProperties,
 } from './ProductAnalyticsService';
 import { getConfidenceBucket } from '../utils/analyticsHelpers';
+import { ReportAiAnalyzer } from './ReportAiAnalyzer';
+import { ReportDetectionBuilder } from './ReportDetectionBuilder';
+import { RoleIntakeProcessor } from './RoleIntakeProcessor';
 /**
  * Interface for the SecurityActionService
  */
@@ -237,14 +238,6 @@ export interface RoleIntakeResult {
   failures: RoleIntakeFailure[];
 }
 
-interface RoleIntakeMemberSelection {
-  totalMembers: number;
-  eligibleMembers: number;
-  selectedMembers: GuildMember[];
-  skippedBots: number;
-  skippedOverLimit: number;
-}
-
 /**
  * SecurityActionService - Coordinates calls to various services based upon actions that occurred
  * This is the service to put all that fancy business logic
@@ -263,6 +256,9 @@ export class SecurityActionService implements ISecurityActionService {
   private client: Client;
   private gptService?: IGPTService;
   private productAnalyticsService: IProductAnalyticsService;
+  private reportAiAnalyzer: ReportAiAnalyzer;
+  private reportDetectionBuilder: ReportDetectionBuilder;
+  private roleIntakeProcessor: RoleIntakeProcessor;
 
   constructor(
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
@@ -293,6 +289,15 @@ export class SecurityActionService implements ISecurityActionService {
     this.client = client;
     this.gptService = gptService;
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
+    this.reportAiAnalyzer = new ReportAiAnalyzer(this.serverRepository, this.gptService);
+    this.reportDetectionBuilder = new ReportDetectionBuilder(
+      this.detectionEventsRepository,
+      this.reportAiAnalyzer
+    );
+    this.roleIntakeProcessor = new RoleIntakeProcessor(
+      this.verificationEventRepository,
+      (member, moderator, options) => this.openAdminCase(member, moderator, options)
+    );
   }
 
   /**
@@ -426,109 +431,8 @@ export class SecurityActionService implements ISecurityActionService {
       triggerSource: detectionEvent.detection_type,
       triggerContent: content ?? '',
       detectionEventId: detectionEvent.id,
-      reportAiAnalysis: this.getReportAiAnalysisFromMetadata(metadata),
+      reportAiAnalysis: this.reportAiAnalyzer.getAnalysisFromMetadata(metadata),
     };
-  }
-
-  private getReportAiAnalysisFromMetadata(
-    metadata: Record<string, unknown>
-  ): ReportAIAnalysis | undefined {
-    const reportAi = metadata.report_ai;
-    return reportAi && typeof reportAi === 'object' && !Array.isArray(reportAi)
-      ? (reportAi as ReportAIAnalysis)
-      : undefined;
-  }
-
-  private capReportAiAction(
-    analysis: ReportAIAnalysis,
-    settings: ReturnType<typeof getReportAiSettings>
-  ): ReportAIAnalysis {
-    const recommendedAction = this.capReportAiRecommendedAction(
-      analysis.recommendedAction,
-      analysis.confidence,
-      settings
-    );
-
-    return recommendedAction === analysis.recommendedAction
-      ? analysis
-      : { ...analysis, recommendedAction };
-  }
-
-  private capReportAiRecommendedAction(
-    action: ReportAIAnalysis['recommendedAction'],
-    confidence: number,
-    settings: ReturnType<typeof getReportAiSettings>
-  ): ReportAIAnalysis['recommendedAction'] {
-    if (action === 'none' || action === 'monitor' || action === 'manual_review') {
-      return action;
-    }
-
-    if (settings.maxAction === 'hints' || settings.maxAction === 'off') {
-      return 'manual_review';
-    }
-
-    if (action === 'restrict') {
-      if (settings.maxAction === 'restrict' && confidence >= settings.restrictThreshold) {
-        return 'restrict';
-      }
-
-      return confidence >= settings.openCaseThreshold ? 'open_case' : 'manual_review';
-    }
-
-    return confidence >= settings.openCaseThreshold ? 'open_case' : 'manual_review';
-  }
-
-  private async analyzeReportIfEnabled(data: {
-    serverId: string;
-    targetUserId: string;
-    reporterId: string;
-    reason?: string;
-    reportedMessageContent?: string;
-    attachments?: MessageReportAttachment[];
-  }): Promise<ReportAIAnalysis | undefined> {
-    const server = await this.serverRepository.findByGuildId(data.serverId);
-    const settings = getReportAiSettings(server?.settings);
-    if (!settings.enabled || settings.maxAction === 'off') {
-      return undefined;
-    }
-    if (!this.gptService) {
-      return undefined;
-    }
-
-    const eligibleImages = selectEligibleReportImageAttachments(data.attachments, settings);
-    const reportReason = settings.analyzeText ? data.reason : undefined;
-    const reportedMessageContent = settings.analyzeText ? data.reportedMessageContent : undefined;
-    if (!reportReason && !reportedMessageContent && eligibleImages.length === 0) {
-      return undefined;
-    }
-
-    const analysis = await this.gptService.analyzeReportEvidence({
-      serverId: data.serverId,
-      targetUserId: data.targetUserId,
-      reporterId: data.reporterId,
-      reportReason,
-      reportedMessageContent,
-      attachments: eligibleImages,
-    });
-
-    return this.capReportAiAction(analysis, settings);
-  }
-
-  private serializeReportAttachments(
-    attachments: MessageReportAttachment[] | undefined
-  ): MessageReportAttachment[] | undefined {
-    if (!attachments?.length) {
-      return undefined;
-    }
-
-    return attachments.map((attachment) => ({
-      id: attachment.id,
-      name: attachment.name,
-      url: attachment.url,
-      proxyUrl: attachment.proxyUrl,
-      contentType: attachment.contentType,
-      size: attachment.size,
-    }));
   }
 
   private shouldUseReportReviewThread(
@@ -675,6 +579,38 @@ export class SecurityActionService implements ISecurityActionService {
     }
   }
 
+  private async clearResolvedVerificationActionFailures(
+    verificationEvent: VerificationEvent,
+    actions: readonly VerificationActionFailureKind[]
+  ): Promise<VerificationEvent> {
+    const hasFailuresToClear = getVerificationActionFailures(verificationEvent.metadata).some(
+      (failure) => actions.includes(failure.action)
+    );
+    if (!hasFailuresToClear) {
+      return verificationEvent;
+    }
+
+    const updatedMetadata = clearVerificationActionFailures(verificationEvent.metadata, actions);
+    const fallbackEvent = {
+      ...verificationEvent,
+      metadata: updatedMetadata as VerificationEvent['metadata'],
+    };
+
+    try {
+      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
+        metadata: updatedMetadata as VerificationEvent['metadata'],
+      });
+
+      return updatedEvent ?? fallbackEvent;
+    } catch (error) {
+      console.error(
+        `Failed to clear resolved action failures for verification event ${verificationEvent.id}; continuing repair flow:`,
+        error
+      );
+      return fallbackEvent;
+    }
+  }
+
   private async tryRestrictUser(
     member: GuildMember,
     verificationEvent: VerificationEvent
@@ -688,6 +624,12 @@ export class SecurityActionService implements ISecurityActionService {
     } catch (error) {
       console.error(`Failed to restrict user ${member.user.tag}; continuing case flow:`, error);
       return this.recordVerificationActionFailure(verificationEvent, 'restrict', error);
+    }
+  }
+
+  private requireModerationSuccess(succeeded: boolean, action: string, member: GuildMember): void {
+    if (!succeeded) {
+      throw new Error(`Failed to ${action} user ${member.user.tag}`);
     }
   }
 
@@ -1358,6 +1300,8 @@ export class SecurityActionService implements ISecurityActionService {
       };
     }
 
+    repairCase = await this.clearResolvedVerificationActionFailures(repairCase, ['thread']);
+
     let notificationUpdateMessage = '';
     try {
       await this.notificationManager.updateNotificationButtons(
@@ -1367,7 +1311,7 @@ export class SecurityActionService implements ISecurityActionService {
     } catch (error) {
       notificationUpdateMessage = ' Notification buttons could not be updated automatically.';
       console.error(
-        `Failed to update notification buttons for repaired case ${repairCase.id}; continuing repair flow:`,
+        `Failed to update notification for repaired case ${repairCase.id}; continuing repair flow:`,
         error
       );
     }
@@ -1381,132 +1325,7 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   public async intakeRoleMembers(options: RoleIntakeOptions): Promise<RoleIntakeResult> {
-    const batchId = `role-intake-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const limit = Math.max(1, Math.min(options.limit ?? 250, 250));
-    const delayMs = Math.max(0, options.delayMs ?? 250);
-    const memberSelection = await this.selectRoleMembersForIntake(options.role, limit);
-    const { selectedMembers } = memberSelection;
-    const result: RoleIntakeResult = {
-      batchId,
-      roleId: options.role.id,
-      roleName: options.role.name,
-      action: options.action,
-      execute: options.execute,
-      totalMembers: memberSelection.totalMembers,
-      eligibleMembers: memberSelection.eligibleMembers,
-      processed: selectedMembers.length,
-      opened: 0,
-      skippedBots: memberSelection.skippedBots,
-      skippedActiveCases: 0,
-      skippedOverLimit: memberSelection.skippedOverLimit,
-      failed: 0,
-      failures: [],
-    };
-
-    for (const member of selectedMembers) {
-      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
-        member.id,
-        member.guild.id
-      );
-      if (activeCase && options.action !== 'restrict') {
-        result.skippedActiveCases += 1;
-        continue;
-      }
-
-      if (!options.execute) {
-        continue;
-      }
-
-      try {
-        const caseResult = await this.openAdminCase(member, options.moderator, {
-          action: options.action,
-          reason: options.reason,
-          metadata: {
-            type: 'admin_role_intake',
-            bulk_intake: true,
-            batchId,
-            sourceRoleId: options.role.id,
-            sourceRoleName: options.role.name,
-          },
-        });
-        if (caseResult.opened) {
-          result.opened += 1;
-          if (options.action === 'restrict' && !caseResult.restricted) {
-            result.failed += 1;
-            result.failures.push({
-              userId: member.id,
-              message: 'Case opened but restriction failed',
-            });
-          }
-        } else {
-          result.failed += 1;
-          result.failures.push({ userId: member.id, message: 'Case flow returned false' });
-        }
-      } catch (error) {
-        result.failed += 1;
-        result.failures.push({
-          userId: member.id,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-
-      if (delayMs > 0) {
-        await this.sleep(delayMs);
-      }
-    }
-
-    return result;
-  }
-
-  private async selectRoleMembersForIntake(
-    role: Role,
-    limit: number
-  ): Promise<RoleIntakeMemberSelection> {
-    const selectedMembers: GuildMember[] = [];
-    let totalMembers = 0;
-    let eligibleMembers = 0;
-    let skippedBots = 0;
-    let skippedOverLimit = 0;
-    let after: string | undefined;
-    let hasMoreMembers = true;
-
-    while (hasMoreMembers) {
-      const page = await role.guild.members.list({ after, limit: 1000, cache: false });
-      if (page.size === 0) {
-        break;
-      }
-
-      const pageMembers = [...page.values()].sort((a, b) => a.id.localeCompare(b.id));
-      for (const member of pageMembers) {
-        if (!member.roles.cache.has(role.id)) {
-          continue;
-        }
-
-        totalMembers += 1;
-        if (member.user.bot) {
-          skippedBots += 1;
-          continue;
-        }
-
-        eligibleMembers += 1;
-        if (selectedMembers.length < limit) {
-          selectedMembers.push(member);
-        } else {
-          skippedOverLimit += 1;
-        }
-      }
-
-      after = pageMembers[pageMembers.length - 1]?.id;
-      if (!after || page.size < 1000) {
-        hasMoreMembers = false;
-      }
-    }
-
-    return { totalMembers, eligibleMembers, selectedMembers, skippedBots, skippedOverLimit };
-  }
-
-  private async sleep(delayMs: number): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return await this.roleIntakeProcessor.intakeRoleMembers(options);
   }
 
   public async handleManualFlag(
@@ -1579,47 +1398,8 @@ export class SecurityActionService implements ISecurityActionService {
         member.joinedAt?.toISOString()
       );
 
-      const reasonText = reason ? `Reason: ${reason}` : 'No reason provided.';
-      const reportAiAnalysis = await this.analyzeReportIfEnabled({
-        serverId: member.guild.id,
-        targetUserId: member.id,
-        reporterId: reporter.id,
-        reason,
-      }).catch((error) => {
-        console.warn(
-          `Report AI analysis failed for guild ${member.guild.id}; continuing without AI triage:`,
-          error
-        );
-        return undefined;
-      });
-      const detectionEvent = await this.detectionEventsRepository.create({
-        server_id: member.guild.id,
-        user_id: member.id,
-        detection_type: DetectionType.USER_REPORT,
-        confidence: 1.0,
-        reasons: [`Reported by user ${reporter.id}. ${reasonText}`],
-        detected_at: new Date(),
-        metadata: withDetectionTestingMetadata(
-          {
-            type: 'user_report',
-            reporterId: reporter.id,
-            content: reason ?? 'User report',
-            reason: reason ?? reasonText,
-            ...(reportAiAnalysis ? { report_ai: reportAiAnalysis } : {}),
-          },
-          'server'
-        ),
-      });
-
-      const detectionResult: DetectionResult = {
-        label: 'SUSPICIOUS',
-        confidence: 1.0,
-        reasons: [`Reported by user ${reporter.id}. ${reasonText}`],
-        triggerSource: DetectionType.USER_REPORT,
-        triggerContent: reason ?? 'User report',
-        detectionEventId: detectionEvent.id,
-        reportAiAnalysis,
-      };
+      const { detectionEvent, detectionResult } =
+        await this.reportDetectionBuilder.createUserReportDetection(member, reporter, reason);
 
       await this.upsertReportObservedAlertOrActiveCase(member, detectionResult, detectionEvent.id);
       this.captureMemberAnalytics(
@@ -1649,37 +1429,11 @@ export class SecurityActionService implements ISecurityActionService {
     try {
       await this.userRepository.getOrCreateUser(targetUser.id, targetUser.username);
 
-      const reasonText = report.reason ? `Reason: ${report.reason}` : 'No reason provided.';
-      const reason = `Message reported by user ${reporter.id}. ${reasonText}`;
-      const isGuildContext =
-        report.interactionContext === InteractionContextType.Guild || !!report.guildId;
-      const metadata: Record<string, unknown> = {
-        type: isGuildContext ? 'guild_message_report' : 'user_installed_message_report',
-        reporterId: reporter.id,
-        targetUserId: targetUser.id,
-        targetUsername: targetUser.username,
-        messageId: report.messageId,
-      };
-      if (report.guildId) metadata.guildId = report.guildId;
-      if (report.channelId) metadata.channelId = report.channelId;
-      if (report.content) metadata.content = report.content;
-      if (report.reason) metadata.reason = report.reason;
-      const attachments = this.serializeReportAttachments(report.attachments);
-      if (attachments) metadata.attachments = attachments;
-      if (report.interactionContext !== undefined) {
-        metadata.interactionContext = report.interactionContext;
-      }
-
-      const globalReport = await this.detectionEventsRepository.create({
-        server_id: null,
-        user_id: targetUser.id,
-        detection_type: DetectionType.USER_REPORT,
-        confidence: 1.0,
-        reasons: [reason],
-        message_id: report.messageId,
-        channel_id: report.channelId,
-        metadata: withDetectionTestingMetadata(metadata, 'global'),
-      });
+      const globalReport = await this.reportDetectionBuilder.createGlobalMessageReportDetection(
+        targetUser,
+        reporter,
+        report
+      );
 
       await this.processMessageReportForManagedServers(
         targetUser,
@@ -1765,33 +1519,20 @@ export class SecurityActionService implements ISecurityActionService {
       return;
     }
 
-    const serverDetectionEvent = await this.createManagedMessageReportDetection(
-      member,
+    const serverDetectionEvent =
+      await this.reportDetectionBuilder.createManagedMessageReportDetection(
+        member,
+        reporter,
+        report,
+        globalReportId,
+        isLocalReport
+      );
+    const detectionResult = this.reportDetectionBuilder.createManagedMessageReportDetectionResult(
+      serverDetectionEvent,
       reporter,
       report,
-      globalReportId,
       isLocalReport
     );
-    const reasonText = report.reason ? ` Reason: ${report.reason}` : '';
-    const eventMetadata =
-      serverDetectionEvent.metadata &&
-      typeof serverDetectionEvent.metadata === 'object' &&
-      !Array.isArray(serverDetectionEvent.metadata)
-        ? serverDetectionEvent.metadata
-        : {};
-    const detectionResult: DetectionResult = {
-      label: 'SUSPICIOUS',
-      confidence: 1.0,
-      reasons: [
-        isLocalReport
-          ? `Message reported in this server by user ${reporter.id}.${reasonText}`
-          : `External DM/GDM report submitted by user ${reporter.id}.${reasonText}`,
-      ],
-      triggerSource: DetectionType.USER_REPORT,
-      triggerContent: report.reason || report.content || 'Message report',
-      detectionEventId: serverDetectionEvent.id,
-      reportAiAnalysis: this.getReportAiAnalysisFromMetadata(eventMetadata),
-    };
 
     try {
       await this.upsertReportObservedAlertOrActiveCase(
@@ -1824,66 +1565,6 @@ export class SecurityActionService implements ISecurityActionService {
   ): Promise<GuildMember | null> {
     const guild = await this.client.guilds.fetch(guildId).catch(() => null);
     return (await guild?.members.fetch(userId).catch(() => null)) ?? null;
-  }
-
-  private async createManagedMessageReportDetection(
-    member: GuildMember,
-    reporter: User | APIUser,
-    report: MessageReportContext,
-    globalReportId: string,
-    isLocalReport: boolean
-  ): Promise<DetectionEvent> {
-    const metadata: Record<string, unknown> = {
-      type: isLocalReport ? 'message_report' : 'external_message_report',
-      globalReportId,
-      reporterId: reporter.id,
-      targetUserId: member.id,
-      messageId: report.messageId,
-    };
-    if (report.guildId) metadata.sourceGuildId = report.guildId;
-    if (report.channelId) metadata.sourceChannelId = report.channelId;
-    if (report.content) metadata.content = report.content;
-    if (report.reason) metadata.reason = report.reason;
-    const attachments = this.serializeReportAttachments(report.attachments);
-    if (attachments) metadata.attachments = attachments;
-    if (report.interactionContext !== undefined) {
-      metadata.interactionContext = report.interactionContext;
-    }
-
-    const reportAiAnalysis = isLocalReport
-      ? await this.analyzeReportIfEnabled({
-          serverId: member.guild.id,
-          targetUserId: member.id,
-          reporterId: reporter.id,
-          reason: report.reason,
-          reportedMessageContent: report.content,
-          attachments,
-        }).catch((error) => {
-          console.warn(
-            `Report AI analysis failed for guild ${member.guild.id}; continuing without AI triage:`,
-            error
-          );
-          return undefined;
-        })
-      : undefined;
-    if (reportAiAnalysis) {
-      metadata.report_ai = reportAiAnalysis;
-    }
-
-    return await this.detectionEventsRepository.create({
-      server_id: member.guild.id,
-      user_id: member.id,
-      detection_type: DetectionType.USER_REPORT,
-      confidence: 1.0,
-      reasons: [
-        isLocalReport
-          ? `Message reported in this server by user ${reporter.id}.${report.reason ? ` Reason: ${report.reason}` : ''}`
-          : `External DM/GDM report submitted by user ${reporter.id}.${report.reason ? ` Reason: ${report.reason}` : ''}`,
-      ],
-      message_id: isLocalReport ? report.messageId : undefined,
-      channel_id: isLocalReport ? report.channelId : undefined,
-      metadata: withDetectionTestingMetadata(metadata, 'server'),
-    });
   }
 
   public async openObservedDetectionCase(
@@ -1963,7 +1644,8 @@ export class SecurityActionService implements ISecurityActionService {
     let actionApplied = false;
     try {
       const verificationEvent = await this.ensureObservedCase(member, detectionEvent, false);
-      await this.userModerationService.restrictUser(member);
+      const restricted = await this.userModerationService.restrictUser(member);
+      this.requireModerationSuccess(restricted, 'restrict', member);
       actionApplied = true;
       await this.recordObservedAction({
         serverId: member.guild.id,
@@ -2027,7 +1709,13 @@ export class SecurityActionService implements ISecurityActionService {
           member.id,
           member.guild.id
         );
-      await this.userModerationService.banUser(member, reason, moderator, detectionEvent.id);
+      const banned = await this.userModerationService.banUser(
+        member,
+        reason,
+        moderator,
+        detectionEvent.id
+      );
+      this.requireModerationSuccess(banned, 'ban', member);
       actionApplied = true;
       const actionAlreadyRecorded = await this.hasRecordedObservedAction(
         member.guild.id,

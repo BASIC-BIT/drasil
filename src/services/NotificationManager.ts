@@ -169,6 +169,7 @@ export class NotificationManager implements INotificationManager {
   private detectionEventsRepository: IDetectionEventsRepository;
   private static readonly THREAD_ANALYSIS_FIELD_NAME = 'AI Thread Analysis';
   private static readonly LATEST_ADMIN_ACTION_FIELD_NAME = 'Latest Admin Action';
+  private static readonly MODERATION_ACTION_WARNING_FIELD_NAME = 'Moderation Action Warning';
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -1062,7 +1063,7 @@ export class NotificationManager implements INotificationManager {
     );
     if (actionFailureFieldValue) {
       embed.addFields({
-        name: 'Moderation Action Warning',
+        name: NotificationManager.MODERATION_ACTION_WARNING_FIELD_NAME,
         value: actionFailureFieldValue,
         inline: false,
       });
@@ -1138,6 +1139,36 @@ export class NotificationManager implements INotificationManager {
     return this.truncateEmbedFieldValue(
       `${value}\nCase record was still created so moderators can review and fix permissions.`
     );
+  }
+
+  private upsertVerificationActionFailureField(
+    embed: EmbedBuilder,
+    verificationEvent: VerificationEvent
+  ): void {
+    const actionFailureFieldValue = this.formatVerificationActionFailureFieldValue(
+      verificationEvent.metadata
+    );
+    const fieldIndex = embed.data.fields?.findIndex(
+      (field) => field.name === NotificationManager.MODERATION_ACTION_WARNING_FIELD_NAME
+    );
+
+    if (actionFailureFieldValue) {
+      const field = {
+        name: NotificationManager.MODERATION_ACTION_WARNING_FIELD_NAME,
+        value: actionFailureFieldValue,
+        inline: false,
+      };
+      if (fieldIndex !== undefined && fieldIndex >= 0) {
+        embed.spliceFields(fieldIndex, 1, field);
+      } else {
+        embed.addFields(field);
+      }
+      return;
+    }
+
+    if (fieldIndex !== undefined && fieldIndex >= 0) {
+      embed.spliceFields(fieldIndex, 1);
+    }
   }
 
   private formatCaseStaffRoutingWarningFieldValue(metadata: unknown): string | null {
@@ -1675,10 +1706,17 @@ export class NotificationManager implements INotificationManager {
     }
 
     const message = await adminChannel.messages.fetch(verificationEvent.notification_message_id);
+    const messageEmbeds = (message as { embeds?: Message['embeds'] }).embeds ?? [];
+    const updatedEmbed = messageEmbeds.length > 0 ? EmbedBuilder.from(messageEmbeds[0]) : null;
+
+    if (updatedEmbed) {
+      this.upsertVerificationActionFailureField(updatedEmbed, verificationEvent);
+    }
 
     await message.edit({
       allowedMentions: { parse: [] },
       components: [this.createActionRow(verificationEvent.user_id)],
+      ...(updatedEmbed ? { embeds: [updatedEmbed] } : {}),
     });
   }
 }

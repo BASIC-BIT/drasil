@@ -18,7 +18,10 @@ import {
 import { IUserModerationService } from '../../services/UserModerationService';
 import { IAdminActionService } from '../../services/AdminActionService';
 import { USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY } from '../../utils/userReportSettings';
-import { getVerificationActionFailures } from '../../utils/verificationActionFailures';
+import {
+  getVerificationActionFailures,
+  VERIFICATION_ACTION_FAILURES_METADATA_KEY,
+} from '../../utils/verificationActionFailures';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -39,10 +42,6 @@ const buildMessage = (guildId: string, channelId: string): Message =>
     channelId,
     url: `https://discord.com/channels/${guildId}/${channelId}/message-1`,
   }) as Message;
-
-const addRoleToMember = (member: GuildMember, roleId: string): void => {
-  (member as any).roles = { cache: { has: jest.fn((id: string) => id === roleId) } };
-};
 
 describe('SecurityActionService (unit)', () => {
   let detectionEventsRepository: InMemoryDetectionEventsRepository;
@@ -533,6 +532,67 @@ describe('SecurityActionService (unit)', () => {
     });
   });
 
+  it('clears repaired thread warnings and rebuilds the notification embed', async () => {
+    const guildId = 'guild-case-repair-warning-clear';
+    const userId = 'user-case-repair-warning-clear';
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.NEW_ACCOUNT,
+      confidence: 1,
+      reasons: ['New Discord account'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    verificationEvent.thread_id = 'thread-1';
+    verificationEvent.notification_message_id = 'notif-1';
+    verificationEvent.metadata = {
+      [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: [
+        {
+          action: 'thread',
+          message: 'Failed to add flagged user to verification thread: Missing Access',
+          at: new Date().toISOString(),
+        },
+        {
+          action: 'restrict',
+          message: 'Role hierarchy issue',
+          at: new Date().toISOString(),
+        },
+      ],
+    };
+    await verificationEventRepository.update(verificationEvent.id, verificationEvent);
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      is_restricted: true,
+      verification_status: VerificationStatus.PENDING,
+    });
+
+    const result = await buildService().repairActiveCase(member);
+    const updatedCase = await verificationEventRepository.findById(verificationEvent.id);
+
+    expect(result.repaired).toBe(true);
+    expect(getVerificationActionFailures(updatedCase?.metadata)).toEqual([
+      expect.objectContaining({ action: 'restrict', message: 'Role hierarchy issue' }),
+    ]);
+    expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: verificationEvent.id,
+        metadata: expect.objectContaining({
+          [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: [
+            expect.objectContaining({ action: 'restrict' }),
+          ],
+        }),
+      }),
+      VerificationStatus.PENDING
+    );
+    expect(notificationManager.upsertSuspiciousUserNotification).not.toHaveBeenCalled();
+  });
+
   it('reports thread repair success when notification button update fails', async () => {
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const guildId = 'guild-case-repair-notification-fails';
@@ -570,7 +630,7 @@ describe('SecurityActionService (unit)', () => {
       });
       expect(result.message).toContain('Notification buttons could not be updated automatically');
       expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Failed to update notification buttons for repaired case'),
+        expect.stringContaining('Failed to update notification for repaired case'),
         expect.any(Error)
       );
     } finally {
@@ -645,167 +705,6 @@ describe('SecurityActionService (unit)', () => {
       action: 'open_case',
       reason: 'real reason',
     });
-  });
-
-  it('dry-runs role intake while skipping bots, active cases, and over-limit members', async () => {
-    const guildId = 'guild-role-intake-dry-run';
-    const activeMember = buildMember(guildId, 'user-active');
-    const selectedMember = buildMember(guildId, 'user-selected');
-    const overLimitMember = buildMember(guildId, 'user-over-limit');
-    const botMember = {
-      ...buildMember(guildId, 'user-bot'),
-      user: { id: 'user-bot', username: 'bot', tag: 'bot#0001', bot: true },
-    } as unknown as GuildMember;
-    const guild = {
-      id: guildId,
-      members: {
-        list: jest.fn().mockResolvedValue(
-          new Map([
-            [activeMember.id, activeMember],
-            [selectedMember.id, selectedMember],
-            [overLimitMember.id, overLimitMember],
-            [botMember.id, botMember],
-          ])
-        ),
-      },
-    } as unknown as Guild;
-    for (const member of [activeMember, selectedMember, overLimitMember, botMember]) {
-      (member as any).guild = guild;
-      addRoleToMember(member, 'role-restricted');
-    }
-    const activeDetection = await detectionEventsRepository.create({
-      server_id: guildId,
-      user_id: activeMember.id,
-      detection_type: DetectionType.SUSPICIOUS_CONTENT,
-      confidence: 0.8,
-      reasons: ['existing case'],
-      detected_at: new Date(),
-    });
-    await verificationEventRepository.createFromDetection(
-      activeDetection.id,
-      guildId,
-      activeMember.id,
-      VerificationStatus.PENDING
-    );
-    const role = {
-      id: 'role-restricted',
-      name: 'restricted',
-      guild,
-    } as unknown as import('discord.js').Role;
-
-    const result = await buildService().intakeRoleMembers({
-      role,
-      moderator: { id: 'admin-role-intake' } as User,
-      action: 'open_case',
-      execute: false,
-      limit: 2,
-      delayMs: 0,
-    });
-
-    expect(guild.members.list).toHaveBeenCalledWith({
-      after: undefined,
-      limit: 1000,
-      cache: false,
-    });
-    expect(result).toMatchObject({
-      roleId: 'role-restricted',
-      roleName: 'restricted',
-      execute: false,
-      totalMembers: 4,
-      eligibleMembers: 3,
-      processed: 2,
-      opened: 0,
-      skippedBots: 1,
-      skippedActiveCases: 1,
-      skippedOverLimit: 1,
-      failed: 0,
-    });
-    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
-  });
-
-  it('executes role intake and records batch provenance metadata', async () => {
-    const guildId = 'guild-role-intake-execute';
-    const member = buildMember(guildId, 'user-role-intake');
-    const guild = {
-      id: guildId,
-      members: { list: jest.fn().mockResolvedValue(new Map([[member.id, member]])) },
-    } as unknown as Guild;
-    (member as any).guild = guild;
-    addRoleToMember(member, 'role-restricted');
-    const role = {
-      id: 'role-restricted',
-      name: 'restricted',
-      guild,
-    } as unknown as import('discord.js').Role;
-    const moderator = { id: 'admin-role-intake' } as User;
-
-    const result = await buildService().intakeRoleMembers({
-      role,
-      moderator,
-      action: 'open_case',
-      execute: true,
-      reason: 'restricted role import',
-      delayMs: 0,
-    });
-
-    expect(result.opened).toBe(1);
-    expect(result.failed).toBe(0);
-    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, member.id);
-    expect(detectionEvents).toHaveLength(1);
-    expect(detectionEvents[0].metadata).toMatchObject({
-      type: 'admin_role_intake',
-      adminId: moderator.id,
-      bulk_intake: true,
-      batchId: result.batchId,
-      sourceRoleId: 'role-restricted',
-      sourceRoleName: 'restricted',
-    });
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
-    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
-  });
-
-  it('restricts active cases during role intake when restrict is requested', async () => {
-    const guildId = 'guild-role-intake-restrict-active';
-    const member = buildMember(guildId, 'user-role-intake-active');
-    const guild = {
-      id: guildId,
-      members: { list: jest.fn().mockResolvedValue(new Map([[member.id, member]])) },
-    } as unknown as Guild;
-    (member as any).guild = guild;
-    addRoleToMember(member, 'role-restricted');
-    const role = {
-      id: 'role-restricted',
-      name: 'restricted',
-      guild,
-    } as unknown as import('discord.js').Role;
-    const existingDetection = await detectionEventsRepository.create({
-      server_id: guildId,
-      user_id: member.id,
-      detection_type: DetectionType.GPT_ANALYSIS,
-      confidence: 1.0,
-      reasons: ['existing active case'],
-      detected_at: new Date(),
-    });
-    await verificationEventRepository.createFromDetection(
-      existingDetection.id,
-      guildId,
-      member.id,
-      VerificationStatus.PENDING
-    );
-
-    const result = await buildService().intakeRoleMembers({
-      role,
-      moderator: { id: 'admin-role-intake' } as User,
-      action: 'restrict',
-      execute: true,
-      delayMs: 0,
-    });
-
-    expect(result.opened).toBe(1);
-    expect(result.skippedActiveCases).toBe(0);
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
-    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
   });
 
   it('posts an observed alert for user report without opening a case', async () => {
@@ -2339,6 +2238,32 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
   });
 
+  it('releases an observed ban claim when the ban service returns false', async () => {
+    const guildId = 'guild-observed-ban-false';
+    const userId = 'user-observed-ban-false';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+    userModerationService.banUser.mockResolvedValueOnce(false);
+
+    await expect(
+      buildService().banObservedDetection(member, detectionEvent.id, moderator, 'Confirmed scam')
+    ).rejects.toThrow('Failed to ban user test-user#0001');
+
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
+    expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
+    expect(adminActionService.recordAction).not.toHaveBeenCalled();
+    expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
+  });
+
   it('keeps an observed ban claim when only notification update fails after banning', async () => {
     const guildId = 'guild-observed-ban-notify-fails';
     const userId = 'user-observed-ban-notify-fails';
@@ -2398,6 +2323,32 @@ describe('SecurityActionService (unit)', () => {
       'restricted this user',
       moderator
     );
+  });
+
+  it('releases an observed restrict claim when restriction returns false', async () => {
+    const guildId = 'guild-observed-restrict-false';
+    const userId = 'user-observed-restrict-false';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+    userModerationService.restrictUser.mockResolvedValueOnce(false);
+
+    await expect(
+      buildService().restrictObservedDetection(member, detectionEvent.id, moderator)
+    ).rejects.toThrow('Failed to restrict user test-user#0001');
+
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
+    expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
+    expect(adminActionService.recordAction).not.toHaveBeenCalled();
+    expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
   });
 
   it('upgrades an existing report review thread when restricting a user report', async () => {

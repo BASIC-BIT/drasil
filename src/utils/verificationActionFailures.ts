@@ -57,3 +57,24 @@ export function appendVerificationActionFailure(
     [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: failures,
   };
 }
+
+export function clearVerificationActionFailures(
+  metadata: unknown,
+  actions: readonly VerificationActionFailureKind[]
+): Record<string, unknown> {
+  const record = metadataToRecord(metadata);
+  const actionsToClear = new Set(actions);
+  const failures = getVerificationActionFailures(metadata).filter(
+    (failure) => !actionsToClear.has(failure.action)
+  );
+
+  if (failures.length === 0) {
+    delete record[VERIFICATION_ACTION_FAILURES_METADATA_KEY];
+    return record;
+  }
+
+  return {
+    ...record,
+    [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: failures,
+  };
+}
