@@ -19,6 +19,7 @@ import { truncatePreview } from '../utils/textPreview';
 import { ReportInstructionsManager } from './ReportInstructionsManager';
 
 const DEFAULT_RESTRICTED_ROLE_NAME = 'Drasil Restricted';
+const DEFAULT_SETUP_FAILURE_DETAIL = 'Please check permissions and try again.';
 const VERIFICATION_CHANNEL_NAME = 'verification';
 
 type ReplyGuildInstallRequired = (interaction: ChatInputCommandInteraction) => Promise<void>;
@@ -77,7 +78,7 @@ export class SetupCommandHandler {
       return;
     }
 
-    let setupFailureDetail = 'Please check permissions and try again.';
+    let setupFailureDetail = DEFAULT_SETUP_FAILURE_DETAIL;
 
     try {
       const restrictedRole = interaction.options.getRole('restricted-role', true);
@@ -144,9 +145,7 @@ export class SetupCommandHandler {
       if (setupResult.status === 'final_validation_failed') {
         setupFailureDetail = setupResult.setupFailureDetail;
         const rollbackNote =
-          setupFailureDetail !== 'Please check permissions and try again.'
-            ? `\n\n${setupFailureDetail}`
-            : '';
+          setupFailureDetail !== DEFAULT_SETUP_FAILURE_DETAIL ? `\n\n${setupFailureDetail}` : '';
         await interaction.editReply({
           content: `Setup not saved. Fix the errors below and rerun setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
           allowedMentions: { parse: [] },
@@ -486,7 +485,7 @@ export class SetupCommandHandler {
       await interaction.editReply({
         content: setupFailureDetail
           ? `Failed to complete setup. ${setupFailureDetail}`
-          : 'Failed to complete setup. Please check permissions and try again.',
+          : `Failed to complete setup. ${DEFAULT_SETUP_FAILURE_DETAIL}`,
         allowedMentions: { parse: [] },
       });
     }
@@ -596,7 +595,10 @@ export class SetupCommandHandler {
         });
         return { setupFailureDetail: null };
       case 'final_validation_failed': {
-        const rollbackNote = `\n\n${setupResult.setupFailureDetail}`;
+        const rollbackNote =
+          setupResult.setupFailureDetail !== DEFAULT_SETUP_FAILURE_DETAIL
+            ? `\n\n${setupResult.setupFailureDetail}`
+            : '';
         await interaction.editReply({
           content: `Setup not saved. Fix the errors below and rerun /config setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
           allowedMentions: { parse: [] },
