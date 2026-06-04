@@ -211,7 +211,7 @@ export class SetupVerificationModalHandler {
       });
     } catch (error) {
       console.error(
-        '[InteractionHandler] Error handling setup verification modal submission:',
+        '[SetupVerificationModalHandler] Error handling setup verification modal submission:',
         error
       );
       const errorResponse = {

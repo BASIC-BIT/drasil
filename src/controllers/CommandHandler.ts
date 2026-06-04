@@ -84,18 +84,12 @@ export interface ICommandHandler {
 @injectable()
 export class CommandHandler implements ICommandHandler {
   private client: Client;
-  private heuristicService: IHeuristicService;
-  private notificationManager: INotificationManager;
   private configService: IConfigService;
-  private productAnalyticsService: IProductAnalyticsService;
-  private setupDiagnosticsService?: ISetupDiagnosticsService;
   private configSubcommandHandler: ConfigSubcommandHandler;
   private caseCommandHandler: CaseCommandHandler;
   private lockdownConfigCommandHandler: LockdownConfigCommandHandler;
   private moderationCommandHandler: ModerationCommandHandler;
   private reportCommandHandler: ReportCommandHandler;
-  private reportInstructionsManager: ReportInstructionsManager;
-  private reportSubmissionService: ReportSubmissionService;
   private setupCommandHandler: SetupCommandHandler;
   private testCommandHandler: TestCommandHandler;
   private commands: RESTPostAPIApplicationCommandsJSONBody[];
@@ -119,15 +113,13 @@ export class CommandHandler implements ICommandHandler {
     restrictedRoleLockdownService?: IRestrictedRoleLockdownService
   ) {
     this.client = client;
-    this.heuristicService = heuristicService;
-    this.notificationManager = notificationManager;
     this.configService = configService;
-    this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
-    this.setupDiagnosticsService = setupDiagnosticsService;
+    const resolvedProductAnalyticsService =
+      productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.configSubcommandHandler = new ConfigSubcommandHandler(
       this.configService,
-      this.heuristicService,
-      this.productAnalyticsService
+      heuristicService,
+      resolvedProductAnalyticsService
     );
     this.caseCommandHandler = new CaseCommandHandler(
       this.configService,
@@ -138,8 +130,11 @@ export class CommandHandler implements ICommandHandler {
       this.configService,
       restrictedRoleLockdownService
     );
-    this.reportInstructionsManager = new ReportInstructionsManager(this.client, this.configService);
-    this.reportSubmissionService = new ReportSubmissionService(
+    const reportInstructionsManager = new ReportInstructionsManager(
+      this.client,
+      this.configService
+    );
+    const reportSubmissionService = new ReportSubmissionService(
       this.configService,
       securityActionService
     );
@@ -150,19 +145,19 @@ export class CommandHandler implements ICommandHandler {
       (interaction) => this.replyGuildInstallRequired(interaction)
     );
     this.reportCommandHandler = new ReportCommandHandler(
-      this.reportSubmissionService,
-      this.reportInstructionsManager,
+      reportSubmissionService,
+      reportInstructionsManager,
       (interaction) => this.replyGuildInstallRequired(interaction)
     );
     this.setupCommandHandler = new SetupCommandHandler(
       this.configService,
-      this.notificationManager,
-      this.productAnalyticsService,
-      this.setupDiagnosticsService,
-      this.reportInstructionsManager,
+      notificationManager,
+      resolvedProductAnalyticsService,
+      setupDiagnosticsService,
+      reportInstructionsManager,
       (interaction) => this.replyGuildInstallRequired(interaction)
     );
-    this.testCommandHandler = new TestCommandHandler(this.heuristicService, detectionOrchestrator);
+    this.testCommandHandler = new TestCommandHandler(heuristicService, detectionOrchestrator);
 
     this.commands = buildApplicationCommands({
       userInstallReportingEnabled: isUserInstallReportingEnabled(),
