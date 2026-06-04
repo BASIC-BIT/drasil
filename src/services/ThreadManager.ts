@@ -207,8 +207,8 @@ export class ThreadManager implements IThreadManager {
     return enforceDiscordMessageLimit(
       [
         roleMentions,
-        `Private evidence workspace for ${member.user.tag} (${member.id}).`,
-        'Admin-only discussion and evidence can be added here. Do not add the user under review to this thread.',
+        `Admin evidence workspace for ${member.user.tag} (${member.id}).`,
+        'Visibility follows the admin notification channel and thread membership. Do not add the user under review to this thread.',
         '',
         `Case ID: ${verificationEvent.id}`,
         ...links,
@@ -888,7 +888,7 @@ export class ThreadManager implements IThreadManager {
       }
     }
 
-    let setupStage = 'prepare private evidence thread records';
+    let setupStage = 'prepare admin evidence thread records';
     let threadWasCreated = false;
 
     try {
@@ -900,21 +900,23 @@ export class ThreadManager implements IThreadManager {
         member.joinedAt ?? undefined
       );
 
-      setupStage = 'create private evidence thread from admin notification';
+      setupStage = 'create admin evidence thread from admin notification';
+      // Attached threads keep the admin notification embed visible at the top;
+      // their visibility follows the admin notification channel permissions.
       const thread = await notificationMessage.startThread({
         name: `Evidence: ${member.user.username}`,
         autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-        reason: `Private evidence thread for user: ${member.user.tag}`,
+        reason: `Admin evidence thread for user: ${member.user.tag}`,
       });
       threadWasCreated = true;
 
-      setupStage = 'store private evidence thread id';
+      setupStage = 'store admin evidence thread id';
       await this.storePrivateEvidenceThreadId(verificationEvent, thread.id);
 
-      setupStage = 'route case responders to private evidence thread';
+      setupStage = 'route case responders to admin evidence thread';
       await this.addCaseResponderMembers(member.guild, thread, [member.id]);
 
-      setupStage = 'send private evidence thread prompt';
+      setupStage = 'send admin evidence thread prompt';
       const roleIds = await this.getCaseNotificationRoleIds(member.guild.id);
       await thread.send({
         content: this.buildPrivateEvidenceThreadMessage(
@@ -929,7 +931,7 @@ export class ThreadManager implements IThreadManager {
 
       return thread;
     } catch (error) {
-      console.error('Failed to create private evidence thread:', error);
+      console.error('Failed to create admin evidence thread:', error);
       if (threadWasCreated) {
         throw this.buildThreadSetupError(setupStage, error);
       }

@@ -1142,7 +1142,7 @@ export class NotificationManager implements INotificationManager {
           failure.action === 'restrict'
             ? 'Apply restricted role'
             : failure.action === 'private_evidence_thread'
-              ? 'Create private evidence thread'
+              ? 'Create admin evidence thread'
               : 'Create case thread';
         const when = Number.isFinite(timestamp) ? ` <t:${timestamp}:R>` : '';
         return `Warning: ${action} failed${when}: ${failure.message}`;
@@ -1333,6 +1333,10 @@ export class NotificationManager implements INotificationManager {
         return 'admin flag';
       case DetectionType.ROLE_INTAKE:
         return 'role intake';
+      default: {
+        const exhaustive: never = detectionType;
+        return String(exhaustive);
+      }
     }
   }
 
@@ -1355,7 +1359,7 @@ export class NotificationManager implements INotificationManager {
 
     if (verificationEvent.private_evidence_thread_id) {
       lines.push(
-        `Private evidence: [thread](https://discord.com/channels/${member.guild.id}/${verificationEvent.private_evidence_thread_id})`
+        `Admin evidence: [thread](https://discord.com/channels/${member.guild.id}/${verificationEvent.private_evidence_thread_id})`
       );
     }
 

@@ -426,7 +426,7 @@ export class InteractionHandler implements IInteractionHandler {
     }
     if (activeCase?.private_evidence_thread_id) {
       details.push(
-        `Private evidence: https://discord.com/channels/${guildId}/${activeCase.private_evidence_thread_id}`
+        `Admin evidence: https://discord.com/channels/${guildId}/${activeCase.private_evidence_thread_id}`
       );
     }
     if (alreadyBanned) {

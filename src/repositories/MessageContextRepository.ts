@@ -88,20 +88,6 @@ export class MessageContextRepository implements IMessageContextRepository {
             WHERE ranked.row_number > ${MESSAGE_CONTEXT_USER_LIMIT}
           )
         `;
-
-        await tx.$executeRaw`
-          DELETE FROM public.message_contexts
-          WHERE id IN (
-            SELECT id FROM (
-              SELECT
-                id,
-                row_number() OVER (ORDER BY created_at DESC, observed_at DESC) AS row_number
-              FROM public.message_contexts
-              WHERE server_id = ${data.serverId}
-            ) ranked
-            WHERE ranked.row_number > ${MESSAGE_CONTEXT_SERVER_LIMIT}
-          )
-        `;
       });
     } catch (error) {
       this.handleError(error, 'recordMessage');
@@ -142,11 +128,28 @@ export class MessageContextRepository implements IMessageContextRepository {
 
   async pruneExpired(now = new Date()): Promise<number> {
     try {
-      const result = await this.prisma.$executeRaw`
-        DELETE FROM public.message_contexts
-        WHERE expires_at <= ${now}
-      `;
-      return Number(result);
+      const [expiredCount, overflowCount] = await this.prisma.$transaction([
+        this.prisma.$executeRaw`
+          DELETE FROM public.message_contexts
+          WHERE expires_at <= ${now}
+        `,
+        this.prisma.$executeRaw`
+          DELETE FROM public.message_contexts
+          WHERE id IN (
+            SELECT id FROM (
+              SELECT
+                id,
+                row_number() OVER (
+                  PARTITION BY server_id
+                  ORDER BY created_at DESC, observed_at DESC
+                ) AS row_number
+              FROM public.message_contexts
+            ) ranked
+            WHERE ranked.row_number > ${MESSAGE_CONTEXT_SERVER_LIMIT}
+          )
+        `,
+      ]);
+      return Number(expiredCount) + Number(overflowCount);
     } catch (error) {
       this.handleError(error, 'pruneExpired');
     }

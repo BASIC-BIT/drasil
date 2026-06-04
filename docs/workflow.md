@@ -95,13 +95,17 @@ not GPT detections.
   intake, the source role. Embed allowed-mentions remain disabled so these fields
   render clearly without causing extra pings.
 
-## Case threads and private evidence
+## Case threads and admin evidence
 
 Case notifications are posted in the configured admin channel. Drasil then starts
 an attached evidence thread from that admin notification message and stores it as
 `verification_events.private_evidence_thread_id`. Because the evidence thread is
 attached to the notification message, the embed is visible at the top of the thread
 without duplicating/mirroring the embed contents.
+
+Attached evidence threads are not Discord `PrivateThread`s. Their visibility follows
+the admin notification channel and thread membership, so servers should keep the
+admin notification channel restricted to staff allowed to see case evidence.
 
 Responder routing follows `/config case-staff`:
 

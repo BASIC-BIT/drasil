@@ -496,12 +496,12 @@ export class SecurityActionService implements ISecurityActionService {
         sourceMessage
       );
       if (!thread) {
-        throw new Error(`Failed to create private evidence thread for ${member.user.tag}`);
+        throw new Error(`Failed to create admin evidence thread for ${member.user.tag}`);
       }
       return verificationEvent;
     } catch (error) {
       console.error(
-        `Failed to create private evidence thread for ${member.user.tag}; continuing case flow:`,
+        `Failed to create admin evidence thread for ${member.user.tag}; continuing case flow:`,
         error
       );
       return this.recordVerificationActionFailure(
