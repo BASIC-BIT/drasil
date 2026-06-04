@@ -8,6 +8,7 @@ import {
   ThreadChannel,
   ThreadAutoArchiveDuration,
   ChannelType,
+  PermissionFlagsBits,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
@@ -362,22 +363,123 @@ export class ThreadManager implements IThreadManager {
     await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
   }
 
-  private async refreshMember(member: GuildMember): Promise<void> {
-    const fetchMember = (member as { fetch?: (force?: boolean) => Promise<GuildMember> }).fetch;
-    if (!fetchMember) {
-      return;
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error && error.message) {
+      return error.message;
     }
 
-    await fetchMember.call(member, true).catch((error) => {
+    return String(error || 'Unknown error');
+  }
+
+  private isMissingAccessError(error: unknown): boolean {
+    const errorCode = (error as { code?: unknown } | null)?.code;
+    return (
+      errorCode === 50001 ||
+      errorCode === '50001' ||
+      this.getErrorMessage(error).toLowerCase().includes('missing access')
+    );
+  }
+
+  private getThreadParentId(thread: ThreadChannel): string | null {
+    return (thread as { parentId?: string | null }).parentId ?? null;
+  }
+
+  private getThreadParentChannel(thread: ThreadChannel): TextChannel | null {
+    const parent = (thread as { parent?: unknown }).parent;
+    if (
+      parent &&
+      typeof parent === 'object' &&
+      typeof (parent as { permissionsFor?: unknown }).permissionsFor === 'function'
+    ) {
+      return parent as TextChannel;
+    }
+
+    return null;
+  }
+
+  private canMemberViewParentChannel(
+    member: GuildMember,
+    parentChannel: TextChannel | null
+  ): boolean | null {
+    const permissionsFor = (parentChannel as { permissionsFor?: unknown } | null)?.permissionsFor;
+    if (!parentChannel || typeof permissionsFor !== 'function') {
+      return null;
+    }
+
+    return parentChannel.permissionsFor(member).has(PermissionFlagsBits.ViewChannel);
+  }
+
+  private buildFlaggedUserThreadAddError(
+    member: GuildMember,
+    thread: ThreadChannel,
+    error: unknown,
+    parentChannel: TextChannel | null,
+    canViewParentChannel: boolean | null
+  ): Error {
+    if (!this.isMissingAccessError(error)) {
+      return error instanceof Error ? error : new Error(this.getErrorMessage(error));
+    }
+
+    const parentId = parentChannel?.id ?? this.getThreadParentId(thread) ?? 'unknown';
+    const originalError = this.getErrorMessage(error);
+    if (canViewParentChannel === false) {
+      return new Error(
+        `Discord denied adding ${member.id} to the private verification thread because the user cannot currently view parent channel ${parentId}. Private thread membership requires parent View Channel; check restricted-role/channel overwrites. Original Discord error: ${originalError}`
+      );
+    }
+
+    return new Error(
+      `Discord denied adding ${member.id} to the private verification thread after role and channel access refreshes. This usually means Discord has not propagated the user's parent-channel access yet, not that the bot lost access. Run case repair after propagation. Original Discord error: ${originalError}`
+    );
+  }
+
+  private async refreshMember(member: GuildMember): Promise<GuildMember> {
+    const fetchMember = (member as { fetch?: (force?: boolean) => Promise<GuildMember> }).fetch;
+    if (!fetchMember) {
+      return member;
+    }
+
+    const refreshedMember = await fetchMember.call(member, true).catch((error) => {
       console.warn(`Failed to refresh member ${member.id} before thread add retry:`, error);
+      return null;
     });
+
+    return refreshedMember ?? member;
+  }
+
+  private async refreshParentChannel(
+    parentChannel: TextChannel | null
+  ): Promise<TextChannel | null> {
+    if (!parentChannel) {
+      return null;
+    }
+
+    const fetchChannel = (parentChannel as { fetch?: (force?: boolean) => Promise<TextChannel> })
+      .fetch;
+    if (!fetchChannel) {
+      return parentChannel;
+    }
+
+    const refreshedChannel = await fetchChannel.call(parentChannel, true).catch((error) => {
+      console.warn(
+        `Failed to refresh parent channel ${parentChannel.id} before thread add retry:`,
+        error
+      );
+      return null;
+    });
+
+    return refreshedChannel ?? parentChannel;
   }
 
   private async addFlaggedUserToVerificationThread(
     member: GuildMember,
-    thread: ThreadChannel
+    thread: ThreadChannel,
+    parentChannel?: TextChannel | null
   ): Promise<void> {
     let lastError: unknown;
+    let latestMember = member;
+    let latestParentChannel = parentChannel ?? this.getThreadParentChannel(thread);
+    let latestCanViewParent = this.canMemberViewParentChannel(latestMember, latestParentChannel);
 
     try {
       await thread.members.add(member.id);
@@ -392,7 +494,9 @@ export class ThreadManager implements IThreadManager {
         lastError
       );
       await this.wait(retryDelay);
-      await this.refreshMember(member);
+      latestMember = await this.refreshMember(latestMember);
+      latestParentChannel = await this.refreshParentChannel(latestParentChannel);
+      latestCanViewParent = this.canMemberViewParentChannel(latestMember, latestParentChannel);
 
       try {
         await thread.members.add(member.id);
@@ -402,7 +506,13 @@ export class ThreadManager implements IThreadManager {
       }
     }
 
-    throw lastError;
+    throw this.buildFlaggedUserThreadAddError(
+      member,
+      thread,
+      lastError,
+      latestParentChannel,
+      latestCanViewParent
+    );
   }
 
   private async fetchStoredThread(
@@ -554,7 +664,7 @@ export class ThreadManager implements IThreadManager {
 
       // Add the member to the private thread so they can see it
       setupStage = 'add flagged user to verification thread';
-      await this.addFlaggedUserToVerificationThread(member, thread);
+      await this.addFlaggedUserToVerificationThread(member, thread, channel);
 
       // Lock invites after the flagged user has been added.
       // Some server permission setups allow creating private threads but not managing them;
