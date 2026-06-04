@@ -355,11 +355,36 @@ describe('ReportIntakeService', () => {
     expect(stored?.status).toBe(ReportIntakeStatus.COLLECTING_EVIDENCE);
     expect(stored?.metadata).toMatchObject({
       candidate_suggestions: [],
+      rejected_candidate_ids: ['user-1'],
       last_rejected_candidate_ids: ['user-1'],
     });
     expect(evidence.map((item) => item.kind)).toContain(
       ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION
     );
+
+    const followupChannel = {
+      id: 'thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    await service.handleThreadMessage(buildMessage({ id: 'message-2', channel: followupChannel }));
+    const afterFollowup = await reportIntakeRepository.findById(intake.id);
+    expect(afterFollowup?.status).toBe(ReportIntakeStatus.COLLECTING_EVIDENCE);
+    expect(afterFollowup?.metadata).toMatchObject({ candidate_suggestions: [] });
+    expect(followupChannel.send).not.toHaveBeenCalled();
+
+    const analysisPrompted = await service.recordAgentAnalysis({
+      intakeId: intake.id,
+      message: buildMessage({ id: 'message-3', channel: followupChannel }),
+      candidates: [buildCandidate('user-1')],
+      evidenceCount: 3,
+      imageCount: 1,
+    });
+    const afterAnalysis = await reportIntakeRepository.findById(intake.id);
+    expect(analysisPrompted).toBe(false);
+    expect(afterAnalysis?.status).toBe(ReportIntakeStatus.COLLECTING_EVIDENCE);
+    expect(afterAnalysis?.metadata).toMatchObject({ candidate_suggestions: [] });
+    expect(followupChannel.send).not.toHaveBeenCalled();
   });
 
   it('ignores stale prompt tokens after a newer target prompt is shown', async () => {

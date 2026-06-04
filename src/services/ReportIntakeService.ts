@@ -258,6 +258,9 @@ export class ReportIntakeService implements IReportIntakeService {
     const remainingCandidates = this.getCandidateSuggestions(metadata).filter(
       (candidate) => !rejectedCandidateIds.includes(candidate.discordUserId)
     );
+    const allRejectedCandidateIds = Array.from(
+      new Set([...readStringArray(metadata.rejected_candidate_ids), ...rejectedCandidateIds])
+    );
     const now = new Date().toISOString();
 
     await this.reportIntakeRepository.addEvidence({
@@ -276,6 +279,7 @@ export class ReportIntakeService implements IReportIntakeService {
       metadata: {
         ...metadata,
         candidate_suggestions: remainingCandidates,
+        rejected_candidate_ids: allRejectedCandidateIds,
         last_rejected_candidate_ids: rejectedCandidateIds,
         last_rejected_at: now,
         last_confirmation_prompt_candidate_ids: [],
@@ -633,11 +637,18 @@ export class ReportIntakeService implements IReportIntakeService {
     candidates: ReportCandidate[]
   ): ReportCandidate[] {
     const merged = new Map<string, ReportCandidate>();
+    const rejectedCandidateIds = new Set(readStringArray(metadata.rejected_candidate_ids));
     for (const candidate of this.getCandidateSuggestions(metadata)) {
+      if (rejectedCandidateIds.has(candidate.discordUserId)) {
+        continue;
+      }
       merged.set(candidate.discordUserId, candidate);
     }
 
     for (const candidate of candidates) {
+      if (rejectedCandidateIds.has(candidate.discordUserId)) {
+        continue;
+      }
       merged.set(candidate.discordUserId, candidate);
     }
 
