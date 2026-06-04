@@ -24,6 +24,7 @@ export const TYPES = {
   RestrictedRoleLockdownService: Symbol.for('RestrictedRoleLockdownService'),
   ReportCandidateService: Symbol.for('ReportCandidateService'),
   ReportIntakeService: Symbol.for('ReportIntakeService'),
+  ReportIntakeAgentService: Symbol.for('ReportIntakeAgentService'),
   CaseReviewReminderService: Symbol.for('CaseReviewReminderService'),
 
   // Repositories

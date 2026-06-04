@@ -11,6 +11,11 @@ export interface BuiltUserReportDetection {
   detectionResult: DetectionResult;
 }
 
+export interface UserReportDetectionOptions {
+  attachments?: MessageReportAttachment[];
+  metadata?: Record<string, unknown>;
+}
+
 export class ReportDetectionBuilder {
   public constructor(
     private readonly detectionEventsRepository: IDetectionEventsRepository,
@@ -20,15 +25,18 @@ export class ReportDetectionBuilder {
   public async createUserReportDetection(
     member: GuildMember,
     reporter: User,
-    reason?: string
+    reason?: string,
+    options: UserReportDetectionOptions = {}
   ): Promise<BuiltUserReportDetection> {
     const reasonText = reason ? `Reason: ${reason}` : 'No reason provided.';
+    const attachments = this.serializeReportAttachments(options.attachments);
     const reportAiAnalysis = await this.reportAiAnalyzer
       .analyzeIfEnabled({
         serverId: member.guild.id,
         targetUserId: member.id,
         reporterId: reporter.id,
         reason,
+        attachments,
       })
       .catch((error) => {
         console.warn(
@@ -50,6 +58,8 @@ export class ReportDetectionBuilder {
           reporterId: reporter.id,
           content: reason ?? 'User report',
           reason: reason ?? reasonText,
+          ...(attachments ? { attachments } : {}),
+          ...options.metadata,
           ...(reportAiAnalysis ? { report_ai: reportAiAnalysis } : {}),
         },
         'server'

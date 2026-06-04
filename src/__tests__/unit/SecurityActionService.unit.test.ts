@@ -923,6 +923,90 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it('opens a report review case for confirmed report intake when configured and report AI meets threshold', async () => {
+    const guildId = 'guild-intake-open-case';
+    const userId = 'user-intake-open-case';
+    const reporterId = 'reporter-intake-open-case';
+    const member = buildMember(guildId, userId);
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        report_intake_confirmed_response_mode: 'open_case',
+        report_ai_triage_enabled: true,
+        report_ai_analyze_text: true,
+        report_ai_max_action: 'open_case',
+        report_ai_open_case_threshold: 0.85,
+      },
+    });
+    gptService.analyzeReportEvidence.mockResolvedValueOnce({
+      result: 'likely_abusive',
+      confidence: 0.9,
+      summary: 'Report evidence needs moderator case review.',
+      reasonCodes: ['harassment'],
+      evidenceCategories: ['report_text'],
+      concerns: ['Likely targeted abuse'],
+      recommendedAction: 'open_case',
+      analyzedImageCount: 0,
+      model: 'gpt-4o-mini',
+      promptVersion: 'report-triage-v1',
+      isFallback: false,
+    });
+
+    await buildService().handleConfirmedReportIntake(member, { id: reporterId } as User, {
+      reason: 'intake evidence summary',
+      intakeId: 'intake-open-case',
+    });
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents[0].metadata).toMatchObject({
+      source: 'report_intake',
+      reportIntakeId: 'intake-open-case',
+      report_ai: { recommendedAction: 'open_case' },
+    });
+    expect(threadManager.createReportReviewThread).toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertObservedDetectionNotification).not.toHaveBeenCalled();
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+  });
+
+  it('restricts a confirmed report intake only when configured and report AI meets restrict threshold', async () => {
+    const guildId = 'guild-intake-restrict';
+    const userId = 'user-intake-restrict';
+    const member = buildMember(guildId, userId);
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        report_intake_confirmed_response_mode: 'restrict',
+        report_ai_triage_enabled: true,
+        report_ai_analyze_text: true,
+        report_ai_max_action: 'restrict',
+        report_ai_open_case_threshold: 0.85,
+        report_ai_restrict_threshold: 0.95,
+      },
+    });
+    gptService.analyzeReportEvidence.mockResolvedValueOnce({
+      result: 'likely_abusive',
+      confidence: 0.96,
+      summary: 'Report evidence meets configured restrict threshold.',
+      reasonCodes: ['harassment'],
+      evidenceCategories: ['report_text'],
+      concerns: ['Likely targeted abuse'],
+      recommendedAction: 'restrict',
+      analyzedImageCount: 0,
+      model: 'gpt-4o-mini',
+      promptVersion: 'report-triage-v1',
+      isFallback: false,
+    });
+
+    await buildService().handleConfirmedReportIntake(member, { id: 'reporter-intake' } as User, {
+      reason: 'intake evidence summary',
+      intakeId: 'intake-restrict',
+    });
+
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(threadManager.createVerificationThread).toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertObservedDetectionNotification).not.toHaveBeenCalled();
+  });
+
   it('fails user report submission when the observed alert cannot be delivered', async () => {
     const guildId = 'guild-report-alert-fails';
     const userId = 'user-report-alert-fails';

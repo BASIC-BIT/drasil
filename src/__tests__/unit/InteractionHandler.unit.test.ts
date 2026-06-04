@@ -147,6 +147,7 @@ describe('InteractionHandler (unit)', () => {
       }),
       intakeRoleMembers: jest.fn().mockResolvedValue({} as any),
       handleUserReport: jest.fn().mockResolvedValue(true),
+      handleConfirmedReportIntake: jest.fn().mockResolvedValue(true),
       handleMessageReport: jest.fn().mockResolvedValue(true),
       openObservedDetectionCase: jest.fn().mockResolvedValue(true),
       restrictObservedDetection: jest.fn().mockResolvedValue(true),

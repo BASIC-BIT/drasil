@@ -84,6 +84,23 @@ export class ReportSubmissionService {
     }
   }
 
+  public async submitConfirmedReportIntake(
+    member: GuildMember,
+    reporter: User,
+    reason: string | undefined,
+    options?: { intakeId?: string }
+  ): Promise<Extract<UserReportSubmissionResult, { status: 'submitted' | 'failed' }>> {
+    try {
+      await this.securityActionService.handleConfirmedReportIntake(member, reporter, {
+        reason,
+        intakeId: options?.intakeId,
+      });
+      return { status: 'submitted', targetUserId: member.id };
+    } catch (error) {
+      return { status: 'failed', error };
+    }
+  }
+
   public async submitMessageReport(
     targetUser: User | APIUser,
     reporter: User | APIUser,

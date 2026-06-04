@@ -75,6 +75,10 @@ export interface ServerSettings {
   report_ai_restrict_threshold?: number;
   report_ai_max_images?: number;
   report_ai_max_image_bytes?: number;
+  report_intake_agent_enabled?: boolean;
+  report_intake_agent_debounce_ms?: number;
+  report_intake_agent_min_interval_ms?: number;
+  report_intake_confirmed_response_mode?: 'observed_alert' | 'open_case' | 'restrict';
   report_instructions_channel_id?: string | null;
   report_instructions_message_id?: string | null;
   restricted_lockdown_enabled?: boolean;

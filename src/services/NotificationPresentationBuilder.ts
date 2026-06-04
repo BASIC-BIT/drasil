@@ -5,6 +5,7 @@ import {
   EmbedBuilder,
   GuildMember,
   Message,
+  ThreadChannel,
 } from 'discord.js';
 import { DetectionResult } from './DetectionOrchestrator';
 import type { ReportAIAnalysis, VerificationThreadAnalysisResult } from './GPTService';
@@ -228,6 +229,57 @@ export class NotificationPresentationBuilder {
         name: 'Recent Detection History',
         value: this.truncateEmbedFieldValue(detectionHistory),
       });
+    }
+
+    return embed;
+  }
+
+  public createReportIntakeStartedEmbed(
+    reporter: GuildMember,
+    thread: ThreadChannel
+  ): EmbedBuilder {
+    const accountCreatedTimestamp = Math.floor(reporter.user.createdTimestamp / 1000);
+    const joinedServerTimestamp = reporter.joinedAt
+      ? Math.floor(reporter.joinedAt.getTime() / 1000)
+      : null;
+    const avatarUrl =
+      typeof reporter.user.displayAvatarURL === 'function'
+        ? reporter.user.displayAvatarURL()
+        : typeof reporter.displayAvatarURL === 'function'
+          ? reporter.displayAvatarURL()
+          : null;
+
+    const embed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle('Report Intake Started')
+      .setDescription(
+        `A private report intake thread was opened by <@${reporter.id}>. No report has been submitted yet.`
+      )
+      .addFields(
+        { name: 'Reporter', value: `${reporter.user.tag} (${reporter.id})`, inline: false },
+        {
+          name: 'Report Thread',
+          value: `[Open thread](${thread.url}) (${thread.id})`,
+          inline: false,
+        },
+        {
+          name: 'Reporter Account Created',
+          value: `<t:${accountCreatedTimestamp}:F> (<t:${accountCreatedTimestamp}:R>)`,
+          inline: false,
+        },
+        {
+          name: 'Reporter Joined Server',
+          value: joinedServerTimestamp
+            ? `<t:${joinedServerTimestamp}:F> (<t:${joinedServerTimestamp}:R>)`
+            : 'Unknown',
+          inline: false,
+        }
+      )
+      .setFooter({ text: 'Drasil will wait for reporter target confirmation before submitting.' })
+      .setTimestamp();
+
+    if (avatarUrl) {
+      embed.setThumbnail(avatarUrl);
     }
 
     return embed;

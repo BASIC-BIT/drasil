@@ -88,6 +88,7 @@ describe('ReportIntakeService', () => {
         ],
       }),
       resolvePlatformBackedCandidates: jest.fn().mockResolvedValue([buildCandidate()]),
+      resolveCandidatesFromSignals: jest.fn().mockResolvedValue([]),
       searchMembersByName: jest.fn().mockResolvedValue([]),
       ...candidateOverrides,
     };
@@ -165,7 +166,7 @@ describe('ReportIntakeService', () => {
     });
     expect((message.channel as any).send).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('Please confirm the correct target'),
+        content: expect.stringContaining('Are you trying to report this person?'),
         allowedMentions: { parse: [] },
       })
     );
@@ -322,6 +323,34 @@ describe('ReportIntakeService', () => {
       message: 'That report target has already been confirmed.',
     });
     expect(confirmationEvidence).toHaveLength(1);
+  });
+
+  it('lets the reporter reject suggested candidates without submitting a report', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+
+    const result = await service.rejectCandidates({
+      intakeId: intake.id,
+      rejectedById: 'reporter-1',
+    });
+
+    const stored = await reportIntakeRepository.findById(intake.id);
+    const evidence = await reportIntakeRepository.listEvidence(intake.id);
+    expect(result).toMatchObject({ rejected: true });
+    expect(stored?.status).toBe(ReportIntakeStatus.COLLECTING_EVIDENCE);
+    expect(stored?.metadata).toMatchObject({
+      candidate_suggestions: [],
+      last_rejected_candidate_ids: ['user-1'],
+    });
+    expect(evidence.map((item) => item.kind)).toContain(
+      ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION
+    );
   });
 
   it('marks an intake as failed when opening cannot complete', async () => {

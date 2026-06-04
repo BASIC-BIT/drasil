@@ -132,6 +132,29 @@ verification/quarantine channel and is linked prominently in the admin embed's
 See `docs/report-ux-journeys.md` for the product-level user journeys and the
 recommended future direction for report-only cases.
 
+## Report intake thread
+
+1. A reporter clicks the configured report instructions button.
+2. Drasil opens a private report intake thread, records durable intake state, and
+   posts a no-ping admin embed that the intake has started. This does not submit a
+   user report yet.
+3. Reporter thread messages are stored as intake evidence. Text, Discord message
+   links, and eligible screenshot metadata are persisted; raw image bytes are not.
+4. Platform-backed evidence such as mentions, Discord IDs, and valid message links
+   can produce immediate candidate prompts. Screenshot/text extraction runs through
+   the debounced report intake agent after the reporter pauses, using report AI
+   image/text limits.
+5. AI/VLM extraction is untrusted evidence only. Extracted IDs and links are
+   validated through Discord before they become candidates; extracted names require
+   reporter confirmation.
+6. The reporter must answer the Yes/No target prompt before Drasil submits a
+   report. `No` returns the intake to evidence collection.
+7. Confirmed intake submissions create a normal `USER_REPORT` detection event.
+   The default `report_intake_confirmed_response_mode` is `observed_alert`, which
+   matches legacy reports. Servers can opt into `open_case` or `restrict`, but
+   escalation only happens when report AI recommendations and configured thresholds
+   allow it. There is no auto-ban path.
+
 ## Admin verify or ban
 
 1. `InteractionHandler` or `CommandHandler` calls `UserModerationService`.
