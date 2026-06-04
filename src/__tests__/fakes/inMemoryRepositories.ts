@@ -180,6 +180,17 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
       .map((event) => ({ ...event }));
   }
 
+  async findByReportIntakeId(reportIntakeId: string): Promise<DetectionEvent | null> {
+    const event = this.events.find(
+      (item) =>
+        item.metadata &&
+        typeof item.metadata === 'object' &&
+        !Array.isArray(item.metadata) &&
+        item.metadata.reportIntakeId === reportIntakeId
+    );
+    return event ? { ...event } : null;
+  }
+
   async recordAdminAction(
     id: string,
     action: 'Verified' | 'Banned' | 'Ignored',

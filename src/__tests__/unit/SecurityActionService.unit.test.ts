@@ -1007,6 +1007,27 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertObservedDetectionNotification).not.toHaveBeenCalled();
   });
 
+  it('does not create duplicate detection events when confirmed report intake submission is retried', async () => {
+    const guildId = 'guild-intake-retry';
+    const userId = 'user-intake-retry';
+    const intakeId = 'intake-retry';
+    const member = buildMember(guildId, userId);
+    const service = buildService();
+
+    await service.handleConfirmedReportIntake(member, { id: 'reporter-intake' } as User, {
+      reason: 'intake evidence summary',
+      intakeId,
+    });
+    await service.handleConfirmedReportIntake(member, { id: 'reporter-intake' } as User, {
+      reason: 'intake evidence summary',
+      intakeId,
+    });
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(detectionEvents).toHaveLength(1);
+    expect(detectionEvents[0].metadata).toMatchObject({ reportIntakeId: intakeId });
+  });
+
   it('fails user report submission when the observed alert cannot be delivered', async () => {
     const guildId = 'guild-report-alert-fails';
     const userId = 'user-report-alert-fails';

@@ -1544,6 +1544,20 @@ export class SecurityActionService implements ISecurityActionService {
         member.joinedAt?.toISOString()
       );
 
+      const existingDetectionEvent = report.intakeId
+        ? await this.detectionEventsRepository.findByReportIntakeId(report.intakeId)
+        : null;
+      if (
+        existingDetectionEvent &&
+        existingDetectionEvent.server_id === member.guild.id &&
+        existingDetectionEvent.user_id === member.id
+      ) {
+        const detectionResult =
+          this.reportDetectionBuilder.createUserReportDetectionResult(existingDetectionEvent);
+        await this.routeConfirmedReportIntake(member, detectionResult, existingDetectionEvent.id);
+        return true;
+      }
+
       const { detectionEvent, detectionResult } =
         await this.reportDetectionBuilder.createUserReportDetection(
           member,
