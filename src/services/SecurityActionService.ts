@@ -622,19 +622,6 @@ export class SecurityActionService implements ISecurityActionService {
     }
   }
 
-  private async getNotificationDetectionResult(
-    verificationEvent: VerificationEvent
-  ): Promise<DetectionResult | null> {
-    if (!verificationEvent.detection_event_id) {
-      return null;
-    }
-
-    const detectionEvent = await this.detectionEventsRepository.findById(
-      verificationEvent.detection_event_id
-    );
-    return detectionEvent ? this.createDetectionResultFromEvent(detectionEvent) : null;
-  }
-
   private async tryRestrictUser(
     member: GuildMember,
     verificationEvent: VerificationEvent
@@ -1322,15 +1309,10 @@ export class SecurityActionService implements ISecurityActionService {
 
     let notificationUpdateMessage = '';
     try {
-      const detectionResult = await this.getNotificationDetectionResult(repairCase);
-      if (detectionResult) {
-        await this.upsertNotification(member, detectionResult, repairCase);
-      } else {
-        await this.notificationManager.updateNotificationButtons(
-          repairCase,
-          VerificationStatus.PENDING
-        );
-      }
+      await this.notificationManager.updateNotificationButtons(
+        repairCase,
+        VerificationStatus.PENDING
+      );
     } catch (error) {
       notificationUpdateMessage = ' Notification buttons could not be updated automatically.';
       console.error(

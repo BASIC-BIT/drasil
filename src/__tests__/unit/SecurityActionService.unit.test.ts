@@ -579,9 +579,7 @@ describe('SecurityActionService (unit)', () => {
     expect(getVerificationActionFailures(updatedCase?.metadata)).toEqual([
       expect.objectContaining({ action: 'restrict', message: 'Role hierarchy issue' }),
     ]);
-    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledWith(
-      member,
-      expect.objectContaining({ detectionEventId: detectionEvent.id }),
+    expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
       expect.objectContaining({
         id: verificationEvent.id,
         metadata: expect.objectContaining({
@@ -590,9 +588,9 @@ describe('SecurityActionService (unit)', () => {
           ],
         }),
       }),
-      undefined
+      VerificationStatus.PENDING
     );
-    expect(notificationManager.updateNotificationButtons).not.toHaveBeenCalled();
+    expect(notificationManager.upsertSuspiciousUserNotification).not.toHaveBeenCalled();
   });
 
   it('reports thread repair success when notification button update fails', async () => {
