@@ -81,7 +81,6 @@ export class InteractionHandler implements IInteractionHandler {
   private verificationEventRepository: IVerificationEventRepository;
   private threadManager: IThreadManager;
   private adminActionRepository: IAdminActionRepository;
-  private reportSubmissionService: ReportSubmissionService;
   private reportInteractionHandler: ReportInteractionHandler;
   private setupVerificationModalHandler: SetupVerificationModalHandler;
 
@@ -113,13 +112,13 @@ export class InteractionHandler implements IInteractionHandler {
     this.verificationEventRepository = verificationEventRepository;
     this.threadManager = threadManager;
     this.adminActionRepository = adminActionRepository;
-    this.reportSubmissionService = new ReportSubmissionService(
+    const reportSubmissionService = new ReportSubmissionService(
       this.configService,
       this.securityActionService
     );
     this.reportInteractionHandler = new ReportInteractionHandler(
       this.client,
-      this.reportSubmissionService,
+      reportSubmissionService,
       this.configService,
       this.threadManager,
       reportIntakeService
