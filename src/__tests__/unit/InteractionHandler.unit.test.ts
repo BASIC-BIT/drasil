@@ -85,6 +85,17 @@ const grantOnlyBanMembersPermission = (
   });
 };
 
+const buildNoIssueSetupDiagnosticsService = (): any => ({
+  validateGuildSetup: jest.fn(),
+  validateSetupCandidate: jest.fn().mockResolvedValue({
+    guildId: 'guild-1',
+    checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+    issues: [],
+    errorCount: 0,
+    warningCount: 0,
+  }),
+});
+
 describe('InteractionHandler (unit)', () => {
   let client: Client;
   let userModerationService: jest.Mocked<IUserModerationService>;
@@ -310,7 +321,8 @@ describe('InteractionHandler (unit)', () => {
       configService,
       verificationEventRepository,
       threadManager,
-      adminActionRepository
+      adminActionRepository,
+      buildNoIssueSetupDiagnosticsService()
     );
     const interaction = buildInteraction('admin_actions:menu:case:user-1', 'guild-1', {
       id: 'admin-1',
@@ -340,7 +352,8 @@ describe('InteractionHandler (unit)', () => {
       configService,
       verificationEventRepository,
       threadManager,
-      adminActionRepository
+      adminActionRepository,
+      buildNoIssueSetupDiagnosticsService()
     );
     const interaction = buildInteraction('admin_actions:confirm_sync_ban:case:user-1', 'guild-1', {
       id: 'ban-mod-1',
@@ -992,7 +1005,8 @@ describe('InteractionHandler (unit)', () => {
       configService,
       verificationEventRepository,
       threadManager,
-      adminActionRepository
+      adminActionRepository,
+      buildNoIssueSetupDiagnosticsService()
     );
 
     const interaction = {
@@ -1066,7 +1080,8 @@ describe('InteractionHandler (unit)', () => {
       configService,
       verificationEventRepository,
       threadManager,
-      adminActionRepository
+      adminActionRepository,
+      buildNoIssueSetupDiagnosticsService()
     );
 
     const interaction = {
@@ -1105,6 +1120,56 @@ describe('InteractionHandler (unit)', () => {
         'Setup complete.\nRestricted role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nCreated verification channel: <#123456789012345681>',
       flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
+    });
+  });
+
+  it('rejects setup verification modal when diagnostics are unavailable', async () => {
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    const interaction = {
+      customId: SETUP_VERIFICATION_MODAL_ID,
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn((id: string) => {
+          if (id === SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID) {
+            return '123456789012345678';
+          }
+          if (id === SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID) {
+            return '123456789012345679';
+          }
+          return '';
+        }),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Setup diagnostics are not available in this runtime.',
+      flags: MessageFlags.Ephemeral,
     });
   });
 

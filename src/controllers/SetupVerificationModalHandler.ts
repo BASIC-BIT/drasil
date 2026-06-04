@@ -25,21 +25,8 @@ import {
 } from '../services/ProductAnalyticsService';
 import { SetupWorkflowService } from '../services/SetupWorkflowService';
 
-const buildNoopSetupDiagnosticReport = (guildId: string): SetupDiagnosticReport => ({
-  guildId,
-  checkedAt: new Date(),
-  issues: [],
-  errorCount: 0,
-  warningCount: 0,
-});
-
-const NOOP_SETUP_DIAGNOSTICS_SERVICE: ISetupDiagnosticsService = {
-  validateGuildSetup: async (guild) => buildNoopSetupDiagnosticReport(guild.id),
-  validateSetupCandidate: async (guild) => buildNoopSetupDiagnosticReport(guild.id),
-};
-
 export class SetupVerificationModalHandler {
-  private readonly setupWorkflowService: SetupWorkflowService;
+  private readonly setupWorkflowService?: SetupWorkflowService;
 
   public constructor(
     private readonly client: Client,
@@ -48,12 +35,14 @@ export class SetupVerificationModalHandler {
     setupDiagnosticsService?: ISetupDiagnosticsService,
     productAnalyticsService: IProductAnalyticsService = NOOP_PRODUCT_ANALYTICS_SERVICE
   ) {
-    this.setupWorkflowService = new SetupWorkflowService(
-      configService,
-      notificationManager,
-      productAnalyticsService,
-      setupDiagnosticsService ?? NOOP_SETUP_DIAGNOSTICS_SERVICE
-    );
+    this.setupWorkflowService = setupDiagnosticsService
+      ? new SetupWorkflowService(
+          configService,
+          notificationManager,
+          productAnalyticsService,
+          setupDiagnosticsService
+        )
+      : undefined;
   }
 
   public async handleSetupVerificationModalSubmit(
@@ -118,6 +107,14 @@ export class SetupVerificationModalHandler {
       if (!moderator || !moderator.permissions.has(PermissionFlagsBits.Administrator)) {
         await interaction.reply({
           content: 'You need administrator permissions to complete setup.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (!this.setupWorkflowService) {
+        await interaction.reply({
+          content: 'Setup diagnostics are not available in this runtime.',
           flags: MessageFlags.Ephemeral,
         });
         return;
