@@ -305,10 +305,39 @@ export class ThreadManager implements IThreadManager {
     verificationEvent: VerificationEvent,
     threadId: string
   ): Promise<void> {
-    verificationEvent.private_evidence_thread_id = threadId;
-    await this.verificationEventRepository.update(verificationEvent.id, {
+    const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
       private_evidence_thread_id: threadId,
     });
+    if (!updatedEvent) {
+      throw new Error(`Verification event ${verificationEvent.id} was not found`);
+    }
+
+    verificationEvent.private_evidence_thread_id =
+      updatedEvent.private_evidence_thread_id ?? threadId;
+  }
+
+  private getAttachedThreadFromMessage(message: Message): ThreadChannel | null {
+    return (message as Message & { thread?: ThreadChannel | null }).thread ?? null;
+  }
+
+  private async fetchAttachedThreadFromMessage(message: Message): Promise<ThreadChannel | null> {
+    const cachedThread = this.getAttachedThreadFromMessage(message);
+    if (cachedThread) {
+      return cachedThread;
+    }
+
+    const fetchMessage = (message as unknown as { fetch?: () => Promise<Message> }).fetch;
+    if (!fetchMessage) {
+      return null;
+    }
+
+    try {
+      const refreshedMessage = await fetchMessage.call(message);
+      return this.getAttachedThreadFromMessage(refreshedMessage);
+    } catch (error) {
+      console.warn('Failed to fetch admin notification message while recovering thread:', error);
+      return null;
+    }
   }
 
   private async addCaseResponderMembers(
@@ -900,15 +929,26 @@ export class ThreadManager implements IThreadManager {
         member.joinedAt ?? undefined
       );
 
-      setupStage = 'create admin evidence thread from admin notification';
-      // Attached threads keep the admin notification embed visible at the top;
-      // their visibility follows the admin notification channel permissions.
-      const thread = await notificationMessage.startThread({
-        name: `Evidence: ${member.user.username}`,
-        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-        reason: `Admin evidence thread for user: ${member.user.tag}`,
-      });
-      threadWasCreated = true;
+      setupStage = 'recover existing admin evidence thread from admin notification';
+      let thread = await this.fetchAttachedThreadFromMessage(notificationMessage);
+      if (!thread) {
+        setupStage = 'create admin evidence thread from admin notification';
+        // Attached threads keep the admin notification embed visible at the top;
+        // their visibility follows the admin notification channel permissions.
+        try {
+          thread = await notificationMessage.startThread({
+            name: `Evidence: ${member.user.username}`,
+            autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+            reason: `Admin evidence thread for user: ${member.user.tag}`,
+          });
+          threadWasCreated = true;
+        } catch (error) {
+          thread = await this.fetchAttachedThreadFromMessage(notificationMessage);
+          if (!thread) {
+            throw error;
+          }
+        }
+      }
 
       setupStage = 'store admin evidence thread id';
       await this.storePrivateEvidenceThreadId(verificationEvent, thread.id);
