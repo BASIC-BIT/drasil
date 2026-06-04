@@ -763,7 +763,12 @@ export class SecurityActionService implements ISecurityActionService {
     reportAiSettings: ReturnType<typeof getReportAiSettings>,
     reportAiAnalysis?: ReportAIAnalysis
   ): 'observed_alert' | 'open_case' | 'restrict' {
-    if (configuredMode === 'observed_alert' || !reportAiAnalysis) {
+    if (configuredMode === 'observed_alert') {
+      return 'observed_alert';
+    }
+
+    if (!reportAiAnalysis) {
+      this.warnConfirmedReportIntakeFallback(configuredMode, reportAiSettings.maxAction);
       return 'observed_alert';
     }
 
@@ -785,7 +790,18 @@ export class SecurityActionService implements ISecurityActionService {
       return 'open_case';
     }
 
+    this.warnConfirmedReportIntakeFallback(configuredMode, reportAiSettings.maxAction);
+
     return 'observed_alert';
+  }
+
+  private warnConfirmedReportIntakeFallback(
+    configuredMode: 'open_case' | 'restrict',
+    maxAction: string
+  ): void {
+    console.warn(
+      `[ReportIntake] confirmedResponseMode is '${configuredMode}' but maxAction ('${maxAction}') or AI analysis did not meet thresholds; falling back to observed_alert.`
+    );
   }
 
   private async getObservedDetectionForMember(

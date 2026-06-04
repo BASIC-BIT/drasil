@@ -968,6 +968,51 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.restrictUser).not.toHaveBeenCalled();
   });
 
+  it('warns when confirmed report intake escalation is blocked by report AI max action', async () => {
+    const guildId = 'guild-intake-max-action-hints';
+    const userId = 'user-intake-max-action-hints';
+    const member = buildMember(guildId, userId);
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        report_intake_confirmed_response_mode: 'open_case',
+        report_ai_triage_enabled: true,
+        report_ai_analyze_text: true,
+        report_ai_max_action: 'hints',
+        report_ai_open_case_threshold: 0.85,
+      },
+    });
+    gptService.analyzeReportEvidence.mockResolvedValueOnce({
+      result: 'likely_abusive',
+      confidence: 0.9,
+      summary: 'Report evidence would otherwise meet case threshold.',
+      reasonCodes: ['harassment'],
+      evidenceCategories: ['report_text'],
+      concerns: ['Likely targeted abuse'],
+      recommendedAction: 'open_case',
+      analyzedImageCount: 0,
+      model: 'gpt-4o-mini',
+      promptVersion: 'report-triage-v1',
+      isFallback: false,
+    });
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      await buildService().handleConfirmedReportIntake(member, { id: 'reporter-intake' } as User, {
+        reason: 'intake evidence summary',
+        intakeId: 'intake-max-action-hints',
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('falling back to observed_alert')
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalled();
+    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
+  });
+
   it('restricts a confirmed report intake only when configured and report AI meets restrict threshold', async () => {
     const guildId = 'guild-intake-restrict';
     const userId = 'user-intake-restrict';
