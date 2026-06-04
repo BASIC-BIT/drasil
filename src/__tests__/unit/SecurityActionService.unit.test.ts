@@ -18,7 +18,10 @@ import {
 import { IUserModerationService } from '../../services/UserModerationService';
 import { IAdminActionService } from '../../services/AdminActionService';
 import { USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY } from '../../utils/userReportSettings';
-import { getVerificationActionFailures } from '../../utils/verificationActionFailures';
+import {
+  getVerificationActionFailures,
+  VERIFICATION_ACTION_FAILURES_METADATA_KEY,
+} from '../../utils/verificationActionFailures';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -529,6 +532,67 @@ describe('SecurityActionService (unit)', () => {
     });
   });
 
+  it('clears repaired thread warnings and rebuilds the notification embed', async () => {
+    const guildId = 'guild-case-repair-warning-clear';
+    const userId = 'user-case-repair-warning-clear';
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.NEW_ACCOUNT,
+      confidence: 1,
+      reasons: ['New Discord account'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    verificationEvent.thread_id = 'thread-1';
+    verificationEvent.notification_message_id = 'notif-1';
+    verificationEvent.metadata = {
+      [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: [
+        {
+          action: 'thread',
+          message: 'Failed to add flagged user to verification thread: Missing Access',
+          at: new Date().toISOString(),
+        },
+        {
+          action: 'restrict',
+          message: 'Role hierarchy issue',
+          at: new Date().toISOString(),
+        },
+      ],
+    };
+    await verificationEventRepository.update(verificationEvent.id, verificationEvent);
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      is_restricted: true,
+      verification_status: VerificationStatus.PENDING,
+    });
+
+    const result = await buildService().repairActiveCase(member);
+    const updatedCase = await verificationEventRepository.findById(verificationEvent.id);
+
+    expect(result.repaired).toBe(true);
+    expect(getVerificationActionFailures(updatedCase?.metadata)).toEqual([
+      expect.objectContaining({ action: 'restrict', message: 'Role hierarchy issue' }),
+    ]);
+    expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: verificationEvent.id,
+        metadata: expect.objectContaining({
+          [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: [
+            expect.objectContaining({ action: 'restrict' }),
+          ],
+        }),
+      }),
+      VerificationStatus.PENDING
+    );
+    expect(notificationManager.upsertSuspiciousUserNotification).not.toHaveBeenCalled();
+  });
+
   it('reports thread repair success when notification button update fails', async () => {
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const guildId = 'guild-case-repair-notification-fails';
@@ -566,7 +630,7 @@ describe('SecurityActionService (unit)', () => {
       });
       expect(result.message).toContain('Notification buttons could not be updated automatically');
       expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Failed to update notification buttons for repaired case'),
+        expect.stringContaining('Failed to update notification for repaired case'),
         expect.any(Error)
       );
     } finally {

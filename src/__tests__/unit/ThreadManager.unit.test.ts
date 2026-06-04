@@ -57,10 +57,13 @@ describe('ThreadManager (unit)', () => {
   let serverMemberRepository: InMemoryServerMemberRepository;
 
   type ThreadParentChannel = {
+    id?: string;
     threads: {
       create: jest.Mock;
       fetch?: jest.Mock;
     };
+    permissionsFor?: jest.Mock;
+    fetch?: jest.Mock;
   };
 
   let channel: ThreadParentChannel;
@@ -84,6 +87,7 @@ describe('ThreadManager (unit)', () => {
     } as unknown as jest.Mocked<ThreadChannel>;
 
     channel = {
+      id: 'verification-channel',
       threads: {
         create: jest.fn().mockResolvedValue(thread),
         fetch: jest.fn().mockResolvedValue(thread),
@@ -184,6 +188,112 @@ describe('ThreadManager (unit)', () => {
         expect.objectContaining({ content: expect.stringContaining(`<@${member.id}>`) })
       );
     } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('explains parent-channel access when Discord denies adding the flagged user', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    channel.permissionsFor = jest.fn().mockReturnValue({
+      has: jest.fn().mockReturnValue(false),
+    });
+    (thread.members.add as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('Missing Access'), { code: 50001 })
+    );
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    (manager as any).wait = jest.fn().mockResolvedValue(undefined);
+    const member = buildMember('guild-1', 'user-1');
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    try {
+      await expect(manager.createVerificationThread(member, event)).rejects.toThrow(
+        'cannot currently view parent channel verification-channel'
+      );
+      expect(thread.members.add).toHaveBeenCalledTimes(4);
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('describes missing access after parent access is visible as propagation', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    channel.permissionsFor = jest.fn().mockReturnValue({
+      has: jest.fn().mockReturnValue(true),
+    });
+    (thread.members.add as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('Missing Access'), { code: 50001 })
+    );
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    (manager as any).wait = jest.fn().mockResolvedValue(undefined);
+    const member = buildMember('guild-1', 'user-1');
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    try {
+      await expect(manager.createVerificationThread(member, event)).rejects.toThrow(
+        'not that the bot lost access'
+      );
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('does not claim propagation when parent-channel access cannot be checked', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    (thread.members.add as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('Missing Access'), { code: 50001 })
+    );
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    (manager as any).wait = jest.fn().mockResolvedValue(undefined);
+    const member = buildMember('guild-1', 'user-1');
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    try {
+      await expect(manager.createVerificationThread(member, event)).rejects.toThrow(
+        'parent-channel access could not be verified'
+      );
+    } finally {
+      errorSpy.mockRestore();
       warnSpy.mockRestore();
     }
   });

@@ -36,6 +36,8 @@ import type { IGPTService } from './GPTService';
 import { ReportAttachmentMetadata } from '../utils/reportAiSettings';
 import {
   appendVerificationActionFailure,
+  clearVerificationActionFailures,
+  getVerificationActionFailures,
   type VerificationActionFailureKind,
 } from '../utils/verificationActionFailures';
 import {
@@ -572,6 +574,38 @@ export class SecurityActionService implements ISecurityActionService {
       console.error(
         `Failed to record ${action} failure for verification event ${verificationEvent.id}; continuing notification:`,
         recordError
+      );
+      return fallbackEvent;
+    }
+  }
+
+  private async clearResolvedVerificationActionFailures(
+    verificationEvent: VerificationEvent,
+    actions: readonly VerificationActionFailureKind[]
+  ): Promise<VerificationEvent> {
+    const hasFailuresToClear = getVerificationActionFailures(verificationEvent.metadata).some(
+      (failure) => actions.includes(failure.action)
+    );
+    if (!hasFailuresToClear) {
+      return verificationEvent;
+    }
+
+    const updatedMetadata = clearVerificationActionFailures(verificationEvent.metadata, actions);
+    const fallbackEvent = {
+      ...verificationEvent,
+      metadata: updatedMetadata as VerificationEvent['metadata'],
+    };
+
+    try {
+      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
+        metadata: updatedMetadata as VerificationEvent['metadata'],
+      });
+
+      return updatedEvent ?? fallbackEvent;
+    } catch (error) {
+      console.error(
+        `Failed to clear resolved action failures for verification event ${verificationEvent.id}; continuing repair flow:`,
+        error
       );
       return fallbackEvent;
     }
@@ -1266,6 +1300,8 @@ export class SecurityActionService implements ISecurityActionService {
       };
     }
 
+    repairCase = await this.clearResolvedVerificationActionFailures(repairCase, ['thread']);
+
     let notificationUpdateMessage = '';
     try {
       await this.notificationManager.updateNotificationButtons(
@@ -1275,7 +1311,7 @@ export class SecurityActionService implements ISecurityActionService {
     } catch (error) {
       notificationUpdateMessage = ' Notification buttons could not be updated automatically.';
       console.error(
-        `Failed to update notification buttons for repaired case ${repairCase.id}; continuing repair flow:`,
+        `Failed to update notification for repaired case ${repairCase.id}; continuing repair flow:`,
         error
       );
     }
