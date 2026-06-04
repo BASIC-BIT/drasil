@@ -72,6 +72,7 @@ First metrics slice:
 
 - Include root `src` in `scripts/check-metrics.sh`.
 - Keep `lizard` strict for production code only, but start at a non-noisy ratchet baseline: cyclomatic complexity over `50` and function length over `300`.
+- PR #116 ratchets the cyclomatic complexity gate from `50` to the documented non-noisy target baseline of `25`.
 - Exclude tests from strict complexity checks for now.
 - Add an advisory largest-file report so growth is visible without failing existing known hotspots.
 
@@ -80,7 +81,7 @@ Ratcheting path:
 - Capture and update this inventory as large-file splits land.
 - Add a baseline or allowlist before any file-length gate becomes blocking.
 - Prefer preventing touched hotspots from growing before enforcing a global max-file-lines rule.
-- Ratchet cyclomatic complexity toward `25` as extracted setup/config handlers are split internally and current production code passes with margin.
+- Continue ratcheting cyclomatic complexity under issue #114 once extracted setup/config handlers are split enough to establish the next non-noisy baseline below `25`.
 
 Coverage strategy:
 
@@ -117,7 +118,7 @@ Lint strategy:
 - Lockdown slice implemented: `/config lockdown` view, disable, allow-list, audit, apply, and lockdown report formatting moved to `src/controllers/LockdownConfigCommandHandler.ts`.
 - Legacy test-command slice implemented: `!test` handling and GPT profile simulation moved to `src/controllers/TestCommandHandler.ts`.
 - `CommandHandler.ts` is now a 403-line command router/coordinator; the next maintainability targets are the newly extracted domain handlers that still appear in the advisory largest-file report, especially `ConfigSubcommandHandler.ts`, `SetupCommandHandler.ts`, and `commandDefinitions.ts`.
-- Setup remains a complexity ratchet target: the first gate uses cyclomatic complexity `50` to avoid noisy failures, with a documented target of `25` once setup internals are split further.
+- Setup remains a complexity ratchet target: the first gate used cyclomatic complexity `50` to avoid noisy failures, and PR #116 ratchets that gate to the documented baseline of `25` after splitting setup permission checks and config setup reply/result handling.
 - Command test split implemented: `src/__tests__/unit/CommandHandler.unit.test.ts` was replaced by domain files plus `src/__tests__/unit/commandHandlerTestHarness.ts`; the largest command-handler test slice is now `CommandHandler.setup.unit.test.ts` at 1,470 lines.
 - Metrics advisory report now skips tracked-but-deleted paths so pre-commit splits do not produce stale `wc` errors.
 - Interaction setup modal slice implemented: setup verification modal submission and rollback handling moved from `src/controllers/InteractionHandler.ts` to `src/controllers/SetupVerificationModalHandler.ts`.

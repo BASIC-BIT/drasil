@@ -14,14 +14,20 @@ import {
   SetupDiagnosticIssue,
   SetupDiagnosticReport,
 } from '../services/SetupDiagnosticsService';
-import { SetupWorkflowService } from '../services/SetupWorkflowService';
+import { SetupWorkflowService, type SetupWorkflowResult } from '../services/SetupWorkflowService';
 import { truncatePreview } from '../utils/textPreview';
 import { ReportInstructionsManager } from './ReportInstructionsManager';
 
 const DEFAULT_RESTRICTED_ROLE_NAME = 'Drasil Restricted';
+const DEFAULT_SETUP_FAILURE_DETAIL = 'Please check permissions and try again.';
 const VERIFICATION_CHANNEL_NAME = 'verification';
 
 type ReplyGuildInstallRequired = (interaction: ChatInputCommandInteraction) => Promise<void>;
+type CompletedSetupWorkflowResult = Extract<SetupWorkflowResult, { status: 'completed' }>;
+type ConfigSetupReportInstructionsStatus = {
+  line: string | null;
+  warningLine: string | null;
+};
 
 export class SetupCommandHandler {
   private readonly setupWorkflowService?: SetupWorkflowService;
@@ -53,20 +59,7 @@ export class SetupCommandHandler {
       return;
     }
 
-    let hasAdminPermission = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
-
-    if (hasAdminPermission === undefined) {
-      const invokingMember = await guild.members.fetch(interaction.user.id).catch(() => null);
-      if (!invokingMember) {
-        hasAdminPermission = false;
-      } else if (interaction.channelId) {
-        hasAdminPermission = invokingMember
-          .permissionsIn(interaction.channelId)
-          .has(PermissionFlagsBits.Administrator);
-      } else {
-        hasAdminPermission = invokingMember.permissions.has(PermissionFlagsBits.Administrator);
-      }
-    }
+    const hasAdminPermission = await this.hasSetupAdminPermission(interaction, guild);
 
     if (!hasAdminPermission) {
       await interaction.reply({
@@ -85,7 +78,7 @@ export class SetupCommandHandler {
       return;
     }
 
-    let setupFailureDetail = 'Please check permissions and try again.';
+    let setupFailureDetail = DEFAULT_SETUP_FAILURE_DETAIL;
 
     try {
       const restrictedRole = interaction.options.getRole('restricted-role', true);
@@ -152,9 +145,7 @@ export class SetupCommandHandler {
       if (setupResult.status === 'final_validation_failed') {
         setupFailureDetail = setupResult.setupFailureDetail;
         const rollbackNote =
-          setupFailureDetail !== 'Please check permissions and try again.'
-            ? `\n\n${setupFailureDetail}`
-            : '';
+          setupFailureDetail !== DEFAULT_SETUP_FAILURE_DETAIL ? `\n\n${setupFailureDetail}` : '';
         await interaction.editReply({
           content: `Setup not saved. Fix the errors below and rerun setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
           allowedMentions: { parse: [] },
@@ -206,6 +197,29 @@ export class SetupCommandHandler {
         await interaction.reply({ ...errorResponse, flags: MessageFlags.Ephemeral });
       }
     }
+  }
+
+  private async hasSetupAdminPermission(
+    interaction: ChatInputCommandInteraction,
+    guild: NonNullable<ChatInputCommandInteraction['guild']>
+  ): Promise<boolean> {
+    const memberPermission = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+    if (memberPermission !== undefined) {
+      return memberPermission;
+    }
+
+    const invokingMember = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!invokingMember) {
+      return false;
+    }
+
+    if (interaction.channelId) {
+      return invokingMember
+        .permissionsIn(interaction.channelId)
+        .has(PermissionFlagsBits.Administrator);
+    }
+
+    return invokingMember.permissions.has(PermissionFlagsBits.Administrator);
   }
 
   private async resolveVerificationChannelCandidate(
@@ -360,35 +374,15 @@ export class SetupCommandHandler {
     const verificationChannel = interaction.options.getChannel('verification-channel');
     const reportChannel = interaction.options.getChannel('report-channel');
 
-    if (adminChannel.type !== ChannelType.GuildText) {
-      await interaction.reply({
-        content: 'Admin channel must be a text channel.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    if (verificationChannel && verificationChannel.type !== ChannelType.GuildText) {
-      await interaction.reply({
-        content: 'Verification channel must be a text channel.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    if (reportChannel && reportChannel.type !== ChannelType.GuildText) {
-      await interaction.reply({
-        content: 'Report channel must be a text channel.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    if (existingRestrictedRole && requestedRoleName) {
-      await interaction.reply({
-        content: '`restricted-role-name` cannot be combined with `restricted-role`.',
-        flags: MessageFlags.Ephemeral,
-      });
+    if (
+      await this.replyIfInvalidConfigSetupOptions(interaction, {
+        adminChannel,
+        verificationChannel,
+        reportChannel,
+        hasExplicitRestrictedRole: Boolean(existingRestrictedRole),
+        requestedRoleName,
+      })
+    ) {
       return;
     }
 
@@ -407,27 +401,13 @@ export class SetupCommandHandler {
         requestedRoleName
       );
 
-      if (restrictedRoleCandidate.ambiguousRoleIds.length > 0) {
-        await interaction.editReply({
-          content:
-            `Setup not saved. Multiple roles named \`${restrictedRoleCandidate.roleName}\` already exist: ` +
-            restrictedRoleCandidate.ambiguousRoleIds.map((roleId) => `<@&${roleId}>`).join(', ') +
-            '. Choose one with `restricted-role` before rerunning /config setup.',
-          allowedMentions: { parse: [] },
-        });
-        return;
-      }
-
-      if (verificationChannelCandidate.ambiguousChannelIds.length > 0) {
-        await interaction.editReply({
-          content:
-            `Setup not saved. Multiple #${VERIFICATION_CHANNEL_NAME} channels already exist: ` +
-            verificationChannelCandidate.ambiguousChannelIds
-              .map((channelId) => `<#${channelId}>`)
-              .join(', ') +
-            '. Choose one with `verification-channel` before rerunning /config setup.',
-          allowedMentions: { parse: [] },
-        });
+      if (
+        await this.replyIfAmbiguousConfigSetupCandidates(
+          interaction,
+          restrictedRoleCandidate,
+          verificationChannelCandidate
+        )
+      ) {
         return;
       }
 
@@ -443,11 +423,7 @@ export class SetupCommandHandler {
         reportInstructionsChannelId: reportChannel?.id ?? null,
       });
 
-      if (candidateReport.errorCount > 0) {
-        await interaction.editReply({
-          content: `Setup not saved. Fix the errors below and rerun /config setup.\n\n${this.formatSetupDiagnosticsReport(candidateReport)}`,
-          allowedMentions: { parse: [] },
-        });
+      if (await this.replyIfConfigSetupCandidateHasErrors(interaction, candidateReport)) {
         return;
       }
 
@@ -476,69 +452,29 @@ export class SetupCommandHandler {
         createdRestrictedRole,
       });
 
-      if (setupResult.status === 'candidate_validation_failed') {
-        await interaction.editReply({
-          content: `Setup not saved. Fix the errors below and rerun /config setup.\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
-          allowedMentions: { parse: [] },
-        });
-        return;
-      }
-
-      if (setupResult.status === 'final_validation_failed') {
-        setupFailureDetail = setupResult.setupFailureDetail;
-        const rollbackNote = `\n\n${setupFailureDetail}`;
-        await interaction.editReply({
-          content: `Setup not saved. Fix the errors below and rerun /config setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
-          allowedMentions: { parse: [] },
-        });
-        return;
-      }
-
-      if (setupResult.status === 'verification_channel_failed') {
-        setupFailureDetail = setupResult.setupFailureDetail;
-        throw setupResult.error;
-      }
-
-      if (setupResult.status === 'config_save_failed') {
-        setupFailureDetail = setupResult.setupFailureDetail;
-        throw setupResult.error;
-      }
-
-      let reportInstructionsLine: string | null = null;
-      let reportInstructionsWarningLine: string | null = null;
-      if (reportChannel) {
-        try {
-          const result = await this.reportInstructionsManager.upsertReportInstructionsMessage(
-            guild.id,
-            reportChannel as TextChannel
-          );
-          reportInstructionsLine = `Report instructions ${result.action}: <#${reportChannel.id}>`;
-        } catch (error) {
-          console.error(`Failed to upsert report instructions for guild ${guild.id}:`, error);
-          reportInstructionsWarningLine =
-            `[WARNING] Core setup was saved, but report instructions were not updated in <#${reportChannel.id}>. ` +
-            'Check Drasil can send messages and embeds there, then rerun setup.';
+      if (setupResult.status !== 'completed') {
+        const incompleteResult = await this.resolveIncompleteConfigSetupResult(
+          interaction,
+          setupResult
+        );
+        if (incompleteResult.setupFailureDetail) {
+          setupFailureDetail = incompleteResult.setupFailureDetail;
         }
+        if (incompleteResult.error) {
+          throw incompleteResult.error;
+        }
+        return;
       }
 
-      const lines = [
-        'Setup complete.',
-        `${setupResult.restrictedRoleWasCreated ? 'Created restricted role' : 'Restricted role'}: <@&${setupResult.restrictedRoleId}>`,
-        `Admin channel: <#${adminChannel.id}>`,
-        `${setupResult.verificationChannelAction === 'created' ? 'Created verification channel' : setupResult.verificationChannelAction === 'synced' ? 'Synced verification channel permissions' : 'Verification channel'}: <#${setupResult.verificationChannelId}>`,
-      ];
-
-      if (reportInstructionsLine) {
-        lines.push(reportInstructionsLine);
-      }
-
-      if (reportInstructionsWarningLine) {
-        lines.push(reportInstructionsWarningLine);
-      }
-
-      if (setupResult.candidateReport.warningCount > 0) {
-        this.appendSetupDiagnosticsReport(lines, setupResult.candidateReport);
-      }
+      const reportInstructionsStatus = await this.upsertReportInstructionsStatus(
+        guild.id,
+        reportChannel as TextChannel | null
+      );
+      const lines = this.buildConfigSetupSuccessLines(
+        setupResult,
+        adminChannel.id,
+        reportInstructionsStatus
+      );
 
       await interaction.editReply({
         content: truncatePreview(lines.join('\n'), 1900),
@@ -549,10 +485,191 @@ export class SetupCommandHandler {
       await interaction.editReply({
         content: setupFailureDetail
           ? `Failed to complete setup. ${setupFailureDetail}`
-          : 'Failed to complete setup. Please check permissions and try again.',
+          : `Failed to complete setup. ${DEFAULT_SETUP_FAILURE_DETAIL}`,
         allowedMentions: { parse: [] },
       });
     }
+  }
+
+  private async replyIfInvalidConfigSetupOptions(
+    interaction: ChatInputCommandInteraction,
+    options: {
+      adminChannel: { type: ChannelType };
+      verificationChannel: { type: ChannelType } | null;
+      reportChannel: { type: ChannelType } | null;
+      hasExplicitRestrictedRole: boolean;
+      requestedRoleName: string | null;
+    }
+  ): Promise<boolean> {
+    if (options.adminChannel.type !== ChannelType.GuildText) {
+      await interaction.reply({
+        content: 'Admin channel must be a text channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    if (options.verificationChannel && options.verificationChannel.type !== ChannelType.GuildText) {
+      await interaction.reply({
+        content: 'Verification channel must be a text channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    if (options.reportChannel && options.reportChannel.type !== ChannelType.GuildText) {
+      await interaction.reply({
+        content: 'Report channel must be a text channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    if (options.hasExplicitRestrictedRole && options.requestedRoleName) {
+      await interaction.reply({
+        content: '`restricted-role-name` cannot be combined with `restricted-role`.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return true;
+    }
+
+    return false;
+  }
+
+  private async replyIfAmbiguousConfigSetupCandidates(
+    interaction: ChatInputCommandInteraction,
+    restrictedRoleCandidate: { roleName: string; ambiguousRoleIds: readonly string[] },
+    verificationChannelCandidate: { ambiguousChannelIds: readonly string[] }
+  ): Promise<boolean> {
+    if (restrictedRoleCandidate.ambiguousRoleIds.length > 0) {
+      await interaction.editReply({
+        content:
+          `Setup not saved. Multiple roles named \`${restrictedRoleCandidate.roleName}\` already exist: ` +
+          restrictedRoleCandidate.ambiguousRoleIds.map((roleId) => `<@&${roleId}>`).join(', ') +
+          '. Choose one with `restricted-role` before rerunning /config setup.',
+        allowedMentions: { parse: [] },
+      });
+      return true;
+    }
+
+    if (verificationChannelCandidate.ambiguousChannelIds.length > 0) {
+      await interaction.editReply({
+        content:
+          `Setup not saved. Multiple #${VERIFICATION_CHANNEL_NAME} channels already exist: ` +
+          verificationChannelCandidate.ambiguousChannelIds
+            .map((channelId) => `<#${channelId}>`)
+            .join(', ') +
+          '. Choose one with `verification-channel` before rerunning /config setup.',
+        allowedMentions: { parse: [] },
+      });
+      return true;
+    }
+
+    return false;
+  }
+
+  private async replyIfConfigSetupCandidateHasErrors(
+    interaction: ChatInputCommandInteraction,
+    candidateReport: SetupDiagnosticReport
+  ): Promise<boolean> {
+    if (candidateReport.errorCount === 0) {
+      return false;
+    }
+
+    await interaction.editReply({
+      content: `Setup not saved. Fix the errors below and rerun /config setup.\n\n${this.formatSetupDiagnosticsReport(candidateReport)}`,
+      allowedMentions: { parse: [] },
+    });
+    return true;
+  }
+
+  private async resolveIncompleteConfigSetupResult(
+    interaction: ChatInputCommandInteraction,
+    setupResult: Exclude<SetupWorkflowResult, { status: 'completed' }>
+  ): Promise<{ setupFailureDetail: string | null; error?: unknown }> {
+    switch (setupResult.status) {
+      case 'candidate_validation_failed':
+        await interaction.editReply({
+          content: `Setup not saved. Fix the errors below and rerun /config setup.\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
+          allowedMentions: { parse: [] },
+        });
+        return { setupFailureDetail: null };
+      case 'final_validation_failed': {
+        const rollbackNote =
+          setupResult.setupFailureDetail !== DEFAULT_SETUP_FAILURE_DETAIL
+            ? `\n\n${setupResult.setupFailureDetail}`
+            : '';
+        await interaction.editReply({
+          content: `Setup not saved. Fix the errors below and rerun /config setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
+          allowedMentions: { parse: [] },
+        });
+        return { setupFailureDetail: setupResult.setupFailureDetail };
+      }
+      case 'verification_channel_failed':
+      case 'config_save_failed':
+        return { setupFailureDetail: setupResult.setupFailureDetail, error: setupResult.error };
+    }
+  }
+
+  private async upsertReportInstructionsStatus(
+    guildId: string,
+    reportChannel: TextChannel | null
+  ): Promise<ConfigSetupReportInstructionsStatus> {
+    if (!reportChannel) {
+      return { line: null, warningLine: null };
+    }
+
+    try {
+      const result = await this.reportInstructionsManager.upsertReportInstructionsMessage(
+        guildId,
+        reportChannel
+      );
+      return {
+        line: `Report instructions ${result.action}: <#${reportChannel.id}>`,
+        warningLine: null,
+      };
+    } catch (error) {
+      console.error(`Failed to upsert report instructions for guild ${guildId}:`, error);
+      return {
+        line: null,
+        warningLine:
+          `[WARNING] Core setup was saved, but report instructions were not updated in <#${reportChannel.id}>. ` +
+          'Check Drasil can send messages and embeds there, then rerun setup.',
+      };
+    }
+  }
+
+  private buildConfigSetupSuccessLines(
+    setupResult: CompletedSetupWorkflowResult,
+    adminChannelId: string,
+    reportInstructionsStatus: ConfigSetupReportInstructionsStatus
+  ): string[] {
+    const verificationChannelAction =
+      setupResult.verificationChannelAction === 'created'
+        ? 'Created verification channel'
+        : setupResult.verificationChannelAction === 'synced'
+          ? 'Synced verification channel permissions'
+          : 'Verification channel';
+    const lines = [
+      'Setup complete.',
+      `${setupResult.restrictedRoleWasCreated ? 'Created restricted role' : 'Restricted role'}: <@&${setupResult.restrictedRoleId}>`,
+      `Admin channel: <#${adminChannelId}>`,
+      `${verificationChannelAction}: <#${setupResult.verificationChannelId}>`,
+    ];
+
+    if (reportInstructionsStatus.line) {
+      lines.push(reportInstructionsStatus.line);
+    }
+
+    if (reportInstructionsStatus.warningLine) {
+      lines.push(reportInstructionsStatus.warningLine);
+    }
+
+    if (setupResult.candidateReport.warningCount > 0) {
+      this.appendSetupDiagnosticsReport(lines, setupResult.candidateReport);
+    }
+
+    return lines;
   }
 
   public async handleConfigValidateCommand(
