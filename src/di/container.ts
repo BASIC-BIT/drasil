@@ -21,6 +21,10 @@ import {
   DetectionEventsRepository,
   IDetectionEventsRepository,
 } from '../repositories/DetectionEventsRepository';
+import {
+  IMessageContextRepository,
+  MessageContextRepository,
+} from '../repositories/MessageContextRepository';
 import { DetectionOrchestrator, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { ConfigService, IConfigService } from '../config/ConfigService';
 import { SecurityActionService, ISecurityActionService } from '../services/SecurityActionService';
@@ -133,6 +137,11 @@ function configureRepositories(container: Container): void {
   container
     .bind<IDetectionEventsRepository>(TYPES.DetectionEventsRepository)
     .to(DetectionEventsRepository)
+    .inSingletonScope();
+
+  container
+    .bind<IMessageContextRepository>(TYPES.MessageContextRepository)
+    .to(MessageContextRepository)
     .inSingletonScope();
 
   // New repositories

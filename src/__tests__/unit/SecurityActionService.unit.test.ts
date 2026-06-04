@@ -676,9 +676,10 @@ describe('SecurityActionService (unit)', () => {
     expect(detectionEvents[0].metadata).toMatchObject({
       reason: 'No reason provided.',
     });
-    expect(detectionEvents[0].reasons[0]).toContain('No reason provided.');
+    expect(detectionEvents[0].reasons[0]).toBe('Admin case opened by <@admin-blank-reason>.');
     const detectionResult = notificationManager.upsertSuspiciousUserNotification.mock.calls[0][1];
-    expect(detectionResult.triggerContent).toBe('Admin-opened case');
+    expect(detectionResult.triggerSource).toBe(DetectionType.ADMIN_CASE);
+    expect(detectionResult.triggerContent).toBe('Opened by <@admin-blank-reason>');
   });
 
   it('preserves trusted admin case metadata over caller metadata', async () => {
@@ -1418,7 +1419,7 @@ describe('SecurityActionService (unit)', () => {
 
     const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
     expect(detectionEvents).toHaveLength(1);
-    expect(detectionEvents[0].detection_type).toBe(DetectionType.GPT_ANALYSIS);
+    expect(detectionEvents[0].detection_type).toBe(DetectionType.ADMIN_FLAG);
     expect(detectionEvents[0].metadata).toMatchObject({
       type: 'admin_flag',
       adminId: moderatorId,

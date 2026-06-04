@@ -565,6 +565,94 @@ describe('ThreadManager (unit)', () => {
     }
   });
 
+  it('creates an admin evidence thread from the notification message', async () => {
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    const member = buildMember('guild-1', 'user-1');
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    const notificationMessage = {
+      startThread: jest.fn().mockResolvedValue(thread),
+      fetch: jest.fn().mockResolvedValue({ thread: null }),
+    } as any;
+
+    const createdThread = await manager.createPrivateEvidenceThread(
+      member,
+      event,
+      {
+        label: 'SUSPICIOUS',
+        confidence: 1.0,
+        reasons: ['Admin case opened by <@admin-1>.'],
+        triggerSource: DetectionType.ADMIN_CASE,
+        triggerContent: 'Opened by <@admin-1>',
+      },
+      notificationMessage
+    );
+    const storedEvent = await verificationEventRepository.findById(event.id);
+
+    expect(notificationMessage.startThread).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Evidence: test-user' })
+    );
+    expect(createdThread?.id).toBe('thread-1');
+    expect(storedEvent?.private_evidence_thread_id).toBe('thread-1');
+    expect(thread.send).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining('Admin evidence workspace') })
+    );
+  });
+
+  it('recovers an already-attached admin evidence thread when duplicate start fails', async () => {
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    const member = buildMember('guild-1', 'user-1');
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    const notificationMessage = {
+      startThread: jest
+        .fn()
+        .mockRejectedValue(new Error('Thread already created for this message')),
+      fetch: jest.fn().mockResolvedValueOnce({ thread: null }).mockResolvedValueOnce({ thread }),
+    } as any;
+
+    const recoveredThread = await manager.createPrivateEvidenceThread(
+      member,
+      event,
+      {
+        label: 'SUSPICIOUS',
+        confidence: 1.0,
+        reasons: ['Admin case opened by <@admin-1>.'],
+        triggerSource: DetectionType.ADMIN_CASE,
+        triggerContent: 'Opened by <@admin-1>',
+      },
+      notificationMessage
+    );
+    const storedEvent = await verificationEventRepository.findById(event.id);
+
+    expect(notificationMessage.startThread).toHaveBeenCalled();
+    expect(notificationMessage.fetch).toHaveBeenCalledTimes(2);
+    expect(recoveredThread?.id).toBe('thread-1');
+    expect(storedEvent?.private_evidence_thread_id).toBe('thread-1');
+  });
+
   it('creates an inactive report intake thread before adding the reporter', async () => {
     const manager = new ThreadManager(
       {} as any,

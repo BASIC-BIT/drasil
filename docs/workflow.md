@@ -29,6 +29,26 @@ events, admin actions, and Discord surfaces.
      restricts the user, creates a verification thread, and upserts the admin
      notification.
 
+## Recent message context
+
+Drasil persists short-lived message context for moderation inference by default.
+Normal guild messages from non-bot users are stored in `message_contexts` as a
+truncated `content_preview` plus lightweight derived features such as URL count,
+mention count, attachment count, invite presence, and thread status. This store is
+for moderation context, not analytics or model training.
+
+Retention and bounds are intentionally tight:
+
+- Message context expires after 30 days.
+- At most 20 recent messages are retained per user per server.
+- At most 50,000 message context rows are retained per server.
+- Expired rows are pruned opportunistically during message handling.
+
+When GPT profile analysis runs for a message, `EventHandler` reads recent context
+from this persistent store instead of relying on process-local memory. If the store
+is unavailable, Drasil continues without recent-message context rather than blocking
+moderation flow.
+
 ## AI detection diagnostics
 
 When `DetectionOrchestrator` asks GPT to classify profile/message context, the
@@ -59,8 +79,44 @@ if one is set.
 ## Manual flag
 
 1. Admin initiates a manual flag.
-2. `SecurityActionService.handleManualFlag` creates a `detection_event` with
-   `metadata.type = "admin_flag"` and follows the same case flow as above.
+2. `SecurityActionService.handleManualFlag` creates a detection event with
+   `detection_type = ADMIN_FLAG` and `metadata.type = "admin_flag"`, then follows
+   the same case flow as above.
+
+## Admin-opened case and role intake
+
+Admin-opened cases and bulk role intake are explicit moderator/server workflows,
+not GPT detections.
+
+- `/case open` and `/case restrict` create `detection_type = ADMIN_CASE` events.
+- `/case intake-role` creates `detection_type = ROLE_INTAKE` events with source
+  role ID/name and batch metadata.
+- Admin-facing reasons render Discord mentions for the moderator and, for role
+  intake, the source role. Embed allowed-mentions remain disabled so these fields
+  render clearly without causing extra pings.
+
+## Case threads and admin evidence
+
+Case notifications are posted in the configured admin channel. Drasil then starts
+an attached evidence thread from that admin notification message and stores it as
+`verification_events.private_evidence_thread_id`. Because the evidence thread is
+attached to the notification message, the embed is visible at the top of the thread
+without duplicating/mirroring the embed contents.
+
+Attached evidence threads are not Discord `PrivateThread`s. Their visibility follows
+the admin notification channel and thread membership, so servers should keep the
+admin notification channel restricted to staff allowed to see case evidence.
+
+Responder routing follows `/config case-staff`:
+
+- `off`: no case responder role routing.
+- `ping_only`: the evidence-thread prompt pings configured admin/case roles.
+- `ping_and_add_members`: configured case responder members are added when under
+  the member cap, and admin/case roles are also mentioned in the prompt.
+
+The user-facing verification thread, when present, remains separate in the
+verification/quarantine channel and is linked prominently in the admin embed's
+`Case Threads` field.
 
 ## User report
 

@@ -396,7 +396,7 @@ export class SecurityActionService implements ISecurityActionService {
     detectionResult: DetectionResult,
     verificationEvent: VerificationEvent,
     sourceMessage?: Message
-  ): Promise<void> {
+  ): Promise<Message> {
     const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
       member,
       detectionResult,
@@ -412,7 +412,10 @@ export class SecurityActionService implements ISecurityActionService {
       await this.verificationEventRepository.update(verificationEvent.id, {
         notification_message_id: notificationMessage.id,
       });
+      verificationEvent.notification_message_id = notificationMessage.id;
     }
+
+    return notificationMessage;
   }
 
   private createDetectionResultFromEvent(detectionEvent: DetectionEvent): DetectionResult {
@@ -481,6 +484,7 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     verificationEvent: VerificationEvent,
     detectionResult: DetectionResult,
+    notificationMessage: Message,
     sourceMessage?: Message
   ): Promise<VerificationEvent> {
     try {
@@ -488,15 +492,16 @@ export class SecurityActionService implements ISecurityActionService {
         member,
         verificationEvent,
         detectionResult,
+        notificationMessage,
         sourceMessage
       );
       if (!thread) {
-        throw new Error(`Failed to create private evidence thread for ${member.user.tag}`);
+        throw new Error(`Failed to create admin evidence thread for ${member.user.tag}`);
       }
       return verificationEvent;
     } catch (error) {
       console.error(
-        `Failed to create private evidence thread for ${member.user.tag}; continuing case flow:`,
+        `Failed to create admin evidence thread for ${member.user.tag}; continuing case flow:`,
         error
       );
       return this.recordVerificationActionFailure(
@@ -511,33 +516,53 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     verificationEvent: VerificationEvent,
     detectionResult: DetectionResult,
+    notificationMessage: Message,
     sourceMessage?: Message
   ): Promise<VerificationEvent> {
     if (verificationEvent.private_evidence_thread_id) {
       return verificationEvent;
     }
 
-    if (this.hasReportReviewThread(verificationEvent)) {
-      if (!verificationEvent.thread_id) {
-        return verificationEvent;
-      }
-      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
-        private_evidence_thread_id: verificationEvent.thread_id,
-      });
-      return (
-        updatedEvent ?? {
-          ...verificationEvent,
-          private_evidence_thread_id: verificationEvent.thread_id,
-        }
-      );
-    }
-
     return this.tryCreatePrivateEvidenceThread(
       member,
       verificationEvent,
       detectionResult,
+      notificationMessage,
       sourceMessage
     );
+  }
+
+  private async upsertNotificationAndEnsurePrivateEvidenceThread(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    verificationEvent: VerificationEvent,
+    sourceMessage?: Message
+  ): Promise<VerificationEvent> {
+    const notificationMessage = await this.upsertNotification(
+      member,
+      detectionResult,
+      verificationEvent,
+      sourceMessage
+    );
+    const previousPrivateEvidenceThreadId = verificationEvent.private_evidence_thread_id;
+    const previousMetadata = verificationEvent.metadata;
+
+    const updatedEvent = await this.ensurePrivateEvidenceThread(
+      member,
+      verificationEvent,
+      detectionResult,
+      notificationMessage,
+      sourceMessage
+    );
+
+    if (
+      updatedEvent.private_evidence_thread_id !== previousPrivateEvidenceThreadId ||
+      updatedEvent.metadata !== previousMetadata
+    ) {
+      await this.upsertNotification(member, detectionResult, updatedEvent, sourceMessage);
+    }
+
+    return updatedEvent;
   }
 
   private formatActionFailureMessage(error: unknown): string {
@@ -648,14 +673,6 @@ export class SecurityActionService implements ISecurityActionService {
         useReportReviewThread,
         sourceMessage
       );
-      if (!useReportReviewThread) {
-        updatedEvent = await this.tryCreatePrivateEvidenceThread(
-          member,
-          updatedEvent,
-          detectionResult,
-          sourceMessage
-        );
-      }
       return updatedEvent;
     } catch (error) {
       console.error(
@@ -1016,13 +1033,7 @@ export class SecurityActionService implements ISecurityActionService {
           );
         }
       }
-      notificationVerificationEvent = await this.ensurePrivateEvidenceThread(
-        member,
-        notificationVerificationEvent,
-        detectionResult,
-        sourceMessage
-      );
-      await this.upsertNotification(
+      notificationVerificationEvent = await this.upsertNotificationAndEnsurePrivateEvidenceThread(
         member,
         detectionResult,
         notificationVerificationEvent,
@@ -1081,7 +1092,12 @@ export class SecurityActionService implements ISecurityActionService {
       sourceMessage
     );
 
-    await this.upsertNotification(member, detectionResult, newVerificationEvent, sourceMessage);
+    newVerificationEvent = await this.upsertNotificationAndEnsurePrivateEvidenceThread(
+      member,
+      detectionResult,
+      newVerificationEvent,
+      sourceMessage
+    );
     this.captureDetectionCaseAnalytics(
       member,
       'verification case opened',
@@ -1185,13 +1201,27 @@ export class SecurityActionService implements ISecurityActionService {
 
       const restrictUser = options.action === 'restrict';
       const normalizedReason = options.reason?.trim() || undefined;
-      const reasonText = normalizedReason ? `Reason: ${normalizedReason}` : 'No reason provided.';
+      const isRoleIntake = options.metadata?.type === 'admin_role_intake';
+      const sourceRoleId =
+        typeof options.metadata?.sourceRoleId === 'string' ? options.metadata.sourceRoleId : null;
+      const reasonSuffix = normalizedReason ? ` Reason: ${normalizedReason}` : '';
+      const reasonText = isRoleIntake
+        ? sourceRoleId
+          ? `Role intake from <@&${sourceRoleId}> started by <@${moderator.id}>.${reasonSuffix}`
+          : `Role intake started by <@${moderator.id}>.${reasonSuffix}`
+        : `Admin case opened by <@${moderator.id}>.${reasonSuffix}`;
+      const triggerContent = isRoleIntake
+        ? sourceRoleId
+          ? `Role intake from <@&${sourceRoleId}> by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`
+          : `Role intake by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`
+        : `Opened by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`;
+      const detectionType = isRoleIntake ? DetectionType.ROLE_INTAKE : DetectionType.ADMIN_CASE;
       const detectionEvent = await this.detectionEventsRepository.create({
         server_id: member.guild.id,
         user_id: member.id,
-        detection_type: DetectionType.GPT_ANALYSIS,
+        detection_type: detectionType,
         confidence: 1.0,
-        reasons: [`Admin case opened by ${moderator.id}. ${reasonText}`],
+        reasons: [reasonText],
         detected_at: new Date(),
         metadata: withDetectionTestingMetadata(
           {
@@ -1208,9 +1238,9 @@ export class SecurityActionService implements ISecurityActionService {
       const detectionResult: DetectionResult = {
         label: 'SUSPICIOUS',
         confidence: 1.0,
-        reasons: [`Admin case opened by ${moderator.id}. ${reasonText}`],
-        triggerSource: DetectionType.GPT_ANALYSIS,
-        triggerContent: normalizedReason ?? 'Admin-opened case',
+        reasons: [reasonText],
+        triggerSource: detectionType,
+        triggerContent,
         detectionEventId: detectionEvent.id,
       };
 
@@ -1341,16 +1371,21 @@ export class SecurityActionService implements ISecurityActionService {
         member.joinedAt?.toISOString()
       );
 
-      const reasonText = reason ? `Reason: ${reason}` : 'No reason provided.';
+      const normalizedReason = reason?.trim() || undefined;
+      const reasonText = `Manually flagged by <@${moderator.id}>.${normalizedReason ? ` Reason: ${normalizedReason}` : ''}`;
       const detectionEvent = await this.detectionEventsRepository.create({
         server_id: member.guild.id,
         user_id: member.id,
-        detection_type: DetectionType.GPT_ANALYSIS,
+        detection_type: DetectionType.ADMIN_FLAG,
         confidence: 1.0,
-        reasons: [`Manually flagged by admin ${moderator.id}. ${reasonText}`],
+        reasons: [reasonText],
         detected_at: new Date(),
         metadata: withDetectionTestingMetadata(
-          { type: 'admin_flag', adminId: moderator.id, reason: reason ?? reasonText },
+          {
+            type: 'admin_flag',
+            adminId: moderator.id,
+            reason: normalizedReason ?? 'No reason provided.',
+          },
           'server'
         ),
       });
@@ -1358,9 +1393,9 @@ export class SecurityActionService implements ISecurityActionService {
       const detectionResult: DetectionResult = {
         label: 'SUSPICIOUS',
         confidence: 1.0,
-        reasons: [`Manually flagged by admin ${moderator.id}. ${reasonText}`],
-        triggerSource: DetectionType.GPT_ANALYSIS,
-        triggerContent: reason ?? 'Manual admin flag',
+        reasons: [reasonText],
+        triggerSource: DetectionType.ADMIN_FLAG,
+        triggerContent: `Flagged by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`,
         detectionEventId: detectionEvent.id,
       };
 
