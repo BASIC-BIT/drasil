@@ -27,6 +27,10 @@ export interface IReportIntakeRepository {
   findById(id: string): Promise<ReportIntake | null>;
   findOpenByThreadId(threadId: string): Promise<ReportIntake | null>;
   findOpenByReporterAndServer(serverId: string, reporterId: string): Promise<ReportIntake | null>;
+  confirmTargetIfUnset(
+    id: string,
+    data: { targetUserId: string; metadata: Record<string, unknown> }
+  ): Promise<ReportIntake | null>;
   update(id: string, data: ReportIntakeUpdate): Promise<ReportIntake | null>;
   addEvidence(data: ReportIntakeEvidenceCreate): Promise<ReportIntakeEvidence>;
   listEvidence(intakeId: string): Promise<ReportIntakeEvidence[]>;
@@ -145,6 +149,33 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
         return null;
       }
       this.handleError(error, 'updateReportIntake');
+    }
+  }
+
+  async confirmTargetIfUnset(
+    id: string,
+    data: { targetUserId: string; metadata: Record<string, unknown> }
+  ): Promise<ReportIntake | null> {
+    try {
+      const updated = await this.prisma.report_intakes.updateMany({
+        where: {
+          id,
+          status: ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION as report_intake_status,
+          confirmed_target_user_id: null,
+        },
+        data: {
+          confirmed_target_user_id: data.targetUserId,
+          metadata: data.metadata as Prisma.InputJsonValue,
+          updated_at: new Date(),
+        },
+      });
+      if (updated.count === 0) {
+        return null;
+      }
+
+      return this.findById(id);
+    } catch (error) {
+      this.handleError(error, 'confirmReportIntakeTargetIfUnset');
     }
   }
 

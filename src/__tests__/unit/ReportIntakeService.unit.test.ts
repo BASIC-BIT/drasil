@@ -296,6 +296,31 @@ describe('ReportIntakeService', () => {
     );
   });
 
+  it('rejects staff confirming themselves as the report target', async () => {
+    const { service } = buildService({
+      resolvePlatformBackedCandidates: jest.fn().mockResolvedValue([buildCandidate('staff-1')]),
+    });
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+
+    const result = await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'staff-1',
+      confirmedById: 'staff-1',
+      confirmedByStaff: true,
+    });
+
+    expect(result).toMatchObject({
+      confirmed: false,
+      message: 'You cannot report yourself.',
+    });
+  });
+
   it('rejects unauthorized candidate confirmations', async () => {
     const { service } = buildService();
     const intake = await service.openIntakeFromThread({
@@ -384,6 +409,34 @@ describe('ReportIntakeService', () => {
     });
     expect(result).not.toHaveProperty('reason');
     expect(confirmationEvidence).toHaveLength(1);
+  });
+
+  it('does not submit when another confirmation wins the conditional update', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+    jest.spyOn(reportIntakeRepository, 'confirmTargetIfUnset').mockResolvedValueOnce(null);
+
+    const result = await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      confirmedById: 'reporter-1',
+    });
+    const confirmationEvidence = (await reportIntakeRepository.listEvidence(intake.id)).filter(
+      (item) => item.kind === ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION
+    );
+
+    expect(result).toMatchObject({
+      confirmed: false,
+      message: 'That report target has already been confirmed for this intake.',
+    });
+    expect(result).not.toHaveProperty('reason');
+    expect(confirmationEvidence).toHaveLength(0);
   });
 
   it('lets the reporter reject suggested candidates without submitting a report', async () => {

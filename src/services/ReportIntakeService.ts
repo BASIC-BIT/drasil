@@ -178,7 +178,7 @@ export class ReportIntakeService implements IReportIntakeService {
         message: 'That report intake is no longer accepting target confirmations.',
       };
     }
-    if (input.targetUserId === intake.reporter_id) {
+    if (input.targetUserId === intake.reporter_id || input.targetUserId === input.confirmedById) {
       return { confirmed: false, message: 'You cannot report yourself.' };
     }
     if (intake.confirmed_target_user_id) {
@@ -203,6 +203,23 @@ export class ReportIntakeService implements IReportIntakeService {
       };
     }
 
+    const confirmedAt = new Date().toISOString();
+    const confirmedIntake = await this.reportIntakeRepository.confirmTargetIfUnset(intake.id, {
+      targetUserId: input.targetUserId,
+      metadata: {
+        ...metadata,
+        confirmed_target_user_id: input.targetUserId,
+        confirmed_by: input.confirmedById,
+        confirmed_at: confirmedAt,
+      },
+    });
+    if (!confirmedIntake) {
+      return {
+        confirmed: false,
+        message: 'That report target has already been confirmed for this intake.',
+      };
+    }
+
     await this.reportIntakeRepository.addEvidence({
       intakeId: intake.id,
       kind: ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION,
@@ -210,17 +227,7 @@ export class ReportIntakeService implements IReportIntakeService {
       metadata: {
         confirmed_by: input.confirmedById,
         target_user_id: input.targetUserId,
-        confirmed_at: new Date().toISOString(),
-      },
-    });
-
-    await this.reportIntakeRepository.update(intake.id, {
-      confirmedTargetUserId: input.targetUserId,
-      metadata: {
-        ...metadata,
-        confirmed_target_user_id: input.targetUserId,
-        confirmed_by: input.confirmedById,
-        confirmed_at: new Date().toISOString(),
+        confirmed_at: confirmedAt,
       },
     });
 
@@ -228,8 +235,8 @@ export class ReportIntakeService implements IReportIntakeService {
     return {
       confirmed: true,
       message: `Confirmed <@${input.targetUserId}> as the report target.`,
-      reporterId: intake.reporter_id,
-      reason: this.buildSubmissionReason(intake, evidence),
+      reporterId: confirmedIntake.reporter_id,
+      reason: this.buildSubmissionReason(confirmedIntake, evidence),
       attachments: this.buildSubmissionAttachments(evidence),
     };
   }
