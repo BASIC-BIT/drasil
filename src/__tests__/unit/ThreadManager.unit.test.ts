@@ -606,7 +606,10 @@ describe('ThreadManager (unit)', () => {
     expect(createdThread?.id).toBe('thread-1');
     expect(storedEvent?.private_evidence_thread_id).toBe('thread-1');
     expect(thread.send).toHaveBeenCalledWith(
-      expect.objectContaining({ content: expect.stringContaining('Admin evidence workspace') })
+      expect.objectContaining({
+        content: expect.stringContaining('Admin-only evidence thread for <@user-1> (user-1).'),
+        allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+      })
     );
   });
 
@@ -694,7 +697,7 @@ describe('ThreadManager (unit)', () => {
     expect(activated).toBe(true);
     expect(thread.members.add).toHaveBeenCalledWith('reporter-1');
     expect(thread.send).toHaveBeenCalledWith({
-      content: expect.stringContaining('Please put the report context in this private thread.'),
+      content: expect.stringContaining('Add what happened here.'),
       allowedMentions: {
         parse: [],
         users: ['reporter-1'],

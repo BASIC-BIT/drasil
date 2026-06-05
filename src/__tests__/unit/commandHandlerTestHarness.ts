@@ -33,6 +33,8 @@ export type HandlerOverrides = Partial<{
   excludeDetectionFromAccounting: jest.Mock;
   restoreDetectionAccounting: jest.Mock;
   restrictedRoleLockdownService: any;
+  reportIntakeService: any;
+  client: any;
 }>;
 
 export const buildHandler = (overrides: HandlerOverrides = {}) => {
@@ -145,9 +147,11 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
               warningCount: 0,
             }),
         } as any);
-  const client = {
-    user: { id: 'client-1' },
-  } as any;
+  const client =
+    overrides.client ??
+    ({
+      user: { id: 'client-1' },
+    } as any);
 
   return {
     handler: new CommandHandler(
@@ -160,7 +164,8 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
       securityActionService,
       undefined,
       setupDiagnosticsService,
-      overrides.restrictedRoleLockdownService
+      overrides.restrictedRoleLockdownService,
+      overrides.reportIntakeService
     ),
     client,
     userModerationService,

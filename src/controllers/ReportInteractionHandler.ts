@@ -25,6 +25,7 @@ import {
   REPORT_MESSAGE_REASON_FIELD_ID,
   USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH,
 } from '../utils/userReportSettings';
+import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
 
 export const REPORT_USER_INITIATE_CUSTOM_ID = 'report_user_initiate';
 export const REPORT_USER_TYPED_MODAL_ID = 'report_user_modal_submit';
@@ -129,7 +130,7 @@ export class ReportInteractionHandler {
       intakeActivated = true;
 
       await interaction.editReply({
-        content: `Opened a private report thread: ${thread.url}\nPlease put the report context there.`,
+        content: `Opened a private report thread: ${thread.url}\nAdd what happened there.`,
       });
 
       await this.notifyReportIntakeThreadOpened(guildId, reporter, thread);
@@ -140,7 +141,7 @@ export class ReportInteractionHandler {
       }
       const content =
         intakeActivated && thread
-          ? `Opened a private report thread: ${thread.url}\nPlease put the report context there.`
+          ? `Opened a private report thread: ${thread.url}\nAdd what happened there.`
           : 'An error occurred while opening the report thread. Please try again later.';
       await interaction.editReply({ content }).catch((replyError) => {
         console.warn('Failed to update report intake interaction after setup error:', replyError);
@@ -197,6 +198,11 @@ export class ReportInteractionHandler {
         intakeId,
         targetUserId,
         confirmedById: interaction.user.id,
+        confirmedByStaff: await canModerateReportIntake(
+          guild,
+          interaction.user.id,
+          this.configService
+        ),
       });
       if (!confirmation.confirmed || !confirmation.reason) {
         await interaction.editReply({ content: confirmation.message });
@@ -204,9 +210,14 @@ export class ReportInteractionHandler {
       }
       targetConfirmed = true;
 
+      const reporter = await this.resolveReportIntakeReporter(
+        confirmation.reporterId,
+        interaction.user
+      );
+
       const submission = await this.reportSubmissionService.submitConfirmedReportIntake(
         targetMember,
-        interaction.user,
+        reporter,
         confirmation.reason,
         {
           intakeId,
@@ -259,10 +270,23 @@ export class ReportInteractionHandler {
         return;
       }
 
+      const guildId = interaction.guildId;
+      if (!guildId) {
+        await interaction.editReply({ content: 'Report answers can only be used in a server.' });
+        return;
+      }
+
+      const guild = await this.client.guilds.fetch(guildId);
+
       const result = await this.reportIntakeService.rejectCandidates({
         intakeId,
         rejectedById: interaction.user.id,
         promptToken,
+        rejectedByStaff: await canModerateReportIntake(
+          guild,
+          interaction.user.id,
+          this.configService
+        ),
       });
       await interaction.editReply({ content: result.message });
 
@@ -477,10 +501,10 @@ export class ReportInteractionHandler {
 
   private buildExistingReportIntakeMessage(guildId: string, threadId: string | null): string {
     if (threadId) {
-      return `You already have an open report thread: https://discord.com/channels/${guildId}/${threadId}\nPlease continue there, or send \`close report\` in that thread if it was opened by mistake.`;
+      return `You already have an open report thread: https://discord.com/channels/${guildId}/${threadId}\nPlease continue there, or use /close-report in that thread if it was opened by mistake.`;
     }
 
-    return 'You already have an open report intake. Please continue in the existing report thread, or send `close report` if it was opened by mistake.';
+    return 'You already have an open report intake. Please continue in the existing report thread, or use /close-report there if it was opened by mistake.';
   }
 
   private async deleteFailedReportIntakeThread(thread: ThreadChannel): Promise<void> {
@@ -498,13 +522,33 @@ export class ReportInteractionHandler {
   ): Promise<void> {
     try {
       const adminChannel = await this.configService.getAdminChannel(guildId);
+      const serverConfig = await this.configService.getServerConfig(guildId);
+      const roleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
       await adminChannel?.send({
+        content: this.presentationBuilder.formatRoleMentions(roleIds),
         embeds: [this.presentationBuilder.createReportIntakeStartedEmbed(reporter, thread)],
-        allowedMentions: { parse: [] },
+        allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
       });
     } catch (error) {
       console.warn(`Failed to notify admin channel for report intake thread ${thread.id}:`, error);
     }
+  }
+
+  private async resolveReportIntakeReporter(
+    reporterId: string | undefined,
+    fallback: User
+  ): Promise<User> {
+    if (!reporterId || reporterId === fallback.id) {
+      return fallback;
+    }
+
+    return this.client.users.fetch(reporterId).catch(
+      () =>
+        ({
+          id: reporterId,
+          username: reporterId,
+        }) as User
+    );
   }
 
   private getThreadChannel(

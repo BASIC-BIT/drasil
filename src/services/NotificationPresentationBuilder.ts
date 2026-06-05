@@ -95,7 +95,7 @@ export class NotificationPresentationBuilder {
     const resolutionPresentation = this.getVerificationResolutionPresentation(verificationEvent);
     const embed = new EmbedBuilder()
       .setColor(embedColor)
-      .setTitle(resolutionPresentation?.title ?? 'Suspicious User Detected')
+      .setTitle(resolutionPresentation?.title ?? this.getPendingCaseTitle(detectionResult))
       .setDescription(
         resolutionPresentation
           ? `<@${member.id}> has been handled. No further moderator action is pending.`
@@ -245,6 +245,18 @@ export class NotificationPresentationBuilder {
     }
 
     return embed;
+  }
+
+  private getPendingCaseTitle(detectionResult: DetectionResult): string {
+    if (detectionResult.triggerSource === DetectionType.USER_REPORT) {
+      return 'User Report Submitted';
+    }
+
+    if (detectionResult.triggerSource === DetectionType.ADMIN_CASE) {
+      return 'Admin Review Case Opened';
+    }
+
+    return 'Suspicious User Detected';
   }
 
   public createReportIntakeStartedEmbed(

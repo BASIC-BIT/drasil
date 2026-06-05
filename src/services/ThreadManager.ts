@@ -201,73 +201,42 @@ export class ThreadManager implements IThreadManager {
     member: GuildMember,
     verificationEvent: VerificationEvent,
     detectionResult: DetectionResult,
-    roleMentions: string | null,
     sourceMessage?: Message
   ): string {
-    const reasonLines = detectionResult.reasons.length
-      ? detectionResult.reasons.map((reason) => `- ${reason}`)
-      : ['- No reason provided.'];
+    const sourceReportUrl = this.resolveSourceReportUrl(
+      member.guild.id,
+      detectionResult,
+      sourceMessage
+    );
     const links = [
       verificationEvent.thread_id
-        ? `User-facing case thread: https://discord.com/channels/${member.guild.id}/${verificationEvent.thread_id}`
+        ? `Case thread: https://discord.com/channels/${member.guild.id}/${verificationEvent.thread_id}`
         : null,
-      sourceMessage?.url ? `Source message: ${sourceMessage.url}` : null,
+      sourceReportUrl ? `Source report: ${sourceReportUrl}` : null,
     ].filter((line): line is string => Boolean(line));
 
     return enforceDiscordMessageLimit(
       [
-        roleMentions,
-        `Admin evidence workspace for ${member.user.tag} (${member.id}).`,
-        'Visibility follows the admin notification channel and thread membership. Do not add the user under review to this thread.',
+        `Admin-only evidence thread for <@${member.id}> (${member.id}).`,
         '',
-        `Case ID: ${verificationEvent.id}`,
+        'Use this thread for staff notes or evidence that should stay separate from the user-facing case thread.',
         ...links,
-        '',
-        'Case details:',
-        ...reasonLines,
-        detectionResult.triggerContent ? `Context: ${detectionResult.triggerContent}` : null,
       ]
         .filter((line): line is string => Boolean(line))
         .join('\n')
     );
   }
 
-  private async getCaseNotificationRoleIds(guildId: string): Promise<string[]> {
-    const serverConfig = await this.configService.getServerConfig(guildId).catch((error) => {
-      console.warn(`Failed to load case notification roles for guild ${guildId}:`, error);
-      return null;
-    });
-    if (!serverConfig) {
-      return [];
-    }
-
-    const roleIds = new Set<string>();
-    if (serverConfig.admin_notification_role_id) {
-      roleIds.add(serverConfig.admin_notification_role_id);
-    }
-
-    const responderSettings = getCaseResponderSettings(serverConfig.settings);
-    if (responderSettings.routingMode !== 'off') {
-      responderSettings.roleIds.forEach((roleId) => roleIds.add(roleId));
-    }
-
-    return [...roleIds];
-  }
-
-  private formatRoleMentions(roleIds: readonly string[]): string | null {
-    return roleIds.length > 0 ? roleIds.map((roleId) => `<@&${roleId}>`).join(' ') : null;
-  }
-
-  private createAllowedRoleMentions(roleIds: readonly string[]): {
+  private createNoMentionAllowedMentions(): {
     parse: [];
     users: [];
-    roles: string[];
+    roles: [];
     repliedUser: false;
   } {
     return {
       parse: [],
       users: [],
-      roles: [...roleIds],
+      roles: [],
       repliedUser: false,
     };
   }
@@ -275,18 +244,37 @@ export class ThreadManager implements IThreadManager {
   private buildReportIntakeThreadMessage(reporter: GuildMember): string {
     return enforceDiscordMessageLimit(
       [
-        `Thanks <@${reporter.id}>. Please put the report context in this private thread.`,
+        `Thanks <@${reporter.id}>. Add what happened here.`,
         '',
         'Useful context includes:',
-        '- Who or what you are reporting, if you know it',
-        '- Message links, screenshots, usernames, user IDs, or mentions',
-        '- What happened and why it looked suspicious',
+        '- who or what you are reporting',
+        '- message links, screenshots, usernames, user IDs, or mentions',
+        '- what happened and why it looked suspicious',
         '',
-        'If you opened this by mistake, send `close report`.',
+        'Drasil will suggest possible report targets and ask for confirmation before submitting anything.',
         '',
-        'Moderators can ask follow-up questions here. Do not add the reported user to this thread.',
+        'If this was opened by mistake, use /close-report in this thread.',
       ].join('\n')
     );
+  }
+
+  private resolveSourceReportUrl(
+    guildId: string,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): string | null {
+    const reportThreadId = this.extractReportThreadId(
+      [detectionResult.triggerContent, ...detectionResult.reasons].join('\n')
+    );
+    if (reportThreadId) {
+      return `https://discord.com/channels/${guildId}/${reportThreadId}`;
+    }
+
+    return sourceMessage?.url ?? null;
+  }
+
+  private extractReportThreadId(text: string): string | null {
+    return text.match(/Report thread ID: (\d{17,20})/)?.[1] ?? null;
   }
 
   private async storeThreadId(
@@ -967,16 +955,14 @@ export class ThreadManager implements IThreadManager {
       await this.addCaseResponderMembers(member.guild, thread, [member.id]);
 
       setupStage = 'send admin evidence thread prompt';
-      const roleIds = await this.getCaseNotificationRoleIds(member.guild.id);
       await thread.send({
         content: this.buildPrivateEvidenceThreadMessage(
           member,
           verificationEvent,
           detectionResult,
-          this.formatRoleMentions(roleIds),
           sourceMessage
         ),
-        allowedMentions: this.createAllowedRoleMentions(roleIds),
+        allowedMentions: this.createNoMentionAllowedMentions(),
       });
 
       return thread;

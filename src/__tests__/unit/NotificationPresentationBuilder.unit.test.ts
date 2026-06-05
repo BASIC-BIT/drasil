@@ -175,6 +175,24 @@ describe('NotificationPresentationBuilder (unit)', () => {
     );
   });
 
+  it('uses specific pending titles for reports and admin-opened cases', () => {
+    const reportEmbed = builder.createSuspiciousUserEmbed(
+      buildMember(),
+      buildDetectionResult({ triggerSource: DetectionType.USER_REPORT }),
+      buildVerificationEvent(),
+      []
+    );
+    const adminCaseEmbed = builder.createSuspiciousUserEmbed(
+      buildMember(),
+      buildDetectionResult({ triggerSource: DetectionType.ADMIN_CASE }),
+      buildVerificationEvent(),
+      []
+    );
+
+    expect(reportEmbed.data.title).toBe('User Report Submitted');
+    expect(adminCaseEmbed.data.title).toBe('Admin Review Case Opened');
+  });
+
   it('adds and removes moderation action failure warnings', () => {
     const embed = new EmbedBuilder();
 
