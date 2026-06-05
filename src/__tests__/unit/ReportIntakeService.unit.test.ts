@@ -354,7 +354,7 @@ describe('ReportIntakeService', () => {
     expect(confirmationEvidence).toHaveLength(1);
   });
 
-  it('lets repeat confirmations retry submission before the intake is submitted', async () => {
+  it('does not retry submission after a target is already confirmed', async () => {
     const { service, reportIntakeRepository } = buildService();
     const intake = await service.openIntakeFromThread({
       serverId: 'guild-1',
@@ -379,9 +379,10 @@ describe('ReportIntakeService', () => {
     );
 
     expect(result).toMatchObject({
-      confirmed: true,
-      message: 'Confirmed <@user-1> as the report target.',
+      confirmed: false,
+      message: 'That report target has already been confirmed for this intake.',
     });
+    expect(result).not.toHaveProperty('reason');
     expect(confirmationEvidence).toHaveLength(1);
   });
 
@@ -670,7 +671,14 @@ describe('ReportIntakeService', () => {
       channelId: 'channel-1',
     });
 
-    const message = buildMessage({ content: 'close report' });
+    const channel = {
+      id: 'thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+      archived: false,
+      setArchived: jest.fn().mockResolvedValue(undefined),
+    };
+    const message = buildMessage({ content: 'close report', channel });
 
     await service.handleThreadMessage(message);
 
@@ -679,11 +687,12 @@ describe('ReportIntakeService', () => {
     expect(stored?.status).toBe(ReportIntakeStatus.CLOSED_BY_REPORTER);
     expect(stored?.closed_at).toBeInstanceOf(Date);
     expect(evidence).toHaveLength(2);
-    expect((message.channel as any).send).toHaveBeenCalledWith({
+    expect(channel.send).toHaveBeenCalledWith({
       content: 'Report intake closed. No report has been filed.',
       components: [],
       allowedMentions: { parse: [] },
     });
+    expect(channel.setArchived).toHaveBeenCalledWith(true, 'Report intake closed');
   });
 
   it('closes the current intake thread by slash command for reporter or staff', async () => {

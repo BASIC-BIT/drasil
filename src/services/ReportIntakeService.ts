@@ -31,6 +31,12 @@ interface MessageSendChannel {
   }): Promise<unknown>;
 }
 
+interface ArchivableThreadChannel {
+  id: string;
+  archived: boolean;
+  setArchived(archived: boolean, reason?: string): Promise<unknown>;
+}
+
 export interface OpenReportIntakeInput {
   serverId: string;
   reporter: GuildMember;
@@ -177,13 +183,9 @@ export class ReportIntakeService implements IReportIntakeService {
     }
     if (intake.confirmed_target_user_id) {
       if (intake.confirmed_target_user_id === input.targetUserId) {
-        const evidence = await this.reportIntakeRepository.listEvidence(intake.id);
         return {
-          confirmed: true,
-          message: `Confirmed <@${input.targetUserId}> as the report target.`,
-          reporterId: intake.reporter_id,
-          reason: this.buildSubmissionReason(intake, evidence),
-          attachments: this.buildSubmissionAttachments(evidence),
+          confirmed: false,
+          message: 'That report target has already been confirmed for this intake.',
         };
       }
 
@@ -494,6 +496,7 @@ export class ReportIntakeService implements IReportIntakeService {
           allowedMentions: { parse: [] },
         });
       }
+      await archiveClosedThread(message.channel);
       return;
     }
 
@@ -776,6 +779,19 @@ function toRecord(value: unknown): Record<string, unknown> {
 function hasMessageSend(channel: unknown): channel is MessageSendChannel {
   const candidate = channel as Partial<MessageSendChannel> | null;
   return typeof candidate?.send === 'function';
+}
+
+async function archiveClosedThread(channel: unknown): Promise<void> {
+  const candidate = channel as Partial<ArchivableThreadChannel> | null;
+  if (!candidate || candidate.archived || typeof candidate.setArchived !== 'function') {
+    return;
+  }
+
+  try {
+    await candidate.setArchived(true, 'Report intake closed');
+  } catch (error) {
+    console.warn(`Failed to archive closed report intake thread ${candidate.id}:`, error);
+  }
 }
 
 function sameStringArray(value: unknown, expected: string[]): boolean {
