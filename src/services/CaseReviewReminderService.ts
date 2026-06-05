@@ -5,6 +5,7 @@ import { IServerRepository } from '../repositories/ServerRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { Server, VerificationEvent } from '../repositories/types';
 import { getCaseReviewReminderSettings } from '../utils/caseReviewReminderSettings';
+import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 
 const CASE_REVIEW_LAST_REMINDED_AT_METADATA_KEY = 'case_review_last_reminded_at';
 const CASE_REVIEW_REMINDER_INTERVAL_MS = 15 * 60 * 1000;
@@ -20,6 +21,7 @@ export interface ICaseReviewReminderService {
 export class CaseReviewReminderService implements ICaseReviewReminderService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  private readonly presentationBuilder = new NotificationPresentationBuilder();
 
   constructor(
     @inject(TYPES.ServerRepository) private readonly serverRepository: IServerRepository,
@@ -90,14 +92,15 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       return;
     }
 
+    const roleIds = this.presentationBuilder.getCaseNotificationRoleIds(server);
     await channel.send({
-      content: this.buildReminderMessage(server.guild_id, staleCases, now),
-      allowedMentions: {
-        parse: [],
-        users: [],
-        roles: [],
-        repliedUser: false,
-      },
+      content: this.buildReminderMessage(
+        server.guild_id,
+        staleCases,
+        now,
+        this.presentationBuilder.formatRoleMentions(roleIds)
+      ),
+      allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
     });
 
     for (const event of staleCases) {
@@ -127,10 +130,15 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     return now.getTime() - remindedAt.getTime() >= repeatHours * 60 * 60 * 1000;
   }
 
-  private buildReminderMessage(guildId: string, events: VerificationEvent[], now: Date): string {
+  private buildReminderMessage(
+    guildId: string,
+    events: VerificationEvent[],
+    now: Date,
+    heading = 'Case review reminder'
+  ): string {
     const visibleEvents = events.slice(0, CASE_REVIEW_REMINDER_MAX_CASES);
     const lines = [
-      'Case review reminder',
+      heading,
       `There ${events.length === 1 ? 'is' : 'are'} ${events.length} stale pending case${events.length === 1 ? '' : 's'} needing review.`,
       '',
       ...visibleEvents.map((event) => this.formatCaseLine(guildId, event, now)),

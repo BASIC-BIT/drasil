@@ -548,6 +548,7 @@ export class ReportInteractionHandler {
         ({
           id: reporterId,
           username: 'unknown',
+          tag: 'unknown',
         }) as User
     );
   }

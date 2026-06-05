@@ -600,43 +600,35 @@ export class ThreadManager implements IThreadManager {
       return null;
     }
 
-    const parentChannels: TextChannel[] = [];
-    const verificationChannel = await this.configService.getVerificationChannel(
-      verificationEvent.server_id
-    );
-    if (verificationChannel) {
-      parentChannels.push(verificationChannel);
-    }
+    return this.fetchThreadById(verificationEvent.thread_id, verificationEvent.server_id);
+  }
 
-    const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
-    if (adminChannel && !parentChannels.some((channel) => channel.id === adminChannel.id)) {
-      parentChannels.push(adminChannel);
+  private async fetchThreadById(
+    threadId: string,
+    serverId?: string
+  ): Promise<ThreadChannel | null> {
+    const parentChannels: TextChannel[] = [];
+    if (serverId) {
+      const verificationChannel = await this.configService
+        .getVerificationChannel(serverId)
+        .catch(() => null);
+      if (verificationChannel) {
+        parentChannels.push(verificationChannel);
+      }
+
+      const adminChannel = await this.configService.getAdminChannel(serverId).catch(() => null);
+      if (adminChannel && !parentChannels.some((channel) => channel.id === adminChannel.id)) {
+        parentChannels.push(adminChannel);
+      }
     }
 
     for (const parentChannel of parentChannels) {
-      const thread = await parentChannel.threads
-        .fetch(verificationEvent.thread_id)
-        .catch(() => null);
+      const thread = await parentChannel.threads.fetch(threadId).catch(() => null);
       if (thread?.isThread()) {
         return thread;
       }
     }
 
-    const fetchChannel = (
-      this.client.channels as { fetch?: (id: string) => Promise<unknown> } | undefined
-    )?.fetch;
-    const fetchedChannel = fetchChannel
-      ? await fetchChannel.call(this.client.channels, verificationEvent.thread_id).catch(() => null)
-      : null;
-    if (!fetchedChannel) {
-      return null;
-    }
-
-    const maybeThread = fetchedChannel as ThreadChannel;
-    return maybeThread.isThread() ? maybeThread : null;
-  }
-
-  private async fetchThreadById(threadId: string): Promise<ThreadChannel | null> {
     const fetchChannel = (
       this.client.channels as { fetch?: (id: string) => Promise<unknown> } | undefined
     )?.fetch;
@@ -912,7 +904,10 @@ export class ThreadManager implements IThreadManager {
     sourceMessage?: Message
   ): Promise<ThreadChannel | null> {
     if (verificationEvent.private_evidence_thread_id) {
-      const existing = await this.fetchThreadById(verificationEvent.private_evidence_thread_id);
+      const existing = await this.fetchThreadById(
+        verificationEvent.private_evidence_thread_id,
+        verificationEvent.server_id
+      );
       if (existing) {
         return existing;
       }
@@ -1033,6 +1028,32 @@ export class ThreadManager implements IThreadManager {
     }
   }
 
+  private async setPrivateEvidenceThreadState(
+    verificationEvent: VerificationEvent,
+    archived: boolean,
+    locked: boolean,
+    ignoredThreadId?: string | null
+  ): Promise<boolean> {
+    const threadId = verificationEvent.private_evidence_thread_id;
+    if (!threadId || threadId === ignoredThreadId) {
+      return false;
+    }
+
+    const thread = await this.fetchThreadById(threadId, verificationEvent.server_id);
+    if (!thread) {
+      return false;
+    }
+
+    try {
+      await thread.setArchived(archived);
+      await thread.setLocked(locked);
+      return true;
+    } catch (error) {
+      console.warn(`Failed to update private evidence thread ${threadId}:`, error);
+      return false;
+    }
+  }
+
   /**
    * Look up a thread on the discord client close it, and lock it
    * @param threadId The Discord thread ID
@@ -1045,49 +1066,46 @@ export class ThreadManager implements IThreadManager {
     resolvedBy: string
   ): Promise<boolean> {
     try {
-      if (!verificationEvent.thread_id) {
-        // No thread but that's okay
-        return false;
+      let resolvedMainThread = false;
+
+      if (verificationEvent.thread_id) {
+        const thread = await this.fetchStoredThread(verificationEvent);
+
+        if (thread) {
+          if (resolution === VerificationStatus.VERIFIED) {
+            await thread.send({
+              content: this.buildVerificationResolutionMessage(
+                verificationEvent,
+                resolution,
+                resolvedBy
+              ),
+              allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+            });
+          } else if (resolution === VerificationStatus.BANNED) {
+            await thread.send({
+              content: this.buildVerificationResolutionMessage(
+                verificationEvent,
+                resolution,
+                resolvedBy
+              ),
+              allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+            });
+          }
+
+          await thread.setArchived(true);
+          await thread.setLocked(true);
+          resolvedMainThread = true;
+        }
       }
 
-      const verificationChannel = await this.configService.getVerificationChannel(
-        verificationEvent.server_id
+      const resolvedPrivateEvidenceThread = await this.setPrivateEvidenceThreadState(
+        verificationEvent,
+        true,
+        true,
+        verificationEvent.thread_id
       );
-      if (!verificationChannel) {
-        throw new Error('No verification channel ID configured');
-      }
 
-      const thread = await verificationChannel.threads.fetch(verificationEvent.thread_id);
-
-      if (!thread || !thread.isThread()) {
-        // No thread but that's okay
-        return false;
-      }
-
-      if (resolution === VerificationStatus.VERIFIED) {
-        await thread.send({
-          content: this.buildVerificationResolutionMessage(
-            verificationEvent,
-            resolution,
-            resolvedBy
-          ),
-          allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
-        });
-      } else if (resolution === VerificationStatus.BANNED) {
-        await thread.send({
-          content: this.buildVerificationResolutionMessage(
-            verificationEvent,
-            resolution,
-            resolvedBy
-          ),
-          allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
-        });
-      }
-
-      await thread.setArchived(true);
-      await thread.setLocked(true);
-
-      return true;
+      return resolvedMainThread || resolvedPrivateEvidenceThread;
     } catch (error) {
       console.error('Failed to resolve verification thread:', error);
       return false;
@@ -1161,27 +1179,25 @@ export class ThreadManager implements IThreadManager {
    */
   async reopenVerificationThread(verificationEvent: VerificationEvent): Promise<boolean> {
     try {
-      if (!verificationEvent.thread_id) {
-        // No thread but that's okay
-        return false;
+      let reopenedMainThread = false;
+
+      if (verificationEvent.thread_id) {
+        const thread = await this.fetchStoredThread(verificationEvent);
+        if (thread) {
+          await thread.setArchived(false);
+          await thread.setLocked(false);
+          reopenedMainThread = true;
+        }
       }
 
-      const channel = await this.configService.getVerificationChannel(verificationEvent.server_id);
+      const reopenedPrivateEvidenceThread = await this.setPrivateEvidenceThreadState(
+        verificationEvent,
+        false,
+        false,
+        verificationEvent.thread_id
+      );
 
-      if (!channel) {
-        throw new Error('No verification channel ID configured');
-      }
-
-      const thread = await channel.threads.fetch(verificationEvent.thread_id);
-      if (!thread || !thread.isThread()) {
-        // No thread but that's okay
-        return false;
-      }
-
-      await thread.setArchived(false);
-      await thread.setLocked(false);
-
-      return true;
+      return reopenedMainThread || reopenedPrivateEvidenceThread;
     } catch (error) {
       console.error('Failed to reopen verification thread:', error);
       return false;
