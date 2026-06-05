@@ -477,7 +477,6 @@ describe('ReportInteractionHandler (unit)', () => {
         'Opened a private report thread: https://discord.com/channels/report-thread-1\nAdd what happened there.',
     });
     expect(adminChannel.send).toHaveBeenCalledWith({
-      content: null,
       embeds: [
         expect.objectContaining({
           data: expect.objectContaining({ title: 'Report Intake Started' }),

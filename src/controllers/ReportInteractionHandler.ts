@@ -524,11 +524,12 @@ export class ReportInteractionHandler {
       const adminChannel = await this.configService.getAdminChannel(guildId);
       const serverConfig = await this.configService.getServerConfig(guildId);
       const roleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
+      const content = this.presentationBuilder.formatRoleMentions(roleIds);
       await adminChannel?.send({
-        content: this.presentationBuilder.formatRoleMentions(roleIds) ?? null,
+        ...(content ? { content } : {}),
         embeds: [this.presentationBuilder.createReportIntakeStartedEmbed(reporter, thread)],
         allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
-      } as unknown as Parameters<TextChannel['send']>[0]);
+      });
     } catch (error) {
       console.warn(`Failed to notify admin channel for report intake thread ${thread.id}:`, error);
     }
@@ -546,7 +547,7 @@ export class ReportInteractionHandler {
       () =>
         ({
           id: reporterId,
-          username: reporterId,
+          username: 'unknown',
         }) as User
     );
   }
