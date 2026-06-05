@@ -39,6 +39,11 @@ interface MessageFetchChannel {
 export interface IReportCandidateService {
   extractCandidateSignals(content: string): CandidateSignalSummary;
   resolvePlatformBackedCandidates(message: Message): Promise<ReportCandidate[]>;
+  resolveCandidatesFromSignals(
+    guild: Guild,
+    signals: CandidateSignalSummary,
+    reasonPrefix?: string
+  ): Promise<ReportCandidate[]>;
   searchMembersByName(guild: Guild, searchTerm: string, limit?: number): Promise<ReportCandidate[]>;
 }
 
@@ -92,34 +97,44 @@ export class ReportCandidateService implements IReportCandidateService {
     }
 
     const signals = this.extractCandidateSignals(message.content);
+
+    return this.resolveCandidatesFromSignals(message.guild, signals);
+  }
+
+  async resolveCandidatesFromSignals(
+    guild: Guild,
+    signals: CandidateSignalSummary,
+    reasonPrefix = ''
+  ): Promise<ReportCandidate[]> {
     const candidates = new Map<string, ReportCandidate>();
+    const prefix = reasonPrefix ? `${reasonPrefix}: ` : '';
 
     for (const userId of [...signals.mentions, ...signals.explicitUserIds]) {
-      const member = await this.fetchGuildMember(message.guild, userId);
+      const member = await this.fetchGuildMember(guild, userId);
       if (!member) {
         continue;
       }
 
       this.mergeCandidate(
         candidates,
-        this.buildCandidate(member, 'explicit Discord ID or mention')
+        this.buildCandidate(member, `${prefix}explicit Discord ID or mention`)
       );
     }
 
     for (const link of signals.messageLinks) {
-      const linkedMessage = await this.fetchLinkedMessage(message.guild, link);
+      const linkedMessage = await this.fetchLinkedMessage(guild, link);
       if (!linkedMessage) {
         continue;
       }
 
-      const member = await this.fetchGuildMember(message.guild, linkedMessage.author.id);
+      const member = await this.fetchGuildMember(guild, linkedMessage.author.id);
       if (!member) {
         continue;
       }
 
       this.mergeCandidate(
         candidates,
-        this.buildCandidate(member, 'validated Discord message link')
+        this.buildCandidate(member, `${prefix}validated Discord message link`)
       );
     }
 

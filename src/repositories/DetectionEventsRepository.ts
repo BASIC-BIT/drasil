@@ -20,6 +20,7 @@ export interface IDetectionEventsRepository {
   findByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]>;
   findCountedByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]>;
   findRecentByServer(serverId: string, limit?: number): Promise<DetectionEvent[]>;
+  findByReportIntakeId(reportIntakeId: string): Promise<DetectionEvent | null>;
   recordAdminAction(
     id: string,
     action: 'Verified' | 'Banned' | 'Ignored', // Keep string literal type for now
@@ -190,6 +191,23 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
       return events as DetectionEvent[];
     } catch (error) {
       this.handleError(error, 'findRecentByServer');
+    }
+  }
+
+  async findByReportIntakeId(reportIntakeId: string): Promise<DetectionEvent | null> {
+    try {
+      const event = await this.prisma.detection_events.findFirst({
+        where: {
+          metadata: {
+            path: ['reportIntakeId'],
+            equals: reportIntakeId,
+          },
+        },
+        orderBy: { detected_at: 'desc' },
+      });
+      return event as DetectionEvent | null;
+    } catch (error) {
+      this.handleError(error, 'findByReportIntakeId');
     }
   }
 

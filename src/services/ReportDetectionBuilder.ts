@@ -11,6 +11,11 @@ export interface BuiltUserReportDetection {
   detectionResult: DetectionResult;
 }
 
+export interface UserReportDetectionOptions {
+  attachments?: MessageReportAttachment[];
+  metadata?: Record<string, unknown>;
+}
+
 export class ReportDetectionBuilder {
   public constructor(
     private readonly detectionEventsRepository: IDetectionEventsRepository,
@@ -20,15 +25,18 @@ export class ReportDetectionBuilder {
   public async createUserReportDetection(
     member: GuildMember,
     reporter: User,
-    reason?: string
+    reason?: string,
+    options: UserReportDetectionOptions = {}
   ): Promise<BuiltUserReportDetection> {
     const reasonText = reason ? `Reason: ${reason}` : 'No reason provided.';
+    const attachments = this.serializeReportAttachments(options.attachments);
     const reportAiAnalysis = await this.reportAiAnalyzer
       .analyzeIfEnabled({
         serverId: member.guild.id,
         targetUserId: member.id,
         reporterId: reporter.id,
         reason,
+        attachments,
       })
       .catch((error) => {
         console.warn(
@@ -50,6 +58,8 @@ export class ReportDetectionBuilder {
           reporterId: reporter.id,
           content: reason ?? 'User report',
           reason: reason ?? reasonText,
+          ...(attachments ? { attachments } : {}),
+          ...options.metadata,
           ...(reportAiAnalysis ? { report_ai: reportAiAnalysis } : {}),
         },
         'server'
@@ -67,6 +77,25 @@ export class ReportDetectionBuilder {
         detectionEventId: detectionEvent.id,
         reportAiAnalysis,
       },
+    };
+  }
+
+  public createUserReportDetectionResult(detectionEvent: DetectionEvent): DetectionResult {
+    const eventMetadata = this.toRecord(detectionEvent.metadata);
+    const reasons = Array.isArray(detectionEvent.reasons) ? detectionEvent.reasons : [];
+    const triggerContent =
+      this.readString(eventMetadata.reason) ??
+      this.readString(eventMetadata.content) ??
+      'User report';
+
+    return {
+      label: 'SUSPICIOUS',
+      confidence: detectionEvent.confidence,
+      reasons: reasons.length ? reasons : ['User report'],
+      triggerSource: DetectionType.USER_REPORT,
+      triggerContent,
+      detectionEventId: detectionEvent.id,
+      reportAiAnalysis: this.reportAiAnalyzer.getAnalysisFromMetadata(eventMetadata),
     };
   }
 
@@ -199,6 +228,16 @@ export class ReportDetectionBuilder {
     return isLocalReport
       ? `Message reported in this server by user ${reporter.id}.${reasonText}`
       : `External DM/GDM report submitted by user ${reporter.id}.${reasonText}`;
+  }
+
+  private toRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  }
+
+  private readString(value: unknown): string | undefined {
+    return typeof value === 'string' && value ? value : undefined;
   }
 
   private serializeReportAttachments(

@@ -32,8 +32,9 @@ import {
 import { IUserModerationService } from './UserModerationService';
 import { IAdminActionService } from './AdminActionService';
 import { getUserReportSettings } from '../utils/userReportSettings';
-import type { IGPTService } from './GPTService';
-import { ReportAttachmentMetadata } from '../utils/reportAiSettings';
+import type { IGPTService, ReportAIAnalysis } from './GPTService';
+import { getReportAiSettings, ReportAttachmentMetadata } from '../utils/reportAiSettings';
+import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
 import {
   appendVerificationActionFailure,
   clearVerificationActionFailures,
@@ -112,6 +113,12 @@ export interface ISecurityActionService {
    */
   handleUserReport(member: GuildMember, reporter: User, reason?: string): Promise<boolean>;
 
+  handleConfirmedReportIntake(
+    member: GuildMember,
+    reporter: User,
+    report: ConfirmedReportIntakeContext
+  ): Promise<boolean>;
+
   handleMessageReport(
     targetUser: User | APIUser,
     reporter: User | APIUser,
@@ -185,6 +192,12 @@ export interface MessageReportContext {
 }
 
 export type MessageReportAttachment = ReportAttachmentMetadata;
+
+export interface ConfirmedReportIntakeContext {
+  reason?: string;
+  intakeId?: string;
+  attachments?: MessageReportAttachment[];
+}
 
 export type AdminCaseAction = 'open_case' | 'restrict';
 
@@ -711,6 +724,84 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     await this.upsertNotification(member, detectionResult, activeVerificationEvent);
+  }
+
+  private async routeConfirmedReportIntake(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    detectionEventId: string
+  ): Promise<void> {
+    const server = await this.serverRepository.findByGuildId(member.guild.id);
+    const intakeSettings = getReportIntakeSettings(server?.settings);
+    const reportAiSettings = getReportAiSettings(server?.settings);
+    const route = this.resolveConfirmedReportIntakeRoute(
+      intakeSettings.confirmedResponseMode,
+      reportAiSettings,
+      detectionResult.reportAiAnalysis
+    );
+
+    if (route === 'observed_alert') {
+      await this.upsertReportObservedAlertOrActiveCase(member, detectionResult, detectionEventId);
+      return;
+    }
+
+    const handled = await this.handleSuspiciousMember(
+      member,
+      detectionResult,
+      undefined,
+      route === 'restrict',
+      route === 'open_case',
+      true
+    );
+    if (!handled) {
+      throw new Error(`Failed to route confirmed report intake as ${route}`);
+    }
+  }
+
+  private resolveConfirmedReportIntakeRoute(
+    configuredMode: 'observed_alert' | 'open_case' | 'restrict',
+    reportAiSettings: ReturnType<typeof getReportAiSettings>,
+    reportAiAnalysis?: ReportAIAnalysis
+  ): 'observed_alert' | 'open_case' | 'restrict' {
+    if (configuredMode === 'observed_alert') {
+      return 'observed_alert';
+    }
+
+    if (!reportAiAnalysis) {
+      this.warnConfirmedReportIntakeFallback(configuredMode, reportAiSettings.maxAction);
+      return 'observed_alert';
+    }
+
+    if (
+      configuredMode === 'restrict' &&
+      reportAiSettings.maxAction === 'restrict' &&
+      reportAiAnalysis.recommendedAction === 'restrict' &&
+      reportAiAnalysis.confidence >= reportAiSettings.restrictThreshold
+    ) {
+      return 'restrict';
+    }
+
+    if (
+      (reportAiSettings.maxAction === 'open_case' || reportAiSettings.maxAction === 'restrict') &&
+      (reportAiAnalysis.recommendedAction === 'open_case' ||
+        reportAiAnalysis.recommendedAction === 'restrict') &&
+      reportAiAnalysis.confidence >= reportAiSettings.openCaseThreshold
+    ) {
+      return 'open_case';
+    }
+
+    this.warnConfirmedReportIntakeFallback(configuredMode, reportAiSettings.maxAction);
+
+    return 'observed_alert';
+  }
+
+  private warnConfirmedReportIntakeFallback(
+    configuredMode: 'open_case' | 'restrict',
+    maxAction: string
+  ): void {
+    console.warn(
+      `[ReportIntake] confirmedResponseMode is '${configuredMode}' but maxAction ('${maxAction}') or AI analysis did not meet thresholds; falling back to observed_alert.`
+    );
   }
 
   private async getObservedDetectionForMember(
@@ -1452,6 +1543,68 @@ export class SecurityActionService implements ISecurityActionService {
       return true;
     } catch (error) {
       console.error(`Failed to handle user report for ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
+  public async handleConfirmedReportIntake(
+    member: GuildMember,
+    reporter: User,
+    report: ConfirmedReportIntakeContext
+  ): Promise<boolean> {
+    try {
+      await this.ensureEntitiesExist(
+        member.guild.id,
+        member.id,
+        member.user.username,
+        member.joinedAt?.toISOString()
+      );
+
+      const existingDetectionEvent = report.intakeId
+        ? await this.detectionEventsRepository.findByReportIntakeId(report.intakeId)
+        : null;
+      if (
+        existingDetectionEvent &&
+        existingDetectionEvent.server_id === member.guild.id &&
+        existingDetectionEvent.user_id === member.id
+      ) {
+        const detectionResult =
+          this.reportDetectionBuilder.createUserReportDetectionResult(existingDetectionEvent);
+        await this.routeConfirmedReportIntake(member, detectionResult, existingDetectionEvent.id);
+        return true;
+      }
+
+      const { detectionEvent, detectionResult } =
+        await this.reportDetectionBuilder.createUserReportDetection(
+          member,
+          reporter,
+          report.reason,
+          {
+            attachments: report.attachments,
+            metadata: {
+              source: 'report_intake',
+              ...(report.intakeId ? { reportIntakeId: report.intakeId } : {}),
+            },
+          }
+        );
+
+      await this.routeConfirmedReportIntake(member, detectionResult, detectionEvent.id);
+      this.captureMemberAnalytics(
+        member,
+        'report intake submitted',
+        {
+          report_type: 'report_intake',
+          has_reason: Boolean(report.reason?.trim()),
+          has_attachments: Boolean(report.attachments?.length),
+        },
+        {
+          reporterId: reporter.id,
+          detectionEventId: detectionEvent.id,
+        }
+      );
+      return true;
+    } catch (error) {
+      console.error(`Failed to handle confirmed report intake for ${member.user.tag}:`, error);
       throw error;
     }
   }

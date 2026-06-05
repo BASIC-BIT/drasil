@@ -72,6 +72,10 @@ import {
   CaseReviewReminderService,
   ICaseReviewReminderService,
 } from '../services/CaseReviewReminderService';
+import {
+  IReportIntakeAgentService,
+  ReportIntakeAgentService,
+} from '../services/ReportIntakeAgentService';
 // Initialize container
 const container = new Container();
 
@@ -242,6 +246,11 @@ function configureServices(container: Container): void {
   container
     .bind<IReportIntakeService>(TYPES.ReportIntakeService)
     .to(ReportIntakeService)
+    .inSingletonScope();
+
+  container
+    .bind<IReportIntakeAgentService>(TYPES.ReportIntakeAgentService)
+    .to(ReportIntakeAgentService)
     .inSingletonScope();
 
   container

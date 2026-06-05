@@ -4,7 +4,11 @@ import {
   DEFAULT_USER_REPORT_REASON_REQUIRED,
   getUserReportSettings,
 } from '../utils/userReportSettings';
-import { ISecurityActionService, MessageReportContext } from './SecurityActionService';
+import {
+  ISecurityActionService,
+  MessageReportAttachment,
+  MessageReportContext,
+} from './SecurityActionService';
 
 export type UserReportSubmissionResult =
   | { status: 'submitted'; targetUserId: string }
@@ -78,6 +82,24 @@ export class ReportSubmissionService {
       } else {
         await this.securityActionService.handleUserReport(member, reporter, reason);
       }
+      return { status: 'submitted', targetUserId: member.id };
+    } catch (error) {
+      return { status: 'failed', error };
+    }
+  }
+
+  public async submitConfirmedReportIntake(
+    member: GuildMember,
+    reporter: User,
+    reason: string | undefined,
+    options?: { intakeId?: string; attachments?: MessageReportAttachment[] }
+  ): Promise<Extract<UserReportSubmissionResult, { status: 'submitted' | 'failed' }>> {
+    try {
+      await this.securityActionService.handleConfirmedReportIntake(member, reporter, {
+        reason,
+        intakeId: options?.intakeId,
+        attachments: options?.attachments,
+      });
       return { status: 'submitted', targetUserId: member.id };
     } catch (error) {
       return { status: 'failed', error };

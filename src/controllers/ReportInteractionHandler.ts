@@ -15,7 +15,9 @@ import { DiscordUserResolver } from '../services/DiscordUserResolver';
 import {
   IReportIntakeService,
   REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX,
+  REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX,
 } from '../services/ReportIntakeService';
+import { NotificationPresentationBuilder } from '../services/NotificationPresentationBuilder';
 import { type MessageReportAttachment } from '../services/SecurityActionService';
 import { ReportSubmissionService } from '../services/ReportSubmissionService';
 import { IThreadManager } from '../services/ThreadManager';
@@ -32,6 +34,7 @@ const REPORT_USER_REASON_FIELD_ID = 'report_reason';
 
 export class ReportInteractionHandler {
   private readonly userResolver: DiscordUserResolver;
+  private readonly presentationBuilder = new NotificationPresentationBuilder();
 
   public constructor(
     private readonly client: Client,
@@ -149,6 +152,11 @@ export class ReportInteractionHandler {
     interaction: ButtonInteraction,
     customId: string
   ): Promise<void> {
+    if (customId.startsWith(`${REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX}:`)) {
+      await this.handleReportIntakeReject(interaction, customId);
+      return;
+    }
+
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     let targetConfirmed = false;
 
@@ -196,10 +204,14 @@ export class ReportInteractionHandler {
       }
       targetConfirmed = true;
 
-      const submission = await this.reportSubmissionService.submitResolvedUserReport(
+      const submission = await this.reportSubmissionService.submitConfirmedReportIntake(
         targetMember,
         interaction.user,
-        confirmation.reason
+        confirmation.reason,
+        {
+          intakeId,
+          ...(confirmation.attachments?.length ? { attachments: confirmation.attachments } : {}),
+        }
       );
       if (submission.status === 'failed') {
         throw submission.error;
@@ -225,6 +237,49 @@ export class ReportInteractionHandler {
         content: targetConfirmed
           ? 'The report target was confirmed, but Drasil could not finish submitting it automatically. A moderator can review the intake thread.'
           : 'An error occurred while submitting this report. Please try again later.',
+      });
+    }
+  }
+
+  public async handleReportIntakeReject(
+    interaction: ButtonInteraction,
+    customId: string
+  ): Promise<void> {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      if (!this.reportIntakeService) {
+        await interaction.editReply({ content: 'Report intake tracking is not available.' });
+        return;
+      }
+
+      const [, intakeId, promptToken] = customId.split(':');
+      if (!intakeId || !promptToken) {
+        await interaction.editReply({ content: 'This report answer button is invalid.' });
+        return;
+      }
+
+      const result = await this.reportIntakeService.rejectCandidates({
+        intakeId,
+        rejectedById: interaction.user.id,
+        promptToken,
+      });
+      await interaction.editReply({ content: result.message });
+
+      if (result.rejected) {
+        const threadChannel = this.getThreadChannel(interaction.channel);
+        if (threadChannel) {
+          await threadChannel.send({
+            content:
+              'I will not submit that target. Please add more context, a Discord ID, a message link, or another screenshot if you want me to keep looking.',
+            allowedMentions: { parse: [] },
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error rejecting report intake target:', error);
+      await interaction.editReply({
+        content: 'An error occurred while recording that answer. Please try again later.',
       });
     }
   }
@@ -444,7 +499,7 @@ export class ReportInteractionHandler {
     try {
       const adminChannel = await this.configService.getAdminChannel(guildId);
       await adminChannel?.send({
-        content: `Report intake thread opened by <@${reporter.id}>: ${thread.url}`,
+        embeds: [this.presentationBuilder.createReportIntakeStartedEmbed(reporter, thread)],
         allowedMentions: { parse: [] },
       });
     } catch (error) {
@@ -491,6 +546,9 @@ export class ReportInteractionHandler {
   }
 
   public isReportIntakeConfirmCustomId(customId: string): boolean {
-    return customId.startsWith(`${REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX}:`);
+    return (
+      customId.startsWith(`${REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX}:`) ||
+      customId.startsWith(`${REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX}:`)
+    );
   }
 }
