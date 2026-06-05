@@ -75,8 +75,10 @@ describe('CaseReviewReminderService (unit)', () => {
 
     expect(send).toHaveBeenCalledWith({
       content: expect.stringContaining('There is 1 stale pending case needing review.'),
-      allowedMentions: { parse: [], users: [], roles: ['123456789012345678'], repliedUser: false },
+      allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
     });
+    expect(send.mock.calls[0][0].content).toContain('Case review reminder');
+    expect(send.mock.calls[0][0].content).not.toContain('<@&123456789012345678>');
     expect(send.mock.calls[0][0].content).toContain('evidence-thread-1');
     expect(verificationEventRepository.update).toHaveBeenCalledWith(
       staleCase.id,

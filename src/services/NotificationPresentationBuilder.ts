@@ -45,6 +45,7 @@ export class NotificationPresentationBuilder {
   public static readonly THREAD_ANALYSIS_FIELD_NAME = 'AI Thread Analysis';
   public static readonly LATEST_ADMIN_ACTION_FIELD_NAME = 'Latest Admin Action';
   public static readonly MODERATION_ACTION_WARNING_FIELD_NAME = 'Moderation Action Warning';
+  public static readonly RESOLUTION_FIELD_NAME = 'Resolution';
 
   public createSuspiciousUserEmbed(
     member: GuildMember,
@@ -91,16 +92,28 @@ export class NotificationPresentationBuilder {
       embedColor = 0x000000;
     }
 
+    const resolutionPresentation = this.getVerificationResolutionPresentation(verificationEvent);
     const embed = new EmbedBuilder()
       .setColor(embedColor)
-      .setTitle('Suspicious User Detected')
+      .setTitle(resolutionPresentation?.title ?? 'Suspicious User Detected')
       .setDescription(
-        countedDetectionEvents.length > 1
-          ? `<@${member.id}> has been flagged as suspicious ${countedDetectionEvents.length} times.`
-          : `<@${member.id}> has been flagged as suspicious.`
+        resolutionPresentation
+          ? `<@${member.id}> has been handled. No further moderator action is pending.`
+          : countedDetectionEvents.length > 1
+            ? `<@${member.id}> has been flagged as suspicious ${countedDetectionEvents.length} times.`
+            : `<@${member.id}> has been flagged as suspicious.`
       )
       .setThumbnail(member.user.displayAvatarURL())
       .addFields(
+        ...(resolutionPresentation
+          ? [
+              {
+                name: NotificationPresentationBuilder.RESOLUTION_FIELD_NAME,
+                value: resolutionPresentation.fieldValue,
+                inline: false,
+              },
+            ]
+          : []),
         { name: 'Username', value: member.user.tag, inline: true },
         { name: 'User ID', value: member.id, inline: true },
         { name: 'Account Created', value: accountCreatedFormatted, inline: false },
@@ -404,6 +417,7 @@ export class NotificationPresentationBuilder {
     if (hasGuild && actionTaken === AdminActionType.BAN) {
       embed.setColor(0x000000);
     }
+    this.upsertHandledResolutionField(embed, actionTaken, adminId, timestamp);
 
     const actionLogContent = `• ${this.formatAdminActionEvent(actionTaken, adminId, timestamp)}`;
     if (actionLogField) {
@@ -665,6 +679,70 @@ export class NotificationPresentationBuilder {
       verificationEvent.resolved_by,
       Math.floor(verificationEvent.resolved_at.getTime() / 1000)
     );
+  }
+
+  private getVerificationResolutionPresentation(
+    verificationEvent: VerificationEvent
+  ): { title: string; fieldValue: string } | null {
+    const actionTaken =
+      verificationEvent.status === VerificationStatus.BANNED
+        ? AdminActionType.BAN
+        : verificationEvent.status === VerificationStatus.VERIFIED
+          ? AdminActionType.VERIFY
+          : null;
+    if (!actionTaken) {
+      return null;
+    }
+
+    const resolvedAt = verificationEvent.resolved_at
+      ? Math.floor(verificationEvent.resolved_at.getTime() / 1000)
+      : null;
+
+    return {
+      title: this.formatHandledTitle(actionTaken),
+      fieldValue: this.formatResolutionFieldValue(
+        actionTaken,
+        verificationEvent.resolved_by,
+        resolvedAt
+      ),
+    };
+  }
+
+  private upsertHandledResolutionField(
+    embed: EmbedBuilder,
+    actionTaken: AdminActionType,
+    adminId: string,
+    timestamp: number
+  ): void {
+    if (actionTaken !== AdminActionType.VERIFY && actionTaken !== AdminActionType.BAN) {
+      return;
+    }
+
+    embed.setTitle(this.formatHandledTitle(actionTaken));
+    const field = {
+      name: NotificationPresentationBuilder.RESOLUTION_FIELD_NAME,
+      value: this.formatResolutionFieldValue(actionTaken, adminId, timestamp),
+      inline: false,
+    };
+    const fields = (embed.data.fields ?? []).filter(
+      (existingField) => existingField.name !== field.name
+    );
+    fields.splice(0, 0, field);
+    embed.setFields(...fields);
+  }
+
+  private formatHandledTitle(actionTaken: AdminActionType): string {
+    return `Case Handled: ${this.formatAdminActionLabel(actionTaken)}`;
+  }
+
+  private formatResolutionFieldValue(
+    actionTaken: AdminActionType,
+    adminId: string | null,
+    timestamp: number | null
+  ): string {
+    const actor = adminId ? ` by <@${adminId}>` : '';
+    const when = timestamp ? ` at <t:${timestamp}:F>` : '';
+    return `${this.formatAdminActionLabel(actionTaken)}${actor}${when}\nNo further moderator action is pending.`;
   }
 
   private upsertField(

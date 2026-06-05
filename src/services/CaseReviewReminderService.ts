@@ -4,7 +4,6 @@ import { TYPES } from '../di/symbols';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { Server, VerificationEvent } from '../repositories/types';
-import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { getCaseReviewReminderSettings } from '../utils/caseReviewReminderSettings';
 
 const CASE_REVIEW_LAST_REMINDED_AT_METADATA_KEY = 'case_review_last_reminded_at';
@@ -91,13 +90,12 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       return;
     }
 
-    const roleIds = getCaseResponderSettings(server.settings).roleIds;
     await channel.send({
-      content: this.buildReminderMessage(server.guild_id, staleCases, roleIds, now),
+      content: this.buildReminderMessage(server.guild_id, staleCases, now),
       allowedMentions: {
         parse: [],
         users: [],
-        roles: roleIds,
+        roles: [],
         repliedUser: false,
       },
     });
@@ -129,16 +127,10 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     return now.getTime() - remindedAt.getTime() >= repeatHours * 60 * 60 * 1000;
   }
 
-  private buildReminderMessage(
-    guildId: string,
-    events: VerificationEvent[],
-    roleIds: string[],
-    now: Date
-  ): string {
-    const roleMentions = roleIds.map((roleId) => `<@&${roleId}>`).join(' ');
+  private buildReminderMessage(guildId: string, events: VerificationEvent[], now: Date): string {
     const visibleEvents = events.slice(0, CASE_REVIEW_REMINDER_MAX_CASES);
     const lines = [
-      roleMentions || 'Case review reminder',
+      'Case review reminder',
       `There ${events.length === 1 ? 'is' : 'are'} ${events.length} stale pending case${events.length === 1 ? '' : 's'} needing review.`,
       '',
       ...visibleEvents.map((event) => this.formatCaseLine(guildId, event, now)),

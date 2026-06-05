@@ -43,6 +43,16 @@ export interface VerificationThreadRepairResult {
   promptAlreadyPresent: boolean;
 }
 
+interface UserSnapshotMetadata {
+  id?: string;
+  tag?: string;
+  username?: string;
+  display_name?: string;
+  avatar_url?: string;
+  account_created_at?: string;
+  joined_at?: string;
+}
+
 /**
  * Interface for NotificationManager service
  */
@@ -1041,7 +1051,8 @@ export class ThreadManager implements IThreadManager {
    */
   async resolveVerificationThread(
     verificationEvent: VerificationEvent,
-    resolution: VerificationStatus
+    resolution: VerificationStatus,
+    resolvedBy: string
   ): Promise<boolean> {
     try {
       if (!verificationEvent.thread_id) {
@@ -1065,11 +1076,21 @@ export class ThreadManager implements IThreadManager {
 
       if (resolution === VerificationStatus.VERIFIED) {
         await thread.send({
-          content: `This thread has been resolved. If you have any questions, please contact a moderator.`,
+          content: this.buildVerificationResolutionMessage(
+            verificationEvent,
+            resolution,
+            resolvedBy
+          ),
+          allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
         });
       } else if (resolution === VerificationStatus.BANNED) {
         await thread.send({
-          content: `This thread has been rejected. If you have any questions, please contact a moderator.`,
+          content: this.buildVerificationResolutionMessage(
+            verificationEvent,
+            resolution,
+            resolvedBy
+          ),
+          allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
         });
       }
 
@@ -1081,6 +1102,65 @@ export class ThreadManager implements IThreadManager {
       console.error('Failed to resolve verification thread:', error);
       return false;
     }
+  }
+
+  private buildVerificationResolutionMessage(
+    verificationEvent: VerificationEvent,
+    resolution: VerificationStatus,
+    resolvedBy: string
+  ): string {
+    const actionLabel = resolution === VerificationStatus.BANNED ? 'banned' : 'verified';
+    const snapshot = this.getUserSnapshot(verificationEvent.metadata);
+    const lines = [
+      `Case handled: ${actionLabel}.`,
+      `Action taken by: <@${resolvedBy}>`,
+      verificationEvent.resolved_at
+        ? `Action time: ${this.formatDiscordTimestamp(verificationEvent.resolved_at)}`
+        : null,
+      '',
+      'User snapshot:',
+      `- User: ${snapshot?.tag ?? snapshot?.username ?? verificationEvent.user_id} (${verificationEvent.user_id})`,
+      snapshot?.display_name ? `- Display name: ${snapshot.display_name}` : null,
+      snapshot?.username && snapshot.username !== snapshot.tag
+        ? `- Username: ${snapshot.username}`
+        : null,
+      snapshot?.account_created_at
+        ? `- Account created: ${this.formatDiscordTimestamp(snapshot.account_created_at)}`
+        : null,
+      snapshot?.joined_at
+        ? `- Joined server: ${this.formatDiscordTimestamp(snapshot.joined_at)}`
+        : null,
+      snapshot?.avatar_url ? `- Avatar at time of case: ${snapshot.avatar_url}` : null,
+      verificationEvent.notes ? `- Notes: ${verificationEvent.notes}` : null,
+      '',
+      'No further moderator action is pending.',
+      'If you have any questions, please contact a moderator.',
+    ].filter((line): line is string => line !== null);
+
+    return enforceDiscordMessageLimit(lines.join('\n'));
+  }
+
+  private getUserSnapshot(metadata: VerificationEvent['metadata']): UserSnapshotMetadata | null {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return null;
+    }
+
+    const snapshot = (metadata as Record<string, unknown>).user_snapshot;
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+      return null;
+    }
+
+    return snapshot as UserSnapshotMetadata;
+  }
+
+  private formatDiscordTimestamp(value: Date | string): string {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return String(value);
+    }
+
+    const timestamp = Math.floor(date.getTime() / 1000);
+    return `<t:${timestamp}:F> (<t:${timestamp}:R>)`;
   }
 
   /**

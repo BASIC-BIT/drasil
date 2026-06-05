@@ -898,12 +898,46 @@ describe('ThreadManager (unit)', () => {
       serverMemberRepository
     );
 
-    const event = buildVerificationEvent({ thread_id: 'thread-1' });
+    const event = buildVerificationEvent({
+      thread_id: 'thread-1',
+      status: VerificationStatus.BANNED,
+      resolved_at: new Date('2026-01-05T00:00:00Z'),
+      notes: 'Confirmed scam',
+      metadata: {
+        user_snapshot: {
+          tag: 'test-user#0001',
+          username: 'test-user',
+          display_name: 'Test User',
+          avatar_url: 'https://example.com/avatar.png',
+          account_created_at: '2026-01-01T00:00:00.000Z',
+          joined_at: '2026-01-02T00:00:00.000Z',
+        },
+      },
+    });
 
-    const result = await manager.resolveVerificationThread(event, VerificationStatus.VERIFIED);
+    const result = await manager.resolveVerificationThread(
+      event,
+      VerificationStatus.BANNED,
+      'admin-1'
+    );
 
     expect(result).toBe(true);
-    expect(thread.send).toHaveBeenCalled();
+    expect(thread.send).toHaveBeenCalledWith({
+      content: expect.stringContaining('Case handled: banned.'),
+      allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+    });
+    expect(thread.send).toHaveBeenCalledWith({
+      content: expect.stringContaining('Action taken by: <@admin-1>'),
+      allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+    });
+    expect(thread.send).toHaveBeenCalledWith({
+      content: expect.stringContaining('- Avatar at time of case: https://example.com/avatar.png'),
+      allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+    });
+    expect(thread.send).toHaveBeenCalledWith({
+      content: expect.stringContaining('- Notes: Confirmed scam'),
+      allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+    });
     expect(thread.setArchived).toHaveBeenCalledWith(true);
     expect(thread.setLocked).toHaveBeenCalledWith(true);
   });

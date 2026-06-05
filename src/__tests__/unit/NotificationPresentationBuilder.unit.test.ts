@@ -136,15 +136,42 @@ describe('NotificationPresentationBuilder (unit)', () => {
     );
 
     expect(embed.data.color).toBe(0x000000);
+    expect(embed.data.title).toBe('Case Handled: Banned');
     expect(embed.data.fields?.map((field) => field.name)).toEqual([
+      'Resolution',
       'Detection Confidence',
       'Latest Admin Action',
       'Action Log',
     ]);
+    expect(getField(embed, 'Resolution')).toBe(
+      'Banned by <@admin-2> at <t:1800000100:F>\nNo further moderator action is pending.'
+    );
     expect(getField(embed, 'Latest Admin Action')).toBe('Banned by <@admin-2> at <t:1800000100:F>');
     expect(getField(embed, 'Action Log')).toBe(
       '• Verified by <@admin-1> at <t:1800000000:F>\n' +
         '• Banned by <@admin-2> at <t:1800000100:F>'
+    );
+  });
+
+  it('fronts handled status when rendering resolved case notifications', () => {
+    const embed = builder.createSuspiciousUserEmbed(
+      buildMember(),
+      buildDetectionResult(),
+      buildVerificationEvent({
+        status: VerificationStatus.BANNED,
+        resolved_by: 'admin-1',
+        resolved_at: new Date('2026-01-05T00:00:00Z'),
+      }),
+      []
+    );
+
+    expect(embed.data.title).toBe('Case Handled: Banned');
+    expect(embed.data.description).toBe(
+      '<@user-1> has been handled. No further moderator action is pending.'
+    );
+    expect(embed.data.fields?.[0].name).toBe('Resolution');
+    expect(getField(embed, 'Resolution')).toBe(
+      'Banned by <@admin-1> at <t:1767571200:F>\nNo further moderator action is pending.'
     );
   });
 
