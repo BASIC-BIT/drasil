@@ -19,6 +19,7 @@ import {
   DEFAULT_VERIFICATION_PROMPT_TEMPLATE,
   renderVerificationPromptTemplate,
 } from '../../utils/verificationPromptTemplate';
+import { parseAdminActionCustomId } from '../../utils/adminActionCustomIds';
 
 const buildMember = (guildId: string, userId: string, guildName = 'Test Guild'): GuildMember =>
   ({
@@ -48,6 +49,16 @@ const buildVerificationEvent = (overrides: Partial<VerificationEvent> = {}): Ver
   notes: overrides.notes ?? null,
   metadata: overrides.metadata ?? null,
 });
+
+const extractComponentCustomIds = (components: unknown[]): string[] =>
+  components.flatMap((row) =>
+    ((row as { components?: unknown[] }).components ?? []).map(
+      (component) =>
+        (component as { data?: { custom_id?: string }; customId?: string }).data?.custom_id ??
+        (component as { customId?: string }).customId ??
+        ''
+    )
+  );
 
 describe('ThreadManager (unit)', () => {
   let configService: IConfigService;
@@ -521,6 +532,13 @@ describe('ThreadManager (unit)', () => {
         roles: [],
         repliedUser: false,
       },
+      components: expect.any(Array),
+    });
+    const prompt = thread.send.mock.calls[0][0] as { components: unknown[] };
+    expect(parseAdminActionCustomId(extractComponentCustomIds(prompt.components)[0])).toEqual({
+      surface: 'case',
+      action: 'menu',
+      userId: 'user-1',
     });
   });
 
@@ -609,8 +627,15 @@ describe('ThreadManager (unit)', () => {
       expect.objectContaining({
         content: expect.stringContaining('Admin-only evidence thread for <@user-1> (user-1).'),
         allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+        components: expect.any(Array),
       })
     );
+    const prompt = thread.send.mock.calls[0][0] as { components: unknown[] };
+    expect(parseAdminActionCustomId(extractComponentCustomIds(prompt.components)[0])).toEqual({
+      surface: 'case',
+      action: 'menu',
+      userId: 'user-1',
+    });
   });
 
   it('recovers an already-attached admin evidence thread when duplicate start fails', async () => {

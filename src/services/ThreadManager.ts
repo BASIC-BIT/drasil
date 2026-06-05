@@ -25,6 +25,7 @@ import {
 } from '../utils/verificationPromptTemplate';
 import { DetectionResult } from './DetectionOrchestrator';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
+import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 
 export const VERIFICATION_THREAD_TYPE_METADATA_KEY = 'thread_type';
 export const VERIFICATION_THREAD_TYPE = 'verification';
@@ -128,6 +129,7 @@ export class ThreadManager implements IThreadManager {
   private userRepository: IUserRepository;
   private serverRepository: IServerRepository;
   private serverMemberRepository: IServerMemberRepository;
+  private readonly presentationBuilder = new NotificationPresentationBuilder();
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -889,6 +891,7 @@ export class ThreadManager implements IThreadManager {
           roles: [],
           repliedUser: false,
         },
+        components: [this.presentationBuilder.createActionRow(member.id)],
       });
 
       return thread;
@@ -963,6 +966,7 @@ export class ThreadManager implements IThreadManager {
           sourceMessage
         ),
         allowedMentions: this.createNoMentionAllowedMentions(),
+        components: [this.presentationBuilder.createActionRow(member.id)],
       });
 
       return thread;
