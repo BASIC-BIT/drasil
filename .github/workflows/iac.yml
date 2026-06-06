@@ -37,6 +37,10 @@ jobs:
         working-directory: infra/aws/prod
         run: terraform init -backend=false && terraform validate
 
+      - name: Terraform validate (domain)
+        working-directory: infra/aws/domain
+        run: terraform init -backend=false && terraform validate
+
       - name: Terraform validate (intel)
         working-directory: infra/aws/intel
         run: terraform init -backend=false && terraform validate
