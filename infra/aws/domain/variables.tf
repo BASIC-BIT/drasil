@@ -10,8 +10,8 @@ variable "domain_name" {
   default     = "drasilbot.com"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$", trimsuffix(var.domain_name, ".")))
-    error_message = "domain_name must be a valid DNS name without protocol or path."
+    condition     = length(trimsuffix(var.domain_name, ".")) <= 253 && can(regex("^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$", trimsuffix(var.domain_name, ".")))
+    error_message = "domain_name must be a valid DNS name without protocol, path, consecutive dots, or labels starting/ending with a hyphen."
   }
 }
 

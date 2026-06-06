@@ -32,6 +32,7 @@ resource "aws_route53_zone" "primary" {
 
 resource "aws_route53_record" "vercel_apex" {
   #checkov:skip=CKV2_AWS_23:Vercel apex records intentionally point to Vercel's provider-managed global edge IP.
+  # Allow overwrite keeps apply idempotent if these records were pre-created during cutover.
   count = var.enable_vercel_records ? 1 : 0
 
   zone_id         = aws_route53_zone.primary.zone_id
@@ -43,6 +44,7 @@ resource "aws_route53_record" "vercel_apex" {
 }
 
 resource "aws_route53_record" "vercel_www" {
+  # Allow overwrite keeps apply idempotent if this record was pre-created during cutover.
   count = var.enable_vercel_records ? 1 : 0
 
   zone_id         = aws_route53_zone.primary.zone_id

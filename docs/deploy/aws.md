@@ -81,7 +81,7 @@ After first apply, set the Route 53 Domains registration nameservers to the Terr
 ```bash
 terraform output name_servers
 aws route53domains update-domain-nameservers --region us-east-1 --domain-name drasilbot.com \
-  --nameservers Name=NS_1 Name=NS_2 Name=NS_3 Name=NS_4
+  --nameservers Name="<NS_1>" Name="<NS_2>" Name="<NS_3>" Name="<NS_4>"
 ```
 
 The stack creates Vercel DNS defaults by default:
