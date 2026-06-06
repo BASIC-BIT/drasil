@@ -31,6 +31,12 @@ interface MessageSendChannel {
   }): Promise<unknown>;
 }
 
+interface ArchivableThreadChannel {
+  id: string;
+  archived: boolean;
+  setArchived(archived: boolean, reason?: string): Promise<unknown>;
+}
+
 export interface OpenReportIntakeInput {
   serverId: string;
   reporter: GuildMember;
@@ -49,9 +55,11 @@ export interface IReportIntakeService {
     intakeId: string;
     targetUserId: string;
     confirmedById: string;
+    confirmedByStaff?: boolean;
   }): Promise<{
     confirmed: boolean;
     message: string;
+    reporterId?: string;
     reason?: string;
     attachments?: ReportAttachmentMetadata[];
   }>;
@@ -59,7 +67,13 @@ export interface IReportIntakeService {
     intakeId: string;
     rejectedById: string;
     promptToken: string;
+    rejectedByStaff?: boolean;
   }): Promise<{ rejected: boolean; message: string }>;
+  closeIntakeForThread(input: {
+    threadId: string;
+    closedById: string;
+    closedByStaff?: boolean;
+  }): Promise<{ closed: boolean; message: string }>;
   recordAgentAnalysis(input: {
     intakeId: string;
     message: Message;
@@ -142,9 +156,11 @@ export class ReportIntakeService implements IReportIntakeService {
     intakeId: string;
     targetUserId: string;
     confirmedById: string;
+    confirmedByStaff?: boolean;
   }): Promise<{
     confirmed: boolean;
     message: string;
+    reporterId?: string;
     reason?: string;
     attachments?: ReportAttachmentMetadata[];
   }> {
@@ -152,8 +168,9 @@ export class ReportIntakeService implements IReportIntakeService {
     if (!intake) {
       return { confirmed: false, message: 'That report intake could not be found.' };
     }
-    if (intake.reporter_id !== input.confirmedById) {
-      return { confirmed: false, message: 'Only the reporter can confirm this target.' };
+    const confirmedByReporter = intake.reporter_id === input.confirmedById;
+    if (!confirmedByReporter && input.confirmedByStaff !== true) {
+      return { confirmed: false, message: 'Only the reporter or staff can confirm this target.' };
     }
     if (intake.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION) {
       return {
@@ -161,17 +178,14 @@ export class ReportIntakeService implements IReportIntakeService {
         message: 'That report intake is no longer accepting target confirmations.',
       };
     }
-    if (input.targetUserId === input.confirmedById) {
+    if (input.targetUserId === intake.reporter_id || input.targetUserId === input.confirmedById) {
       return { confirmed: false, message: 'You cannot report yourself.' };
     }
     if (intake.confirmed_target_user_id) {
       if (intake.confirmed_target_user_id === input.targetUserId) {
-        const evidence = await this.reportIntakeRepository.listEvidence(intake.id);
         return {
-          confirmed: true,
-          message: `Confirmed <@${input.targetUserId}> as the report target.`,
-          reason: this.buildSubmissionReason(intake, evidence),
-          attachments: this.buildSubmissionAttachments(evidence),
+          confirmed: false,
+          message: 'That report target has already been confirmed for this intake.',
         };
       }
 
@@ -189,6 +203,23 @@ export class ReportIntakeService implements IReportIntakeService {
       };
     }
 
+    const confirmedAt = new Date().toISOString();
+    const confirmedIntake = await this.reportIntakeRepository.confirmTargetIfUnset(intake.id, {
+      targetUserId: input.targetUserId,
+      metadata: {
+        ...metadata,
+        confirmed_target_user_id: input.targetUserId,
+        confirmed_by: input.confirmedById,
+        confirmed_at: confirmedAt,
+      },
+    });
+    if (!confirmedIntake) {
+      return {
+        confirmed: false,
+        message: 'That report target has already been confirmed for this intake.',
+      };
+    }
+
     await this.reportIntakeRepository.addEvidence({
       intakeId: intake.id,
       kind: ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION,
@@ -196,17 +227,7 @@ export class ReportIntakeService implements IReportIntakeService {
       metadata: {
         confirmed_by: input.confirmedById,
         target_user_id: input.targetUserId,
-        confirmed_at: new Date().toISOString(),
-      },
-    });
-
-    await this.reportIntakeRepository.update(intake.id, {
-      confirmedTargetUserId: input.targetUserId,
-      metadata: {
-        ...metadata,
-        confirmed_target_user_id: input.targetUserId,
-        confirmed_by: input.confirmedById,
-        confirmed_at: new Date().toISOString(),
+        confirmed_at: confirmedAt,
       },
     });
 
@@ -214,7 +235,8 @@ export class ReportIntakeService implements IReportIntakeService {
     return {
       confirmed: true,
       message: `Confirmed <@${input.targetUserId}> as the report target.`,
-      reason: this.buildSubmissionReason(intake, evidence),
+      reporterId: confirmedIntake.reporter_id,
+      reason: this.buildSubmissionReason(confirmedIntake, evidence),
       attachments: this.buildSubmissionAttachments(evidence),
     };
   }
@@ -223,13 +245,18 @@ export class ReportIntakeService implements IReportIntakeService {
     intakeId: string;
     rejectedById: string;
     promptToken: string;
+    rejectedByStaff?: boolean;
   }): Promise<{ rejected: boolean; message: string }> {
     const intake = await this.reportIntakeRepository.findById(input.intakeId);
     if (!intake) {
       return { rejected: false, message: 'That report intake could not be found.' };
     }
-    if (intake.reporter_id !== input.rejectedById) {
-      return { rejected: false, message: 'Only the reporter can answer this target question.' };
+    const rejectedByReporter = intake.reporter_id === input.rejectedById;
+    if (!rejectedByReporter && input.rejectedByStaff !== true) {
+      return {
+        rejected: false,
+        message: 'Only the reporter or staff can answer this target question.',
+      };
     }
     if (intake.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION) {
       return {
@@ -373,6 +400,32 @@ export class ReportIntakeService implements IReportIntakeService {
     });
   }
 
+  async closeIntakeForThread(input: {
+    threadId: string;
+    closedById: string;
+    closedByStaff?: boolean;
+  }): Promise<{ closed: boolean; message: string }> {
+    const intake = await this.reportIntakeRepository.findOpenByThreadId(input.threadId);
+    if (!intake) {
+      return { closed: false, message: 'This thread does not have an open report intake.' };
+    }
+
+    const closedByReporter = intake.reporter_id === input.closedById;
+    if (!closedByReporter && input.closedByStaff !== true) {
+      return {
+        closed: false,
+        message: 'Only the reporter or staff can close this report intake.',
+      };
+    }
+
+    await this.closeIntake(intake, {
+      closedById: input.closedById,
+      closedByStaff: !closedByReporter && input.closedByStaff === true,
+    });
+
+    return { closed: true, message: 'Report intake closed. No report has been filed.' };
+  }
+
   private async recordMessageEvidence(intake: ReportIntake, message: Message): Promise<void> {
     const isReporterMessage = message.author.id === intake.reporter_id;
     const trimmedContent = message.content.trim();
@@ -439,14 +492,9 @@ export class ReportIntakeService implements IReportIntakeService {
     };
 
     if (isReporterMessage && this.isReporterCloseCommand(trimmedContent)) {
-      await this.reportIntakeRepository.update(intake.id, {
-        status: ReportIntakeStatus.CLOSED_BY_REPORTER,
-        closedAt: now,
-        metadata: {
-          ...nextMetadata,
-          closed_by: message.author.id,
-          closed_reason: 'reporter_request',
-        },
+      await this.closeIntake(intake, {
+        closedById: message.author.id,
+        metadata: nextMetadata,
       });
       if (hasMessageSend(message.channel)) {
         await message.channel.send({
@@ -455,6 +503,7 @@ export class ReportIntakeService implements IReportIntakeService {
           allowedMentions: { parse: [] },
         });
       }
+      await archiveClosedThread(message.channel);
       return;
     }
 
@@ -662,8 +711,15 @@ export class ReportIntakeService implements IReportIntakeService {
     const firstReporterText = evidence.find(
       (item) => item.kind === ReportIntakeEvidenceKind.REPORTER_TEXT && item.content
     )?.content;
+    const confirmationEvidence = evidence.find(
+      (item) =>
+        item.kind === ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION &&
+        Boolean(readOptionalString(toRecord(item.metadata).confirmed_by))
+    );
+    const confirmedBy = readOptionalString(toRecord(confirmationEvidence?.metadata).confirmed_by);
+    const confirmerType = confirmedBy && confirmedBy !== intake.reporter_id ? 'staff' : 'reporter';
     const lines = [
-      'Report intake target confirmed by reporter.',
+      `Report intake target confirmed by ${confirmerType}.`,
       `Report intake ID: ${intake.id}`,
       intake.thread_id ? `Report thread ID: ${intake.thread_id}` : undefined,
       `Evidence entries: ${evidence.length}`,
@@ -697,6 +753,27 @@ export class ReportIntakeService implements IReportIntakeService {
   private isReporterCloseCommand(content: string): boolean {
     return REPORT_INTAKE_CLOSE_COMMANDS.has(content.trim().toLowerCase());
   }
+
+  private async closeIntake(
+    intake: ReportIntake,
+    input: {
+      closedById: string;
+      closedByStaff?: boolean;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<void> {
+    await this.reportIntakeRepository.update(intake.id, {
+      status: ReportIntakeStatus.CLOSED_BY_REPORTER,
+      closedAt: new Date(),
+      metadata: {
+        ...toRecord(intake.metadata),
+        ...input.metadata,
+        closed_by: input.closedById,
+        closed_reason: input.closedByStaff ? 'staff_request' : 'reporter_request',
+        ...(input.closedByStaff ? { closed_by_staff: true } : {}),
+      },
+    });
+  }
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -709,6 +786,19 @@ function toRecord(value: unknown): Record<string, unknown> {
 function hasMessageSend(channel: unknown): channel is MessageSendChannel {
   const candidate = channel as Partial<MessageSendChannel> | null;
   return typeof candidate?.send === 'function';
+}
+
+async function archiveClosedThread(channel: unknown): Promise<void> {
+  const candidate = channel as Partial<ArchivableThreadChannel> | null;
+  if (!candidate || candidate.archived || typeof candidate.setArchived !== 'function') {
+    return;
+  }
+
+  try {
+    await candidate.setArchived(true, 'Report intake closed');
+  } catch (error) {
+    console.warn(`Failed to archive closed report intake thread ${candidate.id}:`, error);
+  }
 }
 
 function sameStringArray(value: unknown, expected: string[]): boolean {

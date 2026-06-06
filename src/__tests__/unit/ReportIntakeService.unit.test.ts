@@ -263,6 +263,86 @@ describe('ReportIntakeService', () => {
     );
   });
 
+  it('allows authorized staff to confirm a suggested candidate', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+
+    const result = await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      confirmedById: 'staff-1',
+      confirmedByStaff: true,
+    });
+
+    const stored = await reportIntakeRepository.findById(intake.id);
+    const evidence = await reportIntakeRepository.listEvidence(intake.id);
+    expect(result).toMatchObject({
+      confirmed: true,
+      reporterId: 'reporter-1',
+      reason: expect.stringContaining('Report intake target confirmed by staff.'),
+    });
+    expect(stored?.confirmed_target_user_id).toBe('user-1');
+    expect(evidence).toContainEqual(
+      expect.objectContaining({
+        kind: ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION,
+        metadata: expect.objectContaining({ confirmed_by: 'staff-1' }),
+      })
+    );
+  });
+
+  it('rejects staff confirming themselves as the report target', async () => {
+    const { service } = buildService({
+      resolvePlatformBackedCandidates: jest.fn().mockResolvedValue([buildCandidate('staff-1')]),
+    });
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+
+    const result = await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'staff-1',
+      confirmedById: 'staff-1',
+      confirmedByStaff: true,
+    });
+
+    expect(result).toMatchObject({
+      confirmed: false,
+      message: 'You cannot report yourself.',
+    });
+  });
+
+  it('rejects unauthorized candidate confirmations', async () => {
+    const { service } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+
+    const result = await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      confirmedById: 'user-2',
+    });
+
+    expect(result).toMatchObject({
+      confirmed: false,
+      message: 'Only the reporter or staff can confirm this target.',
+    });
+  });
+
   it('rejects duplicate confirmations after submission', async () => {
     const { service, reportIntakeRepository } = buildService();
     const intake = await service.openIntakeFromThread({
@@ -299,7 +379,7 @@ describe('ReportIntakeService', () => {
     expect(confirmationEvidence).toHaveLength(1);
   });
 
-  it('lets repeat confirmations retry submission before the intake is submitted', async () => {
+  it('does not retry submission after a target is already confirmed', async () => {
     const { service, reportIntakeRepository } = buildService();
     const intake = await service.openIntakeFromThread({
       serverId: 'guild-1',
@@ -324,10 +404,39 @@ describe('ReportIntakeService', () => {
     );
 
     expect(result).toMatchObject({
-      confirmed: true,
-      message: 'Confirmed <@user-1> as the report target.',
+      confirmed: false,
+      message: 'That report target has already been confirmed for this intake.',
     });
+    expect(result).not.toHaveProperty('reason');
     expect(confirmationEvidence).toHaveLength(1);
+  });
+
+  it('does not submit when another confirmation wins the conditional update', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+    jest.spyOn(reportIntakeRepository, 'confirmTargetIfUnset').mockResolvedValueOnce(null);
+
+    const result = await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      confirmedById: 'reporter-1',
+    });
+    const confirmationEvidence = (await reportIntakeRepository.listEvidence(intake.id)).filter(
+      (item) => item.kind === ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION
+    );
+
+    expect(result).toMatchObject({
+      confirmed: false,
+      message: 'That report target has already been confirmed for this intake.',
+    });
+    expect(result).not.toHaveProperty('reason');
+    expect(confirmationEvidence).toHaveLength(0);
   });
 
   it('lets the reporter reject suggested candidates without submitting a report', async () => {
@@ -385,6 +494,31 @@ describe('ReportIntakeService', () => {
     expect(afterAnalysis?.status).toBe(ReportIntakeStatus.COLLECTING_EVIDENCE);
     expect(afterAnalysis?.metadata).toMatchObject({ candidate_suggestions: [] });
     expect(followupChannel.send).not.toHaveBeenCalled();
+  });
+
+  it('allows authorized staff to reject suggested candidates', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+    const storedBeforeReject = await reportIntakeRepository.findById(intake.id);
+    const promptToken = (storedBeforeReject?.metadata as Record<string, unknown>)
+      .last_confirmation_prompt_token as string;
+
+    const result = await service.rejectCandidates({
+      intakeId: intake.id,
+      rejectedById: 'staff-1',
+      rejectedByStaff: true,
+      promptToken,
+    });
+
+    const stored = await reportIntakeRepository.findById(intake.id);
+    expect(result).toMatchObject({ rejected: true });
+    expect(stored?.status).toBe(ReportIntakeStatus.COLLECTING_EVIDENCE);
   });
 
   it('ignores stale prompt tokens after a newer target prompt is shown', async () => {
@@ -590,7 +724,14 @@ describe('ReportIntakeService', () => {
       channelId: 'channel-1',
     });
 
-    const message = buildMessage({ content: 'close report' });
+    const channel = {
+      id: 'thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+      archived: false,
+      setArchived: jest.fn().mockResolvedValue(undefined),
+    };
+    const message = buildMessage({ content: 'close report', channel });
 
     await service.handleThreadMessage(message);
 
@@ -599,10 +740,39 @@ describe('ReportIntakeService', () => {
     expect(stored?.status).toBe(ReportIntakeStatus.CLOSED_BY_REPORTER);
     expect(stored?.closed_at).toBeInstanceOf(Date);
     expect(evidence).toHaveLength(2);
-    expect((message.channel as any).send).toHaveBeenCalledWith({
+    expect(channel.send).toHaveBeenCalledWith({
       content: 'Report intake closed. No report has been filed.',
       components: [],
       allowedMentions: { parse: [] },
+    });
+    expect(channel.setArchived).toHaveBeenCalledWith(true, 'Report intake closed');
+  });
+
+  it('closes the current intake thread by slash command for reporter or staff', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+
+    const result = await service.closeIntakeForThread({
+      threadId: 'thread-1',
+      closedById: 'staff-1',
+      closedByStaff: true,
+    });
+
+    const stored = await reportIntakeRepository.findById(intake.id);
+    expect(result).toEqual({
+      closed: true,
+      message: 'Report intake closed. No report has been filed.',
+    });
+    expect(stored?.status).toBe(ReportIntakeStatus.CLOSED_BY_REPORTER);
+    expect(stored?.metadata).toMatchObject({
+      closed_by: 'staff-1',
+      closed_reason: 'staff_request',
+      closed_by_staff: true,
     });
   });
 });

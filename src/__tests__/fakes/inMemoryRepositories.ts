@@ -651,6 +651,30 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     return { ...updated };
   }
 
+  async confirmTargetIfUnset(
+    id: string,
+    data: { targetUserId: string; metadata: Record<string, unknown> }
+  ): Promise<ReportIntake | null> {
+    const index = this.intakes.findIndex(
+      (item) =>
+        item.id === id &&
+        item.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION &&
+        item.confirmed_target_user_id === null
+    );
+    if (index === -1) {
+      return null;
+    }
+
+    const updated: ReportIntake = {
+      ...this.intakes[index],
+      confirmed_target_user_id: data.targetUserId,
+      metadata: data.metadata as ReportIntake['metadata'],
+      updated_at: new Date(),
+    };
+    this.intakes[index] = updated;
+    return { ...updated };
+  }
+
   async addEvidence(data: ReportIntakeEvidenceCreate): Promise<ReportIntakeEvidence> {
     const evidence: ReportIntakeEvidence = {
       id: this.nextEvidenceId(),

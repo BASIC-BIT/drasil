@@ -6,6 +6,7 @@ import {
   GuildMember,
   MessageFlags,
   ModalSubmitInteraction,
+  PermissionFlagsBits,
   User,
 } from 'discord.js';
 import {
@@ -87,6 +88,7 @@ const createReportIntakeService = (): jest.Mocked<IReportIntakeService> => ({
   handleThreadMessage: jest.fn().mockResolvedValue(false),
   confirmCandidate: jest.fn().mockResolvedValue({ confirmed: false, message: '' }),
   rejectCandidates: jest.fn().mockResolvedValue({ rejected: false, message: '' }),
+  closeIntakeForThread: jest.fn().mockResolvedValue({ closed: false, message: '' }),
   recordAgentAnalysis: jest.fn().mockResolvedValue(false),
   markSubmitted: jest.fn().mockResolvedValue(undefined),
   markOpenFailed: jest.fn().mockResolvedValue(undefined),
@@ -472,7 +474,7 @@ describe('ReportInteractionHandler (unit)', () => {
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Opened a private report thread: https://discord.com/channels/report-thread-1\nPlease put the report context there.',
+        'Opened a private report thread: https://discord.com/channels/report-thread-1\nAdd what happened there.',
     });
     expect(adminChannel.send).toHaveBeenCalledWith({
       embeds: [
@@ -480,7 +482,7 @@ describe('ReportInteractionHandler (unit)', () => {
           data: expect.objectContaining({ title: 'Report Intake Started' }),
         }),
       ],
-      allowedMentions: { parse: [] },
+      allowedMentions: { parse: [], roles: [], users: [], repliedUser: false },
     });
     expect(interaction.showModal).not.toHaveBeenCalled();
   });
@@ -522,7 +524,7 @@ describe('ReportInteractionHandler (unit)', () => {
     expect(reportIntakeService.openIntakeFromThread).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'You already have an open report thread: https://discord.com/channels/guild-1/existing-thread-1\nPlease continue there, or send `close report` in that thread if it was opened by mistake.',
+        'You already have an open report thread: https://discord.com/channels/guild-1/existing-thread-1\nPlease continue there, or use /close-report in that thread if it was opened by mistake.',
     });
   });
 
@@ -632,7 +634,7 @@ describe('ReportInteractionHandler (unit)', () => {
     expect(reportIntakeService.markOpenFailed).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenLastCalledWith({
       content:
-        'Opened a private report thread: https://discord.com/channels/report-thread-1\nPlease put the report context there.',
+        'Opened a private report thread: https://discord.com/channels/report-thread-1\nAdd what happened there.',
     });
   });
 
@@ -666,6 +668,7 @@ describe('ReportInteractionHandler (unit)', () => {
       intakeId: 'intake-1',
       targetUserId: 'user-1',
       confirmedById: 'reporter-1',
+      confirmedByStaff: false,
     });
     expect(securityActionService.handleConfirmedReportIntake).toHaveBeenCalledWith(
       targetMember,
@@ -690,6 +693,66 @@ describe('ReportInteractionHandler (unit)', () => {
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Submitted report for <@user-1>.',
+    });
+  });
+
+  it('allows configured case responders to confirm an intake for the original reporter', async () => {
+    const reporter = { id: 'reporter-1', username: 'reporter' } as User;
+    const staffMember = {
+      ...buildMember('guild-1', 'staff-1'),
+      roles: { cache: new Map([['123456789012345678', {}]]) },
+    } as unknown as GuildMember;
+    const targetMember = buildMember('guild-1', 'user-1');
+    const membersFetch = jest.fn().mockImplementation(async (userId: string) => {
+      if (userId === 'user-1') return targetMember;
+      if (userId === 'staff-1') return staffMember;
+      return null;
+    });
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      id: 'guild-1',
+      members: { fetch: membersFetch },
+    });
+    (client as any).users = {
+      fetch: jest.fn().mockResolvedValue(reporter),
+    };
+    configService.getServerConfig.mockResolvedValue({
+      settings: {
+        case_responder_role_ids: ['123456789012345678'],
+        case_responder_routing_mode: 'ping_only',
+      },
+    } as any);
+    const reportIntakeService = createReportIntakeService();
+    reportIntakeService.confirmCandidate.mockResolvedValue({
+      confirmed: true,
+      message: 'confirmed',
+      reporterId: 'reporter-1',
+      reason: 'Report intake target confirmed by staff.',
+    });
+    const handler = createHandler(reportIntakeService);
+    const interaction = buildInteraction('report_intake_confirm:intake-1:user-1', 'guild-1', {
+      id: 'staff-1',
+    } as User);
+
+    await handler.handleReportIntakeConfirm(interaction, interaction.customId);
+
+    expect(reportIntakeService.confirmCandidate).toHaveBeenCalledWith({
+      intakeId: 'intake-1',
+      targetUserId: 'user-1',
+      confirmedById: 'staff-1',
+      confirmedByStaff: true,
+    });
+    expect(securityActionService.handleConfirmedReportIntake).toHaveBeenCalledWith(
+      targetMember,
+      reporter,
+      {
+        reason: 'Report intake target confirmed by staff.',
+        intakeId: 'intake-1',
+      }
+    );
+    expect(reportIntakeService.markSubmitted).toHaveBeenCalledWith({
+      intakeId: 'intake-1',
+      targetUserId: 'user-1',
+      submittedById: 'staff-1',
     });
   });
 
@@ -723,6 +786,7 @@ describe('ReportInteractionHandler (unit)', () => {
       intakeId: 'intake-1',
       targetUserId: 'user-1',
       confirmedById: 'reporter-1',
+      confirmedByStaff: false,
     });
     expect(reportIntakeService.markSubmitted).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
@@ -753,6 +817,7 @@ describe('ReportInteractionHandler (unit)', () => {
       intakeId: 'intake-1',
       rejectedById: 'reporter-1',
       promptToken: 'prompt-token',
+      rejectedByStaff: false,
     });
     expect(securityActionService.handleConfirmedReportIntake).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
@@ -763,6 +828,37 @@ describe('ReportInteractionHandler (unit)', () => {
         content: expect.stringContaining('I will not submit that target'),
       })
     );
+  });
+
+  it('allows moderators to reject report intake candidates', async () => {
+    const staffMember = {
+      ...buildMember('guild-1', 'staff-1'),
+      permissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ModerateMembers),
+      },
+    } as unknown as GuildMember;
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(staffMember) },
+    });
+    const reportIntakeService = createReportIntakeService();
+    reportIntakeService.rejectCandidates.mockResolvedValue({
+      rejected: true,
+      message: 'Okay, I will not submit a report for that target.',
+    });
+    const handler = createHandler(reportIntakeService);
+    const interaction = buildInteraction('report_intake_reject:intake-1:prompt-token', 'guild-1', {
+      id: 'staff-1',
+    } as User);
+
+    await handler.handleReportIntakeConfirm(interaction, interaction.customId);
+
+    expect(reportIntakeService.rejectCandidates).toHaveBeenCalledWith({
+      intakeId: 'intake-1',
+      rejectedById: 'staff-1',
+      promptToken: 'prompt-token',
+      rejectedByStaff: true,
+    });
   });
 
   it('rejects report intake self-confirmations before submitting a report', async () => {

@@ -889,6 +889,11 @@ const baseApplicationCommandBuilders = [
     .setContexts(InteractionContextType.Guild)
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
+    .setName('close-report')
+    .setDescription('Close the current report intake thread without submitting a report')
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .setContexts(InteractionContextType.Guild),
+  new SlashCommandBuilder()
     .setName('setupreportbutton')
     .setDescription('Sends report instructions to a channel.')
     .addChannelOption((option) =>
