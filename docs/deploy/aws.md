@@ -63,6 +63,35 @@ Terraform creates:
 - GitHub Actions OIDC role for deploys
 - Resource Group filtered by `Project` + `Environment` tags
 
+## 2b) Provision domain DNS
+
+The domain stack manages the public Route 53 hosted zone for `drasilbot.com` separately from the ECS
+production stack.
+
+```bash
+cd infra/aws/domain
+cp backend.hcl.example backend.hcl
+# Edit backend.hcl and replace REPLACE_ME with the shared state bucket name
+terraform init -backend-config=backend.hcl
+terraform apply
+```
+
+After first apply, set the Route 53 Domains registration nameservers to the Terraform output:
+
+```bash
+terraform output name_servers
+aws route53domains update-domain-nameservers --region us-east-1 --domain-name drasilbot.com \
+  --nameservers Name=NS_1 Name=NS_2 Name=NS_3 Name=NS_4
+```
+
+The stack creates Vercel DNS defaults by default:
+
+- `drasilbot.com` A -> `76.76.21.21`
+- `www.drasilbot.com` CNAME -> `cname.vercel-dns.com`
+
+When Vercel is configured for the custom domain, also set `NEXT_PUBLIC_APP_URL=https://drasilbot.com`
+and add `https://drasilbot.com/api/auth/discord/callback` to the Discord OAuth redirect list.
+
 If your AWS account already has the standard GitHub Actions OIDC provider
 (`token.actions.githubusercontent.com`), set `github_oidc_provider_arn` when
 applying `infra/aws/prod` so this stack reuses it.
