@@ -41,7 +41,7 @@ export default async function AdminPage() {
         ) : (
           <div className="grid">
             {guilds.map((guild) => (
-              <Link className="card stack" href={`/admin/guild/${guild.id}/setup`} key={guild.id}>
+              <article className="card stack" key={guild.id}>
                 <div className={guild.configured ? 'status ok' : 'status warning'}>
                   {guild.configured ? 'Configured' : 'Needs setup'}
                 </div>
@@ -49,7 +49,15 @@ export default async function AdminPage() {
                   <h2>{guild.name}</h2>
                   <p className="muted">Review setup, diagnostics, and moderation policy.</p>
                 </div>
-              </Link>
+                <div className="actions">
+                  <Link className="button" href={`/admin/guild/${guild.id}/cases`}>
+                    Active cases
+                  </Link>
+                  <Link className="button secondary" href={`/admin/guild/${guild.id}/setup`}>
+                    Setup
+                  </Link>
+                </div>
+              </article>
             ))}
           </div>
         )}

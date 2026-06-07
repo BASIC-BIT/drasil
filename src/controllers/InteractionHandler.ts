@@ -11,6 +11,8 @@ import {
   ActionRowBuilder,
   ModalSubmitInteraction,
   ButtonStyle,
+  StringSelectMenuBuilder,
+  StringSelectMenuInteraction,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject, optional } from 'inversify';
@@ -42,6 +44,15 @@ import {
   type ParsedAdminActionCustomId,
 } from '../utils/adminActionCustomIds';
 import {
+  buildCaseReviewDigestPageCustomId,
+  buildCaseReviewDigestSelectCustomId,
+  CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID,
+  CASE_REVIEW_DIGEST_PAGE_CUSTOM_ID_PREFIX,
+  CASE_REVIEW_DIGEST_SELECT_CUSTOM_ID_PREFIX,
+  parseCaseReviewDigestPageCustomId,
+  parseCaseReviewDigestSelectCustomId,
+} from '../utils/caseReviewDigestCustomIds';
+import {
   REPORT_USER_INITIATE_CUSTOM_ID,
   REPORT_USER_TYPED_MODAL_ID,
   ReportInteractionHandler,
@@ -55,6 +66,7 @@ const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notificatio
 const VERIFICATION_BAN_MODAL_PREFIX = 'verification:ban_modal';
 const VERIFICATION_BAN_NOTES_FIELD_ID = 'verification_ban_notes';
 const VERIFICATION_BAN_DEFAULT_REASON = 'Banned by moderator during verification';
+const CASE_REVIEW_DIGEST_PAGE_SIZE = 25;
 /**
  * Interface for the Bot class
  */
@@ -63,6 +75,8 @@ export interface IInteractionHandler {
    * Handle a button interaction
    */
   handleButtonInteraction(interaction: ButtonInteraction): Promise<void>;
+
+  handleStringSelectMenuInteraction(interaction: StringSelectMenuInteraction): Promise<void>;
 
   /**
    * Handle a modal submission interaction
@@ -153,6 +167,14 @@ export class InteractionHandler implements IInteractionHandler {
 
       if (this.reportInteractionHandler.isReportIntakeConfirmCustomId(customId)) {
         await this.reportInteractionHandler.handleReportIntakeConfirm(interaction, customId);
+        return;
+      }
+
+      if (
+        customId === CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID ||
+        customId.startsWith(`${CASE_REVIEW_DIGEST_PAGE_CUSTOM_ID_PREFIX}:`)
+      ) {
+        await this.handleCaseReviewDigestButtonInteraction(interaction, guildId, customId);
         return;
       }
 
@@ -276,6 +298,28 @@ export class InteractionHandler implements IInteractionHandler {
     }
   }
 
+  public async handleStringSelectMenuInteraction(
+    interaction: StringSelectMenuInteraction
+  ): Promise<void> {
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: 'This menu can only be used in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (interaction.customId.startsWith(`${CASE_REVIEW_DIGEST_SELECT_CUSTOM_ID_PREFIX}:`)) {
+      await this.handleCaseReviewDigestSelectInteraction(interaction, interaction.guildId);
+      return;
+    }
+
+    await interaction.reply({
+      content: 'Unknown selection.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
   private async handleAdminActionsButtonInteraction(
     interaction: ButtonInteraction,
     guildId: string,
@@ -339,7 +383,7 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async showAdminActionsMenu(
-    interaction: ButtonInteraction,
+    interaction: ButtonInteraction | StringSelectMenuInteraction,
     guildId: string,
     parsed: ParsedAdminActionCustomId
   ): Promise<void> {
@@ -460,7 +504,7 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async showObservedAdminActionsMenu(
-    interaction: ButtonInteraction,
+    interaction: ButtonInteraction | StringSelectMenuInteraction,
     guildId: string,
     parsed: ParsedAdminActionCustomId,
     permissions: { hasModerationPermission: boolean; hasBanMembersPermission: boolean }
@@ -518,6 +562,175 @@ export class InteractionHandler implements IInteractionHandler {
       components: this.createButtonRows(buttons),
       flags: MessageFlags.Ephemeral,
     });
+  }
+
+  private async handleCaseReviewDigestButtonInteraction(
+    interaction: ButtonInteraction,
+    guildId: string,
+    customId: string
+  ): Promise<void> {
+    if (!(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need moderation permissions to review open cases.'
+      );
+      return;
+    }
+
+    const page =
+      customId === CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID
+        ? 0
+        : parseCaseReviewDigestPageCustomId(customId);
+    if (page === null) {
+      await interaction.reply({
+        content: 'Unknown case digest page.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await this.showCaseReviewDigestSelector(interaction, guildId, page, {
+      update: customId !== CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID,
+    });
+  }
+
+  private async handleCaseReviewDigestSelectInteraction(
+    interaction: StringSelectMenuInteraction,
+    guildId: string
+  ): Promise<void> {
+    if (parseCaseReviewDigestSelectCustomId(interaction.customId) === null) {
+      await interaction.reply({
+        content: 'Unknown case digest selection.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (!(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need moderation permissions to review open cases.'
+      );
+      return;
+    }
+
+    const selectedCaseId = interaction.values[0];
+    if (!selectedCaseId) {
+      await interaction.reply({
+        content: 'No case was selected.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const selectedCase = await this.verificationEventRepository.findById(selectedCaseId);
+    if (
+      !selectedCase ||
+      selectedCase.server_id !== guildId ||
+      selectedCase.status !== VerificationStatus.PENDING
+    ) {
+      await interaction.reply({
+        content: 'That case is no longer pending.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await this.showAdminActionsMenu(interaction, guildId, {
+      action: 'menu',
+      surface: 'case',
+      userId: selectedCase.user_id,
+    });
+  }
+
+  private async showCaseReviewDigestSelector(
+    interaction: ButtonInteraction,
+    guildId: string,
+    page: number,
+    options: { update: boolean }
+  ): Promise<void> {
+    const pendingCases = await this.verificationEventRepository.findPendingByServer(guildId);
+    if (pendingCases.length === 0) {
+      const response = {
+        content: 'There are no pending cases for this server.',
+        components: [],
+      };
+      if (options.update) {
+        await interaction.update(response);
+      } else {
+        await interaction.reply({ ...response, flags: MessageFlags.Ephemeral });
+      }
+      return;
+    }
+
+    const sortedCases = [...pendingCases].sort(
+      (left, right) => left.updated_at.getTime() - right.updated_at.getTime()
+    );
+    const pageCount = Math.ceil(sortedCases.length / CASE_REVIEW_DIGEST_PAGE_SIZE);
+    const safePage = Math.min(Math.max(page, 0), pageCount - 1);
+    const pageCases = sortedCases.slice(
+      safePage * CASE_REVIEW_DIGEST_PAGE_SIZE,
+      (safePage + 1) * CASE_REVIEW_DIGEST_PAGE_SIZE
+    );
+    const selector = new StringSelectMenuBuilder()
+      .setCustomId(buildCaseReviewDigestSelectCustomId(safePage))
+      .setPlaceholder('Choose a pending case')
+      .addOptions(
+        pageCases.map((event) => ({
+          label: this.truncateSelectText(`Case for ${event.user_id}`, 100),
+          description: this.truncateSelectText(
+            `${this.formatHoursSince(event.updated_at)} since update${event.thread_id ? ` | thread ${event.thread_id}` : ''}`,
+            100
+          ),
+          value: event.id,
+        }))
+      );
+    const components: Array<
+      ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>
+    > = [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selector)];
+
+    if (pageCount > 1) {
+      components.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(buildCaseReviewDigestPageCustomId(Math.max(safePage - 1, 0)))
+            .setLabel('Previous')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(safePage === 0),
+          new ButtonBuilder()
+            .setCustomId(buildCaseReviewDigestPageCustomId(Math.min(safePage + 1, pageCount - 1)))
+            .setLabel('Next')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(safePage >= pageCount - 1)
+        )
+      );
+    }
+
+    const response = {
+      content: `Open cases for this server (${sortedCases.length} total). Page ${safePage + 1}/${pageCount}. Selecting a case opens the existing Admin Actions menu.`,
+      components,
+      allowedMentions: { parse: [] },
+    };
+
+    if (options.update) {
+      await interaction.update(response);
+      return;
+    }
+
+    await interaction.reply({ ...response, flags: MessageFlags.Ephemeral });
+  }
+
+  private formatHoursSince(value: Date): string {
+    const ageHours = Math.max(1, Math.floor((Date.now() - value.getTime()) / (60 * 60 * 1000)));
+    return `${ageHours}h`;
+  }
+
+  private truncateSelectText(value: string, maxLength: number): string {
+    if (value.length <= maxLength) {
+      return value;
+    }
+
+    return value.slice(0, maxLength - 1);
   }
 
   private adminActionButton(
@@ -1181,7 +1394,7 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async hasAnyPermission(
-    interaction: ButtonInteraction | ModalSubmitInteraction,
+    interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction,
     guildId: string,
     permissions: bigint[]
   ): Promise<boolean> {
@@ -1227,7 +1440,7 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async replyPermissionDenied(
-    interaction: ButtonInteraction | ModalSubmitInteraction,
+    interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction,
     message: string,
     options?: { clearComponents?: boolean }
   ): Promise<void> {

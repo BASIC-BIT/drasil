@@ -64,6 +64,10 @@ import {
   ReportIntakeRepository,
 } from '../repositories/ReportIntakeRepository';
 import {
+  IModerationOutcomeRepository,
+  ModerationOutcomeRepository,
+} from '../repositories/ModerationOutcomeRepository';
+import {
   IReportCandidateService,
   ReportCandidateService,
 } from '../services/ReportCandidateService';
@@ -76,6 +80,10 @@ import {
   IReportIntakeAgentService,
   ReportIntakeAgentService,
 } from '../services/ReportIntakeAgentService';
+import {
+  IModerationOutcomeService,
+  ModerationOutcomeService,
+} from '../services/ModerationOutcomeService';
 // Initialize container
 const container = new Container();
 
@@ -107,6 +115,7 @@ function configureExternalDependencies(container: Container): void {
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildModeration,
       ],
     })
   );
@@ -160,6 +169,10 @@ function configureRepositories(container: Container): void {
   container
     .bind<IReportIntakeRepository>(TYPES.ReportIntakeRepository)
     .to(ReportIntakeRepository)
+    .inSingletonScope();
+  container
+    .bind<IModerationOutcomeRepository>(TYPES.ModerationOutcomeRepository)
+    .to(ModerationOutcomeRepository)
     .inSingletonScope();
 
   // Add more repository bindings as they're refactored
@@ -256,6 +269,11 @@ function configureServices(container: Container): void {
   container
     .bind<ICaseReviewReminderService>(TYPES.CaseReviewReminderService)
     .to(CaseReviewReminderService)
+    .inSingletonScope();
+
+  container
+    .bind<IModerationOutcomeService>(TYPES.ModerationOutcomeService)
+    .to(ModerationOutcomeService)
     .inSingletonScope();
 }
 

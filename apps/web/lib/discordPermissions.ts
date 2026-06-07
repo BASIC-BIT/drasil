@@ -3,6 +3,7 @@ export const DISCORD_PERMISSIONS = {
   Administrator: 1n << 3n,
   ManageChannels: 1n << 4n,
   ManageGuild: 1n << 5n,
+  ViewAuditLog: 1n << 7n,
   ViewChannel: 1n << 10n,
   SendMessages: 1n << 11n,
   EmbedLinks: 1n << 14n,

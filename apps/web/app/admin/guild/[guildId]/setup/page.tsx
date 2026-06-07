@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { saveGuildSetup } from './actions';
+import { InstallInvitePanel } from '@/components/InstallInvitePanel';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 import type { DiscordChannel, DiscordRole } from '@/lib/discordApi';
@@ -69,6 +70,9 @@ export default async function GuildSetupPage({ params }: PageProps) {
           <span>Drasil</span>
         </Link>
         <div className="actions">
+          <Link className="button secondary" href={`/admin/guild/${guildId}/cases`}>
+            Active cases
+          </Link>
           <Link className="button secondary" href="/admin">
             All servers
           </Link>
@@ -103,6 +107,8 @@ export default async function GuildSetupPage({ params }: PageProps) {
           ))}
         </div>
       </section>
+
+      <InstallInvitePanel guildId={guildId} />
 
       <form action={saveAction} className="panel stack">
         <div>

@@ -1,13 +1,17 @@
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { inject, injectable } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { Server, VerificationEvent } from '../repositories/types';
-import { getCaseReviewReminderSettings } from '../utils/caseReviewReminderSettings';
+import { CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID } from '../utils/caseReviewDigestCustomIds';
+import {
+  CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY,
+  getCaseReviewReminderSettings,
+} from '../utils/caseReviewReminderSettings';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 
-const CASE_REVIEW_LAST_REMINDED_AT_METADATA_KEY = 'case_review_last_reminded_at';
 const CASE_REVIEW_REMINDER_INTERVAL_MS = 15 * 60 * 1000;
 const CASE_REVIEW_REMINDER_MAX_CASES = 10;
 
@@ -81,9 +85,12 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       server.guild_id
     );
     const staleCases = pendingCases.filter((event) =>
-      this.shouldRemind(event, now, settings.staleHours, settings.repeatHours)
+      this.shouldRemind(event, now, settings.staleHours)
     );
     if (staleCases.length === 0) {
+      return;
+    }
+    if (!this.shouldSendDigest(server, now, settings.repeatHours)) {
       return;
     }
 
@@ -92,56 +99,82 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       return;
     }
 
+    const sortedCases = this.sortPendingCasesForDigest(pendingCases, staleCases);
+
     const roleIds = this.presentationBuilder.getCaseNotificationRoleIds(server);
     await channel.send({
       content: this.buildReminderMessage(
         server.guild_id,
-        staleCases,
+        channel.id,
+        sortedCases,
+        new Set(staleCases.map((event) => event.id)),
         now,
         this.presentationBuilder.formatRoleMentions(roleIds)
       ),
       allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
+      components: [this.createDigestActionRow()],
     });
 
-    for (const event of staleCases) {
-      await this.stampReminder(event, now).catch((error) => {
-        console.error(`Failed to stamp case reminder metadata for ${event.id}:`, error);
+    try {
+      await this.configService.updateServerSettings(server.guild_id, {
+        [CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]: now.toISOString(),
       });
+    } catch (error) {
+      console.error(`Failed to stamp case review digest metadata for ${server.guild_id}:`, error);
     }
   }
 
-  private shouldRemind(
-    event: VerificationEvent,
-    now: Date,
-    staleHours: number,
-    repeatHours: number
-  ): boolean {
+  private shouldRemind(event: VerificationEvent, now: Date, staleHours: number): boolean {
     const lastMovementAt = event.updated_at;
     if (now.getTime() - lastMovementAt.getTime() < staleHours * 60 * 60 * 1000) {
       return false;
     }
 
-    const metadata = this.metadataToRecord(event.metadata);
-    const remindedAt = this.parseDate(metadata[CASE_REVIEW_LAST_REMINDED_AT_METADATA_KEY]);
-    if (!remindedAt) {
+    return true;
+  }
+
+  private shouldSendDigest(server: Server, now: Date, repeatHours: number): boolean {
+    const lastSentAt = this.parseDate(server.settings[CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]);
+    if (!lastSentAt) {
       return true;
     }
 
-    return now.getTime() - remindedAt.getTime() >= repeatHours * 60 * 60 * 1000;
+    return now.getTime() - lastSentAt.getTime() >= repeatHours * 60 * 60 * 1000;
+  }
+
+  private sortPendingCasesForDigest(
+    pendingCases: VerificationEvent[],
+    staleCases: VerificationEvent[]
+  ): VerificationEvent[] {
+    const staleCaseIds = new Set(staleCases.map((event) => event.id));
+    return [...pendingCases].sort((left, right) => {
+      const leftIsStale = staleCaseIds.has(left.id);
+      const rightIsStale = staleCaseIds.has(right.id);
+      if (leftIsStale !== rightIsStale) {
+        return leftIsStale ? -1 : 1;
+      }
+
+      return left.updated_at.getTime() - right.updated_at.getTime();
+    });
   }
 
   private buildReminderMessage(
     guildId: string,
+    adminChannelId: string,
     events: VerificationEvent[],
+    staleCaseIds: Set<string>,
     now: Date,
     heading = 'Case review reminder'
   ): string {
     const visibleEvents = events.slice(0, CASE_REVIEW_REMINDER_MAX_CASES);
+    const staleCount = events.filter((event) => staleCaseIds.has(event.id)).length;
     const lines = [
       heading,
-      `There ${events.length === 1 ? 'is' : 'are'} ${events.length} stale pending case${events.length === 1 ? '' : 's'} needing review.`,
+      `There ${events.length === 1 ? 'is' : 'are'} ${events.length} pending case${events.length === 1 ? '' : 's'} needing review; ${staleCount} ${staleCount === 1 ? 'is' : 'are'} stale.`,
       '',
-      ...visibleEvents.map((event) => this.formatCaseLine(guildId, event, now)),
+      ...visibleEvents.map((event) =>
+        this.formatCaseLine(guildId, adminChannelId, event, now, staleCaseIds.has(event.id))
+      ),
     ];
 
     if (events.length > visibleEvents.length) {
@@ -154,34 +187,54 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     return lines.join('\n');
   }
 
-  private formatCaseLine(guildId: string, event: VerificationEvent, now: Date): string {
+  private formatCaseLine(
+    guildId: string,
+    adminChannelId: string,
+    event: VerificationEvent,
+    now: Date,
+    isStale: boolean
+  ): string {
     const lastMovementAt = event.updated_at;
     const ageHours = Math.max(
       1,
       Math.floor((now.getTime() - lastMovementAt.getTime()) / (60 * 60 * 1000))
     );
     const links = [
+      event.notification_message_id
+        ? `admin: https://discord.com/channels/${guildId}/${adminChannelId}/${event.notification_message_id}`
+        : null,
       event.private_evidence_thread_id
         ? `evidence: https://discord.com/channels/${guildId}/${event.private_evidence_thread_id}`
         : null,
       event.thread_id ? `case: https://discord.com/channels/${guildId}/${event.thread_id}` : null,
+      this.formatSourceMessageLink(guildId, event),
     ].filter((value): value is string => Boolean(value));
 
-    return `- <@${event.user_id}> (${event.user_id}) stale for ${ageHours}h${links.length ? ` - ${links.join(' | ')}` : ''}`;
+    return `- ${isStale ? '[STALE]' : '[pending]'} <@${event.user_id}> (${event.user_id}) ${ageHours}h since update${links.length ? ` - ${links.join(' | ')}` : ''}`;
   }
 
-  private async stampReminder(event: VerificationEvent, now: Date): Promise<void> {
-    await this.verificationEventRepository.update(
-      event.id,
-      {
-        metadata: {
-          ...this.metadataToRecord(event.metadata),
-          [CASE_REVIEW_LAST_REMINDED_AT_METADATA_KEY]: now.toISOString(),
-        } as VerificationEvent['metadata'],
-        updated_at: event.updated_at,
-      },
-      { touchUpdatedAt: false }
+  private formatSourceMessageLink(guildId: string, event: VerificationEvent): string | null {
+    const metadata = this.metadataToRecord(event.metadata);
+    const sourceChannelId = this.readString(metadata.source_channel_id);
+    const sourceMessageId = this.readString(metadata.source_message_id);
+    if (!sourceChannelId || !sourceMessageId) {
+      return null;
+    }
+
+    return `source: https://discord.com/channels/${guildId}/${sourceChannelId}/${sourceMessageId}`;
+  }
+
+  private createDigestActionRow(): ActionRowBuilder<ButtonBuilder> {
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID)
+        .setLabel('Open Cases')
+        .setStyle(ButtonStyle.Primary)
     );
+  }
+
+  private readString(value: unknown): string | null {
+    return typeof value === 'string' && value ? value : null;
   }
 
   private metadataToRecord(metadata: unknown): Record<string, unknown> {

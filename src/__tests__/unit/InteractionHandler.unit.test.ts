@@ -7,6 +7,7 @@ import {
   MessageFlags,
   ModalSubmitInteraction,
   PermissionFlagsBits,
+  StringSelectMenuInteraction,
   User,
 } from 'discord.js';
 import { InteractionHandler } from '../../controllers/InteractionHandler';
@@ -25,6 +26,10 @@ import {
   SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
 } from '../../constants/setupVerificationWizard';
 import { MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY } from '../../utils/detectionResponseSettings';
+import {
+  buildCaseReviewDigestSelectCustomId,
+  CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID,
+} from '../../utils/caseReviewDigestCustomIds';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -67,16 +72,57 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
   return interaction as unknown as ButtonInteraction;
 };
 
+const buildSelectInteraction = (
+  customId: string,
+  values: string[],
+  guildId: string,
+  user: User
+): StringSelectMenuInteraction => {
+  const interaction = {
+    customId,
+    values,
+    guildId,
+    user,
+    deferred: false,
+    replied: false,
+    editReply: jest.fn().mockImplementation(async () => {
+      interaction.replied = true;
+    }),
+    followUp: jest.fn().mockResolvedValue(undefined),
+    reply: jest.fn().mockImplementation(async () => {
+      interaction.replied = true;
+    }),
+    update: jest.fn().mockImplementation(async () => {
+      interaction.replied = true;
+    }),
+  };
+  return interaction as unknown as StringSelectMenuInteraction;
+};
+
 const grantInteractionPermissions = (
-  interaction: ButtonInteraction | ModalSubmitInteraction
+  interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction
 ): void => {
   Object.assign(interaction, {
     memberPermissions: { has: jest.fn().mockReturnValue(true) },
   });
 };
 
+const grantOnlyModerationPermission = (
+  interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction
+): void => {
+  Object.assign(interaction, {
+    memberPermissions: {
+      has: jest.fn(
+        (permission: bigint) =>
+          permission === PermissionFlagsBits.ManageGuild ||
+          permission === PermissionFlagsBits.ModerateMembers
+      ),
+    },
+  });
+};
+
 const grantOnlyBanMembersPermission = (
-  interaction: ButtonInteraction | ModalSubmitInteraction
+  interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction
 ): void => {
   Object.assign(interaction, {
     memberPermissions: {
@@ -94,6 +140,27 @@ const buildNoIssueSetupDiagnosticsService = (): any => ({
     errorCount: 0,
     warningCount: 0,
   }),
+});
+
+const buildVerificationEvent = (
+  id: string,
+  userId: string,
+  updatedAt = new Date('2026-06-01T00:00:00.000Z')
+): VerificationEvent => ({
+  id,
+  server_id: 'guild-1',
+  user_id: userId,
+  detection_event_id: null,
+  thread_id: `thread-${id}`,
+  private_evidence_thread_id: null,
+  notification_message_id: `message-${id}`,
+  status: VerificationStatus.PENDING,
+  created_at: updatedAt,
+  updated_at: updatedAt,
+  resolved_at: null,
+  resolved_by: null,
+  notes: null,
+  metadata: null,
 });
 
 describe('InteractionHandler (unit)', () => {
@@ -124,6 +191,8 @@ describe('InteractionHandler (unit)', () => {
       verifyUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
       syncAlreadyBannedUser: jest.fn().mockResolvedValue(1),
+      recordObservedDiscordBan: jest.fn().mockResolvedValue(0),
+      recordMemberLeftGuild: jest.fn().mockResolvedValue(0),
     };
     securityActionService = {
       handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
@@ -258,6 +327,77 @@ describe('InteractionHandler (unit)', () => {
       content: 'User <@user-1> has been verified and can now access the server.',
       flags: MessageFlags.Ephemeral,
     });
+  });
+
+  it('opens a paginated pending-case selector from the digest button', async () => {
+    const pendingCases = Array.from({ length: 26 }, (_, index) =>
+      buildVerificationEvent(`ver-${index + 1}`, `user-${index + 1}`)
+    );
+    verificationEventRepository.findPendingByServer.mockResolvedValue(pendingCases);
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction(CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID, 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Open cases for this server (26 total). Page 1/2.'),
+        flags: MessageFlags.Ephemeral,
+      })
+    );
+    const response = (interaction.reply as jest.Mock).mock.calls[0][0] as any;
+    const selectMenu = response.components[0].toJSON().components[0];
+    expect(selectMenu.options).toHaveLength(25);
+    expect(selectMenu.options[0].value).toBe('ver-1');
+    const buttons = response.components[1].toJSON().components;
+    expect(buttons[0].disabled).toBe(true);
+    expect(buttons[1].disabled).toBe(false);
+  });
+
+  it('opens existing admin actions after a digest case is selected', async () => {
+    const selectedCase = buildVerificationEvent('ver-selected', 'user-selected');
+    verificationEventRepository.findById.mockResolvedValue(selectedCase);
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(selectedCase);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([selectedCase]);
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildSelectInteraction(
+      buildCaseReviewDigestSelectCustomId(0),
+      ['ver-selected'],
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleStringSelectMenuInteraction(interaction);
+
+    expect(verificationEventRepository.findById).toHaveBeenCalledWith('ver-selected');
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Admin actions for <@user-selected>.'),
+        flags: MessageFlags.Ephemeral,
+      })
+    );
   });
 
   it('shows a confirmation modal for the ban button', async () => {

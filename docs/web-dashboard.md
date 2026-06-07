@@ -12,7 +12,8 @@ Initial capabilities:
 - Guild selection for Discord owners or users with Manage Server.
 - Live setup diagnostics using the bot token where available.
 - Core setup editing for restricted role, admin/verification/report channels, detection response policy, report policy, analytics consent, and report AI authority.
-- Shared setup contracts in `packages/contracts`.
+- Read-only active case queue and case detail views for pending verification events.
+- Shared setup and active case contracts in `packages/contracts`.
 
 The bot runtime remains in the repository root for this slice. Do not move bot files into `apps/bot` until the web package is stable and the deploy impact is separated.
 
@@ -20,10 +21,15 @@ The bot runtime remains in the repository root for this slice. Do not move bot f
 
 Drasil remains Supabase/Postgres-backed for production today.
 
-The web app does not import Prisma or bot DI directly. It talks through `SetupDataAdapter`:
+The web app does not import Prisma or bot DI directly. Setup talks through `SetupDataAdapter`:
 
 - `PostgresSetupDataAdapter` is the active adapter and reads/writes the existing `servers` table.
 - `ConvexSetupDataAdapter` is the future adapter boundary and expects schema-compatible HTTP routes if `DRASIL_WEB_DATA_PROVIDER=convex` is selected.
+
+Active cases talk through `ActiveCaseDataAdapter`:
+
+- `PostgresActiveCaseDataAdapter` reads pending `verification_events`, recent `detection_events`, recent `admin_actions`, and persisted `moderation_outcomes`.
+- Case pages are read-only for this slice. Moderator actions still route through Discord surfaces so evidence and provenance stay in Discord threads/messages.
 
 This keeps the first dashboard useful now while preserving the option to migrate new web-facing workflows to Convex later.
 
@@ -56,6 +62,8 @@ Optional variables:
 - `DRASIL_CONVEX_HTTP_URL`: Convex HTTP URL when using the Convex adapter.
 - `DRASIL_CONVEX_WEB_API_KEY`: API key for Convex web routes.
 - `DRASIL_WEB_PG_POOL_MAX`: Postgres pool size for the web runtime.
+- `DRASIL_WEB_ENABLE_ADMINISTRATOR_INVITE`: when `true`, shows the experimental Administrator bot invite. The standard least-privilege invite remains the default path.
+- `DRASIL_WEB_E2E_FIXTURE_MODE`: non-production Playwright fixture mode for web route tests.
 
 GitHub Actions production deploy variables/secrets:
 
@@ -94,3 +102,4 @@ UI-affecting changes should include either a Playwright assertion, a visual snap
 - Guild authorization is rechecked before every setup read/write.
 - Report AI settings retain the current product rule: report AI can never auto-ban.
 - Cross-server intelligence and privileged evidence are not exposed in this dashboard slice.
+- Active case pages require the same Discord Manage Server authorization recheck as setup pages.

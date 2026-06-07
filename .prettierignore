@@ -5,6 +5,7 @@ build/
 apps/web/.next/
 apps/web/next-env.d.ts
 apps/web/playwright-report/
+apps/web/storybook-static/
 apps/web/test-results/
 src/generated/prisma/
 
