@@ -13,6 +13,8 @@
     "test:coverage": "vitest run --coverage",
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build --output-dir storybook-static",
+    "test:storybook:visual": "playwright test -c playwright.storybook.config.ts",
+    "test:storybook:visual:update": "playwright test -c playwright.storybook.config.ts --update-snapshots",
     "test:e2e": "playwright test --grep-invert @visual",
     "test:e2e:visual": "playwright test --grep @visual",
     "test:e2e:visual:update": "playwright test --grep @visual --update-snapshots"

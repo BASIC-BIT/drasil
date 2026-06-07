@@ -118,7 +118,8 @@ jobs:
           fi
 
           mapfile -t files < <(git diff --name-only --diff-filter=AMRT "$RANGE" -- \
-            "apps/web/e2e/*.spec.ts-snapshots/*.png")
+            "apps/web/e2e/*.spec.ts-snapshots/*.png" \
+            "apps/web/storybook-e2e/*.spec.ts-snapshots/*.png")
 
           if [ "${#files[@]}" -eq 0 ]; then
             echo "has_files=false" >> "$GITHUB_OUTPUT"
@@ -185,8 +186,8 @@ jobs:
               marker,
               '## Snapshot Preview',
               hasFiles
-                ? `${files.length} changed Playwright visual snapshot file(s) in this PR.`
-                : 'No changed Playwright visual snapshot files were detected in this PR.',
+                ? `${files.length} changed Playwright/Storybook visual snapshot file(s) in this PR.`
+                : 'No changed Playwright or Storybook visual snapshot files were detected in this PR.',
               `Run: ${runUrl}`,
               artifactLine,
               '',

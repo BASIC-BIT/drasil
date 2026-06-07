@@ -11,6 +11,10 @@
   --danger: #ff8e8e;
   --warn: #ffd27a;
   --ok: #9cffcb;
+  --radius-panel: 18px;
+  --radius-card: 14px;
+  --radius-control: 10px;
+  --radius-chip: 8px;
 }
 
 * {
@@ -72,7 +76,7 @@ select {
   width: 32px;
   height: 32px;
   border: 1px solid var(--accent);
-  border-radius: 10px;
+  border-radius: var(--radius-control);
   background: linear-gradient(135deg, rgba(156, 255, 203, 0.3), rgba(70, 214, 148, 0.08));
   box-shadow: 0 0 28px rgba(70, 214, 148, 0.25);
 }
@@ -88,8 +92,8 @@ select {
 .page-title {
   margin: 0;
   font-size: clamp(2.6rem, 8vw, 5.6rem);
-  line-height: 0.92;
-  letter-spacing: -0.08em;
+  line-height: 0.94;
+  letter-spacing: -0.045em;
 }
 
 .lede {
@@ -101,7 +105,7 @@ select {
 
 .panel {
   border: 1px solid var(--line);
-  border-radius: 28px;
+  border-radius: var(--radius-panel);
   background: rgba(13, 27, 21, 0.82);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
   padding: 24px;
@@ -113,7 +117,7 @@ select {
   justify-content: center;
   min-height: 44px;
   border: 1px solid rgba(156, 255, 203, 0.45);
-  border-radius: 999px;
+  border-radius: var(--radius-control);
   background: var(--accent);
   color: #06110d;
   font-weight: 800;
@@ -134,7 +138,7 @@ select {
 
 .card {
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: var(--radius-card);
   background: rgba(19, 38, 30, 0.72);
   padding: 18px;
 }
@@ -151,7 +155,7 @@ select {
 .status {
   display: inline-flex;
   align-items: center;
-  border-radius: 999px;
+  border-radius: var(--radius-chip);
   padding: 4px 10px;
   font-size: 0.78rem;
   font-weight: 800;
@@ -194,7 +198,7 @@ select {
 .field select {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--radius-control);
   background: #07110d;
   color: var(--text);
   min-height: 42px;
@@ -243,7 +247,7 @@ select {
   display: grid;
   gap: 4px;
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: var(--radius-card);
   background: rgba(7, 17, 13, 0.58);
   padding: 12px;
 }
@@ -258,7 +262,7 @@ select {
 .surface-link,
 .pill {
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-chip);
   background: rgba(156, 255, 203, 0.08);
   color: var(--text);
   padding: 8px 12px;
@@ -279,7 +283,7 @@ select {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 14px;
   border: 1px solid var(--line);
-  border-radius: 18px;
+  border-radius: var(--radius-card);
   background: rgba(7, 17, 13, 0.48);
   padding: 14px;
 }
