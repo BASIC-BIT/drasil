@@ -262,6 +262,7 @@ export class UserModerationService implements IUserModerationService {
           status: VerificationStatus.VERIFIED,
           resolved_by: moderator.id,
           resolved_at: resolvedAt,
+          metadata: this.withUserSnapshot(pendingEvent.metadata, member.user, member),
         };
         const updatedEvent = await this.verificationEventRepository.update(
           pendingEvent.id,
@@ -346,6 +347,8 @@ export class UserModerationService implements IUserModerationService {
           status: VerificationStatus.BANNED,
           resolved_by: moderator.id,
           resolved_at: resolvedAt,
+          notes: reason,
+          metadata: this.withUserSnapshot(pendingEvent.metadata, member.user, member),
         };
         const updatedEvent = await this.verificationEventRepository.update(
           pendingEvent.id,
@@ -432,6 +435,10 @@ export class UserModerationService implements IUserModerationService {
         return 0;
       }
 
+      const existingBanReason = existingBan.reason?.trim() ?? '';
+      const notes = existingBanReason
+        ? `Synced existing Discord ban: ${existingBanReason}`
+        : 'Synced existing Discord ban.';
       const resolvedAt = new Date();
       const resolvedEvents: Array<{
         event: VerificationEvent;
@@ -445,6 +452,8 @@ export class UserModerationService implements IUserModerationService {
           status: VerificationStatus.BANNED,
           resolved_by: moderator.id,
           resolved_at: resolvedAt,
+          notes,
+          metadata: this.withUserSnapshot(pendingEvent.metadata, existingBan.user),
         };
         const updatedEvent = await this.verificationEventRepository.update(
           pendingEvent.id,
@@ -459,10 +468,6 @@ export class UserModerationService implements IUserModerationService {
         last_status_change: new Date(),
       });
 
-      const existingBanReason = existingBan.reason?.trim() ?? '';
-      const notes = existingBanReason
-        ? `Synced existing Discord ban: ${existingBanReason}`
-        : 'Synced existing Discord ban.';
       const target = {
         guildId: guild.id,
         userId,
@@ -509,5 +514,55 @@ export class UserModerationService implements IUserModerationService {
       console.error(`Failed to sync already-banned user ${userId}:`, error);
       throw error;
     }
+  }
+
+  private withUserSnapshot(
+    metadata: VerificationEvent['metadata'],
+    user: User,
+    member?: GuildMember
+  ): VerificationEvent['metadata'] {
+    return {
+      ...this.metadataToRecord(metadata),
+      user_snapshot: this.buildUserSnapshot(user, member),
+    } as VerificationEvent['metadata'];
+  }
+
+  private buildUserSnapshot(user: User, member?: GuildMember): Record<string, string> {
+    const snapshot: Record<string, string> = {
+      id: user.id,
+      tag: user.tag,
+      username: user.username,
+    };
+
+    if (member?.displayName) {
+      snapshot.display_name = member.displayName;
+    }
+
+    const createdTimestamp = (user as { createdTimestamp?: unknown }).createdTimestamp;
+    if (typeof createdTimestamp === 'number' && Number.isFinite(createdTimestamp)) {
+      snapshot.account_created_at = new Date(createdTimestamp).toISOString();
+    }
+
+    if (member?.joinedAt) {
+      snapshot.joined_at = member.joinedAt.toISOString();
+    }
+
+    const displayAvatarURL = (user as { displayAvatarURL?: unknown }).displayAvatarURL;
+    if (typeof displayAvatarURL === 'function') {
+      const avatarUrl = (displayAvatarURL as () => string).call(user);
+      if (avatarUrl) {
+        snapshot.avatar_url = avatarUrl;
+      }
+    }
+
+    return snapshot;
+  }
+
+  private metadataToRecord(metadata: VerificationEvent['metadata']): Record<string, unknown> {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return {};
+    }
+
+    return { ...(metadata as Record<string, unknown>) };
   }
 }

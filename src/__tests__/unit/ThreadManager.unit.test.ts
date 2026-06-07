@@ -19,6 +19,7 @@ import {
   DEFAULT_VERIFICATION_PROMPT_TEMPLATE,
   renderVerificationPromptTemplate,
 } from '../../utils/verificationPromptTemplate';
+import { parseAdminActionCustomId } from '../../utils/adminActionCustomIds';
 
 const buildMember = (guildId: string, userId: string, guildName = 'Test Guild'): GuildMember =>
   ({
@@ -49,6 +50,33 @@ const buildVerificationEvent = (overrides: Partial<VerificationEvent> = {}): Ver
   metadata: overrides.metadata ?? null,
 });
 
+const extractComponentCustomIds = (components: unknown[]): string[] =>
+  components.flatMap((row) =>
+    ((row as { components?: unknown[] }).components ?? []).map(
+      (component) =>
+        (component as { data?: { custom_id?: string }; customId?: string }).data?.custom_id ??
+        (component as { customId?: string }).customId ??
+        ''
+    )
+  );
+
+const buildThread = (id = 'thread-1'): jest.Mocked<ThreadChannel> =>
+  ({
+    id,
+    url: `https://discord.com/channels/${id}`,
+    members: {
+      add: jest.fn().mockResolvedValue(undefined),
+    },
+    send: jest.fn().mockResolvedValue(undefined),
+    setArchived: jest.fn().mockResolvedValue(undefined),
+    setLocked: jest.fn().mockResolvedValue(undefined),
+    setInvitable: jest.fn().mockResolvedValue(undefined),
+    messages: {
+      fetch: jest.fn().mockResolvedValue(new Map()),
+    },
+    isThread: jest.fn().mockReturnValue(true),
+  }) as unknown as jest.Mocked<ThreadChannel>;
+
 describe('ThreadManager (unit)', () => {
   let configService: IConfigService;
   let verificationEventRepository: InMemoryVerificationEventRepository;
@@ -70,21 +98,7 @@ describe('ThreadManager (unit)', () => {
   let thread: jest.Mocked<ThreadChannel>;
 
   beforeEach(() => {
-    thread = {
-      id: 'thread-1',
-      url: 'https://discord.com/channels/thread-1',
-      members: {
-        add: jest.fn().mockResolvedValue(undefined),
-      },
-      send: jest.fn().mockResolvedValue(undefined),
-      setArchived: jest.fn().mockResolvedValue(undefined),
-      setLocked: jest.fn().mockResolvedValue(undefined),
-      setInvitable: jest.fn().mockResolvedValue(undefined),
-      messages: {
-        fetch: jest.fn().mockResolvedValue(new Map()),
-      },
-      isThread: jest.fn().mockReturnValue(true),
-    } as unknown as jest.Mocked<ThreadChannel>;
+    thread = buildThread();
 
     channel = {
       id: 'verification-channel',
@@ -521,6 +535,13 @@ describe('ThreadManager (unit)', () => {
         roles: [],
         repliedUser: false,
       },
+      components: expect.any(Array),
+    });
+    const prompt = thread.send.mock.calls[0][0] as { components: unknown[] };
+    expect(parseAdminActionCustomId(extractComponentCustomIds(prompt.components)[0])).toEqual({
+      surface: 'case',
+      action: 'menu',
+      userId: 'user-1',
     });
   });
 
@@ -606,8 +627,18 @@ describe('ThreadManager (unit)', () => {
     expect(createdThread?.id).toBe('thread-1');
     expect(storedEvent?.private_evidence_thread_id).toBe('thread-1');
     expect(thread.send).toHaveBeenCalledWith(
-      expect.objectContaining({ content: expect.stringContaining('Admin evidence workspace') })
+      expect.objectContaining({
+        content: expect.stringContaining('Admin-only evidence thread for <@user-1> (user-1).'),
+        allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+        components: expect.any(Array),
+      })
     );
+    const prompt = thread.send.mock.calls[0][0] as { components: unknown[] };
+    expect(parseAdminActionCustomId(extractComponentCustomIds(prompt.components)[0])).toEqual({
+      surface: 'case',
+      action: 'menu',
+      userId: 'user-1',
+    });
   });
 
   it('recovers an already-attached admin evidence thread when duplicate start fails', async () => {
@@ -694,7 +725,7 @@ describe('ThreadManager (unit)', () => {
     expect(activated).toBe(true);
     expect(thread.members.add).toHaveBeenCalledWith('reporter-1');
     expect(thread.send).toHaveBeenCalledWith({
-      content: expect.stringContaining('Please put the report context in this private thread.'),
+      content: expect.stringContaining('Add what happened here.'),
       allowedMentions: {
         parse: [],
         users: ['reporter-1'],
@@ -889,6 +920,10 @@ describe('ThreadManager (unit)', () => {
   });
 
   it('resolves verification thread and locks it', async () => {
+    const evidenceThread = buildThread('evidence-thread-1');
+    (channel.threads.fetch as jest.Mock).mockImplementation((threadId: string) =>
+      Promise.resolve(threadId === 'evidence-thread-1' ? evidenceThread : thread)
+    );
     const manager = new ThreadManager(
       {} as any,
       configService,
@@ -898,17 +933,58 @@ describe('ThreadManager (unit)', () => {
       serverMemberRepository
     );
 
-    const event = buildVerificationEvent({ thread_id: 'thread-1' });
+    const event = buildVerificationEvent({
+      thread_id: 'thread-1',
+      private_evidence_thread_id: 'evidence-thread-1',
+      status: VerificationStatus.BANNED,
+      resolved_at: new Date('2026-01-05T00:00:00Z'),
+      notes: 'Confirmed scam',
+      metadata: {
+        user_snapshot: {
+          tag: 'test-user#0001',
+          username: 'test-user',
+          display_name: 'Test User',
+          avatar_url: 'https://example.com/avatar.png',
+          account_created_at: '2026-01-01T00:00:00.000Z',
+          joined_at: '2026-01-02T00:00:00.000Z',
+        },
+      },
+    });
 
-    const result = await manager.resolveVerificationThread(event, VerificationStatus.VERIFIED);
+    const result = await manager.resolveVerificationThread(
+      event,
+      VerificationStatus.BANNED,
+      'admin-1'
+    );
 
     expect(result).toBe(true);
-    expect(thread.send).toHaveBeenCalled();
+    expect(thread.send).toHaveBeenCalledWith({
+      content: expect.stringContaining('Case handled: banned.'),
+      allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+    });
+    expect(thread.send).toHaveBeenCalledWith({
+      content: expect.stringContaining('Action taken by: <@admin-1>'),
+      allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+    });
+    expect(thread.send).toHaveBeenCalledWith({
+      content: expect.stringContaining('- Avatar at time of case: https://example.com/avatar.png'),
+      allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+    });
+    expect(thread.send).toHaveBeenCalledWith({
+      content: expect.stringContaining('- Notes: Confirmed scam'),
+      allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+    });
     expect(thread.setArchived).toHaveBeenCalledWith(true);
     expect(thread.setLocked).toHaveBeenCalledWith(true);
+    expect(evidenceThread.setArchived).toHaveBeenCalledWith(true);
+    expect(evidenceThread.setLocked).toHaveBeenCalledWith(true);
   });
 
   it('reopens verification thread when available', async () => {
+    const evidenceThread = buildThread('evidence-thread-1');
+    (channel.threads.fetch as jest.Mock).mockImplementation((threadId: string) =>
+      Promise.resolve(threadId === 'evidence-thread-1' ? evidenceThread : thread)
+    );
     const manager = new ThreadManager(
       {} as any,
       configService,
@@ -918,12 +994,17 @@ describe('ThreadManager (unit)', () => {
       serverMemberRepository
     );
 
-    const event = buildVerificationEvent({ thread_id: 'thread-1' });
+    const event = buildVerificationEvent({
+      thread_id: 'thread-1',
+      private_evidence_thread_id: 'evidence-thread-1',
+    });
 
     const result = await manager.reopenVerificationThread(event);
 
     expect(result).toBe(true);
     expect(thread.setArchived).toHaveBeenCalledWith(false);
     expect(thread.setLocked).toHaveBeenCalledWith(false);
+    expect(evidenceThread.setArchived).toHaveBeenCalledWith(false);
+    expect(evidenceThread.setLocked).toHaveBeenCalledWith(false);
   });
 });

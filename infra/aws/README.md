@@ -5,6 +5,7 @@ This directory contains Terraform for deploying Drasil to AWS.
 Layout:
 
 - `infra/aws/bootstrap`: one-time setup for Terraform remote state (S3 + DynamoDB lock table)
+- `infra/aws/domain`: public Route 53 hosted zone and web DNS records for `drasilbot.com`
 - `infra/aws/intel`: lightweight private S3 bucket for scam/spam evidence collection
 - `infra/aws/prod`: production infrastructure (ECR + ECS Fargate + networking + IAM)
 
@@ -38,6 +39,22 @@ terraform apply
 The production stack creates Secrets Manager entries for `DISCORD_TOKEN`,
 `OPENAI_API_KEY`, `DATABASE_URL`, `OBSERVABILITY_HASH_KEY`, and
 `POSTHOG_PROJECT_API_KEY`.
+
+## Domain DNS
+
+Use `infra/aws/domain` to manage the public hosted zone and Vercel DNS records for `drasilbot.com`.
+
+```bash
+cd infra/aws/domain
+cp backend.hcl.example backend.hcl
+# Edit backend.hcl and replace REPLACE_ME with the shared state bucket name
+terraform init -backend-config=backend.hcl
+terraform apply
+```
+
+After the first apply, update the Route 53 Domains registration to use the `name_servers` output.
+The hosted zone state is intentionally separate from `prod` so DNS ownership can be managed without
+touching the ECS service stack.
 
 ## Optional intelligence bucket
 

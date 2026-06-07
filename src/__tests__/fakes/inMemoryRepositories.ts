@@ -108,6 +108,10 @@ const baseSettings: ServerSettings = {
   [REPORT_AI_RESTRICT_THRESHOLD_SETTING_KEY]: DEFAULT_REPORT_AI_RESTRICT_THRESHOLD,
   [REPORT_AI_MAX_IMAGES_SETTING_KEY]: DEFAULT_REPORT_AI_MAX_IMAGES,
   [REPORT_AI_MAX_IMAGE_BYTES_SETTING_KEY]: DEFAULT_REPORT_AI_MAX_IMAGE_BYTES,
+  report_intake_agent_enabled: true,
+  report_intake_agent_debounce_ms: 15_000,
+  report_intake_agent_min_interval_ms: 60_000,
+  report_intake_confirmed_response_mode: 'observed_alert',
 };
 
 const defaultHeuristicThreshold = globalSettings.defaultServerSettings.messageThreshold;
@@ -174,6 +178,17 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
       .sort((a, b) => toTimestamp(b.detected_at) - toTimestamp(a.detected_at))
       .slice(0, limit)
       .map((event) => ({ ...event }));
+  }
+
+  async findByReportIntakeId(reportIntakeId: string): Promise<DetectionEvent | null> {
+    const event = this.events.find(
+      (item) =>
+        item.metadata &&
+        typeof item.metadata === 'object' &&
+        !Array.isArray(item.metadata) &&
+        item.metadata.reportIntakeId === reportIntakeId
+    );
+    return event ? { ...event } : null;
   }
 
   async recordAdminAction(
@@ -630,6 +645,30 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
         data.metadata !== undefined
           ? (data.metadata as ReportIntake['metadata'])
           : existing.metadata,
+      updated_at: new Date(),
+    };
+    this.intakes[index] = updated;
+    return { ...updated };
+  }
+
+  async confirmTargetIfUnset(
+    id: string,
+    data: { targetUserId: string; metadata: Record<string, unknown> }
+  ): Promise<ReportIntake | null> {
+    const index = this.intakes.findIndex(
+      (item) =>
+        item.id === id &&
+        item.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION &&
+        item.confirmed_target_user_id === null
+    );
+    if (index === -1) {
+      return null;
+    }
+
+    const updated: ReportIntake = {
+      ...this.intakes[index],
+      confirmed_target_user_id: data.targetUserId,
+      metadata: data.metadata as ReportIntake['metadata'],
       updated_at: new Date(),
     };
     this.intakes[index] = updated;

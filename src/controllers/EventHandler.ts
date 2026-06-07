@@ -36,6 +36,7 @@ import {
   SetupDiagnosticReport,
 } from '../services/SetupDiagnosticsService';
 import { IReportIntakeService } from '../services/ReportIntakeService';
+import { IReportIntakeAgentService } from '../services/ReportIntakeAgentService';
 import { ICaseReviewReminderService } from '../services/CaseReviewReminderService';
 import {
   IMessageContextRepository,
@@ -95,6 +96,7 @@ export class EventHandler implements IEventHandler {
   private productAnalyticsService: IProductAnalyticsService;
   private setupDiagnosticsService?: ISetupDiagnosticsService;
   private reportIntakeService?: IReportIntakeService;
+  private reportIntakeAgentService?: IReportIntakeAgentService;
   private caseReviewReminderService?: ICaseReviewReminderService;
   private messageContextRepository?: IMessageContextRepository;
   private serverConfigWarmups: Set<string> = new Set();
@@ -120,6 +122,9 @@ export class EventHandler implements IEventHandler {
     @inject(TYPES.ReportIntakeService)
     @optional()
     reportIntakeService?: IReportIntakeService,
+    @inject(TYPES.ReportIntakeAgentService)
+    @optional()
+    reportIntakeAgentService?: IReportIntakeAgentService,
     @inject(TYPES.CaseReviewReminderService)
     @optional()
     caseReviewReminderService?: ICaseReviewReminderService,
@@ -138,6 +143,7 @@ export class EventHandler implements IEventHandler {
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.setupDiagnosticsService = setupDiagnosticsService;
     this.reportIntakeService = reportIntakeService;
+    this.reportIntakeAgentService = reportIntakeAgentService;
     this.caseReviewReminderService = caseReviewReminderService;
     this.messageContextRepository = messageContextRepository;
   }
@@ -201,6 +207,7 @@ export class EventHandler implements IEventHandler {
       try {
         const reportIntakeHandled = await this.reportIntakeService?.handleThreadMessage(message);
         if (reportIntakeHandled) {
+          this.reportIntakeAgentService?.scheduleAnalysisForThreadMessage(message);
           this.rememberRecentMessage(message);
           return;
         }

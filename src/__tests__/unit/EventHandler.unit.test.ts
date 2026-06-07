@@ -17,6 +17,7 @@ describe('EventHandler (unit)', () => {
     notificationManager?: Record<string, jest.Mock>;
     setupDiagnosticsService?: Record<string, jest.Mock>;
     reportIntakeService?: Record<string, jest.Mock>;
+    reportIntakeAgentService?: Record<string, jest.Mock>;
     messageContextRepository?: Record<string, jest.Mock>;
   }): EventHandler {
     const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
@@ -69,6 +70,7 @@ describe('EventHandler (unit)', () => {
       undefined,
       overrides?.setupDiagnosticsService as any,
       overrides?.reportIntakeService as any,
+      overrides?.reportIntakeAgentService as any,
       undefined,
       overrides?.messageContextRepository as any
     );
@@ -151,6 +153,28 @@ describe('EventHandler (unit)', () => {
 
     expect(commandHandler.handleTestCommands).toHaveBeenCalledWith(message);
     expect(message.reply).not.toHaveBeenCalled();
+  });
+
+  it('schedules report intake agent analysis after intake thread evidence is recorded', async () => {
+    const reportIntakeService = { handleThreadMessage: jest.fn().mockResolvedValue(true) };
+    const reportIntakeAgentService = { scheduleAnalysisForThreadMessage: jest.fn() };
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const handler = buildHandler({
+      reportIntakeService,
+      reportIntakeAgentService,
+      detectionOrchestrator,
+    });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.channel = { isThread: jest.fn().mockReturnValue(true), name: 'report-intake-test' };
+
+    await (handler as any).handleMessage(message);
+
+    expect(reportIntakeService.handleThreadMessage).toHaveBeenCalledWith(message);
+    expect(reportIntakeAgentService.scheduleAnalysisForThreadMessage).toHaveBeenCalledWith(message);
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
   });
 
   it('skips automatic message detection for moderation members', async () => {

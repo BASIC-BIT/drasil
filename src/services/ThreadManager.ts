@@ -25,6 +25,7 @@ import {
 } from '../utils/verificationPromptTemplate';
 import { DetectionResult } from './DetectionOrchestrator';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
+import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 
 export const VERIFICATION_THREAD_TYPE_METADATA_KEY = 'thread_type';
 export const VERIFICATION_THREAD_TYPE = 'verification';
@@ -41,6 +42,16 @@ export interface VerificationThreadRepairResult {
   userAdded: boolean;
   promptSent: boolean;
   promptAlreadyPresent: boolean;
+}
+
+interface UserSnapshotMetadata {
+  id?: string;
+  tag?: string;
+  username?: string;
+  display_name?: string;
+  avatar_url?: string;
+  account_created_at?: string;
+  joined_at?: string;
 }
 
 /**
@@ -118,6 +129,7 @@ export class ThreadManager implements IThreadManager {
   private userRepository: IUserRepository;
   private serverRepository: IServerRepository;
   private serverMemberRepository: IServerMemberRepository;
+  private readonly presentationBuilder = new NotificationPresentationBuilder();
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -191,73 +203,42 @@ export class ThreadManager implements IThreadManager {
     member: GuildMember,
     verificationEvent: VerificationEvent,
     detectionResult: DetectionResult,
-    roleMentions: string | null,
     sourceMessage?: Message
   ): string {
-    const reasonLines = detectionResult.reasons.length
-      ? detectionResult.reasons.map((reason) => `- ${reason}`)
-      : ['- No reason provided.'];
+    const sourceReportUrl = this.resolveSourceReportUrl(
+      member.guild.id,
+      detectionResult,
+      sourceMessage
+    );
     const links = [
       verificationEvent.thread_id
-        ? `User-facing case thread: https://discord.com/channels/${member.guild.id}/${verificationEvent.thread_id}`
+        ? `Case thread: https://discord.com/channels/${member.guild.id}/${verificationEvent.thread_id}`
         : null,
-      sourceMessage?.url ? `Source message: ${sourceMessage.url}` : null,
+      sourceReportUrl ? `Source report: ${sourceReportUrl}` : null,
     ].filter((line): line is string => Boolean(line));
 
     return enforceDiscordMessageLimit(
       [
-        roleMentions,
-        `Admin evidence workspace for ${member.user.tag} (${member.id}).`,
-        'Visibility follows the admin notification channel and thread membership. Do not add the user under review to this thread.',
+        `Admin-only evidence thread for <@${member.id}> (${member.id}).`,
         '',
-        `Case ID: ${verificationEvent.id}`,
+        'Use this thread for staff notes or evidence that should stay separate from the user-facing case thread.',
         ...links,
-        '',
-        'Case details:',
-        ...reasonLines,
-        detectionResult.triggerContent ? `Context: ${detectionResult.triggerContent}` : null,
       ]
         .filter((line): line is string => Boolean(line))
         .join('\n')
     );
   }
 
-  private async getCaseNotificationRoleIds(guildId: string): Promise<string[]> {
-    const serverConfig = await this.configService.getServerConfig(guildId).catch((error) => {
-      console.warn(`Failed to load case notification roles for guild ${guildId}:`, error);
-      return null;
-    });
-    if (!serverConfig) {
-      return [];
-    }
-
-    const roleIds = new Set<string>();
-    if (serverConfig.admin_notification_role_id) {
-      roleIds.add(serverConfig.admin_notification_role_id);
-    }
-
-    const responderSettings = getCaseResponderSettings(serverConfig.settings);
-    if (responderSettings.routingMode !== 'off') {
-      responderSettings.roleIds.forEach((roleId) => roleIds.add(roleId));
-    }
-
-    return [...roleIds];
-  }
-
-  private formatRoleMentions(roleIds: readonly string[]): string | null {
-    return roleIds.length > 0 ? roleIds.map((roleId) => `<@&${roleId}>`).join(' ') : null;
-  }
-
-  private createAllowedRoleMentions(roleIds: readonly string[]): {
+  private createNoMentionAllowedMentions(): {
     parse: [];
     users: [];
-    roles: string[];
+    roles: [];
     repliedUser: false;
   } {
     return {
       parse: [],
       users: [],
-      roles: [...roleIds],
+      roles: [],
       repliedUser: false,
     };
   }
@@ -265,18 +246,37 @@ export class ThreadManager implements IThreadManager {
   private buildReportIntakeThreadMessage(reporter: GuildMember): string {
     return enforceDiscordMessageLimit(
       [
-        `Thanks <@${reporter.id}>. Please put the report context in this private thread.`,
+        `Thanks <@${reporter.id}>. Add what happened here.`,
         '',
         'Useful context includes:',
-        '- Who or what you are reporting, if you know it',
-        '- Message links, screenshots, usernames, user IDs, or mentions',
-        '- What happened and why it looked suspicious',
+        '- who or what you are reporting',
+        '- message links, screenshots, usernames, user IDs, or mentions',
+        '- what happened and why it looked suspicious',
         '',
-        'If you opened this by mistake, send `close report`.',
+        'Drasil will suggest possible report targets and ask for confirmation before submitting anything.',
         '',
-        'Moderators can ask follow-up questions here. Do not add the reported user to this thread.',
+        'If this was opened by mistake, use /close-report in this thread.',
       ].join('\n')
     );
+  }
+
+  private resolveSourceReportUrl(
+    guildId: string,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): string | null {
+    const reportThreadId = this.extractReportThreadId(
+      [detectionResult.triggerContent, ...detectionResult.reasons].join('\n')
+    );
+    if (reportThreadId) {
+      return `https://discord.com/channels/${guildId}/${reportThreadId}`;
+    }
+
+    return sourceMessage?.url ?? null;
+  }
+
+  private extractReportThreadId(text: string): string | null {
+    return text.match(/Report thread ID: (\d{17,20})/)?.[1] ?? null;
   }
 
   private async storeThreadId(
@@ -600,43 +600,35 @@ export class ThreadManager implements IThreadManager {
       return null;
     }
 
-    const parentChannels: TextChannel[] = [];
-    const verificationChannel = await this.configService.getVerificationChannel(
-      verificationEvent.server_id
-    );
-    if (verificationChannel) {
-      parentChannels.push(verificationChannel);
-    }
+    return this.fetchThreadById(verificationEvent.thread_id, verificationEvent.server_id);
+  }
 
-    const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
-    if (adminChannel && !parentChannels.some((channel) => channel.id === adminChannel.id)) {
-      parentChannels.push(adminChannel);
+  private async fetchThreadById(
+    threadId: string,
+    serverId?: string
+  ): Promise<ThreadChannel | null> {
+    const parentChannels: TextChannel[] = [];
+    if (serverId) {
+      const verificationChannel = await this.configService
+        .getVerificationChannel(serverId)
+        .catch(() => null);
+      if (verificationChannel) {
+        parentChannels.push(verificationChannel);
+      }
+
+      const adminChannel = await this.configService.getAdminChannel(serverId).catch(() => null);
+      if (adminChannel && !parentChannels.some((channel) => channel.id === adminChannel.id)) {
+        parentChannels.push(adminChannel);
+      }
     }
 
     for (const parentChannel of parentChannels) {
-      const thread = await parentChannel.threads
-        .fetch(verificationEvent.thread_id)
-        .catch(() => null);
+      const thread = await parentChannel.threads.fetch(threadId).catch(() => null);
       if (thread?.isThread()) {
         return thread;
       }
     }
 
-    const fetchChannel = (
-      this.client.channels as { fetch?: (id: string) => Promise<unknown> } | undefined
-    )?.fetch;
-    const fetchedChannel = fetchChannel
-      ? await fetchChannel.call(this.client.channels, verificationEvent.thread_id).catch(() => null)
-      : null;
-    if (!fetchedChannel) {
-      return null;
-    }
-
-    const maybeThread = fetchedChannel as ThreadChannel;
-    return maybeThread.isThread() ? maybeThread : null;
-  }
-
-  private async fetchThreadById(threadId: string): Promise<ThreadChannel | null> {
     const fetchChannel = (
       this.client.channels as { fetch?: (id: string) => Promise<unknown> } | undefined
     )?.fetch;
@@ -891,6 +883,7 @@ export class ThreadManager implements IThreadManager {
           roles: [],
           repliedUser: false,
         },
+        components: [this.presentationBuilder.createActionRow(member.id)],
       });
 
       return thread;
@@ -911,7 +904,10 @@ export class ThreadManager implements IThreadManager {
     sourceMessage?: Message
   ): Promise<ThreadChannel | null> {
     if (verificationEvent.private_evidence_thread_id) {
-      const existing = await this.fetchThreadById(verificationEvent.private_evidence_thread_id);
+      const existing = await this.fetchThreadById(
+        verificationEvent.private_evidence_thread_id,
+        verificationEvent.server_id
+      );
       if (existing) {
         return existing;
       }
@@ -957,16 +953,15 @@ export class ThreadManager implements IThreadManager {
       await this.addCaseResponderMembers(member.guild, thread, [member.id]);
 
       setupStage = 'send admin evidence thread prompt';
-      const roleIds = await this.getCaseNotificationRoleIds(member.guild.id);
       await thread.send({
         content: this.buildPrivateEvidenceThreadMessage(
           member,
           verificationEvent,
           detectionResult,
-          this.formatRoleMentions(roleIds),
           sourceMessage
         ),
-        allowedMentions: this.createAllowedRoleMentions(roleIds),
+        allowedMentions: this.createNoMentionAllowedMentions(),
+        components: [this.presentationBuilder.createActionRow(member.id)],
       });
 
       return thread;
@@ -1033,6 +1028,32 @@ export class ThreadManager implements IThreadManager {
     }
   }
 
+  private async setPrivateEvidenceThreadState(
+    verificationEvent: VerificationEvent,
+    archived: boolean,
+    locked: boolean,
+    ignoredThreadId?: string | null
+  ): Promise<boolean> {
+    const threadId = verificationEvent.private_evidence_thread_id;
+    if (!threadId || threadId === ignoredThreadId) {
+      return false;
+    }
+
+    const thread = await this.fetchThreadById(threadId, verificationEvent.server_id);
+    if (!thread) {
+      return false;
+    }
+
+    try {
+      await thread.setArchived(archived);
+      await thread.setLocked(locked);
+      return true;
+    } catch (error) {
+      console.warn(`Failed to update private evidence thread ${threadId}:`, error);
+      return false;
+    }
+  }
+
   /**
    * Look up a thread on the discord client close it, and lock it
    * @param threadId The Discord thread ID
@@ -1041,46 +1062,113 @@ export class ThreadManager implements IThreadManager {
    */
   async resolveVerificationThread(
     verificationEvent: VerificationEvent,
-    resolution: VerificationStatus
+    resolution: VerificationStatus,
+    resolvedBy: string
   ): Promise<boolean> {
     try {
-      if (!verificationEvent.thread_id) {
-        // No thread but that's okay
-        return false;
+      let resolvedMainThread = false;
+
+      if (verificationEvent.thread_id) {
+        const thread = await this.fetchStoredThread(verificationEvent);
+
+        if (thread) {
+          if (resolution === VerificationStatus.VERIFIED) {
+            await thread.send({
+              content: this.buildVerificationResolutionMessage(
+                verificationEvent,
+                resolution,
+                resolvedBy
+              ),
+              allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+            });
+          } else if (resolution === VerificationStatus.BANNED) {
+            await thread.send({
+              content: this.buildVerificationResolutionMessage(
+                verificationEvent,
+                resolution,
+                resolvedBy
+              ),
+              allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+            });
+          }
+
+          await thread.setArchived(true);
+          await thread.setLocked(true);
+          resolvedMainThread = true;
+        }
       }
 
-      const verificationChannel = await this.configService.getVerificationChannel(
-        verificationEvent.server_id
+      const resolvedPrivateEvidenceThread = await this.setPrivateEvidenceThreadState(
+        verificationEvent,
+        true,
+        true,
+        verificationEvent.thread_id
       );
-      if (!verificationChannel) {
-        throw new Error('No verification channel ID configured');
-      }
 
-      const thread = await verificationChannel.threads.fetch(verificationEvent.thread_id);
-
-      if (!thread || !thread.isThread()) {
-        // No thread but that's okay
-        return false;
-      }
-
-      if (resolution === VerificationStatus.VERIFIED) {
-        await thread.send({
-          content: `This thread has been resolved. If you have any questions, please contact a moderator.`,
-        });
-      } else if (resolution === VerificationStatus.BANNED) {
-        await thread.send({
-          content: `This thread has been rejected. If you have any questions, please contact a moderator.`,
-        });
-      }
-
-      await thread.setArchived(true);
-      await thread.setLocked(true);
-
-      return true;
+      return resolvedMainThread || resolvedPrivateEvidenceThread;
     } catch (error) {
       console.error('Failed to resolve verification thread:', error);
       return false;
     }
+  }
+
+  private buildVerificationResolutionMessage(
+    verificationEvent: VerificationEvent,
+    resolution: VerificationStatus,
+    resolvedBy: string
+  ): string {
+    const actionLabel = resolution === VerificationStatus.BANNED ? 'banned' : 'verified';
+    const snapshot = this.getUserSnapshot(verificationEvent.metadata);
+    const lines = [
+      `Case handled: ${actionLabel}.`,
+      `Action taken by: <@${resolvedBy}>`,
+      verificationEvent.resolved_at
+        ? `Action time: ${this.formatDiscordTimestamp(verificationEvent.resolved_at)}`
+        : null,
+      '',
+      'User snapshot:',
+      `- User: ${snapshot?.tag ?? snapshot?.username ?? verificationEvent.user_id} (${verificationEvent.user_id})`,
+      snapshot?.display_name ? `- Display name: ${snapshot.display_name}` : null,
+      snapshot?.username && snapshot.username !== snapshot.tag
+        ? `- Username: ${snapshot.username}`
+        : null,
+      snapshot?.account_created_at
+        ? `- Account created: ${this.formatDiscordTimestamp(snapshot.account_created_at)}`
+        : null,
+      snapshot?.joined_at
+        ? `- Joined server: ${this.formatDiscordTimestamp(snapshot.joined_at)}`
+        : null,
+      snapshot?.avatar_url ? `- Avatar at time of case: ${snapshot.avatar_url}` : null,
+      verificationEvent.notes ? `- Notes: ${verificationEvent.notes}` : null,
+      '',
+      'No further moderator action is pending.',
+      'If you have any questions, please contact a moderator.',
+    ].filter((line): line is string => line !== null);
+
+    return enforceDiscordMessageLimit(lines.join('\n'));
+  }
+
+  private getUserSnapshot(metadata: VerificationEvent['metadata']): UserSnapshotMetadata | null {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return null;
+    }
+
+    const snapshot = (metadata as Record<string, unknown>).user_snapshot;
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+      return null;
+    }
+
+    return snapshot as UserSnapshotMetadata;
+  }
+
+  private formatDiscordTimestamp(value: Date | string): string {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return String(value);
+    }
+
+    const timestamp = Math.floor(date.getTime() / 1000);
+    return `<t:${timestamp}:F> (<t:${timestamp}:R>)`;
   }
 
   /**
@@ -1091,27 +1179,25 @@ export class ThreadManager implements IThreadManager {
    */
   async reopenVerificationThread(verificationEvent: VerificationEvent): Promise<boolean> {
     try {
-      if (!verificationEvent.thread_id) {
-        // No thread but that's okay
-        return false;
+      let reopenedMainThread = false;
+
+      if (verificationEvent.thread_id) {
+        const thread = await this.fetchStoredThread(verificationEvent);
+        if (thread) {
+          await thread.setArchived(false);
+          await thread.setLocked(false);
+          reopenedMainThread = true;
+        }
       }
 
-      const channel = await this.configService.getVerificationChannel(verificationEvent.server_id);
+      const reopenedPrivateEvidenceThread = await this.setPrivateEvidenceThreadState(
+        verificationEvent,
+        false,
+        false,
+        verificationEvent.thread_id
+      );
 
-      if (!channel) {
-        throw new Error('No verification channel ID configured');
-      }
-
-      const thread = await channel.threads.fetch(verificationEvent.thread_id);
-      if (!thread || !thread.isThread()) {
-        // No thread but that's okay
-        return false;
-      }
-
-      await thread.setArchived(false);
-      await thread.setLocked(false);
-
-      return true;
+      return reopenedMainThread || reopenedPrivateEvidenceThread;
     } catch (error) {
       console.error('Failed to reopen verification thread:', error);
       return false;

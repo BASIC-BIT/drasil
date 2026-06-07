@@ -5,6 +5,7 @@ import {
   EmbedBuilder,
   GuildMember,
   Message,
+  ThreadChannel,
 } from 'discord.js';
 import { DetectionResult } from './DetectionOrchestrator';
 import type { ReportAIAnalysis, VerificationThreadAnalysisResult } from './GPTService';
@@ -44,6 +45,7 @@ export class NotificationPresentationBuilder {
   public static readonly THREAD_ANALYSIS_FIELD_NAME = 'AI Thread Analysis';
   public static readonly LATEST_ADMIN_ACTION_FIELD_NAME = 'Latest Admin Action';
   public static readonly MODERATION_ACTION_WARNING_FIELD_NAME = 'Moderation Action Warning';
+  public static readonly RESOLUTION_FIELD_NAME = 'Resolution';
 
   public createSuspiciousUserEmbed(
     member: GuildMember,
@@ -90,16 +92,28 @@ export class NotificationPresentationBuilder {
       embedColor = 0x000000;
     }
 
+    const resolutionPresentation = this.getVerificationResolutionPresentation(verificationEvent);
     const embed = new EmbedBuilder()
       .setColor(embedColor)
-      .setTitle('Suspicious User Detected')
+      .setTitle(resolutionPresentation?.title ?? this.getPendingCaseTitle(detectionResult))
       .setDescription(
-        countedDetectionEvents.length > 1
-          ? `<@${member.id}> has been flagged as suspicious ${countedDetectionEvents.length} times.`
-          : `<@${member.id}> has been flagged as suspicious.`
+        resolutionPresentation
+          ? `<@${member.id}> has been handled. No further moderator action is pending.`
+          : countedDetectionEvents.length > 1
+            ? `<@${member.id}> has been flagged as suspicious ${countedDetectionEvents.length} times.`
+            : `<@${member.id}> has been flagged as suspicious.`
       )
       .setThumbnail(member.user.displayAvatarURL())
       .addFields(
+        ...(resolutionPresentation
+          ? [
+              {
+                name: NotificationPresentationBuilder.RESOLUTION_FIELD_NAME,
+                value: resolutionPresentation.fieldValue,
+                inline: false,
+              },
+            ]
+          : []),
         { name: 'Username', value: member.user.tag, inline: true },
         { name: 'User ID', value: member.id, inline: true },
         { name: 'Account Created', value: accountCreatedFormatted, inline: false },
@@ -233,6 +247,69 @@ export class NotificationPresentationBuilder {
     return embed;
   }
 
+  private getPendingCaseTitle(detectionResult: DetectionResult): string {
+    if (detectionResult.triggerSource === DetectionType.USER_REPORT) {
+      return 'User Report Submitted';
+    }
+
+    if (detectionResult.triggerSource === DetectionType.ADMIN_CASE) {
+      return 'Admin Review Case Opened';
+    }
+
+    return 'Suspicious User Detected';
+  }
+
+  public createReportIntakeStartedEmbed(
+    reporter: GuildMember,
+    thread: ThreadChannel
+  ): EmbedBuilder {
+    const accountCreatedTimestamp = Math.floor(reporter.user.createdTimestamp / 1000);
+    const joinedServerTimestamp = reporter.joinedAt
+      ? Math.floor(reporter.joinedAt.getTime() / 1000)
+      : null;
+    const avatarUrl =
+      typeof reporter.user.displayAvatarURL === 'function'
+        ? reporter.user.displayAvatarURL()
+        : typeof reporter.displayAvatarURL === 'function'
+          ? reporter.displayAvatarURL()
+          : null;
+
+    const embed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle('Report Intake Started')
+      .setDescription(
+        `A private report intake thread was opened by <@${reporter.id}>. No report has been submitted yet.`
+      )
+      .addFields(
+        { name: 'Reporter', value: `${reporter.user.tag} (${reporter.id})`, inline: false },
+        {
+          name: 'Report Thread',
+          value: `[Open thread](${thread.url}) (${thread.id})`,
+          inline: false,
+        },
+        {
+          name: 'Reporter Account Created',
+          value: `<t:${accountCreatedTimestamp}:F> (<t:${accountCreatedTimestamp}:R>)`,
+          inline: false,
+        },
+        {
+          name: 'Reporter Joined Server',
+          value: joinedServerTimestamp
+            ? `<t:${joinedServerTimestamp}:F> (<t:${joinedServerTimestamp}:R>)`
+            : 'Unknown',
+          inline: false,
+        }
+      )
+      .setFooter({ text: 'Drasil will wait for reporter target confirmation before submitting.' })
+      .setTimestamp();
+
+    if (avatarUrl) {
+      embed.setThumbnail(avatarUrl);
+    }
+
+    return embed;
+  }
+
   public createActionRow(userId: string): ActionRowBuilder<ButtonBuilder> {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
@@ -352,6 +429,7 @@ export class NotificationPresentationBuilder {
     if (hasGuild && actionTaken === AdminActionType.BAN) {
       embed.setColor(0x000000);
     }
+    this.upsertHandledResolutionField(embed, actionTaken, adminId, timestamp);
 
     const actionLogContent = `• ${this.formatAdminActionEvent(actionTaken, adminId, timestamp)}`;
     if (actionLogField) {
@@ -613,6 +691,70 @@ export class NotificationPresentationBuilder {
       verificationEvent.resolved_by,
       Math.floor(verificationEvent.resolved_at.getTime() / 1000)
     );
+  }
+
+  private getVerificationResolutionPresentation(
+    verificationEvent: VerificationEvent
+  ): { title: string; fieldValue: string } | null {
+    const actionTaken =
+      verificationEvent.status === VerificationStatus.BANNED
+        ? AdminActionType.BAN
+        : verificationEvent.status === VerificationStatus.VERIFIED
+          ? AdminActionType.VERIFY
+          : null;
+    if (!actionTaken) {
+      return null;
+    }
+
+    const resolvedAt = verificationEvent.resolved_at
+      ? Math.floor(verificationEvent.resolved_at.getTime() / 1000)
+      : null;
+
+    return {
+      title: this.formatHandledTitle(actionTaken),
+      fieldValue: this.formatResolutionFieldValue(
+        actionTaken,
+        verificationEvent.resolved_by,
+        resolvedAt
+      ),
+    };
+  }
+
+  private upsertHandledResolutionField(
+    embed: EmbedBuilder,
+    actionTaken: AdminActionType,
+    adminId: string,
+    timestamp: number
+  ): void {
+    if (actionTaken !== AdminActionType.VERIFY && actionTaken !== AdminActionType.BAN) {
+      return;
+    }
+
+    embed.setTitle(this.formatHandledTitle(actionTaken));
+    const field = {
+      name: NotificationPresentationBuilder.RESOLUTION_FIELD_NAME,
+      value: this.formatResolutionFieldValue(actionTaken, adminId, timestamp),
+      inline: false,
+    };
+    const fields = (embed.data.fields ?? []).filter(
+      (existingField) => existingField.name !== field.name
+    );
+    fields.splice(0, 0, field);
+    embed.setFields(...fields);
+  }
+
+  private formatHandledTitle(actionTaken: AdminActionType): string {
+    return `Case Handled: ${this.formatAdminActionLabel(actionTaken)}`;
+  }
+
+  private formatResolutionFieldValue(
+    actionTaken: AdminActionType,
+    adminId: string | null,
+    timestamp: number | null
+  ): string {
+    const actor = adminId ? ` by <@${adminId}>` : '';
+    const when = timestamp ? ` at <t:${timestamp}:F>` : '';
+    return `${this.formatAdminActionLabel(actionTaken)}${actor}${when}\nNo further moderator action is pending.`;
   }
 
   private upsertField(

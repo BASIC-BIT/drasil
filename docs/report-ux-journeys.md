@@ -45,11 +45,13 @@ Good for privacy and low clutter. Reports start as triage alerts instead of crea
 2. Drasil opens a private report intake thread and adds the reporter.
 3. Drasil adds configured case responders when responder routing is enabled.
 4. Reporter adds freeform context: who or what they are reporting, message links, screenshots, IDs, mentions, and what happened.
-5. Moderators can ask follow-up questions in the thread and decide whether to open a user-specific case.
+5. Drasil records text, links, and eligible screenshot metadata as durable evidence, then uses deterministic candidate resolution plus debounced AI/VLM extraction to propose possible Discord users.
+6. The reporter must answer the Yes/No target prompt before Drasil submits a `USER_REPORT` detection event.
+7. Moderators get a no-ping intake-start embed immediately, and later get the normal observed alert or case notification only after a target is confirmed and routing policy allows it.
 
 Current UX result:
-Avoids Discord's limited recent-user picker. The button is now context intake, not target selection.
-See `docs/report-intake-agent-design.md` for the planned VLM/LangGraph follow-up flow.
+Avoids Discord's limited recent-user picker while still requiring reporter confirmation before screenshot/name-only evidence attaches to a Discord user. The button is context intake first, not silent target selection.
+See `docs/report-intake-agent-design.md` for the deeper VLM/LangGraph follow-up plan.
 
 ### Guild `Report User`
 
