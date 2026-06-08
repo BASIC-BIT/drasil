@@ -23,8 +23,13 @@ export function AccountControl({ username }: AccountControlProps) {
         <span className="account-label">Signed in as</span>
         <strong className="account-name">{username}</strong>
       </span>
-      <button className="button ghost" type="submit">
-        Sign out
+      <button
+        aria-label={`Sign out ${username}`}
+        className="icon-button account-sign-out"
+        title="Sign out"
+        type="submit"
+      >
+        <span aria-hidden="true">-&gt;</span>
       </button>
     </form>
   );

@@ -144,33 +144,49 @@ function DiscordSurfaces({ detail }: { readonly detail: CaseDetail }) {
   );
 }
 
+function CompactExternalLink({
+  href,
+  label,
+  children = 'Open',
+}: {
+  readonly href: string;
+  readonly label: string;
+  readonly children?: string;
+}) {
+  return (
+    <a className="link-control" href={href} rel="noreferrer" target="_blank" title={label}>
+      <span aria-hidden="true">{children}</span>
+      <span className="visually-hidden">{label}</span>
+    </a>
+  );
+}
+
 function DiscordMessageBlock({ message }: { readonly message: CaseDiscordMessage }) {
   return (
     <article className="evidence-row">
-      <div className="evidence-meta">
-        <strong>{message.authorLabel}</strong>
-        <span className="muted">{formatUtc(message.timestamp)}</span>
+      <div className="evidence-row-header">
+        <div className="evidence-meta">
+          <strong>{message.authorLabel}</strong>
+          <span className="muted">{formatUtc(message.timestamp)}</span>
+        </div>
+        <CompactExternalLink href={message.url} label="Open this Discord message" />
       </div>
       <pre className="message-content">{message.content || 'No text content.'}</pre>
       {message.attachments.length > 0 ? (
         <div className="attachment-list">
           {message.attachments.map((attachment) => (
             <p key={attachment.id}>
-              <span className="muted">Attachment</span>{' '}
+              <span className="muted">Attachment</span>
+              <span>{attachment.filename ?? attachment.id}</span>
               {attachment.url ? (
-                <a className="raw-link" href={attachment.url} rel="noreferrer" target="_blank">
-                  {attachment.url}
-                </a>
-              ) : (
-                (attachment.filename ?? attachment.id)
-              )}
+                <CompactExternalLink href={attachment.url} label="Open this Discord attachment">
+                  Open attachment
+                </CompactExternalLink>
+              ) : null}
             </p>
           ))}
         </div>
       ) : null}
-      <a className="raw-link" href={message.url} rel="noreferrer" target="_blank">
-        {message.url}
-      </a>
     </article>
   );
 }
@@ -181,11 +197,13 @@ function DiscordThreadBlock({ thread }: { readonly thread: CaseDiscordThreadSnap
       <div className="evidence-group-header">
         <div>
           <h3>{thread.label}</h3>
-          <a className="raw-link" href={thread.url} rel="noreferrer" target="_blank">
-            {thread.url}
-          </a>
         </div>
-        {thread.truncated ? <span className="status warning">Limited</span> : null}
+        <div className="evidence-actions">
+          {thread.truncated ? <span className="status warning">Limited</span> : null}
+          <CompactExternalLink href={thread.url} label={`Open ${thread.label}`}>
+            Open thread
+          </CompactExternalLink>
+        </div>
       </div>
       {thread.error ? <p className="muted">Could not load thread messages: {thread.error}</p> : null}
       {!thread.error && thread.messages.length === 0 ? (
@@ -201,16 +219,16 @@ function DiscordThreadBlock({ thread }: { readonly thread: CaseDiscordThreadSnap
 function StoredEvidenceItem({ item }: { readonly item: CaseEvidenceItem }) {
   return (
     <article className="evidence-row">
-      <div className="evidence-meta">
-        <strong>{formatDetectionType(item.kind)}</strong>
-        <span className="muted">{formatUtc(item.createdAt)}</span>
+      <div className="evidence-row-header">
+        <div className="evidence-meta">
+          <strong>{formatDetectionType(item.kind)}</strong>
+          <span className="muted">{formatUtc(item.createdAt)}</span>
+        </div>
+        {item.url ? (
+          <CompactExternalLink href={item.url} label={`Open ${formatDetectionType(item.kind)}`} />
+        ) : null}
       </div>
       <pre className="message-content">{item.content || 'No stored text content.'}</pre>
-      {item.url ? (
-        <a className="raw-link" href={item.url} rel="noreferrer" target="_blank">
-          {item.url}
-        </a>
-      ) : null}
     </article>
   );
 }
@@ -218,39 +236,43 @@ function StoredEvidenceItem({ item }: { readonly item: CaseEvidenceItem }) {
 function StoredMessageContextItem({ item }: { readonly item: CaseMessageContextItem }) {
   return (
     <article className="evidence-row">
-      <div className="evidence-meta">
-        <strong>{item.isSource ? 'Stored Source Message' : 'Stored User Message'}</strong>
-        <span className="muted">{formatUtc(item.createdAt)}</span>
+      <div className="evidence-row-header">
+        <div className="evidence-meta">
+          <strong>{item.isSource ? 'Stored Source Message' : 'Stored User Message'}</strong>
+          <span className="muted">{formatUtc(item.createdAt)}</span>
+        </div>
+        {item.url ? (
+          <CompactExternalLink href={item.url} label="Open this stored Discord message" />
+        ) : null}
       </div>
       <pre className="message-content">{item.contentPreview}</pre>
-      {item.url ? (
-        <a className="raw-link" href={item.url} rel="noreferrer" target="_blank">
-          {item.url}
-        </a>
-      ) : null}
     </article>
   );
 }
 
-function EvidenceContent({
+function SourceMessageContent({
   detail,
   discordSnapshot,
 }: {
   readonly detail: CaseDetail;
   readonly discordSnapshot?: CaseDiscordSnapshot;
 }) {
-  const hasLiveContent = Boolean(
-    discordSnapshot?.sourceMessage || discordSnapshot?.threads.some((thread) => thread.messages.length > 0)
+  const storedSourceMessages = detail.messageContext.filter((item) => item.isSource);
+  const storedContextMessages = detail.messageContext.filter((item) => !item.isSource);
+  const hasContent = Boolean(
+    discordSnapshot?.sourceMessage ||
+      detail.evidenceItems.length > 0 ||
+      storedSourceMessages.length > 0 ||
+      storedContextMessages.length > 0
   );
-  const hasStoredContent = detail.evidenceItems.length > 0 || detail.messageContext.length > 0;
 
   return (
     <section className="panel stack">
       <div className="section-heading compact-heading">
-        <h2>Evidence Content</h2>
+        <h2>Source Message</h2>
         <p className="muted">
-          Discord messages are fetched live with the bot token. Stored snippets are shown when
-          Drasil has retained report evidence or recent message context.
+          Live Discord source content first, with retained report evidence and recent stored message
+          context below when available.
         </p>
       </div>
 
@@ -262,15 +284,8 @@ function EvidenceContent({
       ) : null}
 
       {discordSnapshot?.sourceMessage ? (
-        <div className="evidence-group">
-          <h3>Source Message</h3>
-          <DiscordMessageBlock message={discordSnapshot.sourceMessage} />
-        </div>
+        <DiscordMessageBlock message={discordSnapshot.sourceMessage} />
       ) : null}
-
-      {discordSnapshot?.threads.map((thread) => (
-        <DiscordThreadBlock key={`${thread.kind}-${thread.channelId}`} thread={thread} />
-      ))}
 
       {detail.evidenceItems.length > 0 ? (
         <div className="evidence-group">
@@ -281,19 +296,52 @@ function EvidenceContent({
         </div>
       ) : null}
 
-      {detail.messageContext.length > 0 ? (
+      {storedSourceMessages.length > 0 ? (
         <div className="evidence-group">
-          <h3>Recent Stored User Messages</h3>
+          <h3>Stored Source Preview</h3>
           <p className="muted">Stored previews are capped and retained for recent context.</p>
-          {detail.messageContext.map((item) => (
+          {storedSourceMessages.map((item) => (
             <StoredMessageContextItem item={item} key={item.id} />
           ))}
         </div>
       ) : null}
 
-      {!hasLiveContent && !hasStoredContent ? (
+      {storedContextMessages.length > 0 ? (
+        <div className="evidence-group">
+          <h3>Recent Stored User Messages</h3>
+          <p className="muted">Stored previews are capped and retained for recent context.</p>
+          {storedContextMessages.map((item) => (
+            <StoredMessageContextItem item={item} key={item.id} />
+          ))}
+        </div>
+      ) : null}
+
+      {!hasContent ? (
         <p className="muted">No live Discord content or stored message context was available.</p>
       ) : null}
+    </section>
+  );
+}
+
+function ThreadContent({
+  discordSnapshot,
+}: {
+  readonly discordSnapshot?: CaseDiscordSnapshot;
+}) {
+  const threads = discordSnapshot?.threads ?? [];
+
+  return (
+    <section className="panel stack">
+      <div className="section-heading compact-heading">
+        <h2>Thread Content</h2>
+        <p className="muted">
+          Live messages from the verification, evidence, and report-intake threads.
+        </p>
+      </div>
+      {threads.length === 0 ? <p className="muted">No Discord threads recorded yet.</p> : null}
+      {threads.map((thread) => (
+        <DiscordThreadBlock key={`${thread.kind}-${thread.channelId}`} thread={thread} />
+      ))}
     </section>
   );
 }
@@ -397,10 +445,11 @@ export function CaseDetailView({
 
       <p className="muted">{guildName} Active Case Detail</p>
       <SummaryPanel detail={detail} />
-      <EvidenceContent detail={detail} discordSnapshot={discordSnapshot} />
       <DiscordSurfaces detail={detail} />
-      <DetectionHistory detections={detail.detectionHistory} />
       <ModerationOutcomes outcomes={detail.moderationOutcomes} />
+      <SourceMessageContent detail={detail} discordSnapshot={discordSnapshot} />
+      <DetectionHistory detections={detail.detectionHistory} />
+      <ThreadContent discordSnapshot={discordSnapshot} />
     </main>
   );
 }

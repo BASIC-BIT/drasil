@@ -48,7 +48,7 @@ export function ThemeToggle() {
   return (
     <button
       aria-label="Toggle light and dark mode"
-      className="button ghost theme-toggle"
+      className="button secondary theme-toggle"
       onClick={() => {
         applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
       }}
