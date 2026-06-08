@@ -1,0 +1,129 @@
+name: Deploy Domain DNS (prod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (branch, tag, or commit SHA) to use'
+        required: false
+        default: 'main'
+      mode:
+        description: 'Run a Terraform plan only, or apply the generated plan'
+        required: true
+        type: choice
+        default: plan
+        options:
+          - plan
+          - apply
+      domain_name:
+        description: 'Domain name managed by infra/aws/domain'
+        required: true
+        default: 'drasilbot.com'
+
+concurrency:
+  group: deploy-domain-prod
+  cancel-in-progress: false
+
+env:
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
+jobs:
+  terraform-domain:
+    runs-on: ubuntu-latest
+    environment: Deploy - web-prod
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TF_VAR_domain_name: ${{ inputs.domain_name }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: infra/aws/domain
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: 1.6.6
+          terraform_wrapper: false
+
+      - name: Validate required variables
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ROLE_TO_ASSUME: ${{ vars.AWS_TERRAFORM_ROLE_TO_ASSUME || vars.AWS_ROLE_TO_ASSUME }}
+          DOMAIN_HOSTED_ZONE_ID: ${{ vars.DRASIL_DOMAIN_HOSTED_ZONE_ID }}
+          TERRAFORM_LOCK_TABLE: ${{ vars.TERRAFORM_LOCK_TABLE || 'drasil-terraform-locks' }}
+          TERRAFORM_STATE_BUCKET: ${{ vars.TERRAFORM_STATE_BUCKET }}
+        run: |
+          set -euo pipefail
+          : "${AWS_REGION:?Set repository variable AWS_REGION}"
+          : "${AWS_ROLE_TO_ASSUME:?Set repository variable AWS_TERRAFORM_ROLE_TO_ASSUME or AWS_ROLE_TO_ASSUME}"
+          : "${DOMAIN_HOSTED_ZONE_ID:?Set repository variable DRASIL_DOMAIN_HOSTED_ZONE_ID}"
+          : "${TERRAFORM_LOCK_TABLE:?Set repository variable TERRAFORM_LOCK_TABLE}"
+          : "${TERRAFORM_STATE_BUCKET:?Set repository variable TERRAFORM_STATE_BUCKET}"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_TO_ASSUME || vars.AWS_ROLE_TO_ASSUME }}
+
+      - name: Write backend config
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          TERRAFORM_LOCK_TABLE: ${{ vars.TERRAFORM_LOCK_TABLE || 'drasil-terraform-locks' }}
+          TERRAFORM_STATE_BUCKET: ${{ vars.TERRAFORM_STATE_BUCKET }}
+        run: |
+          set -euo pipefail
+          cat > backend.ci.hcl <<EOF
+          bucket         = "${TERRAFORM_STATE_BUCKET}"
+          key            = "drasil/domain/terraform.tfstate"
+          region         = "${AWS_REGION}"
+          dynamodb_table = "${TERRAFORM_LOCK_TABLE}"
+          encrypt        = true
+          EOF
+
+      - name: Terraform init
+        run: terraform init -backend-config=backend.ci.hcl
+
+      - name: Adopt existing hosted zone
+        env:
+          DOMAIN_HOSTED_ZONE_ID: ${{ vars.DRASIL_DOMAIN_HOSTED_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          if terraform state show aws_route53_zone.primary >/dev/null 2>&1; then
+            echo "aws_route53_zone.primary is already tracked in Terraform state."
+            exit 0
+          fi
+
+          terraform import -input=false aws_route53_zone.primary "$DOMAIN_HOSTED_ZONE_ID"
+
+      - name: Terraform plan
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Terraform apply
+        if: inputs.mode == 'apply'
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Deployment summary
+        if: always()
+        env:
+          DOMAIN_HOSTED_ZONE_ID: ${{ vars.DRASIL_DOMAIN_HOSTED_ZONE_ID }}
+          DOMAIN_NAME: ${{ inputs.domain_name }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          {
+            echo "## Domain DNS Terraform"
+            echo "- Mode: ${MODE}"
+            echo "- Commit SHA: $(git rev-parse --short HEAD)"
+            echo "- Domain: ${DOMAIN_NAME}"
+            echo "- Hosted zone ID: ${DOMAIN_HOSTED_ZONE_ID}"
+            echo "- State key: drasil/domain/terraform.tfstate"
+          } >> "$GITHUB_STEP_SUMMARY"
