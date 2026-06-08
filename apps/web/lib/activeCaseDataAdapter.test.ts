@@ -21,6 +21,7 @@ const baseRow = {
   latest_detection_type: 'gpt_analysis',
   latest_confidence: 0.91,
   latest_detection_at: new Date('2026-06-01T00:00:00.000Z'),
+  latest_detection_metadata: {},
   source_channel_id: null,
   source_message_id: null,
   last_action_type: null,

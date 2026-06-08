@@ -28,7 +28,8 @@ The web app does not import Prisma or bot DI directly. Setup talks through `Setu
 
 Active cases talk through `ActiveCaseDataAdapter`:
 
-- `PostgresActiveCaseDataAdapter` reads pending `verification_events`, recent `detection_events`, recent `admin_actions`, and persisted `moderation_outcomes`.
+- `PostgresActiveCaseDataAdapter` reads pending `verification_events`, recent `detection_events`, recent `admin_actions`, persisted `moderation_outcomes`, retained report evidence, and recent `message_contexts` previews.
+- Case detail pages also fetch source-message and thread messages live from the Discord API with the bot token when Discord surfaces are available.
 - Case pages are read-only for this slice. Moderator actions still route through Discord surfaces so evidence and provenance stay in Discord threads/messages.
 
 This keeps the first dashboard useful now while preserving the option to migrate new web-facing workflows to Convex later.
@@ -54,7 +55,7 @@ Required web runtime variables:
 - `DRASIL_SESSION_SECRET`: high-entropy cookie signing secret.
 - `DRASIL_OAUTH_ENCRYPTION_KEY`: high-entropy OAuth token encryption secret. This must be set separately from `DRASIL_SESSION_SECRET`.
 - `DATABASE_URL` or `DRASIL_WEB_DATABASE_URL`: Supabase/Postgres connection string.
-- `DRASIL_WEB_BOT_TOKEN` or `DISCORD_TOKEN`: bot token for live role/channel diagnostics.
+- `DRASIL_WEB_BOT_TOKEN` or `DISCORD_TOKEN`: bot token for live role/channel diagnostics and active-case Discord message reads.
 
 Optional variables:
 

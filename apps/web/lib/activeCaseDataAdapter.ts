@@ -5,6 +5,8 @@ import {
   type CaseAction,
   type CaseDetail,
   type CaseDetectionHistoryItem,
+  type CaseEvidenceItem,
+  type CaseMessageContextItem,
   type CaseModerationOutcome,
   type CasePresenceState,
   type CaseSummary,
@@ -39,6 +41,7 @@ interface CaseSummaryRow {
   latest_detection_type: string | null;
   latest_confidence: number | null;
   latest_detection_at: unknown;
+  latest_detection_metadata: unknown;
   source_channel_id: string | null;
   source_message_id: string | null;
   last_action_type: string | null;
@@ -53,6 +56,24 @@ interface DetectionHistoryRow {
   confidence: number;
   detected_at: unknown;
   reasons: string[] | null;
+}
+
+interface CaseEvidenceRow {
+  id: string;
+  kind: string;
+  source_message_id: string | null;
+  source_channel_id: string | null;
+  content: string | null;
+  metadata: unknown;
+  created_at: unknown;
+}
+
+interface MessageContextRow {
+  id: string;
+  message_id: string;
+  channel_id: string | null;
+  content_preview: string;
+  created_at: unknown;
 }
 
 interface ModerationOutcomeRow {
@@ -235,6 +256,37 @@ function parseDetectionHistoryRow(row: DetectionHistoryRow): CaseDetectionHistor
   };
 }
 
+function parseEvidenceRow(row: CaseEvidenceRow, guildId: string): CaseEvidenceItem {
+  const metadata = metadataToRecord(row.metadata);
+  const attachmentUrl = readString(metadata.url) ?? readString(metadata.proxyUrl);
+  return {
+    id: row.id,
+    kind: row.kind,
+    content: row.content,
+    createdAt: toNullableIsoString(row.created_at),
+    url:
+      row.source_channel_id && row.source_message_id
+        ? discordMessageUrl(guildId, row.source_channel_id, row.source_message_id)
+        : attachmentUrl,
+  };
+}
+
+function parseMessageContextRow(
+  row: MessageContextRow,
+  guildId: string,
+  sourceMessageId: string | null
+): CaseMessageContextItem {
+  return {
+    id: row.id,
+    messageId: row.message_id,
+    channelId: row.channel_id,
+    contentPreview: row.content_preview,
+    createdAt: toIsoString(row.created_at),
+    url: row.channel_id ? discordMessageUrl(guildId, row.channel_id, row.message_id) : null,
+    isSource: row.message_id === sourceMessageId,
+  };
+}
+
 function parseModerationOutcomeRow(row: ModerationOutcomeRow): CaseModerationOutcome {
   return {
     id: row.id,
@@ -264,6 +316,7 @@ const SUMMARY_QUERY = `
     de.detection_type as latest_detection_type,
     de.confidence as latest_confidence,
     de.detected_at as latest_detection_at,
+    de.metadata as latest_detection_metadata,
     de.channel_id as source_channel_id,
     de.message_id as source_message_id,
     aa.action_type as last_action_type,
@@ -312,28 +365,64 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       return null;
     }
 
-    const [detectionHistoryResult, outcomesResult] = await Promise.all([
-      getPostgresPool().query<DetectionHistoryRow>(
-        `select id, detection_type, confidence, detected_at, reasons
-         from detection_events
-         where server_id = $1 and user_id = $2
-         order by detected_at desc nulls last
-         limit 25`,
-        [guildId, row.user_id]
-      ),
-      getPostgresPool().query<ModerationOutcomeRow>(
-        `select id, outcome_type, source, actor_id, reason, occurred_at
-         from moderation_outcomes
-         where server_id = $1 and user_id = $2
-         order by occurred_at desc nulls last
-         limit 25`,
-        [guildId, row.user_id]
-      ),
-    ]);
+    const latestDetectionMetadata = metadataToRecord(row.latest_detection_metadata);
+    const reportIntakeId = readString(latestDetectionMetadata.reportIntakeId);
+    const summaryMetadata = metadataToRecord(row.metadata);
+    const sourceMessageId =
+      readString(summaryMetadata.source_message_id) ??
+      row.source_message_id ??
+      readString(latestDetectionMetadata.sourceMessageId) ??
+      readString(latestDetectionMetadata.messageId);
+
+    const evidenceQuery = reportIntakeId
+      ? getPostgresPool().query<CaseEvidenceRow>(
+          `select id, kind, source_message_id, source_channel_id, content, metadata, created_at
+           from report_intake_evidence
+           where intake_id = $1
+           order by created_at asc nulls last
+           limit 25`,
+          [reportIntakeId]
+        )
+      : Promise.resolve({ rows: [] as CaseEvidenceRow[] });
+
+    const [detectionHistoryResult, outcomesResult, evidenceResult, messageContextResult] =
+      await Promise.all([
+        getPostgresPool().query<DetectionHistoryRow>(
+          `select id, detection_type, confidence, detected_at, reasons
+           from detection_events
+           where server_id = $1 and user_id = $2
+           order by detected_at desc nulls last
+           limit 25`,
+          [guildId, row.user_id]
+        ),
+        getPostgresPool().query<ModerationOutcomeRow>(
+          `select id, outcome_type, source, actor_id, reason, occurred_at
+           from moderation_outcomes
+           where server_id = $1 and user_id = $2
+           order by occurred_at desc nulls last
+           limit 25`,
+          [guildId, row.user_id]
+        ),
+        evidenceQuery,
+        getPostgresPool().query<MessageContextRow>(
+          `select id, message_id, channel_id, content_preview, created_at
+           from message_contexts
+           where server_id = $1 and user_id = $2 and expires_at > now()
+           order by created_at desc, observed_at desc
+           limit 10`,
+          [guildId, row.user_id]
+        ),
+      ]);
 
     return caseDetailSchema.parse({
       ...parseCaseSummaryRow(row),
       notes: row.notes,
+      evidenceItems: evidenceResult.rows.map((evidenceRow) =>
+        parseEvidenceRow(evidenceRow, guildId)
+      ),
+      messageContext: messageContextResult.rows.map((contextRow) =>
+        parseMessageContextRow(contextRow, guildId, sourceMessageId)
+      ),
       detectionHistory: detectionHistoryResult.rows.map(parseDetectionHistoryRow),
       moderationOutcomes: outcomesResult.rows.map(parseModerationOutcomeRow),
     });

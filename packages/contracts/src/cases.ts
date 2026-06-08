@@ -58,6 +58,24 @@ export const caseDetectionHistoryItemSchema = z.object({
   reasons: z.array(z.string()),
 });
 
+export const caseEvidenceItemSchema = z.object({
+  id: z.string(),
+  kind: z.string(),
+  content: z.string().nullable(),
+  createdAt: z.string().nullable(),
+  url: z.string().url().nullable(),
+});
+
+export const caseMessageContextItemSchema = z.object({
+  id: z.string(),
+  messageId: z.string(),
+  channelId: z.string().nullable(),
+  contentPreview: z.string(),
+  createdAt: z.string(),
+  url: z.string().url().nullable(),
+  isSource: z.boolean(),
+});
+
 export const caseModerationOutcomeSchema = z.object({
   id: z.string(),
   outcomeType: z.string(),
@@ -69,6 +87,8 @@ export const caseModerationOutcomeSchema = z.object({
 
 export const caseDetailSchema = caseSummarySchema.extend({
   notes: z.string().nullable(),
+  evidenceItems: z.array(caseEvidenceItemSchema),
+  messageContext: z.array(caseMessageContextItemSchema),
   detectionHistory: z.array(caseDetectionHistoryItemSchema),
   moderationOutcomes: z.array(caseModerationOutcomeSchema),
 });
@@ -79,6 +99,8 @@ export type CaseSurfaceKind = z.infer<typeof caseSurfaceKindSchema>;
 export type CaseSurfaceLink = z.infer<typeof caseSurfaceLinkSchema>;
 export type CaseSummary = z.infer<typeof caseSummarySchema>;
 export type CaseDetectionHistoryItem = z.infer<typeof caseDetectionHistoryItemSchema>;
+export type CaseEvidenceItem = z.infer<typeof caseEvidenceItemSchema>;
+export type CaseMessageContextItem = z.infer<typeof caseMessageContextItemSchema>;
 export type CaseModerationOutcome = z.infer<typeof caseModerationOutcomeSchema>;
 export type CaseDetail = z.infer<typeof caseDetailSchema>;
 

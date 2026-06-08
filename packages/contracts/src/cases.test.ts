@@ -35,6 +35,26 @@ describe('case contracts', () => {
       caseDetailSchema.parse({
         ...buildCase('detail', true, '2026-06-02T00:00:00.000Z'),
         notes: null,
+        evidenceItems: [
+          {
+            id: 'ev-1',
+            kind: 'reported_text',
+            content: 'Suspicious message content',
+            createdAt: '2026-06-01T00:00:00.000Z',
+            url: null,
+          },
+        ],
+        messageContext: [
+          {
+            id: 'msg-1',
+            messageId: 'message-1',
+            channelId: 'channel-1',
+            contentPreview: 'claim your prize',
+            createdAt: '2026-06-01T00:00:00.000Z',
+            url: 'https://discord.com/channels/guild-1/channel-1/message-1',
+            isSource: true,
+          },
+        ],
         detectionHistory: [
           {
             id: 'det-1',

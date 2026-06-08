@@ -694,6 +694,74 @@ select {
   margin: 0 0 6px;
 }
 
+.confidence-pill {
+  min-width: 76px;
+}
+
+.evidence-group {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.evidence-group h3 {
+  margin: 0;
+}
+
+.evidence-group-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.evidence-row {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--panel-muted);
+  padding: 12px;
+}
+
+.evidence-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: baseline;
+}
+
+.message-content {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--field-bg);
+  color: var(--text);
+  padding: 10px;
+  font: inherit;
+  line-height: 1.45;
+}
+
+.attachment-list {
+  display: grid;
+  gap: 4px;
+}
+
+.attachment-list p {
+  margin: 0;
+}
+
+.raw-link {
+  color: var(--accent-strong);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 @media (max-width: 760px) {
   .hero {
     grid-template-columns: 1fr;

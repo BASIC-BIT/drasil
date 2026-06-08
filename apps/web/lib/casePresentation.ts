@@ -134,10 +134,10 @@ export function formatConfidence(value: number | null): string {
     return 'No Signal';
   }
   if (value >= 0.8) {
-    return 'High Confidence';
+    return 'High';
   }
   if (value >= 0.5) {
-    return 'Medium Confidence';
+    return 'Medium';
   }
-  return 'Low Confidence';
+  return 'Low';
 }

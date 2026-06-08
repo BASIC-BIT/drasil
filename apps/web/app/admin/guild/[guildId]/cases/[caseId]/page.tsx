@@ -1,6 +1,7 @@
 import { notFound, redirect } from 'next/navigation';
 import { CaseDetailView } from '@/components/cases/CaseDetailView';
 import { createActiveCaseDataAdapter } from '@/lib/activeCaseDataAdapter';
+import { fetchCaseDiscordSnapshot } from '@/lib/caseDiscordContent';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 
@@ -21,10 +22,12 @@ export default async function CaseDetailPage({ params }: PageProps) {
   if (!detail) {
     notFound();
   }
+  const discordSnapshot = await fetchCaseDiscordSnapshot(guildId, detail);
 
   return (
     <CaseDetailView
       detail={detail}
+      discordSnapshot={discordSnapshot}
       guildId={guildId}
       guildName={guild.name}
       sessionUsername={session.username}

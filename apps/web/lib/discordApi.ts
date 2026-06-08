@@ -3,6 +3,7 @@ import { fixtureGuildResources, fixtureGuilds, isWebE2eFixtureMode } from './e2e
 
 const DEFAULT_DISCORD_API_BASE_URL = 'https://discord.com/api/v10';
 const DISCORD_GUILD_PAGE_LIMIT = 200;
+const DISCORD_MESSAGE_PAGE_LIMIT = 100;
 
 export interface DiscordUser {
   readonly id: string;
@@ -49,6 +50,23 @@ export interface DiscordChannel {
 export interface DiscordGuildMember {
   readonly roles: readonly string[];
   readonly user?: DiscordUser;
+}
+
+export interface DiscordMessageAttachment {
+  readonly id: string;
+  readonly filename?: string;
+  readonly url?: string;
+  readonly proxy_url?: string;
+  readonly content_type?: string;
+}
+
+export interface DiscordMessage {
+  readonly id: string;
+  readonly channel_id: string;
+  readonly content: string;
+  readonly timestamp: string;
+  readonly author: DiscordUser;
+  readonly attachments?: readonly DiscordMessageAttachment[];
 }
 
 export interface DiscordGuildResources {
@@ -167,4 +185,42 @@ export async function fetchGuildResources(guildId: string): Promise<DiscordGuild
   ]);
 
   return { botUser, botMember, roles, channels };
+}
+
+export async function fetchBotMessage(
+  channelId: string,
+  messageId: string
+): Promise<DiscordMessage> {
+  return fetchBotJson<DiscordMessage>(`/channels/${channelId}/messages/${messageId}`);
+}
+
+export async function fetchBotChannelMessages(
+  channelId: string,
+  limit = DISCORD_MESSAGE_PAGE_LIMIT
+): Promise<DiscordMessage[]> {
+  const cappedLimit = Math.max(1, Math.min(limit, 200));
+  const messages: DiscordMessage[] = [];
+  let before: string | null = null;
+
+  while (messages.length < cappedLimit) {
+    const pageLimit = Math.min(DISCORD_MESSAGE_PAGE_LIMIT, cappedLimit - messages.length);
+    const path = new URLSearchParams({ limit: String(pageLimit) });
+    if (before) {
+      path.set('before', before);
+    }
+
+    const page = await fetchBotJson<DiscordMessage[]>(
+      `/channels/${channelId}/messages?${path.toString()}`
+    );
+    messages.push(...page);
+    if (page.length < pageLimit) {
+      break;
+    }
+    before = page[page.length - 1]?.id ?? null;
+    if (!before) {
+      break;
+    }
+  }
+
+  return messages.reverse();
 }

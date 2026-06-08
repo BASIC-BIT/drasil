@@ -2,10 +2,17 @@ import type {
   CaseAction,
   CaseDetail,
   CaseDetectionHistoryItem,
+  CaseEvidenceItem,
+  CaseMessageContextItem,
   CaseModerationOutcome,
 } from '@drasil/contracts';
 import { AccountControl } from '@/components/AccountControl';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import type {
+  CaseDiscordMessage,
+  CaseDiscordSnapshot,
+  CaseDiscordThreadSnapshot,
+} from '@/lib/caseDiscordContent';
 import {
   confidenceStatusClass,
   formatCaseAction,
@@ -25,6 +32,7 @@ interface CaseDetailViewProps {
   readonly guildName: string;
   readonly sessionUsername: string;
   readonly detail: CaseDetail;
+  readonly discordSnapshot?: CaseDiscordSnapshot;
 }
 
 function SummaryPanel({ detail }: { readonly detail: CaseDetail }) {
@@ -136,6 +144,160 @@ function DiscordSurfaces({ detail }: { readonly detail: CaseDetail }) {
   );
 }
 
+function DiscordMessageBlock({ message }: { readonly message: CaseDiscordMessage }) {
+  return (
+    <article className="evidence-row">
+      <div className="evidence-meta">
+        <strong>{message.authorLabel}</strong>
+        <span className="muted">{formatUtc(message.timestamp)}</span>
+      </div>
+      <pre className="message-content">{message.content || 'No text content.'}</pre>
+      {message.attachments.length > 0 ? (
+        <div className="attachment-list">
+          {message.attachments.map((attachment) => (
+            <p key={attachment.id}>
+              <span className="muted">Attachment</span>{' '}
+              {attachment.url ? (
+                <a className="raw-link" href={attachment.url} rel="noreferrer" target="_blank">
+                  {attachment.url}
+                </a>
+              ) : (
+                (attachment.filename ?? attachment.id)
+              )}
+            </p>
+          ))}
+        </div>
+      ) : null}
+      <a className="raw-link" href={message.url} rel="noreferrer" target="_blank">
+        {message.url}
+      </a>
+    </article>
+  );
+}
+
+function DiscordThreadBlock({ thread }: { readonly thread: CaseDiscordThreadSnapshot }) {
+  return (
+    <div className="evidence-group">
+      <div className="evidence-group-header">
+        <div>
+          <h3>{thread.label}</h3>
+          <a className="raw-link" href={thread.url} rel="noreferrer" target="_blank">
+            {thread.url}
+          </a>
+        </div>
+        {thread.truncated ? <span className="status warning">Limited</span> : null}
+      </div>
+      {thread.error ? <p className="muted">Could not load thread messages: {thread.error}</p> : null}
+      {!thread.error && thread.messages.length === 0 ? (
+        <p className="muted">No Discord messages returned for this thread.</p>
+      ) : null}
+      {thread.messages.map((message) => (
+        <DiscordMessageBlock key={message.id} message={message} />
+      ))}
+    </div>
+  );
+}
+
+function StoredEvidenceItem({ item }: { readonly item: CaseEvidenceItem }) {
+  return (
+    <article className="evidence-row">
+      <div className="evidence-meta">
+        <strong>{formatDetectionType(item.kind)}</strong>
+        <span className="muted">{formatUtc(item.createdAt)}</span>
+      </div>
+      <pre className="message-content">{item.content || 'No stored text content.'}</pre>
+      {item.url ? (
+        <a className="raw-link" href={item.url} rel="noreferrer" target="_blank">
+          {item.url}
+        </a>
+      ) : null}
+    </article>
+  );
+}
+
+function StoredMessageContextItem({ item }: { readonly item: CaseMessageContextItem }) {
+  return (
+    <article className="evidence-row">
+      <div className="evidence-meta">
+        <strong>{item.isSource ? 'Stored Source Message' : 'Stored User Message'}</strong>
+        <span className="muted">{formatUtc(item.createdAt)}</span>
+      </div>
+      <pre className="message-content">{item.contentPreview}</pre>
+      {item.url ? (
+        <a className="raw-link" href={item.url} rel="noreferrer" target="_blank">
+          {item.url}
+        </a>
+      ) : null}
+    </article>
+  );
+}
+
+function EvidenceContent({
+  detail,
+  discordSnapshot,
+}: {
+  readonly detail: CaseDetail;
+  readonly discordSnapshot?: CaseDiscordSnapshot;
+}) {
+  const hasLiveContent = Boolean(
+    discordSnapshot?.sourceMessage || discordSnapshot?.threads.some((thread) => thread.messages.length > 0)
+  );
+  const hasStoredContent = detail.evidenceItems.length > 0 || detail.messageContext.length > 0;
+
+  return (
+    <section className="panel stack">
+      <div className="section-heading compact-heading">
+        <h2>Evidence Content</h2>
+        <p className="muted">
+          Discord messages are fetched live with the bot token. Stored snippets are shown when
+          Drasil has retained report evidence or recent message context.
+        </p>
+      </div>
+
+      {discordSnapshot?.errors.length ? (
+        <div className="member-warning neutral-warning">
+          <strong>Some Discord content could not be loaded.</strong>
+          <span>{discordSnapshot.errors.join(' ')}</span>
+        </div>
+      ) : null}
+
+      {discordSnapshot?.sourceMessage ? (
+        <div className="evidence-group">
+          <h3>Source Message</h3>
+          <DiscordMessageBlock message={discordSnapshot.sourceMessage} />
+        </div>
+      ) : null}
+
+      {discordSnapshot?.threads.map((thread) => (
+        <DiscordThreadBlock key={`${thread.kind}-${thread.channelId}`} thread={thread} />
+      ))}
+
+      {detail.evidenceItems.length > 0 ? (
+        <div className="evidence-group">
+          <h3>Stored Report Evidence</h3>
+          {detail.evidenceItems.map((item) => (
+            <StoredEvidenceItem item={item} key={item.id} />
+          ))}
+        </div>
+      ) : null}
+
+      {detail.messageContext.length > 0 ? (
+        <div className="evidence-group">
+          <h3>Recent Stored User Messages</h3>
+          <p className="muted">Stored previews are capped and retained for recent context.</p>
+          {detail.messageContext.map((item) => (
+            <StoredMessageContextItem item={item} key={item.id} />
+          ))}
+        </div>
+      ) : null}
+
+      {!hasLiveContent && !hasStoredContent ? (
+        <p className="muted">No live Discord content or stored message context was available.</p>
+      ) : null}
+    </section>
+  );
+}
+
 function DetectionHistory({
   detections,
 }: {
@@ -153,7 +315,9 @@ function DetectionHistory({
         <div className="timeline">
           {detections.map((detection) => (
             <article className="timeline-item" key={detection.id}>
-              <span className={`${confidenceStatusClass(detection.confidence)} signal-pill`}>
+              <span
+                className={`${confidenceStatusClass(detection.confidence)} signal-pill confidence-pill`}
+              >
                 {formatConfidence(detection.confidence)}
               </span>
               <div>
@@ -210,6 +374,7 @@ export function CaseDetailView({
   guildName,
   sessionUsername,
   detail,
+  discordSnapshot,
 }: CaseDetailViewProps) {
   return (
     <main className="shell stack">
@@ -232,6 +397,7 @@ export function CaseDetailView({
 
       <p className="muted">{guildName} Active Case Detail</p>
       <SummaryPanel detail={detail} />
+      <EvidenceContent detail={detail} discordSnapshot={discordSnapshot} />
       <DiscordSurfaces detail={detail} />
       <DetectionHistory detections={detail.detectionHistory} />
       <ModerationOutcomes outcomes={detail.moderationOutcomes} />
