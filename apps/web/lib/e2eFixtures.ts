@@ -12,6 +12,7 @@ import type { DiscordGuildResources, DiscordGuildSummary } from './discordApi';
 
 export const fixtureGuildId = 'guild-1';
 export const fixtureGuildName = 'Fixture Guild';
+export const fixtureTimestampIso = '2026-06-08T01:16:02.000Z';
 
 export function isWebE2eFixtureMode(): boolean {
   const enabled = readOptionalEnv('DRASIL_WEB_E2E_FIXTURE_MODE') === 'true';
@@ -121,7 +122,7 @@ export function updateFixtureServerRecord(update: GuildSetupUpdate): SetupServer
     admin_notification_role_id:
       update.adminNotificationRoleId ?? fixtureServerRecord().admin_notification_role_id,
     updated_by: update.updatedBy ?? fixtureServerRecord().updated_by,
-    updated_at: new Date().toISOString(),
+    updated_at: fixtureTimestampIso,
   };
 }
 

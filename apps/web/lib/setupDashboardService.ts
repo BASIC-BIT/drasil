@@ -20,6 +20,7 @@ import {
   computeGuildPermissions,
   hasPermission,
 } from './discordPermissions';
+import { fixtureTimestampIso, isWebE2eFixtureMode } from './e2eFixtures';
 import { createSetupDataAdapter, type SetupDataAdapter } from './setupDataAdapter';
 
 export interface ManageableGuild {
@@ -34,6 +35,8 @@ export interface SetupDashboardContext {
   readonly channels: readonly DiscordChannel[];
   readonly roles: readonly DiscordRole[];
 }
+
+type Clock = () => Date;
 
 interface ChannelPermissionCheckArgs {
   readonly guildId: string;
@@ -392,7 +395,10 @@ function buildChecklist(args: BuildChecklistArgs) {
 }
 
 export class SetupDashboardService {
-  public constructor(private readonly adapter: SetupDataAdapter = createSetupDataAdapter()) {}
+  public constructor(
+    private readonly adapter: SetupDataAdapter = createSetupDataAdapter(),
+    private readonly clock: Clock = () => new Date()
+  ) {}
 
   public async listManageableGuilds(accessToken: string): Promise<ManageableGuild[]> {
     const guilds = (await fetchDiscordGuilds(accessToken)).filter((guild) => {
@@ -438,7 +444,7 @@ export class SetupDashboardService {
         guildName: manageableGuild.name,
         configured: Boolean(server?.is_active),
         dataProvider: this.adapter.provider,
-        checkedAt: new Date().toISOString(),
+        checkedAt: this.clock().toISOString(),
         checklist: buildChecklist({ guild: manageableGuild, server, resources, resourcesError }),
         server,
       },
@@ -455,5 +461,6 @@ export class SetupDashboardService {
 }
 
 export function createSetupDashboardService(): SetupDashboardService {
-  return new SetupDashboardService();
+  const clock = isWebE2eFixtureMode() ? () => new Date(fixtureTimestampIso) : undefined;
+  return new SetupDashboardService(createSetupDataAdapter(), clock);
 }
