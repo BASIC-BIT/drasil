@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 export default function HomePage() {
   return (
@@ -8,9 +9,12 @@ export default function HomePage() {
           <span className="brand-mark" />
           <span>Drasil</span>
         </div>
-        <Link className="button secondary" href="/api/auth/discord?returnTo=/admin">
-          Admin sign in
-        </Link>
+        <div className="nav-cluster">
+          <ThemeToggle />
+          <Link className="button secondary" href="/api/auth/discord?returnTo=/admin">
+            Admin sign in
+          </Link>
+        </div>
       </nav>
       <section className="hero">
         <div className="hero-copy">

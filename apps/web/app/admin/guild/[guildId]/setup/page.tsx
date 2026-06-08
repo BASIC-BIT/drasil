@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { saveGuildSetup } from './actions';
 import { AccountControl } from '@/components/AccountControl';
 import { InstallInvitePanel } from '@/components/InstallInvitePanel';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 import type { DiscordChannel, DiscordRole } from '@/lib/discordApi';
@@ -77,6 +78,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
           <Link className="button secondary" href="/admin">
             All Servers
           </Link>
+          <ThemeToggle />
           <AccountControl username={session.username} />
         </div>
       </nav>

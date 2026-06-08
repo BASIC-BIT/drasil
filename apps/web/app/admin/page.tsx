@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { AccountControl } from '@/components/AccountControl';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 
@@ -20,7 +21,10 @@ export default async function AdminPage() {
           <span className="brand-mark" />
           <span>Drasil</span>
         </Link>
-        <AccountControl username={session.username} />
+        <div className="nav-cluster">
+          <ThemeToggle />
+          <AccountControl username={session.username} />
+        </div>
       </nav>
       <section className="panel stack">
         <div className="section-heading">

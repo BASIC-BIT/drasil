@@ -5,6 +5,7 @@ import type {
   CaseModerationOutcome,
 } from '@drasil/contracts';
 import { AccountControl } from '@/components/AccountControl';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import {
   confidenceStatusClass,
   formatCaseAction,
@@ -224,6 +225,7 @@ export function CaseDetailView({
           <a className="button secondary" href={`/admin/guild/${guildId}/setup`}>
             Setup
           </a>
+          <ThemeToggle />
           <AccountControl username={sessionUsername} />
         </div>
       </nav>

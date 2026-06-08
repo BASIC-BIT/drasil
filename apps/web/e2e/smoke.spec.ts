@@ -31,3 +31,23 @@ test('Discord OAuth start builds an authorize redirect', async ({ request }) => 
   expect(authorizeUrl.searchParams.get('state')).toBeTruthy();
   expect(redirectUri.pathname).toBe('/api/auth/discord/callback');
 });
+
+test('theme toggle persists a selected mode', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('/');
+
+  await page.getByRole('button', { name: /toggle light and dark mode/i }).click();
+  await expect
+    .poll(async () => page.evaluate(() => document.documentElement.dataset.theme))
+    .toBe('dark');
+
+  await page.reload();
+  await expect
+    .poll(async () => page.evaluate(() => document.documentElement.dataset.theme))
+    .toBe('dark');
+
+  await page.getByRole('button', { name: /toggle light and dark mode/i }).click();
+  await expect
+    .poll(async () => page.evaluate(() => document.documentElement.dataset.theme))
+    .toBe('light');
+});

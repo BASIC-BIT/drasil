@@ -1,5 +1,6 @@
 import type { CaseAction, CaseSummary } from '@drasil/contracts';
 import { AccountControl } from '@/components/AccountControl';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import {
   formatCaseAction,
   formatConfidence,
@@ -72,7 +73,13 @@ function MemberStateNotice({ item }: { readonly item: CaseSummary }) {
   );
 }
 
-function ActionPills({ actions, itemId }: { readonly actions: readonly CaseAction[]; readonly itemId: string }) {
+function ActionPills({
+  actions,
+  itemId,
+}: {
+  readonly actions: readonly CaseAction[];
+  readonly itemId: string;
+}) {
   const normalActions = actions.filter((action) => !isDebugCaseAction(action));
   const debugActions = actions.filter(isDebugCaseAction);
 
@@ -161,6 +168,7 @@ export function CaseQueueView({ guildId, guildName, sessionUsername, cases }: Ca
           <a className="button secondary" href="/admin">
             All servers
           </a>
+          <ThemeToggle />
           <AccountControl username={sessionUsername} />
         </div>
       </nav>

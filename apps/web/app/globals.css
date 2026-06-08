@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg: #eef2f6;
   --bg-alt: #dfe6ee;
   --bg-glow: rgba(34, 197, 116, 0.14);
@@ -44,8 +44,13 @@
   --radius-chip: 2px;
 }
 
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
+    color-scheme: dark;
     --bg: #0b1016;
     --bg-alt: #111821;
     --bg-glow: rgba(34, 197, 116, 0.1);
@@ -84,6 +89,47 @@
     --shadow-panel: 0 24px 70px rgba(0, 0, 0, 0.34);
     --shadow-control: 0 10px 24px rgba(0, 0, 0, 0.18);
   }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b1016;
+  --bg-alt: #111821;
+  --bg-glow: rgba(34, 197, 116, 0.1);
+  --panel: #131a23;
+  --panel-strong: #18212b;
+  --panel-muted: #101720;
+  --field-bg: #0d131b;
+  --line: #2b3745;
+  --line-strong: #425266;
+  --text: #eef3f8;
+  --muted: #a0adbb;
+  --muted-strong: #cbd5e1;
+  --accent: #54d99b;
+  --accent-strong: #9be6bf;
+  --accent-soft: #123525;
+  --accent-line: #2c8f61;
+  --on-accent: #07110d;
+  --ok: #77dba9;
+  --ok-bg: #123525;
+  --ok-line: #2f895f;
+  --warn: #ffd27a;
+  --warn-bg: #352812;
+  --warn-line: #7d5a1c;
+  --danger: #ff9b94;
+  --danger-bg: #351817;
+  --danger-line: #86403b;
+  --info: #9bbcff;
+  --info-bg: #142747;
+  --info-line: #35598f;
+  --discord: #b8c2ff;
+  --discord-bg: #1c2447;
+  --discord-line: #4a5bb7;
+  --neutral-status: #cbd5e1;
+  --neutral-status-bg: #202936;
+  --neutral-status-line: #3a4656;
+  --shadow-panel: 0 24px 70px rgba(0, 0, 0, 0.34);
+  --shadow-control: 0 10px 24px rgba(0, 0, 0, 0.18);
 }
 
 * {
@@ -160,13 +206,13 @@ select {
 .account-control {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-height: 44px;
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
   background: var(--panel);
   color: var(--text);
-  padding: 3px;
+  padding: 4px 7px 4px 4px;
   box-shadow: var(--shadow-control);
 }
 
@@ -187,8 +233,9 @@ select {
 .account-copy {
   display: flex;
   align-items: baseline;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
+  padding-right: 4px;
 }
 
 .account-label {
@@ -314,6 +361,10 @@ select {
   color: var(--muted-strong);
   padding: 0 12px;
   font-size: 0.86rem;
+}
+
+.theme-toggle {
+  min-width: 78px;
 }
 
 .grid {
