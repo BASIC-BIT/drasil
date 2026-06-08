@@ -105,6 +105,12 @@ variable "github_actions_terraform_lock_table_name" {
   default     = "drasil-terraform-locks"
 }
 
+variable "github_actions_terraform_backend_kms_key_arn" {
+  type        = string
+  description = "KMS key ARN used by the Terraform state bucket and lock table. When set, grants the GitHub OIDC deploy role backend encryption access."
+  default     = null
+}
+
 variable "github_actions_domain_hosted_zone_id" {
   type        = string
   description = "Existing public Route 53 hosted zone ID that the GitHub OIDC deploy role may manage for the domain stack."

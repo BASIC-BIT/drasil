@@ -468,6 +468,20 @@ data "aws_iam_policy_document" "github_deploy" {
   }
 
   dynamic "statement" {
+    for_each = var.github_actions_terraform_backend_kms_key_arn == null ? [] : [var.github_actions_terraform_backend_kms_key_arn]
+
+    content {
+      actions = [
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:GenerateDataKey"
+      ]
+      resources = [statement.value]
+    }
+  }
+
+  dynamic "statement" {
     for_each = var.github_actions_domain_hosted_zone_id == null ? [] : [var.github_actions_domain_hosted_zone_id]
 
     content {
