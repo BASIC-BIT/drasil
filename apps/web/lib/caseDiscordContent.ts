@@ -178,7 +178,7 @@ async function fetchSourceMessage(
   surface: CaseSurfaceLink | undefined
 ): Promise<{ message: CaseDiscordMessage | null; error: string | null }> {
   const parsed = surface ? parseDiscordUrl(surface.url) : null;
-  if (!parsed?.messageId) {
+  if (!parsed?.messageId || parsed.guildId !== guildId) {
     return { message: null, error: null };
   }
 
@@ -196,7 +196,7 @@ async function fetchThreadSnapshot(
 ): Promise<CaseDiscordThreadSnapshot> {
   const parsed = parseDiscordUrl(surface.url);
   const channelId = parsed?.channelId ?? '';
-  if (!channelId) {
+  if (!channelId || parsed?.guildId !== guildId) {
     return {
       kind: surface.kind,
       label: surface.label,
