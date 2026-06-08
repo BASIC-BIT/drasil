@@ -15,12 +15,14 @@ import {
 import {
   fixtureActiveCaseDetail,
   fixtureActiveCaseSummaries,
+  fixtureResolvedCaseCount,
   isWebE2eFixtureMode,
 } from './e2eFixtures';
 import { getPostgresPool } from './setupDataAdapter';
 
 export interface ActiveCaseDataAdapter {
   listActiveCases(guildId: string): Promise<CaseSummary[]>;
+  countResolvedCases(guildId: string): Promise<number>;
   getCaseDetail(guildId: string, caseId: string): Promise<CaseDetail | null>;
 }
 
@@ -353,6 +355,16 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
     return sortCaseSummariesForQueue(result.rows.map((row) => parseCaseSummaryRow(row)));
   }
 
+  public async countResolvedCases(guildId: string): Promise<number> {
+    const result = await getPostgresPool().query<{ count: string }>(
+      `select count(*)::text
+       from verification_events
+       where server_id = $1 and status <> 'pending' and user_id is not null`,
+      [guildId]
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
   public async getCaseDetail(guildId: string, caseId: string): Promise<CaseDetail | null> {
     const summaryResult = await getPostgresPool().query<CaseSummaryRow>(
       `${SUMMARY_QUERY}
@@ -432,6 +444,10 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
 export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
   public async listActiveCases(): Promise<CaseSummary[]> {
     return sortCaseSummariesForQueue(fixtureActiveCaseSummaries());
+  }
+
+  public async countResolvedCases(): Promise<number> {
+    return fixtureResolvedCaseCount();
   }
 
   public async getCaseDetail(_guildId: string, caseId: string): Promise<CaseDetail | null> {

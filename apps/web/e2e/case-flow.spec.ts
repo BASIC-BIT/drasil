@@ -4,7 +4,11 @@ test('active case queue links through to case detail', async ({ page }) => {
   await page.goto('/admin');
 
   await expect(page.getByRole('heading', { name: /choose a server/i })).toBeVisible();
-  await page.getByRole('link', { name: 'Active Cases' }).click();
+  await page
+    .locator('.server-row')
+    .filter({ has: page.getByRole('heading', { name: 'Fixture Guild' }) })
+    .getByRole('link', { name: 'Active Cases' })
+    .click();
 
   await expect(page.getByRole('heading', { name: /fixture guild case queue/i })).toBeVisible();
   const queueMeta = page.locator('.case-meta');

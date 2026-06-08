@@ -54,7 +54,9 @@ function SummaryPanel({ detail }: { readonly detail: CaseDetail }) {
         </div>
         <div>
           <span className="muted">Signal</span>
-          <strong>{formatConfidence(detail.confidence)}</strong>
+          <span className={confidenceStatusClass(detail.confidence)}>
+            {formatConfidence(detail.confidence)}
+          </span>
         </div>
         <div>
           <span className="muted">Last movement</span>
@@ -238,7 +240,7 @@ function StoredMessageContextItem({ item }: { readonly item: CaseMessageContextI
     <article className="evidence-row">
       <div className="evidence-row-header">
         <div className="evidence-meta">
-          <strong>{item.isSource ? 'Stored Source Message' : 'Stored User Message'}</strong>
+          <strong>{item.isSource ? 'Source preview' : 'Nearby user message'}</strong>
           <span className="muted">{formatUtc(item.createdAt)}</span>
         </div>
         {item.url ? (
@@ -259,20 +261,19 @@ function SourceMessageContent({
 }) {
   const storedSourceMessages = detail.messageContext.filter((item) => item.isSource);
   const storedContextMessages = detail.messageContext.filter((item) => !item.isSource);
+  const storedMessages = [...storedSourceMessages, ...storedContextMessages];
   const hasContent = Boolean(
     discordSnapshot?.sourceMessage ||
       detail.evidenceItems.length > 0 ||
-      storedSourceMessages.length > 0 ||
-      storedContextMessages.length > 0
+      storedMessages.length > 0
   );
 
   return (
     <section className="panel stack">
       <div className="section-heading compact-heading">
-        <h2>Source Message</h2>
+        <h2>Message Evidence</h2>
         <p className="muted">
-          Live Discord source content first, with retained report evidence and recent stored message
-          context below when available.
+          Live Discord content first, with stored fallback context when Drasil retained it.
         </p>
       </div>
 
@@ -284,33 +285,28 @@ function SourceMessageContent({
       ) : null}
 
       {discordSnapshot?.sourceMessage ? (
-        <DiscordMessageBlock message={discordSnapshot.sourceMessage} />
+        <div className="evidence-group evidence-group-primary">
+          <h3>Live Source Message</h3>
+          <DiscordMessageBlock message={discordSnapshot.sourceMessage} />
+        </div>
       ) : null}
 
       {detail.evidenceItems.length > 0 ? (
         <div className="evidence-group">
-          <h3>Stored Report Evidence</h3>
+          <h3>Reporter Evidence</h3>
           {detail.evidenceItems.map((item) => (
             <StoredEvidenceItem item={item} key={item.id} />
           ))}
         </div>
       ) : null}
 
-      {storedSourceMessages.length > 0 ? (
+      {storedMessages.length > 0 ? (
         <div className="evidence-group">
-          <h3>Stored Source Preview</h3>
-          <p className="muted">Stored previews are capped and retained for recent context.</p>
-          {storedSourceMessages.map((item) => (
-            <StoredMessageContextItem item={item} key={item.id} />
-          ))}
-        </div>
-      ) : null}
-
-      {storedContextMessages.length > 0 ? (
-        <div className="evidence-group">
-          <h3>Recent Stored User Messages</h3>
-          <p className="muted">Stored previews are capped and retained for recent context.</p>
-          {storedContextMessages.map((item) => (
+          <h3>Stored Message Context</h3>
+          <p className="muted">
+            Saved Discord previews for the source message and nearby messages from the same user.
+          </p>
+          {storedMessages.map((item) => (
             <StoredMessageContextItem item={item} key={item.id} />
           ))}
         </div>

@@ -60,12 +60,12 @@ export function confidenceStatusClass(value: number | null): string {
     return 'status neutral';
   }
   if (value >= 0.8) {
-    return 'status error';
+    return 'status confidence-high';
   }
   if (value >= 0.5) {
-    return 'status warning';
+    return 'status confidence-medium';
   }
-  return 'status info';
+  return 'status confidence-low';
 }
 
 export function surfaceKindClass(kind: CaseSurfaceKind): string {

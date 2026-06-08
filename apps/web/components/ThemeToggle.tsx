@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 type Theme = 'light' | 'dark';
 
@@ -38,24 +38,31 @@ function applyTheme(theme: Theme): void {
 }
 
 export function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme | null>(null);
+
   useEffect(() => {
-    const theme = storedTheme();
-    if (theme) {
-      document.documentElement.dataset.theme = theme;
+    const current = currentTheme();
+    const stored = storedTheme();
+    if (stored) {
+      document.documentElement.dataset.theme = stored;
     }
+    setTheme(current);
   }, []);
+
+  const nextTheme = theme === 'dark' ? 'light' : 'dark';
 
   return (
     <button
       aria-label="Toggle light and dark mode"
-      className="button secondary theme-toggle"
+      className="icon-button theme-toggle"
       onClick={() => {
-        applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+        applyTheme(nextTheme);
+        setTheme(nextTheme);
       }}
-      title="Toggle light and dark mode"
+      title={`Switch to ${nextTheme} mode`}
       type="button"
     >
-      Theme
+      <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
     </button>
   );
 }

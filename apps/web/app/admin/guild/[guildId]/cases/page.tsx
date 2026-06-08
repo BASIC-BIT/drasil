@@ -17,13 +17,18 @@ export default async function ActiveCasesPage({ params }: PageProps) {
 
   const setupService = createSetupDashboardService();
   const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
-  const cases = await createActiveCaseDataAdapter().listActiveCases(guildId);
+  const activeCaseDataAdapter = createActiveCaseDataAdapter();
+  const [cases, resolvedCaseCount] = await Promise.all([
+    activeCaseDataAdapter.listActiveCases(guildId),
+    activeCaseDataAdapter.countResolvedCases(guildId),
+  ]);
 
   return (
     <CaseQueueView
       cases={cases}
       guildId={guildId}
       guildName={guild.name}
+      resolvedCaseCount={resolvedCaseCount}
       sessionUsername={session.username}
     />
   );

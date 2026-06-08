@@ -18,7 +18,7 @@ async function expectVisualSchemes(page: Page, name: string): Promise<void> {
 test('landing page visual baseline @visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /scam reviews, organized/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /review scams/i })).toBeVisible();
   await expectVisualSchemes(page, 'landing-page');
 });
 
@@ -27,6 +27,7 @@ test('admin guild list visual baseline @visual', async ({ page }) => {
   await page.goto('/admin');
   await expect(page.getByRole('heading', { name: /choose a server/i })).toBeVisible();
   const serverRow = page.locator('.server-row').first();
+  await expect(page.locator('.server-row')).toHaveCount(2);
   const serverRowStatus = serverRow.locator('.server-row-status');
   await expect(serverRow).toBeVisible();
   await expect(serverRowStatus).toBeVisible();

@@ -40,3 +40,8 @@ Give signed-in moderators one compact queue of active cases across every guild t
 they can triage their personal review workload without opening each server dashboard first.
 
 Name candidates to workshop: `My Cases`, `Moderator Queue`, `Review Inbox`, `All Active Cases`.
+
+## Server statistics page
+
+Show server-level moderation health and activity: total users, total bans, total cases, resolved
+cases, joins this week, and similar operational counts.

@@ -12,6 +12,8 @@ import type { DiscordGuildResources, DiscordGuildSummary } from './discordApi';
 
 export const fixtureGuildId = 'guild-1';
 export const fixtureGuildName = 'Fixture Guild';
+export const fixtureSecondGuildId = 'guild-2';
+export const fixtureSecondGuildName = 'Quiet Guild';
 export const fixtureTimestampIso = '2026-06-08T01:16:02.000Z';
 
 export function isWebE2eFixtureMode(): boolean {
@@ -47,6 +49,13 @@ export function fixtureGuilds(): DiscordGuildSummary[] {
       name: fixtureGuildName,
       icon: null,
       owner: true,
+      permissions: String(DISCORD_PERMISSIONS.ManageGuild),
+    },
+    {
+      id: fixtureSecondGuildId,
+      name: fixtureSecondGuildName,
+      icon: null,
+      owner: false,
       permissions: String(DISCORD_PERMISSIONS.ManageGuild),
     },
   ];
@@ -128,6 +137,10 @@ export function updateFixtureServerRecord(update: GuildSetupUpdate): SetupServer
 
 export function fixtureActiveCaseSummaries(): CaseSummary[] {
   return fixtureCaseSummaries();
+}
+
+export function fixtureResolvedCaseCount(): number {
+  return 18;
 }
 
 export function fixtureActiveCaseDetail(caseId: string): CaseDetail | null {

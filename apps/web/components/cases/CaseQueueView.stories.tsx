@@ -16,6 +16,7 @@ const meta = {
   args: {
     guildId: 'guild-1',
     guildName: 'Fixture Guild',
+    resolvedCaseCount: 18,
     sessionUsername: 'Fixture Admin',
     cases: fixtureCaseSummaries(),
   },

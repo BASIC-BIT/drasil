@@ -27,7 +27,7 @@ export default async function AdminPage() {
         </div>
       </nav>
       <section className="panel stack">
-        <div className="section-heading">
+        <div className="section-heading server-list-heading">
           <h1 className="page-title">Choose a Server</h1>
           <p className="lede">
             Select a server to review setup health, active cases, and moderation policy.

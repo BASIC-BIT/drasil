@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatCaseAction,
   formatConfidence,
+  confidenceStatusClass,
   formatDetectionType,
   formatPresenceState,
   formatSurfaceKind,
@@ -24,6 +25,9 @@ describe('casePresentation', () => {
     expect(formatDetectionType('gpt_analysis')).toBe('GPT Analysis');
     expect(formatDetectionType('report_ai_id')).toBe('Report AI ID');
     expect(formatConfidence(0.914)).toBe('High');
+    expect(confidenceStatusClass(0.914)).toBe('status confidence-high');
+    expect(confidenceStatusClass(0.6)).toBe('status confidence-medium');
+    expect(confidenceStatusClass(0.2)).toBe('status confidence-low');
     expect(formatConfidence(null)).toBe('No Signal');
     expect(formatUtc(null)).toBe('Unknown');
     expect(formatUtc('not-a-date')).toBe('Unknown');

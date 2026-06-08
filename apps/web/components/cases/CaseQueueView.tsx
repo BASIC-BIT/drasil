@@ -8,6 +8,7 @@ import {
   formatPresenceState,
   formatSurfaceKind,
   formatUtc,
+  confidenceStatusClass,
   freshnessStatusClass,
   isDebugCaseAction,
   surfaceKindClass,
@@ -16,6 +17,7 @@ import {
 interface CaseQueueViewProps {
   readonly guildId: string;
   readonly guildName: string;
+  readonly resolvedCaseCount: number;
   readonly sessionUsername: string;
   readonly cases: readonly CaseSummary[];
 }
@@ -131,7 +133,9 @@ function CaseCard({ guildId, item }: { readonly guildId: string; readonly item: 
         </div>
         <div>
           <span className="muted">Signal</span>
-          <strong>{formatConfidence(item.confidence)}</strong>
+          <span className={confidenceStatusClass(item.confidence)}>
+            {formatConfidence(item.confidence)}
+          </span>
         </div>
         <div>
           <span className="muted">Last movement</span>
@@ -151,7 +155,13 @@ function CaseCard({ guildId, item }: { readonly guildId: string; readonly item: 
   );
 }
 
-export function CaseQueueView({ guildId, guildName, sessionUsername, cases }: CaseQueueViewProps) {
+export function CaseQueueView({
+  guildId,
+  guildName,
+  resolvedCaseCount,
+  sessionUsername,
+  cases,
+}: CaseQueueViewProps) {
   const staleCount = cases.filter((item) => item.stale).length;
 
   return (
@@ -194,14 +204,20 @@ export function CaseQueueView({ guildId, guildName, sessionUsername, cases }: Ca
             <span className="muted">Fresh</span>
             <strong>{cases.length - staleCount}</strong>
           </div>
+          <div>
+            <span className="muted">Resolved</span>
+            <strong>{resolvedCaseCount}</strong>
+          </div>
         </div>
       </section>
 
       {cases.length === 0 ? (
         <section className="panel stack">
-          <span className="status ok">Clear</span>
           <h2>No pending cases</h2>
-          <p className="muted">Drasil has no active verification events for this server.</p>
+          <p className="muted">
+            Drasil has no active verification events for this server. {resolvedCaseCount} case
+            {resolvedCaseCount === 1 ? '' : 's'} already resolved.
+          </p>
         </section>
       ) : (
         <section className="case-list" aria-label="Active cases">
