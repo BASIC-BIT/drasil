@@ -1,4 +1,5 @@
 import type {
+  CaseAction,
   CaseDetail,
   CaseDetectionHistoryItem,
   CaseModerationOutcome,
@@ -10,10 +11,12 @@ import {
   formatConfidence,
   formatDetectionType,
   formatPresenceState,
+  formatSurfaceKind,
   formatUtc,
   freshnessStatusClass,
+  isDebugCaseAction,
   moderationOutcomeStatusClass,
-  presenceStatusClass,
+  surfaceKindClass,
 } from '@/lib/casePresentation';
 
 interface CaseDetailViewProps {
@@ -27,10 +30,7 @@ function SummaryPanel({ detail }: { readonly detail: CaseDetail }) {
   return (
     <section className="panel stack">
       <div className="case-card-header">
-        <div>
-          <span className={presenceStatusClass(detail.presenceState)}>
-            {formatPresenceState(detail.presenceState)}
-          </span>
+        <div className="case-title-block">
           <h1 className="page-title">User {detail.userId}</h1>
         </div>
         <span className={freshnessStatusClass(detail.stale)}>
@@ -44,26 +44,74 @@ function SummaryPanel({ detail }: { readonly detail: CaseDetail }) {
           <strong>{formatDetectionType(detail.latestDetectionType)}</strong>
         </div>
         <div>
-          <span className="muted">Confidence</span>
+          <span className="muted">Signal</span>
           <strong>{formatConfidence(detail.confidence)}</strong>
         </div>
         <div>
           <span className="muted">Last movement</span>
           <strong>{formatUtc(detail.updatedAt)}</strong>
         </div>
+        <div>
+          <span className="muted">Member state</span>
+          <strong>{formatPresenceState(detail.presenceState)}</strong>
+        </div>
       </div>
+
+      {detail.presenceState === 'left_or_removed' ? (
+        <div className="member-warning">
+          <strong>User Left Before Resolution</strong>
+          <span>This case still needs a formal outcome before it leaves the queue.</span>
+        </div>
+      ) : null}
+      {detail.presenceState === 'banned' ? (
+        <div className="member-warning neutral-warning">
+          <strong>User Already Banned</strong>
+          <span>Confirm whether to sync the ban or close the case.</span>
+        </div>
+      ) : null}
 
       {detail.notes ? <p>{detail.notes}</p> : <p className="muted">No moderator notes recorded.</p>}
     </section>
   );
 }
 
+function ActionPills({ actions }: { readonly actions: readonly CaseAction[] }) {
+  const normalActions = actions.filter((action) => !isDebugCaseAction(action));
+  const debugActions = actions.filter(isDebugCaseAction);
+
+  return (
+    <div className="action-stack">
+      {normalActions.length > 0 ? (
+        <div className="pill-list" aria-label="Available moderator paths">
+          {normalActions.map((action) => (
+            <span className="pill action-pill" key={action}>
+              {formatCaseAction(action)}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {debugActions.length > 0 ? (
+        <details className="debug-actions">
+          <summary>Debug Paths</summary>
+          <div className="pill-list">
+            {debugActions.map((action) => (
+              <span className="pill debug-pill" key={action}>
+                {formatCaseAction(action)}
+              </span>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 function DiscordSurfaces({ detail }: { readonly detail: CaseDetail }) {
   return (
     <section className="panel stack">
-      <div>
-        <h2>Discord surfaces</h2>
-        <p className="muted">Use these links to act in Discord while preserving thread history.</p>
+      <div className="section-heading compact-heading">
+        <h2>Discord Surfaces</h2>
+        <p className="muted">Open the Discord records tied to this case.</p>
       </div>
       {detail.surfaces.length === 0 ? (
         <p className="muted">No Discord surfaces recorded yet.</p>
@@ -71,24 +119,18 @@ function DiscordSurfaces({ detail }: { readonly detail: CaseDetail }) {
         <div className="surface-list">
           {detail.surfaces.map((surface) => (
             <a
-              className="surface-link"
+              className={surfaceKindClass(surface.kind)}
               href={surface.url}
               key={surface.kind}
               rel="noreferrer"
               target="_blank"
             >
-              {surface.label}
+              {formatSurfaceKind(surface.kind)}
             </a>
           ))}
         </div>
       )}
-      <div className="pill-list" aria-label="Available moderator paths">
-        {detail.allowedActions.map((action) => (
-          <span className="pill action-pill" key={action}>
-            {formatCaseAction(action)}
-          </span>
-        ))}
-      </div>
+      <ActionPills actions={detail.allowedActions} />
     </section>
   );
 }
@@ -100,8 +142,8 @@ function DetectionHistory({
 }) {
   return (
     <section className="panel stack">
-      <div>
-        <h2>Detection history</h2>
+      <div className="section-heading compact-heading">
+        <h2>Detection History</h2>
         <p className="muted">Recent detections for this user in this server.</p>
       </div>
       {detections.length === 0 ? (
@@ -110,7 +152,7 @@ function DetectionHistory({
         <div className="timeline">
           {detections.map((detection) => (
             <article className="timeline-item" key={detection.id}>
-              <span className={confidenceStatusClass(detection.confidence)}>
+              <span className={`${confidenceStatusClass(detection.confidence)} signal-pill`}>
                 {formatConfidence(detection.confidence)}
               </span>
               <div>
@@ -133,8 +175,8 @@ function DetectionHistory({
 function ModerationOutcomes({ outcomes }: { readonly outcomes: readonly CaseModerationOutcome[] }) {
   return (
     <section className="panel stack">
-      <div>
-        <h2>Moderation outcomes</h2>
+      <div className="section-heading compact-heading">
+        <h2>Moderation Outcomes</h2>
         <p className="muted">
           Persisted labels from Drasil, native Discord events, and sync flows.
         </p>
@@ -145,7 +187,7 @@ function ModerationOutcomes({ outcomes }: { readonly outcomes: readonly CaseMode
         <div className="timeline">
           {outcomes.map((outcome) => (
             <article className="timeline-item" key={outcome.id}>
-              <span className={moderationOutcomeStatusClass(outcome.outcomeType)}>
+              <span className={`${moderationOutcomeStatusClass(outcome.outcomeType)} signal-pill`}>
                 {formatDetectionType(outcome.outcomeType)}
               </span>
               <div>
@@ -177,7 +219,7 @@ export function CaseDetailView({
         </a>
         <div className="nav-cluster">
           <a className="button secondary" href={`/admin/guild/${guildId}/cases`}>
-            Case queue
+            Case Queue
           </a>
           <a className="button secondary" href={`/admin/guild/${guildId}/setup`}>
             Setup
@@ -186,7 +228,7 @@ export function CaseDetailView({
         </div>
       </nav>
 
-      <p className="muted">{guildName} active case detail</p>
+      <p className="muted">{guildName} Active Case Detail</p>
       <SummaryPanel detail={detail} />
       <DiscordSurfaces detail={detail} />
       <DetectionHistory detections={detail.detectionHistory} />

@@ -11,12 +11,11 @@ export function InstallInvitePanel({ guildId }: InstallInvitePanelProps) {
 
   return (
     <section className="panel stack">
-      <div>
-        <span className="status info">Discord install</span>
+      <div className="section-heading compact-heading">
         <h2>Install Drasil</h2>
         <p className="muted">
-          Use the standard invite for normal servers. It requests the permissions needed for setup
-          diagnostics, role restriction, thread handling, reports, and moderator ban actions.
+          Invite Drasil with the standard permission set for setup diagnostics, restricted roles,
+          evidence threads, reports, and moderator ban actions.
         </p>
       </div>
       <div className="actions">
@@ -39,8 +38,8 @@ export function InstallInvitePanel({ guildId }: InstallInvitePanelProps) {
         ) : null}
       </div>
       <p className="muted">
-        If a controlled test server needs the broader Administrator shortcut, enable the invite
-        feature flag and reload this panel. The standard invite remains the production path.
+        A hidden Administrator shortcut can be enabled for controlled test servers. Normal installs
+        should use the standard invite above.
         {administratorEnabled && !administratorInviteUrl
           ? ' Set DISCORD_CLIENT_ID before using the Administrator shortcut.'
           : ''}

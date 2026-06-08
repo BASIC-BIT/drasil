@@ -1,38 +1,52 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
-function platformSnapshotName(name: string): string {
-  return `${name}-${process.platform === 'win32' ? 'win32' : 'linux'}.png`;
+type VisualScheme = 'light' | 'dark';
+
+const visualSchemes: readonly VisualScheme[] = ['light', 'dark'];
+
+function platformSnapshotName(name: string, scheme: VisualScheme): string {
+  return `${name}-${process.platform === 'win32' ? 'win32' : 'linux'}-${scheme}.png`;
+}
+
+async function expectVisualSchemes(page: Page, name: string): Promise<void> {
+  for (const scheme of visualSchemes) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await expect(page).toHaveScreenshot(platformSnapshotName(name, scheme), { fullPage: true });
+  }
 }
 
 test('landing page visual baseline @visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /catch scam accounts/i })).toBeVisible();
-  await expect(page).toHaveScreenshot(platformSnapshotName('landing-page'), { fullPage: true });
+  await expectVisualSchemes(page, 'landing-page');
 });
 
 test('admin guild list visual baseline @visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin');
   await expect(page.getByRole('heading', { name: /choose a server/i })).toBeVisible();
-  await expect(page).toHaveScreenshot(platformSnapshotName('admin-guild-list'), {
-    fullPage: true,
-  });
+  await expectVisualSchemes(page, 'admin-guild-list');
 });
 
 test('guild setup visual baseline @visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin/guild/guild-1/setup');
   await expect(page.getByRole('heading', { name: /fixture guild/i })).toBeVisible();
   await expect(page.getByRole('heading', { name: /install drasil/i })).toBeVisible();
-  await expect(page).toHaveScreenshot(platformSnapshotName('guild-setup'), { fullPage: true });
+  await expectVisualSchemes(page, 'guild-setup');
 });
 
 test('case queue visual baseline @visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin/guild/guild-1/cases');
   await expect(page.getByRole('heading', { name: /fixture guild case queue/i })).toBeVisible();
-  await expect(page).toHaveScreenshot(platformSnapshotName('case-queue'), { fullPage: true });
+  await expectVisualSchemes(page, 'case-queue');
 });
 
 test('case detail visual baseline @visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin/guild/guild-1/cases/case-stale');
   await expect(page.getByRole('heading', { name: 'User user-100' })).toBeVisible();
-  await expect(page).toHaveScreenshot(platformSnapshotName('case-detail'), { fullPage: true });
+  await expectVisualSchemes(page, 'case-detail');
 });

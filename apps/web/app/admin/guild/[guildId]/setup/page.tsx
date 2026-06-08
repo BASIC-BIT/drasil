@@ -72,17 +72,17 @@ export default async function GuildSetupPage({ params }: PageProps) {
         </Link>
         <div className="nav-cluster">
           <Link className="button secondary" href={`/admin/guild/${guildId}/cases`}>
-            Active cases
+            Active Cases
           </Link>
           <Link className="button secondary" href="/admin">
-            All servers
+            All Servers
           </Link>
           <AccountControl username={session.username} />
         </div>
       </nav>
 
       <section className="panel stack">
-        <div>
+        <div className="section-heading">
           <span className={dashboard.configured ? 'status ok' : 'status warning'}>
             {dashboard.configured ? 'Configured' : 'First setup'}
           </span>
@@ -109,8 +109,8 @@ export default async function GuildSetupPage({ params }: PageProps) {
       <InstallInvitePanel guildId={guildId} />
 
       <form action={saveAction} className="panel stack">
-        <div>
-          <h2>Core setup</h2>
+        <div className="section-heading compact-heading">
+          <h2>Core Setup</h2>
           <p className="muted">
             These settings are saved to the same server configuration used by the bot. Channel and
             role dropdowns are loaded live from Discord when the bot token can access the guild.
@@ -189,7 +189,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
         </div>
 
         <div>
-          <h2>Moderation policy</h2>
+          <h2>Moderation Policy</h2>
         </div>
         <div className="form-grid">
           <div className="field">

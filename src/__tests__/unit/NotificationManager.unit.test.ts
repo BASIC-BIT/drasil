@@ -940,7 +940,7 @@ describe('NotificationManager (unit)', () => {
     const fields = editArgs.embeds[0].data.fields ?? [];
     const analysisField = fields.find((field) => field.name === 'AI Thread Analysis');
 
-    expect(analysisField?.value).toContain('Result: **likely_legitimate** (72% confidence)');
+    expect(analysisField?.value).toContain('Result: **likely_legitimate** (Medium confidence)');
     expect(analysisField?.value).toContain('Analyzed responses: 2');
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'
@@ -1023,7 +1023,7 @@ describe('NotificationManager (unit)', () => {
     const fields = editArgs.embeds[0].data.fields ?? [];
     const analysisField = fields.find((field) => field.name === 'AI Thread Analysis');
 
-    expect(analysisField?.value).toContain('Result: **likely_legitimate** (72% confidence)');
+    expect(analysisField?.value).toContain('Result: **likely_legitimate** (Medium confidence)');
     expect(analysisField?.value).toContain('Analyzed responses: 2');
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'

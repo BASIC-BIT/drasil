@@ -120,15 +120,15 @@ describe('NotificationPresentationBuilder (unit)', () => {
 
     expect(getField(embed, 'Trigger')).toBe('Admin flag: triage');
     expect(getField(embed, 'Case Threads')).toBe(
-      'Verification/review: [thread](https://discord.com/channels/guild-1/thread-1) status: verified by <@admin-1>\n' +
-        'Admin evidence: [thread](https://discord.com/channels/guild-1/evidence-thread-1)'
+      'Verification/review thread: https://discord.com/channels/guild-1/thread-1 status: verified by <@admin-1>\n' +
+        'Admin evidence thread: https://discord.com/channels/guild-1/evidence-thread-1'
     );
     expect(getField(embed, 'Detection History')).toContain('role intake');
     expect(getField(embed, 'Detection History')?.indexOf('role intake')).toBeLessThan(
       getField(embed, 'Detection History')?.indexOf('suspicious content') ?? Number.MAX_VALUE
     );
     expect(getField(embed, 'Detection History')).toContain(
-      '[View Message](https://discord.com/channels/guild-1/channel-1/message-1)'
+      'message: https://discord.com/channels/guild-1/channel-1/message-1'
     );
   });
 

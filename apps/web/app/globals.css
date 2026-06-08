@@ -30,6 +30,9 @@
   --info: #245bb3;
   --info-bg: #eaf1ff;
   --info-line: #a8bfee;
+  --discord: #4752c4;
+  --discord-bg: #eef1ff;
+  --discord-line: #aeb8ff;
   --neutral-status: #475569;
   --neutral-status-bg: #eef2f7;
   --neutral-status-line: #c7d1dc;
@@ -72,6 +75,9 @@
     --info: #9bbcff;
     --info-bg: #142747;
     --info-line: #35598f;
+    --discord: #b8c2ff;
+    --discord-bg: #1c2447;
+    --discord-line: #4a5bb7;
     --neutral-status: #cbd5e1;
     --neutral-status-bg: #202936;
     --neutral-status-line: #3a4656;
@@ -155,40 +161,40 @@ select {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  min-height: 44px;
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
   background: var(--panel);
   color: var(--text);
-  padding: 5px;
+  padding: 3px;
   box-shadow: var(--shadow-control);
 }
 
 .account-avatar {
   display: inline-grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   border: 1px solid var(--accent-line);
   border-radius: var(--radius-control);
   background: var(--accent-soft);
   color: var(--accent-strong);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 900;
   letter-spacing: 0.05em;
 }
 
 .account-copy {
-  display: grid;
-  gap: 1px;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
   min-width: 0;
 }
 
 .account-label {
   color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 .account-name {
@@ -219,6 +225,23 @@ select {
   font-size: clamp(2rem, 5.5vw, 3.8rem);
   line-height: 1;
   letter-spacing: -0.035em;
+}
+
+.section-heading {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 16px;
+}
+
+.compact-heading {
+  padding-bottom: 12px;
+}
+
+.section-heading h1,
+.section-heading h2,
+.section-heading p {
+  margin-bottom: 0;
 }
 
 .lede {
@@ -413,6 +436,16 @@ select {
   gap: 16px;
 }
 
+.case-title-block {
+  display: grid;
+  gap: 10px;
+}
+
+.case-title-block h1,
+.case-title-block h2 {
+  margin: 0;
+}
+
 .case-meta {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -430,6 +463,26 @@ select {
   border-radius: var(--radius-card);
   background: var(--panel-muted);
   padding: 12px;
+}
+
+.member-warning {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius-card);
+  background: var(--warn-bg);
+  color: var(--warn);
+  padding: 12px;
+}
+
+.member-warning span {
+  color: var(--muted-strong);
+}
+
+.neutral-warning {
+  border-color: var(--neutral-status-line);
+  background: var(--neutral-status-bg);
+  color: var(--neutral-status);
 }
 
 .setup-check-grid {
@@ -457,6 +510,11 @@ select {
   gap: 10px;
 }
 
+.action-stack {
+  display: grid;
+  gap: 10px;
+}
+
 .surface-link,
 .pill {
   border: 1px solid var(--line);
@@ -468,16 +526,49 @@ select {
 }
 
 .surface-link {
+  border-color: var(--discord-line);
+  background: var(--discord-bg);
+  color: var(--discord);
+  font-weight: 700;
+}
+
+.admin-surface {
+  border-color: var(--line-strong);
+  background: var(--panel-muted);
+  color: var(--muted-strong);
+}
+
+.message-surface {
   border-color: var(--accent-line);
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--panel);
+  color: var(--accent-strong);
 }
 
 .action-pill {
-  border-color: var(--info-line);
-  background: var(--info-bg);
-  color: var(--info);
+  border-color: var(--line-strong);
+  background: var(--panel);
+  color: var(--text);
   font-weight: 700;
+}
+
+.debug-actions {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.debug-actions summary {
+  cursor: pointer;
+  width: fit-content;
+}
+
+.debug-actions .pill-list {
+  margin-top: 8px;
+}
+
+.debug-pill {
+  border-color: var(--neutral-status-line);
+  background: var(--neutral-status-bg);
+  color: var(--neutral-status);
 }
 
 .timeline {
@@ -487,12 +578,18 @@ select {
 
 .timeline-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(120px, auto) minmax(0, 1fr);
   gap: 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: var(--panel-muted);
   padding: 14px;
+}
+
+.signal-pill {
+  align-self: flex-start;
+  justify-content: center;
+  white-space: nowrap;
 }
 
 .inline-link {

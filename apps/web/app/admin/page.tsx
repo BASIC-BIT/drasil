@@ -23,11 +23,10 @@ export default async function AdminPage() {
         <AccountControl username={session.username} />
       </nav>
       <section className="panel stack">
-        <div>
-          <h1 className="page-title">Choose a server.</h1>
+        <div className="section-heading">
+          <h1 className="page-title">Choose a Server</h1>
           <p className="lede">
-            Pick a guild you own or can manage. Drasil only changes a server after you save that
-            server&apos;s settings.
+            Select a server to review setup health, active cases, and moderation policy.
           </p>
         </div>
         {guilds.length === 0 ? (
@@ -44,11 +43,11 @@ export default async function AdminPage() {
                 </div>
                 <div>
                   <h2>{guild.name}</h2>
-                  <p className="muted">Review setup, diagnostics, and moderation policy.</p>
+                  <p className="muted">Open setup diagnostics or review active moderation cases.</p>
                 </div>
                 <div className="actions">
                   <Link className="button" href={`/admin/guild/${guild.id}/cases`}>
-                    Active cases
+                    Active Cases
                   </Link>
                   <Link className="button secondary" href={`/admin/guild/${guild.id}/setup`}>
                     Setup

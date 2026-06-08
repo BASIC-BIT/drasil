@@ -1,13 +1,15 @@
-import type { CaseSummary } from '@drasil/contracts';
+import type { CaseAction, CaseSummary } from '@drasil/contracts';
 import { AccountControl } from '@/components/AccountControl';
 import {
   formatCaseAction,
   formatConfidence,
   formatDetectionType,
   formatPresenceState,
+  formatSurfaceKind,
   formatUtc,
   freshnessStatusClass,
-  presenceStatusClass,
+  isDebugCaseAction,
+  surfaceKindClass,
 } from '@/lib/casePresentation';
 
 interface CaseQueueViewProps {
@@ -26,15 +28,77 @@ function SurfaceLinks({ item }: { readonly item: CaseSummary }) {
     <div className="surface-list" aria-label="Discord surfaces">
       {item.surfaces.map((surface) => (
         <a
-          className="surface-link"
+          className={surfaceKindClass(surface.kind)}
           href={surface.url}
           key={`${item.id}-${surface.kind}`}
           rel="noreferrer"
           target="_blank"
         >
-          {surface.label}
+          {formatSurfaceKind(surface.kind)}
         </a>
       ))}
+    </div>
+  );
+}
+
+function MemberStateNotice({ item }: { readonly item: CaseSummary }) {
+  if (item.presenceState === 'in_server') {
+    return null;
+  }
+
+  if (item.presenceState === 'left_or_removed') {
+    return (
+      <div className="member-warning">
+        <strong>User Left Before Resolution</strong>
+        <span>This case still needs a formal outcome before it leaves the queue.</span>
+      </div>
+    );
+  }
+
+  if (item.presenceState === 'banned') {
+    return (
+      <div className="member-warning neutral-warning">
+        <strong>User Already Banned</strong>
+        <span>Confirm whether to sync the ban or close the case.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="member-warning neutral-warning">
+      <strong>Member State Unknown</strong>
+      <span>Check Discord before taking moderator action.</span>
+    </div>
+  );
+}
+
+function ActionPills({ actions, itemId }: { readonly actions: readonly CaseAction[]; readonly itemId: string }) {
+  const normalActions = actions.filter((action) => !isDebugCaseAction(action));
+  const debugActions = actions.filter(isDebugCaseAction);
+
+  return (
+    <div className="action-stack">
+      {normalActions.length > 0 ? (
+        <div className="pill-list" aria-label="Available moderator paths">
+          {normalActions.map((action) => (
+            <span className="pill action-pill" key={`${itemId}-${action}`}>
+              {formatCaseAction(action)}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {debugActions.length > 0 ? (
+        <details className="debug-actions">
+          <summary>Debug Paths</summary>
+          <div className="pill-list">
+            {debugActions.map((action) => (
+              <span className="pill debug-pill" key={`${itemId}-${action}`}>
+                {formatCaseAction(action)}
+              </span>
+            ))}
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -43,10 +107,7 @@ function CaseCard({ guildId, item }: { readonly guildId: string; readonly item: 
   return (
     <article className="card case-card stack">
       <div className="case-card-header">
-        <div>
-          <span className={presenceStatusClass(item.presenceState)}>
-            {formatPresenceState(item.presenceState)}
-          </span>
+        <div className="case-title-block">
           <h2>
             <a href={`/admin/guild/${guildId}/cases/${item.id}`}>User {item.userId}</a>
           </h2>
@@ -62,24 +123,23 @@ function CaseCard({ guildId, item }: { readonly guildId: string; readonly item: 
           <strong>{formatDetectionType(item.latestDetectionType)}</strong>
         </div>
         <div>
-          <span className="muted">Confidence</span>
+          <span className="muted">Signal</span>
           <strong>{formatConfidence(item.confidence)}</strong>
         </div>
         <div>
           <span className="muted">Last movement</span>
           <strong>{formatUtc(item.updatedAt)}</strong>
         </div>
+        <div>
+          <span className="muted">Member state</span>
+          <strong>{formatPresenceState(item.presenceState)}</strong>
+        </div>
       </div>
+
+      <MemberStateNotice item={item} />
 
       <SurfaceLinks item={item} />
-
-      <div className="pill-list" aria-label="Available moderator paths">
-        {item.allowedActions.map((action) => (
-          <span className="pill action-pill" key={`${item.id}-${action}`}>
-            {formatCaseAction(action)}
-          </span>
-        ))}
-      </div>
+      <ActionPills actions={item.allowedActions} itemId={item.id} />
     </article>
   );
 }
@@ -106,17 +166,18 @@ export function CaseQueueView({ guildId, guildName, sessionUsername, cases }: Ca
       </nav>
 
       <section className="panel stack">
-        <div>
-          <span className={staleCount > 0 ? 'status warning' : 'status info'}>
-            {cases.length} active cases
-          </span>
-          <h1 className="page-title">{guildName} case queue</h1>
+        <div className="section-heading">
+          <h1 className="page-title">{guildName} Case Queue</h1>
           <p className="lede">
-            Read-only queue for pending Discord moderation cases. Actions still happen through the
-            linked Discord surfaces so evidence and moderator provenance stay intact.
+            Review pending moderation cases without moving the source of truth out of Discord.
+            Actions still happen through the linked threads and messages.
           </p>
         </div>
         <div className="case-meta compact">
+          <div>
+            <span className="muted">Active cases</span>
+            <strong>{cases.length}</strong>
+          </div>
           <div>
             <span className="muted">Stale</span>
             <strong>{staleCount}</strong>
@@ -124,10 +185,6 @@ export function CaseQueueView({ guildId, guildName, sessionUsername, cases }: Ca
           <div>
             <span className="muted">Fresh</span>
             <strong>{cases.length - staleCount}</strong>
-          </div>
-          <div>
-            <span className="muted">Review mode</span>
-            <strong>Read-only web queue</strong>
           </div>
         </div>
       </section>

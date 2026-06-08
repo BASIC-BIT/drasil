@@ -2,20 +2,20 @@ import type { CaseAction, CasePresenceState, CaseSurfaceKind } from '@drasil/con
 
 const actionLabels: Record<CaseAction, string> = {
   ban_by_id: 'Ban by ID',
-  ban_user: 'Ban user',
-  close_no_action: 'Close no action',
-  create_thread: 'Create thread',
-  repair_thread: 'Repair thread',
-  sync_existing_ban: 'Sync existing ban',
-  verify_user: 'Verify user',
-  view_history: 'View history',
+  ban_user: 'Ban User',
+  close_no_action: 'Close No Action',
+  create_thread: 'Create Thread',
+  repair_thread: 'Repair Thread',
+  sync_existing_ban: 'Sync Existing Ban',
+  verify_user: 'Verify User',
+  view_history: 'View History',
 };
 
 const presenceLabels: Record<CasePresenceState, string> = {
   banned: 'Banned',
-  in_server: 'In server',
-  left_or_removed: 'Left or removed',
-  unknown: 'Unknown',
+  in_server: 'Member On Server',
+  left_or_removed: 'Member Left Server',
+  unknown: 'Member State Unknown',
 };
 
 const presenceStatusClasses: Record<CasePresenceState, string> = {
@@ -26,17 +26,21 @@ const presenceStatusClasses: Record<CasePresenceState, string> = {
 };
 
 const surfaceLabels: Record<CaseSurfaceKind, string> = {
-  admin_evidence_thread: 'Admin evidence',
-  admin_notification: 'Admin notification',
-  report_intake_thread: 'Report intake',
-  source_message: 'Source message',
-  verification_thread: 'Verification thread',
+  admin_evidence_thread: 'Open Evidence Thread',
+  admin_notification: 'Open Admin Notice',
+  report_intake_thread: 'Open Report Intake',
+  source_message: 'Open Source Message',
+  verification_thread: 'Open Verification Thread',
 };
 
 const acronymParts = new Set(['ai', 'gpt', 'id']);
 
 export function formatCaseAction(action: CaseAction): string {
   return actionLabels[action];
+}
+
+export function isDebugCaseAction(action: CaseAction): boolean {
+  return action === 'repair_thread' || action === 'create_thread';
 }
 
 export function formatPresenceState(state: CasePresenceState): string {
@@ -62,6 +66,21 @@ export function confidenceStatusClass(value: number | null): string {
     return 'status warning';
   }
   return 'status info';
+}
+
+export function surfaceKindClass(kind: CaseSurfaceKind): string {
+  switch (kind) {
+    case 'admin_notification':
+      return 'surface-link admin-surface';
+    case 'admin_evidence_thread':
+    case 'verification_thread':
+    case 'report_intake_thread':
+      return 'surface-link thread-surface';
+    case 'source_message':
+      return 'surface-link message-surface';
+    default:
+      return 'surface-link';
+  }
 }
 
 export function moderationOutcomeStatusClass(value: string): string {
@@ -112,7 +131,13 @@ export function formatUtc(value: string | null): string {
 
 export function formatConfidence(value: number | null): string {
   if (value === null) {
-    return 'No score';
+    return 'No Signal';
   }
-  return `${Math.round(value * 100)}%`;
+  if (value >= 0.8) {
+    return 'High Confidence';
+  }
+  if (value >= 0.5) {
+    return 'Medium Confidence';
+  }
+  return 'Low Confidence';
 }

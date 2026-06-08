@@ -20,7 +20,7 @@ export function AccountControl({ username }: AccountControlProps) {
         {initials}
       </span>
       <span className="account-copy">
-        <span className="account-label">Signed in</span>
+        <span className="account-label">Signed in as</span>
         <strong className="account-name">{username}</strong>
       </span>
       <button className="button ghost" type="submit">
