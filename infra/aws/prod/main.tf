@@ -418,6 +418,82 @@ resource "aws_iam_role" "github_deploy" {
 
 data "aws_iam_policy_document" "github_deploy" {
   #checkov:skip=CKV_AWS_356:Some ECS/ECR actions (for deployment APIs) require wildcard resources.
+  dynamic "statement" {
+    for_each = var.github_actions_terraform_state_bucket_name == null ? [] : [var.github_actions_terraform_state_bucket_name]
+
+    content {
+      actions = [
+        "s3:ListBucket"
+      ]
+      resources = ["arn:aws:s3:::${statement.value}"]
+
+      condition {
+        test     = "StringLike"
+        variable = "s3:prefix"
+        values   = ["drasil/domain/*"]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.github_actions_terraform_state_bucket_name == null ? [] : [var.github_actions_terraform_state_bucket_name]
+
+    content {
+      actions = [
+        "s3:DeleteObject",
+        "s3:GetObject",
+        "s3:PutObject"
+      ]
+      resources = [
+        "arn:aws:s3:::${statement.value}/drasil/domain/terraform.tfstate"
+      ]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.github_actions_terraform_state_bucket_name == null ? [] : [var.github_actions_terraform_lock_table_name]
+
+    content {
+      actions = [
+        "dynamodb:DeleteItem",
+        "dynamodb:DescribeTable",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem"
+      ]
+      resources = [
+        "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${statement.value}"
+      ]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.github_actions_domain_hosted_zone_id == null ? [] : [var.github_actions_domain_hosted_zone_id]
+
+    content {
+      actions = [
+        "route53:ChangeResourceRecordSets",
+        "route53:ChangeTagsForResource",
+        "route53:GetHostedZone",
+        "route53:ListResourceRecordSets",
+        "route53:ListTagsForResource",
+        "route53:UpdateHostedZoneComment"
+      ]
+      resources = ["arn:aws:route53:::hostedzone/${statement.value}"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.github_actions_domain_hosted_zone_id == null ? [] : [1]
+
+    content {
+      actions = [
+        "route53:GetChange"
+      ]
+      resources = ["arn:aws:route53:::change/*"]
+    }
+  }
+
   statement {
     actions = [
       "ecr:GetAuthorizationToken"

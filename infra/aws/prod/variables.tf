@@ -93,6 +93,24 @@ variable "github_oidc_thumbprints" {
   default     = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
 }
 
+variable "github_actions_terraform_state_bucket_name" {
+  type        = string
+  description = "S3 bucket name for Terraform remote state. When set, grants the GitHub OIDC deploy role access to the domain stack state object."
+  default     = null
+}
+
+variable "github_actions_terraform_lock_table_name" {
+  type        = string
+  description = "DynamoDB table name used by the Terraform S3 backend for state locking."
+  default     = "drasil-terraform-locks"
+}
+
+variable "github_actions_domain_hosted_zone_id" {
+  type        = string
+  description = "Existing public Route 53 hosted zone ID that the GitHub OIDC deploy role may manage for the domain stack."
+  default     = null
+}
+
 variable "tags" {
   type        = map(string)
   description = "Tags applied to created resources."

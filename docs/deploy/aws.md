@@ -92,6 +92,35 @@ The stack creates Vercel DNS defaults by default:
 When Vercel is configured for the custom domain, also set `NEXT_PUBLIC_APP_URL=https://drasilbot.com`
 and add `https://drasilbot.com/api/auth/discord/callback` to the Discord OAuth redirect list.
 
+If Route 53 already created the hosted zone during domain registration, adopt it into Terraform state
+before the first local apply:
+
+```bash
+terraform import aws_route53_zone.primary Z07359592T4F9RD06WHWA
+terraform plan
+terraform apply
+```
+
+For GitHub-hosted operation, use the manual `Deploy Domain DNS (prod)` workflow. It is
+`workflow_dispatch` only, uses the protected `Deploy - web-prod` approval gate, and imports the
+existing hosted zone into the remote domain state when it is missing. Merging the workflow is a no-op;
+DNS changes happen only when the workflow is explicitly run in `apply` mode.
+
+Repository variables for the workflow:
+
+- `AWS_REGION`: AWS region for OIDC sessions, usually `us-east-1`.
+- `AWS_ROLE_TO_ASSUME`: existing deploy role, or set `AWS_TERRAFORM_ROLE_TO_ASSUME` to a separate Terraform role.
+- `TERRAFORM_STATE_BUCKET`: S3 bucket created by `infra/aws/bootstrap`.
+- `DRASIL_DOMAIN_HOSTED_ZONE_ID`: existing public hosted zone ID, for example `Z07359592T4F9RD06WHWA`.
+
+If reusing the existing deploy role, apply `infra/aws/prod` with these variables so the role can read
+the domain Terraform state and manage only the Drasil hosted zone:
+
+```hcl
+github_actions_terraform_state_bucket_name = "drasil-terraform-state-079358094174"
+github_actions_domain_hosted_zone_id       = "Z07359592T4F9RD06WHWA"
+```
+
 If your AWS account already has the standard GitHub Actions OIDC provider
 (`token.actions.githubusercontent.com`), set `github_oidc_provider_arn` when
 applying `infra/aws/prod` so this stack reuses it.
