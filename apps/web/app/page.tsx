@@ -14,11 +14,12 @@ export default function HomePage() {
       </nav>
       <section className="hero">
         <div>
-          <h1>Anti-spam setup without Discord modal gymnastics.</h1>
+          <span className="eyebrow">Discord anti-spam operations</span>
+          <h1>Catch scam accounts before moderation turns into archaeology.</h1>
           <p className="lede">
-            Drasil helps moderators tune detection, reports, restricted roles, verification
-            channels, and AI triage from a single setup surface while keeping enforcement in each
-            server owner&apos;s control.
+            Drasil gives server teams one place to wire reports, verification, restricted roles,
+            active cases, and AI triage while keeping final enforcement in Discord where moderator
+            history already lives.
           </p>
           <div className="actions">
             <Link className="button" href="/api/auth/discord?returnTo=/admin">
@@ -34,22 +35,22 @@ export default function HomePage() {
         </div>
         <aside className="panel stack">
           <div>
-            <span className="status ok">First slice</span>
-            <h2>Guild setup diagnostics</h2>
+            <span className="status info">Setup dashboard</span>
+            <h2>Know what is ready before the first alert.</h2>
             <p className="muted">
-              Sign in with Discord, pick a guild you can manage, and review Drasil&apos;s live setup
-              state against the persisted Supabase-backed configuration.
+              Sign in with Discord, choose a guild you manage, and compare live Discord state with
+              Drasil&apos;s saved configuration before moderators depend on it.
             </p>
           </div>
           <div className="grid">
             <div className="card">
-              <h3>Local control</h3>
-              <p className="muted">Reports and AI triage stay server-local by default.</p>
+              <h3>Evidence stays visible</h3>
+              <p className="muted">Case links point back to Discord threads and messages.</p>
             </div>
             <div className="card">
-              <h3>Adapter seam</h3>
+              <h3>Policy stays explicit</h3>
               <p className="muted">
-                Postgres works now; Convex can be added behind the same shape.
+                Tune detection response modes without changing bot code or losing provenance.
               </p>
             </div>
           </div>

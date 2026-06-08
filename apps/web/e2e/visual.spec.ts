@@ -6,7 +6,7 @@ function platformSnapshotName(name: string): string {
 
 test('landing page visual baseline @visual', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /anti-spam setup/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /catch scam accounts/i })).toBeVisible();
   await expect(page).toHaveScreenshot(platformSnapshotName('landing-page'), { fullPage: true });
 });
 

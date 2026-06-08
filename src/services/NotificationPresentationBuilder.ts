@@ -24,7 +24,13 @@ import {
 } from '../utils/adminActionCustomIds';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { isDetectionEventExcludedFromAccounting } from '../utils/detectionEventAccounting';
+import { buildAdminCaseDetailUrl, buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
 import { getVerificationActionFailures } from '../utils/verificationActionFailures';
+
+interface AdminActionRowOptions {
+  readonly guildId?: string;
+  readonly verificationEventId?: string;
+}
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds?: unknown;
@@ -310,27 +316,50 @@ export class NotificationPresentationBuilder {
     return embed;
   }
 
-  public createActionRow(userId: string): ActionRowBuilder<ButtonBuilder> {
-    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+  public createActionRow(
+    userId: string,
+    options: AdminActionRowOptions = {}
+  ): ActionRowBuilder<ButtonBuilder> {
+    const buttons = [
       new ButtonBuilder()
         .setCustomId(buildCaseAdminActionsCustomId(userId))
         .setLabel('Admin Actions')
-        .setStyle(ButtonStyle.Primary)
-    );
+        .setStyle(ButtonStyle.Primary),
+    ];
+
+    const webCaseUrl =
+      options.guildId && options.verificationEventId
+        ? buildAdminCaseDetailUrl(options.guildId, options.verificationEventId)
+        : null;
+    if (webCaseUrl) {
+      buttons.push(this.createLinkButton('Web Case', webCaseUrl));
+    }
+
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
   }
 
   public createObservedActionRows(
     userId: string,
-    detectionEventId: string
+    detectionEventId: string,
+    guildId?: string
   ): ActionRowBuilder<ButtonBuilder>[] {
-    return [
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(buildObservedAdminActionsCustomId(userId, detectionEventId))
-          .setLabel('Admin Actions')
-          .setStyle(ButtonStyle.Primary)
-      ),
+    const buttons = [
+      new ButtonBuilder()
+        .setCustomId(buildObservedAdminActionsCustomId(userId, detectionEventId))
+        .setLabel('Admin Actions')
+        .setStyle(ButtonStyle.Primary),
     ];
+
+    const webQueueUrl = guildId ? buildAdminCaseQueueUrl(guildId) : null;
+    if (webQueueUrl) {
+      buttons.push(this.createLinkButton('Web Queue', webQueueUrl));
+    }
+
+    return [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
+  }
+
+  private createLinkButton(label: string, url: string): ButtonBuilder {
+    return new ButtonBuilder().setLabel(label).setStyle(ButtonStyle.Link).setURL(url);
   }
 
   public createAdminAllowedMentions(roleIds?: string[] | string | null): {

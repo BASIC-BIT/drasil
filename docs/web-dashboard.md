@@ -58,6 +58,7 @@ Required web runtime variables:
 
 Optional variables:
 
+- `DRASIL_WEB_PUBLIC_URL`: deployed web origin for bot-side Discord links. If unset, the bot also accepts `NEXT_PUBLIC_APP_URL`.
 - `DRASIL_WEB_DATA_PROVIDER`: `postgres` by default; `convex` selects the future adapter.
 - `DRASIL_CONVEX_HTTP_URL`: Convex HTTP URL when using the Convex adapter.
 - `DRASIL_CONVEX_WEB_API_KEY`: API key for Convex web routes.

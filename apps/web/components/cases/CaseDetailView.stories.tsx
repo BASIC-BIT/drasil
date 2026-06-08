@@ -16,6 +16,7 @@ const meta = {
   args: {
     guildId: 'guild-1',
     guildName: 'Fixture Guild',
+    sessionUsername: 'Fixture Admin',
     detail: fixtureCaseDetails[0],
   },
 } satisfies Meta<typeof CaseDetailView>;

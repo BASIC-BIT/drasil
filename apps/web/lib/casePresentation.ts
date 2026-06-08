@@ -20,9 +20,9 @@ const presenceLabels: Record<CasePresenceState, string> = {
 
 const presenceStatusClasses: Record<CasePresenceState, string> = {
   banned: 'status error',
-  in_server: 'status ok',
+  in_server: 'status info',
   left_or_removed: 'status warning',
-  unknown: 'status warning',
+  unknown: 'status neutral',
 };
 
 const surfaceLabels: Record<CaseSurfaceKind, string> = {
@@ -45,6 +45,39 @@ export function formatPresenceState(state: CasePresenceState): string {
 
 export function presenceStatusClass(state: CasePresenceState): string {
   return presenceStatusClasses[state];
+}
+
+export function freshnessStatusClass(stale: boolean): string {
+  return stale ? 'status stale' : 'status fresh';
+}
+
+export function confidenceStatusClass(value: number | null): string {
+  if (value === null) {
+    return 'status neutral';
+  }
+  if (value >= 0.8) {
+    return 'status error';
+  }
+  if (value >= 0.5) {
+    return 'status warning';
+  }
+  return 'status info';
+}
+
+export function moderationOutcomeStatusClass(value: string): string {
+  switch (value) {
+    case 'banned':
+    case 'ban':
+      return 'status error';
+    case 'restricted':
+    case 'member_left':
+      return 'status warning';
+    case 'verified':
+    case 'closed_no_action':
+      return 'status ok';
+    default:
+      return 'status neutral';
+  }
 }
 
 export function formatSurfaceKind(kind: CaseSurfaceKind): string {

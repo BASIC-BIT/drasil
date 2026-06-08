@@ -6,6 +6,7 @@ import {
   formatPresenceState,
   formatSurfaceKind,
   formatUtc,
+  moderationOutcomeStatusClass,
   presenceStatusClass,
 } from './casePresentation';
 
@@ -14,6 +15,8 @@ describe('casePresentation', () => {
     expect(formatCaseAction('ban_by_id')).toBe('Ban by ID');
     expect(formatPresenceState('left_or_removed')).toBe('Left or removed');
     expect(presenceStatusClass('banned')).toBe('status error');
+    expect(presenceStatusClass('in_server')).toBe('status info');
+    expect(moderationOutcomeStatusClass('restricted')).toBe('status warning');
     expect(formatSurfaceKind('source_message')).toBe('Source message');
   });
 

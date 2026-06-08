@@ -3,18 +3,23 @@ import type {
   CaseDetectionHistoryItem,
   CaseModerationOutcome,
 } from '@drasil/contracts';
+import { AccountControl } from '@/components/AccountControl';
 import {
+  confidenceStatusClass,
   formatCaseAction,
   formatConfidence,
   formatDetectionType,
   formatPresenceState,
   formatUtc,
+  freshnessStatusClass,
+  moderationOutcomeStatusClass,
   presenceStatusClass,
 } from '@/lib/casePresentation';
 
 interface CaseDetailViewProps {
   readonly guildId: string;
   readonly guildName: string;
+  readonly sessionUsername: string;
   readonly detail: CaseDetail;
 }
 
@@ -28,7 +33,7 @@ function SummaryPanel({ detail }: { readonly detail: CaseDetail }) {
           </span>
           <h1 className="page-title">User {detail.userId}</h1>
         </div>
-        <span className={detail.stale ? 'status warning' : 'status ok'}>
+        <span className={freshnessStatusClass(detail.stale)}>
           {detail.stale ? `${detail.staleHours}h stale` : 'Fresh'}
         </span>
       </div>
@@ -79,7 +84,7 @@ function DiscordSurfaces({ detail }: { readonly detail: CaseDetail }) {
       )}
       <div className="pill-list" aria-label="Available moderator paths">
         {detail.allowedActions.map((action) => (
-          <span className="pill" key={action}>
+          <span className="pill action-pill" key={action}>
             {formatCaseAction(action)}
           </span>
         ))}
@@ -105,7 +110,9 @@ function DetectionHistory({
         <div className="timeline">
           {detections.map((detection) => (
             <article className="timeline-item" key={detection.id}>
-              <span className="status warning">{formatConfidence(detection.confidence)}</span>
+              <span className={confidenceStatusClass(detection.confidence)}>
+                {formatConfidence(detection.confidence)}
+              </span>
               <div>
                 <h3>{formatDetectionType(detection.detectionType)}</h3>
                 <p className="muted">{formatUtc(detection.detectedAt)}</p>
@@ -138,7 +145,9 @@ function ModerationOutcomes({ outcomes }: { readonly outcomes: readonly CaseMode
         <div className="timeline">
           {outcomes.map((outcome) => (
             <article className="timeline-item" key={outcome.id}>
-              <span className="status ok">{formatDetectionType(outcome.outcomeType)}</span>
+              <span className={moderationOutcomeStatusClass(outcome.outcomeType)}>
+                {formatDetectionType(outcome.outcomeType)}
+              </span>
               <div>
                 <h3>{formatDetectionType(outcome.source)}</h3>
                 <p className="muted">{formatUtc(outcome.occurredAt)}</p>
@@ -153,7 +162,12 @@ function ModerationOutcomes({ outcomes }: { readonly outcomes: readonly CaseMode
   );
 }
 
-export function CaseDetailView({ guildId, guildName, detail }: CaseDetailViewProps) {
+export function CaseDetailView({
+  guildId,
+  guildName,
+  sessionUsername,
+  detail,
+}: CaseDetailViewProps) {
   return (
     <main className="shell stack">
       <nav className="topbar">
@@ -161,18 +175,14 @@ export function CaseDetailView({ guildId, guildName, detail }: CaseDetailViewPro
           <span className="brand-mark" />
           <span>Drasil</span>
         </a>
-        <div className="actions">
+        <div className="nav-cluster">
           <a className="button secondary" href={`/admin/guild/${guildId}/cases`}>
             Case queue
           </a>
           <a className="button secondary" href={`/admin/guild/${guildId}/setup`}>
             Setup
           </a>
-          <form action="/api/auth/logout" method="post">
-            <button className="button secondary" type="submit">
-              Sign out
-            </button>
-          </form>
+          <AccountControl username={sessionUsername} />
         </div>
       </nav>
 

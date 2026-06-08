@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { AccountControl } from '@/components/AccountControl';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 
@@ -19,18 +20,14 @@ export default async function AdminPage() {
           <span className="brand-mark" />
           <span>Drasil</span>
         </Link>
-        <form action="/api/auth/logout" method="post">
-          <button className="button secondary" type="submit">
-            Sign out {session.username}
-          </button>
-        </form>
+        <AccountControl username={session.username} />
       </nav>
       <section className="panel stack">
         <div>
           <h1 className="page-title">Choose a server.</h1>
           <p className="lede">
-            These are Discord guilds where your account is owner or has Manage Server. Drasil only
-            changes a guild after you save settings for that guild.
+            Pick a guild you own or can manage. Drasil only changes a server after you save that
+            server&apos;s settings.
           </p>
         </div>
         {guilds.length === 0 ? (

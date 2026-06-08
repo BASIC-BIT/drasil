@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { saveGuildSetup } from './actions';
+import { AccountControl } from '@/components/AccountControl';
 import { InstallInvitePanel } from '@/components/InstallInvitePanel';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
@@ -69,18 +70,14 @@ export default async function GuildSetupPage({ params }: PageProps) {
           <span className="brand-mark" />
           <span>Drasil</span>
         </Link>
-        <div className="actions">
+        <div className="nav-cluster">
           <Link className="button secondary" href={`/admin/guild/${guildId}/cases`}>
             Active cases
           </Link>
           <Link className="button secondary" href="/admin">
             All servers
           </Link>
-          <form action="/api/auth/logout" method="post">
-            <button className="button secondary" type="submit">
-              Sign out
-            </button>
-          </form>
+          <AccountControl username={session.username} />
         </div>
       </nav>
 
@@ -91,13 +88,14 @@ export default async function GuildSetupPage({ params }: PageProps) {
           </span>
           <h1 className="page-title">{dashboard.guildName}</h1>
           <p className="lede">
-            Data provider: {dashboard.dataProvider}. Last checked:{' '}
-            {new Date(dashboard.checkedAt).toLocaleString('en-US', { timeZone: 'UTC' })} UTC.
+            Live setup diagnostics from Discord and the {dashboard.dataProvider} configuration. Last
+            checked: {new Date(dashboard.checkedAt).toLocaleString('en-US', { timeZone: 'UTC' })}{' '}
+            UTC.
           </p>
         </div>
-        <div className="grid">
+        <div className="setup-check-grid">
           {dashboard.checklist.map((check) => (
-            <article className="card stack" key={check.key}>
+            <article className="card setup-check-card" key={check.key}>
               <span className={`status ${check.status}`}>{check.status}</span>
               <div>
                 <h2>{check.label}</h2>

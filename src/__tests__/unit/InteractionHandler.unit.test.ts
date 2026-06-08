@@ -164,6 +164,8 @@ const buildVerificationEvent = (
 });
 
 describe('InteractionHandler (unit)', () => {
+  const originalDrasilWebPublicUrl = process.env.DRASIL_WEB_PUBLIC_URL;
+  const originalNextPublicAppUrl = process.env.NEXT_PUBLIC_APP_URL;
   let client: Client;
   let userModerationService: jest.Mocked<IUserModerationService>;
   let securityActionService: jest.Mocked<ISecurityActionService>;
@@ -174,6 +176,8 @@ describe('InteractionHandler (unit)', () => {
   let adminActionRepository: jest.Mocked<IAdminActionRepository>;
 
   beforeEach(() => {
+    delete process.env.DRASIL_WEB_PUBLIC_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
     const member = buildMember('guild-1', 'user-1');
     client = {
       guilds: {
@@ -298,6 +302,20 @@ describe('InteractionHandler (unit)', () => {
     };
   });
 
+  afterEach(() => {
+    if (originalDrasilWebPublicUrl === undefined) {
+      delete process.env.DRASIL_WEB_PUBLIC_URL;
+    } else {
+      process.env.DRASIL_WEB_PUBLIC_URL = originalDrasilWebPublicUrl;
+    }
+
+    if (originalNextPublicAppUrl === undefined) {
+      delete process.env.NEXT_PUBLIC_APP_URL;
+    } else {
+      process.env.NEXT_PUBLIC_APP_URL = originalNextPublicAppUrl;
+    }
+  });
+
   const enableModeratorBanActions = (): void => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       settings: { [MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY]: true },
@@ -367,6 +385,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('opens existing admin actions after a digest case is selected', async () => {
+    process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
     const selectedCase = buildVerificationEvent('ver-selected', 'user-selected');
     verificationEventRepository.findById.mockResolvedValue(selectedCase);
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(selectedCase);
@@ -397,6 +416,16 @@ describe('InteractionHandler (unit)', () => {
         content: expect.stringContaining('Admin actions for <@user-selected>.'),
         flags: MessageFlags.Ephemeral,
       })
+    );
+    const response = (interaction.reply as jest.Mock).mock.calls[0][0] as any;
+    const buttons = response.components.flatMap(
+      (row: { toJSON(): { components: any[] } }) => row.toJSON().components
+    );
+    expect(buttons.map((button: { label?: string }) => button.label)).toContain('Web Case');
+    expect(buttons.find((button: { label?: string }) => button.label === 'Web Case')).toMatchObject(
+      {
+        url: 'https://drasilbot.com/admin/guild/guild-1/cases/ver-selected',
+      }
     );
   });
 

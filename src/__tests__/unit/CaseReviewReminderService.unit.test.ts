@@ -44,6 +44,28 @@ const buildPendingCase = (
 });
 
 describe('CaseReviewReminderService (unit)', () => {
+  const originalDrasilWebPublicUrl = process.env.DRASIL_WEB_PUBLIC_URL;
+  const originalNextPublicAppUrl = process.env.NEXT_PUBLIC_APP_URL;
+
+  beforeEach(() => {
+    delete process.env.DRASIL_WEB_PUBLIC_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
+  });
+
+  afterEach(() => {
+    if (originalDrasilWebPublicUrl === undefined) {
+      delete process.env.DRASIL_WEB_PUBLIC_URL;
+    } else {
+      process.env.DRASIL_WEB_PUBLIC_URL = originalDrasilWebPublicUrl;
+    }
+
+    if (originalNextPublicAppUrl === undefined) {
+      delete process.env.NEXT_PUBLIC_APP_URL;
+    } else {
+      process.env.NEXT_PUBLIC_APP_URL = originalNextPublicAppUrl;
+    }
+  });
+
   it('sends one all-pending digest, stale cases first, with direct admin links', async () => {
     const now = new Date('2026-06-03T12:00:00.000Z');
     const staleCase = buildPendingCase(
@@ -120,6 +142,50 @@ describe('CaseReviewReminderService (unit)', () => {
       })
     );
     expect(verificationEventRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('adds a web queue link to the digest when the public web URL is configured', async () => {
+    process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    const now = new Date('2026-06-03T12:00:00.000Z');
+    const pendingCase = buildPendingCase(new Date('2026-06-02T10:00:00.000Z'));
+    const send = jest.fn().mockResolvedValue(undefined);
+    const serverRepository = {
+      findAllActive: jest.fn().mockResolvedValue([
+        buildServer({
+          case_review_reminders_enabled: true,
+          case_review_reminder_stale_hours: 24,
+          case_review_reminder_repeat_hours: 24,
+        }),
+      ]),
+    } as unknown as jest.Mocked<IServerRepository>;
+    const verificationEventRepository = {
+      findPendingByServer: jest.fn().mockResolvedValue([pendingCase]),
+      update: jest.fn(),
+    } as unknown as jest.Mocked<IVerificationEventRepository>;
+    const configService = {
+      getAdminChannel: jest
+        .fn()
+        .mockResolvedValue({ id: 'admin-channel-actual', send } as unknown as TextChannel),
+      updateServerSettings: jest.fn().mockResolvedValue({} as Server),
+    } as unknown as jest.Mocked<IConfigService>;
+
+    const service = new CaseReviewReminderService(
+      serverRepository,
+      verificationEventRepository,
+      configService
+    );
+
+    await service.runOnce(now);
+
+    const buttons = send.mock.calls[0][0].components[0].toJSON().components as Array<{
+      label?: string;
+      url?: string;
+    }>;
+    expect(buttons.map((button) => button.label)).toEqual(['Open Cases', 'Web Queue']);
+    expect(buttons[1]).toMatchObject({
+      url: 'https://drasilbot.com/admin/guild/guild-1/cases',
+    });
   });
 
   it('suppresses newly stale cases until the server repeat interval elapses', async () => {

@@ -1,10 +1,12 @@
 import type { CaseSummary } from '@drasil/contracts';
+import { AccountControl } from '@/components/AccountControl';
 import {
   formatCaseAction,
   formatConfidence,
   formatDetectionType,
   formatPresenceState,
   formatUtc,
+  freshnessStatusClass,
   presenceStatusClass,
 } from '@/lib/casePresentation';
 
@@ -49,7 +51,7 @@ function CaseCard({ guildId, item }: { readonly guildId: string; readonly item: 
             <a href={`/admin/guild/${guildId}/cases/${item.id}`}>User {item.userId}</a>
           </h2>
         </div>
-        <span className={item.stale ? 'status warning' : 'status ok'}>
+        <span className={freshnessStatusClass(item.stale)}>
           {item.stale ? `${item.staleHours}h stale` : 'Fresh'}
         </span>
       </div>
@@ -73,7 +75,7 @@ function CaseCard({ guildId, item }: { readonly guildId: string; readonly item: 
 
       <div className="pill-list" aria-label="Available moderator paths">
         {item.allowedActions.map((action) => (
-          <span className="pill" key={`${item.id}-${action}`}>
+          <span className="pill action-pill" key={`${item.id}-${action}`}>
             {formatCaseAction(action)}
           </span>
         ))}
@@ -92,24 +94,20 @@ export function CaseQueueView({ guildId, guildName, sessionUsername, cases }: Ca
           <span className="brand-mark" />
           <span>Drasil</span>
         </a>
-        <div className="actions">
+        <div className="nav-cluster">
           <a className="button secondary" href={`/admin/guild/${guildId}/setup`}>
             Setup
           </a>
           <a className="button secondary" href="/admin">
             All servers
           </a>
-          <form action="/api/auth/logout" method="post">
-            <button className="button secondary" type="submit">
-              Sign out
-            </button>
-          </form>
+          <AccountControl username={sessionUsername} />
         </div>
       </nav>
 
       <section className="panel stack">
         <div>
-          <span className={staleCount > 0 ? 'status warning' : 'status ok'}>
+          <span className={staleCount > 0 ? 'status warning' : 'status info'}>
             {cases.length} active cases
           </span>
           <h1 className="page-title">{guildName} case queue</h1>
@@ -128,8 +126,8 @@ export function CaseQueueView({ guildId, guildName, sessionUsername, cases }: Ca
             <strong>{cases.length - staleCount}</strong>
           </div>
           <div>
-            <span className="muted">Signed in</span>
-            <strong>{sessionUsername}</strong>
+            <span className="muted">Review mode</span>
+            <strong>Read-only web queue</strong>
           </div>
         </div>
       </section>

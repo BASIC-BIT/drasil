@@ -22,5 +22,12 @@ export default async function CaseDetailPage({ params }: PageProps) {
     notFound();
   }
 
-  return <CaseDetailView detail={detail} guildId={guildId} guildName={guild.name} />;
+  return (
+    <CaseDetailView
+      detail={detail}
+      guildId={guildId}
+      guildName={guild.name}
+      sessionUsername={session.username}
+    />
+  );
 }

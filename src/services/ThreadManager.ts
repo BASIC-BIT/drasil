@@ -883,7 +883,12 @@ export class ThreadManager implements IThreadManager {
           roles: [],
           repliedUser: false,
         },
-        components: [this.presentationBuilder.createActionRow(member.id)],
+        components: [
+          this.presentationBuilder.createActionRow(member.id, {
+            guildId: member.guild.id,
+            verificationEventId: verificationEvent.id,
+          }),
+        ],
       });
 
       return thread;
@@ -961,7 +966,12 @@ export class ThreadManager implements IThreadManager {
           sourceMessage
         ),
         allowedMentions: this.createNoMentionAllowedMentions(),
-        components: [this.presentationBuilder.createActionRow(member.id)],
+        components: [
+          this.presentationBuilder.createActionRow(member.id, {
+            guildId: member.guild.id,
+            verificationEventId: verificationEvent.id,
+          }),
+        ],
       });
 
       return thread;

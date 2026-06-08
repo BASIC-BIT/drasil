@@ -58,6 +58,7 @@ import {
   ReportInteractionHandler,
 } from './ReportInteractionHandler';
 import { SetupVerificationModalHandler } from './SetupVerificationModalHandler';
+import { buildAdminCaseDetailUrl, buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
 // Load environment variables
 dotenv.config();
 
@@ -430,35 +431,45 @@ export class InteractionHandler implements IInteractionHandler {
     const canBan =
       hasBanMembersPermission && !alreadyBanned && (await this.canUseModeratorBanAction(guildId));
 
-    const buttons: ButtonBuilder[] = [];
+    const actionButtons: ButtonBuilder[] = [];
     if (hasModerationPermission) {
-      buttons.push(this.adminActionButton(parsed, 'history', 'History', ButtonStyle.Secondary));
+      actionButtons.push(
+        this.adminActionButton(parsed, 'history', 'History', ButtonStyle.Secondary)
+      );
     }
 
     if (activeCase?.status === VerificationStatus.PENDING) {
       if (hasModerationPermission) {
-        buttons.push(
+        actionButtons.push(
           this.adminActionButton(parsed, 'verify', 'Verify User', ButtonStyle.Success),
           this.adminActionButton(parsed, 'repair', 'Repair Active Case', ButtonStyle.Primary)
         );
         if (!activeCase.thread_id) {
-          buttons.push(
+          actionButtons.push(
             this.adminActionButton(parsed, 'thread', 'Create Thread', ButtonStyle.Primary)
           );
         }
       }
       if (alreadyBanned) {
-        buttons.push(
+        actionButtons.push(
           this.adminActionButton(parsed, 'sync_ban', 'Sync Existing Ban', ButtonStyle.Danger)
         );
       }
       if (canBan) {
-        buttons.push(this.adminActionButton(parsed, 'ban', 'Ban User...', ButtonStyle.Danger));
+        actionButtons.push(
+          this.adminActionButton(parsed, 'ban', 'Ban User...', ButtonStyle.Danger)
+        );
       }
     } else if (latestCase && hasModerationPermission) {
-      buttons.push(
+      actionButtons.push(
         this.adminActionButton(parsed, 'reopen', 'Reopen Verification', ButtonStyle.Primary)
       );
+    }
+
+    const buttons = [...actionButtons];
+    const webCaseUrl = latestCase ? buildAdminCaseDetailUrl(guildId, latestCase.id) : null;
+    if (webCaseUrl) {
+      buttons.push(this.webLinkButton('Web Case', webCaseUrl));
     }
 
     const details = [
@@ -491,7 +502,7 @@ export class InteractionHandler implements IInteractionHandler {
           )
       );
     }
-    if (buttons.length === 0) {
+    if (actionButtons.length === 0) {
       details.push('No available actions for your current permissions and this case state.');
     }
 
@@ -519,9 +530,9 @@ export class InteractionHandler implements IInteractionHandler {
 
     const canBan =
       permissions.hasBanMembersPermission && (await this.canUseModeratorBanAction(guildId));
-    const buttons: ButtonBuilder[] = [];
+    const actionButtons: ButtonBuilder[] = [];
     if (permissions.hasModerationPermission) {
-      buttons.push(
+      actionButtons.push(
         this.adminActionButton(parsed, 'observed_open', 'Open Case', ButtonStyle.Primary),
         this.adminActionButton(parsed, 'observed_restrict', 'Restrict', ButtonStyle.Danger),
         this.adminActionButton(parsed, 'observed_dismiss', 'Dismiss Alert', ButtonStyle.Secondary),
@@ -542,20 +553,28 @@ export class InteractionHandler implements IInteractionHandler {
     }
     if (canBan) {
       if (permissions.hasModerationPermission) {
-        buttons.splice(
+        actionButtons.splice(
           2,
           0,
           this.adminActionButton(parsed, 'observed_ban', 'Ban...', ButtonStyle.Danger)
         );
       } else {
-        buttons.push(this.adminActionButton(parsed, 'observed_ban', 'Ban...', ButtonStyle.Danger));
+        actionButtons.push(
+          this.adminActionButton(parsed, 'observed_ban', 'Ban...', ButtonStyle.Danger)
+        );
       }
+    }
+
+    const buttons = [...actionButtons];
+    const webQueueUrl = buildAdminCaseQueueUrl(guildId);
+    if (webQueueUrl) {
+      buttons.push(this.webLinkButton('Web Queue', webQueueUrl));
     }
 
     await interaction.reply({
       content:
         `Admin actions for observed alert on <@${parsed.userId}>.\nMutating actions require a confirmation step before they run.` +
-        (buttons.length === 0
+        (actionButtons.length === 0
           ? '\nNo available actions for your current permissions and this alert state.'
           : ''),
       allowedMentions: { parse: [] },
@@ -706,6 +725,15 @@ export class InteractionHandler implements IInteractionHandler {
       );
     }
 
+    const webQueueUrl = buildAdminCaseQueueUrl(guildId);
+    if (webQueueUrl) {
+      components.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          this.webLinkButton('Open Web Queue', webQueueUrl)
+        )
+      );
+    }
+
     const response = {
       content: `Open cases for this server (${sortedCases.length} total). Page ${safePage + 1}/${pageCount}. Selecting a case opens the existing Admin Actions menu.`,
       components,
@@ -745,6 +773,10 @@ export class InteractionHandler implements IInteractionHandler {
       )
       .setLabel(label)
       .setStyle(style);
+  }
+
+  private webLinkButton(label: string, url: string): ButtonBuilder {
+    return new ButtonBuilder().setLabel(label).setStyle(ButtonStyle.Link).setURL(url);
   }
 
   private createButtonRows(buttons: ButtonBuilder[]): ActionRowBuilder<ButtonBuilder>[] {

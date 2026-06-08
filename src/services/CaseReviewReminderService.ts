@@ -10,6 +10,7 @@ import {
   CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY,
   getCaseReviewReminderSettings,
 } from '../utils/caseReviewReminderSettings';
+import { buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 
 const CASE_REVIEW_REMINDER_INTERVAL_MS = 15 * 60 * 1000;
@@ -112,7 +113,7 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
         this.presentationBuilder.formatRoleMentions(roleIds)
       ),
       allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
-      components: [this.createDigestActionRow()],
+      components: [this.createDigestActionRow(server.guild_id)],
     });
 
     try {
@@ -224,13 +225,22 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     return `source: https://discord.com/channels/${guildId}/${sourceChannelId}/${sourceMessageId}`;
   }
 
-  private createDigestActionRow(): ActionRowBuilder<ButtonBuilder> {
-    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+  private createDigestActionRow(guildId: string): ActionRowBuilder<ButtonBuilder> {
+    const buttons = [
       new ButtonBuilder()
         .setCustomId(CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID)
         .setLabel('Open Cases')
-        .setStyle(ButtonStyle.Primary)
-    );
+        .setStyle(ButtonStyle.Primary),
+    ];
+
+    const webQueueUrl = buildAdminCaseQueueUrl(guildId);
+    if (webQueueUrl) {
+      buttons.push(
+        new ButtonBuilder().setLabel('Web Queue').setStyle(ButtonStyle.Link).setURL(webQueueUrl)
+      );
+    }
+
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
   }
 
   private readString(value: unknown): string | null {
