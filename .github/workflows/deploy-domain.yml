@@ -83,11 +83,12 @@ jobs:
         run: |
           set -euo pipefail
           cat > backend.ci.hcl <<EOF
-          bucket         = "${TERRAFORM_STATE_BUCKET}"
-          key            = "drasil/domain/terraform.tfstate"
-          region         = "${AWS_REGION}"
-          dynamodb_table = "${TERRAFORM_LOCK_TABLE}"
-          encrypt        = true
+          bucket               = "${TERRAFORM_STATE_BUCKET}"
+          key                  = "drasil/domain/terraform.tfstate"
+          region               = "${AWS_REGION}"
+          dynamodb_table       = "${TERRAFORM_LOCK_TABLE}"
+          workspace_key_prefix = "drasil/domain/workspaces"
+          encrypt              = true
           EOF
 
       - name: Terraform init
