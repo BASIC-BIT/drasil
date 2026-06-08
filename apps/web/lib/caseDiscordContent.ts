@@ -5,6 +5,7 @@ import {
   type DiscordMessage,
   type DiscordMessageAttachment,
 } from './discordApi';
+import { discordMessageUrl } from './discordUrls';
 import { isWebE2eFixtureMode } from './e2eFixtures';
 
 const THREAD_MESSAGE_LIMIT = 200;
@@ -68,10 +69,6 @@ function parseDiscordUrl(url: string): ParsedDiscordUrl | null {
   } catch {
     return null;
   }
-}
-
-function discordMessageUrl(guildId: string, channelId: string, messageId: string): string {
-  return `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
 }
 
 function formatAuthor(message: DiscordMessage): string {

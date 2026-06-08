@@ -758,7 +758,7 @@ export class InteractionHandler implements IInteractionHandler {
       return value;
     }
 
-    return value.slice(0, maxLength - 1);
+    return value.slice(0, maxLength);
   }
 
   private adminActionButton(

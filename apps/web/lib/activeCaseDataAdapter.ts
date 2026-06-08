@@ -18,6 +18,7 @@ import {
   fixtureResolvedCaseCount,
   isWebE2eFixtureMode,
 } from './e2eFixtures';
+import { discordMessageUrl } from './discordUrls';
 import { getPostgresPool } from './setupDataAdapter';
 
 export interface ActiveCaseDataAdapter {
@@ -115,12 +116,6 @@ function metadataToRecord(metadata: unknown): Record<string, unknown> {
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null;
-}
-
-function discordMessageUrl(guildId: string, channelId: string, messageId?: string | null): string {
-  return ['https://discord.com/channels', guildId, channelId, messageId]
-    .filter((part): part is string => Boolean(part))
-    .join('/');
 }
 
 function pushSurface(surfaces: CaseSurfaceLink[], surface: CaseSurfaceLink | null): void {

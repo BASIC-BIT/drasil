@@ -743,6 +743,10 @@ export class UserModerationService implements IUserModerationService {
     options: ObservedDiscordBanOptions
   ): Promise<number> {
     try {
+      if (options.source === ModerationOutcomeSource.DRASIL) {
+        return 0;
+      }
+
       const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
         user.id,
         guild.id

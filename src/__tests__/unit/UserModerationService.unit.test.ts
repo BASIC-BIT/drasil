@@ -484,6 +484,58 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
+  it('ignores observed Drasil bans because the direct ban flow records them', async () => {
+    const guildId = 'guild-observed-drasil-ban';
+    const userId = 'user-observed-drasil-ban';
+    const user = { id: userId, username: 'test-user', tag: 'test-user#0001' } as User;
+    const guild = { id: guildId } as Guild;
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.recordObservedDiscordBan(guild, user, {
+        source: ModerationOutcomeSource.DRASIL,
+        actorId: 'bot-1',
+        reason: 'Drasil-issued ban echo',
+        auditLogEntryId: 'audit-1',
+      })
+    ).resolves.toBe(0);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.PENDING })
+    );
+    await expect(moderationOutcomeRepository.findByUserAndServer(userId, guildId)).resolves.toEqual(
+      []
+    );
+  });
+
   it('marks pending cases when a member leaves without closing them', async () => {
     const guildId = 'guild-member-left';
     const userId = 'user-member-left';

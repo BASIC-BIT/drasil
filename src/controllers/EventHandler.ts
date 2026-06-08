@@ -57,6 +57,7 @@ const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
 const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
+const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
 
 type SetupNudgeSource = 'audit_log_installer' | 'owner';
 type SetupNudgeResult = 'sent' | 'dm_failed' | 'no_recipient';
@@ -557,8 +558,7 @@ export class EventHandler implements IEventHandler {
     }
 
     try {
-      const existingBan = await member.guild.bans.fetch(member.id).catch(() => null);
-      if (existingBan) {
+      if (!(await this.isDefinitelyNotBanned(member))) {
         return;
       }
 
@@ -574,6 +574,32 @@ export class EventHandler implements IEventHandler {
         error
       );
     }
+  }
+
+  private async isDefinitelyNotBanned(member: GuildMember | PartialGuildMember): Promise<boolean> {
+    try {
+      const existingBan = await member.guild.bans.fetch(member.id);
+      return !existingBan;
+    } catch (error) {
+      if (this.isUnknownBanError(error)) {
+        return true;
+      }
+
+      console.warn(
+        `Could not confirm ban state for ${member.id} in guild ${member.guild.id}:`,
+        error
+      );
+      return false;
+    }
+  }
+
+  private isUnknownBanError(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: unknown }).code === DISCORD_UNKNOWN_BAN_ERROR_CODE
+    );
   }
 
   private async resolveObservedBanOptions(ban: GuildBan): Promise<ObservedDiscordBanOptions> {

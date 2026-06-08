@@ -384,6 +384,21 @@ describe('InteractionHandler (unit)', () => {
     expect(buttons[1].disabled).toBe(false);
   });
 
+  it('truncates case digest select text to the provided limit', () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+
+    expect((handler as any).truncateSelectText('a'.repeat(101), 100)).toHaveLength(100);
+  });
+
   it('opens existing admin actions after a digest case is selected', async () => {
     process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
     const selectedCase = buildVerificationEvent('ver-selected', 'user-selected');

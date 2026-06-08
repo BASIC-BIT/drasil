@@ -9,6 +9,8 @@ import {
 import { EventHandler } from '../../controllers/EventHandler';
 import { DetectionType, ModerationOutcomeSource } from '../../repositories/types';
 
+const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
+
 describe('EventHandler (unit)', () => {
   function buildHandler(overrides?: {
     client?: Record<string, unknown>;
@@ -167,7 +169,7 @@ describe('EventHandler (unit)', () => {
     );
   });
 
-  it('delegates member removals that are not already bans', async () => {
+  it('delegates member removals that are definitely not already bans', async () => {
     const client = { on: jest.fn(), user: { id: 'bot-1' } };
     const userModerationService = {
       recordObservedDiscordBan: jest.fn(),
@@ -183,13 +185,46 @@ describe('EventHandler (unit)', () => {
       user: { id: 'user-1', tag: 'test-user#0001' },
       guild: {
         id: 'guild-1',
-        bans: { fetch: jest.fn().mockRejectedValue(new Error('not banned')) },
+        bans: { fetch: jest.fn().mockRejectedValue({ code: DISCORD_UNKNOWN_BAN_ERROR_CODE }) },
       },
     };
 
     await removeHandler?.(member as any);
 
     expect(userModerationService.recordMemberLeftGuild).toHaveBeenCalledWith(member);
+  });
+
+  it('does not mark member removals when ban state cannot be confirmed', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const userModerationService = {
+      recordObservedDiscordBan: jest.fn(),
+      recordMemberLeftGuild: jest.fn(),
+    };
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const handler = buildHandler({ client, userModerationService });
+    await handler.setupEventHandlers();
+    const removeHandler = client.on.mock.calls.find(
+      ([event]) => event === Events.GuildMemberRemove
+    )?.[1];
+    const member = {
+      id: 'user-1',
+      user: { id: 'user-1', tag: 'test-user#0001' },
+      guild: {
+        id: 'guild-1',
+        bans: {
+          fetch: jest.fn().mockRejectedValue({ code: 50013, message: 'Missing Permissions' }),
+        },
+      },
+    };
+
+    await removeHandler?.(member as any);
+
+    expect(userModerationService.recordMemberLeftGuild).not.toHaveBeenCalled();
+    expect(consoleWarn).toHaveBeenCalledWith(
+      expect.stringContaining('Could not confirm ban state for user-1 in guild guild-1:'),
+      expect.objectContaining({ code: 50013 })
+    );
+    consoleWarn.mockRestore();
   });
 
   it('delegates legacy test commands to CommandHandler', async () => {
