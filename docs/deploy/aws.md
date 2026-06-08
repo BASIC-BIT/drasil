@@ -112,15 +112,15 @@ Repository variables for the workflow:
 - `AWS_ROLE_TO_ASSUME`: existing deploy role, or set `AWS_TERRAFORM_ROLE_TO_ASSUME` to a separate Terraform role.
 - `TERRAFORM_STATE_BUCKET`: S3 bucket created by `infra/aws/bootstrap`.
 - `TERRAFORM_LOCK_TABLE`: DynamoDB lock table created by `infra/aws/bootstrap`; defaults to `drasil-terraform-locks`.
-- `DRASIL_DOMAIN_HOSTED_ZONE_ID`: existing public hosted zone ID, for example `Z07359592T4F9RD06WHWA`.
+- `DRASIL_DOMAIN_HOSTED_ZONE_ID`: existing public hosted zone ID, for example `Z1234567890EXAMPLE`.
 
 If reusing the existing deploy role, apply `infra/aws/prod` with these variables so the role can read
 the domain Terraform state and manage only the Drasil hosted zone:
 
 ```hcl
-github_actions_terraform_state_bucket_name = "drasil-terraform-state-079358094174"
-github_actions_terraform_backend_kms_key_arn = "arn:aws:kms:us-east-1:079358094174:key/0a0d24a7-db40-4a5f-871a-5147c5eb2041"
-github_actions_domain_hosted_zone_id       = "Z07359592T4F9RD06WHWA"
+github_actions_terraform_state_bucket_name = "drasil-terraform-state-<account-id>"
+github_actions_terraform_backend_kms_key_arn = "arn:aws:kms:<region>:<account-id>:key/<key-id>"
+github_actions_domain_hosted_zone_id       = "<hosted-zone-id>"
 ```
 
 If your AWS account already has the standard GitHub Actions OIDC provider

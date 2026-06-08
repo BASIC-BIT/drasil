@@ -77,6 +77,7 @@ jobs:
 
       - name: Write backend config
         env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
           TERRAFORM_LOCK_TABLE: ${{ vars.TERRAFORM_LOCK_TABLE || 'drasil-terraform-locks' }}
           TERRAFORM_STATE_BUCKET: ${{ vars.TERRAFORM_STATE_BUCKET }}
         run: |
@@ -84,7 +85,7 @@ jobs:
           cat > backend.ci.hcl <<EOF
           bucket         = "${TERRAFORM_STATE_BUCKET}"
           key            = "drasil/domain/terraform.tfstate"
-          region         = "us-east-1"
+          region         = "${AWS_REGION}"
           dynamodb_table = "${TERRAFORM_LOCK_TABLE}"
           encrypt        = true
           EOF
