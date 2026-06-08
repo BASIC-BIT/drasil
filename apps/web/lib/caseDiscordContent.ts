@@ -196,7 +196,7 @@ async function fetchThreadSnapshot(
 ): Promise<CaseDiscordThreadSnapshot> {
   const parsed = parseDiscordUrl(surface.url);
   const channelId = parsed?.channelId ?? '';
-  if (!channelId || parsed?.guildId !== guildId) {
+  if (!channelId) {
     return {
       kind: surface.kind,
       label: surface.label,
@@ -205,6 +205,18 @@ async function fetchThreadSnapshot(
       messages: [],
       truncated: false,
       error: 'Discord surface URL did not include a channel ID.',
+    };
+  }
+
+  if (parsed?.guildId !== guildId) {
+    return {
+      kind: surface.kind,
+      label: surface.label,
+      channelId,
+      url: surface.url,
+      messages: [],
+      truncated: false,
+      error: 'Discord surface URL belongs to a different guild.',
     };
   }
 

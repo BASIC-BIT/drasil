@@ -56,7 +56,7 @@ describe('caseDiscordContent', () => {
       expect.objectContaining({
         channelId: 'thread-1',
         messages: [],
-        error: 'Discord surface URL did not include a channel ID.',
+        error: 'Discord surface URL belongs to a different guild.',
       })
     );
   });
