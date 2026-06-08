@@ -13,13 +13,12 @@ export default function HomePage() {
         </Link>
       </nav>
       <section className="hero">
-        <div>
+        <div className="hero-copy">
           <span className="eyebrow">Discord anti-spam operations</span>
-          <h1>Catch scam accounts before moderation turns into archaeology.</h1>
+          <h1>Scam reviews, organized.</h1>
           <p className="lede">
-            Drasil gives server teams one place to wire reports, verification, restricted roles,
-            active cases, and AI triage while keeping final enforcement in Discord where moderator
-            history already lives.
+            Drasil turns reports, restrictions, verification, and AI triage into Discord-linked
+            cases without replacing moderator judgment.
           </p>
           <div className="actions">
             <Link className="button" href="/api/auth/discord?returnTo=/admin">
@@ -36,10 +35,10 @@ export default function HomePage() {
         <aside className="panel stack">
           <div>
             <span className="status info">Setup dashboard</span>
-            <h2>Know what is ready before the first alert.</h2>
+            <h2>Ready before the first alert.</h2>
             <p className="muted">
-              Sign in with Discord, choose a guild you manage, and compare live Discord state with
-              Drasil&apos;s saved configuration before moderators depend on it.
+              Sign in with Discord, choose a guild, and compare live server state with Drasil&apos;s
+              saved configuration.
             </p>
           </div>
           <div className="grid">

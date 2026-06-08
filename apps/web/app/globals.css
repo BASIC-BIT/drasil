@@ -213,10 +213,18 @@ select {
   align-items: stretch;
 }
 
+.hero-copy {
+  display: grid;
+  align-content: start;
+  gap: 22px;
+  max-width: 680px;
+}
+
 .hero h1 {
   margin: 0;
-  font-size: clamp(2.35rem, 7vw, 4.7rem);
-  line-height: 0.98;
+  max-width: 640px;
+  font-size: clamp(2.55rem, 7vw, 4.8rem);
+  line-height: 0.95;
   letter-spacing: -0.04em;
 }
 
@@ -251,11 +259,15 @@ select {
   line-height: 1.6;
 }
 
+.hero-copy .lede {
+  margin: 0;
+}
+
 .eyebrow {
   display: inline-flex;
   align-items: center;
   min-height: 28px;
-  margin-bottom: 18px;
+  width: fit-content;
   border: 1px solid var(--accent-line);
   border-radius: var(--radius-chip);
   background: var(--accent-soft);
@@ -320,6 +332,33 @@ select {
 .card h2,
 .card h3 {
   margin: 0 0 8px;
+}
+
+.server-list {
+  display: grid;
+}
+
+.server-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: start;
+  border-top: 1px solid var(--line);
+  padding: 22px 0 0;
+}
+
+.server-row-body {
+  display: grid;
+  gap: 14px;
+}
+
+.server-row-body h2,
+.server-row-body p {
+  margin: 0;
+}
+
+.server-row-status {
+  justify-self: end;
 }
 
 .muted {
@@ -625,6 +664,14 @@ select {
 
   .account-control {
     justify-content: space-between;
+  }
+
+  .server-row {
+    grid-template-columns: 1fr;
+  }
+
+  .server-row-status {
+    justify-self: start;
   }
 
   .case-card-header,

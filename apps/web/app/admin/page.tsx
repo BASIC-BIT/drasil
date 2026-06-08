@@ -35,24 +35,30 @@ export default async function AdminPage() {
             <p className="muted">Sign in with a Discord account that can manage a server.</p>
           </div>
         ) : (
-          <div className="grid">
+          <div className="server-list">
             {guilds.map((guild) => (
-              <article className="card stack" key={guild.id}>
-                <div className={guild.configured ? 'status ok' : 'status warning'}>
-                  {guild.configured ? 'Configured' : 'Needs setup'}
-                </div>
-                <div>
+              <article className="server-row" key={guild.id}>
+                <div className="server-row-body">
                   <h2>{guild.name}</h2>
                   <p className="muted">Open setup diagnostics or review active moderation cases.</p>
+                  <div className="actions">
+                    <Link className="button" href={`/admin/guild/${guild.id}/cases`}>
+                      Active Cases
+                    </Link>
+                    <Link className="button secondary" href={`/admin/guild/${guild.id}/setup`}>
+                      Setup
+                    </Link>
+                  </div>
                 </div>
-                <div className="actions">
-                  <Link className="button" href={`/admin/guild/${guild.id}/cases`}>
-                    Active Cases
-                  </Link>
-                  <Link className="button secondary" href={`/admin/guild/${guild.id}/setup`}>
-                    Setup
-                  </Link>
-                </div>
+                <span
+                  className={
+                    guild.configured
+                      ? 'status ok server-row-status'
+                      : 'status warning server-row-status'
+                  }
+                >
+                  {guild.configured ? 'Configured' : 'Needs setup'}
+                </span>
               </article>
             ))}
           </div>

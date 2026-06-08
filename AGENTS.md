@@ -175,6 +175,19 @@ Clean code:
 - Comments explain why, not what.
 - Encapsulate logic; keep structure tidy.
 
+Web UI direction:
+
+- Prefer flattened information design over nested card stacks. Count visible layers before adding
+  another box, badge, or button; for list-like content, use one surface with rules/spacing and put
+  statuses/actions in available horizontal space instead of adding vertical sub-layers.
+- Keep primary hero/focal copy short. Move explanation into supporting text instead of using a long
+  headline as the main eye-drawing element.
+- Promotion note: current source is user UI feedback from the moderation dashboard PR; target is repo
+  `AGENTS.md` because this is repeated Drasil dashboard design guidance. Over-promotion cost is a
+  short UI reminder in repo context; demotion path is moving examples to a design doc if this grows;
+  verification signal is future Drasil web diffs avoiding card-within-card layouts and long hero
+  headlines.
+
 TypeScript:
 
 - Prefer interfaces for object shapes; avoid `any`; explicit return types for public APIs.
