@@ -3,6 +3,7 @@ import type { ServerSettings } from '../repositories/types';
 export const CASE_REVIEW_REMINDERS_ENABLED_SETTING_KEY = 'case_review_reminders_enabled';
 export const CASE_REVIEW_REMINDER_STALE_HOURS_SETTING_KEY = 'case_review_reminder_stale_hours';
 export const CASE_REVIEW_REMINDER_REPEAT_HOURS_SETTING_KEY = 'case_review_reminder_repeat_hours';
+export const CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY = 'case_review_digest_last_sent_at';
 
 export const DEFAULT_CASE_REVIEW_REMINDER_STALE_HOURS = 24;
 export const DEFAULT_CASE_REVIEW_REMINDER_REPEAT_HOURS = 24;

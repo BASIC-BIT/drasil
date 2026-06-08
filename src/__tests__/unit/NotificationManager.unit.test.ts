@@ -110,12 +110,24 @@ const extractCustomIds = (components: unknown[]): string[] => {
   );
 };
 
+const extractUrls = (components: unknown[]): string[] => {
+  return components.flatMap((row) =>
+    ((row as { components?: unknown[] }).components ?? [])
+      .map((button) => (button as { data?: { url?: string } }).data?.url)
+      .filter((url): url is string => typeof url === 'string')
+  );
+};
+
 describe('NotificationManager (unit)', () => {
+  const originalDrasilWebPublicUrl = process.env.DRASIL_WEB_PUBLIC_URL;
+  const originalNextPublicAppUrl = process.env.NEXT_PUBLIC_APP_URL;
   let detectionRepository: InMemoryDetectionEventsRepository;
   let adminChannel: MockTextChannel;
   let configService: IConfigService;
 
   beforeEach(() => {
+    delete process.env.DRASIL_WEB_PUBLIC_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
     detectionRepository = new InMemoryDetectionEventsRepository();
     adminChannel = {
       send: jest.fn(),
@@ -131,6 +143,20 @@ describe('NotificationManager (unit)', () => {
       } as any),
       updateServerConfig: jest.fn().mockResolvedValue({}),
     } as unknown as IConfigService;
+  });
+
+  afterEach(() => {
+    if (originalDrasilWebPublicUrl === undefined) {
+      delete process.env.DRASIL_WEB_PUBLIC_URL;
+    } else {
+      process.env.DRASIL_WEB_PUBLIC_URL = originalDrasilWebPublicUrl;
+    }
+
+    if (originalNextPublicAppUrl === undefined) {
+      delete process.env.NEXT_PUBLIC_APP_URL;
+    } else {
+      process.env.NEXT_PUBLIC_APP_URL = originalNextPublicAppUrl;
+    }
   });
 
   it('sends a new notification when no existing message is set', async () => {
@@ -186,6 +212,38 @@ describe('NotificationManager (unit)', () => {
       surface: 'case',
       userId: 'user-1',
     });
+  });
+
+  it('adds a web case button to suspicious user notifications when configured', async () => {
+    process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
+    const member = buildMember('guild-1', 'user-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+    };
+    const sentMessage: MockMessage = { id: 'message-1', edit: jest.fn() };
+    adminChannel.send.mockResolvedValue(sentMessage);
+
+    const manager = new NotificationManager(
+      buildClientWithBotBanPermission() as any,
+      configService,
+      detectionRepository
+    );
+
+    await manager.upsertSuspiciousUserNotification(
+      member,
+      detectionResult,
+      buildVerificationEvent({ id: 'ver-1', thread_id: null })
+    );
+
+    const sendArgs = adminChannel.send.mock.calls[0][0] as { components: unknown[] };
+    expect(extractLabels(sendArgs.components)).toEqual(['Admin Actions', 'Web Case']);
+    expect(extractUrls(sendArgs.components)).toEqual([
+      'https://drasilbot.com/admin/guild/guild-1/cases/ver-1',
+    ]);
   });
 
   it('hides the ban action when explicitly disabled', async () => {
@@ -882,7 +940,7 @@ describe('NotificationManager (unit)', () => {
     const fields = editArgs.embeds[0].data.fields ?? [];
     const analysisField = fields.find((field) => field.name === 'AI Thread Analysis');
 
-    expect(analysisField?.value).toContain('Result: **likely_legitimate** (72% confidence)');
+    expect(analysisField?.value).toContain('Result: **likely_legitimate** (Medium confidence)');
     expect(analysisField?.value).toContain('Analyzed responses: 2');
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'
@@ -965,7 +1023,7 @@ describe('NotificationManager (unit)', () => {
     const fields = editArgs.embeds[0].data.fields ?? [];
     const analysisField = fields.find((field) => field.name === 'AI Thread Analysis');
 
-    expect(analysisField?.value).toContain('Result: **likely_legitimate** (72% confidence)');
+    expect(analysisField?.value).toContain('Result: **likely_legitimate** (Medium confidence)');
     expect(analysisField?.value).toContain('Analyzed responses: 2');
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'

@@ -70,6 +70,27 @@ const getField = (embed: EmbedBuilder, name: string): string | undefined =>
 
 describe('NotificationPresentationBuilder (unit)', () => {
   const builder = new NotificationPresentationBuilder();
+  const originalDrasilWebPublicUrl = process.env.DRASIL_WEB_PUBLIC_URL;
+  const originalNextPublicAppUrl = process.env.NEXT_PUBLIC_APP_URL;
+
+  beforeEach(() => {
+    delete process.env.DRASIL_WEB_PUBLIC_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
+  });
+
+  afterEach(() => {
+    if (originalDrasilWebPublicUrl === undefined) {
+      delete process.env.DRASIL_WEB_PUBLIC_URL;
+    } else {
+      process.env.DRASIL_WEB_PUBLIC_URL = originalDrasilWebPublicUrl;
+    }
+
+    if (originalNextPublicAppUrl === undefined) {
+      delete process.env.NEXT_PUBLIC_APP_URL;
+    } else {
+      process.env.NEXT_PUBLIC_APP_URL = originalNextPublicAppUrl;
+    }
+  });
 
   it('formats case thread links and newest-first detection history labels', () => {
     const embed = builder.createSuspiciousUserEmbed(
@@ -99,15 +120,15 @@ describe('NotificationPresentationBuilder (unit)', () => {
 
     expect(getField(embed, 'Trigger')).toBe('Admin flag: triage');
     expect(getField(embed, 'Case Threads')).toBe(
-      'Verification/review: [thread](https://discord.com/channels/guild-1/thread-1) status: verified by <@admin-1>\n' +
-        'Admin evidence: [thread](https://discord.com/channels/guild-1/evidence-thread-1)'
+      'Verification/review thread: https://discord.com/channels/guild-1/thread-1 status: verified by <@admin-1>\n' +
+        'Admin evidence thread: https://discord.com/channels/guild-1/evidence-thread-1'
     );
     expect(getField(embed, 'Detection History')).toContain('role intake');
     expect(getField(embed, 'Detection History')?.indexOf('role intake')).toBeLessThan(
       getField(embed, 'Detection History')?.indexOf('suspicious content') ?? Number.MAX_VALUE
     );
     expect(getField(embed, 'Detection History')).toContain(
-      '[View Message](https://discord.com/channels/guild-1/channel-1/message-1)'
+      'message: https://discord.com/channels/guild-1/channel-1/message-1'
     );
   });
 
@@ -191,6 +212,32 @@ describe('NotificationPresentationBuilder (unit)', () => {
 
     expect(reportEmbed.data.title).toBe('User Report Submitted');
     expect(adminCaseEmbed.data.title).toBe('Admin Review Case Opened');
+  });
+
+  it('adds optional web links to action rows when a public web URL is configured', () => {
+    process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
+    delete process.env.NEXT_PUBLIC_APP_URL;
+
+    const caseRow = builder.createActionRow('user-1', {
+      guildId: 'guild-1',
+      verificationEventId: 'ver-1',
+    });
+    const observedRows = builder.createObservedActionRows('user-1', 'det-1', 'guild-1');
+
+    const caseButtons = caseRow.toJSON().components as Array<{ label?: string; url?: string }>;
+    const observedButtons = observedRows[0].toJSON().components as Array<{
+      label?: string;
+      url?: string;
+    }>;
+
+    expect(caseButtons.map((button) => button.label)).toEqual(['Admin Actions', 'Web Case']);
+    expect(caseButtons[1]).toMatchObject({
+      url: 'https://drasilbot.com/admin/guild/guild-1/cases/ver-1',
+    });
+    expect(observedButtons.map((button) => button.label)).toEqual(['Admin Actions', 'Web Queue']);
+    expect(observedButtons[1]).toMatchObject({
+      url: 'https://drasilbot.com/admin/guild/guild-1/cases',
+    });
   });
 
   it('adds and removes moderation action failure warnings', () => {

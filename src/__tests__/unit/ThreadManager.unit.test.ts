@@ -963,7 +963,7 @@ describe('ThreadManager (unit)', () => {
       allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
     });
     expect(thread.send).toHaveBeenCalledWith({
-      content: expect.stringContaining('Action taken by: <@admin-1>'),
+      content: expect.stringContaining('Action taken by: admin-1'),
       allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
     });
     expect(thread.send).toHaveBeenCalledWith({

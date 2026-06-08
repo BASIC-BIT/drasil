@@ -182,7 +182,10 @@ export class NotificationManager implements INotificationManager {
         sourceMessage
       );
       const serverConfig = await this.configService.getServerConfig(member.guild.id);
-      const actionRow = this.presentationBuilder.createActionRow(member.id);
+      const actionRow = this.presentationBuilder.createActionRow(member.id, {
+        guildId: member.guild.id,
+        verificationEventId: verificationEvent.id,
+      });
 
       // If we have an existing message, update it, otherwise create new
       if (verificationEvent.notification_message_id) {
@@ -244,7 +247,11 @@ export class NotificationManager implements INotificationManager {
       );
       const actionDetectionEventId = detectionResult.detectionEventId ?? detectionEvents[0]?.id;
       const components = actionDetectionEventId
-        ? this.presentationBuilder.createObservedActionRows(member.id, actionDetectionEventId)
+        ? this.presentationBuilder.createObservedActionRows(
+            member.id,
+            actionDetectionEventId,
+            member.guild.id
+          )
         : [];
 
       let notificationMessage: Message | null = null;
@@ -340,7 +347,8 @@ export class NotificationManager implements INotificationManager {
 
       const components = this.presentationBuilder.createObservedActionRows(
         detectionEvent.user_id,
-        detectionEvent.id
+        detectionEvent.id,
+        detectionEvent.server_id
       );
 
       await message.edit({
@@ -390,7 +398,8 @@ export class NotificationManager implements INotificationManager {
 
       const components = this.presentationBuilder.createObservedActionRows(
         detectionEvent.user_id,
-        detectionEvent.id
+        detectionEvent.id,
+        detectionEvent.server_id
       );
       if (!message.embeds.length) {
         await message.edit({ allowedMentions: { parse: [] }, components });
@@ -870,7 +879,12 @@ export class NotificationManager implements INotificationManager {
 
     await message.edit({
       allowedMentions: { parse: [] },
-      components: [this.presentationBuilder.createActionRow(verificationEvent.user_id)],
+      components: [
+        this.presentationBuilder.createActionRow(verificationEvent.user_id, {
+          guildId: verificationEvent.server_id,
+          verificationEventId: verificationEvent.id,
+        }),
+      ],
       ...(updatedEmbed ? { embeds: [updatedEmbed] } : {}),
     });
   }

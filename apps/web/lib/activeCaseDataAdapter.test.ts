@@ -1,0 +1,87 @@
+import { describe, expect, it } from 'vitest';
+import { parseCaseSummaryRow } from './activeCaseDataAdapter';
+
+const baseRow = {
+  id: 'ver-1',
+  server_id: 'guild-1',
+  user_id: 'user-1',
+  detection_event_id: 'det-1',
+  thread_id: 'thread-1',
+  private_evidence_thread_id: 'evidence-thread-1',
+  notification_message_id: 'admin-message-1',
+  status: 'pending',
+  created_at: new Date('2026-06-01T00:00:00.000Z'),
+  updated_at: new Date('2026-06-02T00:00:00.000Z'),
+  notes: null,
+  metadata: {
+    source_channel_id: 'source-channel-1',
+    source_message_id: 'source-message-1',
+  },
+  admin_channel_id: 'admin-channel-1',
+  latest_detection_type: 'gpt_analysis',
+  latest_confidence: 0.91,
+  latest_detection_at: new Date('2026-06-01T00:00:00.000Z'),
+  latest_detection_metadata: {},
+  source_channel_id: null,
+  source_message_id: null,
+  last_action_type: null,
+  last_action_at: null,
+  latest_outcome_type: null,
+  latest_outcome_source: null,
+};
+
+describe('activeCaseDataAdapter', () => {
+  it('parses pending case summary rows with surface links and stale state', () => {
+    const summary = parseCaseSummaryRow(baseRow, new Date('2026-06-03T01:00:00.000Z'));
+
+    expect(summary).toEqual(
+      expect.objectContaining({
+        id: 'ver-1',
+        guildId: 'guild-1',
+        userId: 'user-1',
+        stale: true,
+        staleHours: 25,
+        presenceState: 'in_server',
+        confidence: 0.91,
+        latestDetectionType: 'gpt_analysis',
+        allowedActions: ['view_history', 'verify_user', 'ban_user', 'repair_thread'],
+      })
+    );
+    expect(summary.surfaces).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'admin_notification',
+          url: 'https://discord.com/channels/guild-1/admin-channel-1/admin-message-1',
+        }),
+        expect.objectContaining({
+          kind: 'source_message',
+          url: 'https://discord.com/channels/guild-1/source-channel-1/source-message-1',
+        }),
+      ])
+    );
+  });
+
+  it('marks departed users with ban-by-id and close actions', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        metadata: { membership_state: 'left_or_removed' },
+        latest_outcome_type: 'member_left',
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.presenceState).toBe('left_or_removed');
+    expect(summary.allowedActions).toEqual(['view_history', 'ban_by_id', 'close_no_action']);
+  });
+
+  it('marks externally banned users with sync action', () => {
+    const summary = parseCaseSummaryRow(
+      { ...baseRow, latest_outcome_type: 'banned' },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.presenceState).toBe('banned');
+    expect(summary.allowedActions).toEqual(['view_history', 'sync_existing_ban']);
+  });
+});

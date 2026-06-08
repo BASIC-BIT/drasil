@@ -6,6 +6,12 @@ import {
   type GuildSetupUpdate,
   type SetupServerRecord,
 } from '@drasil/contracts';
+import {
+  fixtureGuildId,
+  fixtureServerRecord,
+  isWebE2eFixtureMode,
+  updateFixtureServerRecord,
+} from './e2eFixtures';
 import { readOptionalEnv, readOptionalPositiveIntegerEnv, requireEnv } from './env';
 
 export type SetupDataProvider = 'postgres' | 'convex';
@@ -63,7 +69,7 @@ function resolveSslConfig(databaseUrl: string): PoolConfig['ssl'] | undefined {
   }
 }
 
-function getPostgresPool(): Pool {
+export function getPostgresPool(): Pool {
   if (postgresPool) {
     return postgresPool;
   }
@@ -263,7 +269,27 @@ export class ConvexSetupDataAdapter implements SetupDataAdapter {
   }
 }
 
+export class FixtureSetupDataAdapter implements SetupDataAdapter {
+  public readonly provider = 'postgres' as const;
+
+  public async listConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>> {
+    return new Set(guildIds.includes(fixtureGuildId) ? [fixtureGuildId] : []);
+  }
+
+  public async getServer(guildId: string): Promise<SetupServerRecord | null> {
+    return guildId === fixtureGuildId ? fixtureServerRecord() : null;
+  }
+
+  public async updateGuildSetup(update: GuildSetupUpdate): Promise<SetupServerRecord> {
+    return updateFixtureServerRecord(update);
+  }
+}
+
 export function createSetupDataAdapter(): SetupDataAdapter {
+  if (isWebE2eFixtureMode()) {
+    return new FixtureSetupDataAdapter();
+  }
+
   const provider = readOptionalEnv('DRASIL_WEB_DATA_PROVIDER') ?? 'postgres';
   if (provider === 'convex') {
     return new ConvexSetupDataAdapter();

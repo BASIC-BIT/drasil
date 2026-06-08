@@ -883,7 +883,12 @@ export class ThreadManager implements IThreadManager {
           roles: [],
           repliedUser: false,
         },
-        components: [this.presentationBuilder.createActionRow(member.id)],
+        components: [
+          this.presentationBuilder.createActionRow(member.id, {
+            guildId: member.guild.id,
+            verificationEventId: verificationEvent.id,
+          }),
+        ],
       });
 
       return thread;
@@ -961,7 +966,12 @@ export class ThreadManager implements IThreadManager {
           sourceMessage
         ),
         allowedMentions: this.createNoMentionAllowedMentions(),
-        components: [this.presentationBuilder.createActionRow(member.id)],
+        components: [
+          this.presentationBuilder.createActionRow(member.id, {
+            guildId: member.guild.id,
+            verificationEventId: verificationEvent.id,
+          }),
+        ],
       });
 
       return thread;
@@ -1121,7 +1131,7 @@ export class ThreadManager implements IThreadManager {
     const snapshot = this.getUserSnapshot(verificationEvent.metadata);
     const lines = [
       `Case handled: ${actionLabel}.`,
-      `Action taken by: <@${resolvedBy}>`,
+      `Action taken by: ${this.formatResolvedBy(resolvedBy)}`,
       verificationEvent.resolved_at
         ? `Action time: ${this.formatDiscordTimestamp(verificationEvent.resolved_at)}`
         : null,
@@ -1159,6 +1169,10 @@ export class ThreadManager implements IThreadManager {
     }
 
     return snapshot as UserSnapshotMetadata;
+  }
+
+  private formatResolvedBy(resolvedBy: string): string {
+    return /^\d{17,20}$/.test(resolvedBy) ? `<@${resolvedBy}>` : resolvedBy;
   }
 
   private formatDiscordTimestamp(value: Date | string): string {

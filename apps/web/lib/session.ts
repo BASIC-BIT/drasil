@@ -6,6 +6,7 @@ import {
   DISCORD_TOKEN_COOKIE,
 } from './cookies';
 import { decodeSignedJson, decryptJson, encodeSignedJson, encryptJson } from './crypto';
+import { fixtureAdminSession, fixtureDiscordToken, isWebE2eFixtureMode } from './e2eFixtures';
 import { isProduction, requireEnv } from './env';
 
 const adminSessionSchema = z.object({
@@ -72,12 +73,18 @@ export function decodeDiscordTokenSession(token: string): DiscordTokenSession | 
 export async function getCurrentAdminSession(): Promise<AdminSession | null> {
   const cookieStore = await cookies();
   const raw = cookieStore.get(ADMIN_SESSION_COOKIE)?.value;
+  if (!raw && isWebE2eFixtureMode()) {
+    return fixtureAdminSession();
+  }
   return raw ? decodeAdminSession(raw) : null;
 }
 
 export async function getCurrentDiscordToken(): Promise<DiscordTokenSession | null> {
   const cookieStore = await cookies();
   const raw = cookieStore.get(DISCORD_TOKEN_COOKIE)?.value;
+  if (!raw && isWebE2eFixtureMode()) {
+    return fixtureDiscordToken();
+  }
   return raw ? decodeDiscordTokenSession(raw) : null;
 }
 

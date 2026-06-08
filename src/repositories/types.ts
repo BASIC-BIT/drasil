@@ -87,6 +87,7 @@ export interface ServerSettings {
   case_review_reminders_enabled?: boolean;
   case_review_reminder_stale_hours?: number;
   case_review_reminder_repeat_hours?: number;
+  case_review_digest_last_sent_at?: string | null;
   setup_nudge_last_attempt_at?: string | null;
   setup_nudge_last_recipient_id?: string | null;
   setup_nudge_last_result?: 'sent' | 'dm_failed' | 'no_recipient' | null;
@@ -182,6 +183,21 @@ export enum AdminActionType {
   UNDO_OBSERVED_ACTION = 'undo_observed_action',
 }
 
+export enum ModerationOutcomeSource {
+  DRASIL = 'drasil',
+  NATIVE_DISCORD = 'native_discord',
+  EXTERNAL_BOT = 'external_bot',
+  UNKNOWN_EXTERNAL = 'unknown_external',
+  MIGRATION_OR_SYNC = 'migration_or_sync',
+}
+
+export enum ModerationOutcomeType {
+  RESTRICTED = 'restricted',
+  VERIFIED = 'verified',
+  BANNED = 'banned',
+  MEMBER_LEFT = 'member_left',
+}
+
 export interface VerificationEvent {
   id: string;
   server_id: string;
@@ -212,6 +228,21 @@ export interface AdminAction {
   new_status: VerificationStatus | null;
   notes: string | null;
   metadata: Prisma.JsonValue | null; // Align with Prisma JSON type
+}
+
+export interface ModerationOutcome {
+  id: string;
+  server_id: string;
+  user_id: string;
+  detection_event_id: string | null;
+  verification_event_id: string | null;
+  outcome_type: ModerationOutcomeType;
+  source: ModerationOutcomeSource;
+  actor_id: string | null;
+  reason: string | null;
+  occurred_at: Date | null;
+  created_at: Date | null;
+  metadata: Prisma.JsonValue | null;
 }
 
 export interface VerificationEventWithActions extends VerificationEvent {
@@ -324,4 +355,12 @@ export interface AdminActionCreate extends Omit<
   // Omit fields handled automatically or differently on create
   detection_event_id?: string | null; // Add optional field
   metadata?: Prisma.JsonValue | null; // Allow metadata on create
+}
+
+export interface ModerationOutcomeCreate extends Omit<
+  ModerationOutcome,
+  'id' | 'created_at' | 'metadata' | 'occurred_at'
+> {
+  occurred_at?: Date | null;
+  metadata?: Prisma.JsonValue | null;
 }

@@ -7,7 +7,9 @@ import {
   PermissionsBitField,
 } from 'discord.js';
 import { EventHandler } from '../../controllers/EventHandler';
-import { DetectionType } from '../../repositories/types';
+import { DetectionType, ModerationOutcomeSource } from '../../repositories/types';
+
+const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
 
 describe('EventHandler (unit)', () => {
   function buildHandler(overrides?: {
@@ -19,6 +21,7 @@ describe('EventHandler (unit)', () => {
     reportIntakeService?: Record<string, jest.Mock>;
     reportIntakeAgentService?: Record<string, jest.Mock>;
     messageContextRepository?: Record<string, jest.Mock>;
+    userModerationService?: Record<string, jest.Mock>;
   }): EventHandler {
     const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
     const detectionOrchestrator = overrides?.detectionOrchestrator ?? {
@@ -72,7 +75,8 @@ describe('EventHandler (unit)', () => {
       overrides?.reportIntakeService as any,
       overrides?.reportIntakeAgentService as any,
       undefined,
-      overrides?.messageContextRepository as any
+      overrides?.messageContextRepository as any,
+      overrides?.userModerationService as any
     );
   }
 
@@ -119,9 +123,108 @@ describe('EventHandler (unit)', () => {
     expect(client.on).toHaveBeenCalledWith(Events.ClientReady, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.MessageCreate, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildMemberAdd, expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith(Events.GuildMemberRemove, expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith(Events.GuildBanAdd, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.InteractionCreate, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildCreate, expect.any(Function));
     expect(client.on).not.toHaveBeenCalledWith('ready', expect.any(Function));
+  });
+
+  it('delegates observed Discord bans with native audit-log source attribution', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const userModerationService = {
+      recordObservedDiscordBan: jest.fn().mockResolvedValue(1),
+      recordMemberLeftGuild: jest.fn(),
+    };
+    const handler = buildHandler({ client, userModerationService });
+    await handler.setupEventHandlers();
+    const banHandler = client.on.mock.calls.find(([event]) => event === Events.GuildBanAdd)?.[1];
+
+    await banHandler?.({
+      guild: {
+        id: 'guild-1',
+        fetchAuditLogs: jest.fn().mockResolvedValue({
+          entries: [
+            {
+              id: 'audit-1',
+              target: { id: 'user-1' },
+              executor: { id: 'mod-1', bot: false },
+            },
+          ],
+        }),
+      },
+      user: { id: 'user-1', tag: 'test-user#0001', username: 'test-user' },
+      reason: 'native ban reason',
+    } as any);
+
+    expect(userModerationService.recordObservedDiscordBan).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'guild-1' }),
+      expect.objectContaining({ id: 'user-1' }),
+      expect.objectContaining({
+        source: ModerationOutcomeSource.NATIVE_DISCORD,
+        actorId: 'mod-1',
+        reason: 'native ban reason',
+        auditLogEntryId: 'audit-1',
+      })
+    );
+  });
+
+  it('delegates member removals that are definitely not already bans', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const userModerationService = {
+      recordObservedDiscordBan: jest.fn(),
+      recordMemberLeftGuild: jest.fn().mockResolvedValue(1),
+    };
+    const handler = buildHandler({ client, userModerationService });
+    await handler.setupEventHandlers();
+    const removeHandler = client.on.mock.calls.find(
+      ([event]) => event === Events.GuildMemberRemove
+    )?.[1];
+    const member = {
+      id: 'user-1',
+      user: { id: 'user-1', tag: 'test-user#0001' },
+      guild: {
+        id: 'guild-1',
+        bans: { fetch: jest.fn().mockRejectedValue({ code: DISCORD_UNKNOWN_BAN_ERROR_CODE }) },
+      },
+    };
+
+    await removeHandler?.(member as any);
+
+    expect(userModerationService.recordMemberLeftGuild).toHaveBeenCalledWith(member);
+  });
+
+  it('does not mark member removals when ban state cannot be confirmed', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const userModerationService = {
+      recordObservedDiscordBan: jest.fn(),
+      recordMemberLeftGuild: jest.fn(),
+    };
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const handler = buildHandler({ client, userModerationService });
+    await handler.setupEventHandlers();
+    const removeHandler = client.on.mock.calls.find(
+      ([event]) => event === Events.GuildMemberRemove
+    )?.[1];
+    const member = {
+      id: 'user-1',
+      user: { id: 'user-1', tag: 'test-user#0001' },
+      guild: {
+        id: 'guild-1',
+        bans: {
+          fetch: jest.fn().mockRejectedValue({ code: 50013, message: 'Missing Permissions' }),
+        },
+      },
+    };
+
+    await removeHandler?.(member as any);
+
+    expect(userModerationService.recordMemberLeftGuild).not.toHaveBeenCalled();
+    expect(consoleWarn).toHaveBeenCalledWith(
+      expect.stringContaining('Could not confirm ban state for user-1 in guild guild-1:'),
+      expect.objectContaining({ code: 50013 })
+    );
+    consoleWarn.mockRestore();
   });
 
   it('delegates legacy test commands to CommandHandler', async () => {
