@@ -646,7 +646,8 @@ export class InteractionHandler implements IInteractionHandler {
     if (
       !selectedCase ||
       selectedCase.server_id !== guildId ||
-      selectedCase.status !== VerificationStatus.PENDING
+      selectedCase.status !== VerificationStatus.PENDING ||
+      !selectedCase.user_id
     ) {
       await interaction.reply({
         content: 'That case is no longer pending.',

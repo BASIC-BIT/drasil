@@ -444,6 +444,39 @@ describe('InteractionHandler (unit)', () => {
     );
   });
 
+  it('rejects digest-selected cases without a user id', async () => {
+    const selectedCase = {
+      ...buildVerificationEvent('ver-selected', 'user-selected'),
+      user_id: null,
+    } as unknown as VerificationEvent;
+    verificationEventRepository.findById.mockResolvedValue(selectedCase);
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildSelectInteraction(
+      buildCaseReviewDigestSelectCustomId(0),
+      ['ver-selected'],
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleStringSelectMenuInteraction(interaction);
+
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'That case is no longer pending.',
+      flags: MessageFlags.Ephemeral,
+    });
+    expect(verificationEventRepository.findActiveByUserAndServer).not.toHaveBeenCalled();
+  });
+
   it('shows a confirmation modal for the ban button', async () => {
     enableModeratorBanActions();
     const handler = new InteractionHandler(
