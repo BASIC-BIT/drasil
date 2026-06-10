@@ -212,7 +212,13 @@ function resolveAllowedActions(
     return ['view_history', 'ban_by_id', 'close_no_action'];
   }
 
-  const actions: CaseAction[] = ['view_history', 'verify_user', 'ban_user', 'repair_thread'];
+  const actions: CaseAction[] = [
+    'view_history',
+    'verify_user',
+    'ban_user',
+    'close_no_action',
+    'repair_thread',
+  ];
   if (!row.thread_id) {
     actions.push('create_thread');
   }

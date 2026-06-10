@@ -49,6 +49,9 @@ export default async function AdminPage() {
                     <Link className="button" href={`/admin/guild/${guild.id}/cases`}>
                       Active Cases
                     </Link>
+                    <Link className="button secondary" href={`/admin/guild/${guild.id}/reports`}>
+                      Reports
+                    </Link>
                     <Link className="button secondary" href={`/admin/guild/${guild.id}/setup`}>
                       Setup
                     </Link>

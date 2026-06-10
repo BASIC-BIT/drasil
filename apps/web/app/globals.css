@@ -390,6 +390,12 @@ select {
   font-size: 0.86rem;
 }
 
+.button.compact-button {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 0.86rem;
+}
+
 .icon-button,
 .link-control {
   display: inline-flex;
@@ -698,6 +704,12 @@ select {
 
 .action-stack {
   display: grid;
+  gap: 10px;
+}
+
+.report-action-forms {
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 

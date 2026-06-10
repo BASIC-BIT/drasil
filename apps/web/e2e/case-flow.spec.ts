@@ -27,3 +27,24 @@ test('active case queue links through to case detail', async ({ page }) => {
     'https://discord.com/channels/guild-1/admin-channel-1/admin-message-1'
   );
 });
+
+test('submitted report queue is reachable from admin entry points', async ({ page }) => {
+  await page.goto('/admin');
+  await page
+    .locator('.server-row')
+    .filter({ has: page.getByRole('heading', { name: 'Fixture Guild' }) })
+    .getByRole('link', { name: 'Reports' })
+    .click();
+  await expect(page).toHaveURL('/admin/guild/guild-1/reports');
+  await expect(page.getByRole('heading', { name: /fixture guild report queue/i })).toBeVisible();
+
+  await page.goto('/admin/guild/guild-1/cases');
+  await page.getByRole('link', { name: 'Reports' }).click();
+  await expect(page).toHaveURL('/admin/guild/guild-1/reports');
+  await expect(page.getByRole('heading', { name: /fixture guild report queue/i })).toBeVisible();
+
+  await page.goto('/admin/guild/guild-1/cases/case-stale');
+  await page.getByRole('link', { name: 'Reports' }).click();
+  await expect(page).toHaveURL('/admin/guild/guild-1/reports');
+  await expect(page.getByRole('heading', { name: /fixture guild report queue/i })).toBeVisible();
+});

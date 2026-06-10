@@ -60,6 +60,9 @@ export class VerificationHistoryFormatter {
       case AdminActionType.BAN:
         output = `🔨 Banned by ${adminMention}`;
         break;
+      case AdminActionType.CLOSE_NO_ACTION:
+        output = `Closed with no action by ${adminMention}`;
+        break;
       case AdminActionType.REOPEN:
         output = `🔄 Verification reopened by ${adminMention}`;
         break;

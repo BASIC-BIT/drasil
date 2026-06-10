@@ -229,7 +229,8 @@ export class VerificationEventRepository implements IVerificationEventRepository
 
         if (
           data.status === VerificationStatus.VERIFIED ||
-          data.status === VerificationStatus.BANNED
+          data.status === VerificationStatus.BANNED ||
+          data.status === VerificationStatus.CLOSED_NO_ACTION
         ) {
           // Set resolution fields if status is resolved
           updateData.resolved_at = data.resolved_at instanceof Date ? data.resolved_at : now; // Use provided date or now

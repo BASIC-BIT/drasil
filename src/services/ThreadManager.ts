@@ -1082,16 +1082,7 @@ export class ThreadManager implements IThreadManager {
         const thread = await this.fetchStoredThread(verificationEvent);
 
         if (thread) {
-          if (resolution === VerificationStatus.VERIFIED) {
-            await thread.send({
-              content: this.buildVerificationResolutionMessage(
-                verificationEvent,
-                resolution,
-                resolvedBy
-              ),
-              allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
-            });
-          } else if (resolution === VerificationStatus.BANNED) {
+          if (this.shouldSendResolutionMessage(resolution)) {
             await thread.send({
               content: this.buildVerificationResolutionMessage(
                 verificationEvent,
@@ -1127,7 +1118,7 @@ export class ThreadManager implements IThreadManager {
     resolution: VerificationStatus,
     resolvedBy: string
   ): string {
-    const actionLabel = resolution === VerificationStatus.BANNED ? 'banned' : 'verified';
+    const actionLabel = this.formatResolutionLabel(resolution);
     const snapshot = this.getUserSnapshot(verificationEvent.metadata);
     const lines = [
       `Case handled: ${actionLabel}.`,
@@ -1156,6 +1147,27 @@ export class ThreadManager implements IThreadManager {
     ].filter((line): line is string => line !== null);
 
     return enforceDiscordMessageLimit(lines.join('\n'));
+  }
+
+  private shouldSendResolutionMessage(resolution: VerificationStatus): boolean {
+    return (
+      resolution === VerificationStatus.VERIFIED ||
+      resolution === VerificationStatus.BANNED ||
+      resolution === VerificationStatus.CLOSED_NO_ACTION
+    );
+  }
+
+  private formatResolutionLabel(resolution: VerificationStatus): string {
+    switch (resolution) {
+      case VerificationStatus.BANNED:
+        return 'banned';
+      case VerificationStatus.VERIFIED:
+        return 'verified';
+      case VerificationStatus.CLOSED_NO_ACTION:
+        return 'closed with no action';
+      case VerificationStatus.PENDING:
+        return 'pending';
+    }
   }
 
   private getUserSnapshot(metadata: VerificationEvent['metadata']): UserSnapshotMetadata | null {

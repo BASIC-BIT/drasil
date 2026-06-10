@@ -44,7 +44,13 @@ describe('activeCaseDataAdapter', () => {
         presenceState: 'in_server',
         confidence: 0.91,
         latestDetectionType: 'gpt_analysis',
-        allowedActions: ['view_history', 'verify_user', 'ban_user', 'repair_thread'],
+        allowedActions: [
+          'view_history',
+          'verify_user',
+          'ban_user',
+          'close_no_action',
+          'repair_thread',
+        ],
       })
     );
     expect(summary.surfaces).toEqual(

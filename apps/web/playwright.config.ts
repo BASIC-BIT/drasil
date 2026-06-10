@@ -32,7 +32,7 @@ export default defineConfig({
   expect: {
     timeout: 5_000,
     toHaveScreenshot: {
-      maxDiffPixelRatio: 0.03,
+      maxDiffPixels: 1_200,
     },
   },
   snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}{ext}',

@@ -70,6 +70,9 @@ export class AdminActionService implements IAdminActionService {
       case AdminActionType.BAN:
         summary = `🔨 Banned by ${adminMention}`;
         break;
+      case AdminActionType.CLOSE_NO_ACTION:
+        summary = `Closed with no action by ${adminMention}`;
+        break;
       case AdminActionType.REOPEN:
         summary = `🔄 Verification reopened by ${adminMention}`;
         break;

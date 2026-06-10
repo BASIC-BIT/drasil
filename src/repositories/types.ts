@@ -168,12 +168,14 @@ export enum VerificationStatus {
   PENDING = 'pending',
   VERIFIED = 'verified',
   BANNED = 'banned',
+  CLOSED_NO_ACTION = 'closed_no_action',
 }
 
 export enum AdminActionType {
   VERIFY = 'verify',
   REJECT = 'reject',
   BAN = 'ban',
+  CLOSE_NO_ACTION = 'close_no_action',
   REOPEN = 'reopen',
   CREATE_THREAD = 'create_thread',
   OPEN_CASE = 'open_case',
@@ -195,6 +197,7 @@ export enum ModerationOutcomeType {
   RESTRICTED = 'restricted',
   VERIFIED = 'verified',
   BANNED = 'banned',
+  CLOSED_NO_ACTION = 'closed_no_action',
   MEMBER_LEFT = 'member_left',
 }
 
@@ -281,6 +284,8 @@ export enum ReportIntakeStatus {
   SUBMITTED = 'submitted',
   CLOSED_BY_REPORTER = 'closed_by_reporter',
   ACTIONED = 'actioned',
+  DISMISSED = 'dismissed',
+  FALSE_POSITIVE = 'false_positive',
   EXPIRED = 'expired',
 }
 

@@ -442,6 +442,12 @@ export class InteractionHandler implements IInteractionHandler {
       if (hasModerationPermission) {
         actionButtons.push(
           this.adminActionButton(parsed, 'verify', 'Verify User', ButtonStyle.Success),
+          this.adminActionButton(
+            parsed,
+            'close_no_action',
+            'Close No Action',
+            ButtonStyle.Secondary
+          ),
           this.adminActionButton(parsed, 'repair', 'Repair Active Case', ButtonStyle.Primary)
         );
         if (!activeCase.thread_id) {
@@ -803,6 +809,12 @@ export class InteractionHandler implements IInteractionHandler {
           message: `Verify ${target} and remove verification restrictions?`,
           style: ButtonStyle.Success,
         };
+      case 'close_no_action':
+        return {
+          label: 'Confirm Close',
+          message: `Close pending verification cases for ${target} without verifying or banning them? If Drasil has them marked restricted, the restricted role will be removed.`,
+          style: ButtonStyle.Secondary,
+        };
       case 'thread':
         return {
           label: 'Confirm Create Thread',
@@ -958,6 +970,18 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
       await this.handleVerifyButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
+    if (action === 'close_no_action') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to close a case.'
+        );
+        return;
+      }
+      await this.handleCloseNoActionButton(interaction, guildId, parsed.userId);
       return;
     }
 
@@ -1128,6 +1152,41 @@ export class InteractionHandler implements IInteractionHandler {
       await interaction.followUp({
         content:
           'Could not sync the existing ban. Confirm the user is still banned and Drasil can view server bans.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  private async handleCloseNoActionButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      const guild = await this.client.guilds.fetch(guildId);
+      const closedCount = await this.userModerationService.closeCaseNoAction(
+        guild,
+        userId,
+        interaction.user,
+        'Closed with no action by moderator.'
+      );
+
+      const caseWord = closedCount === 1 ? 'case' : 'cases';
+      await interaction.followUp({
+        content:
+          closedCount === 0
+            ? `No pending verification cases remain for <@${userId}>.`
+            : `Closed ${closedCount} pending verification ${caseWord} for <@${userId}> with no action.`,
+        allowedMentions: { parse: [] },
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error('Error closing case with no action:', error);
+      await interaction.followUp({
+        content:
+          'Could not close the case with no action. If the user is restricted, confirm Drasil can remove the restricted role and try again.',
         flags: MessageFlags.Ephemeral,
       });
     }
