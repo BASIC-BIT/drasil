@@ -3,12 +3,22 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 type VisualScheme = 'light' | 'dark';
 
 const visualSchemes: readonly VisualScheme[] = ['light', 'dark'];
+const nextDevOverlayStyle = `
+nextjs-portal,
+[data-nextjs-dev-overlay],
+[data-nextjs-dialog-overlay],
+[data-nextjs-toast],
+[data-nextjs-toast-wrapper] {
+  display: none !important;
+}
+`;
 
 function platformSnapshotName(name: string, scheme: VisualScheme): string {
   return `${name}-${process.platform === 'win32' ? 'win32' : 'linux'}-${scheme}.png`;
 }
 
 async function expectVisualSchemes(page: Page, name: string): Promise<void> {
+  await page.addStyleTag({ content: nextDevOverlayStyle });
   for (const scheme of visualSchemes) {
     await page.emulateMedia({ colorScheme: scheme });
     await expect(page).toHaveScreenshot(platformSnapshotName(name, scheme), { fullPage: true });
@@ -27,6 +37,7 @@ async function expectElementVisualSchemes(
   locator: Locator,
   name: string
 ): Promise<void> {
+  await page.addStyleTag({ content: nextDevOverlayStyle });
   for (const scheme of visualSchemes) {
     await page.emulateMedia({ colorScheme: scheme });
     await expect(locator).toHaveScreenshot(platformSnapshotName(name, scheme));
