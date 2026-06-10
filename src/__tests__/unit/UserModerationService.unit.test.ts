@@ -311,7 +311,7 @@ describe('UserModerationService (unit)', () => {
     await userRepository.getOrCreateUser(userId, 'test-user');
     await serverMemberRepository.upsertMember(guildId, userId, {
       is_restricted: true,
-      verification_status: VerificationStatus.CLOSED_NO_ACTION,
+      verification_status: VerificationStatus.PENDING,
     });
 
     const detectionEvent = await detectionEventsRepository.create({
@@ -348,7 +348,11 @@ describe('UserModerationService (unit)', () => {
       expect.objectContaining({ status: VerificationStatus.CLOSED_NO_ACTION })
     );
     expect(await serverMemberRepository.findByServerAndUser(guildId, userId)).toEqual(
-      expect.objectContaining({ is_restricted: false })
+      expect.objectContaining({
+        is_restricted: false,
+        verification_status: VerificationStatus.CLOSED_NO_ACTION,
+        last_status_change: expect.any(Date),
+      })
     );
     expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
     expect(notificationManager.logActionToMessage).not.toHaveBeenCalled();

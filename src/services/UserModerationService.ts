@@ -778,6 +778,8 @@ export class UserModerationService implements IUserModerationService {
 
           await this.serverMemberRepository.upsertMember(guild.id, userId, {
             is_restricted: false,
+            verification_status: VerificationStatus.CLOSED_NO_ACTION,
+            last_status_change: new Date(),
             updated_by: moderator.id,
           });
         }
