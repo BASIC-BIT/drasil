@@ -261,6 +261,7 @@ enum admin_action_type {
   verify
   reject
   ban
+  close_no_action
   reopen
   create_thread
   open_case
@@ -294,6 +295,7 @@ enum moderation_outcome_type {
   restricted
   verified
   banned
+  closed_no_action
   member_left
 }
 
@@ -304,6 +306,8 @@ enum report_intake_status {
   submitted
   closed_by_reporter
   actioned
+  dismissed
+  false_positive
   expired
 }
 
@@ -321,4 +325,5 @@ enum verification_status {
   pending
   verified
   banned
+  closed_no_action
 }

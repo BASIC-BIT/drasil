@@ -172,6 +172,9 @@ export function CaseQueueView({
           <span>Drasil</span>
         </a>
         <div className="nav-cluster">
+          <a className="button secondary" href={`/admin/guild/${guildId}/reports`}>
+            Reports
+          </a>
           <a className="button secondary" href={`/admin/guild/${guildId}/setup`}>
             Setup
           </a>

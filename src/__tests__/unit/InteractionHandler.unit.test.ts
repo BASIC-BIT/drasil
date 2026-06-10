@@ -195,6 +195,7 @@ describe('InteractionHandler (unit)', () => {
       verifyUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
       syncAlreadyBannedUser: jest.fn().mockResolvedValue(1),
+      closeCaseNoAction: jest.fn().mockResolvedValue(1),
       recordObservedDiscordBan: jest.fn().mockResolvedValue(0),
       recordMemberLeftGuild: jest.fn().mockResolvedValue(0),
     };
@@ -343,6 +344,39 @@ describe('InteractionHandler (unit)', () => {
     expect(userModerationService.verifyUser).toHaveBeenCalledTimes(1);
     expect(interaction.followUp).toHaveBeenCalledWith({
       content: 'User <@user-1> has been verified and can now access the server.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles close-no-action button by calling UserModerationService', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_close_no_action:case:user-1',
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(userModerationService.closeCaseNoAction).toHaveBeenCalledWith(
+      expect.objectContaining({ members: expect.any(Object) }),
+      'user-1',
+      interaction.user,
+      'Closed with no action by moderator.'
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'Closed 1 pending verification case for <@user-1> with no action.',
+      allowedMentions: { parse: [] },
       flags: MessageFlags.Ephemeral,
     });
   });

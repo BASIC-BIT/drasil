@@ -58,6 +58,16 @@ export interface IUserModerationService {
   syncAlreadyBannedUser(guild: Guild, userId: string, moderator: User): Promise<number>;
 
   /**
+   * Closes pending verification cases without treating the user as verified or banned.
+   */
+  closeCaseNoAction(
+    guild: Guild,
+    userId: string,
+    moderator: User,
+    notes?: string | null
+  ): Promise<number>;
+
+  /**
    * Resolves pending verification cases after observing a Discord ban outside the Drasil action flow.
    */
   recordObservedDiscordBan(
@@ -297,8 +307,11 @@ export class UserModerationService implements IUserModerationService {
     target: ModerationTarget,
     verificationEvent: VerificationEvent,
     previousStatus: VerificationStatus,
-    newStatus: VerificationStatus.VERIFIED | VerificationStatus.BANNED,
-    actionType: AdminActionType.VERIFY | AdminActionType.BAN,
+    newStatus:
+      | VerificationStatus.VERIFIED
+      | VerificationStatus.BANNED
+      | VerificationStatus.CLOSED_NO_ACTION,
+    actionType: AdminActionType.VERIFY | AdminActionType.BAN | AdminActionType.CLOSE_NO_ACTION,
     moderator: User,
     strictNotification: boolean,
     options: { notes?: string | null; detectionEventId?: string | null } = {}
@@ -733,6 +746,127 @@ export class UserModerationService implements IUserModerationService {
       return resolvedEvents.length;
     } catch (error) {
       console.error(`Failed to sync already-banned user ${userId}:`, error);
+      throw error;
+    }
+  }
+
+  public async closeCaseNoAction(
+    guild: Guild,
+    userId: string,
+    moderator: User,
+    notes?: string | null
+  ): Promise<number> {
+    try {
+      const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
+        userId,
+        guild.id
+      );
+      const pendingVerificationEvents = verificationEvents.filter(
+        (event) => event.status === VerificationStatus.PENDING
+      );
+      if (pendingVerificationEvents.length === 0) {
+        return 0;
+      }
+
+      const member = await guild.members.fetch(userId).catch(() => null);
+      const serverMember = await this.serverMemberRepository.findByServerAndUser(guild.id, userId);
+      if (member && serverMember?.is_restricted === true) {
+        const roleRemoved = await this.roleManager.removeRestrictedRole(member);
+        if (!roleRemoved) {
+          throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
+        }
+      }
+
+      const resolvedAt = new Date();
+      const resolutionNotes = notes?.trim() || 'Closed with no action.';
+      const resolvedEvents: Array<{
+        event: VerificationEvent;
+        previousStatus: VerificationStatus;
+      }> = [];
+
+      for (const pendingEvent of pendingVerificationEvents) {
+        const previousStatus = pendingEvent.status;
+        const eventToUpdate = {
+          ...pendingEvent,
+          status: VerificationStatus.CLOSED_NO_ACTION,
+          resolved_by: moderator.id,
+          resolved_at: resolvedAt,
+          notes: resolutionNotes,
+          metadata: {
+            ...this.metadataToRecord(pendingEvent.metadata),
+            ...(member ? { user_snapshot: this.buildUserSnapshot(member.user, member) } : {}),
+            ...(!member ? { membership_state: 'left_or_removed' } : {}),
+            closed_no_action_at: resolvedAt.toISOString(),
+          } as VerificationEvent['metadata'],
+        };
+        const updatedEvent = await this.verificationEventRepository.update(
+          pendingEvent.id,
+          eventToUpdate
+        );
+        resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
+      }
+
+      await this.serverMemberRepository.upsertMember(guild.id, userId, {
+        is_restricted: false,
+        verification_status: VerificationStatus.CLOSED_NO_ACTION,
+        last_status_change: resolvedAt,
+        updated_by: moderator.id,
+      });
+
+      const target = member
+        ? this.getModerationTarget(member)
+        : {
+            guildId: guild.id,
+            userId,
+            userTag: userId,
+            username: null,
+            accountCreatedAt: null,
+          };
+
+      for (const resolvedEvent of resolvedEvents) {
+        await this.finalizeResolvedVerificationEvent(
+          target,
+          resolvedEvent.event,
+          resolvedEvent.previousStatus,
+          VerificationStatus.CLOSED_NO_ACTION,
+          AdminActionType.CLOSE_NO_ACTION,
+          moderator,
+          Boolean(resolvedEvent.event.notification_message_id) &&
+            resolvedEvent.event.id === resolvedEvents[0].event.id,
+          {
+            notes: resolutionNotes,
+            detectionEventId: resolvedEvent.event.detection_event_id,
+          }
+        );
+      }
+
+      await this.tryRecordModerationOutcomes(
+        target,
+        ModerationOutcomeType.CLOSED_NO_ACTION,
+        ModerationOutcomeSource.DRASIL,
+        resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
+        {
+          actorId: moderator.id,
+          reason: resolutionNotes,
+          metadata: member ? this.buildOutcomeMetadata({}, member.user, member) : {},
+        }
+      );
+
+      void this.productAnalyticsService.captureUserEvent(
+        guild.id,
+        userId,
+        'moderation action completed',
+        { action_type: AdminActionType.CLOSE_NO_ACTION },
+        {
+          moderatorId: moderator.id,
+          verificationEventId: resolvedEvents[0].event.id,
+          detectionEventId: resolvedEvents[0].event.detection_event_id ?? undefined,
+        }
+      );
+
+      return resolvedEvents.length;
+    } catch (error) {
+      console.error(`Failed to close case with no action for user ${userId}:`, error);
       throw error;
     }
   }

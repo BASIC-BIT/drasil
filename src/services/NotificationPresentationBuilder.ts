@@ -88,6 +88,8 @@ export class NotificationPresentationBuilder {
       embedColor = 0x00ff00;
     } else if (verificationEvent.status === VerificationStatus.BANNED) {
       embedColor = 0x000000;
+    } else if (verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION) {
+      embedColor = 0x808080;
     }
 
     const resolutionPresentation = this.getVerificationResolutionPresentation(verificationEvent);
@@ -635,6 +637,8 @@ export class NotificationPresentationBuilder {
     switch (actionTaken) {
       case AdminActionType.BAN:
         return 'Banned';
+      case AdminActionType.CLOSE_NO_ACTION:
+        return 'Closed with no action';
       case AdminActionType.VERIFY:
         return 'Verified';
       case AdminActionType.CREATE_THREAD:
@@ -701,7 +705,9 @@ export class NotificationPresentationBuilder {
         ? AdminActionType.BAN
         : verificationEvent.status === VerificationStatus.VERIFIED
           ? AdminActionType.VERIFY
-          : null;
+          : verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
+            ? AdminActionType.CLOSE_NO_ACTION
+            : null;
     if (!actionTaken) {
       return;
     }
@@ -722,7 +728,9 @@ export class NotificationPresentationBuilder {
         ? AdminActionType.BAN
         : verificationEvent.status === VerificationStatus.VERIFIED
           ? AdminActionType.VERIFY
-          : null;
+          : verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
+            ? AdminActionType.CLOSE_NO_ACTION
+            : null;
     if (!actionTaken) {
       return null;
     }
@@ -747,7 +755,11 @@ export class NotificationPresentationBuilder {
     adminId: string,
     timestamp: number
   ): void {
-    if (actionTaken !== AdminActionType.VERIFY && actionTaken !== AdminActionType.BAN) {
+    if (
+      actionTaken !== AdminActionType.VERIFY &&
+      actionTaken !== AdminActionType.BAN &&
+      actionTaken !== AdminActionType.CLOSE_NO_ACTION
+    ) {
       return;
     }
 
@@ -986,7 +998,8 @@ export class NotificationPresentationBuilder {
     const lines: string[] = [];
     const threadStatus =
       verificationEvent.status === VerificationStatus.VERIFIED ||
-      verificationEvent.status === VerificationStatus.BANNED
+      verificationEvent.status === VerificationStatus.BANNED ||
+      verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
         ? `${verificationEvent.status}${verificationEvent.resolved_by ? ` by <@${verificationEvent.resolved_by}>` : ''}`
         : 'pending';
 

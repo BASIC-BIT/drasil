@@ -37,7 +37,7 @@ export const fixtureCaseDetails: CaseDetail[] = [
         url: 'https://discord.com/channels/guild-1/source-channel-1/source-message-1',
       },
     ],
-    allowedActions: ['view_history', 'verify_user', 'ban_user', 'repair_thread'],
+    allowedActions: ['view_history', 'verify_user', 'ban_user', 'close_no_action', 'repair_thread'],
     notes: 'User was restricted after suspicious DM-style promotion language.',
     evidenceItems: [
       {

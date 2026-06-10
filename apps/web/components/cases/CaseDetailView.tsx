@@ -431,6 +431,9 @@ export function CaseDetailView({
           <a className="button secondary" href={`/admin/guild/${guildId}/cases`}>
             Case Queue
           </a>
+          <a className="button secondary" href={`/admin/guild/${guildId}/reports`}>
+            Reports
+          </a>
           <a className="button secondary" href={`/admin/guild/${guildId}/setup`}>
             Setup
           </a>
