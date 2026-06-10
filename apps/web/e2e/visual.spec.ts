@@ -15,6 +15,13 @@ async function expectVisualSchemes(page: Page, name: string): Promise<void> {
   }
 }
 
+async function expectReportsLink(page: Page, expectedHref: string): Promise<void> {
+  await expect(page.getByRole('link', { name: 'Reports' }).first()).toHaveAttribute(
+    'href',
+    expectedHref
+  );
+}
+
 test('landing page visual baseline @visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/');
@@ -31,6 +38,7 @@ test('admin guild list visual baseline @visual', async ({ page }) => {
   const serverRowStatus = serverRow.locator('.server-row-status');
   await expect(serverRow).toBeVisible();
   await expect(serverRowStatus).toBeVisible();
+  await expectReportsLink(page, '/admin/guild/guild-1/reports');
   await expect
     .poll(async () => {
       const [rowBox, statusBox] = await Promise.all([
@@ -55,6 +63,7 @@ test('case queue visual baseline @visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin/guild/guild-1/cases');
   await expect(page.getByRole('heading', { name: /fixture guild case queue/i })).toBeVisible();
+  await expectReportsLink(page, '/admin/guild/guild-1/reports');
   await expectVisualSchemes(page, 'case-queue');
 });
 
@@ -69,5 +78,6 @@ test('case detail visual baseline @visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin/guild/guild-1/cases/case-stale');
   await expect(page.getByRole('heading', { name: 'User user-100' })).toBeVisible();
+  await expectReportsLink(page, '/admin/guild/guild-1/reports');
   await expectVisualSchemes(page, 'case-detail');
 });
