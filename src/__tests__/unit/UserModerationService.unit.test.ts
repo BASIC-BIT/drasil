@@ -284,8 +284,8 @@ describe('UserModerationService (unit)', () => {
     expect(updateVerificationEvent.mock.invocationCallOrder[0]).toBeLessThan(
       roleManager.removeRestrictedRole.mock.invocationCallOrder[0]
     );
-    expect(upsertServerMember.mock.invocationCallOrder[0]).toBeLessThan(
-      roleManager.removeRestrictedRole.mock.invocationCallOrder[0]
+    expect(roleManager.removeRestrictedRole.mock.invocationCallOrder[0]).toBeLessThan(
+      upsertServerMember.mock.invocationCallOrder[0]
     );
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
@@ -298,6 +298,60 @@ describe('UserModerationService (unit)', () => {
       moderator
     );
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
+  });
+
+  it('retries no-action restricted role cleanup after case events are already closed', async () => {
+    const guildId = 'guild-close-retry';
+    const userId = 'user-close-retry';
+    const moderator = { id: 'mod-close-retry' } as User;
+    const member = buildMember(guildId, userId);
+    const guild = buildGuildWithMember(guildId, member);
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      is_restricted: true,
+      verification_status: VerificationStatus.CLOSED_NO_ACTION,
+    });
+
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.CLOSED_NO_ACTION
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    const closedCount = await service.closeCaseNoAction(guild, userId, moderator);
+
+    expect(closedCount).toBe(0);
+    expect(roleManager.removeRestrictedRole).toHaveBeenCalledWith(member);
+    expect(await verificationEventRepository.findById(verificationEvent.id)).toEqual(
+      expect.objectContaining({ status: VerificationStatus.CLOSED_NO_ACTION })
+    );
+    expect(await serverMemberRepository.findByServerAndUser(guildId, userId)).toEqual(
+      expect.objectContaining({ is_restricted: false })
+    );
+    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+    expect(notificationManager.logActionToMessage).not.toHaveBeenCalled();
   });
 
   it('bans a user and records admin action', async () => {

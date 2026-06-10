@@ -764,13 +764,26 @@ export class UserModerationService implements IUserModerationService {
       const pendingVerificationEvents = verificationEvents.filter(
         (event) => event.status === VerificationStatus.PENDING
       );
-      if (pendingVerificationEvents.length === 0) {
-        return 0;
-      }
 
       const member = await guild.members.fetch(userId).catch(() => null);
       const serverMember = await this.serverMemberRepository.findByServerAndUser(guild.id, userId);
       const shouldRemoveRestrictedRole = member && serverMember?.is_restricted === true;
+
+      if (pendingVerificationEvents.length === 0) {
+        if (shouldRemoveRestrictedRole) {
+          const roleRemoved = await this.roleManager.removeRestrictedRole(member);
+          if (!roleRemoved) {
+            throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
+          }
+
+          await this.serverMemberRepository.upsertMember(guild.id, userId, {
+            is_restricted: false,
+            updated_by: moderator.id,
+          });
+        }
+
+        return 0;
+      }
 
       const resolvedAt = new Date();
       const resolutionNotes = notes?.trim() || 'Closed with no action.';
@@ -801,19 +814,19 @@ export class UserModerationService implements IUserModerationService {
         resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
       }
 
-      await this.serverMemberRepository.upsertMember(guild.id, userId, {
-        is_restricted: false,
-        verification_status: VerificationStatus.CLOSED_NO_ACTION,
-        last_status_change: resolvedAt,
-        updated_by: moderator.id,
-      });
-
       if (shouldRemoveRestrictedRole) {
         const roleRemoved = await this.roleManager.removeRestrictedRole(member);
         if (!roleRemoved) {
           throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
         }
       }
+
+      await this.serverMemberRepository.upsertMember(guild.id, userId, {
+        is_restricted: false,
+        verification_status: VerificationStatus.CLOSED_NO_ACTION,
+        last_status_change: resolvedAt,
+        updated_by: moderator.id,
+      });
 
       const target = member
         ? this.getModerationTarget(member)
