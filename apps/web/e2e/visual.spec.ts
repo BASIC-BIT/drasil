@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 type VisualScheme = 'light' | 'dark';
 
@@ -20,6 +20,17 @@ async function expectReportsLink(page: Page, expectedHref: string): Promise<void
     'href',
     expectedHref
   );
+}
+
+async function expectElementVisualSchemes(
+  page: Page,
+  locator: Locator,
+  name: string
+): Promise<void> {
+  for (const scheme of visualSchemes) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await expect(locator).toHaveScreenshot(platformSnapshotName(name, scheme));
+  }
 }
 
 test('landing page visual baseline @visual', async ({ page }) => {
@@ -51,6 +62,19 @@ test('admin guild list visual baseline @visual', async ({ page }) => {
   await expectVisualSchemes(page, 'admin-guild-list');
 });
 
+test('admin guild list reports entry visual baseline @visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('/admin');
+  const fixtureServerRow = page
+    .locator('.server-row')
+    .filter({ has: page.getByRole('heading', { name: 'Fixture Guild' }) });
+  await expect(fixtureServerRow.getByRole('link', { name: 'Reports' })).toHaveAttribute(
+    'href',
+    '/admin/guild/guild-1/reports'
+  );
+  await expectElementVisualSchemes(page, fixtureServerRow, 'report-entry-admin-server-row');
+});
+
 test('guild setup visual baseline @visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin/guild/guild-1/setup');
@@ -67,6 +91,14 @@ test('case queue visual baseline @visual', async ({ page }) => {
   await expectVisualSchemes(page, 'case-queue');
 });
 
+test('case queue reports entry visual baseline @visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('/admin/guild/guild-1/cases');
+  await expect(page.getByRole('heading', { name: /fixture guild case queue/i })).toBeVisible();
+  await expectReportsLink(page, '/admin/guild/guild-1/reports');
+  await expectElementVisualSchemes(page, page.locator('.topbar'), 'report-entry-case-queue-nav');
+});
+
 test('report queue visual baseline @visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin/guild/guild-1/reports');
@@ -80,4 +112,12 @@ test('case detail visual baseline @visual', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'User user-100' })).toBeVisible();
   await expectReportsLink(page, '/admin/guild/guild-1/reports');
   await expectVisualSchemes(page, 'case-detail');
+});
+
+test('case detail reports entry visual baseline @visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('/admin/guild/guild-1/cases/case-stale');
+  await expect(page.getByRole('heading', { name: 'User user-100' })).toBeVisible();
+  await expectReportsLink(page, '/admin/guild/guild-1/reports');
+  await expectElementVisualSchemes(page, page.locator('.topbar'), 'report-entry-case-detail-nav');
 });
