@@ -770,12 +770,7 @@ export class UserModerationService implements IUserModerationService {
 
       const member = await guild.members.fetch(userId).catch(() => null);
       const serverMember = await this.serverMemberRepository.findByServerAndUser(guild.id, userId);
-      if (member && serverMember?.is_restricted === true) {
-        const roleRemoved = await this.roleManager.removeRestrictedRole(member);
-        if (!roleRemoved) {
-          throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
-        }
-      }
+      const shouldRemoveRestrictedRole = member && serverMember?.is_restricted === true;
 
       const resolvedAt = new Date();
       const resolutionNotes = notes?.trim() || 'Closed with no action.';
@@ -812,6 +807,13 @@ export class UserModerationService implements IUserModerationService {
         last_status_change: resolvedAt,
         updated_by: moderator.id,
       });
+
+      if (shouldRemoveRestrictedRole) {
+        const roleRemoved = await this.roleManager.removeRestrictedRole(member);
+        if (!roleRemoved) {
+          throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
+        }
+      }
 
       const target = member
         ? this.getModerationTarget(member)

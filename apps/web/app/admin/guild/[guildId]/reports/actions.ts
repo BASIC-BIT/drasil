@@ -33,11 +33,16 @@ export async function closeSubmittedReport(
 
   const setupService = createSetupDashboardService();
   await setupService.assertCanManageGuild(guildId, token.accessToken);
-  await createReportQueueDataAdapter().closeSubmittedReport({
+  const closed = await createReportQueueDataAdapter().closeSubmittedReport({
     guildId,
     reportId,
     action: parsedAction as ReportClosureAction,
     adminId: session.userId,
   });
+
+  if (!closed) {
+    throw new Error('Report is no longer available to close. Refresh the queue and try again.');
+  }
+
   revalidatePath(`/admin/guild/${guildId}/reports`);
 }

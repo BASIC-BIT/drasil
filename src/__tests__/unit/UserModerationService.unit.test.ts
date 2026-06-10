@@ -226,6 +226,8 @@ describe('UserModerationService (unit)', () => {
     await verificationEventRepository.update(verificationEvent.id, {
       notification_message_id: 'admin-message-1',
     });
+    const updateVerificationEvent = jest.spyOn(verificationEventRepository, 'update');
+    const upsertServerMember = jest.spyOn(serverMemberRepository, 'upsertMember');
 
     const service = new UserModerationService(
       serverMemberRepository,
@@ -279,6 +281,12 @@ describe('UserModerationService (unit)', () => {
     );
 
     expect(roleManager.removeRestrictedRole).toHaveBeenCalledWith(member);
+    expect(updateVerificationEvent.mock.invocationCallOrder[0]).toBeLessThan(
+      roleManager.removeRestrictedRole.mock.invocationCallOrder[0]
+    );
+    expect(upsertServerMember.mock.invocationCallOrder[0]).toBeLessThan(
+      roleManager.removeRestrictedRole.mock.invocationCallOrder[0]
+    );
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       VerificationStatus.CLOSED_NO_ACTION,

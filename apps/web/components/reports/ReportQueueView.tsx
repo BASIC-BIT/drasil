@@ -62,6 +62,7 @@ function ReportActions({
           </a>
         ) : null}
         {!item.latestCaseId && item.allowedActions.includes('open_case') ? (
+          // TODO(#131): turn this placeholder into a case-creation action.
           <span className="pill action-pill">{actionLabels.open_case}</span>
         ) : null}
       </div>
