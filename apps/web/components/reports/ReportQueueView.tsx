@@ -1,5 +1,4 @@
 import type { ReportQueueAction, ReportQueueItem } from '@drasil/contracts';
-import { closeSubmittedReport } from '@/app/admin/guild/[guildId]/reports/actions';
 import { AccountControl } from '@/components/AccountControl';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { formatDetectionType, formatUtc, freshnessStatusClass } from '@/lib/casePresentation';
@@ -10,6 +9,7 @@ interface ReportQueueViewProps {
   readonly closedReportCount: number;
   readonly sessionUsername: string;
   readonly reports: readonly ReportQueueItem[];
+  readonly closeReportAction: CloseReportAction;
 }
 
 const actionLabels: Record<ReportQueueAction, string> = {
@@ -25,13 +25,27 @@ type ReportClosureAction = Extract<
   'mark_actioned' | 'dismiss_no_action' | 'mark_false_positive'
 >;
 
+type CloseReportAction = (
+  guildId: string,
+  reportId: string,
+  action: ReportClosureAction
+) => Promise<void>;
+
 const closureActions: ReportClosureAction[] = [
   'mark_actioned',
   'dismiss_no_action',
   'mark_false_positive',
 ];
 
-function ReportActions({ guildId, item }: { readonly guildId: string; readonly item: ReportQueueItem }) {
+function ReportActions({
+  guildId,
+  item,
+  closeReportAction,
+}: {
+  readonly guildId: string;
+  readonly item: ReportQueueItem;
+  readonly closeReportAction: CloseReportAction;
+}) {
   const canClose = closureActions.some((action) => item.allowedActions.includes(action));
 
   return (
@@ -56,7 +70,7 @@ function ReportActions({ guildId, item }: { readonly guildId: string; readonly i
         <div className="report-action-forms" aria-label="Report closure actions">
           {closureActions.map((action) =>
             item.allowedActions.includes(action) ? (
-              <form action={closeSubmittedReport.bind(null, guildId, item.id, action)} key={action}>
+              <form action={closeReportAction.bind(null, guildId, item.id, action)} key={action}>
                 <button className="button secondary compact-button" type="submit">
                   {actionLabels[action]}
                 </button>
@@ -69,7 +83,15 @@ function ReportActions({ guildId, item }: { readonly guildId: string; readonly i
   );
 }
 
-function ReportRow({ guildId, item }: { readonly guildId: string; readonly item: ReportQueueItem }) {
+function ReportRow({
+  guildId,
+  item,
+  closeReportAction,
+}: {
+  readonly guildId: string;
+  readonly item: ReportQueueItem;
+  readonly closeReportAction: CloseReportAction;
+}) {
   return (
     <article className="card case-card stack">
       <div className="case-card-header">
@@ -102,7 +124,7 @@ function ReportRow({ guildId, item }: { readonly guildId: string; readonly item:
       </div>
 
       {item.summary ? <p>{item.summary}</p> : <p className="muted">No summary recorded.</p>}
-      <ReportActions guildId={guildId} item={item} />
+      <ReportActions closeReportAction={closeReportAction} guildId={guildId} item={item} />
     </article>
   );
 }
@@ -113,6 +135,7 @@ export function ReportQueueView({
   closedReportCount,
   sessionUsername,
   reports,
+  closeReportAction,
 }: ReportQueueViewProps) {
   const staleCount = reports.filter((item) => item.stale).length;
 
@@ -177,7 +200,12 @@ export function ReportQueueView({
       ) : (
         <section className="case-list" aria-label="Submitted reports">
           {reports.map((item) => (
-            <ReportRow guildId={guildId} item={item} key={item.id} />
+            <ReportRow
+              closeReportAction={closeReportAction}
+              guildId={guildId}
+              item={item}
+              key={item.id}
+            />
           ))}
         </section>
       )}

@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import { closeSubmittedReport } from './actions';
 import { ReportQueueView } from '@/components/reports/ReportQueueView';
 import { createReportQueueDataAdapter } from '@/lib/reportQueueDataAdapter';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
@@ -25,6 +26,7 @@ export default async function ReportsPage({ params }: PageProps) {
 
   return (
     <ReportQueueView
+      closeReportAction={closeSubmittedReport}
       closedReportCount={closedReportCount}
       guildId={guildId}
       guildName={guild.name}

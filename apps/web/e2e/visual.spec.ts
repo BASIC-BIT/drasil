@@ -58,6 +58,13 @@ test('case queue visual baseline @visual', async ({ page }) => {
   await expectVisualSchemes(page, 'case-queue');
 });
 
+test('report queue visual baseline @visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('/admin/guild/guild-1/reports');
+  await expect(page.getByRole('heading', { name: /fixture guild report queue/i })).toBeVisible();
+  await expectVisualSchemes(page, 'report-queue');
+});
+
 test('case detail visual baseline @visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin/guild/guild-1/cases/case-stale');

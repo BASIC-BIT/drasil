@@ -33,6 +33,20 @@ test('case queue empty story visual baseline @storybook-visual', async ({ page }
   await expectVisualSchemes(page, 'storybook-case-queue-empty');
 });
 
+test('report queue mixed story visual baseline @storybook-visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await gotoStory(page, 'submitted-reports-report-queue--mixed-reports');
+  await expect(page.getByRole('heading', { name: /fixture guild report queue/i })).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-report-queue-mixed');
+});
+
+test('report queue empty story visual baseline @storybook-visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await gotoStory(page, 'submitted-reports-report-queue--empty-reports');
+  await expect(page.getByRole('heading', { name: /no submitted reports/i })).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-report-queue-empty');
+});
+
 test('case detail stale story visual baseline @storybook-visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await gotoStory(page, 'active-triage-case-detail--stale-restricted-case');
