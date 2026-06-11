@@ -233,12 +233,13 @@ export class ReportInteractionHandler {
         submittedById: interaction.user.id,
       });
 
-      await interaction.editReply({ content: `Submitted report for <@${targetUserId}>.` });
+      const targetLabel = this.formatReportTargetLabel(targetMember);
+      await interaction.editReply({ content: `Submitted report for ${targetLabel}.` });
 
       const threadChannel = this.getThreadChannel(interaction.channel);
       if (threadChannel) {
         await threadChannel.send({
-          content: `Report submitted for <@${targetUserId}>. Moderators have been notified.`,
+          content: `Report submitted for ${targetLabel}. Moderators have been notified.`,
           allowedMentions: { parse: [] },
         });
       }
@@ -563,6 +564,17 @@ export class ReportInteractionHandler {
       channel.isThread()
     );
     return isThread ? (channel as unknown as Pick<ThreadChannel, 'send'>) : null;
+  }
+
+  private formatReportTargetLabel(member: GuildMember): string {
+    const displayName = this.readOptionalString((member as { displayName?: unknown }).displayName);
+    const username = this.readOptionalString((member.user as { username?: unknown }).username);
+    const label = [displayName, username].find((name) => Boolean(name));
+    return `<@${member.id}> (${label ?? 'unknown user'}) (${member.id})`;
+  }
+
+  private readOptionalString(value: unknown): string | null {
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
   }
 
   private async fetchReportMessage(

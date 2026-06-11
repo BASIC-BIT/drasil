@@ -172,7 +172,7 @@ describe('ReportIntakeService', () => {
     );
     expect((message.channel as any).send).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('1. <@user-1>'),
+        content: expect.stringContaining('1. <@user-1> (Target user-1) (user-1)'),
       })
     );
   });

@@ -48,7 +48,7 @@ interface ThreadAnalysisMetadata {
 }
 
 export class NotificationPresentationBuilder {
-  public static readonly THREAD_ANALYSIS_FIELD_NAME = 'AI Thread Analysis';
+  public static readonly THREAD_ANALYSIS_FIELD_NAME = 'Thread Analysis';
   public static readonly LATEST_ADMIN_ACTION_FIELD_NAME = 'Latest Admin Action';
   public static readonly MODERATION_ACTION_WARNING_FIELD_NAME = 'Moderation Action Warning';
   public static readonly RESOLUTION_FIELD_NAME = 'Resolution';
@@ -511,7 +511,7 @@ export class NotificationPresentationBuilder {
   ): void {
     const aiDiagnosticFieldValue = this.formatGptDiagnosticFieldValue(detectionResult);
     if (aiDiagnosticFieldValue) {
-      embed.addFields({ name: 'AI Analysis', value: aiDiagnosticFieldValue, inline: false });
+      embed.addFields({ name: 'Risk Analysis', value: aiDiagnosticFieldValue, inline: false });
     }
 
     const reportAiFieldValue = this.formatReportAiFieldValue(
@@ -519,7 +519,7 @@ export class NotificationPresentationBuilder {
         this.findReportAiAnalysis(detectionEvents, detectionResult.detectionEventId)
     );
     if (reportAiFieldValue) {
-      embed.addFields({ name: 'AI Report Triage', value: reportAiFieldValue, inline: false });
+      embed.addFields({ name: 'Report Triage', value: reportAiFieldValue, inline: false });
     }
   }
 

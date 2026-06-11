@@ -649,8 +649,20 @@ export class ReportIntakeService implements IReportIntakeService {
   }
 
   private formatCandidateLine(candidate: ReportCandidate, index: number): string {
-    const reasons = candidate.matchReasons.join(', ') || 'candidate match';
-    return `${index}. <@${candidate.discordUserId}> (${candidate.discordUserId}) - ${reasons}`;
+    return `${index}. <@${candidate.discordUserId}> (${this.formatCandidateDisplayName(candidate)}) (${candidate.discordUserId})`;
+  }
+
+  private formatCandidateDisplayName(candidate: ReportCandidate): string {
+    const names = [
+      candidate.displayName,
+      candidate.nickname,
+      candidate.globalName,
+      candidate.username,
+    ]
+      .map((name) => name?.trim())
+      .filter((name): name is string => Boolean(name));
+    const uniqueNames = [...new Set(names)];
+    return uniqueNames[0] ?? 'unknown user';
   }
 
   private createPromptToken(candidateIds: string[]): string {

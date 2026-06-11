@@ -475,7 +475,7 @@ describe('NotificationManager (unit)', () => {
     expect(sendArgs.embeds[0].data.title).toBe('Suspicious Activity Observed');
     const fields = sendArgs.embeds[0].data.fields ?? [];
     const reasonsField = fields.find((field) => field.name === 'Reasons');
-    const aiField = fields.find((field) => field.name === 'AI Analysis');
+    const aiField = fields.find((field) => field.name === 'Risk Analysis');
     expect(reasonsField?.value).toContain('Message contains suspicious keywords or patterns');
     expect(aiField?.value).toContain('Primary signal: message_content');
     expect(aiField?.value).toContain('Reason codes: suspicious_keyword');
@@ -938,7 +938,7 @@ describe('NotificationManager (unit)', () => {
 
     const editArgs = message.edit.mock.calls[0][0] as { embeds: EmbedBuilder[] };
     const fields = editArgs.embeds[0].data.fields ?? [];
-    const analysisField = fields.find((field) => field.name === 'AI Thread Analysis');
+    const analysisField = fields.find((field) => field.name === 'Thread Analysis');
 
     expect(analysisField?.value).toContain('Result: **likely_legitimate** (Medium confidence)');
     expect(analysisField?.value).toContain('Analyzed responses: 2');
@@ -978,7 +978,7 @@ describe('NotificationManager (unit)', () => {
 
     const sendArgs = adminChannel.send.mock.calls[0][0] as { embeds: EmbedBuilder[] };
     const fields = sendArgs.embeds[0].data.fields ?? [];
-    const aiField = fields.find((field) => field.name === 'AI Analysis');
+    const aiField = fields.find((field) => field.name === 'Risk Analysis');
 
     expect(aiField?.value).toContain('Result: **Unavailable**');
     expect(aiField?.value).not.toContain('Result: **OK**');
@@ -1021,7 +1021,7 @@ describe('NotificationManager (unit)', () => {
 
     const editArgs = message.edit.mock.calls[0][0] as { embeds: EmbedBuilder[] };
     const fields = editArgs.embeds[0].data.fields ?? [];
-    const analysisField = fields.find((field) => field.name === 'AI Thread Analysis');
+    const analysisField = fields.find((field) => field.name === 'Thread Analysis');
 
     expect(analysisField?.value).toContain('Result: **likely_legitimate** (Medium confidence)');
     expect(analysisField?.value).toContain('Analyzed responses: 2');
