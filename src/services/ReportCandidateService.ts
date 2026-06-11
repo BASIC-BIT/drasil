@@ -165,7 +165,7 @@ export class ReportCandidateService implements IReportCandidateService {
     return [...fetchedMembers.values()]
       .filter((member) => this.memberMatchesName(member, normalizedSearchTerm))
       .map((member) => ({
-        ...this.buildCandidate(member, 'current-server name search'),
+        ...this.buildCandidate(member, 'current-server name match'),
         confidence: 0.55,
         ambiguityNotes: ['Name/display-name matches require human confirmation.'],
         platformBackedEvidence: [],

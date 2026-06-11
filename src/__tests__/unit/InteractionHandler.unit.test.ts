@@ -31,17 +31,29 @@ import {
   CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID,
 } from '../../utils/caseReviewDigestCustomIds';
 
-const buildMember = (guildId: string, userId: string): GuildMember =>
+const buildMember = (guildId: string, userId: string, displayName = 'test-user'): GuildMember =>
   ({
     id: userId,
     guild: { id: guildId } as Guild,
+    displayName,
+    nickname: displayName,
     user: {
       id: userId,
-      username: 'test-user',
-      tag: 'test-user#0001',
+      username: displayName,
+      tag: `${displayName}#0001`,
     } as User,
     permissions: { has: jest.fn().mockReturnValue(false) },
   }) as unknown as GuildMember;
+
+const buildGuildMemberFetchMock = (): jest.Mock =>
+  jest.fn(async (query: string | { user?: string | string[] }) => {
+    if (typeof query === 'string') {
+      return buildMember('guild-1', query);
+    }
+
+    const userIds = Array.isArray(query.user) ? query.user : query.user ? [query.user] : [];
+    return new Map(userIds.map((userId) => [userId, buildMember('guild-1', userId)]));
+  });
 
 const buildInteraction = (customId: string, guildId: string, user: User): ButtonInteraction => {
   const interaction = {
@@ -178,13 +190,12 @@ describe('InteractionHandler (unit)', () => {
   beforeEach(() => {
     delete process.env.DRASIL_WEB_PUBLIC_URL;
     delete process.env.NEXT_PUBLIC_APP_URL;
-    const member = buildMember('guild-1', 'user-1');
     client = {
       guilds: {
         fetch: jest.fn().mockResolvedValue({
           members: {
             me: { permissions: { has: jest.fn().mockReturnValue(true) } },
-            fetch: jest.fn().mockResolvedValue(member),
+            fetch: buildGuildMemberFetchMock(),
           },
         }),
       },
@@ -412,6 +423,7 @@ describe('InteractionHandler (unit)', () => {
     const response = (interaction.reply as jest.Mock).mock.calls[0][0] as any;
     const selectMenu = response.components[0].toJSON().components[0];
     expect(selectMenu.options).toHaveLength(25);
+    expect(selectMenu.options[0].label).toBe('Case for test-user (user-1)');
     expect(selectMenu.options[0].value).toBe('ver-1');
     const buttons = response.components[1].toJSON().components;
     expect(buttons[0].disabled).toBe(true);
@@ -435,10 +447,20 @@ describe('InteractionHandler (unit)', () => {
 
   it('opens existing admin actions after a digest case is selected', async () => {
     process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
-    const selectedCase = buildVerificationEvent('ver-selected', 'user-selected');
+    const selectedCase: VerificationEvent = {
+      ...buildVerificationEvent('ver-selected', 'user-selected'),
+      private_evidence_thread_id: 'evidence-thread-1',
+      metadata: {
+        source_channel_id: 'source-channel-1',
+        source_message_id: 'source-message-1',
+      },
+    };
     verificationEventRepository.findById.mockResolvedValue(selectedCase);
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(selectedCase);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([selectedCase]);
+    (configService.getCachedServerConfig as jest.Mock).mockReturnValue({
+      admin_channel_id: 'admin-channel-1',
+    });
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -462,11 +484,15 @@ describe('InteractionHandler (unit)', () => {
     expect(verificationEventRepository.findById).toHaveBeenCalledWith('ver-selected');
     expect(interaction.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('Admin actions for <@user-selected>.'),
+        content: expect.stringContaining('Admin actions for test-user (user-selected).'),
         flags: MessageFlags.Ephemeral,
       })
     );
     const response = (interaction.reply as jest.Mock).mock.calls[0][0] as any;
+    expect(response.content).toContain(
+      'Links: admin: https://discord.com/channels/guild-1/admin-channel-1/message-ver-selected | evidence: https://discord.com/channels/guild-1/evidence-thread-1 | case: https://discord.com/channels/guild-1/thread-ver-selected | source: https://discord.com/channels/guild-1/source-channel-1/source-message-1'
+    );
+    expect(response.content).not.toContain('Mutating actions require a confirmation step');
     const buttons = response.components.flatMap(
       (row: { toJSON(): { components: any[] } }) => row.toJSON().components
     );
@@ -476,6 +502,29 @@ describe('InteractionHandler (unit)', () => {
         url: 'https://drasilbot.com/admin/guild/guild-1/cases/ver-selected',
       }
     );
+  });
+
+  it('shows observed admin actions with a resolved display label and no confirmation copy', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('admin_actions:m:o:user-1:det-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    const response = (interaction.reply as jest.Mock).mock.calls[0][0] as any;
+    expect(response.content).toContain('Admin actions for observed alert on test-user (user-1).');
+    expect(response.content).not.toContain('Mutating actions require a confirmation step');
   });
 
   it('rejects digest-selected cases without a user id', async () => {

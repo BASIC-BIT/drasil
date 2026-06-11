@@ -169,6 +169,22 @@ Operating principles:
 - Never add secrets/credentials to git.
 - Public posts: if the agent drafts text that will be posted on a public forum (GitHub issues/PRs, release notes, etc.), prefix the content with "[AGENT]" so it's clear it was written by automation.
 
+Product copy:
+
+- User-facing Drasil surfaces should feel deterministic and productized even when GPT or other AI
+  assisted the decision. Do not label user-visible report, case, or confirmation copy as "AI";
+  describe concrete facts, checks, suggestions, or confidence in plain product language. Admin-facing
+  diagnostics can be more explicit when useful, but should still avoid over-emphasizing the model as
+  the actor instead of Drasil's moderation workflow.
+- Model-assisted admin diagnostics should be concise by contract. Do not render long model prose and
+  then clip it with ellipses; tighten the model prompt/schema, select the highest-signal fields, or
+  omit optional detail instead of showing truncated analysis text.
+- Promotion note: current source is user feedback from the report-intake QA session; target is repo
+  `AGENTS.md` because this is a broad Drasil copy principle for Discord/web UX. Over-promotion cost
+  is a short reminder in every repo session; demotion path is moving examples to a product-copy doc if
+  this grows; verification signal is future Drasil user-facing copy avoiding raw "AI" labels such as
+  "AI-extracted display name" while keeping admin diagnostics appropriately toned.
+
 Clean code:
 
 - Prefer constants over magic numbers; meaningful names; single responsibility; DRY.

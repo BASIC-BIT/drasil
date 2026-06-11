@@ -18,7 +18,7 @@ import * as dotenv from 'dotenv';
 import { injectable, inject, optional } from 'inversify';
 import { INotificationManager } from '../services/NotificationManager';
 import { TYPES } from '../di/symbols';
-import { AdminActionType, VerificationStatus } from '../repositories/types';
+import { AdminActionType, VerificationStatus, type VerificationEvent } from '../repositories/types';
 import { VerificationHistoryFormatter } from '../utils/VerificationHistoryFormatter';
 import 'reflect-metadata';
 import { IUserModerationService } from '../services/UserModerationService';
@@ -478,17 +478,14 @@ export class InteractionHandler implements IInteractionHandler {
       buttons.push(this.webLinkButton('Web Case', webCaseUrl));
     }
 
-    const details = [
-      `Admin actions for <@${parsed.userId}>.`,
-      'Mutating actions require a confirmation step before they run.',
-    ];
-    if (activeCase?.thread_id) {
-      details.push(`Case thread: https://discord.com/channels/${guildId}/${activeCase.thread_id}`);
-    }
-    if (activeCase?.private_evidence_thread_id) {
-      details.push(
-        `Admin evidence: https://discord.com/channels/${guildId}/${activeCase.private_evidence_thread_id}`
-      );
+    const adminChannelId = await this.getAdminChannelId(guildId);
+    const userLabel = await this.resolveUserDisplayLabel(guildId, parsed.userId);
+    const details = [`Admin actions for ${userLabel}.`];
+    const latestCaseLinks = latestCase
+      ? this.formatVerificationCaseLinks(guildId, latestCase, adminChannelId)
+      : [];
+    if (latestCaseLinks.length > 0) {
+      details.push(`Links: ${latestCaseLinks.join(' | ')}`);
     }
     if (alreadyBanned) {
       details.push(
@@ -500,12 +497,10 @@ export class InteractionHandler implements IInteractionHandler {
         `Warning: ${pendingCases.length} pending cases exist for this user. Terminal actions will resolve all pending case rows.`
       );
       details.push(
-        ...pendingCases
-          .slice(0, 5)
-          .map(
-            (event) =>
-              `Pending case ${event.id}${event.thread_id ? `: https://discord.com/channels/${guildId}/${event.thread_id}` : ''}`
-          )
+        ...pendingCases.slice(0, 5).map((event) => {
+          const links = this.formatVerificationCaseLinks(guildId, event, adminChannelId);
+          return `Pending case ${event.id}${links.length ? ` - ${links.join(' | ')}` : ''}`;
+        })
       );
     }
     if (actionButtons.length === 0) {
@@ -577,9 +572,10 @@ export class InteractionHandler implements IInteractionHandler {
       buttons.push(this.webLinkButton('Web Queue', webQueueUrl));
     }
 
+    const userLabel = await this.resolveUserDisplayLabel(guildId, parsed.userId);
     await interaction.reply({
       content:
-        `Admin actions for observed alert on <@${parsed.userId}>.\nMutating actions require a confirmation step before they run.` +
+        `Admin actions for observed alert on ${userLabel}.` +
         (actionButtons.length === 0
           ? '\nNo available actions for your current permissions and this alert state.'
           : ''),
@@ -698,12 +694,19 @@ export class InteractionHandler implements IInteractionHandler {
       safePage * CASE_REVIEW_DIGEST_PAGE_SIZE,
       (safePage + 1) * CASE_REVIEW_DIGEST_PAGE_SIZE
     );
+    const userLabels = await this.resolveUserDisplayLabels(
+      guildId,
+      pageCases.map((event) => event.user_id)
+    );
     const selector = new StringSelectMenuBuilder()
       .setCustomId(buildCaseReviewDigestSelectCustomId(safePage))
       .setPlaceholder('Choose a pending case')
       .addOptions(
         pageCases.map((event) => ({
-          label: this.truncateSelectText(`Case for ${event.user_id}`, 100),
+          label: this.truncateSelectText(
+            `Case for ${userLabels.get(event.user_id) ?? event.user_id}`,
+            100
+          ),
           description: this.truncateSelectText(
             `${this.formatHoursSince(event.updated_at)} since update${event.thread_id ? ` | thread ${event.thread_id}` : ''}`,
             100
@@ -758,6 +761,123 @@ export class InteractionHandler implements IInteractionHandler {
   private formatHoursSince(value: Date): string {
     const ageHours = Math.max(1, Math.floor((Date.now() - value.getTime()) / (60 * 60 * 1000)));
     return `${ageHours}h`;
+  }
+
+  private async resolveUserDisplayLabel(guildId: string, userId: string): Promise<string> {
+    const labels = await this.resolveUserDisplayLabels(guildId, [userId]);
+    return labels.get(userId) ?? userId;
+  }
+
+  private async resolveUserDisplayLabels(
+    guildId: string,
+    userIds: string[]
+  ): Promise<Map<string, string>> {
+    const uniqueUserIds = [...new Set(userIds)];
+    const labels = new Map(
+      uniqueUserIds.map((userId) => [userId, this.formatUserDisplayLabel(userId, null)])
+    );
+    const guild = await this.client.guilds.fetch(guildId).catch(() => null);
+    if (!guild) {
+      return labels;
+    }
+
+    const fetchedMembers = await guild.members.fetch({ user: uniqueUserIds }).catch(() => null);
+    const fetchedMemberMap = fetchedMembers as {
+      get?: (userId: string) => GuildMember | null;
+    } | null;
+    if (fetchedMemberMap && typeof fetchedMemberMap.get === 'function') {
+      for (const userId of uniqueUserIds) {
+        labels.set(
+          userId,
+          this.formatUserDisplayLabel(
+            userId,
+            this.getMemberDisplayName(fetchedMemberMap.get(userId))
+          )
+        );
+      }
+      return labels;
+    }
+
+    if (uniqueUserIds.length === 1 && fetchedMembers) {
+      const userId = uniqueUserIds[0];
+      labels.set(
+        userId,
+        this.formatUserDisplayLabel(
+          userId,
+          this.getMemberDisplayName(fetchedMembers as unknown as GuildMember)
+        )
+      );
+    }
+
+    return labels;
+  }
+
+  private getMemberDisplayName(member: GuildMember | null): string | null {
+    return (
+      [member?.displayName, member?.nickname, member?.user.globalName, member?.user.username].find(
+        (name) => typeof name === 'string' && name.trim().length > 0
+      ) ?? null
+    );
+  }
+
+  private formatUserDisplayLabel(userId: string, displayName: string | null): string {
+    const trimmedDisplayName = displayName?.trim();
+    if (!trimmedDisplayName || trimmedDisplayName === userId) {
+      return userId;
+    }
+
+    return `${trimmedDisplayName} (${userId})`;
+  }
+
+  private async getAdminChannelId(guildId: string): Promise<string | null> {
+    const cachedAdminChannelId =
+      this.configService.getCachedServerConfig(guildId)?.admin_channel_id;
+    if (cachedAdminChannelId) {
+      return cachedAdminChannelId;
+    }
+
+    const server = await this.configService.getServerConfig(guildId).catch(() => null);
+    return server?.admin_channel_id ?? null;
+  }
+
+  private formatVerificationCaseLinks(
+    guildId: string,
+    event: VerificationEvent,
+    adminChannelId: string | null
+  ): string[] {
+    return [
+      adminChannelId && event.notification_message_id
+        ? `admin: https://discord.com/channels/${guildId}/${adminChannelId}/${event.notification_message_id}`
+        : null,
+      event.private_evidence_thread_id
+        ? `evidence: https://discord.com/channels/${guildId}/${event.private_evidence_thread_id}`
+        : null,
+      event.thread_id ? `case: https://discord.com/channels/${guildId}/${event.thread_id}` : null,
+      this.formatSourceMessageLink(guildId, event),
+    ].filter((value): value is string => Boolean(value));
+  }
+
+  private formatSourceMessageLink(guildId: string, event: VerificationEvent): string | null {
+    const metadata = this.metadataToRecord(event.metadata);
+    const sourceChannelId = this.readString(metadata.source_channel_id);
+    const sourceMessageId = this.readString(metadata.source_message_id);
+    if (!sourceChannelId || !sourceMessageId) {
+      return null;
+    }
+
+    return `source: https://discord.com/channels/${guildId}/${sourceChannelId}/${sourceMessageId}`;
+  }
+
+  private readString(value: unknown): string | null {
+    return typeof value === 'string' && value ? value : null;
+  }
+
+  private metadataToRecord(metadata: unknown): Record<string, unknown> {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return {};
+    }
+
+    return { ...(metadata as Record<string, unknown>) };
   }
 
   private truncateSelectText(value: string, maxLength: number): string {

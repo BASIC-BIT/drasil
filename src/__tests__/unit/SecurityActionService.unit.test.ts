@@ -309,6 +309,50 @@ describe('SecurityActionService (unit)', () => {
     ]);
   });
 
+  it('retries failed verification thread setup after Discord propagation delay', async () => {
+    jest.useFakeTimers();
+    const guildId = 'guild-thread-delayed-repair';
+    const userId = 'user-thread-delayed-repair';
+    const member = buildMember(guildId, userId);
+    const message = buildMessage(guildId, 'channel-1');
+    threadManager.createVerificationThread.mockRejectedValueOnce(new Error('Missing Access'));
+
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: message.content,
+    };
+
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(
+        buildService().handleSuspiciousMessage(member, detectionResult, message)
+      ).resolves.toBe(true);
+
+      expect(threadManager.repairVerificationThread).not.toHaveBeenCalled();
+      expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(69_999);
+      expect(threadManager.repairVerificationThread).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(threadManager.repairVerificationThread).toHaveBeenCalledWith(
+        member,
+        expect.objectContaining({ server_id: guildId, user_id: userId })
+      );
+      expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
+      const refreshedVerificationEvent =
+        notificationManager.upsertSuspiciousUserNotification.mock.calls[1][2];
+      expect(getVerificationActionFailures(refreshedVerificationEvent.metadata)).toEqual([]);
+    } finally {
+      consoleErrorSpy.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
   it('updates notification without creating a new verification', async () => {
     const guildId = 'guild-2';
     const userId = 'user-2';

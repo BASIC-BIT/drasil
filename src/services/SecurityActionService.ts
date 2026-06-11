@@ -55,6 +55,8 @@ import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { ReportAiAnalyzer } from './ReportAiAnalyzer';
 import { ReportDetectionBuilder } from './ReportDetectionBuilder';
 import { RoleIntakeProcessor } from './RoleIntakeProcessor';
+
+const DELAYED_THREAD_REPAIR_DELAY_MS = 70_000;
 /**
  * Interface for the SecurityActionService
  */
@@ -272,6 +274,7 @@ export class SecurityActionService implements ISecurityActionService {
   private reportAiAnalyzer: ReportAiAnalyzer;
   private reportDetectionBuilder: ReportDetectionBuilder;
   private roleIntakeProcessor: RoleIntakeProcessor;
+  private readonly scheduledThreadRepairEventIds = new Set<string>();
 
   constructor(
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
@@ -649,6 +652,81 @@ export class SecurityActionService implements ISecurityActionService {
     }
   }
 
+  private hasVerificationActionFailure(
+    verificationEvent: VerificationEvent,
+    action: VerificationActionFailureKind
+  ): boolean {
+    return getVerificationActionFailures(verificationEvent.metadata).some(
+      (failure) => failure.action === action
+    );
+  }
+
+  private scheduleDelayedThreadRepair(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): void {
+    if (!this.hasVerificationActionFailure(verificationEvent, 'thread')) {
+      return;
+    }
+    if (this.scheduledThreadRepairEventIds.has(verificationEvent.id)) {
+      return;
+    }
+
+    this.scheduledThreadRepairEventIds.add(verificationEvent.id);
+    const timer = setTimeout(() => {
+      void this.runDelayedThreadRepair(
+        member,
+        verificationEvent.id,
+        detectionResult,
+        sourceMessage
+      ).finally(() => {
+        this.scheduledThreadRepairEventIds.delete(verificationEvent.id);
+      });
+    }, DELAYED_THREAD_REPAIR_DELAY_MS);
+    (timer as { unref?: () => void }).unref?.();
+  }
+
+  private async runDelayedThreadRepair(
+    member: GuildMember,
+    verificationEventId: string,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<void> {
+    const verificationEvent = await this.verificationEventRepository.findById(verificationEventId);
+    if (!verificationEvent || verificationEvent.status !== VerificationStatus.PENDING) {
+      return;
+    }
+    if (!this.hasVerificationActionFailure(verificationEvent, 'thread')) {
+      return;
+    }
+
+    try {
+      const repair = await this.threadManager.repairVerificationThread(member, verificationEvent);
+      if (!repair.threadId || !repair.userAdded) {
+        throw new Error('Delayed verification thread repair did not complete thread setup');
+      }
+
+      const repairedEvent =
+        (await this.verificationEventRepository.findById(verificationEventId)) ?? verificationEvent;
+      const clearedEvent = await this.clearResolvedVerificationActionFailures(repairedEvent, [
+        'thread',
+      ]);
+      await this.upsertNotificationAndEnsurePrivateEvidenceThread(
+        member,
+        detectionResult,
+        clearedEvent,
+        sourceMessage
+      );
+    } catch (error) {
+      console.error(
+        `Delayed verification thread repair failed for verification event ${verificationEventId}:`,
+        error
+      );
+    }
+  }
+
   private async tryRestrictUser(
     member: GuildMember,
     verificationEvent: VerificationEvent
@@ -898,6 +976,9 @@ export class SecurityActionService implements ISecurityActionService {
         shouldUseReviewThread
       );
       await this.upsertNotification(member, detectionResult, notificationVerificationEvent);
+      if (!shouldUseReviewThread) {
+        this.scheduleDelayedThreadRepair(member, notificationVerificationEvent, detectionResult);
+      }
     }
 
     return notificationVerificationEvent;
@@ -1130,6 +1211,14 @@ export class SecurityActionService implements ISecurityActionService {
         notificationVerificationEvent,
         sourceMessage
       );
+      if (!shouldUseReviewThread) {
+        this.scheduleDelayedThreadRepair(
+          member,
+          notificationVerificationEvent,
+          detectionResult,
+          sourceMessage
+        );
+      }
       this.captureDetectionCaseAnalytics(
         member,
         'verification case updated',
@@ -1189,6 +1278,14 @@ export class SecurityActionService implements ISecurityActionService {
       newVerificationEvent,
       sourceMessage
     );
+    if (!shouldUseReviewThread) {
+      this.scheduleDelayedThreadRepair(
+        member,
+        newVerificationEvent,
+        detectionResult,
+        sourceMessage
+      );
+    }
     this.captureDetectionCaseAnalytics(
       member,
       'verification case opened',
