@@ -80,6 +80,7 @@ const PROFILE_SUMMARY_MAX_LENGTH = 160;
 const VERIFICATION_THREAD_SUMMARY_MAX_LENGTH = 160;
 const REPORT_SUMMARY_MAX_LENGTH = 160;
 const MODEL_DETAIL_MAX_LENGTH = 100;
+const MODEL_DETAIL_EXCEEDED_LIMIT_MESSAGE = 'Detail exceeded display limit; review source context.';
 
 const ProfileAnalysisResponseSchema = z.object({
   result: z.enum(['OK', 'SUSPICIOUS']),
@@ -815,11 +816,33 @@ export class GPTService implements IGPTService {
       return [];
     }
 
-    return value
-      .filter((item): item is string => typeof item === 'string')
-      .map((item) => this.sanitizeModelSummary(item))
-      .filter((item) => item.length > 0 && item.length <= maxLength)
-      .slice(0, maxItems);
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+    for (const item of value) {
+      if (typeof item !== 'string') {
+        continue;
+      }
+
+      const sanitized = this.sanitizeModelSummary(item);
+      if (!sanitized) {
+        continue;
+      }
+
+      const displayed =
+        sanitized.length <= maxLength ? sanitized : MODEL_DETAIL_EXCEEDED_LIMIT_MESSAGE;
+      const key = displayed.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      normalized.push(displayed);
+      if (normalized.length >= maxItems) {
+        break;
+      }
+    }
+
+    return normalized;
   }
 
   private normalizeRawStringArray(value: unknown, maxItems: number, maxLength: number): string[] {

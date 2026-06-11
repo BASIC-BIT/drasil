@@ -443,6 +443,19 @@ describe('NotificationManager (unit)', () => {
         promptVersion: GPT_PROFILE_PROMPT_VERSION,
         isFallback: false,
       },
+      reportAiAnalysis: {
+        result: 'needs_review',
+        confidence: 0.74,
+        summary: 'Reporter evidence needs moderator review.',
+        reasonCodes: ['image_evidence'],
+        evidenceCategories: ['image'],
+        concerns: ['Screenshot indicates targeted harassment.'],
+        recommendedAction: 'open_case',
+        analyzedImageCount: 1,
+        model: GPT_PROFILE_MODEL,
+        promptVersion: 'report-triage-v1',
+        isFallback: false,
+      },
     };
     const sentMessage: MockMessage = { id: 'message-1', edit: jest.fn() };
     adminChannel.send.mockResolvedValue(sentMessage);
@@ -476,10 +489,12 @@ describe('NotificationManager (unit)', () => {
     const fields = sendArgs.embeds[0].data.fields ?? [];
     const reasonsField = fields.find((field) => field.name === 'Reasons');
     const aiField = fields.find((field) => field.name === 'Risk Analysis');
+    const reportField = fields.find((field) => field.name === 'Report Triage');
     expect(reasonsField?.value).toContain('Message contains suspicious keywords or patterns');
     expect(aiField?.value).toContain('Primary signal: message_content');
     expect(aiField?.value).toContain('Reason codes: suspicious_keyword');
     expect(aiField?.value).toContain('Recent message context matches common scam patterns.');
+    expect(reportField?.value).toContain('Concerns: Screenshot indicates targeted harassment.');
 
     const updatedEvent = await detectionRepository.findById(detectionEvent.id);
     expect(updatedEvent?.metadata).toMatchObject({
@@ -945,6 +960,7 @@ describe('NotificationManager (unit)', () => {
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'
     );
+    expect(analysisField?.value).toContain('Legitimacy: Specific server context matched');
     expect(analysisField?.value).not.toContain('Reason codes: normal_context');
   });
 

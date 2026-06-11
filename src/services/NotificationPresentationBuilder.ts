@@ -637,11 +637,11 @@ export class NotificationPresentationBuilder {
   }
 
   private formatCompactEmbedFieldValue(
-    requiredLines: string[],
+    primaryLines: string[],
     optionalLines: Array<string | null | undefined> = []
   ): string {
     const lines: string[] = [];
-    for (const line of [...requiredLines, ...optionalLines]) {
+    for (const line of [...primaryLines, ...optionalLines]) {
       const normalized = line?.trim();
       if (!normalized) {
         continue;
@@ -903,6 +903,12 @@ export class NotificationPresentationBuilder {
       ],
       [
         `Responses reviewed: ${analysis.analyzedMessageCount}`,
+        analysis.legitimacySignals?.length
+          ? `Legitimacy: ${analysis.legitimacySignals.slice(0, 2).join('; ')}`
+          : null,
+        analysis.suspicionSignals?.length
+          ? `Suspicion: ${analysis.suspicionSignals.slice(0, 2).join('; ')}`
+          : null,
         analysis.recommendedAction ? `Recommended action: ${analysis.recommendedAction}` : null,
         analysis.recommendedNextQuestion
           ? `Next question: ${analysis.recommendedNextQuestion}`
@@ -946,6 +952,7 @@ export class NotificationPresentationBuilder {
         analysis.evidenceCategories.length
           ? `Evidence: ${analysis.evidenceCategories.slice(0, 3).join(', ')}`
           : null,
+        analysis.concerns.length ? `Concerns: ${analysis.concerns.slice(0, 2).join('; ')}` : null,
       ]
     );
   }

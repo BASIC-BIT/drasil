@@ -781,12 +781,33 @@ export class InteractionHandler implements IInteractionHandler {
       return labels;
     }
 
-    await Promise.all(
-      uniqueUserIds.map(async (userId) => {
-        const member = await guild.members.fetch(userId).catch(() => null);
-        labels.set(userId, this.formatUserDisplayLabel(userId, this.getMemberDisplayName(member)));
-      })
-    );
+    const fetchedMembers = await guild.members.fetch({ user: uniqueUserIds }).catch(() => null);
+    const fetchedMemberMap = fetchedMembers as {
+      get?: (userId: string) => GuildMember | null;
+    } | null;
+    if (fetchedMemberMap && typeof fetchedMemberMap.get === 'function') {
+      for (const userId of uniqueUserIds) {
+        labels.set(
+          userId,
+          this.formatUserDisplayLabel(
+            userId,
+            this.getMemberDisplayName(fetchedMemberMap.get(userId))
+          )
+        );
+      }
+      return labels;
+    }
+
+    if (uniqueUserIds.length === 1 && fetchedMembers) {
+      const userId = uniqueUserIds[0];
+      labels.set(
+        userId,
+        this.formatUserDisplayLabel(
+          userId,
+          this.getMemberDisplayName(fetchedMembers as unknown as GuildMember)
+        )
+      );
+    }
 
     return labels;
   }

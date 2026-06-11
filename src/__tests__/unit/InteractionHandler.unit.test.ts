@@ -45,6 +45,16 @@ const buildMember = (guildId: string, userId: string, displayName = 'test-user')
     permissions: { has: jest.fn().mockReturnValue(false) },
   }) as unknown as GuildMember;
 
+const buildGuildMemberFetchMock = (): jest.Mock =>
+  jest.fn(async (query: string | { user?: string | string[] }) => {
+    if (typeof query === 'string') {
+      return buildMember('guild-1', query);
+    }
+
+    const userIds = Array.isArray(query.user) ? query.user : query.user ? [query.user] : [];
+    return new Map(userIds.map((userId) => [userId, buildMember('guild-1', userId)]));
+  });
+
 const buildInteraction = (customId: string, guildId: string, user: User): ButtonInteraction => {
   const interaction = {
     customId,
@@ -185,7 +195,7 @@ describe('InteractionHandler (unit)', () => {
         fetch: jest.fn().mockResolvedValue({
           members: {
             me: { permissions: { has: jest.fn().mockReturnValue(true) } },
-            fetch: jest.fn(async (userId: string) => buildMember('guild-1', userId)),
+            fetch: buildGuildMemberFetchMock(),
           },
         }),
       },
