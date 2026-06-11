@@ -47,6 +47,8 @@ interface ThreadAnalysisMetadata {
   };
 }
 
+const EMBED_FIELD_VALUE_MAX_LENGTH = 1024;
+
 export class NotificationPresentationBuilder {
   public static readonly THREAD_ANALYSIS_FIELD_NAME = 'Thread Analysis';
   public static readonly LATEST_ADMIN_ACTION_FIELD_NAME = 'Latest Admin Action';
@@ -629,8 +631,29 @@ export class NotificationPresentationBuilder {
   }
 
   private truncateEmbedFieldValue(value: string): string {
-    const maxLength = 1024;
-    return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
+    return value.length <= EMBED_FIELD_VALUE_MAX_LENGTH
+      ? value
+      : `${value.slice(0, EMBED_FIELD_VALUE_MAX_LENGTH - 3)}...`;
+  }
+
+  private formatCompactEmbedFieldValue(
+    requiredLines: string[],
+    optionalLines: Array<string | null | undefined> = []
+  ): string {
+    const lines: string[] = [];
+    for (const line of [...requiredLines, ...optionalLines]) {
+      const normalized = line?.trim();
+      if (!normalized) {
+        continue;
+      }
+
+      const candidate = [...lines, normalized].join('\n');
+      if (candidate.length <= EMBED_FIELD_VALUE_MAX_LENGTH) {
+        lines.push(normalized);
+      }
+    }
+
+    return lines.join('\n') || 'Review manually.';
   }
 
   private formatAdminActionLabel(actionTaken: AdminActionType): string {
@@ -873,28 +896,19 @@ export class NotificationPresentationBuilder {
     recommendedAction?: 'none' | 'ask_followup' | 'manual_review' | 'restrict';
     analyzedMessageCount: number;
   }): string {
-    const lines = [
-      `Result: **${analysis.result}** (${this.formatConfidencePhrase(analysis.confidence)})`,
-      `Analyzed responses: ${analysis.analyzedMessageCount}`,
-      `Summary: ${analysis.summary}`,
-    ];
-    if (analysis.reasonCodes?.length) {
-      lines.push(`Reason codes: ${analysis.reasonCodes.join(', ')}`);
-    }
-    if (analysis.legitimacySignals?.length) {
-      lines.push(`Legitimacy signals: ${analysis.legitimacySignals.join('; ')}`);
-    }
-    if (analysis.suspicionSignals?.length) {
-      lines.push(`Suspicion signals: ${analysis.suspicionSignals.join('; ')}`);
-    }
-    if (analysis.recommendedNextQuestion) {
-      lines.push(`Next question: ${analysis.recommendedNextQuestion}`);
-    }
-    if (analysis.recommendedAction) {
-      lines.push(`Recommended action: ${analysis.recommendedAction}`);
-    }
-
-    return this.truncateEmbedFieldValue(lines.join('\n'));
+    return this.formatCompactEmbedFieldValue(
+      [
+        `Result: **${analysis.result}** (${this.formatConfidencePhrase(analysis.confidence)})`,
+        `Summary: ${analysis.summary}`,
+      ],
+      [
+        `Responses reviewed: ${analysis.analyzedMessageCount}`,
+        analysis.recommendedAction ? `Recommended action: ${analysis.recommendedAction}` : null,
+        analysis.recommendedNextQuestion
+          ? `Next question: ${analysis.recommendedNextQuestion}`
+          : null,
+      ]
+    );
   }
 
   private findReportAiAnalysis(
@@ -921,23 +935,19 @@ export class NotificationPresentationBuilder {
       return null;
     }
 
-    const lines = [
-      `Result: **${analysis.result}** (${this.formatConfidencePhrase(analysis.confidence)})`,
-      `Summary: ${analysis.summary}`,
-      `Recommended action: ${analysis.recommendedAction}`,
-      `Images analyzed: ${analysis.analyzedImageCount}`,
-    ];
-    if (analysis.reasonCodes.length) {
-      lines.push(`Reason codes: ${analysis.reasonCodes.join(', ')}`);
-    }
-    if (analysis.evidenceCategories.length) {
-      lines.push(`Evidence: ${analysis.evidenceCategories.join(', ')}`);
-    }
-    if (analysis.concerns.length) {
-      lines.push(`Concerns: ${analysis.concerns.join('; ')}`);
-    }
-
-    return this.truncateEmbedFieldValue(lines.join('\n'));
+    return this.formatCompactEmbedFieldValue(
+      [
+        `Result: **${analysis.result}** (${this.formatConfidencePhrase(analysis.confidence)})`,
+        `Summary: ${analysis.summary}`,
+      ],
+      [
+        `Recommended action: ${analysis.recommendedAction}`,
+        analysis.analyzedImageCount > 0 ? `Images analyzed: ${analysis.analyzedImageCount}` : null,
+        analysis.evidenceCategories.length
+          ? `Evidence: ${analysis.evidenceCategories.slice(0, 3).join(', ')}`
+          : null,
+      ]
+    );
   }
 
   private formatGptDiagnosticFieldValue(detectionResult: DetectionResult): string | null {
@@ -950,13 +960,9 @@ export class NotificationPresentationBuilder {
     const resultLine = analysis.isFallback
       ? 'Result: **Unavailable**'
       : `Result: **${analysis.result}** (${this.formatConfidencePhrase(analysis.confidence)})`;
-    return this.truncateEmbedFieldValue(
-      [
-        resultLine,
-        `Primary signal: ${analysis.primarySignal}`,
-        `Reason codes: ${reasonCodes}`,
-        `Summary: ${analysis.summary}`,
-      ].join('\n')
+    return this.formatCompactEmbedFieldValue(
+      [resultLine, `Summary: ${analysis.summary}`],
+      [`Primary signal: ${analysis.primarySignal}`, `Reason codes: ${reasonCodes}`]
     );
   }
 

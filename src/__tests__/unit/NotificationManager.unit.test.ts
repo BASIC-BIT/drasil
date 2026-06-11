@@ -427,7 +427,7 @@ describe('NotificationManager (unit)', () => {
       confidence: 0.9,
       reasons: [
         'Message contains suspicious keywords or patterns',
-        'AI analysis flagged recent message context as suspicious',
+        'Risk analysis flagged recent message context as suspicious',
       ],
       triggerSource: DetectionType.SUSPICIOUS_CONTENT,
       triggerContent: 'free discord nitro',
@@ -435,7 +435,7 @@ describe('NotificationManager (unit)', () => {
       gptAnalysis: {
         result: 'SUSPICIOUS',
         confidence: 0.91,
-        reasons: ['AI analysis flagged recent message context as suspicious'],
+        reasons: ['Risk analysis flagged recent message context as suspicious'],
         reasonCodes: ['suspicious_keyword'],
         primarySignal: 'message_content',
         summary: 'Recent message context matches common scam patterns.',
@@ -906,7 +906,7 @@ describe('NotificationManager (unit)', () => {
     expect(actionLog?.value).toContain(':F>');
   });
 
-  it('updates the admin notification with AI thread analysis details', async () => {
+  it('updates the admin notification with concise thread analysis details', async () => {
     const embed = new EmbedBuilder().setTitle('Suspicious User');
     const message: MockMessage = {
       embeds: [embed],
@@ -941,11 +941,11 @@ describe('NotificationManager (unit)', () => {
     const analysisField = fields.find((field) => field.name === 'Thread Analysis');
 
     expect(analysisField?.value).toContain('Result: **likely_legitimate** (Medium confidence)');
-    expect(analysisField?.value).toContain('Analyzed responses: 2');
+    expect(analysisField?.value).toContain('Responses reviewed: 2');
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'
     );
-    expect(analysisField?.value).toContain('Reason codes: normal_context');
+    expect(analysisField?.value).not.toContain('Reason codes: normal_context');
   });
 
   it('displays fallback GPT diagnostics as unavailable', async () => {
@@ -953,16 +953,16 @@ describe('NotificationManager (unit)', () => {
     const detectionResult: DetectionResult = {
       label: 'SUSPICIOUS',
       confidence: 0.9,
-      reasons: ['Suspicious content', 'AI analysis unavailable; review manually'],
+      reasons: ['Suspicious content', 'Risk analysis unavailable; review manually'],
       triggerSource: DetectionType.SUSPICIOUS_CONTENT,
       triggerContent: 'free discord nitro',
       gptAnalysis: {
         result: 'OK',
         confidence: 0.1,
-        reasons: ['AI analysis unavailable; review manually'],
+        reasons: ['Risk analysis unavailable; review manually'],
         reasonCodes: ['ai_analysis_unavailable'],
         primarySignal: 'none',
-        summary: 'AI returned incomplete analysis; review manually.',
+        summary: 'Risk analysis returned incomplete output; review manually.',
         model: GPT_PROFILE_MODEL,
         promptVersion: GPT_PROFILE_PROMPT_VERSION,
         isFallback: true,
@@ -984,7 +984,44 @@ describe('NotificationManager (unit)', () => {
     expect(aiField?.value).not.toContain('Result: **OK**');
   });
 
-  it('preserves persisted AI thread analysis when rebuilding the embed', async () => {
+  it('omits overlong risk-analysis prose instead of truncating it with ellipses', async () => {
+    const member = buildMember('guild-1', 'user-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+      gptAnalysis: {
+        result: 'SUSPICIOUS',
+        confidence: 0.91,
+        reasons: ['Risk analysis flagged recent message context as suspicious'],
+        reasonCodes: ['suspicious_keyword'],
+        primarySignal: 'message_content',
+        summary: 'Verbose diagnostic sentence. '.repeat(80),
+        model: GPT_PROFILE_MODEL,
+        promptVersion: GPT_PROFILE_PROMPT_VERSION,
+        isFallback: false,
+      },
+    };
+    const sentMessage: MockMessage = { id: 'message-9', edit: jest.fn() };
+    adminChannel.send.mockResolvedValue(sentMessage);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({ thread_id: null });
+
+    await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
+
+    const sendArgs = adminChannel.send.mock.calls[0][0] as { embeds: EmbedBuilder[] };
+    const fields = sendArgs.embeds[0].data.fields ?? [];
+    const riskField = fields.find((field) => field.name === 'Risk Analysis');
+
+    expect(riskField?.value.length).toBeLessThanOrEqual(1024);
+    expect(riskField?.value).toContain('Result: **SUSPICIOUS** (High confidence)');
+    expect(riskField?.value).not.toContain('...');
+  });
+
+  it('preserves persisted thread analysis when rebuilding the embed', async () => {
     const member = buildMember('guild-1', 'user-1');
     const detectionResult: DetectionResult = {
       label: 'SUSPICIOUS',
@@ -1024,7 +1061,7 @@ describe('NotificationManager (unit)', () => {
     const analysisField = fields.find((field) => field.name === 'Thread Analysis');
 
     expect(analysisField?.value).toContain('Result: **likely_legitimate** (Medium confidence)');
-    expect(analysisField?.value).toContain('Analyzed responses: 2');
+    expect(analysisField?.value).toContain('Responses reviewed: 2');
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'
     );
