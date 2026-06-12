@@ -1,6 +1,21 @@
 import { MessageFlags, PermissionFlagsBits, User } from 'discord.js';
 import { MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY } from '../../utils/detectionResponseSettings';
+import { handleSlashCommandConfirmationButton } from '../../utils/slashCommandConfirmations';
 import { buildHandler } from './commandHandlerTestHarness';
+
+const confirmLastSlashCommand = async (interaction: any): Promise<void> => {
+  const reply = interaction.reply.mock.calls.at(-1)?.[0];
+  const confirmButton = reply.components[0].components[0];
+  const customId = confirmButton.toJSON().custom_id;
+  await handleSlashCommandConfirmationButton({
+    customId,
+    user: interaction.user,
+    guildId: interaction.guildId ?? null,
+    reply: jest.fn().mockResolvedValue(undefined),
+    update: jest.fn().mockResolvedValue(undefined),
+    editReply: interaction.editReply,
+  } as any);
+};
 
 describe('CommandHandler moderation commands (unit)', () => {
   it('handles /audit ignore-detection for users with Manage Server permission', async () => {
@@ -21,11 +36,14 @@ describe('CommandHandler moderation commands (unit)', () => {
           name === 'detection-id' ? 'det-1' : 'testing false positive'
         ),
       },
-      deferReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
       editReply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     await handler.handleSlashCommand(interaction);
+
+    expect(securityActionService.excludeDetectionFromAccounting).not.toHaveBeenCalled();
+    await confirmLastSlashCommand(interaction);
 
     expect(securityActionService.excludeDetectionFromAccounting).toHaveBeenCalledWith(
       'guild-1',
@@ -116,15 +134,18 @@ describe('CommandHandler moderation commands (unit)', () => {
         getString: jest.fn().mockReturnValue('reason'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     await handler.handleSlashCommand(interaction);
 
     expect(permissionsIn).toHaveBeenCalledWith('channel-1');
+    expect(userModerationService.banUser).not.toHaveBeenCalled();
+    await confirmLastSlashCommand(interaction);
+
     expect(userModerationService.banUser).toHaveBeenCalledWith(targetMember, 'reason', invoker);
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: `User ${targetUser.tag} has been banned.`,
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -159,15 +180,18 @@ describe('CommandHandler moderation commands (unit)', () => {
         getString: jest.fn().mockReturnValue('reason'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     await handler.handleSlashCommand(interaction);
 
     expect(guild.members.fetch).toHaveBeenCalledWith(targetUser.id);
+    expect(userModerationService.banUser).not.toHaveBeenCalled();
+    await confirmLastSlashCommand(interaction);
+
     expect(userModerationService.banUser).toHaveBeenCalledWith(targetMember, 'reason', invoker);
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: `User ${targetUser.tag} has been banned.`,
-      flags: MessageFlags.Ephemeral,
     });
   });
 });

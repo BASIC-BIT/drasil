@@ -23,6 +23,7 @@ import { VerificationHistoryFormatter } from '../utils/VerificationHistoryFormat
 import 'reflect-metadata';
 import { IUserModerationService } from '../services/UserModerationService';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
+import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import { IThreadManager } from '../services/ThreadManager';
 import { IAdminActionRepository } from '../repositories/AdminActionRepository';
 import { ISecurityActionService } from '../services/SecurityActionService';
@@ -59,6 +60,10 @@ import {
 } from './ReportInteractionHandler';
 import { SetupVerificationModalHandler } from './SetupVerificationModalHandler';
 import { buildAdminCaseDetailUrl, buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
+import {
+  handleSlashCommandConfirmationButton,
+  isSlashCommandConfirmationCustomId,
+} from '../utils/slashCommandConfirmations';
 // Load environment variables
 dotenv.config();
 
@@ -94,6 +99,7 @@ export class InteractionHandler implements IInteractionHandler {
   private configService: IConfigService;
   // TODO: Handlers calling a repository is a smell, and should be improved
   private verificationEventRepository: IVerificationEventRepository;
+  private serverMemberRepository?: IServerMemberRepository;
   private threadManager: IThreadManager;
   private adminActionRepository: IAdminActionRepository;
   private reportInteractionHandler: ReportInteractionHandler;
@@ -117,7 +123,10 @@ export class InteractionHandler implements IInteractionHandler {
     reportIntakeService?: IReportIntakeService,
     @inject(TYPES.ProductAnalyticsService)
     @optional()
-    productAnalyticsService?: IProductAnalyticsService
+    productAnalyticsService?: IProductAnalyticsService,
+    @inject(TYPES.ServerMemberRepository)
+    @optional()
+    serverMemberRepository?: IServerMemberRepository
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -125,6 +134,7 @@ export class InteractionHandler implements IInteractionHandler {
     this.securityActionService = securityActionService;
     this.configService = configService;
     this.verificationEventRepository = verificationEventRepository;
+    this.serverMemberRepository = serverMemberRepository;
     this.threadManager = threadManager;
     this.adminActionRepository = adminActionRepository;
     const reportSubmissionService = new ReportSubmissionService(
@@ -168,6 +178,11 @@ export class InteractionHandler implements IInteractionHandler {
 
       if (this.reportInteractionHandler.isReportIntakeConfirmCustomId(customId)) {
         await this.reportInteractionHandler.handleReportIntakeConfirm(interaction, customId);
+        return;
+      }
+
+      if (isSlashCommandConfirmationCustomId(customId)) {
+        await handleSlashCommandConfirmationButton(interaction);
         return;
       }
 
@@ -430,6 +445,9 @@ export class InteractionHandler implements IInteractionHandler {
         : false;
     const canBan =
       hasBanMembersPermission && !alreadyBanned && (await this.canUseModeratorBanAction(guildId));
+    const restrictionState = activeCase
+      ? await this.getCaseRestrictionState(guildId, parsed.userId)
+      : null;
 
     const actionButtons: ButtonBuilder[] = [];
     if (hasModerationPermission) {
@@ -440,6 +458,16 @@ export class InteractionHandler implements IInteractionHandler {
 
     if (activeCase?.status === VerificationStatus.PENDING) {
       if (hasModerationPermission) {
+        actionButtons.push(
+          restrictionState === true
+            ? this.adminActionButton(
+                parsed,
+                'lift_restriction',
+                'Lift Restriction',
+                ButtonStyle.Secondary
+              )
+            : this.adminActionButton(parsed, 'restrict_user', 'Restrict User', ButtonStyle.Danger)
+        );
         actionButtons.push(
           this.adminActionButton(parsed, 'verify', 'Verify User', ButtonStyle.Success),
           this.adminActionButton(
@@ -481,6 +509,9 @@ export class InteractionHandler implements IInteractionHandler {
     const adminChannelId = await this.getAdminChannelId(guildId);
     const userLabel = await this.resolveUserDisplayLabel(guildId, parsed.userId);
     const details = [`Admin actions for ${userLabel}.`];
+    if (activeCase?.status === VerificationStatus.PENDING) {
+      details.push(`Restriction: ${this.formatCaseRestrictionState(restrictionState)}.`);
+    }
     const latestCaseLinks = latestCase
       ? this.formatVerificationCaseLinks(guildId, latestCase, adminChannelId)
       : [];
@@ -840,14 +871,36 @@ export class InteractionHandler implements IInteractionHandler {
     return server?.admin_channel_id ?? null;
   }
 
+  private async getCaseRestrictionState(guildId: string, userId: string): Promise<boolean | null> {
+    if (!this.serverMemberRepository) {
+      return null;
+    }
+
+    const serverMember = await this.serverMemberRepository
+      .findByServerAndUser(guildId, userId)
+      .catch(() => null);
+    return serverMember?.is_restricted ?? null;
+  }
+
+  private formatCaseRestrictionState(restricted: boolean | null): string {
+    if (restricted === true) {
+      return 'restricted';
+    }
+    if (restricted === false) {
+      return 'unrestricted';
+    }
+
+    return 'unknown';
+  }
+
   private formatVerificationCaseLinks(
     guildId: string,
     event: VerificationEvent,
     adminChannelId: string | null
   ): string[] {
     return [
-      adminChannelId && event.notification_message_id
-        ? `admin: https://discord.com/channels/${guildId}/${adminChannelId}/${event.notification_message_id}`
+      (event.notification_channel_id ?? adminChannelId) && event.notification_message_id
+        ? `admin: https://discord.com/channels/${guildId}/${event.notification_channel_id ?? adminChannelId}/${event.notification_message_id}`
         : null,
       event.private_evidence_thread_id
         ? `evidence: https://discord.com/channels/${guildId}/${event.private_evidence_thread_id}`
@@ -928,6 +981,18 @@ export class InteractionHandler implements IInteractionHandler {
           label: 'Confirm Verify',
           message: `Verify ${target} and remove verification restrictions?`,
           style: ButtonStyle.Success,
+        };
+      case 'restrict_user':
+        return {
+          label: 'Confirm Restrict',
+          message: `Restrict ${target} while keeping their case pending?`,
+          style: ButtonStyle.Danger,
+        };
+      case 'lift_restriction':
+        return {
+          label: 'Confirm Lift',
+          message: `Lift verification restrictions for ${target} while keeping their case pending?`,
+          style: ButtonStyle.Secondary,
         };
       case 'close_no_action':
         return {
@@ -1093,6 +1158,30 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
+    if (action === 'restrict_user') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to restrict a user.'
+        );
+        return;
+      }
+      await this.handleRestrictUserButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
+    if (action === 'lift_restriction') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to lift a restriction.'
+        );
+        return;
+      }
+      await this.handleLiftRestrictionButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
     if (action === 'close_no_action') {
       if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
         await this.replyPermissionDenied(
@@ -1241,6 +1330,84 @@ export class InteractionHandler implements IInteractionHandler {
         flags: MessageFlags.Ephemeral,
       });
     }
+  }
+
+  private async handleRestrictUserButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) {
+        throw new Error('Could not find member in guild');
+      }
+
+      await this.securityActionService.restrictActiveCase(member, interaction.user);
+      await this.refreshActiveCaseNotification(guildId, userId);
+
+      await interaction.followUp({
+        content: `Restricted <@${userId}> while keeping the case open.`,
+        flags: MessageFlags.Ephemeral,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Error restricting user from case action:', error);
+      await interaction.followUp({
+        content: 'An error occurred while restricting the user.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  private async handleLiftRestrictionButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) {
+        throw new Error('Could not find member in guild');
+      }
+
+      await this.userModerationService.liftRestriction(member, interaction.user);
+      await this.refreshActiveCaseNotification(guildId, userId);
+
+      await interaction.followUp({
+        content: `Lifted restrictions for <@${userId}> while keeping the case open.`,
+        flags: MessageFlags.Ephemeral,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Error lifting restriction from case action:', error);
+      await interaction.followUp({
+        content: 'An error occurred while lifting the restriction.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  private async refreshActiveCaseNotification(guildId: string, userId: string): Promise<void> {
+    const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+      userId,
+      guildId
+    );
+    if (!activeCase?.notification_message_id) {
+      return;
+    }
+
+    await this.notificationManager
+      .updateNotificationButtons(activeCase, VerificationStatus.PENDING)
+      .catch((error) => {
+        console.warn(`Failed to refresh case notification for ${userId}:`, error);
+      });
   }
 
   private async handleSyncAlreadyBannedButton(

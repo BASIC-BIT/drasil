@@ -29,14 +29,15 @@ Persistence uses Postgres (often Supabase) via Prisma. Orchestration is direct (
 - Orchestration is direct: controllers call services; services coordinate side effects.
 - DMs are ignored.
 - Failure handling is fail-fast; no retries/compensation yet.
-- Thread creation is automatic on suspicion; Create Thread button is only for missing threads.
-- Manual flag and user report both create detection events and follow the same flow.
+- Automatic message/join detections can record, notify, or restrict; they do not open unrestricted cases.
+- User reports create detection events first; default report triage is an observed alert until a moderator or configured report-intake escalation opens/restricts a case.
+- Cases use normal user-visible threads whether restricted or unrestricted; moderator-only report review threads are legacy fallback only.
 
 Primary flow (see `docs/workflow.md`):
 
 1. `EventHandler` -> `DetectionOrchestrator` -> `SecurityActionService`.
-2. `SecurityActionService` ensures entities, ensures detection event, creates verification if
-   needed, restricts the user, creates a thread, and upserts admin notification.
+2. `SecurityActionService` ensures entities, ensures detection events, routes observed alerts or
+   cases, applies restriction when requested, creates case threads, and upserts admin notifications.
 3. `InteractionHandler`/`CommandHandler` call `UserModerationService` for verify/ban.
 4. `UserModerationService` updates verification status, roles, thread state, notifications,
    and admin actions.

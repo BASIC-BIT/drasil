@@ -51,7 +51,7 @@ describe('CommandHandler detection config commands (unit)', () => {
     const updateServerSettings = jest.fn().mockResolvedValue({
       settings: {
         detection_response_mode: 'notify_only',
-        message_detection_response_mode: 'open_case',
+        message_detection_response_mode: 'restrict',
       },
     });
     const { handler, configService } = buildHandler({ updateServerSettings });
@@ -74,7 +74,7 @@ describe('CommandHandler detection config commands (unit)', () => {
       options: {
         getSubcommandGroup: jest.fn().mockReturnValue('detection'),
         getSubcommand: jest.fn().mockReturnValue('set-event-mode'),
-        getString: jest.fn((name: string) => (name === 'event' ? 'message' : 'open_case')),
+        getString: jest.fn((name: string) => (name === 'event' ? 'message' : 'restrict')),
       },
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
@@ -82,7 +82,7 @@ describe('CommandHandler detection config commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
-      message_detection_response_mode: 'open_case',
+      message_detection_response_mode: 'restrict',
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining('Updated message detection response policy'),

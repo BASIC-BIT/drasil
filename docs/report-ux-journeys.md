@@ -101,17 +101,18 @@ Good low-commitment signal for moderators. It avoids case clutter but may be eas
 5. No automatic restriction is applied.
 
 Current UX result:
-Currently equivalent to `notify_only`; retained as a separate mode for compatibility and future UX polish.
+Currently equivalent to `notify_only`; retained as a separate mode for compatibility and future UX polish. External `open_case` does not create a case thread yet.
 
 ### Moderator Escalates A Report Case
 
-1. Moderator reviews the report-only case.
-2. Moderator restricts or bans the reported user.
-3. If the moderator restricts, Drasil creates a user-visible verification thread before applying the restriction.
-4. If the moderator bans, Drasil bans and logs the action without creating a user-visible verification thread.
+1. Moderator reviews the report alert or existing case.
+2. Moderator opens a case, restricts, lifts restriction, or bans the reported user.
+3. If the moderator opens a case without restriction, Drasil creates a normal user-visible case thread and leaves the user unrestricted.
+4. If the moderator restricts, Drasil creates or reuses the normal user-visible case thread before applying the restriction.
+5. If the moderator bans directly from an alert, Drasil bans and logs the action without creating a user-visible verification thread.
 
 Current UX result:
-This is the critical safety invariant. Report-only stays quiet; restriction creates a visible path; ban does not create unnecessary conversation space.
+This is the critical safety invariant. Report-only stays quiet until a moderator opens a case or restricts; opening a case creates the same visible case surface whether or not the user is restricted.
 
 ## Previous Implementation Tradeoff
 
@@ -131,7 +132,7 @@ Costs:
 - Increases channel/thread clutter for low-quality reports.
 - Can make report-only cases feel heavier than observe-only suspicious activity.
 
-The `metadata.thread_type` distinction still exists as a safety fallback for cases that already have report review threads or for moderators who explicitly open a case workspace.
+The `metadata.thread_type` distinction still exists as a safety fallback for cases that already have report review threads.
 
 ## Embed-First, Lazy Thread
 
@@ -144,20 +145,20 @@ Report-only intake starts as an observed alert instead of immediately opening a 
 5. `Dismiss...` keeps the existing flow: `Dismiss Alert`, `False Positive`, and undo.
 6. `Restrict` creates or reuses a case, restricts the user, and creates a user-visible verification thread.
 7. `Ban` bans and logs the action without creating a user-visible thread.
-8. `Open Case` is the deliberate path for moderators who want a case workspace without immediately restricting the user.
+8. `Open Case` is the deliberate path for moderators who want a normal case without immediately restricting the user.
 
 Benefits:
 
 - Lower clutter for report-only review.
 - Aligns reports with observe-only suspicious activity UX.
-- Keeps thread creation tied to cases that need conversation.
+- Keeps thread creation tied to cases instead of report alerts.
 - Reuses existing observed alert dismissal, false-positive, undo, and history actions.
 
 Costs:
 
 - Report submissions would no longer immediately create a pending case, so any code or docs that assume user reports always create cases must be updated.
-- `Open Case` still needs a clear product meaning for reports: it means "create a moderator review workspace," not "notify the reported user."
-- The existing report review thread remains useful as the workspace for `Open Case`, but it should be deliberate instead of automatic on every report.
+- `Open Case` needs a clear product meaning for reports: it creates a normal case and user-visible thread without applying restriction.
+- Legacy report review threads remain as a safety fallback for existing cases, not the default workspace for new cases.
 
 ## Recommendation
 
@@ -166,20 +167,21 @@ Keep report-only intake on the existing observed alert UX. Do not introduce a ne
 Target behavior:
 
 - Report submission: moderator-facing observed alert embed with action buttons, no case/thread by default.
-- Moderator opens case: create the existing moderator-only report review thread/workspace.
-- Moderator restricts: create a user-visible verification thread.
+- Moderator opens case: create a normal user-visible case thread without restricting the user.
+- Moderator restricts: create or reuse the normal case thread and apply the restricted role.
+- Moderator lifts restriction: keep the case open and remove the restricted role.
 - Moderator bans: ban and log the action, with no user-visible verification thread.
 - External `notify_only`: observed alert with action buttons, no case thread.
 - External `open_case`: currently the same observed-alert behavior as `notify_only`, retained for compatibility and future UX polish.
 
-The key product rule should be: report triage needs context and buttons; restriction needs a user-visible conversation; moderator collaboration can use the existing report review thread when a moderator explicitly opens a case.
+The key product rule should be: report triage needs context and buttons; a case means a user-visible case surface; restriction is a reversible state on an open case, not a separate hidden case type.
 
 ## Open Questions
 
 - Should external reports show which server(s) received the report in the reporter confirmation, or keep that intentionally opaque?
 - If the reporter is an admin in one or more servers that receive an external report, should the confirmation name those servers?
 - Should repeated reports update one embed, append a summary, or create separate case entries?
-- Should moderator-only review threads auto-archive when a case is closed or escalated?
+- Should legacy moderator-only review threads be migrated or removed once no active cases use them?
 - Should `Open Case` be relabeled for report alerts, or is the existing label clear enough?
 
 ## Follow-Up Work
@@ -187,4 +189,5 @@ The key product rule should be: report triage needs context and buttons; restric
 1. Consider whether `Open Case` should be relabeled for report alerts.
 2. Decide whether admin reporters should see which servers received an external report.
 3. Preserve the current thread-type upgrade behavior as a safety fallback for existing cases.
-4. Update manual QA to cover reporter confirmation, moderator alert actions, dismissal/false-positive undo, open case, restrict, and ban.
+4. Decide the parent-channel permission strategy for unrestricted user-visible case threads.
+5. Update manual QA to cover reporter confirmation, moderator alert actions, dismissal/false-positive undo, open case, restrict, lift restriction, and ban.

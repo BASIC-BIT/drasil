@@ -4,7 +4,6 @@ export const detectionResponseModeSchema = z.enum([
   'off',
   'record_only',
   'notify_only',
-  'open_case',
   'restrict',
 ]);
 

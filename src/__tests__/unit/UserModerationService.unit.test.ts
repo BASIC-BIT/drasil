@@ -108,6 +108,7 @@ describe('UserModerationService (unit)', () => {
       createVerificationThread: jest.fn().mockResolvedValue({} as any),
       createReportReviewThread: jest.fn().mockResolvedValue({} as any),
       createPrivateEvidenceThread: jest.fn().mockResolvedValue({} as any),
+      createObservedEvidenceThread: jest.fn().mockResolvedValue({} as any),
       createReportIntakeThread: jest.fn().mockResolvedValue({} as any),
       activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
@@ -120,6 +121,118 @@ describe('UserModerationService (unit)', () => {
         promptAlreadyPresent: false,
       }),
     };
+  });
+
+  it('restricts a pending case without resolving it', async () => {
+    const guildId = 'guild-restrict';
+    const userId = 'user-restrict';
+    const moderator = { id: 'mod-restrict' } as User;
+    const member = buildMember(guildId, userId);
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.ADMIN_CASE,
+      confidence: 1,
+      reasons: ['Admin case'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await service.restrictUser(member, moderator);
+
+    const updatedEvent = await verificationEventRepository.findById(verificationEvent.id);
+    expect(updatedEvent?.status).toBe(VerificationStatus.PENDING);
+    expect(roleManager.assignRestrictedRole).toHaveBeenCalledWith(member);
+    const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
+    expect(serverMember?.is_restricted).toBe(true);
+    expect(serverMember?.verification_status).toBe(VerificationStatus.PENDING);
+
+    const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
+    expect(adminActions).toHaveLength(1);
+    expect(adminActions[0]).toEqual(
+      expect.objectContaining({
+        action_type: AdminActionType.RESTRICT,
+        verification_event_id: verificationEvent.id,
+        detection_event_id: detectionEvent.id,
+      })
+    );
+  });
+
+  it('lifts a restriction without resolving the pending case', async () => {
+    const guildId = 'guild-lift-restriction';
+    const userId = 'user-lift-restriction';
+    const moderator = { id: 'mod-lift' } as User;
+    const member = buildMember(guildId, userId);
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      is_restricted: true,
+      verification_status: VerificationStatus.PENDING,
+    });
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.ADMIN_CASE,
+      confidence: 1,
+      reasons: ['Admin case'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await service.liftRestriction(member, moderator);
+
+    const updatedEvent = await verificationEventRepository.findById(verificationEvent.id);
+    expect(updatedEvent?.status).toBe(VerificationStatus.PENDING);
+    expect(roleManager.removeRestrictedRole).toHaveBeenCalledWith(member);
+    const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
+    expect(serverMember?.is_restricted).toBe(false);
+    expect(serverMember?.verification_status).toBe(VerificationStatus.PENDING);
+
+    const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
+    expect(adminActions).toHaveLength(1);
+    expect(adminActions[0]).toEqual(
+      expect.objectContaining({
+        action_type: AdminActionType.LIFT_RESTRICTION,
+        verification_event_id: verificationEvent.id,
+        detection_event_id: detectionEvent.id,
+      })
+    );
   });
 
   it('verifies a user and records admin action', async () => {

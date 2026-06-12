@@ -28,7 +28,12 @@ export interface IUserModerationService {
    * @param member The guild member to restrict
    * @returns Promise resolving to true if successful, false if the restriction failed
    */
-  restrictUser(member: GuildMember): Promise<boolean>;
+  restrictUser(member: GuildMember, moderator?: User): Promise<boolean>;
+
+  /**
+   * Removes the restricted role while keeping the active case pending.
+   */
+  liftRestriction(member: GuildMember, moderator: User): Promise<boolean>;
 
   /**
    * Removes the restricted role from a guild member and updates their verification status
@@ -359,12 +364,13 @@ export class UserModerationService implements IUserModerationService {
    * @param member The guild member to restrict
    * @returns Promise resolving to true if successful, false if the restriction failed
    */
-  public async restrictUser(member: GuildMember): Promise<boolean> {
+  public async restrictUser(member: GuildMember, moderator?: User): Promise<boolean> {
     try {
       const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
         member.id,
         member.guild.id
       );
+      const previousStatus = verificationEvent?.status ?? null;
 
       if (!verificationEvent) {
         // If no active event, we might still need to restrict based on other logic,
@@ -394,6 +400,7 @@ export class UserModerationService implements IUserModerationService {
         is_restricted: true,
         verification_status: VerificationStatus.PENDING, // Ensure status matches
         last_status_change: new Date(),
+        updated_by: moderator?.id,
       });
 
       console.log(`Successfully restricted user ${member.user.tag}`);
@@ -410,13 +417,75 @@ export class UserModerationService implements IUserModerationService {
         ModerationOutcomeSource.DRASIL,
         verificationEvent ? [verificationEvent] : [],
         {
+          actorId: moderator?.id,
           metadata: this.buildOutcomeMetadata({}, member.user, member),
           recordWithoutVerificationEvent: !verificationEvent,
         }
       );
+      if (moderator && verificationEvent) {
+        await this.adminActionService.recordAction({
+          server_id: member.guild.id,
+          user_id: member.id,
+          admin_id: moderator.id,
+          verification_event_id: verificationEvent.id,
+          detection_event_id: verificationEvent.detection_event_id,
+          action_type: AdminActionType.RESTRICT,
+          previous_status: previousStatus,
+          new_status: VerificationStatus.PENDING,
+          notes: 'Restricted while case remains pending.',
+        });
+      }
       return true;
     } catch (error) {
       console.error(`Failed to restrict user ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
+  public async liftRestriction(member: GuildMember, moderator: User): Promise<boolean> {
+    try {
+      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+      if (!verificationEvent) {
+        throw new Error('No active verification event found to lift restriction');
+      }
+
+      const roleRemoved = await this.roleManager.removeRestrictedRole(member);
+      if (!roleRemoved) {
+        throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
+      }
+
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        is_restricted: false,
+        verification_status: VerificationStatus.PENDING,
+        last_status_change: new Date(),
+        updated_by: moderator.id,
+      });
+
+      await this.adminActionService.recordAction({
+        server_id: member.guild.id,
+        user_id: member.id,
+        admin_id: moderator.id,
+        verification_event_id: verificationEvent.id,
+        detection_event_id: verificationEvent.detection_event_id,
+        action_type: AdminActionType.LIFT_RESTRICTION,
+        previous_status: verificationEvent.status,
+        new_status: VerificationStatus.PENDING,
+        notes: 'Restriction lifted while case remains pending.',
+      });
+
+      this.captureModerationAction(
+        member,
+        AdminActionType.LIFT_RESTRICTION,
+        moderator,
+        verificationEvent.id,
+        verificationEvent.detection_event_id
+      );
+      return true;
+    } catch (error) {
+      console.error(`Failed to lift restriction for user ${member.user.tag}:`, error);
       throw error;
     }
   }

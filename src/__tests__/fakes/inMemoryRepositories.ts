@@ -478,6 +478,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       detection_event_id: detectionEventId,
       thread_id: null,
       private_evidence_thread_id: null,
+      notification_channel_id: null,
       notification_message_id: null,
       status,
       created_at: now,
@@ -529,6 +530,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     if (data.thread_id !== undefined) updated.thread_id = data.thread_id;
     if (data.private_evidence_thread_id !== undefined)
       updated.private_evidence_thread_id = data.private_evidence_thread_id;
+    if (data.notification_channel_id !== undefined)
+      updated.notification_channel_id = data.notification_channel_id;
     if (data.notification_message_id !== undefined)
       updated.notification_message_id = data.notification_message_id;
     if (data.notes !== undefined) updated.notes = data.notes;

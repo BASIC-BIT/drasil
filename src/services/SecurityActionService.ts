@@ -108,6 +108,8 @@ export interface ISecurityActionService {
 
   repairActiveCase(member: GuildMember): Promise<ActiveCaseRepairResult>;
 
+  restrictActiveCase(member: GuildMember, moderator: User): Promise<boolean>;
+
   intakeRoleMembers(options: RoleIntakeOptions): Promise<RoleIntakeResult>;
 
   /**
@@ -424,10 +426,15 @@ export class SecurityActionService implements ISecurityActionService {
       throw new Error('Failed to send or update suspicious user notification');
     }
 
-    if (verificationEvent.notification_message_id !== notificationMessage.id) {
+    if (
+      verificationEvent.notification_message_id !== notificationMessage.id ||
+      verificationEvent.notification_channel_id !== notificationMessage.channelId
+    ) {
       await this.verificationEventRepository.update(verificationEvent.id, {
+        notification_channel_id: notificationMessage.channelId,
         notification_message_id: notificationMessage.id,
       });
+      verificationEvent.notification_channel_id = notificationMessage.channelId;
       verificationEvent.notification_message_id = notificationMessage.id;
     }
 
@@ -435,12 +442,7 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   private createDetectionResultFromEvent(detectionEvent: DetectionEvent): DetectionResult {
-    const metadata =
-      detectionEvent.metadata &&
-      typeof detectionEvent.metadata === 'object' &&
-      !Array.isArray(detectionEvent.metadata)
-        ? detectionEvent.metadata
-        : {};
+    const metadata = this.metadataToRecord(detectionEvent.metadata);
     const content = typeof metadata.content === 'string' ? metadata.content : undefined;
 
     return {
@@ -454,11 +456,16 @@ export class SecurityActionService implements ISecurityActionService {
     };
   }
 
-  private shouldUseReportReviewThread(
-    restrictUser: boolean,
-    detectionResult: DetectionResult
-  ): boolean {
-    return !restrictUser && detectionResult.triggerSource === DetectionType.USER_REPORT;
+  private metadataToRecord(metadata: unknown): Record<string, unknown> {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return {};
+    }
+
+    return { ...(metadata as Record<string, unknown>) };
+  }
+
+  private shouldUseReportReviewThread(): boolean {
+    return false;
   }
 
   private hasReportReviewThread(verificationEvent: VerificationEvent): boolean {
@@ -729,10 +736,13 @@ export class SecurityActionService implements ISecurityActionService {
 
   private async tryRestrictUser(
     member: GuildMember,
-    verificationEvent: VerificationEvent
+    verificationEvent: VerificationEvent,
+    moderator?: User
   ): Promise<VerificationEvent> {
     try {
-      const restricted = await this.userModerationService.restrictUser(member);
+      const restricted = moderator
+        ? await this.userModerationService.restrictUser(member, moderator)
+        : await this.userModerationService.restrictUser(member);
       if (!restricted) {
         throw new Error(`Failed to restrict user ${member.user.tag}`);
       }
@@ -777,7 +787,8 @@ export class SecurityActionService implements ISecurityActionService {
   private async upsertReportObservedAlertOrActiveCase(
     member: GuildMember,
     detectionResult: DetectionResult,
-    detectionEventId: string
+    detectionEventId: string,
+    sourceMessage?: Message
   ): Promise<void> {
     const activeVerificationEvent =
       await this.verificationEventRepository.findActiveByUserAndServer(member.id, member.guild.id);
@@ -788,6 +799,12 @@ export class SecurityActionService implements ISecurityActionService {
       if (!notificationMessage) {
         throw new Error('Failed to send or update report observed alert');
       }
+      await this.ensureObservedEvidenceThread(
+        member,
+        detectionResult,
+        notificationMessage,
+        sourceMessage
+      );
       return;
     }
 
@@ -802,6 +819,47 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     await this.upsertNotification(member, detectionResult, activeVerificationEvent);
+  }
+
+  private async ensureObservedEvidenceThread(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    notificationMessage: Message,
+    sourceMessage?: Message
+  ): Promise<void> {
+    if (!detectionResult.detectionEventId) {
+      return;
+    }
+
+    try {
+      const detectionEvent = await this.detectionEventsRepository.findById(
+        detectionResult.detectionEventId
+      );
+      const metadata = this.metadataToRecord(detectionEvent?.metadata);
+      if (typeof metadata.observed_evidence_thread_id === 'string') {
+        return;
+      }
+
+      const thread = await this.threadManager.createObservedEvidenceThread(
+        member,
+        detectionResult,
+        notificationMessage,
+        sourceMessage
+      );
+      if (!thread) {
+        return;
+      }
+
+      await this.detectionEventsRepository.updateMetadata(detectionResult.detectionEventId, {
+        ...metadata,
+        observed_evidence_thread_id: thread.id,
+      });
+    } catch (error) {
+      console.error(
+        `Failed to create observed evidence thread for ${member.user.tag}; continuing observed alert flow:`,
+        error
+      );
+    }
   }
 
   private async routeConfirmedReportIntake(
@@ -828,7 +886,7 @@ export class SecurityActionService implements ISecurityActionService {
       detectionResult,
       undefined,
       route === 'restrict',
-      route === 'open_case',
+      false,
       true
     );
     if (!handled) {
@@ -946,8 +1004,7 @@ export class SecurityActionService implements ISecurityActionService {
     useReportReviewThread?: boolean
   ): Promise<VerificationEvent> {
     const detectionResult = this.createDetectionResultFromEvent(detectionEvent);
-    const shouldUseReviewThread =
-      useReportReviewThread ?? this.shouldUseReportReviewThread(false, detectionResult);
+    const shouldUseReviewThread = useReportReviewThread ?? this.shouldUseReportReviewThread();
     await this.handleSuspiciousMember(
       member,
       detectionResult,
@@ -1155,10 +1212,10 @@ export class SecurityActionService implements ISecurityActionService {
     sourceMessage?: Message,
     restrictUser = true,
     useReportReviewThread?: boolean,
-    entitiesAlreadyEnsured = false
+    entitiesAlreadyEnsured = false,
+    moderator?: User
   ): Promise<boolean> {
-    const shouldUseReviewThread =
-      useReportReviewThread ?? this.shouldUseReportReviewThread(restrictUser, detectionResult);
+    const shouldUseReviewThread = useReportReviewThread ?? this.shouldUseReportReviewThread();
 
     if (!entitiesAlreadyEnsured) {
       // Create durable case state before Discord side effects so moderators see partial failures.
@@ -1193,6 +1250,19 @@ export class SecurityActionService implements ISecurityActionService {
           `Failed to link detection event ${detectionEventId} to verification event ${activeVerificationEvent.id}`
         );
       }
+      if (
+        !shouldUseReviewThread &&
+        (!notificationVerificationEvent.thread_id ||
+          this.hasReportReviewThread(notificationVerificationEvent))
+      ) {
+        notificationVerificationEvent = await this.tryCreateCaseThread(
+          member,
+          notificationVerificationEvent,
+          detectionResult,
+          false,
+          sourceMessage
+        );
+      }
       if (restrictUser) {
         const serverMember = await this.serverMemberRepository.findByServerAndUser(
           member.guild.id,
@@ -1201,7 +1271,8 @@ export class SecurityActionService implements ISecurityActionService {
         if (serverMember?.is_restricted !== true) {
           notificationVerificationEvent = await this.tryRestrictUser(
             member,
-            activeVerificationEvent
+            notificationVerificationEvent,
+            moderator
           );
         }
       }
@@ -1255,7 +1326,7 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     if (restrictUser) {
-      newVerificationEvent = await this.tryRestrictUser(member, newVerificationEvent);
+      newVerificationEvent = await this.tryRestrictUser(member, newVerificationEvent, moderator);
     } else {
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
         is_restricted: false,
@@ -1438,7 +1509,8 @@ export class SecurityActionService implements ISecurityActionService {
         undefined,
         restrictUser,
         undefined,
-        true
+        true,
+        moderator
       );
       if (handled) {
         this.captureMemberAnalytics(
@@ -1542,6 +1614,49 @@ export class SecurityActionService implements ISecurityActionService {
     };
   }
 
+  public async restrictActiveCase(member: GuildMember, moderator: User): Promise<boolean> {
+    const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+      member.id,
+      member.guild.id
+    );
+    if (!activeCase) {
+      throw new Error(`No active verification case found for ${member.user.tag}.`);
+    }
+
+    await this.ensureUserFacingThreadForRestriction(member, activeCase);
+    const restricted = await this.userModerationService.restrictUser(member, moderator);
+    this.requireModerationSuccess(restricted, 'restrict', member);
+
+    return true;
+  }
+
+  private async ensureUserFacingThreadForRestriction(
+    member: GuildMember,
+    activeCase: VerificationEvent
+  ): Promise<VerificationEvent> {
+    try {
+      if (this.hasReportReviewThread(activeCase)) {
+        const thread = await this.threadManager.createVerificationThread(member, activeCase);
+        if (!thread) {
+          throw new Error(`Failed to create verification thread for ${member.user.tag}`);
+        }
+        return await this.clearResolvedVerificationActionFailures(activeCase, ['thread']);
+      }
+
+      const repair = await this.threadManager.repairVerificationThread(member, activeCase);
+      if (!repair.threadId) {
+        throw new Error(`Failed to create or repair verification thread for ${member.user.tag}`);
+      }
+      return await this.clearResolvedVerificationActionFailures(activeCase, ['thread']);
+    } catch (error) {
+      console.error(
+        `Failed to ensure user-facing case thread before restricting ${member.user.tag}; continuing restriction:`,
+        error
+      );
+      return this.recordVerificationActionFailure(activeCase, 'thread', error);
+    }
+  }
+
   public async intakeRoleMembers(options: RoleIntakeOptions): Promise<RoleIntakeResult> {
     return await this.roleIntakeProcessor.intakeRoleMembers(options);
   }
@@ -1587,7 +1702,15 @@ export class SecurityActionService implements ISecurityActionService {
         detectionEventId: detectionEvent.id,
       };
 
-      const handled = await this.handleSuspiciousMember(member, detectionResult);
+      const handled = await this.handleSuspiciousMember(
+        member,
+        detectionResult,
+        undefined,
+        true,
+        undefined,
+        true,
+        moderator
+      );
       if (handled) {
         this.captureMemberAnalytics(
           member,

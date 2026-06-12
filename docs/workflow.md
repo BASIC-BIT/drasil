@@ -7,6 +7,9 @@ services, and services handle side effects in a single flow.
 `docs/cases.md` for the product-language mapping between cases, detection
 events, admin actions, and Discord surfaces.
 
+For a visual overview of how entry points converge into reports, observed
+detections, and cases, see `docs/moderation-flow.md`.
+
 ## Suspicious message or join
 
 1. `EventHandler` receives a guild message or a new member join (DMs are ignored).
@@ -17,7 +20,6 @@ events, admin actions, and Discord surfaces.
    - `off`: skip automatic detection entirely.
    - `record_only`: persist suspicious detections only.
    - `notify_only`: persist suspicious detections and send/update an admin alert.
-   - `open_case`: create a review case and thread without restricting the user.
    - `restrict`: restrict the user, create a review case, create a thread, and
      notify admins.
 5. `SecurityActionService` handles case-based modes:
@@ -88,7 +90,8 @@ if one is set.
 Admin-opened cases and bulk role intake are explicit moderator/server workflows,
 not GPT detections.
 
-- `/case open` and `/case restrict` create `detection_type = ADMIN_CASE` events.
+- `/case open` creates `detection_type = ADMIN_CASE` events. It restricts by
+  default; pass `restrict:false` to open an unrestricted case.
 - `/case intake-role` creates `detection_type = ROLE_INTAKE` events with source
   role ID/name and batch metadata.
 - Admin-facing reasons render Discord mentions for the moderator and, for role

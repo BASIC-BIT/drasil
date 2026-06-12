@@ -33,6 +33,7 @@ const buildPendingCase = (
   detection_event_id: overrides.detection_event_id ?? 'det-1',
   thread_id: overrides.thread_id ?? 'case-thread-1',
   private_evidence_thread_id: overrides.private_evidence_thread_id ?? 'evidence-thread-1',
+  notification_channel_id: overrides.notification_channel_id ?? null,
   notification_message_id: overrides.notification_message_id ?? 'message-1',
   status: VerificationStatus.PENDING,
   created_at: updatedAt,

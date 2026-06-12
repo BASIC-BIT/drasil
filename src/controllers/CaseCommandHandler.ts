@@ -1,4 +1,5 @@
 import {
+  ButtonStyle,
   ChatInputCommandInteraction,
   Guild,
   MessageFlags,
@@ -7,6 +8,7 @@ import {
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { AdminCaseAction, ISecurityActionService } from '../services/SecurityActionService';
+import { requestSlashCommandConfirmation } from '../utils/slashCommandConfirmations';
 
 type ReplyGuildInstallRequired = (interaction: ChatInputCommandInteraction) => Promise<void>;
 
@@ -58,12 +60,9 @@ export class CaseCommandHandler {
     }
 
     const subcommand = interaction.options.getSubcommand(true);
-    if (subcommand === 'open' || subcommand === 'restrict') {
-      await this.handleCaseUserCommand(
-        interaction,
-        guild,
-        subcommand === 'restrict' ? 'restrict' : 'open_case'
-      );
+    if (subcommand === 'open') {
+      const restrict = interaction.options.getBoolean('restrict') ?? true;
+      await this.handleCaseUserCommand(interaction, guild, restrict ? 'restrict' : 'open_case');
       return;
     }
 
@@ -99,36 +98,48 @@ export class CaseCommandHandler {
       return;
     }
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-    try {
-      const result = await this.securityActionService.openAdminCase(
-        targetMember,
-        interaction.user,
-        {
-          action,
-          reason,
-        }
-      );
-      if (!result.opened) {
-        throw new Error('Case flow returned false');
-      }
-      const content =
+    await requestSlashCommandConfirmation(interaction, {
+      message:
         action === 'restrict'
-          ? result.restricted
-            ? `Opened a case for ${targetUser.tag} and restricted them pending review.`
-            : `Opened a case for ${targetUser.tag}, but I could not apply the restricted role. Check bot permissions and role hierarchy.`
-          : `Opened a review case for ${targetUser.tag}.`;
-      await interaction.editReply({
-        content,
-        allowedMentions: { parse: [] },
-      });
-    } catch (error) {
-      console.error('Failed to open admin case:', error);
-      await interaction.editReply({
-        content: `Failed to open a case for ${targetUser.tag}. Please try again later.`,
-      });
-    }
+          ? `Open a case for ${targetUser.tag} and restrict them pending review?`
+          : `Open an unrestricted case for ${targetUser.tag}?`,
+      confirmLabel: action === 'restrict' ? 'Open And Restrict' : 'Open Case',
+      confirmStyle: action === 'restrict' ? ButtonStyle.Danger : ButtonStyle.Primary,
+      execute: async (buttonInteraction) => {
+        await buttonInteraction.update({
+          content: `Opening case for ${targetUser.tag}...`,
+          components: [],
+        });
+        try {
+          const result = await this.securityActionService.openAdminCase(
+            targetMember,
+            interaction.user,
+            {
+              action,
+              reason,
+            }
+          );
+          if (!result.opened) {
+            throw new Error('Case flow returned false');
+          }
+          const content =
+            action === 'restrict'
+              ? result.restricted
+                ? `Opened a case for ${targetUser.tag} and restricted them pending review.`
+                : `Opened a case for ${targetUser.tag}, but I could not apply the restricted role. Check bot permissions and role hierarchy.`
+              : `Opened an unrestricted case for ${targetUser.tag}.`;
+          await buttonInteraction.editReply({
+            content,
+            allowedMentions: { parse: [] },
+          });
+        } catch (error) {
+          console.error('Failed to open admin case:', error);
+          await buttonInteraction.editReply({
+            content: `Failed to open a case for ${targetUser.tag}. Please try again later.`,
+          });
+        }
+      },
+    });
   }
 
   private async handleCaseRepairCommand(
@@ -206,8 +217,6 @@ export class CaseCommandHandler {
       return;
     }
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
     const rawAction = interaction.options.getString('action') ?? 'open_case';
     const action: AdminCaseAction =
       rawAction === 'open_case' || rawAction === 'restrict' ? rawAction : 'open_case';
@@ -215,10 +224,55 @@ export class CaseCommandHandler {
     const limit = interaction.options.getInteger('limit') ?? undefined;
     const reason = interaction.options.getString('reason')?.trim() || undefined;
 
+    if (execute) {
+      await requestSlashCommandConfirmation(interaction, {
+        message: `Execute role intake for ${role.name}? This will ${action === 'restrict' ? 'open cases and restrict eligible members' : 'open cases for eligible members'}${limit ? `, up to ${limit} members` : ''}.`,
+        confirmLabel: 'Execute Intake',
+        confirmStyle: ButtonStyle.Danger,
+        execute: async (buttonInteraction) => {
+          await buttonInteraction.update({
+            content: `Executing role intake for ${role.name}...`,
+            components: [],
+          });
+          await this.executeRoleIntake(
+            buttonInteraction,
+            role,
+            interaction.user,
+            reason,
+            action,
+            execute,
+            limit
+          );
+        },
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await this.executeRoleIntake(
+      interaction,
+      role,
+      interaction.user,
+      reason,
+      action,
+      execute,
+      limit
+    );
+  }
+
+  private async executeRoleIntake(
+    interaction: Pick<ChatInputCommandInteraction, 'editReply'>,
+    role: Role,
+    moderator: ChatInputCommandInteraction['user'],
+    reason: string | undefined,
+    action: AdminCaseAction,
+    execute: boolean,
+    limit: number | undefined
+  ): Promise<void> {
     try {
       const result = await this.securityActionService.intakeRoleMembers({
         role,
-        moderator: interaction.user,
+        moderator,
         reason,
         action,
         execute,

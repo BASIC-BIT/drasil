@@ -42,6 +42,7 @@ const buildEvent = (
   metadata: null,
   actions,
   ...overrides,
+  notification_channel_id: overrides.notification_channel_id ?? null,
 });
 
 describe('VerificationHistoryFormatter (unit)', () => {

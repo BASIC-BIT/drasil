@@ -55,6 +55,7 @@ const buildVerificationEvent = (overrides: Partial<VerificationEvent> = {}): Ver
   detection_event_id: overrides.detection_event_id ?? null,
   thread_id: overrides.thread_id ?? null,
   private_evidence_thread_id: overrides.private_evidence_thread_id ?? null,
+  notification_channel_id: overrides.notification_channel_id ?? null,
   notification_message_id: overrides.notification_message_id ?? null,
   status: overrides.status ?? VerificationStatus.PENDING,
   created_at: overrides.created_at ?? new Date('2026-01-03T00:00:00Z'),

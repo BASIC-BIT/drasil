@@ -25,6 +25,7 @@ export type HandlerOverrides = Partial<{
   handleMessageReport: jest.Mock;
   openAdminCase: jest.Mock;
   repairActiveCase: jest.Mock;
+  restrictActiveCase: jest.Mock;
   intakeRoleMembers: jest.Mock;
   setupVerificationChannel: jest.Mock;
   setupDiagnosticsService: any | null;
@@ -96,6 +97,7 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
         promptSent: true,
         promptAlreadyPresent: false,
       }),
+    restrictActiveCase: overrides.restrictActiveCase ?? jest.fn().mockResolvedValue(true),
     intakeRoleMembers:
       overrides.intakeRoleMembers ??
       jest.fn().mockResolvedValue({

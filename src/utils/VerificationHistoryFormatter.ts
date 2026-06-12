@@ -75,6 +75,9 @@ export class VerificationHistoryFormatter {
       case AdminActionType.RESTRICT:
         output = `🔒 Restricted by ${adminMention}`;
         break;
+      case AdminActionType.LIFT_RESTRICTION:
+        output = `Restriction lifted by ${adminMention}`;
+        break;
       case AdminActionType.DISMISS:
         output = `Dismissed by ${adminMention}`;
         break;
