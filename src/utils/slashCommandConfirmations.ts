@@ -75,23 +75,28 @@ export async function requestSlashCommandConfirmation(
     execute: options.execute,
   });
 
-  await interaction.reply({
-    content: options.message,
-    flags: MessageFlags.Ephemeral,
-    allowedMentions: { parse: [] },
-    components: [
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(buildConfirmationCustomId('confirm', id))
-          .setLabel(options.confirmLabel)
-          .setStyle(options.confirmStyle ?? ButtonStyle.Danger),
-        new ButtonBuilder()
-          .setCustomId(buildConfirmationCustomId('cancel', id))
-          .setLabel('Cancel')
-          .setStyle(ButtonStyle.Secondary)
-      ),
-    ],
-  });
+  try {
+    await interaction.reply({
+      content: options.message,
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(buildConfirmationCustomId('confirm', id))
+            .setLabel(options.confirmLabel)
+            .setStyle(options.confirmStyle ?? ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId(buildConfirmationCustomId('cancel', id))
+            .setLabel('Cancel')
+            .setStyle(ButtonStyle.Secondary)
+        ),
+      ],
+    });
+  } catch (error) {
+    pendingConfirmations.delete(id);
+    throw error;
+  }
 }
 
 export async function handleSlashCommandConfirmationButton(

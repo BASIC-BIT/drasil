@@ -145,6 +145,9 @@ describe('UserModerationService (unit)', () => {
       userId,
       VerificationStatus.PENDING
     );
+    await verificationEventRepository.update(verificationEvent.id, {
+      notification_message_id: 'notification-restrict',
+    });
 
     const service = new UserModerationService(
       serverMemberRepository,
@@ -175,6 +178,11 @@ describe('UserModerationService (unit)', () => {
         detection_event_id: detectionEvent.id,
       })
     );
+    expect(notificationManager.logActionToMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      AdminActionType.RESTRICT,
+      moderator
+    );
   });
 
   it('lifts a restriction without resolving the pending case', async () => {
@@ -203,6 +211,9 @@ describe('UserModerationService (unit)', () => {
       userId,
       VerificationStatus.PENDING
     );
+    await verificationEventRepository.update(verificationEvent.id, {
+      notification_message_id: 'notification-lift',
+    });
 
     const service = new UserModerationService(
       serverMemberRepository,
@@ -232,6 +243,11 @@ describe('UserModerationService (unit)', () => {
         verification_event_id: verificationEvent.id,
         detection_event_id: detectionEvent.id,
       })
+    );
+    expect(notificationManager.logActionToMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      AdminActionType.LIFT_RESTRICTION,
+      moderator
     );
   });
 

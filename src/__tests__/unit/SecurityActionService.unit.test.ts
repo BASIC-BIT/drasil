@@ -740,6 +740,29 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it('does not restrict an already restricted active case again', async () => {
+    const guildId = 'guild-case-action-restrict-idempotent';
+    const userId = 'user-case-action-restrict-idempotent';
+    const moderator = { id: 'admin-case-action-restrict-idempotent' } as User;
+    const member = buildMember(guildId, userId);
+    await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      is_restricted: true,
+      verification_status: VerificationStatus.PENDING,
+    });
+
+    await buildService().restrictActiveCase(member, moderator);
+
+    expect(threadManager.repairVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+  });
+
   it('creates a new verification thread before restricting a legacy report-review case', async () => {
     const guildId = 'guild-case-action-restrict-report-review';
     const userId = 'user-case-action-restrict-report-review';

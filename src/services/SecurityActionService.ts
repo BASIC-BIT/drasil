@@ -1623,6 +1623,14 @@ export class SecurityActionService implements ISecurityActionService {
       throw new Error(`No active verification case found for ${member.user.tag}.`);
     }
 
+    const serverMember = await this.serverMemberRepository.findByServerAndUser(
+      member.guild.id,
+      member.id
+    );
+    if (serverMember?.is_restricted === true) {
+      return true;
+    }
+
     await this.ensureUserFacingThreadForRestriction(member, activeCase);
     const restricted = await this.userModerationService.restrictUser(member, moderator);
     this.requireModerationSuccess(restricted, 'restrict', member);

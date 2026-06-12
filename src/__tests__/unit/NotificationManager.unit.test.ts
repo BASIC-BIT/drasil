@@ -828,6 +828,35 @@ describe('NotificationManager (unit)', () => {
     expect(labels).toEqual(['Admin Actions']);
   });
 
+  it('updates notification buttons from stored notification channel', async () => {
+    const message: MockMessage = { edit: jest.fn().mockResolvedValue(undefined) };
+    const storedChannel = {
+      id: 'observed-channel-1',
+      type: ChannelType.GuildText,
+      guildId: 'guild-1',
+      messages: {
+        fetch: jest.fn().mockResolvedValue(message as unknown as Message<true>),
+      },
+    };
+    const client = {
+      channels: {
+        fetch: jest.fn().mockResolvedValue(storedChannel),
+      },
+    };
+    const manager = new NotificationManager(client as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({
+      notification_channel_id: 'observed-channel-1',
+      notification_message_id: 'message-stored-channel',
+    });
+
+    await manager.updateNotificationButtons(verificationEvent, VerificationStatus.PENDING);
+
+    expect(client.channels.fetch).toHaveBeenCalledWith('observed-channel-1');
+    expect(storedChannel.messages.fetch).toHaveBeenCalledWith('message-stored-channel');
+    expect(adminChannel.messages.fetch).not.toHaveBeenCalled();
+    expect(message.edit).toHaveBeenCalledTimes(1);
+  });
+
   it('removes repaired action warnings without dropping action log fields', async () => {
     const embed = new EmbedBuilder().setTitle('Suspicious User').addFields(
       {

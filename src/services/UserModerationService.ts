@@ -423,6 +423,13 @@ export class UserModerationService implements IUserModerationService {
         }
       );
       if (moderator && verificationEvent) {
+        if (verificationEvent.notification_message_id) {
+          await this.notificationManager.logActionToMessage(
+            verificationEvent,
+            AdminActionType.RESTRICT,
+            moderator
+          );
+        }
         await this.adminActionService.recordAction({
           server_id: member.guild.id,
           user_id: member.id,
@@ -475,6 +482,14 @@ export class UserModerationService implements IUserModerationService {
         new_status: VerificationStatus.PENDING,
         notes: 'Restriction lifted while case remains pending.',
       });
+
+      if (verificationEvent.notification_message_id) {
+        await this.notificationManager.logActionToMessage(
+          verificationEvent,
+          AdminActionType.LIFT_RESTRICTION,
+          moderator
+        );
+      }
 
       this.captureModerationAction(
         member,

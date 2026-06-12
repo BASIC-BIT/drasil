@@ -913,13 +913,7 @@ export class NotificationManager implements INotificationManager {
       throw new Error('No notification message ID found for verification event');
     }
 
-    const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
-
-    if (!adminChannel) {
-      throw new Error('No admin channel found for verification event');
-    }
-
-    const message = await adminChannel.messages.fetch(verificationEvent.notification_message_id);
+    const message = await this.getMessageForVerificationEvent(verificationEvent);
     const messageEmbeds = (message as { embeds?: Message['embeds'] }).embeds ?? [];
     const updatedEmbed = messageEmbeds.length > 0 ? EmbedBuilder.from(messageEmbeds[0]) : null;
 

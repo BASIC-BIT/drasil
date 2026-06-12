@@ -86,7 +86,7 @@ export class AdminActionService implements IAdminActionService {
         summary = `🔒 Restricted by ${adminMention}`;
         break;
       case AdminActionType.LIFT_RESTRICTION:
-        summary = `Restriction lifted by ${adminMention}`;
+        summary = `🔓 Restriction lifted by ${adminMention}`;
         break;
       case AdminActionType.DISMISS:
         summary = `Dismissed by ${adminMention}`;
