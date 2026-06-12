@@ -119,6 +119,7 @@ export interface INotificationManager {
 }
 
 interface ObservedDetectionMetadata {
+  observed_notification_channel_id?: string;
   observed_notification_message_id?: string;
   observed_notification_last_notified_at?: string;
   observed_action?: string;
@@ -163,9 +164,14 @@ export class NotificationManager implements INotificationManager {
     verificationEvent: VerificationEvent,
     sourceMessage?: Message
   ): Promise<Message | null> {
-    const adminChannel = await this.configService.getAdminChannel(member.guild.id);
-    if (!adminChannel) {
-      console.error('No admin channel ID configured');
+    const serverConfig = await this.configService.getServerConfig(member.guild.id);
+    const responseSettings = getDetectionResponseSettings(serverConfig.settings);
+    const notificationChannel = await this.getModerationNotificationChannel(
+      member.guild.id,
+      responseSettings
+    );
+    if (!notificationChannel) {
+      console.error('No moderation notification channel configured');
       return null;
     }
 
@@ -181,7 +187,6 @@ export class NotificationManager implements INotificationManager {
         detectionEvents,
         sourceMessage
       );
-      const serverConfig = await this.configService.getServerConfig(member.guild.id);
       const actionRow = this.presentationBuilder.createActionRow(member.id, {
         guildId: member.guild.id,
         verificationEventId: verificationEvent.id,
@@ -189,19 +194,26 @@ export class NotificationManager implements INotificationManager {
 
       // If we have an existing message, update it, otherwise create new
       if (verificationEvent.notification_message_id) {
-        const existingMessage = await adminChannel.messages.fetch(
-          verificationEvent.notification_message_id
+        const existingChannel = await this.getStoredNotificationChannel(
+          member.guild.id,
+          verificationEvent.notification_channel_id,
+          notificationChannel
         );
-        return await existingMessage.edit({
-          allowedMentions: { parse: [] },
-          embeds: [embed],
-          components: [actionRow],
-        });
+        const existingMessage = await existingChannel.messages
+          .fetch(verificationEvent.notification_message_id)
+          .catch(() => null);
+        if (existingMessage) {
+          return await existingMessage.edit({
+            allowedMentions: { parse: [] },
+            embeds: [embed],
+            components: [actionRow],
+          });
+        }
       }
 
       // Create a new message
       const notificationRoleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
-      return await adminChannel.send({
+      return await notificationChannel.send({
         content: this.presentationBuilder.formatRoleMentions(notificationRoleIds),
         allowedMentions: this.presentationBuilder.createAdminAllowedMentions(notificationRoleIds),
         embeds: [embed],
@@ -221,7 +233,7 @@ export class NotificationManager implements INotificationManager {
     try {
       const serverConfig = await this.configService.getServerConfig(member.guild.id);
       const responseSettings = getDetectionResponseSettings(serverConfig.settings);
-      const notificationChannel = await this.getObservedDetectionNotificationChannel(
+      const notificationChannel = await this.getModerationNotificationChannel(
         member.guild.id,
         responseSettings
       );
@@ -286,6 +298,7 @@ export class NotificationManager implements INotificationManager {
         const metadata = this.metadataToRecord(currentDetection?.metadata);
         await this.detectionEventsRepository.updateMetadata(detectionResult.detectionEventId, {
           ...metadata,
+          observed_notification_channel_id: notificationMessage.channelId,
           observed_notification_message_id: notificationMessage.id,
           observed_notification_last_notified_at: new Date().toISOString(),
         });
@@ -316,10 +329,17 @@ export class NotificationManager implements INotificationManager {
 
       const serverConfig = await this.configService.getServerConfig(detectionEvent.server_id);
       const responseSettings = getDetectionResponseSettings(serverConfig.settings);
-      const notificationChannel = await this.getObservedDetectionNotificationChannel(
+      const fallbackChannel = await this.getModerationNotificationChannel(
         detectionEvent.server_id,
         responseSettings
       );
+      const notificationChannel = fallbackChannel
+        ? await this.getStoredNotificationChannel(
+            detectionEvent.server_id,
+            metadata.observed_notification_channel_id,
+            fallbackChannel
+          )
+        : null;
       if (!notificationChannel) {
         return false;
       }
@@ -381,10 +401,17 @@ export class NotificationManager implements INotificationManager {
 
       const serverConfig = await this.configService.getServerConfig(detectionEvent.server_id);
       const responseSettings = getDetectionResponseSettings(serverConfig.settings);
-      const notificationChannel = await this.getObservedDetectionNotificationChannel(
+      const fallbackChannel = await this.getModerationNotificationChannel(
         detectionEvent.server_id,
         responseSettings
       );
+      const notificationChannel = fallbackChannel
+        ? await this.getStoredNotificationChannel(
+            detectionEvent.server_id,
+            metadata.observed_notification_channel_id,
+            fallbackChannel
+          )
+        : null;
       if (!notificationChannel) {
         return false;
       }
@@ -536,7 +563,7 @@ export class NotificationManager implements INotificationManager {
     return null;
   }
 
-  private async getObservedDetectionNotificationChannel(
+  private async getModerationNotificationChannel(
     guildId: string,
     responseSettings: ReturnType<typeof getDetectionResponseSettings>
   ): Promise<TextChannel | null> {
@@ -552,6 +579,21 @@ export class NotificationManager implements INotificationManager {
     return (await this.configService.getAdminChannel(guildId)) ?? null;
   }
 
+  private async getStoredNotificationChannel(
+    guildId: string,
+    channelId: string | null | undefined,
+    fallbackChannel: TextChannel
+  ): Promise<TextChannel> {
+    if (!channelId || channelId === fallbackChannel.id) {
+      return fallbackChannel;
+    }
+
+    const channel = await this.client.channels.fetch(channelId).catch(() => null);
+    return channel && channel.type === ChannelType.GuildText && channel.guildId === guildId
+      ? channel
+      : fallbackChannel;
+  }
+
   private async getMessageForVerificationEvent(
     verificationEvent: VerificationEvent
   ): Promise<Message> {
@@ -559,13 +601,24 @@ export class NotificationManager implements INotificationManager {
       throw new Error('No notification message ID found for verification event');
     }
 
-    const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
+    const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
+    const responseSettings = getDetectionResponseSettings(serverConfig.settings);
+    const fallbackChannel = await this.getModerationNotificationChannel(
+      verificationEvent.server_id,
+      responseSettings
+    );
 
-    if (!adminChannel) {
-      throw new Error('No admin channel found for verification event');
+    if (!fallbackChannel) {
+      throw new Error('No moderation notification channel found for verification event');
     }
 
-    return await adminChannel.messages.fetch(verificationEvent.notification_message_id);
+    const notificationChannel = await this.getStoredNotificationChannel(
+      verificationEvent.server_id,
+      verificationEvent.notification_channel_id,
+      fallbackChannel
+    );
+
+    return await notificationChannel.messages.fetch(verificationEvent.notification_message_id);
   }
 
   /**
@@ -860,13 +913,7 @@ export class NotificationManager implements INotificationManager {
       throw new Error('No notification message ID found for verification event');
     }
 
-    const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
-
-    if (!adminChannel) {
-      throw new Error('No admin channel found for verification event');
-    }
-
-    const message = await adminChannel.messages.fetch(verificationEvent.notification_message_id);
+    const message = await this.getMessageForVerificationEvent(verificationEvent);
     const messageEmbeds = (message as { embeds?: Message['embeds'] }).embeds ?? [];
     const updatedEmbed = messageEmbeds.length > 0 ? EmbedBuilder.from(messageEmbeds[0]) : null;
 

@@ -204,7 +204,6 @@ export default async function GuildSetupPage({ params }: PageProps) {
               <option value="off">Off</option>
               <option value="record_only">Record only</option>
               <option value="notify_only">Notify only</option>
-              <option value="open_case">Open case</option>
               <option value="restrict">Restrict pending review</option>
             </select>
           </div>
@@ -219,7 +218,6 @@ export default async function GuildSetupPage({ params }: PageProps) {
               <option value="off">Off</option>
               <option value="record_only">Record only</option>
               <option value="notify_only">Notify only</option>
-              <option value="open_case">Open case</option>
               <option value="restrict">Restrict pending review</option>
             </select>
           </div>
@@ -234,7 +232,6 @@ export default async function GuildSetupPage({ params }: PageProps) {
               <option value="off">Off</option>
               <option value="record_only">Record only</option>
               <option value="notify_only">Notify only</option>
-              <option value="open_case">Open case</option>
               <option value="restrict">Restrict pending review</option>
             </select>
           </div>

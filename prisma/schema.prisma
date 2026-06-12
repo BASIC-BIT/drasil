@@ -232,6 +232,7 @@ model verification_events {
   detection_event_id                                                                  String?               @db.Uuid
   thread_id                                                                           String?
   private_evidence_thread_id                                                          String?
+  notification_channel_id                                                             String?
   notification_message_id                                                             String?
   status                                                                              verification_status   @default(pending)
   created_at                                                                          DateTime?             @default(now()) @db.Timestamptz(6)
@@ -249,6 +250,7 @@ model verification_events {
 
   @@index([created_at], map: "idx_verification_events_created_at_range", type: Brin)
   @@index([detection_event_id], map: "idx_verification_events_detection")
+  @@index([notification_channel_id], map: "idx_verification_events_notification_channel")
   @@index([private_evidence_thread_id], map: "idx_verification_events_private_evidence_thread")
   @@index([server_id], map: "idx_verification_events_server")
   @@index([status], map: "idx_verification_events_status")
@@ -266,6 +268,7 @@ enum admin_action_type {
   create_thread
   open_case
   restrict
+  lift_restriction
   dismiss
   false_positive
   undo_observed_action

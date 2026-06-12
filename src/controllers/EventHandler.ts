@@ -410,11 +410,7 @@ export class EventHandler implements IEventHandler {
     }
 
     const confidencePercent = detectionResult.confidence * 100;
-    if (
-      responseSettings.mode === 'notify_only' ||
-      responseSettings.mode === 'open_case' ||
-      responseSettings.mode === 'restrict'
-    ) {
+    if (responseSettings.mode === 'notify_only' || responseSettings.mode === 'restrict') {
       void this.maybeSendDetectionSetupWarning(member.guild).catch((error) => {
         console.warn(`Failed to process setup warning for guild ${member.guild.id}:`, error);
       });
@@ -434,27 +430,6 @@ export class EventHandler implements IEventHandler {
           responseSettings,
           sourceMessage
         );
-        return;
-
-      case 'open_case':
-        if (confidencePercent < actionThreshold) {
-          await this.notifyObservedDetectionIfEligible(
-            member,
-            detectionResult,
-            responseSettings,
-            sourceMessage
-          );
-          return;
-        }
-        if (sourceMessage) {
-          await this.securityActionService.openCaseForSuspiciousMessage(
-            member,
-            detectionResult,
-            sourceMessage
-          );
-        } else {
-          await this.securityActionService.openCaseForSuspiciousJoin(member, detectionResult);
-        }
         return;
 
       case 'restrict':

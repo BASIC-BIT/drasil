@@ -74,6 +74,7 @@ const buildVerificationEvent = (overrides: Partial<VerificationEvent> = {}): Ver
   detection_event_id: overrides.detection_event_id ?? null,
   thread_id: overrides.thread_id ?? null,
   private_evidence_thread_id: overrides.private_evidence_thread_id ?? null,
+  notification_channel_id: overrides.notification_channel_id ?? null,
   notification_message_id: overrides.notification_message_id ?? null,
   status: overrides.status ?? VerificationStatus.PENDING,
   created_at: overrides.created_at ?? new Date(),
@@ -825,6 +826,35 @@ describe('NotificationManager (unit)', () => {
     const editArgs = message.edit.mock.calls[0][0] as { components: unknown[] };
     const labels = extractLabels(editArgs.components);
     expect(labels).toEqual(['Admin Actions']);
+  });
+
+  it('updates notification buttons from stored notification channel', async () => {
+    const message: MockMessage = { edit: jest.fn().mockResolvedValue(undefined) };
+    const storedChannel = {
+      id: 'observed-channel-1',
+      type: ChannelType.GuildText,
+      guildId: 'guild-1',
+      messages: {
+        fetch: jest.fn().mockResolvedValue(message as unknown as Message<true>),
+      },
+    };
+    const client = {
+      channels: {
+        fetch: jest.fn().mockResolvedValue(storedChannel),
+      },
+    };
+    const manager = new NotificationManager(client as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({
+      notification_channel_id: 'observed-channel-1',
+      notification_message_id: 'message-stored-channel',
+    });
+
+    await manager.updateNotificationButtons(verificationEvent, VerificationStatus.PENDING);
+
+    expect(client.channels.fetch).toHaveBeenCalledWith('observed-channel-1');
+    expect(storedChannel.messages.fetch).toHaveBeenCalledWith('message-stored-channel');
+    expect(adminChannel.messages.fetch).not.toHaveBeenCalled();
+    expect(message.edit).toHaveBeenCalledTimes(1);
   });
 
   it('removes repaired action warnings without dropping action log fields', async () => {

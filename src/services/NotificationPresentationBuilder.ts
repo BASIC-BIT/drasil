@@ -71,7 +71,7 @@ export class NotificationPresentationBuilder {
       ? `<t:${joinedServerTimestamp}:F> (<t:${joinedServerTimestamp}:R>)`
       : 'Unknown';
 
-    const confidenceLevel = this.formatConfidenceLabel(detectionResult.confidence);
+    const signalField = this.formatSignalField(detectionResult);
     let embedColor = 0xff0000;
 
     const reasonsFormatted = detectionResult.reasons.map((reason) => `• ${reason}`).join('\n');
@@ -120,7 +120,7 @@ export class NotificationPresentationBuilder {
         { name: 'User ID', value: member.id, inline: true },
         { name: 'Account Created', value: accountCreatedFormatted, inline: false },
         { name: 'Joined Server', value: joinedServerFormatted, inline: false },
-        { name: 'Detection Confidence', value: confidenceLevel, inline: true },
+        signalField,
         {
           name: 'Trigger',
           value: this.formatSuspiciousDetectionTrigger(detectionResult, sourceMessage),
@@ -191,13 +191,13 @@ export class NotificationPresentationBuilder {
     const joinedServerTimestamp = member.joinedAt
       ? Math.floor(member.joinedAt.getTime() / 1000)
       : null;
-    const confidenceLevel = this.formatConfidenceLabel(detectionResult.confidence);
+    const signalField = this.formatSignalField(detectionResult);
     const reasonsFormatted = detectionResult.reasons.map((reason) => `• ${reason}`).join('\n');
     const recentEvents = detectionEvents.slice(0, 5);
     const detectionHistory = recentEvents
       .map((event) => {
         const timestamp = Math.floor(new Date(event.detected_at).getTime() / 1000);
-        return `• <t:${timestamp}:R>: ${this.formatDetectionTypeLabel(event.detection_type)} (${this.formatConfidencePhrase(event.confidence)})${this.formatAccountingSuffix(event)}`;
+        return `• <t:${timestamp}:R>: ${this.formatDetectionTypeLabel(event.detection_type)} (${this.formatDetectionSignalPhrase(event)})${this.formatAccountingSuffix(event)}`;
       })
       .join('\n');
 
@@ -223,7 +223,7 @@ export class NotificationPresentationBuilder {
             : 'Unknown',
           inline: false,
         },
-        { name: 'Detection Confidence', value: confidenceLevel, inline: true },
+        signalField,
         {
           name: 'Trigger',
           value: this.truncateEmbedFieldValue(
@@ -544,7 +544,7 @@ export class NotificationPresentationBuilder {
         if (event.message_id) {
           entry += ` - message: https://discord.com/channels/${guildId}/${event.channel_id}/${event.message_id}`;
         }
-        entry += ` (${this.formatConfidencePhrase(event.confidence)})`;
+        entry += ` (${this.formatDetectionSignalPhrase(event)})`;
         entry += this.formatAccountingSuffix(event);
         return entry;
       })
@@ -670,6 +670,8 @@ export class NotificationPresentationBuilder {
         return 'Reopened verification';
       case AdminActionType.RESTRICT:
         return 'Restricted';
+      case AdminActionType.LIFT_RESTRICTION:
+        return 'Lifted restriction';
       case AdminActionType.OPEN_CASE:
         return 'Opened case';
       case AdminActionType.DISMISS:
@@ -1118,6 +1120,30 @@ export class NotificationPresentationBuilder {
       return 'Medium';
     }
     return 'Low';
+  }
+
+  private formatSignalField(detectionResult: DetectionResult): {
+    name: string;
+    value: string;
+    inline: true;
+  } {
+    if (detectionResult.triggerSource === DetectionType.USER_REPORT) {
+      return { name: 'Report Signal', value: 'Reported by user', inline: true };
+    }
+
+    return {
+      name: 'Detection Confidence',
+      value: this.formatConfidenceLabel(detectionResult.confidence),
+      inline: true,
+    };
+  }
+
+  private formatDetectionSignalPhrase(event: DetectionEvent): string {
+    if (event.detection_type === DetectionType.USER_REPORT) {
+      return 'report signal';
+    }
+
+    return this.formatConfidencePhrase(event.confidence);
   }
 
   private formatConfidencePhrase(confidence: number): string {

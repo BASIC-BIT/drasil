@@ -165,6 +165,7 @@ const buildVerificationEvent = (
   detection_event_id: null,
   thread_id: `thread-${id}`,
   private_evidence_thread_id: null,
+  notification_channel_id: null,
   notification_message_id: `message-${id}`,
   status: VerificationStatus.PENDING,
   created_at: updatedAt,
@@ -203,6 +204,7 @@ describe('InteractionHandler (unit)', () => {
 
     userModerationService = {
       restrictUser: jest.fn().mockResolvedValue(true),
+      liftRestriction: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
       syncAlreadyBannedUser: jest.fn().mockResolvedValue(1),
@@ -230,6 +232,7 @@ describe('InteractionHandler (unit)', () => {
         promptSent: true,
         promptAlreadyPresent: false,
       }),
+      restrictActiveCase: jest.fn().mockResolvedValue(true),
       intakeRoleMembers: jest.fn().mockResolvedValue({} as any),
       handleUserReport: jest.fn().mockResolvedValue(true),
       handleConfirmedReportIntake: jest.fn().mockResolvedValue(true),
@@ -290,6 +293,10 @@ describe('InteractionHandler (unit)', () => {
       createPrivateEvidenceThread: jest
         .fn()
         .mockResolvedValue({ url: 'https://discord.com/channels/evidence-1' } as any),
+      createObservedEvidenceThread: jest.fn().mockResolvedValue({
+        id: 'observed-evidence-1',
+        url: 'https://discord.com/channels/observed-evidence-1',
+      } as any),
       createReportIntakeThread: jest.fn().mockResolvedValue({
         id: 'report-thread-1',
         url: 'https://discord.com/channels/report-thread-1',
@@ -356,6 +363,80 @@ describe('InteractionHandler (unit)', () => {
     expect(interaction.followUp).toHaveBeenCalledWith({
       content: 'User <@user-1> has been verified and can now access the server.',
       flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles restrict-user case action without resolving the case', async () => {
+    const activeCase = buildVerificationEvent('ver-restrict', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(activeCase);
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_restrict_user:case:user-1',
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(securityActionService.restrictActiveCase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      interaction.user
+    );
+    expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+      activeCase,
+      VerificationStatus.PENDING
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'Restricted <@user-1> while keeping the case open.',
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('handles lift-restriction case action without resolving the case', async () => {
+    const activeCase = buildVerificationEvent('ver-lift', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(activeCase);
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_lift_restriction:case:user-1',
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(userModerationService.liftRestriction).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      interaction.user
+    );
+    expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+      activeCase,
+      VerificationStatus.PENDING
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'Lifted restrictions for <@user-1> while keeping the case open.',
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
     });
   });
 
@@ -595,6 +676,7 @@ describe('InteractionHandler (unit)', () => {
       detection_event_id: null,
       thread_id: null,
       private_evidence_thread_id: null,
+      notification_channel_id: null,
       notification_message_id: 'message-1',
       status: VerificationStatus.PENDING,
       created_at: new Date(),
@@ -684,6 +766,7 @@ describe('InteractionHandler (unit)', () => {
       detection_event_id: null,
       thread_id: null,
       private_evidence_thread_id: null,
+      notification_channel_id: null,
       notification_message_id: 'message-1',
       status: VerificationStatus.PENDING,
       created_at: new Date(),
@@ -728,6 +811,7 @@ describe('InteractionHandler (unit)', () => {
       detection_event_id: null,
       thread_id: null,
       private_evidence_thread_id: null,
+      notification_channel_id: null,
       notification_message_id: 'message-1',
       status: VerificationStatus.VERIFIED,
       created_at: new Date(),

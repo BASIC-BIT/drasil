@@ -40,21 +40,9 @@ export interface ServerSettings {
   verification_ai_thread_analysis_message_limit?: number; // Max flagged-user thread messages to analyze
   verification_ai_max_action?: 'off' | 'hints' | 'restrict';
   verification_ai_restrict_threshold?: number;
-  detection_response_mode?: 'off' | 'record_only' | 'notify_only' | 'open_case' | 'restrict';
-  message_detection_response_mode?:
-    | 'off'
-    | 'record_only'
-    | 'notify_only'
-    | 'open_case'
-    | 'restrict'
-    | null;
-  join_detection_response_mode?:
-    | 'off'
-    | 'record_only'
-    | 'notify_only'
-    | 'open_case'
-    | 'restrict'
-    | null;
+  detection_response_mode?: 'off' | 'record_only' | 'notify_only' | 'restrict';
+  message_detection_response_mode?: 'off' | 'record_only' | 'notify_only' | 'restrict' | null;
+  join_detection_response_mode?: 'off' | 'record_only' | 'notify_only' | 'restrict' | null;
   observed_detection_notification_channel_id?: string | null;
   observed_detection_min_confidence_threshold?: number;
   observed_detection_notification_window_minutes?: number;
@@ -180,6 +168,7 @@ export enum AdminActionType {
   CREATE_THREAD = 'create_thread',
   OPEN_CASE = 'open_case',
   RESTRICT = 'restrict',
+  LIFT_RESTRICTION = 'lift_restriction',
   DISMISS = 'dismiss',
   FALSE_POSITIVE = 'false_positive',
   UNDO_OBSERVED_ACTION = 'undo_observed_action',
@@ -208,6 +197,7 @@ export interface VerificationEvent {
   detection_event_id: string | null;
   thread_id: string | null;
   private_evidence_thread_id: string | null;
+  notification_channel_id: string | null;
   notification_message_id: string | null;
   status: VerificationStatus;
   created_at: Date; // Use Date type
