@@ -210,7 +210,7 @@ describeIntegration('SecurityActionService (integration)', () => {
 
     const verificationEvents = await prisma.verification_events.findMany();
     expect(verificationEvents).toHaveLength(1);
-    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
