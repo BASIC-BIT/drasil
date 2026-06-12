@@ -463,7 +463,7 @@ export class UserModerationService implements IUserModerationService {
         member.guild.id,
         member.id
       );
-      if (serverMember?.is_restricted === false) {
+      if (serverMember?.is_restricted !== true) {
         return true;
       }
 
