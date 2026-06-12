@@ -834,6 +834,23 @@ const baseApplicationCommandBuilders = [
     )
     .addSubcommand((subcommand) =>
       subcommand
+        .setName('refresh')
+        .setDescription('Refresh a case notification embed from stored case state')
+        .addUserOption((option) =>
+          option
+            .setName('user')
+            .setDescription('The user whose latest case notification to refresh')
+            .setRequired(true)
+        )
+        .addStringOption((option) =>
+          option
+            .setName('case-id')
+            .setDescription('Specific case ID to refresh; defaults to the latest case for the user')
+            .setRequired(false)
+        )
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
         .setName('intake-role')
         .setDescription('Preview or open cases for members currently in a role')
         .addRoleOption((option) =>

@@ -693,6 +693,74 @@ describe('SecurityActionService (unit)', () => {
     }
   });
 
+  it('refreshes the latest resolved case notification from stored state', async () => {
+    const member = buildMember('guild-1', 'user-refresh');
+    const pendingEvent = await verificationEventRepository.createFromDetection(
+      null,
+      member.guild.id,
+      member.id,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(pendingEvent.id, {
+      ...pendingEvent,
+      notification_channel_id: 'channel-old',
+      notification_message_id: 'message-old',
+    });
+    const latestEvent = await verificationEventRepository.createFromDetection(
+      null,
+      member.guild.id,
+      member.id,
+      VerificationStatus.PENDING
+    );
+    const verifiedEvent = await verificationEventRepository.update(latestEvent.id, {
+      ...latestEvent,
+      status: VerificationStatus.VERIFIED,
+      resolved_by: 'admin-1',
+      resolved_at: new Date('2026-06-12T15:04:12Z'),
+      notification_channel_id: 'channel-new',
+      notification_message_id: 'message-new',
+    });
+
+    const result = await buildService().refreshCaseNotification(member.guild.id, member.user);
+
+    expect(result).toMatchObject({
+      refreshed: true,
+      verificationEventId: latestEvent.id,
+      status: VerificationStatus.VERIFIED,
+      notificationChannelId: 'channel-new',
+      notificationMessageId: 'message-new',
+    });
+    expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+      verifiedEvent,
+      VerificationStatus.VERIFIED
+    );
+  });
+
+  it('does not refresh a case without a stored notification message', async () => {
+    const member = buildMember('guild-1', 'user-no-notification');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      member.guild.id,
+      member.id,
+      VerificationStatus.PENDING
+    );
+
+    const result = await buildService().refreshCaseNotification(
+      member.guild.id,
+      member.user,
+      verificationEvent.id
+    );
+
+    expect(result).toMatchObject({
+      refreshed: false,
+      verificationEventId: verificationEvent.id,
+      status: VerificationStatus.PENDING,
+      notificationMessageId: null,
+    });
+    expect(result.message).toContain('no stored notification message');
+    expect(notificationManager.updateNotificationButtons).not.toHaveBeenCalled();
+  });
+
   it('does not repair moderator-only report review threads as user-facing threads', async () => {
     const guildId = 'guild-case-repair-report-review';
     const userId = 'user-case-repair-report-review';

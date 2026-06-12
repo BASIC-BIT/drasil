@@ -106,6 +106,12 @@ export interface ISecurityActionService {
     options: AdminCaseOptions
   ): Promise<AdminCaseResult>;
 
+  refreshCaseNotification(
+    guildId: string,
+    user: User,
+    verificationEventId?: string
+  ): Promise<CaseNotificationRefreshResult>;
+
   repairActiveCase(member: GuildMember): Promise<ActiveCaseRepairResult>;
 
   restrictActiveCase(member: GuildMember, moderator: User): Promise<boolean>;
@@ -221,6 +227,15 @@ export interface ActiveCaseRepairResult extends VerificationThreadRepairResult {
   repaired: boolean;
   message: string;
   verificationEventId?: string;
+}
+
+export interface CaseNotificationRefreshResult {
+  refreshed: boolean;
+  message: string;
+  verificationEventId?: string;
+  status?: VerificationStatus;
+  notificationMessageId?: string | null;
+  notificationChannelId?: string | null;
 }
 
 export interface RoleIntakeOptions {
@@ -1612,6 +1627,66 @@ export class SecurityActionService implements ISecurityActionService {
       message: `Repaired active verification case for ${member.user.tag}.${notificationUpdateMessage}`,
       verificationEventId: repairCase.id,
     };
+  }
+
+  public async refreshCaseNotification(
+    guildId: string,
+    user: User,
+    verificationEventId?: string
+  ): Promise<CaseNotificationRefreshResult> {
+    const verificationEvent = verificationEventId
+      ? await this.verificationEventRepository.findById(verificationEventId)
+      : ((await this.verificationEventRepository.findByUserAndServer(user.id, guildId))[0] ?? null);
+
+    if (
+      !verificationEvent ||
+      verificationEvent.server_id !== guildId ||
+      verificationEvent.user_id !== user.id
+    ) {
+      return {
+        refreshed: false,
+        message: verificationEventId
+          ? `No matching case ${verificationEventId} found for ${user.tag}.`
+          : `No verification case found for ${user.tag}.`,
+      };
+    }
+
+    if (!verificationEvent.notification_message_id) {
+      return {
+        refreshed: false,
+        message: `Case ${verificationEvent.id} has no stored notification message to refresh.`,
+        verificationEventId: verificationEvent.id,
+        status: verificationEvent.status,
+        notificationMessageId: null,
+        notificationChannelId: verificationEvent.notification_channel_id,
+      };
+    }
+
+    try {
+      await this.notificationManager.updateNotificationButtons(
+        verificationEvent,
+        verificationEvent.status
+      );
+      return {
+        refreshed: true,
+        message: `Refreshed ${verificationEvent.status} case notification for ${user.tag}.`,
+        verificationEventId: verificationEvent.id,
+        status: verificationEvent.status,
+        notificationMessageId: verificationEvent.notification_message_id,
+        notificationChannelId: verificationEvent.notification_channel_id,
+      };
+    } catch (error) {
+      console.error(`Failed to refresh case notification ${verificationEvent.id}:`, error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return {
+        refreshed: false,
+        message: `Failed to refresh case ${verificationEvent.id} notification: ${message}`,
+        verificationEventId: verificationEvent.id,
+        status: verificationEvent.status,
+        notificationMessageId: verificationEvent.notification_message_id,
+        notificationChannelId: verificationEvent.notification_channel_id,
+      };
+    }
   }
 
   public async restrictActiveCase(member: GuildMember, moderator: User): Promise<boolean> {

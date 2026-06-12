@@ -71,6 +71,11 @@ export class CaseCommandHandler {
       return;
     }
 
+    if (subcommand === 'refresh') {
+      await this.handleCaseRefreshCommand(interaction, guild);
+      return;
+    }
+
     if (subcommand === 'intake-role') {
       await this.handleCaseRoleIntakeCommand(interaction, guild);
       return;
@@ -184,6 +189,40 @@ export class CaseCommandHandler {
         allowedMentions: { parse: [] },
       });
     }
+  }
+
+  private async handleCaseRefreshCommand(
+    interaction: ChatInputCommandInteraction,
+    guild: Guild
+  ): Promise<void> {
+    const targetUser = interaction.options.getUser('user', true);
+    const caseId = interaction.options.getString('case-id')?.trim() || undefined;
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const result = await this.securityActionService.refreshCaseNotification(
+      guild.id,
+      targetUser,
+      caseId
+    );
+
+    const lines = [result.message];
+    if (result.verificationEventId) {
+      lines.push(`Case: \`${result.verificationEventId}\``);
+    }
+    if (result.status) {
+      lines.push(`Status: \`${result.status}\``);
+    }
+    if (result.notificationChannelId && result.notificationMessageId) {
+      lines.push(
+        `Notification: https://discord.com/channels/${guild.id}/${result.notificationChannelId}/${result.notificationMessageId}`
+      );
+    }
+
+    await interaction.editReply({
+      content: lines.join('\n'),
+      allowedMentions: { parse: [] },
+    });
   }
 
   private async resolveRoleIntakeRole(

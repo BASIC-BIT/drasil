@@ -918,6 +918,11 @@ export class NotificationManager implements INotificationManager {
     const updatedEmbed = messageEmbeds.length > 0 ? EmbedBuilder.from(messageEmbeds[0]) : null;
 
     if (updatedEmbed) {
+      this.presentationBuilder.upsertResolvedCasePresentation(
+        updatedEmbed,
+        verificationEvent,
+        newStatus
+      );
       this.presentationBuilder.upsertVerificationActionFailureField(
         updatedEmbed,
         verificationEvent

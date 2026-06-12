@@ -696,6 +696,7 @@ export class ThreadManager implements IThreadManager {
         roles: [],
         repliedUser: false,
       },
+      components: [this.presentationBuilder.createActionRow(member.id)],
     });
   }
 
@@ -1144,13 +1145,27 @@ export class ThreadManager implements IThreadManager {
     }
 
     try {
-      await thread.setArchived(archived);
-      await thread.setLocked(locked);
+      await this.setThreadArchiveAndLockState(thread, archived, locked);
       return true;
     } catch (error) {
       console.warn(`Failed to update private evidence thread ${threadId}:`, error);
       return false;
     }
+  }
+
+  private async setThreadArchiveAndLockState(
+    thread: ThreadChannel,
+    archived: boolean,
+    locked: boolean
+  ): Promise<void> {
+    if (archived) {
+      await thread.setLocked(locked);
+      await thread.setArchived(archived);
+      return;
+    }
+
+    await thread.setArchived(archived);
+    await thread.setLocked(locked);
   }
 
   /**
@@ -1182,8 +1197,7 @@ export class ThreadManager implements IThreadManager {
             });
           }
 
-          await thread.setArchived(true);
-          await thread.setLocked(true);
+          await this.setThreadArchiveAndLockState(thread, true, true);
           resolvedMainThread = true;
         }
       }
@@ -1299,8 +1313,7 @@ export class ThreadManager implements IThreadManager {
       if (verificationEvent.thread_id) {
         const thread = await this.fetchStoredThread(verificationEvent);
         if (thread) {
-          await thread.setArchived(false);
-          await thread.setLocked(false);
+          await this.setThreadArchiveAndLockState(thread, false, false);
           reopenedMainThread = true;
         }
       }

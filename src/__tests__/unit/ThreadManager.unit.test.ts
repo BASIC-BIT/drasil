@@ -165,6 +165,15 @@ describe('ThreadManager (unit)', () => {
         roles: [],
         repliedUser: false,
       },
+      components: expect.any(Array),
+    });
+    const prompt = thread.send.mock.calls[0][0] as { components: unknown[] };
+    const customIds = extractComponentCustomIds(prompt.components);
+    expect(customIds).toHaveLength(1);
+    expect(parseAdminActionCustomId(customIds[0])).toEqual({
+      surface: 'case',
+      action: 'menu',
+      userId: member.id,
     });
   });
 
@@ -376,6 +385,15 @@ describe('ThreadManager (unit)', () => {
         roles: [],
         repliedUser: false,
       },
+      components: expect.any(Array),
+    });
+    const prompt = thread.send.mock.calls[0][0] as { components: unknown[] };
+    const customIds = extractComponentCustomIds(prompt.components);
+    expect(customIds).toHaveLength(1);
+    expect(parseAdminActionCustomId(customIds[0])).toEqual({
+      surface: 'case',
+      action: 'menu',
+      userId: member.id,
     });
     expect(result).toEqual({
       threadId: 'thread-1',
@@ -485,6 +503,7 @@ describe('ThreadManager (unit)', () => {
         roles: [],
         repliedUser: false,
       },
+      components: expect.any(Array),
     });
   });
 
@@ -832,6 +851,7 @@ describe('ThreadManager (unit)', () => {
           roles: [],
           repliedUser: false,
         },
+        components: expect.any(Array),
       });
       expect(warnSpy).toHaveBeenCalled();
     } finally {
@@ -979,6 +999,12 @@ describe('ThreadManager (unit)', () => {
     expect(thread.setLocked).toHaveBeenCalledWith(true);
     expect(evidenceThread.setArchived).toHaveBeenCalledWith(true);
     expect(evidenceThread.setLocked).toHaveBeenCalledWith(true);
+    expect(thread.setLocked.mock.invocationCallOrder[0]).toBeLessThan(
+      thread.setArchived.mock.invocationCallOrder[0]
+    );
+    expect(evidenceThread.setLocked.mock.invocationCallOrder[0]).toBeLessThan(
+      evidenceThread.setArchived.mock.invocationCallOrder[0]
+    );
   });
 
   it('reopens verification thread when available', async () => {
@@ -1007,5 +1033,11 @@ describe('ThreadManager (unit)', () => {
     expect(thread.setLocked).toHaveBeenCalledWith(false);
     expect(evidenceThread.setArchived).toHaveBeenCalledWith(false);
     expect(evidenceThread.setLocked).toHaveBeenCalledWith(false);
+    expect(thread.setArchived.mock.invocationCallOrder[0]).toBeLessThan(
+      thread.setLocked.mock.invocationCallOrder[0]
+    );
+    expect(evidenceThread.setArchived.mock.invocationCallOrder[0]).toBeLessThan(
+      evidenceThread.setLocked.mock.invocationCallOrder[0]
+    );
   });
 });

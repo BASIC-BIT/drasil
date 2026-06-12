@@ -506,6 +506,44 @@ export class NotificationPresentationBuilder {
     }
   }
 
+  public upsertResolvedCasePresentation(
+    embed: EmbedBuilder,
+    verificationEvent: VerificationEvent,
+    status: VerificationStatus
+  ): void {
+    const actionTaken = this.getResolutionAction(status);
+    if (!actionTaken) {
+      return;
+    }
+
+    if (status === VerificationStatus.VERIFIED) {
+      embed.setColor(0x00ff00);
+    } else if (status === VerificationStatus.BANNED) {
+      embed.setColor(0x000000);
+    } else if (status === VerificationStatus.CLOSED_NO_ACTION) {
+      embed.setColor(0x808080);
+    }
+
+    const resolvedAt = verificationEvent.resolved_at
+      ? Math.floor(verificationEvent.resolved_at.getTime() / 1000)
+      : null;
+    this.upsertHandledResolutionField(
+      embed,
+      actionTaken,
+      verificationEvent.resolved_by,
+      resolvedAt
+    );
+
+    if (verificationEvent.resolved_by && resolvedAt) {
+      this.upsertLatestAdminActionField(
+        embed,
+        actionTaken,
+        verificationEvent.resolved_by,
+        resolvedAt
+      );
+    }
+  }
+
   private addOptionalAnalysisFields(
     embed: EmbedBuilder,
     detectionResult: DetectionResult,
@@ -725,14 +763,7 @@ export class NotificationPresentationBuilder {
       return;
     }
 
-    const actionTaken =
-      verificationEvent.status === VerificationStatus.BANNED
-        ? AdminActionType.BAN
-        : verificationEvent.status === VerificationStatus.VERIFIED
-          ? AdminActionType.VERIFY
-          : verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
-            ? AdminActionType.CLOSE_NO_ACTION
-            : null;
+    const actionTaken = this.getResolutionAction(verificationEvent.status);
     if (!actionTaken) {
       return;
     }
@@ -748,14 +779,7 @@ export class NotificationPresentationBuilder {
   private getVerificationResolutionPresentation(
     verificationEvent: VerificationEvent
   ): { title: string; fieldValue: string } | null {
-    const actionTaken =
-      verificationEvent.status === VerificationStatus.BANNED
-        ? AdminActionType.BAN
-        : verificationEvent.status === VerificationStatus.VERIFIED
-          ? AdminActionType.VERIFY
-          : verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
-            ? AdminActionType.CLOSE_NO_ACTION
-            : null;
+    const actionTaken = this.getResolutionAction(verificationEvent.status);
     if (!actionTaken) {
       return null;
     }
@@ -777,8 +801,8 @@ export class NotificationPresentationBuilder {
   private upsertHandledResolutionField(
     embed: EmbedBuilder,
     actionTaken: AdminActionType,
-    adminId: string,
-    timestamp: number
+    adminId: string | null,
+    timestamp: number | null
   ): void {
     if (
       actionTaken !== AdminActionType.VERIFY &&
@@ -799,6 +823,19 @@ export class NotificationPresentationBuilder {
     );
     fields.splice(0, 0, field);
     embed.setFields(...fields);
+  }
+
+  private getResolutionAction(status: VerificationStatus): AdminActionType | null {
+    switch (status) {
+      case VerificationStatus.BANNED:
+        return AdminActionType.BAN;
+      case VerificationStatus.VERIFIED:
+        return AdminActionType.VERIFY;
+      case VerificationStatus.CLOSED_NO_ACTION:
+        return AdminActionType.CLOSE_NO_ACTION;
+      case VerificationStatus.PENDING:
+        return null;
+    }
   }
 
   private formatHandledTitle(actionTaken: AdminActionType): string {

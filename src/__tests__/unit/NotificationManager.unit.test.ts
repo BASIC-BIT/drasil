@@ -917,6 +917,37 @@ describe('NotificationManager (unit)', () => {
     expect(labels).toEqual(['Admin Actions']);
   });
 
+  it('reapplies resolved case presentation while updating buttons', async () => {
+    const embed = new EmbedBuilder().setTitle('Suspicious User').setColor(0xff0000);
+    const message: MockMessage = {
+      embeds: [embed],
+      edit: jest.fn().mockResolvedValue(undefined),
+    };
+    adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({
+      notification_message_id: 'message-verified',
+      status: VerificationStatus.VERIFIED,
+      resolved_by: 'admin-1',
+      resolved_at: new Date('2026-06-12T15:04:12Z'),
+    });
+
+    await manager.updateNotificationButtons(verificationEvent, VerificationStatus.VERIFIED);
+
+    const editArgs = message.edit.mock.calls[0][0] as { embeds: EmbedBuilder[] };
+    const updatedEmbed = editArgs.embeds[0];
+    const fields = updatedEmbed.data.fields ?? [];
+    expect(updatedEmbed.data.title).toBe('Case Handled: Verified');
+    expect(updatedEmbed.data.color).toBe(0x00ff00);
+    expect(fields.find((field) => field.name === 'Resolution')?.value).toBe(
+      'Verified by <@admin-1> at <t:1781276652:F>\nNo further moderator action is pending.'
+    );
+    expect(fields.find((field) => field.name === 'Latest Admin Action')?.value).toBe(
+      'Verified by <@admin-1> at <t:1781276652:F>'
+    );
+  });
+
   it('logs action and adds a thread field for create thread', async () => {
     const embed = new EmbedBuilder().setTitle('Suspicious User');
     const message: MockMessage = {
