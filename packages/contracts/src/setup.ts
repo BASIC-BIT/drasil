@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
-export const detectionResponseModeSchema = z.enum([
-  'off',
-  'record_only',
-  'notify_only',
-  'restrict',
-]);
+const activeDetectionResponseModeSchema = z.enum(['off', 'record_only', 'notify_only', 'restrict']);
+
+export const detectionResponseModeSchema = z.preprocess(
+  (value) => (value === 'open_case' ? 'notify_only' : value),
+  activeDetectionResponseModeSchema
+);
 
 export const userReportExternalResponseModeSchema = z.enum(['off', 'notify_only', 'open_case']);
 export const analyticsConsentLevelSchema = z.enum(['off', 'anonymous', 'full']);
