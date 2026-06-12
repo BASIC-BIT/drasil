@@ -251,6 +251,52 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
+  it('does not lift an already unrestricted pending case again', async () => {
+    const guildId = 'guild-lift-idempotent';
+    const userId = 'user-lift-idempotent';
+    const moderator = { id: 'mod-lift-idempotent' } as User;
+    const member = buildMember(guildId, userId);
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      is_restricted: false,
+      verification_status: VerificationStatus.PENDING,
+    });
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.ADMIN_CASE,
+      confidence: 1,
+      reasons: ['Admin case'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await service.liftRestriction(member, moderator);
+
+    expect(roleManager.removeRestrictedRole).not.toHaveBeenCalled();
+    const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
+    expect(adminActions).toEqual([]);
+    expect(notificationManager.logActionToMessage).not.toHaveBeenCalled();
+  });
+
   it('verifies a user and records admin action', async () => {
     const guildId = 'guild-verify';
     const userId = 'user-verify';

@@ -459,6 +459,14 @@ export class UserModerationService implements IUserModerationService {
         throw new Error('No active verification event found to lift restriction');
       }
 
+      const serverMember = await this.serverMemberRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
+      if (serverMember?.is_restricted === false) {
+        return true;
+      }
+
       const roleRemoved = await this.roleManager.removeRestrictedRole(member);
       if (!roleRemoved) {
         throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
