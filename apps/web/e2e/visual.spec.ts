@@ -120,7 +120,7 @@ test('report queue visual baseline @visual', async ({ page }) => {
 test('case detail visual baseline @visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin/guild/guild-1/cases/case-stale');
-  await expect(page.getByRole('heading', { name: 'User user-100' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Prize Patrol' })).toBeVisible();
   await expectReportsLink(page, '/admin/guild/guild-1/reports');
   await expectVisualSchemes(page, 'case-detail');
 });
@@ -128,7 +128,7 @@ test('case detail visual baseline @visual', async ({ page }) => {
 test('case detail reports entry visual baseline @visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin/guild/guild-1/cases/case-stale');
-  await expect(page.getByRole('heading', { name: 'User user-100' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Prize Patrol' })).toBeVisible();
   await expectReportsLink(page, '/admin/guild/guild-1/reports');
   await expectElementVisualSchemes(page, page.locator('.topbar'), 'report-entry-case-detail-nav');
 });

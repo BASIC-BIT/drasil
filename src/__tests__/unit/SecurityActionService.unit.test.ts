@@ -27,11 +27,16 @@ const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
     id: userId,
     joinedAt: new Date(),
+    displayName: 'Test Display',
+    nickname: 'Test Nick',
+    displayAvatarURL: () => 'https://cdn.discordapp.com/embed/avatars/4.png',
     guild: { id: guildId } as Guild,
     user: {
       id: userId,
       username: 'test-user',
+      globalName: 'Test Global',
       tag: 'test-user#0001',
+      displayAvatarURL: () => 'https://cdn.discordapp.com/embed/avatars/5.png',
     } as User,
   }) as unknown as GuildMember;
 
@@ -196,6 +201,18 @@ describe('SecurityActionService (unit)', () => {
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
     expect(verificationEvents[0].notification_message_id).toBe('notif-1');
+    expect(verificationEvents[0].metadata).toEqual(
+      expect.objectContaining({
+        user_snapshot: expect.objectContaining({
+          id: userId,
+          username: 'test-user',
+          global_name: 'Test Global',
+          nickname: 'Test Nick',
+          display_name: 'Test Display',
+          avatar_url: 'https://cdn.discordapp.com/embed/avatars/4.png',
+        }),
+      })
+    );
     expect(detectionEvents[0].latest_verification_event_id).toBe(verificationEvents[0].id);
 
     expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);

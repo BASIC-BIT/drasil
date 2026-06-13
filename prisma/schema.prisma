@@ -62,6 +62,7 @@ model detection_events {
 
   @@index([detected_at], map: "idx_detection_events_detected_at")
   @@index([detected_at], map: "idx_detection_events_detected_at_range", type: Brin)
+  @@index([latest_verification_event_id], map: "idx_detection_events_latest_verification")
   @@index([server_id], map: "idx_detection_events_server")
   @@index([detection_type], map: "idx_detection_events_type")
   @@index([user_id], map: "idx_detection_events_user")
