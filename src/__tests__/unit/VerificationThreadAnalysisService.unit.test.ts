@@ -18,6 +18,8 @@ describe('VerificationThreadAnalysisService (unit)', () => {
         id: 'user-1',
         username: 'runner',
       },
+      attachments: new Collection<string, any>(),
+      url: 'https://discord.com/channels/guild-1/thread-1/msg-1',
       channel: {
         name: 'Verification: runner',
         isThread: () => true,
@@ -31,7 +33,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     return { message: base, messages };
   };
 
-  it('does nothing when thread analysis is disabled', async () => {
+  it('mirrors support-check replies before skipping disabled thread analysis', async () => {
     const verificationRepo = new InMemoryVerificationEventRepository();
     const detectionRepo = new InMemoryDetectionEventsRepository();
     const detectionEvent = await detectionRepo.create({
@@ -49,6 +51,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     );
     await verificationRepo.update(verificationEvent.id, {
       thread_id: 'thread-1',
+      private_evidence_thread_id: 'evidence-thread-1',
       notification_message_id: 'notif-1',
     });
 
@@ -57,6 +60,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     } as any;
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn(),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -78,6 +82,9 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     const handled = await service.handleThreadMessage(message as any);
 
     expect(handled).toBe(true);
+    expect(
+      notificationManager.mirrorVerificationThreadMessageToEvidenceThread
+    ).toHaveBeenCalledWith(expect.objectContaining({ id: verificationEvent.id }), message);
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
   });
 
@@ -88,7 +95,10 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     const service = new VerificationThreadAnalysisService(
       { getServerConfig: jest.fn() } as any,
       { analyzeVerificationThreadResponses: jest.fn() } as any,
-      { updateVerificationThreadAnalysis: jest.fn() } as any,
+      {
+        updateVerificationThreadAnalysis: jest.fn(),
+        mirrorVerificationThreadMessageToEvidenceThread: jest.fn(),
+      } as any,
       verificationRepo,
       { findById: jest.fn() } as any
     );
@@ -124,6 +134,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     } as any;
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn(),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn(),
     } as any;
     const configService = {
       getServerConfig: jest.fn(),
@@ -148,6 +159,9 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     expect(configService.getServerConfig).not.toHaveBeenCalled();
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
     expect(notificationManager.updateVerificationThreadAnalysis).not.toHaveBeenCalled();
+    expect(
+      notificationManager.mirrorVerificationThreadMessageToEvidenceThread
+    ).not.toHaveBeenCalled();
   });
 
   it('analyzes flagged-user verification replies and updates the admin notification', async () => {
@@ -188,6 +202,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     } as any;
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -238,6 +253,9 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       expect.objectContaining({ result: 'likely_legitimate', recommendedAction: 'ask_followup' }),
       2
     );
+    expect(
+      notificationManager.mirrorVerificationThreadMessageToEvidenceThread
+    ).toHaveBeenCalledWith(expect.objectContaining({ id: verificationEvent.id }), message);
 
     const updated = await verificationRepo.findById(verificationEvent.id);
     expect(updated?.metadata).toEqual({
@@ -295,6 +313,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     } as any;
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -386,6 +405,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     } as any;
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -445,6 +465,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     } as any;
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn(),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -500,6 +521,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     } as any;
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(false),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -575,6 +597,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     } as any;
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({

@@ -1,5 +1,6 @@
 import {
   ChannelType,
+  Collection,
   EmbedBuilder,
   Guild,
   GuildMember,
@@ -20,7 +21,6 @@ import {
 import { IConfigService } from '../../config/ConfigService';
 import { VERIFICATION_ACTION_FAILURES_METADATA_KEY } from '../../utils/verificationActionFailures';
 import { MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY } from '../../utils/detectionResponseSettings';
-import { parseAdminActionCustomId } from '../../utils/adminActionCustomIds';
 
 type MockTextChannel = {
   send: jest.Mock;
@@ -207,12 +207,14 @@ describe('NotificationManager (unit)', () => {
       repliedUser: false,
     });
     const labels = extractLabels(sendArgs.components);
-    expect(labels).toEqual(['Admin Actions']);
-    expect(parseAdminActionCustomId(extractCustomIds(sendArgs.components)[0])).toEqual({
-      action: 'menu',
-      surface: 'case',
-      userId: 'user-1',
-    });
+    expect(labels).toEqual(['Verify', 'Restrict', 'Ban...', 'Close', 'Other Actions']);
+    expect(extractCustomIds(sendArgs.components)).toEqual([
+      'verify_user-1',
+      'restrict_user-1',
+      'ban_user-1',
+      'close_user-1',
+      'admin_actions:m:c:user-1',
+    ]);
   });
 
   it('adds a web case button to suspicious user notifications when configured', async () => {
@@ -241,7 +243,14 @@ describe('NotificationManager (unit)', () => {
     );
 
     const sendArgs = adminChannel.send.mock.calls[0][0] as { components: unknown[] };
-    expect(extractLabels(sendArgs.components)).toEqual(['Admin Actions', 'Web Case']);
+    expect(extractLabels(sendArgs.components)).toEqual([
+      'Verify',
+      'Restrict',
+      'Ban...',
+      'Close',
+      'Other Actions',
+      'Web Case',
+    ]);
     expect(extractUrls(sendArgs.components)).toEqual([
       'https://drasilbot.com/admin/guild/guild-1/cases/ver-1',
     ]);
@@ -276,7 +285,7 @@ describe('NotificationManager (unit)', () => {
     );
 
     const sendArgs = adminChannel.send.mock.calls[0][0] as { components: unknown[] };
-    expect(extractLabels(sendArgs.components)).not.toContain('Ban User');
+    expect(extractLabels(sendArgs.components)).not.toContain('Ban...');
   });
 
   it('renders moderation action warnings on suspicious user notifications', async () => {
@@ -480,12 +489,13 @@ describe('NotificationManager (unit)', () => {
       repliedUser: false,
     });
     expect(sendArgs.components).toHaveLength(1);
-    expect(parseAdminActionCustomId(extractCustomIds(sendArgs.components)[0])).toEqual({
-      action: 'menu',
-      surface: 'observed',
-      userId: 'user-1',
-      detectionEventId: detectionEvent.id,
-    });
+    expect(extractLabels(sendArgs.components)).toEqual([
+      'Open Case',
+      'Restrict',
+      'Ban...',
+      'Dismiss',
+      'Other Actions',
+    ]);
     expect(sendArgs.embeds[0].data.title).toBe('Suspicious Activity Observed');
     const fields = sendArgs.embeds[0].data.fields ?? [];
     const reasonsField = fields.find((field) => field.name === 'Reasons');
@@ -686,7 +696,13 @@ describe('NotificationManager (unit)', () => {
     );
 
     const editArgs = message.edit.mock.calls[0][0] as { components: unknown[] };
-    expect(extractLabels(editArgs.components)).toEqual(['Admin Actions']);
+    expect(extractLabels(editArgs.components)).toEqual([
+      'Open Case',
+      'Restrict',
+      'Ban...',
+      'Dismiss',
+      'Other Actions',
+    ]);
   });
 
   it('restores observed action buttons after undo', async () => {
@@ -723,7 +739,13 @@ describe('NotificationManager (unit)', () => {
       components: unknown[];
       embeds: EmbedBuilder[];
     };
-    expect(extractLabels(editArgs.components)).toEqual(['Admin Actions']);
+    expect(extractLabels(editArgs.components)).toEqual([
+      'Open Case',
+      'Restrict',
+      'Ban...',
+      'Dismiss',
+      'Other Actions',
+    ]);
     expect(editArgs.embeds[0].data.fields?.[0].name).toBe('Action Reverted');
   });
 
@@ -803,7 +825,7 @@ describe('NotificationManager (unit)', () => {
     expect(editArgs.content).toBeUndefined();
     expect(editArgs.allowedMentions).toEqual({ parse: [] });
     const labels = extractLabels(editArgs.components);
-    expect(labels).toEqual(['Admin Actions']);
+    expect(labels).toEqual(['Verify', 'Restrict', 'Ban...', 'Close', 'Other Actions']);
   });
 
   it('updates notification buttons for pending status with thread action', async () => {
@@ -825,7 +847,7 @@ describe('NotificationManager (unit)', () => {
     expect(message.edit).toHaveBeenCalledTimes(1);
     const editArgs = message.edit.mock.calls[0][0] as { components: unknown[] };
     const labels = extractLabels(editArgs.components);
-    expect(labels).toEqual(['Admin Actions']);
+    expect(labels).toEqual(['Verify', 'Restrict', 'Ban...', 'Close', 'Other Actions']);
   });
 
   it('updates notification buttons from stored notification channel', async () => {
@@ -914,7 +936,7 @@ describe('NotificationManager (unit)', () => {
     expect(message.edit).toHaveBeenCalledTimes(1);
     const editArgs = message.edit.mock.calls[0][0] as { components: unknown[] };
     const labels = extractLabels(editArgs.components);
-    expect(labels).toEqual(['Admin Actions']);
+    expect(labels).toEqual(['Reopen', 'History', 'Other Actions']);
   });
 
   it('reapplies resolved case presentation while updating buttons', async () => {
@@ -1023,6 +1045,46 @@ describe('NotificationManager (unit)', () => {
     );
     expect(analysisField?.value).toContain('Legitimacy: Specific server context matched');
     expect(analysisField?.value).not.toContain('Reason codes: normal_context');
+  });
+
+  it('mirrors verification-thread user replies into the private evidence thread', async () => {
+    const evidenceThread = { send: jest.fn().mockResolvedValue({}) };
+    const client = {
+      channels: {
+        fetch: jest.fn().mockResolvedValue(evidenceThread),
+      },
+    };
+    const manager = new NotificationManager(client as any, configService, detectionRepository);
+    const message = {
+      id: 'msg-1',
+      channelId: 'thread-1',
+      content: 'I joined for weekly races. ```not a real fence```',
+      url: 'https://discord.com/channels/guild-1/thread-1/msg-1',
+      author: { id: 'user-1', username: 'runner', tag: 'runner#0001' },
+      attachments: new Collection<string, any>([
+        [
+          'attachment-1',
+          { id: 'attachment-1', name: 'proof.png', url: 'https://cdn.example/proof.png' },
+        ],
+      ]),
+    } as Message;
+
+    const mirrored = await manager.mirrorVerificationThreadMessageToEvidenceThread(
+      buildVerificationEvent({ private_evidence_thread_id: 'evidence-thread-1' }),
+      message
+    );
+
+    expect(mirrored).toBe(true);
+    expect(client.channels.fetch).toHaveBeenCalledWith('evidence-thread-1');
+    expect(evidenceThread.send).toHaveBeenCalledWith({
+      content:
+        'Support-check reply from <@user-1> (runner#0001).\n' +
+        'Source: https://discord.com/channels/guild-1/thread-1/msg-1\n\n' +
+        "```\nI joined for weekly races. ''' not a real fence''' \n```\n\n" +
+        'Attachments:\n' +
+        '- proof.png: https://cdn.example/proof.png',
+      allowedMentions: { parse: [], roles: [], users: [], repliedUser: false },
+    });
   });
 
   it('displays fallback GPT diagnostics as unavailable', async () => {

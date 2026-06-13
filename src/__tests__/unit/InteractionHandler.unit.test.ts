@@ -257,6 +257,7 @@ describe('InteractionHandler (unit)', () => {
       handleHistoryButtonClick: jest.fn().mockResolvedValue(true),
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue(null),
       markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
@@ -405,6 +406,34 @@ describe('InteractionHandler (unit)', () => {
       flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
+  });
+
+  it.each([
+    ['restrict_user-1', 'Restrict <@user-1> while keeping their case pending?'],
+    [
+      'close_user-1',
+      'Close pending verification cases for <@user-1> without verifying or banning them? If Drasil has them marked restricted, the restricted role will be removed.',
+    ],
+  ])('opens an ephemeral confirmation for persistent %s button', async (customId, message) => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction(customId, 'guild-1', { id: 'admin-1' } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: message, flags: MessageFlags.Ephemeral })
+    );
+    expect(interaction.update).not.toHaveBeenCalled();
   });
 
   it('handles lift-restriction case action without resolving the case', async () => {

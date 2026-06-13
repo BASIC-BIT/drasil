@@ -100,6 +100,7 @@ describe('UserModerationService (unit)', () => {
       handleHistoryButtonClick: jest.fn().mockResolvedValue(true),
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue({} as any),
       markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),

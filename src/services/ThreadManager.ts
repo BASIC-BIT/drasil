@@ -917,12 +917,11 @@ export class ThreadManager implements IThreadManager {
           roles: [],
           repliedUser: false,
         },
-        components: [
-          this.presentationBuilder.createActionRow(member.id, {
-            guildId: member.guild.id,
-            verificationEventId: verificationEvent.id,
-          }),
-        ],
+        components: this.presentationBuilder.createAdminNotificationActionRows(member.id, {
+          guildId: member.guild.id,
+          verificationEventId: verificationEvent.id,
+          verificationStatus: verificationEvent.status,
+        }),
       });
 
       return thread;
@@ -1000,12 +999,11 @@ export class ThreadManager implements IThreadManager {
           sourceMessage
         ),
         allowedMentions: this.createNoMentionAllowedMentions(),
-        components: [
-          this.presentationBuilder.createActionRow(member.id, {
-            guildId: member.guild.id,
-            verificationEventId: verificationEvent.id,
-          }),
-        ],
+        components: this.presentationBuilder.createAdminNotificationActionRows(member.id, {
+          guildId: member.guild.id,
+          verificationEventId: verificationEvent.id,
+          verificationStatus: verificationEvent.status,
+        }),
       });
 
       return thread;

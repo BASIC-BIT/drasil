@@ -61,6 +61,13 @@ const extractComponentCustomIds = (components: unknown[]): string[] =>
     )
   );
 
+const extractComponentLabels = (components: unknown[]): string[] =>
+  components.flatMap((row) =>
+    ((row as { components?: unknown[] }).components ?? []).map(
+      (component) => (component as { data?: { label?: string } }).data?.label ?? ''
+    )
+  );
+
 const buildThread = (id = 'thread-1'): jest.Mocked<ThreadChannel> =>
   ({
     id,
@@ -558,11 +565,13 @@ describe('ThreadManager (unit)', () => {
       components: expect.any(Array),
     });
     const prompt = thread.send.mock.calls[0][0] as { components: unknown[] };
-    expect(parseAdminActionCustomId(extractComponentCustomIds(prompt.components)[0])).toEqual({
-      surface: 'case',
-      action: 'menu',
-      userId: 'user-1',
-    });
+    expect(extractComponentLabels(prompt.components)).toEqual([
+      'Verify',
+      'Restrict',
+      'Ban...',
+      'Close',
+      'Other Actions',
+    ]);
   });
 
   it('keeps a created report review thread linked when prompt send fails', async () => {
@@ -654,11 +663,13 @@ describe('ThreadManager (unit)', () => {
       })
     );
     const prompt = thread.send.mock.calls[0][0] as { components: unknown[] };
-    expect(parseAdminActionCustomId(extractComponentCustomIds(prompt.components)[0])).toEqual({
-      surface: 'case',
-      action: 'menu',
-      userId: 'user-1',
-    });
+    expect(extractComponentLabels(prompt.components)).toEqual([
+      'Verify',
+      'Restrict',
+      'Ban...',
+      'Close',
+      'Other Actions',
+    ]);
   });
 
   it('recovers an already-attached admin evidence thread when duplicate start fails', async () => {

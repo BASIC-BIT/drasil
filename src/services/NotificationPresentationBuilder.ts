@@ -30,6 +30,8 @@ import { getVerificationActionFailures } from '../utils/verificationActionFailur
 interface AdminActionRowOptions {
   readonly guildId?: string;
   readonly verificationEventId?: string;
+  readonly verificationStatus?: VerificationStatus;
+  readonly includeBanAction?: boolean;
 }
 
 interface ThreadAnalysisMetadata {
@@ -334,24 +336,122 @@ export class NotificationPresentationBuilder {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
   }
 
+  public createAdminNotificationActionRows(
+    userId: string,
+    options: AdminActionRowOptions = {}
+  ): ActionRowBuilder<ButtonBuilder>[] {
+    const isPending =
+      !options.verificationStatus || options.verificationStatus === VerificationStatus.PENDING;
+    const primaryButtons = isPending
+      ? this.createPendingCaseAdminButtons(userId, options.includeBanAction !== false)
+      : [
+          this.createCustomButton(`reopen_${userId}`, 'Reopen', ButtonStyle.Primary),
+          this.createCustomButton(`history_${userId}`, 'History', ButtonStyle.Secondary),
+          this.createCustomButton(
+            buildCaseAdminActionsCustomId(userId),
+            'Other Actions',
+            ButtonStyle.Secondary
+          ),
+        ];
+
+    const rows = [new ActionRowBuilder<ButtonBuilder>().addComponents(...primaryButtons)];
+    const webCaseUrl =
+      options.guildId && options.verificationEventId
+        ? buildAdminCaseDetailUrl(options.guildId, options.verificationEventId)
+        : null;
+    if (webCaseUrl) {
+      rows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          this.createLinkButton('Web Case', webCaseUrl)
+        )
+      );
+    }
+
+    return rows;
+  }
+
   public createObservedActionRows(
     userId: string,
     detectionEventId: string,
-    guildId?: string
+    guildId?: string,
+    options: Pick<AdminActionRowOptions, 'includeBanAction'> = {}
   ): ActionRowBuilder<ButtonBuilder>[] {
     const buttons = [
-      new ButtonBuilder()
-        .setCustomId(buildObservedAdminActionsCustomId(userId, detectionEventId))
-        .setLabel('Admin Actions')
-        .setStyle(ButtonStyle.Primary),
+      this.createCustomButton(
+        `observed:open:${userId}:${detectionEventId}`,
+        'Open Case',
+        ButtonStyle.Primary
+      ),
+      this.createCustomButton(
+        `observed:restrict:${userId}:${detectionEventId}`,
+        'Restrict',
+        ButtonStyle.Danger
+      ),
     ];
 
-    const webQueueUrl = guildId ? buildAdminCaseQueueUrl(guildId) : null;
-    if (webQueueUrl) {
-      buttons.push(this.createLinkButton('Web Queue', webQueueUrl));
+    if (options.includeBanAction !== false) {
+      buttons.push(
+        this.createCustomButton(
+          `observed:ban:${userId}:${detectionEventId}`,
+          'Ban...',
+          ButtonStyle.Danger
+        )
+      );
     }
 
-    return [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
+    buttons.push(
+      this.createCustomButton(
+        `observed:dismiss:${userId}:${detectionEventId}`,
+        'Dismiss',
+        ButtonStyle.Secondary
+      ),
+      this.createCustomButton(
+        buildObservedAdminActionsCustomId(userId, detectionEventId),
+        'Other Actions',
+        ButtonStyle.Secondary
+      )
+    );
+
+    const webQueueUrl = guildId ? buildAdminCaseQueueUrl(guildId) : null;
+    const rows = [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
+    if (webQueueUrl) {
+      rows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          this.createLinkButton('Web Queue', webQueueUrl)
+        )
+      );
+    }
+
+    return rows;
+  }
+
+  private createPendingCaseAdminButtons(
+    userId: string,
+    includeBanAction: boolean
+  ): ButtonBuilder[] {
+    const buttons = [
+      this.createCustomButton(`verify_${userId}`, 'Verify', ButtonStyle.Success),
+      this.createCustomButton(`restrict_${userId}`, 'Restrict', ButtonStyle.Danger),
+    ];
+
+    if (includeBanAction) {
+      buttons.push(this.createCustomButton(`ban_${userId}`, 'Ban...', ButtonStyle.Danger));
+    }
+
+    buttons.push(
+      this.createCustomButton(`close_${userId}`, 'Close', ButtonStyle.Secondary),
+      this.createCustomButton(
+        buildCaseAdminActionsCustomId(userId),
+        'Other Actions',
+        ButtonStyle.Secondary
+      )
+    );
+
+    return buttons;
+  }
+
+  private createCustomButton(customId: string, label: string, style: ButtonStyle): ButtonBuilder {
+    return new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(style);
   }
 
   private createLinkButton(label: string, url: string): ButtonBuilder {

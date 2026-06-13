@@ -215,30 +215,74 @@ describe('NotificationPresentationBuilder (unit)', () => {
     expect(adminCaseEmbed.data.title).toBe('Admin Review Case Opened');
   });
 
-  it('adds optional web links to action rows when a public web URL is configured', () => {
+  it('keeps user-facing case prompts behind the compact admin actions entry point', () => {
+    const row = builder.createActionRow('user-1');
+    const buttons = row.toJSON().components as Array<{ label?: string; custom_id?: string }>;
+
+    expect(buttons.map((button) => button.label)).toEqual(['Admin Actions']);
+    expect(buttons[0].custom_id).toBe('admin_actions:m:c:user-1');
+  });
+
+  it('adds primary admin actions and optional web links to admin notification rows', () => {
     process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
     delete process.env.NEXT_PUBLIC_APP_URL;
 
-    const caseRow = builder.createActionRow('user-1', {
+    const caseRows = builder.createAdminNotificationActionRows('user-1', {
       guildId: 'guild-1',
       verificationEventId: 'ver-1',
     });
     const observedRows = builder.createObservedActionRows('user-1', 'det-1', 'guild-1');
 
-    const caseButtons = caseRow.toJSON().components as Array<{ label?: string; url?: string }>;
-    const observedButtons = observedRows[0].toJSON().components as Array<{
-      label?: string;
-      url?: string;
-    }>;
+    const caseButtons = caseRows.flatMap(
+      (row) => row.toJSON().components as Array<{ label?: string; url?: string }>
+    );
+    const observedButtons = observedRows.flatMap(
+      (row) => row.toJSON().components as Array<{ label?: string; url?: string }>
+    );
 
-    expect(caseButtons.map((button) => button.label)).toEqual(['Admin Actions', 'Web Case']);
-    expect(caseButtons[1]).toMatchObject({
+    expect(caseButtons.map((button) => button.label)).toEqual([
+      'Verify',
+      'Restrict',
+      'Ban...',
+      'Close',
+      'Other Actions',
+      'Web Case',
+    ]);
+    expect(caseButtons[5]).toMatchObject({
       url: 'https://drasilbot.com/admin/guild/guild-1/cases/ver-1',
     });
-    expect(observedButtons.map((button) => button.label)).toEqual(['Admin Actions', 'Web Queue']);
-    expect(observedButtons[1]).toMatchObject({
+    expect(observedButtons.map((button) => button.label)).toEqual([
+      'Open Case',
+      'Restrict',
+      'Ban...',
+      'Dismiss',
+      'Other Actions',
+      'Web Queue',
+    ]);
+    expect(observedButtons[5]).toMatchObject({
       url: 'https://drasilbot.com/admin/guild/guild-1/cases',
     });
+  });
+
+  it('uses resolved-case admin notification rows after a case is handled', () => {
+    process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
+
+    const rows = builder.createAdminNotificationActionRows('user-1', {
+      guildId: 'guild-1',
+      verificationEventId: 'ver-1',
+      verificationStatus: VerificationStatus.VERIFIED,
+    });
+    const buttons = rows.flatMap(
+      (row) => row.toJSON().components as Array<{ label?: string; custom_id?: string }>
+    );
+
+    expect(buttons.map((button) => button.label)).toEqual([
+      'Reopen',
+      'History',
+      'Other Actions',
+      'Web Case',
+    ]);
+    expect(buttons[0].custom_id).toBe('reopen_user-1');
   });
 
   it('adds and removes moderation action failure warnings', () => {
