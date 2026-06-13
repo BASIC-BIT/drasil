@@ -197,6 +197,38 @@ describe('NotificationPresentationBuilder (unit)', () => {
     );
   });
 
+  it('clears stale handled presentation when refreshing a pending case', () => {
+    const embed = new EmbedBuilder()
+      .setTitle('Case Handled: Verified')
+      .setDescription('<@user-1> has been handled. No further moderator action is pending.')
+      .setColor(0x00ff00)
+      .addFields(
+        {
+          name: 'Resolution',
+          value:
+            'Verified by <@admin-1> at <t:1767571200:F>\nNo further moderator action is pending.',
+          inline: false,
+        },
+        { name: 'User ID', value: 'user-1', inline: true },
+        { name: 'Trigger', value: 'Flagged via user report: `scam DM`', inline: false },
+        { name: 'Latest Admin Action', value: 'Reopened by <@admin-2>', inline: false },
+        { name: 'Action Log', value: 'Reopened by <@admin-2>', inline: false }
+      );
+
+    builder.upsertResolvedCasePresentation(
+      embed,
+      buildVerificationEvent({ status: VerificationStatus.PENDING }),
+      VerificationStatus.PENDING
+    );
+
+    expect(embed.data.title).toBe('User Report Submitted');
+    expect(embed.data.description).toBe('<@user-1> has been flagged as suspicious.');
+    expect(embed.data.color).toBe(0xff0000);
+    expect(getField(embed, 'Resolution')).toBeUndefined();
+    expect(getField(embed, 'Latest Admin Action')).toBe('Reopened by <@admin-2>');
+    expect(getField(embed, 'Action Log')).toBe('Reopened by <@admin-2>');
+  });
+
   it('uses specific pending titles for reports and admin-opened cases', () => {
     const reportEmbed = builder.createSuspiciousUserEmbed(
       buildMember(),

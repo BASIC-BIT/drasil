@@ -613,6 +613,7 @@ export class NotificationPresentationBuilder {
   ): void {
     const actionTaken = this.getResolutionAction(status);
     if (!actionTaken) {
+      this.clearResolvedCasePresentation(embed);
       return;
     }
 
@@ -642,6 +643,51 @@ export class NotificationPresentationBuilder {
         resolvedAt
       );
     }
+  }
+
+  private clearResolvedCasePresentation(embed: EmbedBuilder): void {
+    const fields = embed.data.fields ?? [];
+    const hasResolutionField = fields.some(
+      (field) => field.name === NotificationPresentationBuilder.RESOLUTION_FIELD_NAME
+    );
+    const hasHandledTitle = embed.data.title?.startsWith('Case Handled:') ?? false;
+    const hasHandledDescription =
+      embed.data.description?.includes('No further moderator action is pending.') ?? false;
+
+    if (!hasResolutionField && !hasHandledTitle && !hasHandledDescription) {
+      return;
+    }
+
+    embed.setColor(0xff0000);
+    embed.setTitle(this.getPendingTitleFromExistingEmbed(embed));
+    embed.setDescription(this.getPendingDescriptionFromExistingEmbed(embed));
+    embed.setFields(
+      ...fields.filter(
+        (field) => field.name !== NotificationPresentationBuilder.RESOLUTION_FIELD_NAME
+      )
+    );
+  }
+
+  private getPendingTitleFromExistingEmbed(embed: EmbedBuilder): string {
+    const trigger = embed.data.fields?.find((field) => field.name === 'Trigger')?.value ?? '';
+    if (trigger.startsWith('Flagged via user report:')) {
+      return 'User Report Submitted';
+    }
+
+    if (trigger.startsWith('Admin-opened case:')) {
+      return 'Admin Review Case Opened';
+    }
+
+    return 'Suspicious User Detected';
+  }
+
+  private getPendingDescriptionFromExistingEmbed(embed: EmbedBuilder): string {
+    const userId = embed.data.fields?.find((field) => field.name === 'User ID')?.value;
+    if (userId) {
+      return `<@${userId}> has been flagged as suspicious.`;
+    }
+
+    return 'Case is pending moderator review.';
   }
 
   private addOptionalAnalysisFields(
