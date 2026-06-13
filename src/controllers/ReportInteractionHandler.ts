@@ -26,6 +26,7 @@ import {
   USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH,
 } from '../utils/userReportSettings';
 import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
+import { messageAttachmentsToReportMetadata } from '../utils/reportAttachments';
 
 export const REPORT_USER_INITIATE_CUSTOM_ID = 'report_user_initiate';
 export const REPORT_USER_TYPED_MODAL_ID = 'report_user_modal_submit';
@@ -591,16 +592,7 @@ export class ReportInteractionHandler {
       return null;
     }
 
-    const attachments = [...message.attachments.values()].map((attachment) => ({
-      id: attachment.id,
-      name: attachment.name,
-      url: attachment.url,
-      proxyUrl: attachment.proxyURL,
-      contentType: attachment.contentType ?? undefined,
-      size: attachment.size,
-    }));
-
-    return { content: message.content, attachments };
+    return { content: message.content, attachments: messageAttachmentsToReportMetadata(message) };
   }
 
   public isReportIntakeConfirmCustomId(customId: string): boolean {

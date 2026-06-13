@@ -71,6 +71,11 @@ export class CaseCommandHandler {
       return;
     }
 
+    if (subcommand === 'refresh') {
+      await this.handleCaseRefreshCommand(interaction, guild);
+      return;
+    }
+
     if (subcommand === 'intake-role') {
       await this.handleCaseRoleIntakeCommand(interaction, guild);
       return;
@@ -181,6 +186,49 @@ export class CaseCommandHandler {
       const message = error instanceof Error ? error.message : 'Unknown error';
       await interaction.editReply({
         content: `Failed to repair the active case for ${targetUser.tag}: ${message}`,
+        allowedMentions: { parse: [] },
+      });
+    }
+  }
+
+  private async handleCaseRefreshCommand(
+    interaction: ChatInputCommandInteraction,
+    guild: Guild
+  ): Promise<void> {
+    const targetUser = interaction.options.getUser('user', true);
+    const caseId = interaction.options.getString('case-id')?.trim() || undefined;
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      const result = await this.securityActionService.refreshCaseNotification(
+        guild.id,
+        targetUser,
+        caseId
+      );
+
+      const lines = [result.message];
+      if (result.verificationEventId) {
+        lines.push(`Case: \`${result.verificationEventId}\``);
+      }
+      if (result.status) {
+        lines.push(`Status: \`${result.status}\``);
+      }
+      if (result.notificationChannelId && result.notificationMessageId) {
+        lines.push(
+          `Notification: https://discord.com/channels/${guild.id}/${result.notificationChannelId}/${result.notificationMessageId}`
+        );
+      }
+
+      await interaction.editReply({
+        content: lines.join('\n'),
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Failed to refresh case notification:', error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      await interaction.editReply({
+        content: `Failed to refresh case notification for ${targetUser.tag}: ${message}`,
         allowedMentions: { parse: [] },
       });
     }

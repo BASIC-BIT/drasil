@@ -83,6 +83,11 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       return;
     }
 
+    await this.notificationManager.mirrorVerificationThreadMessageToEvidenceThread(
+      verificationEvent,
+      message
+    );
+
     const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
     const settings = getVerificationThreadAnalysisSettings(serverConfig.settings);
     if (!settings.enabled || settings.maxAction === 'off') {

@@ -231,6 +231,150 @@ describe('CommandHandler case commands (unit)', () => {
     );
   });
 
+  it('refreshes the latest case notification via /case refresh', async () => {
+    const refreshCaseNotification = jest.fn().mockResolvedValue({
+      refreshed: true,
+      message: 'Refreshed verified case notification for target#0001.',
+      verificationEventId: 'ver-1',
+      status: 'verified',
+      notificationChannelId: 'channel-1',
+      notificationMessageId: 'message-1',
+    });
+    const { handler, securityActionService } = buildHandler({ refreshCaseNotification });
+    const invoker = { id: 'admin-1' } as any;
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest
+          .fn()
+          .mockResolvedValue({ permissions: { has: jest.fn().mockReturnValue(true) } }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'case',
+      user: invoker,
+      guild,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      options: {
+        getSubcommand: jest.fn().mockReturnValue('refresh'),
+        getUser: jest.fn().mockReturnValue(targetUser),
+        getString: jest.fn().mockReturnValue(undefined),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(securityActionService.refreshCaseNotification).toHaveBeenCalledWith(
+      'guild-1',
+      targetUser,
+      undefined
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Refreshed verified case notification'),
+      allowedMentions: { parse: [] },
+    });
+    expect(interaction.editReply.mock.calls[0][0].content).toContain(
+      'https://discord.com/channels/guild-1/channel-1/message-1'
+    );
+  });
+
+  it('refreshes a specific case notification via /case refresh case-id', async () => {
+    const refreshCaseNotification = jest.fn().mockResolvedValue({
+      refreshed: false,
+      message: 'Case ver-older has no stored notification message to refresh.',
+      verificationEventId: 'ver-older',
+      status: 'verified',
+      notificationChannelId: null,
+      notificationMessageId: null,
+    });
+    const { handler, securityActionService } = buildHandler({ refreshCaseNotification });
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest
+          .fn()
+          .mockResolvedValue({ permissions: { has: jest.fn().mockReturnValue(true) } }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'case',
+      user: { id: 'admin-1' } as any,
+      guild,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      options: {
+        getSubcommand: jest.fn().mockReturnValue('refresh'),
+        getUser: jest.fn().mockReturnValue(targetUser),
+        getString: jest.fn().mockReturnValue('ver-older'),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(securityActionService.refreshCaseNotification).toHaveBeenCalledWith(
+      'guild-1',
+      targetUser,
+      'ver-older'
+    );
+    expect(interaction.editReply.mock.calls[0][0].content).toContain('Case: `ver-older`');
+    expect(interaction.editReply.mock.calls[0][0].content).not.toContain(
+      'https://discord.com/channels/'
+    );
+  });
+
+  it('returns a failure reply when /case refresh fails after deferring', async () => {
+    const refreshCaseNotification = jest
+      .fn()
+      .mockRejectedValue(new Error('notification channel fetch failed'));
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = buildHandler({ refreshCaseNotification });
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest
+          .fn()
+          .mockResolvedValue({ permissions: { has: jest.fn().mockReturnValue(true) } }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'case',
+      user: { id: 'admin-1' } as any,
+      guild,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      options: {
+        getSubcommand: jest.fn().mockReturnValue('refresh'),
+        getUser: jest.fn().mockReturnValue(targetUser),
+        getString: jest.fn().mockReturnValue('ver-1'),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content:
+        'Failed to refresh case notification for target#0001: notification channel fetch failed',
+      allowedMentions: { parse: [] },
+    });
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to refresh case notification:',
+      expect.any(Error)
+    );
+    consoleError.mockRestore();
+  });
+
   it('dry-runs restricted role intake via /case intake-role', async () => {
     const intakeRoleMembers = jest.fn().mockResolvedValue({
       batchId: 'role-intake-1',

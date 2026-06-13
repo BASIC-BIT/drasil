@@ -30,6 +30,8 @@ import { getVerificationActionFailures } from '../utils/verificationActionFailur
 interface AdminActionRowOptions {
   readonly guildId?: string;
   readonly verificationEventId?: string;
+  readonly verificationStatus?: VerificationStatus;
+  readonly includeBanAction?: boolean;
 }
 
 interface ThreadAnalysisMetadata {
@@ -334,24 +336,122 @@ export class NotificationPresentationBuilder {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
   }
 
+  public createAdminNotificationActionRows(
+    userId: string,
+    options: AdminActionRowOptions = {}
+  ): ActionRowBuilder<ButtonBuilder>[] {
+    const isPending =
+      !options.verificationStatus || options.verificationStatus === VerificationStatus.PENDING;
+    const primaryButtons = isPending
+      ? this.createPendingCaseAdminButtons(userId, options.includeBanAction !== false)
+      : [
+          this.createCustomButton(`reopen_${userId}`, 'Reopen', ButtonStyle.Primary),
+          this.createCustomButton(`history_${userId}`, 'History', ButtonStyle.Secondary),
+          this.createCustomButton(
+            buildCaseAdminActionsCustomId(userId),
+            'Other Actions',
+            ButtonStyle.Secondary
+          ),
+        ];
+
+    const rows = [new ActionRowBuilder<ButtonBuilder>().addComponents(...primaryButtons)];
+    const webCaseUrl =
+      options.guildId && options.verificationEventId
+        ? buildAdminCaseDetailUrl(options.guildId, options.verificationEventId)
+        : null;
+    if (webCaseUrl) {
+      rows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          this.createLinkButton('Web Case', webCaseUrl)
+        )
+      );
+    }
+
+    return rows;
+  }
+
   public createObservedActionRows(
     userId: string,
     detectionEventId: string,
-    guildId?: string
+    guildId?: string,
+    options: Pick<AdminActionRowOptions, 'includeBanAction'> = {}
   ): ActionRowBuilder<ButtonBuilder>[] {
     const buttons = [
-      new ButtonBuilder()
-        .setCustomId(buildObservedAdminActionsCustomId(userId, detectionEventId))
-        .setLabel('Admin Actions')
-        .setStyle(ButtonStyle.Primary),
+      this.createCustomButton(
+        `observed:open:${userId}:${detectionEventId}`,
+        'Open Case',
+        ButtonStyle.Primary
+      ),
+      this.createCustomButton(
+        `observed:restrict:${userId}:${detectionEventId}`,
+        'Restrict',
+        ButtonStyle.Danger
+      ),
     ];
 
-    const webQueueUrl = guildId ? buildAdminCaseQueueUrl(guildId) : null;
-    if (webQueueUrl) {
-      buttons.push(this.createLinkButton('Web Queue', webQueueUrl));
+    if (options.includeBanAction !== false) {
+      buttons.push(
+        this.createCustomButton(
+          `observed:ban:${userId}:${detectionEventId}`,
+          'Ban...',
+          ButtonStyle.Danger
+        )
+      );
     }
 
-    return [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
+    buttons.push(
+      this.createCustomButton(
+        `observed:dismiss:${userId}:${detectionEventId}`,
+        'Dismiss',
+        ButtonStyle.Secondary
+      ),
+      this.createCustomButton(
+        buildObservedAdminActionsCustomId(userId, detectionEventId),
+        'Other Actions',
+        ButtonStyle.Secondary
+      )
+    );
+
+    const webQueueUrl = guildId ? buildAdminCaseQueueUrl(guildId) : null;
+    const rows = [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
+    if (webQueueUrl) {
+      rows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          this.createLinkButton('Web Queue', webQueueUrl)
+        )
+      );
+    }
+
+    return rows;
+  }
+
+  private createPendingCaseAdminButtons(
+    userId: string,
+    includeBanAction: boolean
+  ): ButtonBuilder[] {
+    const buttons = [
+      this.createCustomButton(`verify_${userId}`, 'Verify', ButtonStyle.Success),
+      this.createCustomButton(`restrict_${userId}`, 'Restrict', ButtonStyle.Danger),
+    ];
+
+    if (includeBanAction) {
+      buttons.push(this.createCustomButton(`ban_${userId}`, 'Ban...', ButtonStyle.Danger));
+    }
+
+    buttons.push(
+      this.createCustomButton(`close_${userId}`, 'Close', ButtonStyle.Secondary),
+      this.createCustomButton(
+        buildCaseAdminActionsCustomId(userId),
+        'Other Actions',
+        ButtonStyle.Secondary
+      )
+    );
+
+    return buttons;
+  }
+
+  private createCustomButton(customId: string, label: string, style: ButtonStyle): ButtonBuilder {
+    return new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(style);
   }
 
   private createLinkButton(label: string, url: string): ButtonBuilder {
@@ -504,6 +604,90 @@ export class NotificationPresentationBuilder {
     if (fieldIndex !== undefined && fieldIndex >= 0) {
       embed.spliceFields(fieldIndex, 1);
     }
+  }
+
+  public upsertResolvedCasePresentation(
+    embed: EmbedBuilder,
+    verificationEvent: VerificationEvent,
+    status: VerificationStatus
+  ): void {
+    const actionTaken = this.getResolutionAction(status);
+    if (!actionTaken) {
+      this.clearResolvedCasePresentation(embed);
+      return;
+    }
+
+    if (status === VerificationStatus.VERIFIED) {
+      embed.setColor(0x00ff00);
+    } else if (status === VerificationStatus.BANNED) {
+      embed.setColor(0x000000);
+    } else if (status === VerificationStatus.CLOSED_NO_ACTION) {
+      embed.setColor(0x808080);
+    }
+
+    const resolvedAt = verificationEvent.resolved_at
+      ? Math.floor(verificationEvent.resolved_at.getTime() / 1000)
+      : null;
+    this.upsertHandledResolutionField(
+      embed,
+      actionTaken,
+      verificationEvent.resolved_by,
+      resolvedAt
+    );
+
+    if (verificationEvent.resolved_by && resolvedAt) {
+      this.upsertLatestAdminActionField(
+        embed,
+        actionTaken,
+        verificationEvent.resolved_by,
+        resolvedAt
+      );
+    }
+  }
+
+  private clearResolvedCasePresentation(embed: EmbedBuilder): void {
+    const fields = embed.data.fields ?? [];
+    const hasResolutionField = fields.some(
+      (field) => field.name === NotificationPresentationBuilder.RESOLUTION_FIELD_NAME
+    );
+    const hasHandledTitle = embed.data.title?.startsWith('Case Handled:') ?? false;
+    const hasHandledDescription =
+      embed.data.description?.includes('No further moderator action is pending.') ?? false;
+
+    if (!hasResolutionField && !hasHandledTitle && !hasHandledDescription) {
+      return;
+    }
+
+    embed.setColor(0xff0000);
+    embed.setTitle(this.getPendingTitleFromExistingEmbed(embed));
+    embed.setDescription(this.getPendingDescriptionFromExistingEmbed(embed));
+    embed.setFields(
+      ...fields.filter(
+        (field) => field.name !== NotificationPresentationBuilder.RESOLUTION_FIELD_NAME
+      )
+    );
+  }
+
+  private getPendingTitleFromExistingEmbed(embed: EmbedBuilder): string {
+    const trigger = embed.data.fields?.find((field) => field.name === 'Trigger')?.value ?? '';
+    if (trigger.startsWith('Flagged via user report:')) {
+      return 'User Report Submitted';
+    }
+
+    if (trigger.startsWith('Admin-opened case:')) {
+      return 'Admin Review Case Opened';
+    }
+
+    return 'Suspicious User Detected';
+  }
+
+  private getPendingDescriptionFromExistingEmbed(embed: EmbedBuilder): string {
+    const userId = embed.data.fields?.find((field) => field.name === 'User ID')?.value;
+    if (userId) {
+      return `<@${userId}> has been flagged as suspicious.`;
+    }
+
+    return 'Case is pending moderator review.';
   }
 
   private addOptionalAnalysisFields(
@@ -725,14 +909,7 @@ export class NotificationPresentationBuilder {
       return;
     }
 
-    const actionTaken =
-      verificationEvent.status === VerificationStatus.BANNED
-        ? AdminActionType.BAN
-        : verificationEvent.status === VerificationStatus.VERIFIED
-          ? AdminActionType.VERIFY
-          : verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
-            ? AdminActionType.CLOSE_NO_ACTION
-            : null;
+    const actionTaken = this.getResolutionAction(verificationEvent.status);
     if (!actionTaken) {
       return;
     }
@@ -748,14 +925,7 @@ export class NotificationPresentationBuilder {
   private getVerificationResolutionPresentation(
     verificationEvent: VerificationEvent
   ): { title: string; fieldValue: string } | null {
-    const actionTaken =
-      verificationEvent.status === VerificationStatus.BANNED
-        ? AdminActionType.BAN
-        : verificationEvent.status === VerificationStatus.VERIFIED
-          ? AdminActionType.VERIFY
-          : verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
-            ? AdminActionType.CLOSE_NO_ACTION
-            : null;
+    const actionTaken = this.getResolutionAction(verificationEvent.status);
     if (!actionTaken) {
       return null;
     }
@@ -777,8 +947,8 @@ export class NotificationPresentationBuilder {
   private upsertHandledResolutionField(
     embed: EmbedBuilder,
     actionTaken: AdminActionType,
-    adminId: string,
-    timestamp: number
+    adminId: string | null,
+    timestamp: number | null
   ): void {
     if (
       actionTaken !== AdminActionType.VERIFY &&
@@ -799,6 +969,19 @@ export class NotificationPresentationBuilder {
     );
     fields.splice(0, 0, field);
     embed.setFields(...fields);
+  }
+
+  private getResolutionAction(status: VerificationStatus): AdminActionType | null {
+    switch (status) {
+      case VerificationStatus.BANNED:
+        return AdminActionType.BAN;
+      case VerificationStatus.VERIFIED:
+        return AdminActionType.VERIFY;
+      case VerificationStatus.CLOSED_NO_ACTION:
+        return AdminActionType.CLOSE_NO_ACTION;
+      case VerificationStatus.PENDING:
+        return null;
+    }
   }
 
   private formatHandledTitle(actionTaken: AdminActionType): string {

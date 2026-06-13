@@ -13,6 +13,7 @@ import {
   GuildBasedChannel,
   OverwriteResolvable,
   ButtonInteraction,
+  type MessageCreateOptions,
   MessageFlags,
   TextChannel,
 } from 'discord.js';
@@ -29,9 +30,25 @@ import {
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
 import type { VerificationThreadAnalysisResult } from './GPTService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
+import { getReportAiSettings, type ReportAttachmentMetadata } from '../utils/reportAiSettings';
+import {
+  buildSpoilerImageAttachmentFileResult,
+  messageAttachmentsToReportMetadata,
+  selectEligibleMessageReportImageAttachments,
+} from '../utils/reportAttachments';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 
 const VERIFICATION_CHANNEL_NAME = 'verification';
+const DISCORD_MESSAGE_CONTENT_MAX_LENGTH = 2000;
+const MIRRORED_THREAD_MESSAGE_CONTENT_MAX_LENGTH = 1200;
+const MIRRORED_THREAD_MESSAGE_ATTACHMENT_LIMIT = 5;
+const MIRRORED_THREAD_MESSAGE_TRUNCATION_NOTICE =
+  '\n\n[Support-check reply mirror truncated to fit Discord message limits.]';
+
+interface MirroredThreadImageFileResult {
+  readonly files: NonNullable<MessageCreateOptions['files']>;
+  readonly copiedAttachmentIds: Set<string>;
+}
 
 /**
  * Interface for NotificationManager service
@@ -97,6 +114,11 @@ export interface INotificationManager {
     verificationEvent: VerificationEvent,
     analysis: VerificationThreadAnalysisResult,
     analyzedMessageCount: number
+  ): Promise<boolean>;
+
+  mirrorVerificationThreadMessageToEvidenceThread(
+    verificationEvent: VerificationEvent,
+    message: Message
   ): Promise<boolean>;
 
   upsertObservedDetectionNotification(
@@ -187,9 +209,11 @@ export class NotificationManager implements INotificationManager {
         detectionEvents,
         sourceMessage
       );
-      const actionRow = this.presentationBuilder.createActionRow(member.id, {
+      const actionRows = this.presentationBuilder.createAdminNotificationActionRows(member.id, {
         guildId: member.guild.id,
         verificationEventId: verificationEvent.id,
+        verificationStatus: verificationEvent.status,
+        includeBanAction: responseSettings.moderatorBanActionEnabled,
       });
 
       // If we have an existing message, update it, otherwise create new
@@ -206,7 +230,7 @@ export class NotificationManager implements INotificationManager {
           return await existingMessage.edit({
             allowedMentions: { parse: [] },
             embeds: [embed],
-            components: [actionRow],
+            components: actionRows,
           });
         }
       }
@@ -217,7 +241,7 @@ export class NotificationManager implements INotificationManager {
         content: this.presentationBuilder.formatRoleMentions(notificationRoleIds),
         allowedMentions: this.presentationBuilder.createAdminAllowedMentions(notificationRoleIds),
         embeds: [embed],
-        components: [actionRow],
+        components: actionRows,
       });
     } catch (error) {
       console.error('Failed to upsert suspicious user notification:', error);
@@ -262,7 +286,8 @@ export class NotificationManager implements INotificationManager {
         ? this.presentationBuilder.createObservedActionRows(
             member.id,
             actionDetectionEventId,
-            member.guild.id
+            member.guild.id,
+            { includeBanAction: responseSettings.moderatorBanActionEnabled }
           )
         : [];
 
@@ -368,7 +393,8 @@ export class NotificationManager implements INotificationManager {
       const components = this.presentationBuilder.createObservedActionRows(
         detectionEvent.user_id,
         detectionEvent.id,
-        detectionEvent.server_id
+        detectionEvent.server_id,
+        { includeBanAction: responseSettings.moderatorBanActionEnabled }
       );
 
       await message.edit({
@@ -426,7 +452,8 @@ export class NotificationManager implements INotificationManager {
       const components = this.presentationBuilder.createObservedActionRows(
         detectionEvent.user_id,
         detectionEvent.id,
-        detectionEvent.server_id
+        detectionEvent.server_id,
+        { includeBanAction: responseSettings.moderatorBanActionEnabled }
       );
       if (!message.embeds.length) {
         await message.edit({ allowedMentions: { parse: [] }, components });
@@ -450,6 +477,45 @@ export class NotificationManager implements INotificationManager {
       return true;
     } catch (error) {
       console.error('Failed to restore observed detection actions:', error);
+      return false;
+    }
+  }
+
+  public async mirrorVerificationThreadMessageToEvidenceThread(
+    verificationEvent: VerificationEvent,
+    message: Message
+  ): Promise<boolean> {
+    if (!verificationEvent.private_evidence_thread_id) {
+      return false;
+    }
+    if (verificationEvent.private_evidence_thread_id === message.channelId) {
+      return false;
+    }
+
+    try {
+      const channel = await this.client.channels
+        .fetch(verificationEvent.private_evidence_thread_id)
+        .catch(() => null);
+      const send = (channel as { send?: unknown } | null)?.send;
+      if (typeof send !== 'function') {
+        return false;
+      }
+
+      const imageFiles = await this.buildMirroredThreadImageFiles(verificationEvent, message);
+      await (channel as { send: ThreadChannel['send'] }).send({
+        content: this.formatVerificationThreadMessageMirror(
+          message,
+          imageFiles.copiedAttachmentIds
+        ),
+        ...(imageFiles.files.length ? { files: imageFiles.files } : {}),
+        allowedMentions: this.presentationBuilder.createAdminAllowedMentions(),
+      });
+      return true;
+    } catch (error) {
+      console.warn(
+        `Failed to mirror verification thread message ${message.id} to private evidence thread ${verificationEvent.private_evidence_thread_id}:`,
+        error
+      );
       return false;
     }
   }
@@ -907,8 +973,6 @@ export class NotificationManager implements INotificationManager {
     verificationEvent: VerificationEvent,
     newStatus: VerificationStatus
   ): Promise<void> {
-    void newStatus;
-
     if (!verificationEvent.notification_message_id) {
       throw new Error('No notification message ID found for verification event');
     }
@@ -918,21 +982,138 @@ export class NotificationManager implements INotificationManager {
     const updatedEmbed = messageEmbeds.length > 0 ? EmbedBuilder.from(messageEmbeds[0]) : null;
 
     if (updatedEmbed) {
+      this.presentationBuilder.upsertResolvedCasePresentation(
+        updatedEmbed,
+        verificationEvent,
+        newStatus
+      );
       this.presentationBuilder.upsertVerificationActionFailureField(
         updatedEmbed,
         verificationEvent
       );
     }
 
+    const serverConfig = await this.configService
+      .getServerConfig(verificationEvent.server_id)
+      .catch(() => null);
+    const responseSettings = serverConfig
+      ? getDetectionResponseSettings(serverConfig.settings)
+      : null;
+
     await message.edit({
       allowedMentions: { parse: [] },
-      components: [
-        this.presentationBuilder.createActionRow(verificationEvent.user_id, {
+      components: this.presentationBuilder.createAdminNotificationActionRows(
+        verificationEvent.user_id,
+        {
           guildId: verificationEvent.server_id,
           verificationEventId: verificationEvent.id,
-        }),
-      ],
+          verificationStatus: newStatus,
+          includeBanAction: responseSettings?.moderatorBanActionEnabled ?? true,
+        }
+      ),
       ...(updatedEmbed ? { embeds: [updatedEmbed] } : {}),
     });
+  }
+
+  private formatVerificationThreadMessageMirror(
+    message: Message,
+    copiedImageIds: Set<string>
+  ): string {
+    const authorTag = message.author.tag;
+    const lines = [
+      `Support-check reply from <@${message.author.id}> (${authorTag}).`,
+      `Source: ${message.url}`,
+      '',
+      this.formatMirroredMessageContent(message.content),
+    ];
+
+    const attachments = messageAttachmentsToReportMetadata(message).slice(
+      0,
+      MIRRORED_THREAD_MESSAGE_ATTACHMENT_LIMIT
+    );
+    if (attachments.length > 0) {
+      lines.push(
+        '',
+        'Attachments:',
+        ...attachments.map((attachment) =>
+          this.formatMirroredAttachmentLine(attachment, copiedImageIds)
+        )
+      );
+      if (message.attachments.size > attachments.length) {
+        lines.push(
+          `- ${message.attachments.size - attachments.length} more attachment(s) omitted.`
+        );
+      }
+    }
+
+    return this.enforceMirroredThreadMessageLimit(lines.join('\n'));
+  }
+
+  private async buildMirroredThreadImageFiles(
+    verificationEvent: VerificationEvent,
+    message: Message
+  ): Promise<MirroredThreadImageFileResult> {
+    if (message.attachments.size === 0) {
+      return { files: [], copiedAttachmentIds: new Set() };
+    }
+
+    try {
+      const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
+      const attachments = selectEligibleMessageReportImageAttachments(
+        message,
+        getReportAiSettings(serverConfig.settings)
+      );
+      return await buildSpoilerImageAttachmentFileResult(attachments, { logger: console });
+    } catch (error) {
+      console.warn(
+        `Failed to prepare spoilered support-check image attachments for verification event ${verificationEvent.id}:`,
+        error
+      );
+      return { files: [], copiedAttachmentIds: new Set() };
+    }
+  }
+
+  private formatMirroredAttachmentLine(
+    attachment: ReportAttachmentMetadata,
+    copiedImageIds: Set<string>
+  ): string {
+    const name = attachment.name ?? attachment.id ?? 'attachment';
+    if (attachment.id && copiedImageIds.has(attachment.id)) {
+      return `- ${name} (copied below as a spoilered image)`;
+    }
+
+    return `- ${name}: ${attachment.url ?? 'no URL available'}`;
+  }
+
+  private formatMirroredMessageContent(content: string): string {
+    const trimmed = content.trim();
+    if (!trimmed) {
+      return '_No text content._';
+    }
+
+    const safeContent = this.truncateMirroredMessageContent(trimmed).replace(/```/g, "''' ");
+    return `\`\`\`\n${safeContent}\n\`\`\``;
+  }
+
+  private truncateMirroredMessageContent(content: string): string {
+    if (content.length <= MIRRORED_THREAD_MESSAGE_CONTENT_MAX_LENGTH) {
+      return content;
+    }
+
+    return `${content.slice(0, MIRRORED_THREAD_MESSAGE_CONTENT_MAX_LENGTH - 3)}...`;
+  }
+
+  private enforceMirroredThreadMessageLimit(content: string): string {
+    if (content.length <= DISCORD_MESSAGE_CONTENT_MAX_LENGTH) {
+      return content;
+    }
+
+    const maxPrefixLength =
+      DISCORD_MESSAGE_CONTENT_MAX_LENGTH - MIRRORED_THREAD_MESSAGE_TRUNCATION_NOTICE.length;
+    if (maxPrefixLength <= 0) {
+      return content.slice(0, DISCORD_MESSAGE_CONTENT_MAX_LENGTH);
+    }
+
+    return `${content.slice(0, maxPrefixLength)}${MIRRORED_THREAD_MESSAGE_TRUNCATION_NOTICE}`;
   }
 }
