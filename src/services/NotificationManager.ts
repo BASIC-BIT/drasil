@@ -973,8 +973,6 @@ export class NotificationManager implements INotificationManager {
     verificationEvent: VerificationEvent,
     newStatus: VerificationStatus
   ): Promise<void> {
-    void newStatus;
-
     if (!verificationEvent.notification_message_id) {
       throw new Error('No notification message ID found for verification event');
     }

@@ -200,29 +200,38 @@ export class CaseCommandHandler {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const result = await this.securityActionService.refreshCaseNotification(
-      guild.id,
-      targetUser,
-      caseId
-    );
-
-    const lines = [result.message];
-    if (result.verificationEventId) {
-      lines.push(`Case: \`${result.verificationEventId}\``);
-    }
-    if (result.status) {
-      lines.push(`Status: \`${result.status}\``);
-    }
-    if (result.notificationChannelId && result.notificationMessageId) {
-      lines.push(
-        `Notification: https://discord.com/channels/${guild.id}/${result.notificationChannelId}/${result.notificationMessageId}`
+    try {
+      const result = await this.securityActionService.refreshCaseNotification(
+        guild.id,
+        targetUser,
+        caseId
       );
-    }
 
-    await interaction.editReply({
-      content: lines.join('\n'),
-      allowedMentions: { parse: [] },
-    });
+      const lines = [result.message];
+      if (result.verificationEventId) {
+        lines.push(`Case: \`${result.verificationEventId}\``);
+      }
+      if (result.status) {
+        lines.push(`Status: \`${result.status}\``);
+      }
+      if (result.notificationChannelId && result.notificationMessageId) {
+        lines.push(
+          `Notification: https://discord.com/channels/${guild.id}/${result.notificationChannelId}/${result.notificationMessageId}`
+        );
+      }
+
+      await interaction.editReply({
+        content: lines.join('\n'),
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Failed to refresh case notification:', error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      await interaction.editReply({
+        content: `Failed to refresh case notification for ${targetUser.tag}: ${message}`,
+        allowedMentions: { parse: [] },
+      });
+    }
   }
 
   private async resolveRoleIntakeRole(
