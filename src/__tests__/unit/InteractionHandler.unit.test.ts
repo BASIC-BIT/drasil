@@ -223,6 +223,10 @@ describe('InteractionHandler (unit)', () => {
         restrictionAttempted: false,
         restricted: false,
       }),
+      refreshCaseNotification: jest.fn().mockResolvedValue({
+        refreshed: true,
+        message: 'Refreshed pending case notification for test-user#0001.',
+      }),
       repairActiveCase: jest.fn().mockResolvedValue({
         repaired: true,
         message: 'Repaired active verification case for test-user#0001.',
