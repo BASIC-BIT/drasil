@@ -387,7 +387,10 @@ export class InteractionHandler implements IInteractionHandler {
     }
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const acknowledged = await this.moderationQueueService.acknowledgeAttentionItem(itemId);
+    const acknowledged = await this.moderationQueueService.acknowledgeAttentionItem(
+      itemId,
+      guildId
+    );
     await interaction.editReply(
       acknowledged ? 'Queue reminder acknowledged.' : 'That queue reminder was already handled.'
     );

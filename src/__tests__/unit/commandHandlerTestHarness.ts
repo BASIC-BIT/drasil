@@ -36,6 +36,7 @@ export type HandlerOverrides = Partial<{
   restoreDetectionAccounting: jest.Mock;
   restrictedRoleLockdownService: any;
   reportIntakeService: any;
+  moderationQueueService: any;
   client: any;
 }>;
 
@@ -178,7 +179,8 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
       undefined,
       setupDiagnosticsService,
       overrides.restrictedRoleLockdownService,
-      overrides.reportIntakeService
+      overrides.reportIntakeService,
+      overrides.moderationQueueService
     ),
     client,
     userModerationService,

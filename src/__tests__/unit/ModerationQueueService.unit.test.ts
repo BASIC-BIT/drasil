@@ -435,10 +435,51 @@ describe('ModerationQueueService', () => {
     expect(queueRepository.items).toHaveLength(1);
     expect(queueRepository.items[0].last_source_message_id).toBe('reply-2');
 
-    const acknowledged = await service.acknowledgeAttentionItem(queueRepository.items[0].id);
+    const acknowledged = await service.acknowledgeAttentionItem(
+      queueRepository.items[0].id,
+      'guild-1'
+    );
 
     expect(acknowledged).toBe(true);
     expect(channel.sentMessages[0].delete).toHaveBeenCalledTimes(1);
     expect(queueRepository.items).toHaveLength(0);
+  });
+
+  it('does not acknowledge attention items from another server', async () => {
+    const { channel, queueRepository, service } = buildService();
+    await service.recordSupportThreadAttention(buildVerificationEvent(), {
+      id: 'reply-1',
+      channelId: 'support-thread',
+      content: 'Please review this.',
+      url: 'https://discord.com/channels/guild-1/support-thread/reply-1',
+      createdTimestamp: Date.parse('2026-06-13T12:00:00Z'),
+      author: { id: 'user-1' },
+    } as unknown as Message);
+
+    const acknowledged = await service.acknowledgeAttentionItem(
+      queueRepository.items[0].id,
+      'other-guild'
+    );
+
+    expect(acknowledged).toBe(false);
+    expect(channel.sentMessages[0].delete).not.toHaveBeenCalled();
+    expect(queueRepository.items).toHaveLength(1);
+  });
+
+  it('keeps queue send failures from escaping moderation flows', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const channel = new FakeDiscordChannel('queue-channel');
+    channel.send.mockRejectedValueOnce(new Error('Missing permissions'));
+    const { queueRepository, service } = buildService({ channel });
+
+    await expect(service.upsertCaseMirror(buildVerificationEvent())).resolves.toBeUndefined();
+
+    expect(queueRepository.items).toHaveLength(1);
+    expect(queueRepository.items[0].queue_message_id).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to send live moderation queue item'),
+      expect.any(Error)
+    );
+    warnSpy.mockRestore();
   });
 });

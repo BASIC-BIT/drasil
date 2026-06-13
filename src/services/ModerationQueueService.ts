@@ -61,7 +61,7 @@ export interface IModerationQueueService {
   ): Promise<void>;
   recordReportThreadAttention(reportIntake: ReportIntake, message: Message): Promise<void>;
   deleteReportThreadAttention(reportIntakeId: string): Promise<void>;
-  acknowledgeAttentionItem(itemId: string): Promise<boolean>;
+  acknowledgeAttentionItem(itemId: string, serverId: string): Promise<boolean>;
 }
 
 @injectable()
@@ -266,9 +266,9 @@ export class ModerationQueueService implements IModerationQueueService {
     await Promise.all(items.map((item) => this.deleteQueueMessage(item)));
   }
 
-  public async acknowledgeAttentionItem(itemId: string): Promise<boolean> {
+  public async acknowledgeAttentionItem(itemId: string, serverId: string): Promise<boolean> {
     const item = await this.moderationQueueRepository.findById(itemId);
-    if (!item || !this.isAttentionItem(item)) {
+    if (!item || item.server_id !== serverId || !this.isAttentionItem(item)) {
       return false;
     }
 
@@ -553,17 +553,27 @@ export class ModerationQueueService implements IModerationQueueService {
           .fetch(item.queue_message_id)
           .catch(() => null);
         if (existingMessage) {
-          return existingMessage.edit(editPayload);
+          try {
+            return await existingMessage.edit(editPayload);
+          } catch (error) {
+            console.warn(`Failed to edit live moderation queue item ${item.id}:`, error);
+            return null;
+          }
         }
       }
     }
 
-    return queueChannel.send({
-      content: payload.content,
-      allowedMentions: payload.allowedMentions,
-      embeds: payload.embeds,
-      components: payload.components,
-    });
+    try {
+      return await queueChannel.send({
+        content: payload.content,
+        allowedMentions: payload.allowedMentions,
+        embeds: payload.embeds,
+        components: payload.components,
+      });
+    } catch (error) {
+      console.warn(`Failed to send live moderation queue item ${item.id}:`, error);
+      return null;
+    }
   }
 
   private async deleteQueueMessage(item: ModerationQueueItem): Promise<void> {

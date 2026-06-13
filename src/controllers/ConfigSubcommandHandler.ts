@@ -209,33 +209,33 @@ export class ConfigSubcommandHandler {
         }
 
         case 'set-channel': {
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
           const channel = interaction.options.getChannel('channel', true);
           const updated = await this.configService.updateServerSettings(guildId, {
             [MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY]: channel.id,
           });
           await this.moderationQueueService?.syncServerQueue(guildId);
           const settings = getModerationQueueSettings(updated.settings);
-          await interaction.reply({
+          await interaction.editReply({
             content:
               'Updated live moderation queue channel and synced current pending items.\n\n' +
               this.formatCaseQueueSettings(guildId, settings),
-            flags: MessageFlags.Ephemeral,
             allowedMentions: { parse: [] },
           });
           return;
         }
 
         case 'clear-channel': {
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
           const deletedCount = (await this.moderationQueueService?.clearServerQueue(guildId)) ?? 0;
           const updated = await this.configService.updateServerSettings(guildId, {
             [MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY]: null,
           });
           const settings = getModerationQueueSettings(updated.settings);
-          await interaction.reply({
+          await interaction.editReply({
             content:
               `Disabled the live moderation queue and removed ${deletedCount} live queue message(s).\n\n` +
               this.formatCaseQueueSettings(guildId, settings),
-            flags: MessageFlags.Ephemeral,
             allowedMentions: { parse: [] },
           });
           return;
@@ -249,6 +249,13 @@ export class ConfigSubcommandHandler {
       }
     } catch (error) {
       console.error(`Failed to update live moderation queue settings for guild ${guildId}:`, error);
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({
+          content: 'Failed to update live moderation queue settings. Please try again later.',
+        });
+        return;
+      }
+
       await interaction.reply({
         content: 'Failed to update live moderation queue settings. Please try again later.',
         flags: MessageFlags.Ephemeral,

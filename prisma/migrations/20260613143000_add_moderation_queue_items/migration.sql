@@ -22,6 +22,11 @@ CREATE TABLE "moderation_queue_items" (
   "updated_at" timestamptz(6) DEFAULT now(),
   "metadata" jsonb DEFAULT '{}',
   CONSTRAINT "moderation_queue_items_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "moderation_queue_items_identity_required" CHECK (
+    ("item_type" = 'case_mirror' AND "verification_event_id" IS NOT NULL) OR
+    ("item_type" = 'observed_alert_mirror' AND "detection_event_id" IS NOT NULL) OR
+    ("item_type" IN ('support_thread_attention', 'report_thread_attention') AND "source_thread_id" IS NOT NULL)
+  ),
   CONSTRAINT "moderation_queue_items_server_id_fkey" FOREIGN KEY ("server_id") REFERENCES "servers"("guild_id") ON DELETE CASCADE ON UPDATE NO ACTION,
   CONSTRAINT "moderation_queue_items_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("discord_id") ON DELETE CASCADE ON UPDATE NO ACTION,
   CONSTRAINT "moderation_queue_items_verification_event_id_fkey" FOREIGN KEY ("verification_event_id") REFERENCES "verification_events"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
@@ -29,9 +34,9 @@ CREATE TABLE "moderation_queue_items" (
   CONSTRAINT "moderation_queue_items_report_intake_id_fkey" FOREIGN KEY ("report_intake_id") REFERENCES "report_intakes"("id") ON DELETE CASCADE ON UPDATE NO ACTION
 );
 
-CREATE UNIQUE INDEX "moderation_queue_items_type_verification_key" ON "moderation_queue_items"("item_type", "verification_event_id");
-CREATE UNIQUE INDEX "moderation_queue_items_type_detection_key" ON "moderation_queue_items"("item_type", "detection_event_id");
-CREATE UNIQUE INDEX "moderation_queue_items_type_thread_key" ON "moderation_queue_items"("item_type", "source_thread_id");
+CREATE UNIQUE INDEX "moderation_queue_items_type_verification_key" ON "moderation_queue_items"("item_type", "verification_event_id") WHERE "verification_event_id" IS NOT NULL;
+CREATE UNIQUE INDEX "moderation_queue_items_type_detection_key" ON "moderation_queue_items"("item_type", "detection_event_id") WHERE "detection_event_id" IS NOT NULL;
+CREATE UNIQUE INDEX "moderation_queue_items_type_thread_key" ON "moderation_queue_items"("item_type", "source_thread_id") WHERE "source_thread_id" IS NOT NULL;
 CREATE INDEX "idx_moderation_queue_items_detection" ON "moderation_queue_items"("detection_event_id");
 CREATE INDEX "idx_moderation_queue_items_type" ON "moderation_queue_items"("item_type");
 CREATE INDEX "idx_moderation_queue_items_queue_message" ON "moderation_queue_items"("queue_channel_id", "queue_message_id");
