@@ -3,6 +3,7 @@
 import type { MouseEvent, ReactNode } from 'react';
 
 const mobileUserAgentPattern = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i;
+const desktopFallbackDelayMs = 1_000;
 
 interface DiscordExternalLinkProps {
   readonly href: string;
@@ -34,8 +35,18 @@ export function DiscordExternalLink({
       return;
     }
 
+    const opened = window.open(desktopHref, '_blank');
+    if (!opened) {
+      return;
+    }
+
     event.preventDefault();
-    window.location.href = desktopHref;
+    opened.opener = null;
+    window.setTimeout(() => {
+      if (!opened.closed) {
+        opened.location.href = href;
+      }
+    }, desktopFallbackDelayMs);
   };
 
   return (

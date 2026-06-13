@@ -47,6 +47,7 @@ interface CaseSummaryRow {
   latest_confidence: number | null;
   latest_detection_at: unknown;
   latest_detection_metadata: unknown;
+  opening_detection_metadata?: unknown;
   source_channel_id: string | null;
   source_message_id: string | null;
   last_action_type: string | null;
@@ -406,6 +407,16 @@ function parseModerationOutcomeRow(row: ModerationOutcomeRow): CaseModerationOut
   };
 }
 
+export function resolveReportIntakeId(
+  openingDetectionMetadata: unknown,
+  latestDetectionMetadata: unknown
+): string | null {
+  return (
+    readString(metadataToRecord(openingDetectionMetadata).reportIntakeId) ??
+    readString(metadataToRecord(latestDetectionMetadata).reportIntakeId)
+  );
+}
+
 const SUMMARY_QUERY = `
   select
     ve.id,
@@ -426,6 +437,7 @@ const SUMMARY_QUERY = `
     de.confidence as latest_confidence,
     de.detected_at as latest_detection_at,
     de.metadata as latest_detection_metadata,
+    opening_de.metadata as opening_detection_metadata,
     de.channel_id as source_channel_id,
     de.message_id as source_message_id,
     aa.action_type as last_action_type,
@@ -439,6 +451,7 @@ const SUMMARY_QUERY = `
   join servers s on s.guild_id = ve.server_id
   left join users u on u.discord_id = ve.user_id
   left join server_members sm on sm.server_id = ve.server_id and sm.user_id = ve.user_id
+  left join detection_events opening_de on opening_de.id = ve.detection_event_id
   left join lateral (
     select detection_type, confidence, detected_at, metadata, channel_id, message_id
     from detection_events linked_de
@@ -497,7 +510,10 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
     }
 
     const latestDetectionMetadata = metadataToRecord(row.latest_detection_metadata);
-    const reportIntakeId = readString(latestDetectionMetadata.reportIntakeId);
+    const reportIntakeId = resolveReportIntakeId(
+      row.opening_detection_metadata,
+      row.latest_detection_metadata
+    );
     const summaryMetadata = metadataToRecord(row.metadata);
     const sourceMessageId =
       readString(summaryMetadata.source_message_id) ??

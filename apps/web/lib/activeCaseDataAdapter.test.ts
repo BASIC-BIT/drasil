@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCaseSummaryRow } from './activeCaseDataAdapter';
+import { parseCaseSummaryRow, resolveReportIntakeId } from './activeCaseDataAdapter';
 
 const baseRow = {
   id: 'ver-1',
@@ -155,5 +155,16 @@ describe('activeCaseDataAdapter', () => {
 
     expect(summary.presenceState).toBe('banned');
     expect(summary.allowedActions).toEqual(['view_history', 'sync_existing_ban']);
+  });
+
+  it('keeps report evidence tied to the opening detection metadata', () => {
+    expect(
+      resolveReportIntakeId(
+        { reportIntakeId: 'opening-intake' },
+        { reportIntakeId: 'latest-intake' }
+      )
+    ).toBe('opening-intake');
+    expect(resolveReportIntakeId({}, { reportIntakeId: 'latest-intake' })).toBe('latest-intake');
+    expect(resolveReportIntakeId({}, {})).toBeNull();
   });
 });
