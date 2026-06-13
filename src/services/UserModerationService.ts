@@ -149,6 +149,21 @@ export class UserModerationService implements IUserModerationService {
     this.moderationQueueService = moderationQueueService;
   }
 
+  private async deleteLiveQueueCaseMirror(verificationEventId: string): Promise<void> {
+    if (!this.moderationQueueService) {
+      return;
+    }
+
+    try {
+      await this.moderationQueueService.deleteCaseMirror(verificationEventId);
+    } catch (error) {
+      console.warn(
+        `Failed to delete case ${verificationEventId} from the live moderation queue:`,
+        error
+      );
+    }
+  }
+
   private captureModerationAction(
     member: GuildMember,
     actionType: AdminActionType,
@@ -313,7 +328,7 @@ export class UserModerationService implements IUserModerationService {
       }
     }
 
-    await this.moderationQueueService?.deleteCaseMirror(verificationEvent.id);
+    await this.deleteLiveQueueCaseMirror(verificationEvent.id);
   }
 
   private async finalizeResolvedVerificationEvent(
@@ -366,7 +381,7 @@ export class UserModerationService implements IUserModerationService {
       notes: options.notes ?? null,
     });
 
-    await this.moderationQueueService?.deleteCaseMirror(verificationEvent.id);
+    await this.deleteLiveQueueCaseMirror(verificationEvent.id);
   }
 
   /**

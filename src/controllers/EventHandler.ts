@@ -406,9 +406,16 @@ export class EventHandler implements IEventHandler {
       sourceMessage
     );
     if (notification && detectionResult.detectionEventId) {
-      await this.moderationQueueService?.upsertObservedAlertMirrorById(
-        detectionResult.detectionEventId
-      );
+      try {
+        await this.moderationQueueService?.upsertObservedAlertMirrorById(
+          detectionResult.detectionEventId
+        );
+      } catch (error) {
+        console.warn(
+          `Failed to mirror observed alert ${detectionResult.detectionEventId} to the live moderation queue:`,
+          error
+        );
+      }
     }
   }
 

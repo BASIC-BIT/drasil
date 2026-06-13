@@ -22,6 +22,7 @@ import {
   getVerificationActionFailures,
   VERIFICATION_ACTION_FAILURES_METADATA_KEY,
 } from '../../utils/verificationActionFailures';
+import type { IModerationQueueService } from '../../services/ModerationQueueService';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -218,6 +219,62 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues case creation when live queue mirroring fails', async () => {
+    const guildId = 'guild-queue-fails';
+    const userId = 'user-queue-fails';
+    const member = buildMember(guildId, userId);
+    const message = buildMessage(guildId, 'channel-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: message.content,
+    };
+    const moderationQueueService = {
+      upsertCaseMirror: jest.fn().mockRejectedValue(new Error('queue unavailable')),
+    } as unknown as IModerationQueueService;
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const service = new SecurityActionService(
+      notificationManager,
+      detectionEventsRepository,
+      serverMemberRepository,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      adminActionService,
+      threadManager,
+      userModerationService,
+      {} as Client,
+      gptService as any,
+      undefined,
+      moderationQueueService
+    );
+
+    try {
+      await expect(service.handleSuspiciousMessage(member, detectionResult, message)).resolves.toBe(
+        true
+      );
+      expect(consoleWarn).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to mirror case'),
+        expect.any(Error)
+      );
+    } finally {
+      consoleWarn.mockRestore();
+    }
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
+    expect(moderationQueueService.upsertCaseMirror).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvents[0].id })
+    );
   });
 
   it('continues case notification when automatic restriction fails', async () => {

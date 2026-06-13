@@ -339,6 +339,21 @@ export class SecurityActionService implements ISecurityActionService {
     );
   }
 
+  private async runModerationQueueTask(
+    action: string,
+    task: (moderationQueueService: IModerationQueueService) => Promise<void>
+  ): Promise<void> {
+    if (!this.moderationQueueService) {
+      return;
+    }
+
+    try {
+      await task(this.moderationQueueService);
+    } catch (error) {
+      console.warn(`Failed to ${action}:`, error);
+    }
+  }
+
   /**
    * Ensures all required entities exist in the database
    * This should be called at the start of handling any security action
@@ -900,7 +915,11 @@ export class SecurityActionService implements ISecurityActionService {
         notificationMessage,
         sourceMessage
       );
-      await this.moderationQueueService?.upsertObservedAlertMirrorById(detectionEventId);
+      await this.runModerationQueueTask(
+        `mirror observed alert ${detectionEventId} to the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.upsertObservedAlertMirrorById(detectionEventId)
+      );
       return;
     }
 
@@ -915,7 +934,10 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     await this.upsertNotification(member, detectionResult, activeVerificationEvent);
-    await this.moderationQueueService?.upsertCaseMirror(activeVerificationEvent);
+    await this.runModerationQueueTask(
+      `mirror case ${activeVerificationEvent.id} to the live moderation queue`,
+      (moderationQueueService) => moderationQueueService.upsertCaseMirror(activeVerificationEvent)
+    );
   }
 
   private async ensureObservedEvidenceThread(
@@ -1401,7 +1423,11 @@ export class SecurityActionService implements ISecurityActionService {
           active_case_existed: true,
         }
       );
-      await this.moderationQueueService?.upsertCaseMirror(notificationVerificationEvent);
+      await this.runModerationQueueTask(
+        `mirror case ${notificationVerificationEvent.id} to the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.upsertCaseMirror(notificationVerificationEvent)
+      );
       return true;
     }
 
@@ -1470,7 +1496,10 @@ export class SecurityActionService implements ISecurityActionService {
         active_case_existed: false,
       }
     );
-    await this.moderationQueueService?.upsertCaseMirror(newVerificationEvent);
+    await this.runModerationQueueTask(
+      `mirror case ${newVerificationEvent.id} to the live moderation queue`,
+      (moderationQueueService) => moderationQueueService.upsertCaseMirror(newVerificationEvent)
+    );
 
     return true;
   }
@@ -2180,7 +2209,11 @@ export class SecurityActionService implements ISecurityActionService {
         'opened a verification case',
         moderator
       );
-      await this.moderationQueueService?.deleteObservedAlertMirror(detectionEvent.id);
+      await this.runModerationQueueTask(
+        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
+      );
       this.captureMemberAnalytics(
         member,
         'observed detection action completed',
@@ -2240,7 +2273,11 @@ export class SecurityActionService implements ISecurityActionService {
         'restricted this user',
         moderator
       );
-      await this.moderationQueueService?.deleteObservedAlertMirror(detectionEvent.id);
+      await this.runModerationQueueTask(
+        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
+      );
       this.captureMemberAnalytics(
         member,
         'observed detection action completed',
@@ -2323,7 +2360,11 @@ export class SecurityActionService implements ISecurityActionService {
         'banned this user',
         moderator
       );
-      await this.moderationQueueService?.deleteObservedAlertMirror(detectionEvent.id);
+      await this.runModerationQueueTask(
+        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
+      );
       this.captureMemberAnalytics(
         member,
         'observed detection action completed',
@@ -2387,7 +2428,11 @@ export class SecurityActionService implements ISecurityActionService {
           : 'dismissed this alert',
         moderator
       );
-      await this.moderationQueueService?.deleteObservedAlertMirror(detectionEvent.id);
+      await this.runModerationQueueTask(
+        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
+      );
       void this.productAnalyticsService.captureUserEvent(
         guildId,
         userId,
@@ -2456,7 +2501,11 @@ export class SecurityActionService implements ISecurityActionService {
           : 'undid the dismissal',
         moderator
       );
-      await this.moderationQueueService?.upsertObservedAlertMirror(restoredDetectionEvent);
+      await this.runModerationQueueTask(
+        `restore observed alert ${restoredDetectionEvent.id} to the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.upsertObservedAlertMirror(restoredDetectionEvent)
+      );
       void this.productAnalyticsService.captureUserEvent(
         guildId,
         userId,
@@ -2568,7 +2617,11 @@ export class SecurityActionService implements ISecurityActionService {
           moderator
         );
       }
-      await this.moderationQueueService?.upsertObservedAlertMirror(updatedDetectionEvent);
+      await this.runModerationQueueTask(
+        `restore observed alert ${updatedDetectionEvent.id} to the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.upsertObservedAlertMirror(updatedDetectionEvent)
+      );
     } catch (error) {
       if (!actionRecorded) {
         await this.rollbackDetectionMetadata(detectionEvent);
@@ -2624,7 +2677,10 @@ export class SecurityActionService implements ISecurityActionService {
         verificationEvent,
         VerificationStatus.PENDING
       );
-      await this.moderationQueueService?.upsertCaseMirror(updatedEvent);
+      await this.runModerationQueueTask(
+        `mirror case ${updatedEvent.id} to the live moderation queue`,
+        (moderationQueueService) => moderationQueueService.upsertCaseMirror(updatedEvent)
+      );
 
       await this.adminActionService.recordAction({
         server_id: verificationEvent.server_id,
