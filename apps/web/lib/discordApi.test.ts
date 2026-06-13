@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchDiscordGuilds, type DiscordGuildSummary } from './discordApi';
+import {
+  fetchBotChannelMessages,
+  fetchDiscordGuilds,
+  type DiscordGuildSummary,
+  type DiscordMessage,
+} from './discordApi';
 
 function guild(id: string): DiscordGuildSummary {
   return {
@@ -16,6 +21,17 @@ function jsonResponse(value: unknown): Response {
     headers: { 'content-type': 'application/json' },
     status: 200,
   });
+}
+
+function message(id: string): DiscordMessage {
+  return {
+    id,
+    channel_id: 'channel-1',
+    content: `message ${id}`,
+    timestamp: '2026-06-01T00:00:00.000Z',
+    author: { id: 'user-1', username: 'user-1' },
+    attachments: [],
+  };
 }
 
 describe('Discord API helpers', () => {
@@ -38,5 +54,35 @@ describe('Discord API helpers', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('limit=200');
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('after=200');
+  });
+
+  it('paginates bot channel messages and returns oldest first', async () => {
+    vi.stubEnv('DISCORD_API_BASE_URL', 'https://discord.test/api/v10');
+    vi.stubEnv('DRASIL_WEB_BOT_TOKEN', 'bot-token');
+    const firstPage = Array.from({ length: 100 }, (_, index) => message(String(200 - index)));
+    const secondPage = [message('100'), message('99')];
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(firstPage))
+      .mockResolvedValueOnce(jsonResponse(secondPage));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const messages = await fetchBotChannelMessages('channel-1', 102);
+
+    expect(messages.map((item) => item.id)).toEqual([
+      '99',
+      '100',
+      ...firstPage.map((item) => item.id).reverse(),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      '/channels/channel-1/messages?limit=100'
+    );
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('before=101');
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        headers: { authorization: 'Bot bot-token' },
+      })
+    );
   });
 });

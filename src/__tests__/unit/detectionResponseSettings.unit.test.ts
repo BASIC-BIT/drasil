@@ -35,22 +35,32 @@ describe('detectionResponseSettings (unit)', () => {
   it('uses an explicit detection response mode when configured', () => {
     const settings = getDetectionResponseSettings({
       auto_restrict: true,
-      detection_response_mode: 'open_case',
+      detection_response_mode: 'notify_only',
     });
 
-    expect(settings.mode).toBe('open_case');
+    expect(settings.mode).toBe('notify_only');
+  });
+
+  it('maps legacy open_case detection response settings to notify_only', () => {
+    const settings = getDetectionResponseSettings({
+      detection_response_mode: 'open_case',
+      join_detection_response_mode: 'open_case',
+    } as unknown as Parameters<typeof getDetectionResponseSettings>[0]);
+
+    expect(settings.mode).toBe('notify_only');
+    expect(settings.joinMode).toBe('notify_only');
   });
 
   it('uses per-event response mode overrides when configured', () => {
     const settings = getDetectionResponseSettings({
       detection_response_mode: 'notify_only',
       message_detection_response_mode: 'restrict',
-      join_detection_response_mode: 'open_case',
+      join_detection_response_mode: 'record_only',
     });
 
     expect(settings.mode).toBe('notify_only');
     expect(settings.messageMode).toBe('restrict');
-    expect(settings.joinMode).toBe('open_case');
+    expect(settings.joinMode).toBe('record_only');
     expect(
       getDetectionResponseSettings(
         { detection_response_mode: 'notify_only', message_detection_response_mode: 'restrict' },

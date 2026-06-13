@@ -135,7 +135,7 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 - Send 1-2 replies from the flagged user inside their verification thread.
 - Expected result:
   - analysis is not posted publicly in the user-visible thread
-  - admin notification gains or updates an `AI Thread Analysis` section
+  - admin notification gains or updates a `Thread Analysis` section
   - result is admin-facing only
   - repeated replies update the same analysis area rather than creating a second notification
 
@@ -152,7 +152,7 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
     reason codes, primary signal, summary, and token/trace details when available
   - an admin-channel `Suspicious Activity Observed` embed is posted
   - the embed says no automatic restriction was applied
-  - the embed shows heuristic reasons separately from the `AI Analysis` field
+  - the embed shows heuristic reasons separately from the `Risk Analysis` field
 
 ### 10. Observe-only notification coalescing
 

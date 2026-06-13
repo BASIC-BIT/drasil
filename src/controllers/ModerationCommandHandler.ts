@@ -1,8 +1,15 @@
-import { ChatInputCommandInteraction, Guild, MessageFlags, PermissionFlagsBits } from 'discord.js';
+import {
+  ButtonStyle,
+  ChatInputCommandInteraction,
+  Guild,
+  MessageFlags,
+  PermissionFlagsBits,
+} from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { ISecurityActionService } from '../services/SecurityActionService';
 import { IUserModerationService } from '../services/UserModerationService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
+import { requestSlashCommandConfirmation } from '../utils/slashCommandConfirmations';
 
 type ReplyGuildInstallRequired = (interaction: ChatInputCommandInteraction) => Promise<void>;
 
@@ -65,19 +72,23 @@ export class ModerationCommandHandler {
       return;
     }
 
-    try {
-      await this.userModerationService.banUser(member, reason, interaction.user);
-      await interaction.reply({
-        content: `User ${targetUser.tag} has been banned.`,
-        flags: MessageFlags.Ephemeral,
-      });
-    } catch (error) {
-      console.error('Failed to ban user via command:', error);
-      await interaction.reply({
-        content: `Failed to ban ${targetUser.tag}. Please try again later.`,
-        flags: MessageFlags.Ephemeral,
-      });
-    }
+    await requestSlashCommandConfirmation(interaction, {
+      message: `Ban ${targetUser.tag} from this server?`,
+      confirmLabel: 'Ban User',
+      confirmStyle: ButtonStyle.Danger,
+      execute: async (buttonInteraction) => {
+        await buttonInteraction.update({ content: `Banning ${targetUser.tag}...`, components: [] });
+        try {
+          await this.userModerationService.banUser(member, reason, interaction.user);
+          await buttonInteraction.editReply({ content: `User ${targetUser.tag} has been banned.` });
+        } catch (error) {
+          console.error('Failed to ban user via command:', error);
+          await buttonInteraction.editReply({
+            content: `Failed to ban ${targetUser.tag}. Please try again later.`,
+          });
+        }
+      },
+    });
   }
 
   public async handleAuditCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -109,46 +120,53 @@ export class ModerationCommandHandler {
     const detectionEventId = interaction.options.getString('detection-id', true).trim();
     const reason = interaction.options.getString('reason')?.trim() || undefined;
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-    try {
-      if (subcommand === 'ignore-detection') {
-        const updatedDetection = await this.securityActionService.excludeDetectionFromAccounting(
-          guild.id,
-          detectionEventId,
-          interaction.user,
-          reason
-        );
-        await interaction.editReply({
-          content: updatedDetection
-            ? `Detection ${detectionEventId} is now ignored for future accounting.`
-            : `Detection ${detectionEventId} was not found or is not auditable from this server.`,
-        });
-        return;
-      }
-
-      if (subcommand === 'restore-detection') {
-        const updatedDetection = await this.securityActionService.restoreDetectionAccounting(
-          guild.id,
-          detectionEventId,
-          interaction.user,
-          reason
-        );
-        await interaction.editReply({
-          content: updatedDetection
-            ? `Detection ${detectionEventId} now counts toward future accounting again.`
-            : `Detection ${detectionEventId} was not found or is not auditable from this server.`,
-        });
-        return;
-      }
-
-      await interaction.editReply({ content: 'Unsupported /audit subcommand.' });
-    } catch (error) {
-      console.error(`Failed to audit detection ${detectionEventId}:`, error);
-      await interaction.editReply({
-        content: 'Failed to update detection accounting. Please try again later.',
+    if (subcommand !== 'ignore-detection' && subcommand !== 'restore-detection') {
+      await interaction.reply({
+        content: 'Unsupported /audit subcommand.',
+        flags: MessageFlags.Ephemeral,
       });
+      return;
     }
+
+    const isRestore = subcommand === 'restore-detection';
+    await requestSlashCommandConfirmation(interaction, {
+      message: `${isRestore ? 'Restore' : 'Ignore'} detection ${detectionEventId} for future accounting?`,
+      confirmLabel: isRestore ? 'Restore Detection' : 'Ignore Detection',
+      confirmStyle: isRestore ? ButtonStyle.Success : ButtonStyle.Danger,
+      execute: async (buttonInteraction) => {
+        await buttonInteraction.update({
+          content: `${isRestore ? 'Restoring' : 'Ignoring'} detection ${detectionEventId}...`,
+          components: [],
+        });
+        try {
+          const updatedDetection = isRestore
+            ? await this.securityActionService.restoreDetectionAccounting(
+                guild.id,
+                detectionEventId,
+                interaction.user,
+                reason
+              )
+            : await this.securityActionService.excludeDetectionFromAccounting(
+                guild.id,
+                detectionEventId,
+                interaction.user,
+                reason
+              );
+          await buttonInteraction.editReply({
+            content: updatedDetection
+              ? isRestore
+                ? `Detection ${detectionEventId} now counts toward future accounting again.`
+                : `Detection ${detectionEventId} is now ignored for future accounting.`
+              : `Detection ${detectionEventId} was not found or is not auditable from this server.`,
+          });
+        } catch (error) {
+          console.error(`Failed to audit detection ${detectionEventId}:`, error);
+          await buttonInteraction.editReply({
+            content: 'Failed to update detection accounting. Please try again later.',
+          });
+        }
+      },
+    });
   }
 
   public async handleFlagUserCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -179,23 +197,32 @@ export class ModerationCommandHandler {
       return;
     }
 
-    try {
-      await this.securityActionService.handleManualFlag(
-        targetMember,
-        interaction.user,
-        reason ?? undefined
-      );
-      await interaction.reply({
-        content: `Flag request for ${targetUser.tag} received. Initiating verification process...`,
-        flags: MessageFlags.Ephemeral,
-      });
-    } catch (error) {
-      console.error('Failed to manually flag user:', error);
-      await interaction.reply({
-        content: `Failed to flag ${targetUser.tag}. Please try again later.`,
-        flags: MessageFlags.Ephemeral,
-      });
-    }
+    await requestSlashCommandConfirmation(interaction, {
+      message: `Flag ${targetUser.tag} and restrict them pending moderator review?`,
+      confirmLabel: 'Flag User',
+      confirmStyle: ButtonStyle.Danger,
+      execute: async (buttonInteraction) => {
+        await buttonInteraction.update({
+          content: `Flagging ${targetUser.tag}...`,
+          components: [],
+        });
+        try {
+          await this.securityActionService.handleManualFlag(
+            targetMember,
+            interaction.user,
+            reason ?? undefined
+          );
+          await buttonInteraction.editReply({
+            content: `Flag request for ${targetUser.tag} received. Initiating verification process...`,
+          });
+        } catch (error) {
+          console.error('Failed to manually flag user:', error);
+          await buttonInteraction.editReply({
+            content: `Failed to flag ${targetUser.tag}. Please try again later.`,
+          });
+        }
+      },
+    });
   }
 
   private async canUseModeratorBanAction(guild: Guild): Promise<boolean> {

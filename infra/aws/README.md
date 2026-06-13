@@ -49,12 +49,18 @@ cd infra/aws/domain
 cp backend.hcl.example backend.hcl
 # Edit backend.hcl and replace REPLACE_ME with the shared state bucket name
 terraform init -backend-config=backend.hcl
+terraform import aws_route53_zone.primary Z07359592T4F9RD06WHWA # first adoption only
 terraform apply
 ```
 
 After the first apply, update the Route 53 Domains registration to use the `name_servers` output.
 The hosted zone state is intentionally separate from `prod` so DNS ownership can be managed without
 touching the ECS service stack.
+
+The same stack can also be run from GitHub using the manual `Deploy Domain DNS (prod)` workflow.
+That workflow is `workflow_dispatch` only, so merging changes is a no-op until an operator runs it.
+It uses the protected `Deploy - web-prod` environment and imports the existing hosted zone into the
+remote domain state if it is not tracked yet.
 
 ## Optional intelligence bucket
 

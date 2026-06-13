@@ -14,7 +14,9 @@ locals {
 
   github_oidc_subjects = distinct([
     "repo:${local.github_repo_owner}/${local.github_repo_name}:ref:refs/heads/main",
-    "repo:${lower(local.github_repo_owner)}/${lower(local.github_repo_name)}:ref:refs/heads/main"
+    "repo:${lower(local.github_repo_owner)}/${lower(local.github_repo_name)}:ref:refs/heads/main",
+    "repo:${local.github_repo_owner}/${local.github_repo_name}:environment:Deploy - web-prod",
+    "repo:${lower(local.github_repo_owner)}/${lower(local.github_repo_name)}:environment:Deploy - web-prod"
   ])
 
   github_oidc_provider_arn = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
@@ -418,6 +420,96 @@ resource "aws_iam_role" "github_deploy" {
 
 data "aws_iam_policy_document" "github_deploy" {
   #checkov:skip=CKV_AWS_356:Some ECS/ECR actions (for deployment APIs) require wildcard resources.
+  dynamic "statement" {
+    for_each = var.github_actions_terraform_state_bucket_name == null ? [] : [var.github_actions_terraform_state_bucket_name]
+
+    content {
+      actions = [
+        "s3:ListBucket"
+      ]
+      resources = ["arn:aws:s3:::${statement.value}"]
+
+      condition {
+        test     = "StringLike"
+        variable = "s3:prefix"
+        values   = ["drasil/domain/*"]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.github_actions_terraform_state_bucket_name == null ? [] : [var.github_actions_terraform_state_bucket_name]
+
+    content {
+      actions = [
+        "s3:DeleteObject",
+        "s3:GetObject",
+        "s3:PutObject"
+      ]
+      resources = [
+        "arn:aws:s3:::${statement.value}/drasil/domain/terraform.tfstate"
+      ]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.github_actions_terraform_state_bucket_name == null ? [] : [var.github_actions_terraform_lock_table_name]
+
+    content {
+      actions = [
+        "dynamodb:DeleteItem",
+        "dynamodb:DescribeTable",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem"
+      ]
+      resources = [
+        "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${statement.value}"
+      ]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.github_actions_terraform_backend_kms_key_arn == null ? [] : [var.github_actions_terraform_backend_kms_key_arn]
+
+    content {
+      actions = [
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:GenerateDataKey"
+      ]
+      resources = [statement.value]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.github_actions_domain_hosted_zone_id == null ? [] : [var.github_actions_domain_hosted_zone_id]
+
+    content {
+      actions = [
+        "route53:ChangeResourceRecordSets",
+        "route53:ChangeTagsForResource",
+        "route53:GetHostedZone",
+        "route53:ListResourceRecordSets",
+        "route53:ListTagsForResource",
+        "route53:UpdateHostedZoneComment"
+      ]
+      resources = ["arn:aws:route53:::hostedzone/${statement.value}"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.github_actions_domain_hosted_zone_id == null ? [] : [1]
+
+    content {
+      actions = [
+        "route53:GetChange"
+      ]
+      resources = ["arn:aws:route53:::change/*"]
+    }
+  }
+
   statement {
     actions = [
       "ecr:GetAuthorizationToken"

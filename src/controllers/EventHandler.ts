@@ -1,8 +1,10 @@
 import {
   AuditLogEvent,
   Client,
+  GuildBan,
   Message,
   GuildMember,
+  PartialGuildMember,
   Interaction,
   Guild,
   Events,
@@ -44,12 +46,18 @@ import {
   MESSAGE_CONTEXT_RETENTION_DAYS,
   MESSAGE_CONTEXT_USER_LIMIT,
 } from '../repositories/MessageContextRepository';
+import {
+  IUserModerationService,
+  ObservedDiscordBanOptions,
+} from '../services/UserModerationService';
+import { ModerationOutcomeSource } from '../services/ModerationOutcomeService';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
 const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
+const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
 
 type SetupNudgeSource = 'audit_log_installer' | 'owner';
 type SetupNudgeResult = 'sent' | 'dm_failed' | 'no_recipient';
@@ -99,6 +107,7 @@ export class EventHandler implements IEventHandler {
   private reportIntakeAgentService?: IReportIntakeAgentService;
   private caseReviewReminderService?: ICaseReviewReminderService;
   private messageContextRepository?: IMessageContextRepository;
+  private userModerationService?: IUserModerationService;
   private serverConfigWarmups: Set<string> = new Set();
   private configInitializePromise: Promise<void> | null = null;
   private lastMessageContextPruneAt = 0;
@@ -130,7 +139,10 @@ export class EventHandler implements IEventHandler {
     caseReviewReminderService?: ICaseReviewReminderService,
     @inject(TYPES.MessageContextRepository)
     @optional()
-    messageContextRepository?: IMessageContextRepository
+    messageContextRepository?: IMessageContextRepository,
+    @inject(TYPES.UserModerationService)
+    @optional()
+    userModerationService?: IUserModerationService
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -146,12 +158,15 @@ export class EventHandler implements IEventHandler {
     this.reportIntakeAgentService = reportIntakeAgentService;
     this.caseReviewReminderService = caseReviewReminderService;
     this.messageContextRepository = messageContextRepository;
+    this.userModerationService = userModerationService;
   }
 
   public async setupEventHandlers(): Promise<void> {
     this.client.on(Events.ClientReady, this.handleReady.bind(this));
     this.client.on(Events.MessageCreate, this.handleMessage.bind(this));
     this.client.on(Events.GuildMemberAdd, this.handleGuildMemberAdd.bind(this));
+    this.client.on(Events.GuildMemberRemove, this.handleGuildMemberRemove.bind(this));
+    this.client.on(Events.GuildBanAdd, this.handleGuildBanAdd.bind(this));
     this.client.on(Events.InteractionCreate, this.handleInteraction.bind(this));
     this.client.on(Events.GuildCreate, this.handleGuildCreate.bind(this));
   }
@@ -181,6 +196,8 @@ export class EventHandler implements IEventHandler {
         await this.commandHandler.handleMessageContextMenuCommand(interaction);
       } else if (interaction.isButton()) {
         await this.interactionHandler.handleButtonInteraction(interaction);
+      } else if (interaction.isStringSelectMenu()) {
+        await this.interactionHandler.handleStringSelectMenuInteraction(interaction);
       } else if (interaction.isModalSubmit()) {
         // Added check for modal submit
         await this.interactionHandler.handleModalSubmit(interaction);
@@ -393,11 +410,7 @@ export class EventHandler implements IEventHandler {
     }
 
     const confidencePercent = detectionResult.confidence * 100;
-    if (
-      responseSettings.mode === 'notify_only' ||
-      responseSettings.mode === 'open_case' ||
-      responseSettings.mode === 'restrict'
-    ) {
+    if (responseSettings.mode === 'notify_only' || responseSettings.mode === 'restrict') {
       void this.maybeSendDetectionSetupWarning(member.guild).catch((error) => {
         console.warn(`Failed to process setup warning for guild ${member.guild.id}:`, error);
       });
@@ -417,27 +430,6 @@ export class EventHandler implements IEventHandler {
           responseSettings,
           sourceMessage
         );
-        return;
-
-      case 'open_case':
-        if (confidencePercent < actionThreshold) {
-          await this.notifyObservedDetectionIfEligible(
-            member,
-            detectionResult,
-            responseSettings,
-            sourceMessage
-          );
-          return;
-        }
-        if (sourceMessage) {
-          await this.securityActionService.openCaseForSuspiciousMessage(
-            member,
-            detectionResult,
-            sourceMessage
-          );
-        } else {
-          await this.securityActionService.openCaseForSuspiciousJoin(member, detectionResult);
-        }
         return;
 
       case 'restrict':
@@ -511,6 +503,120 @@ export class EventHandler implements IEventHandler {
     } catch (error) {
       console.error('Error handling new member:', error);
     }
+  }
+
+  private async handleGuildBanAdd(ban: GuildBan): Promise<void> {
+    if (!this.userModerationService) {
+      return;
+    }
+
+    try {
+      const options = await this.resolveObservedBanOptions(ban);
+      const resolvedCount = await this.userModerationService.recordObservedDiscordBan(
+        ban.guild,
+        ban.user,
+        options
+      );
+      if (resolvedCount > 0) {
+        console.log(
+          `Resolved ${resolvedCount} pending case(s) for ${ban.user.tag} after observing Discord ban in guild ${ban.guild.id}.`
+        );
+      }
+    } catch (error) {
+      console.error(`Error handling guild ban for ${ban.user.id} in guild ${ban.guild.id}:`, error);
+    }
+  }
+
+  private async handleGuildMemberRemove(member: GuildMember | PartialGuildMember): Promise<void> {
+    if (!this.userModerationService) {
+      return;
+    }
+
+    try {
+      if (!(await this.isDefinitelyNotBanned(member))) {
+        return;
+      }
+
+      const markedCount = await this.userModerationService.recordMemberLeftGuild(member);
+      if (markedCount > 0) {
+        console.log(
+          `Marked ${markedCount} pending case(s) for ${member.user.tag} after member removal in guild ${member.guild.id}.`
+        );
+      }
+    } catch (error) {
+      console.error(
+        `Error handling member removal for ${member.id} in guild ${member.guild.id}:`,
+        error
+      );
+    }
+  }
+
+  private async isDefinitelyNotBanned(member: GuildMember | PartialGuildMember): Promise<boolean> {
+    try {
+      const existingBan = await member.guild.bans.fetch(member.id);
+      return !existingBan;
+    } catch (error) {
+      if (this.isUnknownBanError(error)) {
+        return true;
+      }
+
+      console.warn(
+        `Could not confirm ban state for ${member.id} in guild ${member.guild.id}:`,
+        error
+      );
+      return false;
+    }
+  }
+
+  private isUnknownBanError(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: unknown }).code === DISCORD_UNKNOWN_BAN_ERROR_CODE
+    );
+  }
+
+  private async resolveObservedBanOptions(ban: GuildBan): Promise<ObservedDiscordBanOptions> {
+    const baseOptions: ObservedDiscordBanOptions = {
+      source: ModerationOutcomeSource.UNKNOWN_EXTERNAL,
+      reason: ban.reason ?? null,
+      sourceDetail: 'guildBanAdd',
+    };
+
+    try {
+      const auditLogs = await ban.guild.fetchAuditLogs({
+        type: AuditLogEvent.MemberBanAdd,
+        limit: 5,
+      });
+      const banEntry = auditLogs.entries.find((entry) => entry.target?.id === ban.user.id);
+      if (!banEntry?.executor) {
+        return baseOptions;
+      }
+
+      return {
+        ...baseOptions,
+        source: this.resolveBanOutcomeSource(banEntry.executor.id, banEntry.executor.bot),
+        actorId: banEntry.executor.id,
+        auditLogEntryId: banEntry.id,
+      };
+    } catch (error) {
+      console.warn(`Could not read ban audit log for guild ${ban.guild.id}:`, error);
+      return baseOptions;
+    }
+  }
+
+  private resolveBanOutcomeSource(
+    executorId: string,
+    executorIsBot: boolean
+  ): ModerationOutcomeSource {
+    if (executorId === this.client.user?.id) {
+      return ModerationOutcomeSource.DRASIL;
+    }
+
+    return executorIsBot
+      ? ModerationOutcomeSource.EXTERNAL_BOT
+      : ModerationOutcomeSource.NATIVE_DISCORD;
   }
 
   /**

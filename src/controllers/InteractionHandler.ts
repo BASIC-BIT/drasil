@@ -11,16 +11,19 @@ import {
   ActionRowBuilder,
   ModalSubmitInteraction,
   ButtonStyle,
+  StringSelectMenuBuilder,
+  StringSelectMenuInteraction,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject, optional } from 'inversify';
 import { INotificationManager } from '../services/NotificationManager';
 import { TYPES } from '../di/symbols';
-import { AdminActionType, VerificationStatus } from '../repositories/types';
+import { AdminActionType, VerificationStatus, type VerificationEvent } from '../repositories/types';
 import { VerificationHistoryFormatter } from '../utils/VerificationHistoryFormatter';
 import 'reflect-metadata';
 import { IUserModerationService } from '../services/UserModerationService';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
+import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import { IThreadManager } from '../services/ThreadManager';
 import { IAdminActionRepository } from '../repositories/AdminActionRepository';
 import { ISecurityActionService } from '../services/SecurityActionService';
@@ -42,11 +45,25 @@ import {
   type ParsedAdminActionCustomId,
 } from '../utils/adminActionCustomIds';
 import {
+  buildCaseReviewDigestPageCustomId,
+  buildCaseReviewDigestSelectCustomId,
+  CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID,
+  CASE_REVIEW_DIGEST_PAGE_CUSTOM_ID_PREFIX,
+  CASE_REVIEW_DIGEST_SELECT_CUSTOM_ID_PREFIX,
+  parseCaseReviewDigestPageCustomId,
+  parseCaseReviewDigestSelectCustomId,
+} from '../utils/caseReviewDigestCustomIds';
+import {
   REPORT_USER_INITIATE_CUSTOM_ID,
   REPORT_USER_TYPED_MODAL_ID,
   ReportInteractionHandler,
 } from './ReportInteractionHandler';
 import { SetupVerificationModalHandler } from './SetupVerificationModalHandler';
+import { buildAdminCaseDetailUrl, buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
+import {
+  handleSlashCommandConfirmationButton,
+  isSlashCommandConfirmationCustomId,
+} from '../utils/slashCommandConfirmations';
 // Load environment variables
 dotenv.config();
 
@@ -55,6 +72,7 @@ const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notificatio
 const VERIFICATION_BAN_MODAL_PREFIX = 'verification:ban_modal';
 const VERIFICATION_BAN_NOTES_FIELD_ID = 'verification_ban_notes';
 const VERIFICATION_BAN_DEFAULT_REASON = 'Banned by moderator during verification';
+const CASE_REVIEW_DIGEST_PAGE_SIZE = 25;
 /**
  * Interface for the Bot class
  */
@@ -63,6 +81,8 @@ export interface IInteractionHandler {
    * Handle a button interaction
    */
   handleButtonInteraction(interaction: ButtonInteraction): Promise<void>;
+
+  handleStringSelectMenuInteraction(interaction: StringSelectMenuInteraction): Promise<void>;
 
   /**
    * Handle a modal submission interaction
@@ -79,6 +99,7 @@ export class InteractionHandler implements IInteractionHandler {
   private configService: IConfigService;
   // TODO: Handlers calling a repository is a smell, and should be improved
   private verificationEventRepository: IVerificationEventRepository;
+  private serverMemberRepository?: IServerMemberRepository;
   private threadManager: IThreadManager;
   private adminActionRepository: IAdminActionRepository;
   private reportInteractionHandler: ReportInteractionHandler;
@@ -102,7 +123,10 @@ export class InteractionHandler implements IInteractionHandler {
     reportIntakeService?: IReportIntakeService,
     @inject(TYPES.ProductAnalyticsService)
     @optional()
-    productAnalyticsService?: IProductAnalyticsService
+    productAnalyticsService?: IProductAnalyticsService,
+    @inject(TYPES.ServerMemberRepository)
+    @optional()
+    serverMemberRepository?: IServerMemberRepository
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -110,6 +134,7 @@ export class InteractionHandler implements IInteractionHandler {
     this.securityActionService = securityActionService;
     this.configService = configService;
     this.verificationEventRepository = verificationEventRepository;
+    this.serverMemberRepository = serverMemberRepository;
     this.threadManager = threadManager;
     this.adminActionRepository = adminActionRepository;
     const reportSubmissionService = new ReportSubmissionService(
@@ -153,6 +178,19 @@ export class InteractionHandler implements IInteractionHandler {
 
       if (this.reportInteractionHandler.isReportIntakeConfirmCustomId(customId)) {
         await this.reportInteractionHandler.handleReportIntakeConfirm(interaction, customId);
+        return;
+      }
+
+      if (isSlashCommandConfirmationCustomId(customId)) {
+        await handleSlashCommandConfirmationButton(interaction);
+        return;
+      }
+
+      if (
+        customId === CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID ||
+        customId.startsWith(`${CASE_REVIEW_DIGEST_PAGE_CUSTOM_ID_PREFIX}:`)
+      ) {
+        await this.handleCaseReviewDigestButtonInteraction(interaction, guildId, customId);
         return;
       }
 
@@ -276,6 +314,28 @@ export class InteractionHandler implements IInteractionHandler {
     }
   }
 
+  public async handleStringSelectMenuInteraction(
+    interaction: StringSelectMenuInteraction
+  ): Promise<void> {
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: 'This menu can only be used in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (interaction.customId.startsWith(`${CASE_REVIEW_DIGEST_SELECT_CUSTOM_ID_PREFIX}:`)) {
+      await this.handleCaseReviewDigestSelectInteraction(interaction, interaction.guildId);
+      return;
+    }
+
+    await interaction.reply({
+      content: 'Unknown selection.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
   private async handleAdminActionsButtonInteraction(
     interaction: ButtonInteraction,
     guildId: string,
@@ -339,7 +399,7 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async showAdminActionsMenu(
-    interaction: ButtonInteraction,
+    interaction: ButtonInteraction | StringSelectMenuInteraction,
     guildId: string,
     parsed: ParsedAdminActionCustomId
   ): Promise<void> {
@@ -385,49 +445,78 @@ export class InteractionHandler implements IInteractionHandler {
         : false;
     const canBan =
       hasBanMembersPermission && !alreadyBanned && (await this.canUseModeratorBanAction(guildId));
+    const restrictionState = activeCase
+      ? await this.getCaseRestrictionState(guildId, parsed.userId)
+      : null;
 
-    const buttons: ButtonBuilder[] = [];
+    const actionButtons: ButtonBuilder[] = [];
     if (hasModerationPermission) {
-      buttons.push(this.adminActionButton(parsed, 'history', 'History', ButtonStyle.Secondary));
+      actionButtons.push(
+        this.adminActionButton(parsed, 'history', 'History', ButtonStyle.Secondary)
+      );
     }
 
     if (activeCase?.status === VerificationStatus.PENDING) {
       if (hasModerationPermission) {
-        buttons.push(
+        actionButtons.push(
+          restrictionState === true
+            ? this.adminActionButton(
+                parsed,
+                'lift_restriction',
+                'Lift Restriction',
+                ButtonStyle.Secondary
+              )
+            : this.adminActionButton(parsed, 'restrict_user', 'Restrict User', ButtonStyle.Danger)
+        );
+        actionButtons.push(
           this.adminActionButton(parsed, 'verify', 'Verify User', ButtonStyle.Success),
+          this.adminActionButton(
+            parsed,
+            'close_no_action',
+            'Close No Action',
+            ButtonStyle.Secondary
+          ),
           this.adminActionButton(parsed, 'repair', 'Repair Active Case', ButtonStyle.Primary)
         );
         if (!activeCase.thread_id) {
-          buttons.push(
+          actionButtons.push(
             this.adminActionButton(parsed, 'thread', 'Create Thread', ButtonStyle.Primary)
           );
         }
       }
       if (alreadyBanned) {
-        buttons.push(
+        actionButtons.push(
           this.adminActionButton(parsed, 'sync_ban', 'Sync Existing Ban', ButtonStyle.Danger)
         );
       }
       if (canBan) {
-        buttons.push(this.adminActionButton(parsed, 'ban', 'Ban User...', ButtonStyle.Danger));
+        actionButtons.push(
+          this.adminActionButton(parsed, 'ban', 'Ban User...', ButtonStyle.Danger)
+        );
       }
     } else if (latestCase && hasModerationPermission) {
-      buttons.push(
+      actionButtons.push(
         this.adminActionButton(parsed, 'reopen', 'Reopen Verification', ButtonStyle.Primary)
       );
     }
 
-    const details = [
-      `Admin actions for <@${parsed.userId}>.`,
-      'Mutating actions require a confirmation step before they run.',
-    ];
-    if (activeCase?.thread_id) {
-      details.push(`Case thread: https://discord.com/channels/${guildId}/${activeCase.thread_id}`);
+    const buttons = [...actionButtons];
+    const webCaseUrl = latestCase ? buildAdminCaseDetailUrl(guildId, latestCase.id) : null;
+    if (webCaseUrl) {
+      buttons.push(this.webLinkButton('Web Case', webCaseUrl));
     }
-    if (activeCase?.private_evidence_thread_id) {
-      details.push(
-        `Admin evidence: https://discord.com/channels/${guildId}/${activeCase.private_evidence_thread_id}`
-      );
+
+    const adminChannelId = await this.getAdminChannelId(guildId);
+    const userLabel = await this.resolveUserDisplayLabel(guildId, parsed.userId);
+    const details = [`Admin actions for ${userLabel}.`];
+    if (activeCase?.status === VerificationStatus.PENDING) {
+      details.push(`Restriction: ${this.formatCaseRestrictionState(restrictionState)}.`);
+    }
+    const latestCaseLinks = latestCase
+      ? this.formatVerificationCaseLinks(guildId, latestCase, adminChannelId)
+      : [];
+    if (latestCaseLinks.length > 0) {
+      details.push(`Links: ${latestCaseLinks.join(' | ')}`);
     }
     if (alreadyBanned) {
       details.push(
@@ -439,15 +528,13 @@ export class InteractionHandler implements IInteractionHandler {
         `Warning: ${pendingCases.length} pending cases exist for this user. Terminal actions will resolve all pending case rows.`
       );
       details.push(
-        ...pendingCases
-          .slice(0, 5)
-          .map(
-            (event) =>
-              `Pending case ${event.id}${event.thread_id ? `: https://discord.com/channels/${guildId}/${event.thread_id}` : ''}`
-          )
+        ...pendingCases.slice(0, 5).map((event) => {
+          const links = this.formatVerificationCaseLinks(guildId, event, adminChannelId);
+          return `Pending case ${event.id}${links.length ? ` - ${links.join(' | ')}` : ''}`;
+        })
       );
     }
-    if (buttons.length === 0) {
+    if (actionButtons.length === 0) {
       details.push('No available actions for your current permissions and this case state.');
     }
 
@@ -460,7 +547,7 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async showObservedAdminActionsMenu(
-    interaction: ButtonInteraction,
+    interaction: ButtonInteraction | StringSelectMenuInteraction,
     guildId: string,
     parsed: ParsedAdminActionCustomId,
     permissions: { hasModerationPermission: boolean; hasBanMembersPermission: boolean }
@@ -475,9 +562,9 @@ export class InteractionHandler implements IInteractionHandler {
 
     const canBan =
       permissions.hasBanMembersPermission && (await this.canUseModeratorBanAction(guildId));
-    const buttons: ButtonBuilder[] = [];
+    const actionButtons: ButtonBuilder[] = [];
     if (permissions.hasModerationPermission) {
-      buttons.push(
+      actionButtons.push(
         this.adminActionButton(parsed, 'observed_open', 'Open Case', ButtonStyle.Primary),
         this.adminActionButton(parsed, 'observed_restrict', 'Restrict', ButtonStyle.Danger),
         this.adminActionButton(parsed, 'observed_dismiss', 'Dismiss Alert', ButtonStyle.Secondary),
@@ -498,26 +585,360 @@ export class InteractionHandler implements IInteractionHandler {
     }
     if (canBan) {
       if (permissions.hasModerationPermission) {
-        buttons.splice(
+        actionButtons.splice(
           2,
           0,
           this.adminActionButton(parsed, 'observed_ban', 'Ban...', ButtonStyle.Danger)
         );
       } else {
-        buttons.push(this.adminActionButton(parsed, 'observed_ban', 'Ban...', ButtonStyle.Danger));
+        actionButtons.push(
+          this.adminActionButton(parsed, 'observed_ban', 'Ban...', ButtonStyle.Danger)
+        );
       }
     }
 
+    const buttons = [...actionButtons];
+    const webQueueUrl = buildAdminCaseQueueUrl(guildId);
+    if (webQueueUrl) {
+      buttons.push(this.webLinkButton('Web Queue', webQueueUrl));
+    }
+
+    const userLabel = await this.resolveUserDisplayLabel(guildId, parsed.userId);
     await interaction.reply({
       content:
-        `Admin actions for observed alert on <@${parsed.userId}>.\nMutating actions require a confirmation step before they run.` +
-        (buttons.length === 0
+        `Admin actions for observed alert on ${userLabel}.` +
+        (actionButtons.length === 0
           ? '\nNo available actions for your current permissions and this alert state.'
           : ''),
       allowedMentions: { parse: [] },
       components: this.createButtonRows(buttons),
       flags: MessageFlags.Ephemeral,
     });
+  }
+
+  private async handleCaseReviewDigestButtonInteraction(
+    interaction: ButtonInteraction,
+    guildId: string,
+    customId: string
+  ): Promise<void> {
+    if (!(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need moderation permissions to review open cases.'
+      );
+      return;
+    }
+
+    const page =
+      customId === CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID
+        ? 0
+        : parseCaseReviewDigestPageCustomId(customId);
+    if (page === null) {
+      await interaction.reply({
+        content: 'Unknown case digest page.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await this.showCaseReviewDigestSelector(interaction, guildId, page, {
+      update: customId !== CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID,
+    });
+  }
+
+  private async handleCaseReviewDigestSelectInteraction(
+    interaction: StringSelectMenuInteraction,
+    guildId: string
+  ): Promise<void> {
+    if (parseCaseReviewDigestSelectCustomId(interaction.customId) === null) {
+      await interaction.reply({
+        content: 'Unknown case digest selection.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (!(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need moderation permissions to review open cases.'
+      );
+      return;
+    }
+
+    const selectedCaseId = interaction.values[0];
+    if (!selectedCaseId) {
+      await interaction.reply({
+        content: 'No case was selected.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const selectedCase = await this.verificationEventRepository.findById(selectedCaseId);
+    if (
+      !selectedCase ||
+      selectedCase.server_id !== guildId ||
+      selectedCase.status !== VerificationStatus.PENDING ||
+      !selectedCase.user_id
+    ) {
+      await interaction.reply({
+        content: 'That case is no longer pending.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await this.showAdminActionsMenu(interaction, guildId, {
+      action: 'menu',
+      surface: 'case',
+      userId: selectedCase.user_id,
+    });
+  }
+
+  private async showCaseReviewDigestSelector(
+    interaction: ButtonInteraction,
+    guildId: string,
+    page: number,
+    options: { update: boolean }
+  ): Promise<void> {
+    const pendingCases = await this.verificationEventRepository.findPendingByServer(guildId);
+    if (pendingCases.length === 0) {
+      const response = {
+        content: 'There are no pending cases for this server.',
+        components: [],
+      };
+      if (options.update) {
+        await interaction.update(response);
+      } else {
+        await interaction.reply({ ...response, flags: MessageFlags.Ephemeral });
+      }
+      return;
+    }
+
+    const sortedCases = [...pendingCases].sort(
+      (left, right) => left.updated_at.getTime() - right.updated_at.getTime()
+    );
+    const pageCount = Math.ceil(sortedCases.length / CASE_REVIEW_DIGEST_PAGE_SIZE);
+    const safePage = Math.min(Math.max(page, 0), pageCount - 1);
+    const pageCases = sortedCases.slice(
+      safePage * CASE_REVIEW_DIGEST_PAGE_SIZE,
+      (safePage + 1) * CASE_REVIEW_DIGEST_PAGE_SIZE
+    );
+    const userLabels = await this.resolveUserDisplayLabels(
+      guildId,
+      pageCases.map((event) => event.user_id)
+    );
+    const selector = new StringSelectMenuBuilder()
+      .setCustomId(buildCaseReviewDigestSelectCustomId(safePage))
+      .setPlaceholder('Choose a pending case')
+      .addOptions(
+        pageCases.map((event) => ({
+          label: this.truncateSelectText(
+            `Case for ${userLabels.get(event.user_id) ?? event.user_id}`,
+            100
+          ),
+          description: this.truncateSelectText(
+            `${this.formatHoursSince(event.updated_at)} since update${event.thread_id ? ` | thread ${event.thread_id}` : ''}`,
+            100
+          ),
+          value: event.id,
+        }))
+      );
+    const components: Array<
+      ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>
+    > = [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selector)];
+
+    if (pageCount > 1) {
+      components.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(buildCaseReviewDigestPageCustomId(Math.max(safePage - 1, 0)))
+            .setLabel('Previous')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(safePage === 0),
+          new ButtonBuilder()
+            .setCustomId(buildCaseReviewDigestPageCustomId(Math.min(safePage + 1, pageCount - 1)))
+            .setLabel('Next')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(safePage >= pageCount - 1)
+        )
+      );
+    }
+
+    const webQueueUrl = buildAdminCaseQueueUrl(guildId);
+    if (webQueueUrl) {
+      components.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          this.webLinkButton('Open Web Queue', webQueueUrl)
+        )
+      );
+    }
+
+    const response = {
+      content: `Open cases for this server (${sortedCases.length} total). Page ${safePage + 1}/${pageCount}. Selecting a case opens the existing Admin Actions menu.`,
+      components,
+      allowedMentions: { parse: [] },
+    };
+
+    if (options.update) {
+      await interaction.update(response);
+      return;
+    }
+
+    await interaction.reply({ ...response, flags: MessageFlags.Ephemeral });
+  }
+
+  private formatHoursSince(value: Date): string {
+    const ageHours = Math.max(1, Math.floor((Date.now() - value.getTime()) / (60 * 60 * 1000)));
+    return `${ageHours}h`;
+  }
+
+  private async resolveUserDisplayLabel(guildId: string, userId: string): Promise<string> {
+    const labels = await this.resolveUserDisplayLabels(guildId, [userId]);
+    return labels.get(userId) ?? userId;
+  }
+
+  private async resolveUserDisplayLabels(
+    guildId: string,
+    userIds: string[]
+  ): Promise<Map<string, string>> {
+    const uniqueUserIds = [...new Set(userIds)];
+    const labels = new Map(
+      uniqueUserIds.map((userId) => [userId, this.formatUserDisplayLabel(userId, null)])
+    );
+    const guild = await this.client.guilds.fetch(guildId).catch(() => null);
+    if (!guild) {
+      return labels;
+    }
+
+    const fetchedMembers = await guild.members.fetch({ user: uniqueUserIds }).catch(() => null);
+    const fetchedMemberMap = fetchedMembers as {
+      get?: (userId: string) => GuildMember | null;
+    } | null;
+    if (fetchedMemberMap && typeof fetchedMemberMap.get === 'function') {
+      for (const userId of uniqueUserIds) {
+        labels.set(
+          userId,
+          this.formatUserDisplayLabel(
+            userId,
+            this.getMemberDisplayName(fetchedMemberMap.get(userId))
+          )
+        );
+      }
+      return labels;
+    }
+
+    if (uniqueUserIds.length === 1 && fetchedMembers) {
+      const userId = uniqueUserIds[0];
+      labels.set(
+        userId,
+        this.formatUserDisplayLabel(
+          userId,
+          this.getMemberDisplayName(fetchedMembers as unknown as GuildMember)
+        )
+      );
+    }
+
+    return labels;
+  }
+
+  private getMemberDisplayName(member: GuildMember | null): string | null {
+    return (
+      [member?.displayName, member?.nickname, member?.user.globalName, member?.user.username].find(
+        (name) => typeof name === 'string' && name.trim().length > 0
+      ) ?? null
+    );
+  }
+
+  private formatUserDisplayLabel(userId: string, displayName: string | null): string {
+    const trimmedDisplayName = displayName?.trim();
+    if (!trimmedDisplayName || trimmedDisplayName === userId) {
+      return userId;
+    }
+
+    return `${trimmedDisplayName} (${userId})`;
+  }
+
+  private async getAdminChannelId(guildId: string): Promise<string | null> {
+    const cachedAdminChannelId =
+      this.configService.getCachedServerConfig(guildId)?.admin_channel_id;
+    if (cachedAdminChannelId) {
+      return cachedAdminChannelId;
+    }
+
+    const server = await this.configService.getServerConfig(guildId).catch(() => null);
+    return server?.admin_channel_id ?? null;
+  }
+
+  private async getCaseRestrictionState(guildId: string, userId: string): Promise<boolean | null> {
+    if (!this.serverMemberRepository) {
+      return null;
+    }
+
+    const serverMember = await this.serverMemberRepository
+      .findByServerAndUser(guildId, userId)
+      .catch(() => null);
+    return serverMember?.is_restricted ?? null;
+  }
+
+  private formatCaseRestrictionState(restricted: boolean | null): string {
+    if (restricted === true) {
+      return 'restricted';
+    }
+    if (restricted === false) {
+      return 'unrestricted';
+    }
+
+    return 'unknown';
+  }
+
+  private formatVerificationCaseLinks(
+    guildId: string,
+    event: VerificationEvent,
+    adminChannelId: string | null
+  ): string[] {
+    return [
+      (event.notification_channel_id ?? adminChannelId) && event.notification_message_id
+        ? `admin: https://discord.com/channels/${guildId}/${event.notification_channel_id ?? adminChannelId}/${event.notification_message_id}`
+        : null,
+      event.private_evidence_thread_id
+        ? `evidence: https://discord.com/channels/${guildId}/${event.private_evidence_thread_id}`
+        : null,
+      event.thread_id ? `case: https://discord.com/channels/${guildId}/${event.thread_id}` : null,
+      this.formatSourceMessageLink(guildId, event),
+    ].filter((value): value is string => Boolean(value));
+  }
+
+  private formatSourceMessageLink(guildId: string, event: VerificationEvent): string | null {
+    const metadata = this.metadataToRecord(event.metadata);
+    const sourceChannelId = this.readString(metadata.source_channel_id);
+    const sourceMessageId = this.readString(metadata.source_message_id);
+    if (!sourceChannelId || !sourceMessageId) {
+      return null;
+    }
+
+    return `source: https://discord.com/channels/${guildId}/${sourceChannelId}/${sourceMessageId}`;
+  }
+
+  private readString(value: unknown): string | null {
+    return typeof value === 'string' && value ? value : null;
+  }
+
+  private metadataToRecord(metadata: unknown): Record<string, unknown> {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return {};
+    }
+
+    return { ...(metadata as Record<string, unknown>) };
+  }
+
+  private truncateSelectText(value: string, maxLength: number): string {
+    if (value.length <= maxLength) {
+      return value;
+    }
+
+    return value.slice(0, maxLength);
   }
 
   private adminActionButton(
@@ -532,6 +953,10 @@ export class InteractionHandler implements IInteractionHandler {
       )
       .setLabel(label)
       .setStyle(style);
+  }
+
+  private webLinkButton(label: string, url: string): ButtonBuilder {
+    return new ButtonBuilder().setLabel(label).setStyle(ButtonStyle.Link).setURL(url);
   }
 
   private createButtonRows(buttons: ButtonBuilder[]): ActionRowBuilder<ButtonBuilder>[] {
@@ -556,6 +981,24 @@ export class InteractionHandler implements IInteractionHandler {
           label: 'Confirm Verify',
           message: `Verify ${target} and remove verification restrictions?`,
           style: ButtonStyle.Success,
+        };
+      case 'restrict_user':
+        return {
+          label: 'Confirm Restrict',
+          message: `Restrict ${target} while keeping their case pending?`,
+          style: ButtonStyle.Danger,
+        };
+      case 'lift_restriction':
+        return {
+          label: 'Confirm Lift',
+          message: `Lift verification restrictions for ${target} while keeping their case pending?`,
+          style: ButtonStyle.Secondary,
+        };
+      case 'close_no_action':
+        return {
+          label: 'Confirm Close',
+          message: `Close pending verification cases for ${target} without verifying or banning them? If Drasil has them marked restricted, the restricted role will be removed.`,
+          style: ButtonStyle.Secondary,
         };
       case 'thread':
         return {
@@ -715,6 +1158,42 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
+    if (action === 'restrict_user') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to restrict a user.'
+        );
+        return;
+      }
+      await this.handleRestrictUserButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
+    if (action === 'lift_restriction') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to lift a restriction.'
+        );
+        return;
+      }
+      await this.handleLiftRestrictionButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
+    if (action === 'close_no_action') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to close a case.'
+        );
+        return;
+      }
+      await this.handleCloseNoActionButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
     if (action === 'thread') {
       if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
         await this.replyPermissionDenied(
@@ -853,6 +1332,84 @@ export class InteractionHandler implements IInteractionHandler {
     }
   }
 
+  private async handleRestrictUserButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) {
+        throw new Error('Could not find member in guild');
+      }
+
+      await this.securityActionService.restrictActiveCase(member, interaction.user);
+      await this.refreshActiveCaseNotification(guildId, userId);
+
+      await interaction.followUp({
+        content: `Restricted <@${userId}> while keeping the case open.`,
+        flags: MessageFlags.Ephemeral,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Error restricting user from case action:', error);
+      await interaction.followUp({
+        content: 'An error occurred while restricting the user.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  private async handleLiftRestrictionButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) {
+        throw new Error('Could not find member in guild');
+      }
+
+      await this.userModerationService.liftRestriction(member, interaction.user);
+      await this.refreshActiveCaseNotification(guildId, userId);
+
+      await interaction.followUp({
+        content: `Lifted restrictions for <@${userId}> while keeping the case open.`,
+        flags: MessageFlags.Ephemeral,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Error lifting restriction from case action:', error);
+      await interaction.followUp({
+        content: 'An error occurred while lifting the restriction.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  private async refreshActiveCaseNotification(guildId: string, userId: string): Promise<void> {
+    const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+      userId,
+      guildId
+    );
+    if (!activeCase?.notification_message_id) {
+      return;
+    }
+
+    await this.notificationManager
+      .updateNotificationButtons(activeCase, VerificationStatus.PENDING)
+      .catch((error) => {
+        console.warn(`Failed to refresh case notification for ${userId}:`, error);
+      });
+  }
+
   private async handleSyncAlreadyBannedButton(
     interaction: ButtonInteraction,
     guildId: string,
@@ -882,6 +1439,41 @@ export class InteractionHandler implements IInteractionHandler {
       await interaction.followUp({
         content:
           'Could not sync the existing ban. Confirm the user is still banned and Drasil can view server bans.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  private async handleCloseNoActionButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      const guild = await this.client.guilds.fetch(guildId);
+      const closedCount = await this.userModerationService.closeCaseNoAction(
+        guild,
+        userId,
+        interaction.user,
+        'Closed with no action by moderator.'
+      );
+
+      const caseWord = closedCount === 1 ? 'case' : 'cases';
+      await interaction.followUp({
+        content:
+          closedCount === 0
+            ? `No pending verification cases remain for <@${userId}>.`
+            : `Closed ${closedCount} pending verification ${caseWord} for <@${userId}> with no action.`,
+        allowedMentions: { parse: [] },
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error('Error closing case with no action:', error);
+      await interaction.followUp({
+        content:
+          'Could not close the case with no action. If the user is restricted, confirm Drasil can remove the restricted role and try again.',
         flags: MessageFlags.Ephemeral,
       });
     }
@@ -1181,7 +1773,7 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async hasAnyPermission(
-    interaction: ButtonInteraction | ModalSubmitInteraction,
+    interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction,
     guildId: string,
     permissions: bigint[]
   ): Promise<boolean> {
@@ -1227,7 +1819,7 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async replyPermissionDenied(
-    interaction: ButtonInteraction | ModalSubmitInteraction,
+    interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction,
     message: string,
     options?: { clearComponents?: boolean }
   ): Promise<void> {

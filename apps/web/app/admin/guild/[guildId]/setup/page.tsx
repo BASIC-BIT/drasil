@@ -1,6 +1,9 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { saveGuildSetup } from './actions';
+import { AccountControl } from '@/components/AccountControl';
+import { InstallInvitePanel } from '@/components/InstallInvitePanel';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 import type { DiscordChannel, DiscordRole } from '@/lib/discordApi';
@@ -68,32 +71,33 @@ export default async function GuildSetupPage({ params }: PageProps) {
           <span className="brand-mark" />
           <span>Drasil</span>
         </Link>
-        <div className="actions">
-          <Link className="button secondary" href="/admin">
-            All servers
+        <div className="nav-cluster">
+          <Link className="button secondary" href={`/admin/guild/${guildId}/cases`}>
+            Active Cases
           </Link>
-          <form action="/api/auth/logout" method="post">
-            <button className="button secondary" type="submit">
-              Sign out
-            </button>
-          </form>
+          <Link className="button secondary" href="/admin">
+            All Servers
+          </Link>
+          <ThemeToggle />
+          <AccountControl username={session.username} />
         </div>
       </nav>
 
       <section className="panel stack">
-        <div>
+        <div className="section-heading">
           <span className={dashboard.configured ? 'status ok' : 'status warning'}>
             {dashboard.configured ? 'Configured' : 'First setup'}
           </span>
           <h1 className="page-title">{dashboard.guildName}</h1>
           <p className="lede">
-            Data provider: {dashboard.dataProvider}. Last checked:{' '}
-            {new Date(dashboard.checkedAt).toLocaleString('en-US', { timeZone: 'UTC' })} UTC.
+            Live setup diagnostics from Discord and the {dashboard.dataProvider} configuration. Last
+            checked: {new Date(dashboard.checkedAt).toLocaleString('en-US', { timeZone: 'UTC' })}{' '}
+            UTC.
           </p>
         </div>
-        <div className="grid">
+        <div className="setup-check-grid">
           {dashboard.checklist.map((check) => (
-            <article className="card stack" key={check.key}>
+            <article className="card setup-check-card" key={check.key}>
               <span className={`status ${check.status}`}>{check.status}</span>
               <div>
                 <h2>{check.label}</h2>
@@ -104,9 +108,11 @@ export default async function GuildSetupPage({ params }: PageProps) {
         </div>
       </section>
 
+      <InstallInvitePanel guildId={guildId} />
+
       <form action={saveAction} className="panel stack">
-        <div>
-          <h2>Core setup</h2>
+        <div className="section-heading compact-heading">
+          <h2>Core Setup</h2>
           <p className="muted">
             These settings are saved to the same server configuration used by the bot. Channel and
             role dropdowns are loaded live from Discord when the bot token can access the guild.
@@ -185,7 +191,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
         </div>
 
         <div>
-          <h2>Moderation policy</h2>
+          <h2>Moderation Policy</h2>
         </div>
         <div className="form-grid">
           <div className="field">
@@ -198,7 +204,6 @@ export default async function GuildSetupPage({ params }: PageProps) {
               <option value="off">Off</option>
               <option value="record_only">Record only</option>
               <option value="notify_only">Notify only</option>
-              <option value="open_case">Open case</option>
               <option value="restrict">Restrict pending review</option>
             </select>
           </div>
@@ -213,7 +218,6 @@ export default async function GuildSetupPage({ params }: PageProps) {
               <option value="off">Off</option>
               <option value="record_only">Record only</option>
               <option value="notify_only">Notify only</option>
-              <option value="open_case">Open case</option>
               <option value="restrict">Restrict pending review</option>
             </select>
           </div>
@@ -228,7 +232,6 @@ export default async function GuildSetupPage({ params }: PageProps) {
               <option value="off">Off</option>
               <option value="record_only">Record only</option>
               <option value="notify_only">Notify only</option>
-              <option value="open_case">Open case</option>
               <option value="restrict">Restrict pending review</option>
             </select>
           </div>

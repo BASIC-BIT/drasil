@@ -29,14 +29,15 @@ Persistence uses Postgres (often Supabase) via Prisma. Orchestration is direct (
 - Orchestration is direct: controllers call services; services coordinate side effects.
 - DMs are ignored.
 - Failure handling is fail-fast; no retries/compensation yet.
-- Thread creation is automatic on suspicion; Create Thread button is only for missing threads.
-- Manual flag and user report both create detection events and follow the same flow.
+- Automatic message/join detections can record, notify, or restrict; they do not open unrestricted cases.
+- User reports create detection events first; default report triage is an observed alert until a moderator or configured report-intake escalation opens/restricts a case.
+- Cases use normal user-visible threads whether restricted or unrestricted; moderator-only report review threads are legacy fallback only.
 
 Primary flow (see `docs/workflow.md`):
 
 1. `EventHandler` -> `DetectionOrchestrator` -> `SecurityActionService`.
-2. `SecurityActionService` ensures entities, ensures detection event, creates verification if
-   needed, restricts the user, creates a thread, and upserts admin notification.
+2. `SecurityActionService` ensures entities, ensures detection events, routes observed alerts or
+   cases, applies restriction when requested, creates case threads, and upserts admin notifications.
 3. `InteractionHandler`/`CommandHandler` call `UserModerationService` for verify/ban.
 4. `UserModerationService` updates verification status, roles, thread state, notifications,
    and admin actions.
@@ -169,11 +170,40 @@ Operating principles:
 - Never add secrets/credentials to git.
 - Public posts: if the agent drafts text that will be posted on a public forum (GitHub issues/PRs, release notes, etc.), prefix the content with "[AGENT]" so it's clear it was written by automation.
 
+Product copy:
+
+- User-facing Drasil surfaces should feel deterministic and productized even when GPT or other AI
+  assisted the decision. Do not label user-visible report, case, or confirmation copy as "AI";
+  describe concrete facts, checks, suggestions, or confidence in plain product language. Admin-facing
+  diagnostics can be more explicit when useful, but should still avoid over-emphasizing the model as
+  the actor instead of Drasil's moderation workflow.
+- Model-assisted admin diagnostics should be concise by contract. Do not render long model prose and
+  then clip it with ellipses; tighten the model prompt/schema, select the highest-signal fields, or
+  omit optional detail instead of showing truncated analysis text.
+- Promotion note: current source is user feedback from the report-intake QA session; target is repo
+  `AGENTS.md` because this is a broad Drasil copy principle for Discord/web UX. Over-promotion cost
+  is a short reminder in every repo session; demotion path is moving examples to a product-copy doc if
+  this grows; verification signal is future Drasil user-facing copy avoiding raw "AI" labels such as
+  "AI-extracted display name" while keeping admin diagnostics appropriately toned.
+
 Clean code:
 
 - Prefer constants over magic numbers; meaningful names; single responsibility; DRY.
 - Comments explain why, not what.
 - Encapsulate logic; keep structure tidy.
+
+Web UI direction:
+
+- Prefer flattened information design over nested card stacks. Count visible layers before adding
+  another box, badge, or button; for list-like content, use one surface with rules/spacing and put
+  statuses/actions in available horizontal space instead of adding vertical sub-layers.
+- Keep primary hero/focal copy short. Move explanation into supporting text instead of using a long
+  headline as the main eye-drawing element.
+- Promotion note: current source is user UI feedback from the moderation dashboard PR; target is repo
+  `AGENTS.md` because this is repeated Drasil dashboard design guidance. Over-promotion cost is a
+  short UI reminder in repo context; demotion path is moving examples to a design doc if this grows;
+  verification signal is future Drasil web diffs avoiding card-within-card layouts and long hero
+  headlines.
 
 TypeScript:
 

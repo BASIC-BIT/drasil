@@ -236,10 +236,12 @@ describe('CommandHandler command catalog (unit)', () => {
     );
     expect(caseCommand.options.map((option: any) => option.name)).toEqual([
       'open',
-      'restrict',
       'repair',
       'intake-role',
     ]);
+
+    const open = caseCommand.options.find((option: any) => option.name === 'open');
+    expect(open.options.map((option: any) => option.name)).toEqual(['user', 'restrict', 'reason']);
 
     const repair = caseCommand.options.find((option: any) => option.name === 'repair');
     expect(repair.options.map((option: any) => option.name)).toEqual(['user']);

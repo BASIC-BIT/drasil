@@ -24,7 +24,13 @@ import {
 } from '../utils/adminActionCustomIds';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { isDetectionEventExcludedFromAccounting } from '../utils/detectionEventAccounting';
+import { buildAdminCaseDetailUrl, buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
 import { getVerificationActionFailures } from '../utils/verificationActionFailures';
+
+interface AdminActionRowOptions {
+  readonly guildId?: string;
+  readonly verificationEventId?: string;
+}
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds?: unknown;
@@ -41,8 +47,10 @@ interface ThreadAnalysisMetadata {
   };
 }
 
+const EMBED_FIELD_VALUE_MAX_LENGTH = 1024;
+
 export class NotificationPresentationBuilder {
-  public static readonly THREAD_ANALYSIS_FIELD_NAME = 'AI Thread Analysis';
+  public static readonly THREAD_ANALYSIS_FIELD_NAME = 'Thread Analysis';
   public static readonly LATEST_ADMIN_ACTION_FIELD_NAME = 'Latest Admin Action';
   public static readonly MODERATION_ACTION_WARNING_FIELD_NAME = 'Moderation Action Warning';
   public static readonly RESOLUTION_FIELD_NAME = 'Resolution';
@@ -63,16 +71,8 @@ export class NotificationPresentationBuilder {
       ? `<t:${joinedServerTimestamp}:F> (<t:${joinedServerTimestamp}:R>)`
       : 'Unknown';
 
-    const confidencePercent = detectionResult.confidence * 100;
-    let confidenceLevel: string;
+    const signalField = this.formatSignalField(detectionResult);
     let embedColor = 0xff0000;
-    if (confidencePercent <= 40) {
-      confidenceLevel = '🟢 Low';
-    } else if (confidencePercent <= 70) {
-      confidenceLevel = '🟡 Medium';
-    } else {
-      confidenceLevel = '🔴 High';
-    }
 
     const reasonsFormatted = detectionResult.reasons.map((reason) => `• ${reason}`).join('\n');
     const countedDetectionEvents = detectionEvents.filter(
@@ -90,6 +90,8 @@ export class NotificationPresentationBuilder {
       embedColor = 0x00ff00;
     } else if (verificationEvent.status === VerificationStatus.BANNED) {
       embedColor = 0x000000;
+    } else if (verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION) {
+      embedColor = 0x808080;
     }
 
     const resolutionPresentation = this.getVerificationResolutionPresentation(verificationEvent);
@@ -118,7 +120,7 @@ export class NotificationPresentationBuilder {
         { name: 'User ID', value: member.id, inline: true },
         { name: 'Account Created', value: accountCreatedFormatted, inline: false },
         { name: 'Joined Server', value: joinedServerFormatted, inline: false },
-        { name: 'Detection Confidence', value: confidenceLevel, inline: true },
+        signalField,
         {
           name: 'Trigger',
           value: this.formatSuspiciousDetectionTrigger(detectionResult, sourceMessage),
@@ -189,13 +191,13 @@ export class NotificationPresentationBuilder {
     const joinedServerTimestamp = member.joinedAt
       ? Math.floor(member.joinedAt.getTime() / 1000)
       : null;
-    const confidencePercent = Math.round(detectionResult.confidence * 100);
+    const signalField = this.formatSignalField(detectionResult);
     const reasonsFormatted = detectionResult.reasons.map((reason) => `• ${reason}`).join('\n');
     const recentEvents = detectionEvents.slice(0, 5);
     const detectionHistory = recentEvents
       .map((event) => {
         const timestamp = Math.floor(new Date(event.detected_at).getTime() / 1000);
-        return `• <t:${timestamp}:R>: ${this.formatDetectionTypeLabel(event.detection_type)} (${Math.round(event.confidence * 100)}% confidence)${this.formatAccountingSuffix(event)}`;
+        return `• <t:${timestamp}:R>: ${this.formatDetectionTypeLabel(event.detection_type)} (${this.formatDetectionSignalPhrase(event)})${this.formatAccountingSuffix(event)}`;
       })
       .join('\n');
 
@@ -221,7 +223,7 @@ export class NotificationPresentationBuilder {
             : 'Unknown',
           inline: false,
         },
-        { name: 'Detection Confidence', value: `${confidencePercent}%`, inline: true },
+        signalField,
         {
           name: 'Trigger',
           value: this.truncateEmbedFieldValue(
@@ -310,27 +312,50 @@ export class NotificationPresentationBuilder {
     return embed;
   }
 
-  public createActionRow(userId: string): ActionRowBuilder<ButtonBuilder> {
-    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+  public createActionRow(
+    userId: string,
+    options: AdminActionRowOptions = {}
+  ): ActionRowBuilder<ButtonBuilder> {
+    const buttons = [
       new ButtonBuilder()
         .setCustomId(buildCaseAdminActionsCustomId(userId))
         .setLabel('Admin Actions')
-        .setStyle(ButtonStyle.Primary)
-    );
+        .setStyle(ButtonStyle.Primary),
+    ];
+
+    const webCaseUrl =
+      options.guildId && options.verificationEventId
+        ? buildAdminCaseDetailUrl(options.guildId, options.verificationEventId)
+        : null;
+    if (webCaseUrl) {
+      buttons.push(this.createLinkButton('Web Case', webCaseUrl));
+    }
+
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
   }
 
   public createObservedActionRows(
     userId: string,
-    detectionEventId: string
+    detectionEventId: string,
+    guildId?: string
   ): ActionRowBuilder<ButtonBuilder>[] {
-    return [
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(buildObservedAdminActionsCustomId(userId, detectionEventId))
-          .setLabel('Admin Actions')
-          .setStyle(ButtonStyle.Primary)
-      ),
+    const buttons = [
+      new ButtonBuilder()
+        .setCustomId(buildObservedAdminActionsCustomId(userId, detectionEventId))
+        .setLabel('Admin Actions')
+        .setStyle(ButtonStyle.Primary),
     ];
+
+    const webQueueUrl = guildId ? buildAdminCaseQueueUrl(guildId) : null;
+    if (webQueueUrl) {
+      buttons.push(this.createLinkButton('Web Queue', webQueueUrl));
+    }
+
+    return [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
+  }
+
+  private createLinkButton(label: string, url: string): ButtonBuilder {
+    return new ButtonBuilder().setLabel(label).setStyle(ButtonStyle.Link).setURL(url);
   }
 
   public createAdminAllowedMentions(roleIds?: string[] | string | null): {
@@ -488,7 +513,7 @@ export class NotificationPresentationBuilder {
   ): void {
     const aiDiagnosticFieldValue = this.formatGptDiagnosticFieldValue(detectionResult);
     if (aiDiagnosticFieldValue) {
-      embed.addFields({ name: 'AI Analysis', value: aiDiagnosticFieldValue, inline: false });
+      embed.addFields({ name: 'Risk Analysis', value: aiDiagnosticFieldValue, inline: false });
     }
 
     const reportAiFieldValue = this.formatReportAiFieldValue(
@@ -496,7 +521,7 @@ export class NotificationPresentationBuilder {
         this.findReportAiAnalysis(detectionEvents, detectionResult.detectionEventId)
     );
     if (reportAiFieldValue) {
-      embed.addFields({ name: 'AI Report Triage', value: reportAiFieldValue, inline: false });
+      embed.addFields({ name: 'Report Triage', value: reportAiFieldValue, inline: false });
     }
   }
 
@@ -517,9 +542,9 @@ export class NotificationPresentationBuilder {
         const timestamp = Math.floor(new Date(event.detected_at).getTime() / 1000);
         let entry = `• <t:${timestamp}:R>: ${this.formatDetectionTypeLabel(event.detection_type)}`;
         if (event.message_id) {
-          entry += ` - [View Message](https://discord.com/channels/${guildId}/${event.channel_id}/${event.message_id})`;
+          entry += ` - message: https://discord.com/channels/${guildId}/${event.channel_id}/${event.message_id}`;
         }
-        entry += ` (${(event.confidence * 100).toFixed(0)}% confidence)`;
+        entry += ` (${this.formatDetectionSignalPhrase(event)})`;
         entry += this.formatAccountingSuffix(event);
         return entry;
       })
@@ -539,7 +564,7 @@ export class NotificationPresentationBuilder {
         ? `\`${detectionResult.triggerContent}\``
         : '`Message content unavailable`';
       return sourceMessage
-        ? `[Observed message](${sourceMessage.url}): ${safeContent}`
+        ? `Observed message: ${safeContent}\nMessage URL: ${sourceMessage.url}`
         : `Observed message: ${safeContent}`;
     }
 
@@ -574,7 +599,7 @@ export class NotificationPresentationBuilder {
         ? `\`${detectionResult.triggerContent}\``
         : '`Message content unavailable`';
       return sourceMessage
-        ? `[Flagged for message](${sourceMessage.url}): ${safeContent}`
+        ? `Flagged for message: ${safeContent}\nMessage URL: ${sourceMessage.url}`
         : `Flagged for message: ${safeContent}`;
     }
     if (detectionResult.triggerSource === DetectionType.USER_REPORT) {
@@ -606,14 +631,37 @@ export class NotificationPresentationBuilder {
   }
 
   private truncateEmbedFieldValue(value: string): string {
-    const maxLength = 1024;
-    return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
+    return value.length <= EMBED_FIELD_VALUE_MAX_LENGTH
+      ? value
+      : `${value.slice(0, EMBED_FIELD_VALUE_MAX_LENGTH - 3)}...`;
+  }
+
+  private formatCompactEmbedFieldValue(
+    primaryLines: string[],
+    optionalLines: Array<string | null | undefined> = []
+  ): string {
+    const lines: string[] = [];
+    for (const line of [...primaryLines, ...optionalLines]) {
+      const normalized = line?.trim();
+      if (!normalized) {
+        continue;
+      }
+
+      const candidate = [...lines, normalized].join('\n');
+      if (candidate.length <= EMBED_FIELD_VALUE_MAX_LENGTH) {
+        lines.push(normalized);
+      }
+    }
+
+    return lines.join('\n') || 'Review manually.';
   }
 
   private formatAdminActionLabel(actionTaken: AdminActionType): string {
     switch (actionTaken) {
       case AdminActionType.BAN:
         return 'Banned';
+      case AdminActionType.CLOSE_NO_ACTION:
+        return 'Closed with no action';
       case AdminActionType.VERIFY:
         return 'Verified';
       case AdminActionType.CREATE_THREAD:
@@ -622,6 +670,8 @@ export class NotificationPresentationBuilder {
         return 'Reopened verification';
       case AdminActionType.RESTRICT:
         return 'Restricted';
+      case AdminActionType.LIFT_RESTRICTION:
+        return 'Lifted restriction';
       case AdminActionType.OPEN_CASE:
         return 'Opened case';
       case AdminActionType.DISMISS:
@@ -680,7 +730,9 @@ export class NotificationPresentationBuilder {
         ? AdminActionType.BAN
         : verificationEvent.status === VerificationStatus.VERIFIED
           ? AdminActionType.VERIFY
-          : null;
+          : verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
+            ? AdminActionType.CLOSE_NO_ACTION
+            : null;
     if (!actionTaken) {
       return;
     }
@@ -701,7 +753,9 @@ export class NotificationPresentationBuilder {
         ? AdminActionType.BAN
         : verificationEvent.status === VerificationStatus.VERIFIED
           ? AdminActionType.VERIFY
-          : null;
+          : verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
+            ? AdminActionType.CLOSE_NO_ACTION
+            : null;
     if (!actionTaken) {
       return null;
     }
@@ -726,7 +780,11 @@ export class NotificationPresentationBuilder {
     adminId: string,
     timestamp: number
   ): void {
-    if (actionTaken !== AdminActionType.VERIFY && actionTaken !== AdminActionType.BAN) {
+    if (
+      actionTaken !== AdminActionType.VERIFY &&
+      actionTaken !== AdminActionType.BAN &&
+      actionTaken !== AdminActionType.CLOSE_NO_ACTION
+    ) {
       return;
     }
 
@@ -840,29 +898,25 @@ export class NotificationPresentationBuilder {
     recommendedAction?: 'none' | 'ask_followup' | 'manual_review' | 'restrict';
     analyzedMessageCount: number;
   }): string {
-    const confidencePercent = Math.round(analysis.confidence * 100);
-    const lines = [
-      `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
-      `Analyzed responses: ${analysis.analyzedMessageCount}`,
-      `Summary: ${analysis.summary}`,
-    ];
-    if (analysis.reasonCodes?.length) {
-      lines.push(`Reason codes: ${analysis.reasonCodes.join(', ')}`);
-    }
-    if (analysis.legitimacySignals?.length) {
-      lines.push(`Legitimacy signals: ${analysis.legitimacySignals.join('; ')}`);
-    }
-    if (analysis.suspicionSignals?.length) {
-      lines.push(`Suspicion signals: ${analysis.suspicionSignals.join('; ')}`);
-    }
-    if (analysis.recommendedNextQuestion) {
-      lines.push(`Next question: ${analysis.recommendedNextQuestion}`);
-    }
-    if (analysis.recommendedAction) {
-      lines.push(`Recommended action: ${analysis.recommendedAction}`);
-    }
-
-    return this.truncateEmbedFieldValue(lines.join('\n'));
+    return this.formatCompactEmbedFieldValue(
+      [
+        `Result: **${analysis.result}** (${this.formatConfidencePhrase(analysis.confidence)})`,
+        `Summary: ${analysis.summary}`,
+      ],
+      [
+        `Responses reviewed: ${analysis.analyzedMessageCount}`,
+        analysis.legitimacySignals?.length
+          ? `Legitimacy: ${analysis.legitimacySignals.slice(0, 2).join('; ')}`
+          : null,
+        analysis.suspicionSignals?.length
+          ? `Suspicion: ${analysis.suspicionSignals.slice(0, 2).join('; ')}`
+          : null,
+        analysis.recommendedAction ? `Recommended action: ${analysis.recommendedAction}` : null,
+        analysis.recommendedNextQuestion
+          ? `Next question: ${analysis.recommendedNextQuestion}`
+          : null,
+      ]
+    );
   }
 
   private findReportAiAnalysis(
@@ -889,24 +943,20 @@ export class NotificationPresentationBuilder {
       return null;
     }
 
-    const confidencePercent = Math.round(analysis.confidence * 100);
-    const lines = [
-      `Result: **${analysis.result}** (${confidencePercent}% confidence)`,
-      `Summary: ${analysis.summary}`,
-      `Recommended action: ${analysis.recommendedAction}`,
-      `Images analyzed: ${analysis.analyzedImageCount}`,
-    ];
-    if (analysis.reasonCodes.length) {
-      lines.push(`Reason codes: ${analysis.reasonCodes.join(', ')}`);
-    }
-    if (analysis.evidenceCategories.length) {
-      lines.push(`Evidence: ${analysis.evidenceCategories.join(', ')}`);
-    }
-    if (analysis.concerns.length) {
-      lines.push(`Concerns: ${analysis.concerns.join('; ')}`);
-    }
-
-    return this.truncateEmbedFieldValue(lines.join('\n'));
+    return this.formatCompactEmbedFieldValue(
+      [
+        `Result: **${analysis.result}** (${this.formatConfidencePhrase(analysis.confidence)})`,
+        `Summary: ${analysis.summary}`,
+      ],
+      [
+        `Recommended action: ${analysis.recommendedAction}`,
+        analysis.analyzedImageCount > 0 ? `Images analyzed: ${analysis.analyzedImageCount}` : null,
+        analysis.evidenceCategories.length
+          ? `Evidence: ${analysis.evidenceCategories.slice(0, 3).join(', ')}`
+          : null,
+        analysis.concerns.length ? `Concerns: ${analysis.concerns.slice(0, 2).join('; ')}` : null,
+      ]
+    );
   }
 
   private formatGptDiagnosticFieldValue(detectionResult: DetectionResult): string | null {
@@ -915,18 +965,13 @@ export class NotificationPresentationBuilder {
       return null;
     }
 
-    const confidencePercent = Math.round(analysis.confidence * 100);
     const reasonCodes = analysis.reasonCodes.length ? analysis.reasonCodes.join(', ') : 'none';
     const resultLine = analysis.isFallback
       ? 'Result: **Unavailable**'
-      : `Result: **${analysis.result}** (${confidencePercent}% confidence)`;
-    return this.truncateEmbedFieldValue(
-      [
-        resultLine,
-        `Primary signal: ${analysis.primarySignal}`,
-        `Reason codes: ${reasonCodes}`,
-        `Summary: ${analysis.summary}`,
-      ].join('\n')
+      : `Result: **${analysis.result}** (${this.formatConfidencePhrase(analysis.confidence)})`;
+    return this.formatCompactEmbedFieldValue(
+      [resultLine, `Summary: ${analysis.summary}`],
+      [`Primary signal: ${analysis.primarySignal}`, `Reason codes: ${reasonCodes}`]
     );
   }
 
@@ -968,19 +1013,20 @@ export class NotificationPresentationBuilder {
     const lines: string[] = [];
     const threadStatus =
       verificationEvent.status === VerificationStatus.VERIFIED ||
-      verificationEvent.status === VerificationStatus.BANNED
+      verificationEvent.status === VerificationStatus.BANNED ||
+      verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
         ? `${verificationEvent.status}${verificationEvent.resolved_by ? ` by <@${verificationEvent.resolved_by}>` : ''}`
         : 'pending';
 
     if (verificationEvent.thread_id) {
       lines.push(
-        `Verification/review: [thread](https://discord.com/channels/${member.guild.id}/${verificationEvent.thread_id}) status: ${threadStatus}`
+        `Verification/review thread: https://discord.com/channels/${member.guild.id}/${verificationEvent.thread_id} status: ${threadStatus}`
       );
     }
 
     if (verificationEvent.private_evidence_thread_id) {
       lines.push(
-        `Admin evidence: [thread](https://discord.com/channels/${member.guild.id}/${verificationEvent.private_evidence_thread_id})`
+        `Admin evidence thread: https://discord.com/channels/${member.guild.id}/${verificationEvent.private_evidence_thread_id}`
       );
     }
 
@@ -1064,5 +1110,43 @@ export class NotificationPresentationBuilder {
         analyzedMessageCount: latestAnalysis.analyzedMessageCount,
       },
     };
+  }
+
+  private formatConfidenceLabel(confidence: number): string {
+    if (confidence >= 0.8) {
+      return 'High';
+    }
+    if (confidence >= 0.5) {
+      return 'Medium';
+    }
+    return 'Low';
+  }
+
+  private formatSignalField(detectionResult: DetectionResult): {
+    name: string;
+    value: string;
+    inline: true;
+  } {
+    if (detectionResult.triggerSource === DetectionType.USER_REPORT) {
+      return { name: 'Report Signal', value: 'Reported by user', inline: true };
+    }
+
+    return {
+      name: 'Detection Confidence',
+      value: this.formatConfidenceLabel(detectionResult.confidence),
+      inline: true,
+    };
+  }
+
+  private formatDetectionSignalPhrase(event: DetectionEvent): string {
+    if (event.detection_type === DetectionType.USER_REPORT) {
+      return 'report signal';
+    }
+
+    return this.formatConfidencePhrase(event.confidence);
+  }
+
+  private formatConfidencePhrase(confidence: number): string {
+    return `${this.formatConfidenceLabel(confidence)} confidence`;
   }
 }

@@ -33,10 +33,10 @@ const buildCandidate = (discordUserId = 'user-1'): ReportCandidate => ({
   displayName: `Target ${discordUserId}`,
   nickname: null,
   avatarUrl: null,
-  matchReasons: ['AI-extracted intake evidence: explicit Discord ID or mention'],
+  matchReasons: ['intake evidence: explicit Discord ID or mention'],
   confidence: 0.95,
   ambiguityNotes: [],
-  platformBackedEvidence: ['AI-extracted intake evidence: explicit Discord ID or mention'],
+  platformBackedEvidence: ['intake evidence: explicit Discord ID or mention'],
   confirmationRequired: false,
 });
 
@@ -154,7 +154,7 @@ describe('ReportIntakeAgentService', () => {
     expect(candidateService.resolveCandidatesFromSignals).toHaveBeenCalledWith(
       message.guild,
       expect.objectContaining({ explicitUserIds: ['user-1'] }),
-      'AI-extracted intake evidence'
+      'intake evidence'
     );
     expect(stored?.status).toBe(ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION);
     expect(stored?.metadata).toMatchObject({

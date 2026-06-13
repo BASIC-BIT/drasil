@@ -43,6 +43,7 @@ import { TestCommandHandler } from './TestCommandHandler';
 import { isUserInstallReportingEnabled } from '../utils/userInstallReporting';
 import { IReportIntakeService } from '../services/ReportIntakeService';
 import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
+import { buildAdminGuildSetupUrl } from '../utils/publicWebLinks';
 import 'reflect-metadata';
 
 // Load environment variables
@@ -452,9 +453,15 @@ export class CommandHandler implements ICommandHandler {
     interaction: ChatInputCommandInteraction | UserContextMenuCommandInteraction
   ): Promise<void> {
     const installLink = this.getGuildInstallLink();
+    const setupLink = interaction.guildId ? buildAdminGuildSetupUrl(interaction.guildId) : null;
+    const links = [
+      installLink ? `Install: ${installLink}` : null,
+      setupLink ? `Setup dashboard: ${setupLink}` : null,
+    ].filter((value): value is string => Boolean(value));
+    const suffix = links.length ? `\n${links.join('\n')}` : '';
     const content = interaction.guildId
-      ? `Drasil is not installed in this server yet. Ask a server admin to install it${installLink ? `: ${installLink}` : '.'}`
-      : `This command can only be used in a server where Drasil is installed${installLink ? `: ${installLink}` : '.'}`;
+      ? `Drasil is not installed in this server yet. Ask a server admin to install it.${suffix}`
+      : `This command can only be used in a server where Drasil is installed.${suffix}`;
 
     await interaction.reply({
       content,

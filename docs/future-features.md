@@ -33,3 +33,15 @@ Make a website for configuring the bot, verifying users, etc.
 ## Report review UX polish
 
 Improve the report alert action labels and external-report reporter confirmation. See `docs/report-ux-journeys.md` for the persona journeys, tradeoffs, and proposed follow-up work.
+
+## Cross-guild personal case queue
+
+Give signed-in moderators one compact queue of active cases across every guild they can manage, so
+they can triage their personal review workload without opening each server dashboard first.
+
+Name candidates to workshop: `My Cases`, `Moderator Queue`, `Review Inbox`, `All Active Cases`.
+
+## Server statistics page
+
+Show server-level moderation health and activity: total users, total bans, total cases, resolved
+cases, joins this week, and similar operational counts.

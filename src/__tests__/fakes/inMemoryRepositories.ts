@@ -5,11 +5,14 @@ import type { IServerRepository } from '../../repositories/ServerRepository';
 import type { IUserRepository } from '../../repositories/UserRepository';
 import type { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import type { IReportIntakeRepository } from '../../repositories/ReportIntakeRepository';
+import type { IModerationOutcomeRepository } from '../../repositories/ModerationOutcomeRepository';
 import { verification_status } from '../../db/prisma';
 import {
   AdminAction,
   AdminActionCreate,
   DetectionEvent,
+  ModerationOutcome,
+  ModerationOutcomeCreate,
   ReportIntake,
   ReportIntakeCreate,
   ReportIntakeEvidence,
@@ -475,6 +478,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       detection_event_id: detectionEventId,
       thread_id: null,
       private_evidence_thread_id: null,
+      notification_channel_id: null,
       notification_message_id: null,
       status,
       created_at: now,
@@ -526,6 +530,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     if (data.thread_id !== undefined) updated.thread_id = data.thread_id;
     if (data.private_evidence_thread_id !== undefined)
       updated.private_evidence_thread_id = data.private_evidence_thread_id;
+    if (data.notification_channel_id !== undefined)
+      updated.notification_channel_id = data.notification_channel_id;
     if (data.notification_message_id !== undefined)
       updated.notification_message_id = data.notification_message_id;
     if (data.notes !== undefined) updated.notes = data.notes;
@@ -1137,5 +1143,54 @@ export class InMemoryAdminActionRepository implements IAdminActionRepository {
 
   async getActionHistory(userId: string, serverId: string): Promise<AdminAction[]> {
     return this.findByUserAndServer(userId, serverId, { limit: 100 });
+  }
+}
+
+export class InMemoryModerationOutcomeRepository implements IModerationOutcomeRepository {
+  private outcomes: ModerationOutcome[] = [];
+  private idCounter = 0;
+
+  private nextId(): string {
+    this.idCounter += 1;
+    return `out-${this.idCounter}`;
+  }
+
+  async createOutcome(data: ModerationOutcomeCreate): Promise<ModerationOutcome> {
+    const outcome: ModerationOutcome = {
+      id: this.nextId(),
+      server_id: data.server_id,
+      user_id: data.user_id,
+      detection_event_id: data.detection_event_id ?? null,
+      verification_event_id: data.verification_event_id ?? null,
+      outcome_type: data.outcome_type,
+      source: data.source,
+      actor_id: data.actor_id ?? null,
+      reason: data.reason ?? null,
+      occurred_at: data.occurred_at ?? new Date(),
+      created_at: new Date(),
+      metadata: data.metadata ?? null,
+    };
+    this.outcomes.push(outcome);
+    return { ...outcome };
+  }
+
+  async findByUserAndServer(
+    userId: string,
+    serverId: string,
+    options: { limit?: number; offset?: number } = {}
+  ): Promise<ModerationOutcome[]> {
+    const filtered = this.outcomes
+      .filter((outcome) => outcome.user_id === userId && outcome.server_id === serverId)
+      .sort((a, b) => toTimestamp(b.occurred_at) - toTimestamp(a.occurred_at));
+    const start = options.offset ?? 0;
+    const end = options.limit ? start + options.limit : undefined;
+    return filtered.slice(start, end).map((outcome) => ({ ...outcome }));
+  }
+
+  async findByVerificationEvent(verificationEventId: string): Promise<ModerationOutcome[]> {
+    return this.outcomes
+      .filter((outcome) => outcome.verification_event_id === verificationEventId)
+      .sort((a, b) => toTimestamp(b.occurred_at) - toTimestamp(a.occurred_at))
+      .map((outcome) => ({ ...outcome }));
   }
 }

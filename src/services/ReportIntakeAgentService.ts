@@ -207,7 +207,7 @@ export class ReportIntakeAgentService implements IReportIntakeAgentService {
     const platformCandidates = await this.candidateService.resolveCandidatesFromSignals(
       guild,
       signals,
-      'AI-extracted intake evidence'
+      'intake evidence'
     );
     for (const candidate of platformCandidates) {
       candidates.set(candidate.discordUserId, candidate);
@@ -225,7 +225,9 @@ export class ReportIntakeAgentService implements IReportIntakeAgentService {
       for (const candidate of nameCandidates) {
         candidates.set(candidate.discordUserId, {
           ...candidate,
-          matchReasons: [...new Set([...candidate.matchReasons, 'AI-extracted display name'])],
+          matchReasons: [
+            ...new Set([...candidate.matchReasons, 'reported image display-name match']),
+          ],
           ambiguityNotes: [
             ...new Set([
               ...candidate.ambiguityNotes,

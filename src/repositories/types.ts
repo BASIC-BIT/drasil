@@ -40,21 +40,9 @@ export interface ServerSettings {
   verification_ai_thread_analysis_message_limit?: number; // Max flagged-user thread messages to analyze
   verification_ai_max_action?: 'off' | 'hints' | 'restrict';
   verification_ai_restrict_threshold?: number;
-  detection_response_mode?: 'off' | 'record_only' | 'notify_only' | 'open_case' | 'restrict';
-  message_detection_response_mode?:
-    | 'off'
-    | 'record_only'
-    | 'notify_only'
-    | 'open_case'
-    | 'restrict'
-    | null;
-  join_detection_response_mode?:
-    | 'off'
-    | 'record_only'
-    | 'notify_only'
-    | 'open_case'
-    | 'restrict'
-    | null;
+  detection_response_mode?: 'off' | 'record_only' | 'notify_only' | 'restrict';
+  message_detection_response_mode?: 'off' | 'record_only' | 'notify_only' | 'restrict' | null;
+  join_detection_response_mode?: 'off' | 'record_only' | 'notify_only' | 'restrict' | null;
   observed_detection_notification_channel_id?: string | null;
   observed_detection_min_confidence_threshold?: number;
   observed_detection_notification_window_minutes?: number;
@@ -87,6 +75,7 @@ export interface ServerSettings {
   case_review_reminders_enabled?: boolean;
   case_review_reminder_stale_hours?: number;
   case_review_reminder_repeat_hours?: number;
+  case_review_digest_last_sent_at?: string | null;
   setup_nudge_last_attempt_at?: string | null;
   setup_nudge_last_recipient_id?: string | null;
   setup_nudge_last_result?: 'sent' | 'dm_failed' | 'no_recipient' | null;
@@ -167,19 +156,38 @@ export enum VerificationStatus {
   PENDING = 'pending',
   VERIFIED = 'verified',
   BANNED = 'banned',
+  CLOSED_NO_ACTION = 'closed_no_action',
 }
 
 export enum AdminActionType {
   VERIFY = 'verify',
   REJECT = 'reject',
   BAN = 'ban',
+  CLOSE_NO_ACTION = 'close_no_action',
   REOPEN = 'reopen',
   CREATE_THREAD = 'create_thread',
   OPEN_CASE = 'open_case',
   RESTRICT = 'restrict',
+  LIFT_RESTRICTION = 'lift_restriction',
   DISMISS = 'dismiss',
   FALSE_POSITIVE = 'false_positive',
   UNDO_OBSERVED_ACTION = 'undo_observed_action',
+}
+
+export enum ModerationOutcomeSource {
+  DRASIL = 'drasil',
+  NATIVE_DISCORD = 'native_discord',
+  EXTERNAL_BOT = 'external_bot',
+  UNKNOWN_EXTERNAL = 'unknown_external',
+  MIGRATION_OR_SYNC = 'migration_or_sync',
+}
+
+export enum ModerationOutcomeType {
+  RESTRICTED = 'restricted',
+  VERIFIED = 'verified',
+  BANNED = 'banned',
+  CLOSED_NO_ACTION = 'closed_no_action',
+  MEMBER_LEFT = 'member_left',
 }
 
 export interface VerificationEvent {
@@ -189,6 +197,7 @@ export interface VerificationEvent {
   detection_event_id: string | null;
   thread_id: string | null;
   private_evidence_thread_id: string | null;
+  notification_channel_id: string | null;
   notification_message_id: string | null;
   status: VerificationStatus;
   created_at: Date; // Use Date type
@@ -212,6 +221,21 @@ export interface AdminAction {
   new_status: VerificationStatus | null;
   notes: string | null;
   metadata: Prisma.JsonValue | null; // Align with Prisma JSON type
+}
+
+export interface ModerationOutcome {
+  id: string;
+  server_id: string;
+  user_id: string;
+  detection_event_id: string | null;
+  verification_event_id: string | null;
+  outcome_type: ModerationOutcomeType;
+  source: ModerationOutcomeSource;
+  actor_id: string | null;
+  reason: string | null;
+  occurred_at: Date | null;
+  created_at: Date | null;
+  metadata: Prisma.JsonValue | null;
 }
 
 export interface VerificationEventWithActions extends VerificationEvent {
@@ -250,6 +274,8 @@ export enum ReportIntakeStatus {
   SUBMITTED = 'submitted',
   CLOSED_BY_REPORTER = 'closed_by_reporter',
   ACTIONED = 'actioned',
+  DISMISSED = 'dismissed',
+  FALSE_POSITIVE = 'false_positive',
   EXPIRED = 'expired',
 }
 
@@ -324,4 +350,12 @@ export interface AdminActionCreate extends Omit<
   // Omit fields handled automatically or differently on create
   detection_event_id?: string | null; // Add optional field
   metadata?: Prisma.JsonValue | null; // Allow metadata on create
+}
+
+export interface ModerationOutcomeCreate extends Omit<
+  ModerationOutcome,
+  'id' | 'created_at' | 'metadata' | 'occurred_at'
+> {
+  occurred_at?: Date | null;
+  metadata?: Prisma.JsonValue | null;
 }

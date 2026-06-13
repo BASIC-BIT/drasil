@@ -21,6 +21,7 @@ const webServerEnv: Record<string, string> = {
   DATABASE_URL:
     process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@127.0.0.1:5432/drasil_test',
   DRASIL_WEB_BOT_TOKEN: process.env.DRASIL_WEB_BOT_TOKEN ?? 'playwright-bot-token',
+  DRASIL_WEB_E2E_FIXTURE_MODE: process.env.DRASIL_WEB_E2E_FIXTURE_MODE ?? 'true',
 };
 
 export default defineConfig({
@@ -31,7 +32,7 @@ export default defineConfig({
   expect: {
     timeout: 5_000,
     toHaveScreenshot: {
-      maxDiffPixelRatio: 0.03,
+      maxDiffPixels: 1_200,
     },
   },
   snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}{ext}',

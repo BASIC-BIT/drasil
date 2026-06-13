@@ -1,4 +1,4 @@
-import { Guild, GuildMember, User } from 'discord.js';
+import { Guild, GuildMember, PartialGuildMember, User } from 'discord.js';
 import { injectable, inject, optional } from 'inversify';
 import { TYPES } from '../di/symbols';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
@@ -12,6 +12,12 @@ import {
   IProductAnalyticsService,
   NOOP_PRODUCT_ANALYTICS_SERVICE,
 } from './ProductAnalyticsService';
+import {
+  IModerationOutcomeService,
+  ModerationOutcomeRecordInput,
+  ModerationOutcomeSource,
+  ModerationOutcomeType,
+} from './ModerationOutcomeService';
 
 /**
  * Interface for the UserModerationService
@@ -22,7 +28,12 @@ export interface IUserModerationService {
    * @param member The guild member to restrict
    * @returns Promise resolving to true if successful, false if the restriction failed
    */
-  restrictUser(member: GuildMember): Promise<boolean>;
+  restrictUser(member: GuildMember, moderator?: User): Promise<boolean>;
+
+  /**
+   * Removes the restricted role while keeping the active case pending.
+   */
+  liftRestriction(member: GuildMember, moderator: User): Promise<boolean>;
 
   /**
    * Removes the restricted role from a guild member and updates their verification status
@@ -50,12 +61,47 @@ export interface IUserModerationService {
    * Synchronizes pending verification cases when Discord already has an existing ban.
    */
   syncAlreadyBannedUser(guild: Guild, userId: string, moderator: User): Promise<number>;
+
+  /**
+   * Closes pending verification cases without treating the user as verified or banned.
+   */
+  closeCaseNoAction(
+    guild: Guild,
+    userId: string,
+    moderator: User,
+    notes?: string | null
+  ): Promise<number>;
+
+  /**
+   * Resolves pending verification cases after observing a Discord ban outside the Drasil action flow.
+   */
+  recordObservedDiscordBan(
+    guild: Guild,
+    user: User,
+    options: ObservedDiscordBanOptions
+  ): Promise<number>;
+
+  /**
+   * Marks pending verification cases when the user leaves or is removed without closing the case.
+   */
+  recordMemberLeftGuild(member: GuildMember | PartialGuildMember): Promise<number>;
+}
+
+export interface ObservedDiscordBanOptions {
+  source: ModerationOutcomeSource;
+  actorId?: string | null;
+  reason?: string | null;
+  sourceDetail?: string | null;
+  auditLogEntryId?: string | null;
+  occurredAt?: Date;
 }
 
 interface ModerationTarget {
   guildId: string;
   userId: string;
   userTag: string;
+  username?: string | null;
+  accountCreatedAt?: Date | null;
 }
 
 /**
@@ -70,6 +116,7 @@ export class UserModerationService implements IUserModerationService {
   private adminActionService: IAdminActionService; // Keep for now, might be replaced by events later
   private threadManager: IThreadManager;
   private productAnalyticsService: IProductAnalyticsService;
+  private moderationOutcomeService?: IModerationOutcomeService;
 
   constructor(
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
@@ -81,7 +128,10 @@ export class UserModerationService implements IUserModerationService {
     @inject(TYPES.ThreadManager) threadManager: IThreadManager,
     @inject(TYPES.ProductAnalyticsService)
     @optional()
-    productAnalyticsService?: IProductAnalyticsService
+    productAnalyticsService?: IProductAnalyticsService,
+    @inject(TYPES.ModerationOutcomeService)
+    @optional()
+    moderationOutcomeService?: IModerationOutcomeService
   ) {
     this.serverMemberRepository = serverMemberRepository;
     this.notificationManager = notificationManager;
@@ -90,6 +140,7 @@ export class UserModerationService implements IUserModerationService {
     this.adminActionService = adminActionService;
     this.threadManager = threadManager;
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
+    this.moderationOutcomeService = moderationOutcomeService;
   }
 
   private captureModerationAction(
@@ -120,20 +171,152 @@ export class UserModerationService implements IUserModerationService {
     return verificationEvents.filter((event) => event.status === VerificationStatus.PENDING);
   }
 
-  private getModerationTarget(member: GuildMember): ModerationTarget {
+  private getModerationTarget(member: GuildMember | PartialGuildMember): ModerationTarget {
     return {
       guildId: member.guild.id,
       userId: member.id,
       userTag: member.user.tag,
+      username: member.user.username,
+      accountCreatedAt: this.getUserAccountCreatedAt(member.user),
     };
+  }
+
+  private getUserAccountCreatedAt(user: User): Date | null {
+    const createdTimestamp = (user as { createdTimestamp?: unknown }).createdTimestamp;
+    if (typeof createdTimestamp !== 'number' || !Number.isFinite(createdTimestamp)) {
+      return null;
+    }
+
+    return new Date(createdTimestamp);
+  }
+
+  private async recordModerationOutcomes(
+    target: ModerationTarget,
+    outcomeType: ModerationOutcomeType,
+    source: ModerationOutcomeSource,
+    verificationEvents: VerificationEvent[],
+    options: {
+      actorId?: string | null;
+      reason?: string | null;
+      detectionEventId?: string | null;
+      metadata?: Record<string, unknown>;
+      occurredAt?: Date;
+      recordWithoutVerificationEvent?: boolean;
+    } = {}
+  ): Promise<void> {
+    const moderationOutcomeService = this.moderationOutcomeService;
+    if (!moderationOutcomeService) {
+      return;
+    }
+
+    const eventRecords = verificationEvents.length > 0 ? verificationEvents : [null];
+    if (!options.recordWithoutVerificationEvent && verificationEvents.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      eventRecords.map((event) =>
+        moderationOutcomeService.recordOutcome({
+          server_id: target.guildId,
+          user_id: target.userId,
+          detection_event_id: options.detectionEventId ?? event?.detection_event_id ?? null,
+          verification_event_id: event?.id ?? null,
+          outcome_type: outcomeType,
+          source,
+          actor_id: options.actorId ?? null,
+          reason: options.reason ?? null,
+          occurred_at: options.occurredAt ?? null,
+          metadata: (options.metadata ?? {}) as ModerationOutcomeRecordInput['metadata'],
+          username: target.username,
+          accountCreatedAt: target.accountCreatedAt,
+        })
+      )
+    );
+  }
+
+  private async tryRecordModerationOutcomes(
+    target: ModerationTarget,
+    outcomeType: ModerationOutcomeType,
+    source: ModerationOutcomeSource,
+    verificationEvents: VerificationEvent[],
+    options: Parameters<UserModerationService['recordModerationOutcomes']>[4] = {}
+  ): Promise<void> {
+    try {
+      await this.recordModerationOutcomes(target, outcomeType, source, verificationEvents, options);
+    } catch (error) {
+      console.warn(
+        `Failed to record ${outcomeType} moderation outcome for ${target.userId} in guild ${target.guildId}:`,
+        error
+      );
+    }
+  }
+
+  private buildOutcomeMetadata(
+    metadata: Record<string, unknown> = {},
+    user?: User,
+    member?: GuildMember | PartialGuildMember
+  ): Record<string, unknown> {
+    return {
+      ...metadata,
+      ...(user ? { user_snapshot: this.buildUserSnapshot(user, member) } : {}),
+    };
+  }
+
+  private buildExternalResolutionActorLabel(
+    source: ModerationOutcomeSource,
+    actorId?: string | null
+  ): string {
+    if (actorId) {
+      return actorId;
+    }
+
+    switch (source) {
+      case ModerationOutcomeSource.NATIVE_DISCORD:
+        return 'Discord native moderation';
+      case ModerationOutcomeSource.EXTERNAL_BOT:
+        return 'external Discord bot';
+      case ModerationOutcomeSource.MIGRATION_OR_SYNC:
+        return 'existing Discord ban sync';
+      case ModerationOutcomeSource.UNKNOWN_EXTERNAL:
+        return 'external Discord moderation';
+      case ModerationOutcomeSource.DRASIL:
+        return 'Drasil';
+    }
+  }
+
+  private async finalizeExternallyResolvedVerificationEvent(
+    verificationEvent: VerificationEvent,
+    newStatus: VerificationStatus.BANNED,
+    source: ModerationOutcomeSource,
+    actorId?: string | null
+  ): Promise<void> {
+    await this.threadManager.resolveVerificationThread(
+      verificationEvent,
+      newStatus,
+      this.buildExternalResolutionActorLabel(source, actorId)
+    );
+
+    if (verificationEvent.notification_message_id) {
+      try {
+        await this.notificationManager.updateNotificationButtons(verificationEvent, newStatus);
+      } catch (error) {
+        console.warn(
+          `Failed to update notification buttons for externally resolved case ${verificationEvent.id}:`,
+          error
+        );
+      }
+    }
   }
 
   private async finalizeResolvedVerificationEvent(
     target: ModerationTarget,
     verificationEvent: VerificationEvent,
     previousStatus: VerificationStatus,
-    newStatus: VerificationStatus.VERIFIED | VerificationStatus.BANNED,
-    actionType: AdminActionType.VERIFY | AdminActionType.BAN,
+    newStatus:
+      | VerificationStatus.VERIFIED
+      | VerificationStatus.BANNED
+      | VerificationStatus.CLOSED_NO_ACTION,
+    actionType: AdminActionType.VERIFY | AdminActionType.BAN | AdminActionType.CLOSE_NO_ACTION,
     moderator: User,
     strictNotification: boolean,
     options: { notes?: string | null; detectionEventId?: string | null } = {}
@@ -181,12 +364,13 @@ export class UserModerationService implements IUserModerationService {
    * @param member The guild member to restrict
    * @returns Promise resolving to true if successful, false if the restriction failed
    */
-  public async restrictUser(member: GuildMember): Promise<boolean> {
+  public async restrictUser(member: GuildMember, moderator?: User): Promise<boolean> {
     try {
       const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
         member.id,
         member.guild.id
       );
+      const previousStatus = verificationEvent?.status ?? null;
 
       if (!verificationEvent) {
         // If no active event, we might still need to restrict based on other logic,
@@ -216,6 +400,7 @@ export class UserModerationService implements IUserModerationService {
         is_restricted: true,
         verification_status: VerificationStatus.PENDING, // Ensure status matches
         last_status_change: new Date(),
+        updated_by: moderator?.id,
       });
 
       console.log(`Successfully restricted user ${member.user.tag}`);
@@ -226,9 +411,104 @@ export class UserModerationService implements IUserModerationService {
         verificationEvent?.id,
         verificationEvent?.detection_event_id
       );
+      await this.tryRecordModerationOutcomes(
+        this.getModerationTarget(member),
+        ModerationOutcomeType.RESTRICTED,
+        ModerationOutcomeSource.DRASIL,
+        verificationEvent ? [verificationEvent] : [],
+        {
+          actorId: moderator?.id,
+          metadata: this.buildOutcomeMetadata({}, member.user, member),
+          recordWithoutVerificationEvent: !verificationEvent,
+        }
+      );
+      if (moderator && verificationEvent) {
+        if (verificationEvent.notification_message_id) {
+          await this.notificationManager.logActionToMessage(
+            verificationEvent,
+            AdminActionType.RESTRICT,
+            moderator
+          );
+        }
+        await this.adminActionService.recordAction({
+          server_id: member.guild.id,
+          user_id: member.id,
+          admin_id: moderator.id,
+          verification_event_id: verificationEvent.id,
+          detection_event_id: verificationEvent.detection_event_id,
+          action_type: AdminActionType.RESTRICT,
+          previous_status: previousStatus,
+          new_status: VerificationStatus.PENDING,
+          notes: 'Restricted while case remains pending.',
+        });
+      }
       return true;
     } catch (error) {
       console.error(`Failed to restrict user ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
+  public async liftRestriction(member: GuildMember, moderator: User): Promise<boolean> {
+    try {
+      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+      if (!verificationEvent) {
+        throw new Error('No active verification event found to lift restriction');
+      }
+
+      const serverMember = await this.serverMemberRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
+      if (serverMember?.is_restricted !== true) {
+        return true;
+      }
+
+      const roleRemoved = await this.roleManager.removeRestrictedRole(member);
+      if (!roleRemoved) {
+        throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
+      }
+
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        is_restricted: false,
+        verification_status: VerificationStatus.PENDING,
+        last_status_change: new Date(),
+        updated_by: moderator.id,
+      });
+
+      await this.adminActionService.recordAction({
+        server_id: member.guild.id,
+        user_id: member.id,
+        admin_id: moderator.id,
+        verification_event_id: verificationEvent.id,
+        detection_event_id: verificationEvent.detection_event_id,
+        action_type: AdminActionType.LIFT_RESTRICTION,
+        previous_status: verificationEvent.status,
+        new_status: VerificationStatus.PENDING,
+        notes: 'Restriction lifted while case remains pending.',
+      });
+
+      if (verificationEvent.notification_message_id) {
+        await this.notificationManager.logActionToMessage(
+          verificationEvent,
+          AdminActionType.LIFT_RESTRICTION,
+          moderator
+        );
+      }
+
+      this.captureModerationAction(
+        member,
+        AdminActionType.LIFT_RESTRICTION,
+        moderator,
+        verificationEvent.id,
+        verificationEvent.detection_event_id
+      );
+      return true;
+    } catch (error) {
+      console.error(`Failed to lift restriction for user ${member.user.tag}:`, error);
       throw error;
     }
   }
@@ -301,6 +581,17 @@ export class UserModerationService implements IUserModerationService {
           resolvedEvent.event.id === verificationEvent.id
         );
       }
+
+      await this.tryRecordModerationOutcomes(
+        this.getModerationTarget(member),
+        ModerationOutcomeType.VERIFIED,
+        ModerationOutcomeSource.DRASIL,
+        resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
+        {
+          actorId: moderator.id,
+          metadata: this.buildOutcomeMetadata({}, member.user, member),
+        }
+      );
 
       console.log(`User ${member.user.tag} verification process completed successfully.`);
       this.captureModerationAction(
@@ -399,6 +690,20 @@ export class UserModerationService implements IUserModerationService {
         );
       }
 
+      await this.tryRecordModerationOutcomes(
+        this.getModerationTarget(member),
+        ModerationOutcomeType.BANNED,
+        ModerationOutcomeSource.DRASIL,
+        resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
+        {
+          actorId: moderator.id,
+          reason,
+          detectionEventId: detectionEventId ?? verificationEvent?.detection_event_id ?? null,
+          metadata: this.buildOutcomeMetadata({}, member.user, member),
+          recordWithoutVerificationEvent: true,
+        }
+      );
+
       this.captureModerationAction(
         member,
         AdminActionType.BAN,
@@ -472,6 +777,8 @@ export class UserModerationService implements IUserModerationService {
         guildId: guild.id,
         userId,
         userTag: existingBan.user.tag,
+        username: existingBan.user.username,
+        accountCreatedAt: this.getUserAccountCreatedAt(existingBan.user),
       };
 
       try {
@@ -497,6 +804,25 @@ export class UserModerationService implements IUserModerationService {
         );
       }
 
+      await this.tryRecordModerationOutcomes(
+        target,
+        ModerationOutcomeType.BANNED,
+        ModerationOutcomeSource.MIGRATION_OR_SYNC,
+        resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
+        {
+          actorId: moderator.id,
+          reason: existingBanReason || null,
+          metadata: this.buildOutcomeMetadata(
+            {
+              source_detail: 'syncAlreadyBannedUser',
+              synced_already_banned: true,
+            },
+            existingBan.user
+          ),
+          occurredAt: resolvedAt,
+        }
+      );
+
       void this.productAnalyticsService.captureUserEvent(
         guild.id,
         userId,
@@ -516,6 +842,315 @@ export class UserModerationService implements IUserModerationService {
     }
   }
 
+  public async closeCaseNoAction(
+    guild: Guild,
+    userId: string,
+    moderator: User,
+    notes?: string | null
+  ): Promise<number> {
+    try {
+      const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
+        userId,
+        guild.id
+      );
+      const pendingVerificationEvents = verificationEvents.filter(
+        (event) => event.status === VerificationStatus.PENDING
+      );
+
+      const member = await guild.members.fetch(userId).catch(() => null);
+      const serverMember = await this.serverMemberRepository.findByServerAndUser(guild.id, userId);
+      const shouldRemoveRestrictedRole = member && serverMember?.is_restricted === true;
+
+      if (pendingVerificationEvents.length === 0) {
+        if (shouldRemoveRestrictedRole) {
+          const roleRemoved = await this.roleManager.removeRestrictedRole(member);
+          if (!roleRemoved) {
+            throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
+          }
+
+          await this.serverMemberRepository.upsertMember(guild.id, userId, {
+            is_restricted: false,
+            verification_status: VerificationStatus.CLOSED_NO_ACTION,
+            last_status_change: new Date(),
+            updated_by: moderator.id,
+          });
+        }
+
+        return 0;
+      }
+
+      const resolvedAt = new Date();
+      const resolutionNotes = notes?.trim() || 'Closed with no action.';
+      const resolvedEvents: Array<{
+        event: VerificationEvent;
+        previousStatus: VerificationStatus;
+      }> = [];
+
+      for (const pendingEvent of pendingVerificationEvents) {
+        const previousStatus = pendingEvent.status;
+        const eventToUpdate = {
+          ...pendingEvent,
+          status: VerificationStatus.CLOSED_NO_ACTION,
+          resolved_by: moderator.id,
+          resolved_at: resolvedAt,
+          notes: resolutionNotes,
+          metadata: {
+            ...this.metadataToRecord(pendingEvent.metadata),
+            ...(member ? { user_snapshot: this.buildUserSnapshot(member.user, member) } : {}),
+            ...(!member ? { membership_state: 'left_or_removed' } : {}),
+            closed_no_action_at: resolvedAt.toISOString(),
+          } as VerificationEvent['metadata'],
+        };
+        const updatedEvent = await this.verificationEventRepository.update(
+          pendingEvent.id,
+          eventToUpdate
+        );
+        resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
+      }
+
+      if (shouldRemoveRestrictedRole) {
+        const roleRemoved = await this.roleManager.removeRestrictedRole(member);
+        if (!roleRemoved) {
+          throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
+        }
+      }
+
+      await this.serverMemberRepository.upsertMember(guild.id, userId, {
+        is_restricted: false,
+        verification_status: VerificationStatus.CLOSED_NO_ACTION,
+        last_status_change: resolvedAt,
+        updated_by: moderator.id,
+      });
+
+      const target = member
+        ? this.getModerationTarget(member)
+        : {
+            guildId: guild.id,
+            userId,
+            userTag: userId,
+            username: null,
+            accountCreatedAt: null,
+          };
+
+      for (const resolvedEvent of resolvedEvents) {
+        await this.finalizeResolvedVerificationEvent(
+          target,
+          resolvedEvent.event,
+          resolvedEvent.previousStatus,
+          VerificationStatus.CLOSED_NO_ACTION,
+          AdminActionType.CLOSE_NO_ACTION,
+          moderator,
+          Boolean(resolvedEvent.event.notification_message_id) &&
+            resolvedEvent.event.id === resolvedEvents[0].event.id,
+          {
+            notes: resolutionNotes,
+            detectionEventId: resolvedEvent.event.detection_event_id,
+          }
+        );
+      }
+
+      await this.tryRecordModerationOutcomes(
+        target,
+        ModerationOutcomeType.CLOSED_NO_ACTION,
+        ModerationOutcomeSource.DRASIL,
+        resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
+        {
+          actorId: moderator.id,
+          reason: resolutionNotes,
+          metadata: member ? this.buildOutcomeMetadata({}, member.user, member) : {},
+        }
+      );
+
+      void this.productAnalyticsService.captureUserEvent(
+        guild.id,
+        userId,
+        'moderation action completed',
+        { action_type: AdminActionType.CLOSE_NO_ACTION },
+        {
+          moderatorId: moderator.id,
+          verificationEventId: resolvedEvents[0].event.id,
+          detectionEventId: resolvedEvents[0].event.detection_event_id ?? undefined,
+        }
+      );
+
+      return resolvedEvents.length;
+    } catch (error) {
+      console.error(`Failed to close case with no action for user ${userId}:`, error);
+      throw error;
+    }
+  }
+
+  public async recordObservedDiscordBan(
+    guild: Guild,
+    user: User,
+    options: ObservedDiscordBanOptions
+  ): Promise<number> {
+    try {
+      if (options.source === ModerationOutcomeSource.DRASIL) {
+        return 0;
+      }
+
+      const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
+        user.id,
+        guild.id
+      );
+      const pendingVerificationEvents = verificationEvents.filter(
+        (event) => event.status === VerificationStatus.PENDING
+      );
+      if (pendingVerificationEvents.length === 0) {
+        return 0;
+      }
+
+      const resolvedAt = options.occurredAt ?? new Date();
+      const notes = options.reason?.trim()
+        ? `Observed Discord ban: ${options.reason.trim()}`
+        : 'Observed Discord ban.';
+      const outcomeMetadata = this.buildOutcomeMetadata(
+        {
+          source_detail: options.sourceDetail ?? 'guildBanAdd',
+          audit_log_entry_id: options.auditLogEntryId ?? null,
+        },
+        user
+      );
+      const resolvedEvents: Array<{
+        event: VerificationEvent;
+        previousStatus: VerificationStatus;
+      }> = [];
+
+      for (const pendingEvent of pendingVerificationEvents) {
+        const previousStatus = pendingEvent.status;
+        const eventToUpdate = {
+          ...pendingEvent,
+          status: VerificationStatus.BANNED,
+          resolved_by: options.actorId ?? null,
+          resolved_at: resolvedAt,
+          notes,
+          metadata: {
+            ...this.metadataToRecord(pendingEvent.metadata),
+            ...outcomeMetadata,
+            moderation_outcome_source: options.source,
+            moderation_outcome_actor_id: options.actorId ?? null,
+          } as VerificationEvent['metadata'],
+        };
+        const updatedEvent = await this.verificationEventRepository.update(
+          pendingEvent.id,
+          eventToUpdate
+        );
+        resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
+      }
+
+      await this.serverMemberRepository.upsertMember(guild.id, user.id, {
+        verification_status: VerificationStatus.BANNED,
+        is_restricted: true,
+        last_status_change: new Date(),
+      });
+
+      for (const resolvedEvent of resolvedEvents) {
+        await this.finalizeExternallyResolvedVerificationEvent(
+          resolvedEvent.event,
+          VerificationStatus.BANNED,
+          options.source,
+          options.actorId
+        );
+      }
+
+      await this.tryRecordModerationOutcomes(
+        {
+          guildId: guild.id,
+          userId: user.id,
+          userTag: user.tag,
+          username: user.username,
+          accountCreatedAt: this.getUserAccountCreatedAt(user),
+        },
+        ModerationOutcomeType.BANNED,
+        options.source,
+        resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
+        {
+          actorId: options.actorId ?? null,
+          reason: options.reason ?? null,
+          metadata: outcomeMetadata,
+          occurredAt: resolvedAt,
+        }
+      );
+
+      void this.productAnalyticsService.captureUserEvent(
+        guild.id,
+        user.id,
+        'moderation action completed',
+        { action_type: AdminActionType.BAN, source: options.source },
+        {
+          moderatorId: options.actorId ?? undefined,
+          verificationEventId: resolvedEvents[0].event.id,
+          detectionEventId: resolvedEvents[0].event.detection_event_id ?? undefined,
+        }
+      );
+
+      return resolvedEvents.length;
+    } catch (error) {
+      console.error(`Failed to record observed Discord ban for user ${user.id}:`, error);
+      throw error;
+    }
+  }
+
+  public async recordMemberLeftGuild(member: GuildMember | PartialGuildMember): Promise<number> {
+    try {
+      const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+      const pendingVerificationEvents = verificationEvents.filter(
+        (event) => event.status === VerificationStatus.PENDING
+      );
+      if (pendingVerificationEvents.length === 0) {
+        return 0;
+      }
+
+      const occurredAt = new Date();
+      const outcomeMetadata = this.buildOutcomeMetadata(
+        {
+          source_detail: 'guildMemberRemove',
+          membership_state: 'left_or_removed',
+          member_left_at: occurredAt.toISOString(),
+        },
+        member.user,
+        member
+      );
+      const markedEvents: VerificationEvent[] = [];
+
+      for (const pendingEvent of pendingVerificationEvents) {
+        const eventToUpdate = {
+          ...pendingEvent,
+          metadata: {
+            ...this.metadataToRecord(pendingEvent.metadata),
+            ...outcomeMetadata,
+          } as VerificationEvent['metadata'],
+        };
+        const updatedEvent = await this.verificationEventRepository.update(
+          pendingEvent.id,
+          eventToUpdate,
+          { touchUpdatedAt: false }
+        );
+        markedEvents.push(updatedEvent ?? eventToUpdate);
+      }
+
+      await this.tryRecordModerationOutcomes(
+        this.getModerationTarget(member),
+        ModerationOutcomeType.MEMBER_LEFT,
+        ModerationOutcomeSource.NATIVE_DISCORD,
+        markedEvents,
+        {
+          metadata: outcomeMetadata,
+          occurredAt,
+        }
+      );
+
+      return markedEvents.length;
+    } catch (error) {
+      console.error(`Failed to record guild member removal for user ${member.id}:`, error);
+      throw error;
+    }
+  }
+
   private withUserSnapshot(
     metadata: VerificationEvent['metadata'],
     user: User,
@@ -527,7 +1162,10 @@ export class UserModerationService implements IUserModerationService {
     } as VerificationEvent['metadata'];
   }
 
-  private buildUserSnapshot(user: User, member?: GuildMember): Record<string, string> {
+  private buildUserSnapshot(
+    user: User,
+    member?: GuildMember | PartialGuildMember
+  ): Record<string, string> {
     const snapshot: Record<string, string> = {
       id: user.id,
       tag: user.tag,

@@ -16,17 +16,32 @@ captures the near-term lifecycle for one user in one server.
 - `pending`: the case is open and needs moderator review.
 - `verified`: the case was resolved as legitimate, and the user was unrestricted.
 - `banned`: the case was resolved by banning the user.
+- `closed_no_action`: the case was resolved without verifying or banning the user.
 
-Additional product labels such as `duplicate`, `needs_more_info`,
-`resolved_no_action`, or `false_report` should be added only when a concrete UI
-or moderation workflow requires them.
+Additional product labels such as `duplicate`, `needs_more_info`, or
+`false_report` should be added only when a concrete UI or moderation workflow
+requires them.
+
+## Restriction State
+
+`pending` cases can be restricted or unrestricted. Restriction is tracked on the
+server member and can change while the case remains open:
+
+- Restricted cases use the configured restricted role and a normal user-visible
+  verification/case thread.
+- Unrestricted cases are still normal cases with a user-visible thread; they are
+  not moderator-only report review workspaces.
+- Moderators can use case actions to restrict the user or lift restriction
+  without moving the case to a terminal status.
 
 ## Case Entry Points
 
-- Suspicious message or join: creates or reuses a pending case based on the
-  detection result.
-- User report: creates a `user_report` detection event and creates or reuses a
-  pending case.
+- Suspicious message or join: records the detection result. Server response
+  settings can leave it as record/notification only or restrict the user; there
+  is no automatic open-case-without-restriction mode for these detections.
+- User report: creates a `user_report` detection event. The default path is a
+  moderator-facing observed alert; configured report-intake escalation or
+  moderator actions can create or reuse a pending case.
 - Manual flag: creates a detection event with `metadata.type = "admin_flag"` and
   creates or reuses a pending case.
 

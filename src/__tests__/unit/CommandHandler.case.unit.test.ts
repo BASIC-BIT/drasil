@@ -1,12 +1,30 @@
 import { MessageFlags } from 'discord.js';
 import { buildHandler } from './commandHandlerTestHarness';
+import { handleSlashCommandConfirmationButton } from '../../utils/slashCommandConfirmations';
+
+const confirmLastSlashCommand = async (interaction: any): Promise<any> => {
+  const reply = interaction.reply.mock.calls.at(-1)?.[0];
+  const confirmButton = reply.components[0].components[0];
+  const customId = confirmButton.toJSON().custom_id;
+  const buttonInteraction = {
+    customId,
+    user: interaction.user,
+    guildId: interaction.guildId ?? null,
+    reply: jest.fn().mockResolvedValue(undefined),
+    update: jest.fn().mockResolvedValue(undefined),
+    editReply: interaction.editReply,
+  } as any;
+
+  await handleSlashCommandConfirmationButton(buttonInteraction);
+  return buttonInteraction;
+};
 
 describe('CommandHandler case commands (unit)', () => {
-  it('opens an admin review case without restricting via /case open', async () => {
+  it('opens and restricts an admin case by default via /case open', async () => {
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
-      restrictionAttempted: false,
-      restricted: false,
+      restrictionAttempted: true,
+      restricted: true,
     });
     const { handler, securityActionService } = buildHandler({ openAdminCase });
     const invoker = { id: 'admin-1' } as any;
@@ -29,6 +47,7 @@ describe('CommandHandler case commands (unit)', () => {
       options: {
         getSubcommand: jest.fn().mockReturnValue('open'),
         getUser: jest.fn().mockReturnValue(targetUser),
+        getBoolean: jest.fn().mockReturnValue(undefined),
         getString: jest.fn().mockReturnValue('manual review'),
       },
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -40,22 +59,30 @@ describe('CommandHandler case commands (unit)', () => {
 
     expect(guild.members.fetch).toHaveBeenCalledWith(targetUser.id);
     expect(guild.members.fetch).not.toHaveBeenCalledWith(invoker.id);
+    expect(securityActionService.openAdminCase).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'Open a case for target#0001 and restrict them pending review?',
+      })
+    );
+
+    await confirmLastSlashCommand(interaction);
+
     expect(securityActionService.openAdminCase).toHaveBeenCalledWith(targetMember, invoker, {
-      action: 'open_case',
+      action: 'restrict',
       reason: 'manual review',
     });
-    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Opened a review case for target#0001.',
+      content: 'Opened a case for target#0001 and restricted them pending review.',
       allowedMentions: { parse: [] },
     });
   });
 
-  it('opens and restricts an admin case via /case restrict', async () => {
+  it('opens an unrestricted admin case via /case open restrict:false', async () => {
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
-      restrictionAttempted: true,
-      restricted: true,
+      restrictionAttempted: false,
+      restricted: false,
     });
     const { handler, securityActionService } = buildHandler({ openAdminCase });
     const invoker = { id: 'admin-1' } as any;
@@ -78,9 +105,10 @@ describe('CommandHandler case commands (unit)', () => {
       user: invoker,
       guild,
       options: {
-        getSubcommand: jest.fn().mockReturnValue('restrict'),
+        getSubcommand: jest.fn().mockReturnValue('open'),
         getUser: jest.fn().mockReturnValue(targetUser),
-        getString: jest.fn().mockReturnValue('restricted review'),
+        getBoolean: jest.fn().mockReturnValue(false),
+        getString: jest.fn().mockReturnValue('manual review'),
       },
       deferReply: jest.fn().mockResolvedValue(undefined),
       editReply: jest.fn().mockResolvedValue(undefined),
@@ -89,18 +117,20 @@ describe('CommandHandler case commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
+    expect(securityActionService.openAdminCase).not.toHaveBeenCalled();
+    await confirmLastSlashCommand(interaction);
+
     expect(securityActionService.openAdminCase).toHaveBeenCalledWith(targetMember, invoker, {
-      action: 'restrict',
-      reason: 'restricted review',
+      action: 'open_case',
+      reason: 'manual review',
     });
-    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Opened a case for target#0001 and restricted them pending review.',
+      content: 'Opened an unrestricted case for target#0001.',
       allowedMentions: { parse: [] },
     });
   });
 
-  it('surfaces partial restriction failure via /case restrict', async () => {
+  it('surfaces partial restriction failure via default /case open', async () => {
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
       restrictionAttempted: true,
@@ -127,8 +157,9 @@ describe('CommandHandler case commands (unit)', () => {
       user: invoker,
       guild,
       options: {
-        getSubcommand: jest.fn().mockReturnValue('restrict'),
+        getSubcommand: jest.fn().mockReturnValue('open'),
         getUser: jest.fn().mockReturnValue(targetUser),
+        getBoolean: jest.fn().mockReturnValue(undefined),
         getString: jest.fn().mockReturnValue('restricted review'),
       },
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -137,6 +168,8 @@ describe('CommandHandler case commands (unit)', () => {
     } as any;
 
     await handler.handleSlashCommand(interaction);
+
+    await confirmLastSlashCommand(interaction);
 
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:

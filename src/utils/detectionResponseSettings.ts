@@ -15,13 +15,7 @@ export const OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY =
   'observed_action_ban_requires_reason';
 export const MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY = 'moderator_ban_action_enabled';
 
-export const DETECTION_RESPONSE_MODES = [
-  'off',
-  'record_only',
-  'notify_only',
-  'open_case',
-  'restrict',
-] as const;
+export const DETECTION_RESPONSE_MODES = ['off', 'record_only', 'notify_only', 'restrict'] as const;
 
 export type DetectionResponseMode = (typeof DETECTION_RESPONSE_MODES)[number];
 export type DetectionResponseEvent = 'message' | 'join';
@@ -51,6 +45,18 @@ export function isDetectionResponseMode(value: unknown): value is DetectionRespo
   );
 }
 
+function readDetectionResponseMode(value: unknown): DetectionResponseMode | undefined {
+  if (isDetectionResponseMode(value)) {
+    return value;
+  }
+
+  if (value === 'open_case') {
+    return 'notify_only';
+  }
+
+  return undefined;
+}
+
 function readNumberSetting(
   value: unknown,
   defaultValue: number,
@@ -68,20 +74,18 @@ export function getDetectionResponseSettings(
   settings: ServerSettings,
   event?: DetectionResponseEvent
 ): DetectionResponseSettings {
-  const configuredMode = settings[DETECTION_RESPONSE_MODE_SETTING_KEY];
-  const defaultMode = isDetectionResponseMode(configuredMode)
+  const configuredMode = readDetectionResponseMode(settings[DETECTION_RESPONSE_MODE_SETTING_KEY]);
+  const defaultMode = configuredMode
     ? configuredMode
     : settings.auto_restrict === true
       ? 'restrict'
       : settings.auto_restrict === false
         ? 'notify_only'
         : DEFAULT_DETECTION_RESPONSE_MODE;
-  const configuredMessageMode = settings[MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY];
-  const configuredJoinMode = settings[JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY];
-  const messageMode = isDetectionResponseMode(configuredMessageMode)
-    ? configuredMessageMode
-    : defaultMode;
-  const joinMode = isDetectionResponseMode(configuredJoinMode) ? configuredJoinMode : defaultMode;
+  const messageMode =
+    readDetectionResponseMode(settings[MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY]) ?? defaultMode;
+  const joinMode =
+    readDetectionResponseMode(settings[JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY]) ?? defaultMode;
   const mode = event === 'message' ? messageMode : event === 'join' ? joinMode : defaultMode;
 
   const observedNotificationChannelId =

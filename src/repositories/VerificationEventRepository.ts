@@ -216,6 +216,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
         // Existing fields
         thread_id: data.thread_id,
         private_evidence_thread_id: data.private_evidence_thread_id,
+        notification_channel_id: data.notification_channel_id,
         notification_message_id: data.notification_message_id,
         notes: data.notes,
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- data.metadata can be null or undefined
@@ -229,7 +230,8 @@ export class VerificationEventRepository implements IVerificationEventRepository
 
         if (
           data.status === VerificationStatus.VERIFIED ||
-          data.status === VerificationStatus.BANNED
+          data.status === VerificationStatus.BANNED ||
+          data.status === VerificationStatus.CLOSED_NO_ACTION
         ) {
           // Set resolution fields if status is resolved
           updateData.resolved_at = data.resolved_at instanceof Date ? data.resolved_at : now; // Use provided date or now

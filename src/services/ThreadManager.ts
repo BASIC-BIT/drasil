@@ -88,6 +88,13 @@ export interface IThreadManager {
     sourceMessage?: Message
   ): Promise<ThreadChannel | null>;
 
+  createObservedEvidenceThread(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    notificationMessage: Message,
+    sourceMessage?: Message
+  ): Promise<ThreadChannel | null>;
+
   createReportIntakeThread(
     channel: TextChannel,
     reporter: GuildMember
@@ -222,6 +229,32 @@ export class ThreadManager implements IThreadManager {
         `Admin-only evidence thread for <@${member.id}> (${member.id}).`,
         '',
         'Use this thread for staff notes or evidence that should stay separate from the user-facing case thread.',
+        ...links,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join('\n')
+    );
+  }
+
+  private buildObservedEvidenceThreadMessage(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): string {
+    const sourceReportUrl = this.resolveSourceReportUrl(
+      member.guild.id,
+      detectionResult,
+      sourceMessage
+    );
+    const links = [sourceReportUrl ? `Source report: ${sourceReportUrl}` : null].filter(
+      (line): line is string => Boolean(line)
+    );
+
+    return enforceDiscordMessageLimit(
+      [
+        `Admin-only observed evidence thread for <@${member.id}> (${member.id}).`,
+        '',
+        'Use this thread for staff notes before deciding whether to open a case, restrict, dismiss, or ban.',
         ...links,
       ]
         .filter((line): line is string => Boolean(line))
@@ -883,7 +916,12 @@ export class ThreadManager implements IThreadManager {
           roles: [],
           repliedUser: false,
         },
-        components: [this.presentationBuilder.createActionRow(member.id)],
+        components: [
+          this.presentationBuilder.createActionRow(member.id, {
+            guildId: member.guild.id,
+            verificationEventId: verificationEvent.id,
+          }),
+        ],
       });
 
       return thread;
@@ -961,12 +999,73 @@ export class ThreadManager implements IThreadManager {
           sourceMessage
         ),
         allowedMentions: this.createNoMentionAllowedMentions(),
-        components: [this.presentationBuilder.createActionRow(member.id)],
+        components: [
+          this.presentationBuilder.createActionRow(member.id, {
+            guildId: member.guild.id,
+            verificationEventId: verificationEvent.id,
+          }),
+        ],
       });
 
       return thread;
     } catch (error) {
       console.error('Failed to create admin evidence thread:', error);
+      if (threadWasCreated) {
+        throw this.buildThreadSetupError(setupStage, error);
+      }
+      return null;
+    }
+  }
+
+  public async createObservedEvidenceThread(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    notificationMessage: Message,
+    sourceMessage?: Message
+  ): Promise<ThreadChannel | null> {
+    let setupStage = 'prepare observed evidence thread records';
+    let threadWasCreated = false;
+
+    try {
+      await this.serverRepository.getOrCreateServer(member.guild.id);
+      await this.userRepository.getOrCreateUser(member.id, member.user.username);
+      await this.serverMemberRepository.getOrCreateMember(
+        member.guild.id,
+        member.id,
+        member.joinedAt ?? undefined
+      );
+
+      setupStage = 'recover existing observed evidence thread from observed notification';
+      let thread = await this.fetchAttachedThreadFromMessage(notificationMessage);
+      if (!thread) {
+        setupStage = 'create observed evidence thread from observed notification';
+        try {
+          thread = await notificationMessage.startThread({
+            name: `Observed evidence: ${member.user.username}`,
+            autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+            reason: `Observed evidence thread for user: ${member.user.tag}`,
+          });
+          threadWasCreated = true;
+        } catch (error) {
+          thread = await this.fetchAttachedThreadFromMessage(notificationMessage);
+          if (!thread) {
+            throw error;
+          }
+        }
+      }
+
+      setupStage = 'route case responders to observed evidence thread';
+      await this.addCaseResponderMembers(member.guild, thread, [member.id]);
+
+      setupStage = 'send observed evidence thread prompt';
+      await thread.send({
+        content: this.buildObservedEvidenceThreadMessage(member, detectionResult, sourceMessage),
+        allowedMentions: this.createNoMentionAllowedMentions(),
+      });
+
+      return thread;
+    } catch (error) {
+      console.error('Failed to create observed evidence thread:', error);
       if (threadWasCreated) {
         throw this.buildThreadSetupError(setupStage, error);
       }
@@ -1072,16 +1171,7 @@ export class ThreadManager implements IThreadManager {
         const thread = await this.fetchStoredThread(verificationEvent);
 
         if (thread) {
-          if (resolution === VerificationStatus.VERIFIED) {
-            await thread.send({
-              content: this.buildVerificationResolutionMessage(
-                verificationEvent,
-                resolution,
-                resolvedBy
-              ),
-              allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
-            });
-          } else if (resolution === VerificationStatus.BANNED) {
+          if (this.shouldSendResolutionMessage(resolution)) {
             await thread.send({
               content: this.buildVerificationResolutionMessage(
                 verificationEvent,
@@ -1117,11 +1207,11 @@ export class ThreadManager implements IThreadManager {
     resolution: VerificationStatus,
     resolvedBy: string
   ): string {
-    const actionLabel = resolution === VerificationStatus.BANNED ? 'banned' : 'verified';
+    const actionLabel = this.formatResolutionLabel(resolution);
     const snapshot = this.getUserSnapshot(verificationEvent.metadata);
     const lines = [
       `Case handled: ${actionLabel}.`,
-      `Action taken by: <@${resolvedBy}>`,
+      `Action taken by: ${this.formatResolvedBy(resolvedBy)}`,
       verificationEvent.resolved_at
         ? `Action time: ${this.formatDiscordTimestamp(verificationEvent.resolved_at)}`
         : null,
@@ -1148,6 +1238,27 @@ export class ThreadManager implements IThreadManager {
     return enforceDiscordMessageLimit(lines.join('\n'));
   }
 
+  private shouldSendResolutionMessage(resolution: VerificationStatus): boolean {
+    return (
+      resolution === VerificationStatus.VERIFIED ||
+      resolution === VerificationStatus.BANNED ||
+      resolution === VerificationStatus.CLOSED_NO_ACTION
+    );
+  }
+
+  private formatResolutionLabel(resolution: VerificationStatus): string {
+    switch (resolution) {
+      case VerificationStatus.BANNED:
+        return 'banned';
+      case VerificationStatus.VERIFIED:
+        return 'verified';
+      case VerificationStatus.CLOSED_NO_ACTION:
+        return 'closed with no action';
+      case VerificationStatus.PENDING:
+        return 'pending';
+    }
+  }
+
   private getUserSnapshot(metadata: VerificationEvent['metadata']): UserSnapshotMetadata | null {
     if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
       return null;
@@ -1159,6 +1270,10 @@ export class ThreadManager implements IThreadManager {
     }
 
     return snapshot as UserSnapshotMetadata;
+  }
+
+  private formatResolvedBy(resolvedBy: string): string {
+    return /^\d{17,20}$/.test(resolvedBy) ? `<@${resolvedBy}>` : resolvedBy;
   }
 
   private formatDiscordTimestamp(value: Date | string): string {

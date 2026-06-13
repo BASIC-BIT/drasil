@@ -77,4 +77,18 @@ describe('SetupDashboardService', () => {
     await expect(service.assertCanManageGuild('guild-1', 'access-token')).resolves.toBe(guild);
     expect(fetchGuildResources).not.toHaveBeenCalled();
   });
+
+  it('uses the injected clock for dashboard check time', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockResolvedValue(resources);
+
+    const service = new SetupDashboardService(
+      createAdapter(inactiveServer),
+      () => new Date('2026-06-08T01:16:02.000Z')
+    );
+
+    await expect(service.getDashboard('guild-1', 'access-token')).resolves.toMatchObject({
+      dashboard: { checkedAt: '2026-06-08T01:16:02.000Z' },
+    });
+  });
 });

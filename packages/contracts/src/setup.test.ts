@@ -24,4 +24,42 @@ describe('setup contracts', () => {
 
     expect(parsed.success).toBe(false);
   });
+
+  it('normalizes legacy automatic open_case modes to notify_only', () => {
+    const parsed = setupDashboardSchema.parse({
+      guildId: '123',
+      guildName: 'Test Guild',
+      configured: true,
+      dataProvider: 'postgres',
+      checkedAt: new Date(0).toISOString(),
+      checklist: [],
+      server: {
+        guild_id: '123',
+        restricted_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
+        admin_notification_role_id: null,
+        heuristic_message_threshold: 5,
+        heuristic_message_timeframe_seconds: 60,
+        heuristic_suspicious_keywords: [],
+        created_at: null,
+        updated_at: null,
+        updated_by: null,
+        settings: {
+          detection_response_mode: 'open_case',
+          message_detection_response_mode: 'open_case',
+          join_detection_response_mode: 'open_case',
+          user_report_external_response_mode: 'open_case',
+        },
+        is_active: true,
+      },
+    });
+
+    expect(parsed.server?.settings).toMatchObject({
+      detection_response_mode: 'notify_only',
+      message_detection_response_mode: 'notify_only',
+      join_detection_response_mode: 'notify_only',
+      user_report_external_response_mode: 'open_case',
+    });
+  });
 });

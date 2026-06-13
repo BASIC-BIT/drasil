@@ -74,6 +74,7 @@ const buildVerificationEvent = (overrides: Partial<VerificationEvent> = {}): Ver
   detection_event_id: overrides.detection_event_id ?? null,
   thread_id: overrides.thread_id ?? null,
   private_evidence_thread_id: overrides.private_evidence_thread_id ?? null,
+  notification_channel_id: overrides.notification_channel_id ?? null,
   notification_message_id: overrides.notification_message_id ?? null,
   status: overrides.status ?? VerificationStatus.PENDING,
   created_at: overrides.created_at ?? new Date(),
@@ -110,12 +111,24 @@ const extractCustomIds = (components: unknown[]): string[] => {
   );
 };
 
+const extractUrls = (components: unknown[]): string[] => {
+  return components.flatMap((row) =>
+    ((row as { components?: unknown[] }).components ?? [])
+      .map((button) => (button as { data?: { url?: string } }).data?.url)
+      .filter((url): url is string => typeof url === 'string')
+  );
+};
+
 describe('NotificationManager (unit)', () => {
+  const originalDrasilWebPublicUrl = process.env.DRASIL_WEB_PUBLIC_URL;
+  const originalNextPublicAppUrl = process.env.NEXT_PUBLIC_APP_URL;
   let detectionRepository: InMemoryDetectionEventsRepository;
   let adminChannel: MockTextChannel;
   let configService: IConfigService;
 
   beforeEach(() => {
+    delete process.env.DRASIL_WEB_PUBLIC_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
     detectionRepository = new InMemoryDetectionEventsRepository();
     adminChannel = {
       send: jest.fn(),
@@ -131,6 +144,20 @@ describe('NotificationManager (unit)', () => {
       } as any),
       updateServerConfig: jest.fn().mockResolvedValue({}),
     } as unknown as IConfigService;
+  });
+
+  afterEach(() => {
+    if (originalDrasilWebPublicUrl === undefined) {
+      delete process.env.DRASIL_WEB_PUBLIC_URL;
+    } else {
+      process.env.DRASIL_WEB_PUBLIC_URL = originalDrasilWebPublicUrl;
+    }
+
+    if (originalNextPublicAppUrl === undefined) {
+      delete process.env.NEXT_PUBLIC_APP_URL;
+    } else {
+      process.env.NEXT_PUBLIC_APP_URL = originalNextPublicAppUrl;
+    }
   });
 
   it('sends a new notification when no existing message is set', async () => {
@@ -186,6 +213,38 @@ describe('NotificationManager (unit)', () => {
       surface: 'case',
       userId: 'user-1',
     });
+  });
+
+  it('adds a web case button to suspicious user notifications when configured', async () => {
+    process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
+    const member = buildMember('guild-1', 'user-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+    };
+    const sentMessage: MockMessage = { id: 'message-1', edit: jest.fn() };
+    adminChannel.send.mockResolvedValue(sentMessage);
+
+    const manager = new NotificationManager(
+      buildClientWithBotBanPermission() as any,
+      configService,
+      detectionRepository
+    );
+
+    await manager.upsertSuspiciousUserNotification(
+      member,
+      detectionResult,
+      buildVerificationEvent({ id: 'ver-1', thread_id: null })
+    );
+
+    const sendArgs = adminChannel.send.mock.calls[0][0] as { components: unknown[] };
+    expect(extractLabels(sendArgs.components)).toEqual(['Admin Actions', 'Web Case']);
+    expect(extractUrls(sendArgs.components)).toEqual([
+      'https://drasilbot.com/admin/guild/guild-1/cases/ver-1',
+    ]);
   });
 
   it('hides the ban action when explicitly disabled', async () => {
@@ -369,7 +428,7 @@ describe('NotificationManager (unit)', () => {
       confidence: 0.9,
       reasons: [
         'Message contains suspicious keywords or patterns',
-        'AI analysis flagged recent message context as suspicious',
+        'Risk analysis flagged recent message context as suspicious',
       ],
       triggerSource: DetectionType.SUSPICIOUS_CONTENT,
       triggerContent: 'free discord nitro',
@@ -377,12 +436,25 @@ describe('NotificationManager (unit)', () => {
       gptAnalysis: {
         result: 'SUSPICIOUS',
         confidence: 0.91,
-        reasons: ['AI analysis flagged recent message context as suspicious'],
+        reasons: ['Risk analysis flagged recent message context as suspicious'],
         reasonCodes: ['suspicious_keyword'],
         primarySignal: 'message_content',
         summary: 'Recent message context matches common scam patterns.',
         model: GPT_PROFILE_MODEL,
         promptVersion: GPT_PROFILE_PROMPT_VERSION,
+        isFallback: false,
+      },
+      reportAiAnalysis: {
+        result: 'needs_review',
+        confidence: 0.74,
+        summary: 'Reporter evidence needs moderator review.',
+        reasonCodes: ['image_evidence'],
+        evidenceCategories: ['image'],
+        concerns: ['Screenshot indicates targeted harassment.'],
+        recommendedAction: 'open_case',
+        analyzedImageCount: 1,
+        model: GPT_PROFILE_MODEL,
+        promptVersion: 'report-triage-v1',
         isFallback: false,
       },
     };
@@ -417,11 +489,13 @@ describe('NotificationManager (unit)', () => {
     expect(sendArgs.embeds[0].data.title).toBe('Suspicious Activity Observed');
     const fields = sendArgs.embeds[0].data.fields ?? [];
     const reasonsField = fields.find((field) => field.name === 'Reasons');
-    const aiField = fields.find((field) => field.name === 'AI Analysis');
+    const aiField = fields.find((field) => field.name === 'Risk Analysis');
+    const reportField = fields.find((field) => field.name === 'Report Triage');
     expect(reasonsField?.value).toContain('Message contains suspicious keywords or patterns');
     expect(aiField?.value).toContain('Primary signal: message_content');
     expect(aiField?.value).toContain('Reason codes: suspicious_keyword');
     expect(aiField?.value).toContain('Recent message context matches common scam patterns.');
+    expect(reportField?.value).toContain('Concerns: Screenshot indicates targeted harassment.');
 
     const updatedEvent = await detectionRepository.findById(detectionEvent.id);
     expect(updatedEvent?.metadata).toMatchObject({
@@ -754,6 +828,35 @@ describe('NotificationManager (unit)', () => {
     expect(labels).toEqual(['Admin Actions']);
   });
 
+  it('updates notification buttons from stored notification channel', async () => {
+    const message: MockMessage = { edit: jest.fn().mockResolvedValue(undefined) };
+    const storedChannel = {
+      id: 'observed-channel-1',
+      type: ChannelType.GuildText,
+      guildId: 'guild-1',
+      messages: {
+        fetch: jest.fn().mockResolvedValue(message as unknown as Message<true>),
+      },
+    };
+    const client = {
+      channels: {
+        fetch: jest.fn().mockResolvedValue(storedChannel),
+      },
+    };
+    const manager = new NotificationManager(client as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({
+      notification_channel_id: 'observed-channel-1',
+      notification_message_id: 'message-stored-channel',
+    });
+
+    await manager.updateNotificationButtons(verificationEvent, VerificationStatus.PENDING);
+
+    expect(client.channels.fetch).toHaveBeenCalledWith('observed-channel-1');
+    expect(storedChannel.messages.fetch).toHaveBeenCalledWith('message-stored-channel');
+    expect(adminChannel.messages.fetch).not.toHaveBeenCalled();
+    expect(message.edit).toHaveBeenCalledTimes(1);
+  });
+
   it('removes repaired action warnings without dropping action log fields', async () => {
     const embed = new EmbedBuilder().setTitle('Suspicious User').addFields(
       {
@@ -848,7 +951,7 @@ describe('NotificationManager (unit)', () => {
     expect(actionLog?.value).toContain(':F>');
   });
 
-  it('updates the admin notification with AI thread analysis details', async () => {
+  it('updates the admin notification with concise thread analysis details', async () => {
     const embed = new EmbedBuilder().setTitle('Suspicious User');
     const message: MockMessage = {
       embeds: [embed],
@@ -880,14 +983,15 @@ describe('NotificationManager (unit)', () => {
 
     const editArgs = message.edit.mock.calls[0][0] as { embeds: EmbedBuilder[] };
     const fields = editArgs.embeds[0].data.fields ?? [];
-    const analysisField = fields.find((field) => field.name === 'AI Thread Analysis');
+    const analysisField = fields.find((field) => field.name === 'Thread Analysis');
 
-    expect(analysisField?.value).toContain('Result: **likely_legitimate** (72% confidence)');
-    expect(analysisField?.value).toContain('Analyzed responses: 2');
+    expect(analysisField?.value).toContain('Result: **likely_legitimate** (Medium confidence)');
+    expect(analysisField?.value).toContain('Responses reviewed: 2');
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'
     );
-    expect(analysisField?.value).toContain('Reason codes: normal_context');
+    expect(analysisField?.value).toContain('Legitimacy: Specific server context matched');
+    expect(analysisField?.value).not.toContain('Reason codes: normal_context');
   });
 
   it('displays fallback GPT diagnostics as unavailable', async () => {
@@ -895,16 +999,16 @@ describe('NotificationManager (unit)', () => {
     const detectionResult: DetectionResult = {
       label: 'SUSPICIOUS',
       confidence: 0.9,
-      reasons: ['Suspicious content', 'AI analysis unavailable; review manually'],
+      reasons: ['Suspicious content', 'Risk analysis unavailable; review manually'],
       triggerSource: DetectionType.SUSPICIOUS_CONTENT,
       triggerContent: 'free discord nitro',
       gptAnalysis: {
         result: 'OK',
         confidence: 0.1,
-        reasons: ['AI analysis unavailable; review manually'],
+        reasons: ['Risk analysis unavailable; review manually'],
         reasonCodes: ['ai_analysis_unavailable'],
         primarySignal: 'none',
-        summary: 'AI returned incomplete analysis; review manually.',
+        summary: 'Risk analysis returned incomplete output; review manually.',
         model: GPT_PROFILE_MODEL,
         promptVersion: GPT_PROFILE_PROMPT_VERSION,
         isFallback: true,
@@ -920,13 +1024,50 @@ describe('NotificationManager (unit)', () => {
 
     const sendArgs = adminChannel.send.mock.calls[0][0] as { embeds: EmbedBuilder[] };
     const fields = sendArgs.embeds[0].data.fields ?? [];
-    const aiField = fields.find((field) => field.name === 'AI Analysis');
+    const aiField = fields.find((field) => field.name === 'Risk Analysis');
 
     expect(aiField?.value).toContain('Result: **Unavailable**');
     expect(aiField?.value).not.toContain('Result: **OK**');
   });
 
-  it('preserves persisted AI thread analysis when rebuilding the embed', async () => {
+  it('omits overlong risk-analysis prose instead of truncating it with ellipses', async () => {
+    const member = buildMember('guild-1', 'user-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+      gptAnalysis: {
+        result: 'SUSPICIOUS',
+        confidence: 0.91,
+        reasons: ['Risk analysis flagged recent message context as suspicious'],
+        reasonCodes: ['suspicious_keyword'],
+        primarySignal: 'message_content',
+        summary: 'Verbose diagnostic sentence. '.repeat(80),
+        model: GPT_PROFILE_MODEL,
+        promptVersion: GPT_PROFILE_PROMPT_VERSION,
+        isFallback: false,
+      },
+    };
+    const sentMessage: MockMessage = { id: 'message-9', edit: jest.fn() };
+    adminChannel.send.mockResolvedValue(sentMessage);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({ thread_id: null });
+
+    await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
+
+    const sendArgs = adminChannel.send.mock.calls[0][0] as { embeds: EmbedBuilder[] };
+    const fields = sendArgs.embeds[0].data.fields ?? [];
+    const riskField = fields.find((field) => field.name === 'Risk Analysis');
+
+    expect(riskField?.value.length).toBeLessThanOrEqual(1024);
+    expect(riskField?.value).toContain('Result: **SUSPICIOUS** (High confidence)');
+    expect(riskField?.value).not.toContain('...');
+  });
+
+  it('preserves persisted thread analysis when rebuilding the embed', async () => {
     const member = buildMember('guild-1', 'user-1');
     const detectionResult: DetectionResult = {
       label: 'SUSPICIOUS',
@@ -963,10 +1104,10 @@ describe('NotificationManager (unit)', () => {
 
     const editArgs = message.edit.mock.calls[0][0] as { embeds: EmbedBuilder[] };
     const fields = editArgs.embeds[0].data.fields ?? [];
-    const analysisField = fields.find((field) => field.name === 'AI Thread Analysis');
+    const analysisField = fields.find((field) => field.name === 'Thread Analysis');
 
-    expect(analysisField?.value).toContain('Result: **likely_legitimate** (72% confidence)');
-    expect(analysisField?.value).toContain('Analyzed responses: 2');
+    expect(analysisField?.value).toContain('Result: **likely_legitimate** (Medium confidence)');
+    expect(analysisField?.value).toContain('Responses reviewed: 2');
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'
     );

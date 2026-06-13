@@ -290,13 +290,12 @@ const baseApplicationCommandBuilders = [
             .addStringOption((option) =>
               option
                 .setName('mode')
-                .setDescription('off, record_only, notify_only, open_case, or restrict')
+                .setDescription('off, record_only, notify_only, or restrict')
                 .setRequired(true)
                 .addChoices(
                   { name: 'Off', value: 'off' },
                   { name: 'Record only', value: 'record_only' },
                   { name: 'Notify only', value: 'notify_only' },
-                  { name: 'Open case', value: 'open_case' },
                   { name: 'Restrict pending review', value: 'restrict' }
                 )
             )
@@ -318,13 +317,12 @@ const baseApplicationCommandBuilders = [
             .addStringOption((option) =>
               option
                 .setName('mode')
-                .setDescription('off, record_only, notify_only, open_case, or restrict')
+                .setDescription('off, record_only, notify_only, or restrict')
                 .setRequired(true)
                 .addChoices(
                   { name: 'Off', value: 'off' },
                   { name: 'Record only', value: 'record_only' },
                   { name: 'Notify only', value: 'notify_only' },
-                  { name: 'Open case', value: 'open_case' },
                   { name: 'Restrict pending review', value: 'restrict' }
                 )
             )
@@ -805,24 +803,15 @@ const baseApplicationCommandBuilders = [
     .addSubcommand((subcommand) =>
       subcommand
         .setName('open')
-        .setDescription('Open a moderation case without restricting the user')
+        .setDescription('Open a moderation case; restricts the user by default')
         .addUserOption((option) =>
           option.setName('user').setDescription('The user to review').setRequired(true)
         )
-        .addStringOption((option) =>
+        .addBooleanOption((option) =>
           option
-            .setName('reason')
-            .setDescription('Why moderators should review this user')
+            .setName('restrict')
+            .setDescription('Restrict the user pending review; defaults to true')
             .setRequired(false)
-            .setMaxLength(500)
-        )
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('restrict')
-        .setDescription('Open a moderation case and restrict the user pending review')
-        .addUserOption((option) =>
-          option.setName('user').setDescription('The user to restrict and review').setRequired(true)
         )
         .addStringOption((option) =>
           option
