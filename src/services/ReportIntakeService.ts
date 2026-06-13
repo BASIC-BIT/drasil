@@ -8,11 +8,8 @@ import { IServerMemberRepository } from '../repositories/ServerMemberRepository'
 import { IServerRepository } from '../repositories/ServerRepository';
 import { ReportIntake, ReportIntakeEvidenceKind, ReportIntakeStatus } from '../repositories/types';
 import { IUserRepository } from '../repositories/UserRepository';
-import {
-  getReportAiSettings,
-  ReportAttachmentMetadata,
-  selectEligibleReportImageAttachments,
-} from '../utils/reportAiSettings';
+import { getReportAiSettings, ReportAttachmentMetadata } from '../utils/reportAiSettings';
+import { selectEligibleMessageReportImageAttachments } from '../utils/reportAttachments';
 import type { ReportIntakeEvidenceExtraction } from './GPTService';
 import { IReportCandidateService, ReportCandidate } from './ReportCandidateService';
 
@@ -523,22 +520,13 @@ export class ReportIntakeService implements IReportIntakeService {
     serverId: string,
     message: Message
   ): Promise<ReportAttachmentMetadata[]> {
-    const attachments = message.attachments.map((attachment) => ({
-      id: attachment.id,
-      name: attachment.name,
-      url: attachment.url,
-      proxyUrl: attachment.proxyURL,
-      contentType: attachment.contentType ?? undefined,
-      size: attachment.size,
-    }));
-
-    if (attachments.length === 0) {
+    if (message.attachments.size === 0) {
       return [];
     }
 
     const serverConfig = await this.configService.getServerConfig(serverId);
-    return selectEligibleReportImageAttachments(
-      attachments,
+    return selectEligibleMessageReportImageAttachments(
+      message,
       getReportAiSettings(serverConfig.settings)
     );
   }

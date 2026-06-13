@@ -230,6 +230,38 @@ export class InteractionHandler implements IInteractionHandler {
             userId: targetUserId,
           });
           break;
+        case 'restrict':
+          if (
+            !(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))
+          ) {
+            await this.replyPermissionDenied(
+              interaction,
+              'You need moderation permissions to restrict a user.'
+            );
+            return;
+          }
+          await this.showLegacyAdminActionConfirmation(interaction, {
+            action: 'restrict_user',
+            surface: 'case',
+            userId: targetUserId,
+          });
+          break;
+        case 'close':
+          if (
+            !(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))
+          ) {
+            await this.replyPermissionDenied(
+              interaction,
+              'You need moderation permissions to close a case.'
+            );
+            return;
+          }
+          await this.showLegacyAdminActionConfirmation(interaction, {
+            action: 'close_no_action',
+            surface: 'case',
+            userId: targetUserId,
+          });
+          break;
         case 'ban':
           if (
             !(await this.hasAnyPermission(interaction, guildId, [PermissionFlagsBits.BanMembers]))

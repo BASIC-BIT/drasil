@@ -24,6 +24,7 @@ export type HandlerOverrides = Partial<{
   handleUserReport: jest.Mock;
   handleMessageReport: jest.Mock;
   openAdminCase: jest.Mock;
+  refreshCaseNotification: jest.Mock;
   repairActiveCase: jest.Mock;
   restrictActiveCase: jest.Mock;
   intakeRoleMembers: jest.Mock;
@@ -84,6 +85,16 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
         opened: true,
         restrictionAttempted: false,
         restricted: false,
+      }),
+    refreshCaseNotification:
+      overrides.refreshCaseNotification ??
+      jest.fn().mockResolvedValue({
+        refreshed: true,
+        message: 'Refreshed pending case notification for test-user#0001.',
+        verificationEventId: 'ver-1',
+        status: 'pending',
+        notificationChannelId: 'channel-1',
+        notificationMessageId: 'message-1',
       }),
     repairActiveCase:
       overrides.repairActiveCase ??
