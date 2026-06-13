@@ -13,6 +13,7 @@ import {
   GuildBasedChannel,
   OverwriteResolvable,
   ButtonInteraction,
+  type MessageCreateOptions,
   MessageFlags,
   TextChannel,
 } from 'discord.js';
@@ -29,6 +30,12 @@ import {
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
 import type { VerificationThreadAnalysisResult } from './GPTService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
+import { getReportAiSettings, type ReportAttachmentMetadata } from '../utils/reportAiSettings';
+import {
+  buildSpoilerImageAttachmentFileResult,
+  messageAttachmentsToReportMetadata,
+  selectEligibleMessageReportImageAttachments,
+} from '../utils/reportAttachments';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 
 const VERIFICATION_CHANNEL_NAME = 'verification';
@@ -37,6 +44,11 @@ const MIRRORED_THREAD_MESSAGE_CONTENT_MAX_LENGTH = 1200;
 const MIRRORED_THREAD_MESSAGE_ATTACHMENT_LIMIT = 5;
 const MIRRORED_THREAD_MESSAGE_TRUNCATION_NOTICE =
   '\n\n[Support-check reply mirror truncated to fit Discord message limits.]';
+
+interface MirroredThreadImageFileResult {
+  readonly files: NonNullable<MessageCreateOptions['files']>;
+  readonly copiedAttachmentIds: Set<string>;
+}
 
 /**
  * Interface for NotificationManager service
@@ -489,8 +501,13 @@ export class NotificationManager implements INotificationManager {
         return false;
       }
 
+      const imageFiles = await this.buildMirroredThreadImageFiles(verificationEvent, message);
       await (channel as { send: ThreadChannel['send'] }).send({
-        content: this.formatVerificationThreadMessageMirror(message),
+        content: this.formatVerificationThreadMessageMirror(
+          message,
+          imageFiles.copiedAttachmentIds
+        ),
+        ...(imageFiles.files.length ? { files: imageFiles.files } : {}),
         allowedMentions: this.presentationBuilder.createAdminAllowedMentions(),
       });
       return true;
@@ -1000,7 +1017,10 @@ export class NotificationManager implements INotificationManager {
     });
   }
 
-  private formatVerificationThreadMessageMirror(message: Message): string {
+  private formatVerificationThreadMessageMirror(
+    message: Message,
+    copiedImageIds: Set<string>
+  ): string {
     const authorTag = message.author.tag;
     const lines = [
       `Support-check reply from <@${message.author.id}> (${authorTag}).`,
@@ -1009,7 +1029,7 @@ export class NotificationManager implements INotificationManager {
       this.formatMirroredMessageContent(message.content),
     ];
 
-    const attachments = [...message.attachments.values()].slice(
+    const attachments = messageAttachmentsToReportMetadata(message).slice(
       0,
       MIRRORED_THREAD_MESSAGE_ATTACHMENT_LIMIT
     );
@@ -1017,7 +1037,9 @@ export class NotificationManager implements INotificationManager {
       lines.push(
         '',
         'Attachments:',
-        ...attachments.map((attachment) => `- ${attachment.name}: ${attachment.url}`)
+        ...attachments.map((attachment) =>
+          this.formatMirroredAttachmentLine(attachment, copiedImageIds)
+        )
       );
       if (message.attachments.size > attachments.length) {
         lines.push(
@@ -1027,6 +1049,42 @@ export class NotificationManager implements INotificationManager {
     }
 
     return this.enforceMirroredThreadMessageLimit(lines.join('\n'));
+  }
+
+  private async buildMirroredThreadImageFiles(
+    verificationEvent: VerificationEvent,
+    message: Message
+  ): Promise<MirroredThreadImageFileResult> {
+    if (message.attachments.size === 0) {
+      return { files: [], copiedAttachmentIds: new Set() };
+    }
+
+    try {
+      const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
+      const attachments = selectEligibleMessageReportImageAttachments(
+        message,
+        getReportAiSettings(serverConfig.settings)
+      );
+      return await buildSpoilerImageAttachmentFileResult(attachments, { logger: console });
+    } catch (error) {
+      console.warn(
+        `Failed to prepare spoilered support-check image attachments for verification event ${verificationEvent.id}:`,
+        error
+      );
+      return { files: [], copiedAttachmentIds: new Set() };
+    }
+  }
+
+  private formatMirroredAttachmentLine(
+    attachment: ReportAttachmentMetadata,
+    copiedImageIds: Set<string>
+  ): string {
+    const name = attachment.name ?? attachment.id ?? 'attachment';
+    if (attachment.id && copiedImageIds.has(attachment.id)) {
+      return `- ${name} (copied below as a spoilered image)`;
+    }
+
+    return `- ${name}: ${attachment.url ?? 'no URL available'}`;
   }
 
   private formatMirroredMessageContent(content: string): string {

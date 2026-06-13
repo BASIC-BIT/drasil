@@ -147,6 +147,8 @@ describe('NotificationManager (unit)', () => {
   });
 
   afterEach(() => {
+    jest.restoreAllMocks();
+
     if (originalDrasilWebPublicUrl === undefined) {
       delete process.env.DRASIL_WEB_PUBLIC_URL;
     } else {
@@ -1049,6 +1051,11 @@ describe('NotificationManager (unit)', () => {
 
   it('mirrors verification-thread user replies into the private evidence thread', async () => {
     const evidenceThread = { send: jest.fn().mockResolvedValue({}) };
+    const imageBytes = Uint8Array.from([1, 2, 3]);
+    const fetchImage = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      arrayBuffer: jest.fn().mockResolvedValue(imageBytes.buffer),
+    } as unknown as Response);
     const client = {
       channels: {
         fetch: jest.fn().mockResolvedValue(evidenceThread),
@@ -1064,7 +1071,14 @@ describe('NotificationManager (unit)', () => {
       attachments: new Collection<string, any>([
         [
           'attachment-1',
-          { id: 'attachment-1', name: 'proof.png', url: 'https://cdn.example/proof.png' },
+          {
+            id: 'attachment-1',
+            name: 'proof.png',
+            url: 'https://cdn.example/proof.png',
+            proxyURL: 'https://media.discordapp.net/proof.png',
+            contentType: 'image/png',
+            size: imageBytes.byteLength,
+          },
         ],
       ]),
     } as Message;
@@ -1076,15 +1090,18 @@ describe('NotificationManager (unit)', () => {
 
     expect(mirrored).toBe(true);
     expect(client.channels.fetch).toHaveBeenCalledWith('evidence-thread-1');
+    expect(fetchImage).toHaveBeenCalledWith('https://media.discordapp.net/proof.png');
     expect(evidenceThread.send).toHaveBeenCalledWith({
       content:
         'Support-check reply from <@user-1> (runner#0001).\n' +
         'Source: https://discord.com/channels/guild-1/thread-1/msg-1\n\n' +
         "```\nI joined for weekly races. ''' not a real fence''' \n```\n\n" +
         'Attachments:\n' +
-        '- proof.png: https://cdn.example/proof.png',
+        '- proof.png (copied below as a spoilered image)',
+      files: [{ attachment: Buffer.from(imageBytes), name: 'SPOILER_proof.png' }],
       allowedMentions: { parse: [], roles: [], users: [], repliedUser: false },
     });
+    fetchImage.mockRestore();
   });
 
   it('displays fallback GPT diagnostics as unavailable', async () => {
