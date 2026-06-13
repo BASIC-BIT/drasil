@@ -30,12 +30,27 @@ export const caseSurfaceLinkSchema = z.object({
   kind: caseSurfaceKindSchema,
   label: z.string(),
   url: z.string().url(),
+  desktopUrl: z
+    .string()
+    .regex(/^discord:\/\//)
+    .optional(),
+});
+
+export const caseUserIdentitySchema = z.object({
+  id: z.string(),
+  username: z.string().nullable(),
+  globalName: z.string().nullable(),
+  nickname: z.string().nullable(),
+  displayName: z.string().nullable(),
+  avatarUrl: z.string().url().nullable(),
+  displayLabel: z.string(),
 });
 
 export const caseSummarySchema = z.object({
   id: z.string(),
   guildId: z.string(),
   userId: z.string(),
+  userIdentity: caseUserIdentitySchema,
   createdAt: z.string(),
   updatedAt: z.string(),
   stale: z.boolean(),
@@ -97,6 +112,7 @@ export type CasePresenceState = z.infer<typeof casePresenceStateSchema>;
 export type CaseAction = z.infer<typeof caseActionSchema>;
 export type CaseSurfaceKind = z.infer<typeof caseSurfaceKindSchema>;
 export type CaseSurfaceLink = z.infer<typeof caseSurfaceLinkSchema>;
+export type CaseUserIdentity = z.infer<typeof caseUserIdentitySchema>;
 export type CaseSummary = z.infer<typeof caseSummarySchema>;
 export type CaseDetectionHistoryItem = z.infer<typeof caseDetectionHistoryItemSchema>;
 export type CaseEvidenceItem = z.infer<typeof caseEvidenceItemSchema>;

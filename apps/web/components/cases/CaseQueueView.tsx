@@ -1,6 +1,8 @@
 import type { CaseAction, CaseSummary } from '@drasil/contracts';
 import { AccountControl } from '@/components/AccountControl';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { CaseIdentity } from './CaseIdentity';
+import { DiscordExternalLink } from './DiscordExternalLink';
 import {
   formatCaseAction,
   formatConfidence,
@@ -30,15 +32,15 @@ function SurfaceLinks({ item }: { readonly item: CaseSummary }) {
   return (
     <div className="surface-list" aria-label="Discord surfaces">
       {item.surfaces.map((surface) => (
-        <a
+        <DiscordExternalLink
           className={surfaceKindClass(surface.kind)}
+          desktopHref={surface.desktopUrl}
           href={surface.url}
           key={`${item.id}-${surface.kind}`}
-          rel="noreferrer"
-          target="_blank"
+          label={`${formatSurfaceKind(surface.kind)} for ${item.userIdentity.displayLabel}`}
         >
           {formatSurfaceKind(surface.kind)}
-        </a>
+        </DiscordExternalLink>
       ))}
     </div>
   );
@@ -88,13 +90,16 @@ function ActionPills({
   return (
     <div className="action-stack">
       {normalActions.length > 0 ? (
-        <div className="pill-list" aria-label="Available moderator paths">
-          {normalActions.map((action) => (
-            <span className="pill action-pill" key={`${itemId}-${action}`}>
-              {formatCaseAction(action)}
-            </span>
-          ))}
-        </div>
+        <>
+          <p className="muted action-caption">Available in Discord</p>
+          <div className="pill-list" aria-label="Moderator paths available in Discord">
+            {normalActions.map((action) => (
+              <span className="pill action-pill" key={`${itemId}-${action}`}>
+                {formatCaseAction(action)}
+              </span>
+            ))}
+          </div>
+        </>
       ) : null}
       {debugActions.length > 0 ? (
         <details className="debug-actions">
@@ -116,13 +121,13 @@ function CaseCard({ guildId, item }: { readonly guildId: string; readonly item: 
   return (
     <article className="card case-card stack">
       <div className="case-card-header">
-        <div className="case-title-block">
-          <h2>
-            <a href={`/admin/guild/${guildId}/cases/${item.id}`}>User {item.userId}</a>
-          </h2>
-        </div>
+        <CaseIdentity
+          headingLevel={2}
+          href={`/admin/guild/${guildId}/cases/${item.id}`}
+          identity={item.userIdentity}
+        />
         <span className={freshnessStatusClass(item.stale)}>
-          {item.stale ? `${item.staleHours}h stale` : 'Fresh'}
+          {item.stale ? `${item.staleHours}h stale` : `Fresh, ${item.staleHours}h old`}
         </span>
       </div>
 
@@ -138,8 +143,16 @@ function CaseCard({ guildId, item }: { readonly guildId: string; readonly item: 
           </span>
         </div>
         <div>
-          <span className="muted">Last movement</span>
+          <span className="muted">Latest detection at</span>
+          <strong>{formatUtc(item.latestDetectionAt)}</strong>
+        </div>
+        <div>
+          <span className="muted">Last queue update</span>
           <strong>{formatUtc(item.updatedAt)}</strong>
+        </div>
+        <div>
+          <span className="muted">Last moderator action</span>
+          <strong>{item.lastActionType ? formatDetectionType(item.lastActionType) : 'None recorded'}</strong>
         </div>
         <div>
           <span className="muted">Member state</span>

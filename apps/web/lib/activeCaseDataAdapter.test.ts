@@ -8,6 +8,7 @@ const baseRow = {
   detection_event_id: 'det-1',
   thread_id: 'thread-1',
   private_evidence_thread_id: 'evidence-thread-1',
+  notification_channel_id: 'notification-channel-1',
   notification_message_id: 'admin-message-1',
   status: 'pending',
   created_at: new Date('2026-06-01T00:00:00.000Z'),
@@ -28,6 +29,9 @@ const baseRow = {
   last_action_at: null,
   latest_outcome_type: null,
   latest_outcome_source: null,
+  user_username: 'stored-username',
+  user_metadata: {},
+  member_user_id: 'user-1',
 };
 
 describe('activeCaseDataAdapter', () => {
@@ -39,6 +43,11 @@ describe('activeCaseDataAdapter', () => {
         id: 'ver-1',
         guildId: 'guild-1',
         userId: 'user-1',
+        userIdentity: expect.objectContaining({
+          displayLabel: 'stored-username',
+          username: 'stored-username',
+          id: 'user-1',
+        }),
         stale: true,
         staleHours: 25,
         presenceState: 'in_server',
@@ -57,14 +66,71 @@ describe('activeCaseDataAdapter', () => {
       expect.arrayContaining([
         expect.objectContaining({
           kind: 'admin_notification',
-          url: 'https://discord.com/channels/guild-1/admin-channel-1/admin-message-1',
+          url: 'https://discord.com/channels/guild-1/notification-channel-1/admin-message-1',
+          desktopUrl:
+            'discord://discord.com/channels/guild-1/notification-channel-1/admin-message-1',
         }),
         expect.objectContaining({
           kind: 'source_message',
           url: 'https://discord.com/channels/guild-1/source-channel-1/source-message-1',
+          desktopUrl: 'discord://discord.com/channels/guild-1/source-channel-1/source-message-1',
         }),
       ])
     );
+  });
+
+  it('falls back to the admin channel when notification channel is missing', () => {
+    const summary = parseCaseSummaryRow(
+      { ...baseRow, notification_channel_id: null },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.surfaces).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'admin_notification',
+          url: 'https://discord.com/channels/guild-1/admin-channel-1/admin-message-1',
+        }),
+      ])
+    );
+  });
+
+  it('prefers snapshot identity over stored username', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        metadata: {
+          user_snapshot: {
+            username: 'snapshot-username',
+            global_name: 'Snapshot Global',
+            nickname: 'Snapshot Nick',
+            display_name: 'Server Effective Name',
+            avatar_url: 'https://cdn.discordapp.com/embed/avatars/3.png',
+          },
+        },
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.userIdentity).toEqual({
+      id: 'user-1',
+      username: 'snapshot-username',
+      globalName: 'Snapshot Global',
+      nickname: 'Snapshot Nick',
+      displayName: 'Server Effective Name',
+      avatarUrl: 'https://cdn.discordapp.com/embed/avatars/3.png',
+      displayLabel: 'Server Effective Name',
+    });
+  });
+
+  it('marks cases without current membership evidence as unknown', () => {
+    const summary = parseCaseSummaryRow(
+      { ...baseRow, member_user_id: null },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.presenceState).toBe('unknown');
+    expect(summary.allowedActions).toEqual(['view_history', 'ban_by_id', 'close_no_action']);
   });
 
   it('marks departed users with ban-by-id and close actions', () => {

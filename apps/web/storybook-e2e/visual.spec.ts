@@ -50,13 +50,13 @@ test('report queue empty story visual baseline @storybook-visual', async ({ page
 test('case detail stale story visual baseline @storybook-visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await gotoStory(page, 'active-triage-case-detail--stale-restricted-case');
-  await expect(page.getByRole('heading', { name: 'User user-100' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Prize Patrol' })).toBeVisible();
   await expectVisualSchemes(page, 'storybook-case-detail-stale');
 });
 
 test('case detail left user story visual baseline @storybook-visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await gotoStory(page, 'active-triage-case-detail--left-user-case');
-  await expect(page.getByRole('heading', { name: 'User user-200' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Gone User' })).toBeVisible();
   await expectVisualSchemes(page, 'storybook-case-detail-left');
 });

@@ -628,6 +628,10 @@ select {
   gap: 16px;
 }
 
+.case-card-header > .status {
+  flex-shrink: 0;
+}
+
 .case-title-block {
   display: grid;
   gap: 10px;
@@ -636,6 +640,65 @@ select {
 .case-title-block h1,
 .case-title-block h2 {
   margin: 0;
+}
+
+.case-identity {
+  display: flex;
+  min-width: 0;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.case-avatar {
+  display: inline-grid;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--panel-muted);
+  color: var(--text);
+  font-weight: 900;
+  object-fit: cover;
+}
+
+.case-avatar-placeholder {
+  background: linear-gradient(135deg, var(--accent-soft), var(--panel-strong));
+}
+
+.case-identity-copy {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.case-identity-copy h1,
+.case-identity-copy h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.identity-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.identity-fact {
+  display: inline-flex;
+  max-width: 100%;
+  gap: 6px;
+  align-items: baseline;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-chip);
+  background: var(--panel-muted);
+  padding: 4px 8px;
+  font-size: 0.82rem;
+}
+
+.identity-fact strong {
+  overflow-wrap: anywhere;
 }
 
 .case-meta {
@@ -707,6 +770,11 @@ select {
   gap: 10px;
 }
 
+.action-caption {
+  margin: 0;
+  font-size: 0.86rem;
+}
+
 .report-action-forms {
   display: flex;
   flex-wrap: wrap;
@@ -721,6 +789,7 @@ select {
   color: var(--text);
   padding: 8px 12px;
   font-size: 0.9rem;
+  overflow-wrap: anywhere;
 }
 
 .surface-link {
@@ -942,5 +1011,12 @@ select {
 
   .case-card-header {
     display: grid;
+  }
+
+  .surface-link,
+  .pill {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
   }
 }

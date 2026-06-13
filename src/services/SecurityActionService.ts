@@ -479,6 +479,80 @@ export class SecurityActionService implements ISecurityActionService {
     return { ...(metadata as Record<string, unknown>) };
   }
 
+  private buildUserSnapshot(member: GuildMember): Record<string, string> {
+    const user = member.user as User & { globalName?: string | null };
+    const snapshot: Record<string, string> = {
+      id: user.id,
+      tag: user.tag,
+      username: user.username,
+      captured_at: new Date().toISOString(),
+    };
+
+    if (member.displayName) {
+      snapshot.display_name = member.displayName;
+    }
+    if (user.globalName) {
+      snapshot.global_name = user.globalName;
+    }
+    if (member.nickname) {
+      snapshot.nickname = member.nickname;
+    }
+    if (member.joinedAt) {
+      snapshot.joined_at = member.joinedAt.toISOString();
+    }
+
+    const createdTimestamp = user.createdTimestamp;
+    if (Number.isFinite(createdTimestamp)) {
+      snapshot.account_created_at = new Date(createdTimestamp).toISOString();
+    }
+
+    const memberDisplayAvatarURL = (member as { displayAvatarURL?: unknown }).displayAvatarURL;
+    const userDisplayAvatarURL = (user as { displayAvatarURL?: unknown }).displayAvatarURL;
+    const avatarUrl =
+      typeof memberDisplayAvatarURL === 'function'
+        ? (memberDisplayAvatarURL as (options?: { size?: number }) => string).call(member, {
+            size: 128,
+          })
+        : typeof userDisplayAvatarURL === 'function'
+          ? (userDisplayAvatarURL as () => string).call(user)
+          : null;
+    if (avatarUrl) {
+      snapshot.avatar_url = avatarUrl;
+    }
+
+    return snapshot;
+  }
+
+  private withUserSnapshot(
+    metadata: VerificationEvent['metadata'],
+    member: GuildMember
+  ): VerificationEvent['metadata'] {
+    return {
+      ...this.metadataToRecord(metadata),
+      user_snapshot: this.buildUserSnapshot(member),
+    } as VerificationEvent['metadata'];
+  }
+
+  private async refreshVerificationUserSnapshot(
+    verificationEvent: VerificationEvent,
+    member: GuildMember
+  ): Promise<VerificationEvent> {
+    try {
+      const updated = await this.verificationEventRepository.update(
+        verificationEvent.id,
+        {
+          metadata: this.withUserSnapshot(verificationEvent.metadata, member),
+        },
+        { touchUpdatedAt: false }
+      );
+
+      return updated ?? verificationEvent;
+    } catch (error) {
+      console.warn(`Failed to refresh user snapshot for case ${verificationEvent.id}:`, error);
+      return verificationEvent;
+    }
+  }
+
   private shouldUseReportReviewThread(): boolean {
     return false;
   }
@@ -1252,7 +1326,10 @@ export class SecurityActionService implements ISecurityActionService {
       await this.verificationEventRepository.findActiveByUserAndServer(member.id, member.guild.id);
 
     if (activeVerificationEvent) {
-      let notificationVerificationEvent = activeVerificationEvent;
+      let notificationVerificationEvent = await this.refreshVerificationUserSnapshot(
+        activeVerificationEvent,
+        member
+      );
       console.log(
         `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Updating notification.`
       );
@@ -1329,6 +1406,7 @@ export class SecurityActionService implements ISecurityActionService {
       member.id,
       VerificationStatus.PENDING
     );
+    newVerificationEvent = await this.refreshVerificationUserSnapshot(newVerificationEvent, member);
 
     const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
       detectionEventId,

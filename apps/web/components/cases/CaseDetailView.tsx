@@ -8,6 +8,9 @@ import type {
 } from '@drasil/contracts';
 import { AccountControl } from '@/components/AccountControl';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { discordDesktopUrlFromWebUrl } from '@/lib/discordUrls';
+import { CaseIdentity } from './CaseIdentity';
+import { DiscordExternalLink } from './DiscordExternalLink';
 import type {
   CaseDiscordMessage,
   CaseDiscordSnapshot,
@@ -39,11 +42,9 @@ function SummaryPanel({ detail }: { readonly detail: CaseDetail }) {
   return (
     <section className="panel stack">
       <div className="case-card-header">
-        <div className="case-title-block">
-          <h1 className="page-title">User {detail.userId}</h1>
-        </div>
+        <CaseIdentity headingLevel={1} identity={detail.userIdentity} />
         <span className={freshnessStatusClass(detail.stale)}>
-          {detail.stale ? `${detail.staleHours}h stale` : 'Fresh'}
+          {detail.stale ? `${detail.staleHours}h stale` : `Fresh, ${detail.staleHours}h old`}
         </span>
       </div>
 
@@ -59,8 +60,18 @@ function SummaryPanel({ detail }: { readonly detail: CaseDetail }) {
           </span>
         </div>
         <div>
-          <span className="muted">Last movement</span>
+          <span className="muted">Latest detection at</span>
+          <strong>{formatUtc(detail.latestDetectionAt)}</strong>
+        </div>
+        <div>
+          <span className="muted">Last queue update</span>
           <strong>{formatUtc(detail.updatedAt)}</strong>
+        </div>
+        <div>
+          <span className="muted">Last moderator action</span>
+          <strong>
+            {detail.lastActionType ? formatDetectionType(detail.lastActionType) : 'None recorded'}
+          </strong>
         </div>
         <div>
           <span className="muted">Member state</span>
@@ -80,6 +91,12 @@ function SummaryPanel({ detail }: { readonly detail: CaseDetail }) {
           <span>Confirm whether to sync the ban or close the case.</span>
         </div>
       ) : null}
+      {detail.presenceState === 'unknown' ? (
+        <div className="member-warning neutral-warning">
+          <strong>Member State Unknown</strong>
+          <span>Check Discord before taking moderator action.</span>
+        </div>
+      ) : null}
 
       {detail.notes ? <p>{detail.notes}</p> : <p className="muted">No moderator notes recorded.</p>}
     </section>
@@ -93,13 +110,16 @@ function ActionPills({ actions }: { readonly actions: readonly CaseAction[] }) {
   return (
     <div className="action-stack">
       {normalActions.length > 0 ? (
-        <div className="pill-list" aria-label="Available moderator paths">
-          {normalActions.map((action) => (
-            <span className="pill action-pill" key={action}>
-              {formatCaseAction(action)}
-            </span>
-          ))}
-        </div>
+        <>
+          <p className="muted action-caption">Available in Discord</p>
+          <div className="pill-list" aria-label="Moderator paths available in Discord">
+            {normalActions.map((action) => (
+              <span className="pill action-pill" key={action}>
+                {formatCaseAction(action)}
+              </span>
+            ))}
+          </div>
+        </>
       ) : null}
       {debugActions.length > 0 ? (
         <details className="debug-actions">
@@ -129,15 +149,15 @@ function DiscordSurfaces({ detail }: { readonly detail: CaseDetail }) {
       ) : (
         <div className="surface-list">
           {detail.surfaces.map((surface) => (
-            <a
+            <DiscordExternalLink
               className={surfaceKindClass(surface.kind)}
+              desktopHref={surface.desktopUrl}
               href={surface.url}
               key={surface.kind}
-              rel="noreferrer"
-              target="_blank"
+              label={`${formatSurfaceKind(surface.kind)} for ${detail.userIdentity.displayLabel}`}
             >
               {formatSurfaceKind(surface.kind)}
-            </a>
+            </DiscordExternalLink>
           ))}
         </div>
       )}
@@ -155,11 +175,19 @@ function CompactExternalLink({
   readonly label: string;
   readonly children?: string;
 }) {
+  const desktopHref = discordDesktopUrlFromWebUrl(href) ?? undefined;
+
   return (
-    <a className="link-control" href={href} rel="noreferrer" target="_blank" title={label}>
+    <DiscordExternalLink
+      className="link-control"
+      desktopHref={desktopHref}
+      href={href}
+      label={label}
+      title={label}
+    >
       <span aria-hidden="true">{children}</span>
       <span className="visually-hidden">{label}</span>
-    </a>
+    </DiscordExternalLink>
   );
 }
 
@@ -385,9 +413,9 @@ function ModerationOutcomes({ outcomes }: { readonly outcomes: readonly CaseMode
   return (
     <section className="panel stack">
       <div className="section-heading compact-heading">
-        <h2>Moderation Outcomes</h2>
+        <h2>Case Moderation Outcomes</h2>
         <p className="muted">
-          Persisted labels from Drasil, native Discord events, and sync flows.
+          Persisted labels from Drasil, native Discord events, and sync flows for this case.
         </p>
       </div>
       {outcomes.length === 0 ? (

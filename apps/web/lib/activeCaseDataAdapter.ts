@@ -11,6 +11,7 @@ import {
   type CasePresenceState,
   type CaseSummary,
   type CaseSurfaceLink,
+  type CaseUserIdentity,
 } from '@drasil/contracts';
 import {
   fixtureActiveCaseDetail,
@@ -18,7 +19,7 @@ import {
   fixtureResolvedCaseCount,
   isWebE2eFixtureMode,
 } from './e2eFixtures';
-import { discordMessageUrl } from './discordUrls';
+import { discordDesktopUrl, discordMessageUrl } from './discordUrls';
 import { getPostgresPool } from './setupDataAdapter';
 
 export interface ActiveCaseDataAdapter {
@@ -34,6 +35,7 @@ interface CaseSummaryRow {
   detection_event_id: string | null;
   thread_id: string | null;
   private_evidence_thread_id: string | null;
+  notification_channel_id: string | null;
   notification_message_id: string | null;
   status: string;
   created_at: unknown;
@@ -51,6 +53,9 @@ interface CaseSummaryRow {
   last_action_at: unknown;
   latest_outcome_type: string | null;
   latest_outcome_source: string | null;
+  user_username: string | null;
+  user_metadata: unknown;
+  member_user_id: string | null;
 }
 
 interface DetectionHistoryRow {
@@ -118,6 +123,95 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null;
 }
 
+function firstString(...values: Array<unknown>): string | null {
+  for (const value of values) {
+    const stringValue = readString(value);
+    if (stringValue) {
+      return stringValue;
+    }
+  }
+
+  return null;
+}
+
+function firstUrlString(...values: Array<unknown>): string | null {
+  const value = firstString(...values);
+  if (!value) {
+    return null;
+  }
+
+  try {
+    new URL(value);
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+function readNestedRecord(record: Record<string, unknown>, key: string): Record<string, unknown> {
+  return metadataToRecord(record[key]);
+}
+
+function createDiscordSurface(
+  kind: CaseSurfaceLink['kind'],
+  label: string,
+  guildId: string,
+  channelId: string,
+  messageId?: string | null
+): CaseSurfaceLink {
+  return {
+    kind,
+    label,
+    url: discordMessageUrl(guildId, channelId, messageId),
+    desktopUrl: discordDesktopUrl(guildId, channelId, messageId),
+  };
+}
+
+function resolveUserIdentity(row: CaseSummaryRow): CaseUserIdentity {
+  const metadata = metadataToRecord(row.metadata);
+  const userMetadata = metadataToRecord(row.user_metadata);
+  const snapshot = readNestedRecord(metadata, 'user_snapshot');
+  const username = firstString(snapshot.username, userMetadata.username, row.user_username);
+  const globalName = firstString(
+    snapshot.global_name,
+    snapshot.globalName,
+    userMetadata.global_name,
+    userMetadata.globalName
+  );
+  const nickname = firstString(snapshot.nickname, userMetadata.nickname);
+  const displayName = firstString(
+    snapshot.display_name,
+    snapshot.displayName,
+    snapshot.server_display_name,
+    snapshot.serverDisplayName,
+    nickname
+  );
+  const avatarUrl = firstUrlString(
+    snapshot.avatar_url,
+    snapshot.avatarUrl,
+    userMetadata.avatar_url,
+    userMetadata.avatarUrl
+  );
+  const displayLabel = firstString(
+    displayName,
+    nickname,
+    globalName,
+    username,
+    snapshot.tag,
+    row.user_id
+  );
+
+  return {
+    id: row.user_id,
+    username,
+    globalName,
+    nickname,
+    displayName,
+    avatarUrl,
+    displayLabel: displayLabel ?? row.user_id,
+  };
+}
+
 function pushSurface(surfaces: CaseSurfaceLink[], surface: CaseSurfaceLink | null): void {
   if (surface) {
     surfaces.push(surface);
@@ -127,35 +221,40 @@ function pushSurface(surfaces: CaseSurfaceLink[], surface: CaseSurfaceLink | nul
 function buildSurfaces(row: CaseSummaryRow): CaseSurfaceLink[] {
   const metadata = metadataToRecord(row.metadata);
   const surfaces: CaseSurfaceLink[] = [];
+  const notificationChannelId = row.notification_channel_id ?? row.admin_channel_id;
 
   pushSurface(
     surfaces,
-    row.admin_channel_id && row.notification_message_id
-      ? {
-          kind: 'admin_notification',
-          label: 'Admin notification',
-          url: discordMessageUrl(row.server_id, row.admin_channel_id, row.notification_message_id),
-        }
+    notificationChannelId && row.notification_message_id
+      ? createDiscordSurface(
+          'admin_notification',
+          'Admin notification',
+          row.server_id,
+          notificationChannelId,
+          row.notification_message_id
+        )
       : null
   );
   pushSurface(
     surfaces,
     row.private_evidence_thread_id
-      ? {
-          kind: 'admin_evidence_thread',
-          label: 'Admin evidence',
-          url: discordMessageUrl(row.server_id, row.private_evidence_thread_id),
-        }
+      ? createDiscordSurface(
+          'admin_evidence_thread',
+          'Admin evidence',
+          row.server_id,
+          row.private_evidence_thread_id
+        )
       : null
   );
   pushSurface(
     surfaces,
     row.thread_id
-      ? {
-          kind: 'verification_thread',
-          label: 'Verification thread',
-          url: discordMessageUrl(row.server_id, row.thread_id),
-        }
+      ? createDiscordSurface(
+          'verification_thread',
+          'Verification thread',
+          row.server_id,
+          row.thread_id
+        )
       : null
   );
 
@@ -163,11 +262,12 @@ function buildSurfaces(row: CaseSummaryRow): CaseSurfaceLink[] {
   pushSurface(
     surfaces,
     reportIntakeThreadId
-      ? {
-          kind: 'report_intake_thread',
-          label: 'Report intake',
-          url: discordMessageUrl(row.server_id, reportIntakeThreadId),
-        }
+      ? createDiscordSurface(
+          'report_intake_thread',
+          'Report intake',
+          row.server_id,
+          reportIntakeThreadId
+        )
       : null
   );
 
@@ -176,11 +276,13 @@ function buildSurfaces(row: CaseSummaryRow): CaseSurfaceLink[] {
   pushSurface(
     surfaces,
     sourceChannelId && sourceMessageId
-      ? {
-          kind: 'source_message',
-          label: 'Source message',
-          url: discordMessageUrl(row.server_id, sourceChannelId, sourceMessageId),
-        }
+      ? createDiscordSurface(
+          'source_message',
+          'Source message',
+          row.server_id,
+          sourceChannelId,
+          sourceMessageId
+        )
       : null
   );
 
@@ -198,6 +300,9 @@ function resolvePresenceState(row: CaseSummaryRow): CasePresenceState {
   ) {
     return 'left_or_removed';
   }
+  if (!row.member_user_id) {
+    return 'unknown';
+  }
   return 'in_server';
 }
 
@@ -211,15 +316,14 @@ function resolveAllowedActions(
   if (presenceState === 'left_or_removed') {
     return ['view_history', 'ban_by_id', 'close_no_action'];
   }
+  if (presenceState === 'unknown') {
+    return ['view_history', 'ban_by_id', 'close_no_action'];
+  }
 
-  const actions: CaseAction[] = [
-    'view_history',
-    'verify_user',
-    'ban_user',
-    'close_no_action',
-    'repair_thread',
-  ];
-  if (!row.thread_id) {
+  const actions: CaseAction[] = ['view_history', 'verify_user', 'ban_user', 'close_no_action'];
+  if (row.thread_id) {
+    actions.push('repair_thread');
+  } else {
     actions.push('create_thread');
   }
   return actions;
@@ -234,6 +338,7 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
     id: row.id,
     guildId: row.server_id,
     userId: row.user_id,
+    userIdentity: resolveUserIdentity(row),
     createdAt: toIsoString(row.created_at),
     updatedAt: updatedAt.toISOString(),
     stale: staleHours >= DEFAULT_STALE_HOURS,
@@ -309,6 +414,7 @@ const SUMMARY_QUERY = `
     ve.detection_event_id,
     ve.thread_id,
     ve.private_evidence_thread_id,
+    ve.notification_channel_id,
     ve.notification_message_id,
     ve.status,
     ve.created_at,
@@ -325,10 +431,22 @@ const SUMMARY_QUERY = `
     aa.action_type as last_action_type,
     aa.action_at as last_action_at,
     mo.outcome_type as latest_outcome_type,
-    mo.source as latest_outcome_source
+    mo.source as latest_outcome_source,
+    u.username as user_username,
+    u.metadata as user_metadata,
+    sm.user_id as member_user_id
   from verification_events ve
   join servers s on s.guild_id = ve.server_id
-  left join detection_events de on de.id = ve.detection_event_id
+  left join users u on u.discord_id = ve.user_id
+  left join server_members sm on sm.server_id = ve.server_id and sm.user_id = ve.user_id
+  left join lateral (
+    select detection_type, confidence, detected_at, metadata, channel_id, message_id
+    from detection_events linked_de
+    where linked_de.id = ve.detection_event_id
+       or linked_de.latest_verification_event_id = ve.id
+    order by detected_at desc nulls last
+    limit 1
+  ) de on true
   left join lateral (
     select action_type, action_at
     from admin_actions
@@ -410,11 +528,11 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
         ),
         getPostgresPool().query<ModerationOutcomeRow>(
           `select id, outcome_type, source, actor_id, reason, occurred_at
-           from moderation_outcomes
-           where server_id = $1 and user_id = $2
-           order by occurred_at desc nulls last
-           limit 25`,
-          [guildId, row.user_id]
+            from moderation_outcomes
+            where server_id = $1 and verification_event_id = $2
+            order by occurred_at desc nulls last
+            limit 25`,
+          [guildId, row.id]
         ),
         evidenceQuery,
         getPostgresPool().query<MessageContextRow>(

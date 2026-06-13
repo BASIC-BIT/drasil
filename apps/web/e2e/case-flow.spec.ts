@@ -17,12 +17,12 @@ test('active case queue links through to case detail', async ({ page }) => {
   await expect(page.getByText('48h stale')).toBeVisible();
   await expect(page.getByText('Ban by ID')).toBeVisible();
 
-  await page.getByRole('link', { name: 'User user-100' }).click();
+  await page.getByRole('link', { name: 'Prize Patrol', exact: true }).click();
 
-  await expect(page.getByRole('heading', { name: 'User user-100' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Prize Patrol' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Detection History' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Moderation Outcomes' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Open Admin Notice' })).toHaveAttribute(
+  await expect(page.getByRole('heading', { name: 'Case Moderation Outcomes' })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Open Admin Notice/ })).toHaveAttribute(
     'href',
     'https://discord.com/channels/guild-1/admin-channel-1/admin-message-1'
   );
