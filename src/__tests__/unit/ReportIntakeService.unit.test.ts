@@ -7,6 +7,7 @@ import {
   InMemoryUserRepository,
 } from '../fakes/inMemoryRepositories';
 import { ReportIntakeEvidenceKind, ReportIntakeStatus } from '../../repositories/types';
+import type { IModerationQueueService } from '../../services/ModerationQueueService';
 import { IReportCandidateService, ReportCandidate } from '../../services/ReportCandidateService';
 import { ReportIntakeService } from '../../services/ReportIntakeService';
 
@@ -92,16 +93,21 @@ describe('ReportIntakeService', () => {
       searchMembersByName: jest.fn().mockResolvedValue([]),
       ...candidateOverrides,
     };
+    const moderationQueueService = {
+      recordReportThreadAttention: jest.fn().mockResolvedValue(undefined),
+      deleteReportThreadAttention: jest.fn().mockResolvedValue(undefined),
+    } as unknown as IModerationQueueService;
     const service = new ReportIntakeService(
       reportIntakeRepository,
       serverRepository,
       userRepository,
       serverMemberRepository,
       configService,
-      candidateService
+      candidateService,
+      moderationQueueService
     );
 
-    return { service, reportIntakeRepository, candidateService };
+    return { service, reportIntakeRepository, candidateService, moderationQueueService };
   }
 
   it('opens durable intake state for a new report thread', async () => {
@@ -344,7 +350,7 @@ describe('ReportIntakeService', () => {
   });
 
   it('rejects duplicate confirmations after submission', async () => {
-    const { service, reportIntakeRepository } = buildService();
+    const { service, reportIntakeRepository, moderationQueueService } = buildService();
     const intake = await service.openIntakeFromThread({
       serverId: 'guild-1',
       reporter: buildReporter(),
@@ -377,6 +383,7 @@ describe('ReportIntakeService', () => {
       message: 'That report intake is no longer accepting target confirmations.',
     });
     expect(confirmationEvidence).toHaveLength(1);
+    expect(moderationQueueService.deleteReportThreadAttention).toHaveBeenCalledWith(intake.id);
   });
 
   it('does not retry submission after a target is already confirmed', async () => {
@@ -561,7 +568,7 @@ describe('ReportIntakeService', () => {
   });
 
   it('marks an intake as failed when opening cannot complete', async () => {
-    const { service, reportIntakeRepository } = buildService();
+    const { service, reportIntakeRepository, moderationQueueService } = buildService();
     const intake = await service.openIntakeFromThread({
       serverId: 'guild-1',
       reporter: buildReporter(),
@@ -579,6 +586,7 @@ describe('ReportIntakeService', () => {
     expect(stored?.status).toBe(ReportIntakeStatus.EXPIRED);
     expect(stored?.metadata).toMatchObject({ open_failed_reason: 'thread_activation_failed' });
     expect(openForReporter).toBeNull();
+    expect(moderationQueueService.deleteReportThreadAttention).toHaveBeenCalledWith(intake.id);
   });
 
   it('rejects reporter self-confirmation', async () => {
@@ -709,7 +717,7 @@ describe('ReportIntakeService', () => {
   });
 
   it('lets the reporter close the intake without deleting evidence', async () => {
-    const { service, reportIntakeRepository } = buildService({
+    const { service, reportIntakeRepository, moderationQueueService } = buildService({
       resolvePlatformBackedCandidates: jest.fn().mockResolvedValue([]),
       extractCandidateSignals: jest.fn().mockReturnValue({
         mentions: [],
@@ -746,10 +754,12 @@ describe('ReportIntakeService', () => {
       allowedMentions: { parse: [] },
     });
     expect(channel.setArchived).toHaveBeenCalledWith(true, 'Report intake closed');
+    expect(moderationQueueService.recordReportThreadAttention).not.toHaveBeenCalled();
+    expect(moderationQueueService.deleteReportThreadAttention).toHaveBeenCalledWith(intake.id);
   });
 
   it('closes the current intake thread by slash command for reporter or staff', async () => {
-    const { service, reportIntakeRepository } = buildService();
+    const { service, reportIntakeRepository, moderationQueueService } = buildService();
     const intake = await service.openIntakeFromThread({
       serverId: 'guild-1',
       reporter: buildReporter(),
@@ -774,5 +784,6 @@ describe('ReportIntakeService', () => {
       closed_reason: 'staff_request',
       closed_by_staff: true,
     });
+    expect(moderationQueueService.deleteReportThreadAttention).toHaveBeenCalledWith(intake.id);
   });
 });

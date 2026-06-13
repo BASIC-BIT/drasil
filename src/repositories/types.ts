@@ -76,6 +76,7 @@ export interface ServerSettings {
   case_review_reminder_stale_hours?: number;
   case_review_reminder_repeat_hours?: number;
   case_review_digest_last_sent_at?: string | null;
+  moderation_queue_channel_id?: string | null;
   setup_nudge_last_attempt_at?: string | null;
   setup_nudge_last_recipient_id?: string | null;
   setup_nudge_last_result?: 'sent' | 'dm_failed' | 'no_recipient' | null;
@@ -190,6 +191,13 @@ export enum ModerationOutcomeType {
   MEMBER_LEFT = 'member_left',
 }
 
+export enum ModerationQueueItemType {
+  CASE_MIRROR = 'case_mirror',
+  OBSERVED_ALERT_MIRROR = 'observed_alert_mirror',
+  SUPPORT_THREAD_ATTENTION = 'support_thread_attention',
+  REPORT_THREAD_ATTENTION = 'report_thread_attention',
+}
+
 export interface VerificationEvent {
   id: string;
   server_id: string;
@@ -236,6 +244,39 @@ export interface ModerationOutcome {
   occurred_at: Date | null;
   created_at: Date | null;
   metadata: Prisma.JsonValue | null;
+}
+
+export interface ModerationQueueItem {
+  id: string;
+  server_id: string;
+  user_id: string;
+  item_type: ModerationQueueItemType;
+  verification_event_id: string | null;
+  detection_event_id: string | null;
+  report_intake_id: string | null;
+  source_thread_id: string | null;
+  queue_channel_id: string | null;
+  queue_message_id: string | null;
+  last_source_message_id: string | null;
+  last_notified_at: Date | null;
+  created_at: Date | null;
+  updated_at: Date | null;
+  metadata: Prisma.JsonValue | null;
+}
+
+export interface ModerationQueueItemUpsert {
+  serverId: string;
+  userId: string;
+  itemType: ModerationQueueItemType;
+  verificationEventId?: string | null;
+  detectionEventId?: string | null;
+  reportIntakeId?: string | null;
+  sourceThreadId?: string | null;
+  queueChannelId?: string | null;
+  queueMessageId?: string | null;
+  lastSourceMessageId?: string | null;
+  lastNotifiedAt?: Date | null;
+  metadata?: Prisma.JsonValue | null;
 }
 
 export interface VerificationEventWithActions extends VerificationEvent {

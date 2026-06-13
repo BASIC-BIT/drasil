@@ -55,6 +55,7 @@ import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { ReportAiAnalyzer } from './ReportAiAnalyzer';
 import { ReportDetectionBuilder } from './ReportDetectionBuilder';
 import { RoleIntakeProcessor } from './RoleIntakeProcessor';
+import { IModerationQueueService } from './ModerationQueueService';
 
 const DELAYED_THREAD_REPAIR_DELAY_MS = 70_000;
 /**
@@ -288,6 +289,7 @@ export class SecurityActionService implements ISecurityActionService {
   private client: Client;
   private gptService?: IGPTService;
   private productAnalyticsService: IProductAnalyticsService;
+  private moderationQueueService?: IModerationQueueService;
   private reportAiAnalyzer: ReportAiAnalyzer;
   private reportDetectionBuilder: ReportDetectionBuilder;
   private roleIntakeProcessor: RoleIntakeProcessor;
@@ -308,7 +310,10 @@ export class SecurityActionService implements ISecurityActionService {
     @optional() @inject(TYPES.GPTService) gptService?: IGPTService,
     @inject(TYPES.ProductAnalyticsService)
     @optional()
-    productAnalyticsService?: IProductAnalyticsService
+    productAnalyticsService?: IProductAnalyticsService,
+    @inject(TYPES.ModerationQueueService)
+    @optional()
+    moderationQueueService?: IModerationQueueService
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -322,6 +327,7 @@ export class SecurityActionService implements ISecurityActionService {
     this.client = client;
     this.gptService = gptService;
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
+    this.moderationQueueService = moderationQueueService;
     this.reportAiAnalyzer = new ReportAiAnalyzer(this.serverRepository, this.gptService);
     this.reportDetectionBuilder = new ReportDetectionBuilder(
       this.detectionEventsRepository,
@@ -894,6 +900,7 @@ export class SecurityActionService implements ISecurityActionService {
         notificationMessage,
         sourceMessage
       );
+      await this.moderationQueueService?.upsertObservedAlertMirrorById(detectionEventId);
       return;
     }
 
@@ -908,6 +915,7 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     await this.upsertNotification(member, detectionResult, activeVerificationEvent);
+    await this.moderationQueueService?.upsertCaseMirror(activeVerificationEvent);
   }
 
   private async ensureObservedEvidenceThread(
@@ -1393,6 +1401,7 @@ export class SecurityActionService implements ISecurityActionService {
           active_case_existed: true,
         }
       );
+      await this.moderationQueueService?.upsertCaseMirror(notificationVerificationEvent);
       return true;
     }
 
@@ -1461,6 +1470,7 @@ export class SecurityActionService implements ISecurityActionService {
         active_case_existed: false,
       }
     );
+    await this.moderationQueueService?.upsertCaseMirror(newVerificationEvent);
 
     return true;
   }
@@ -2170,6 +2180,7 @@ export class SecurityActionService implements ISecurityActionService {
         'opened a verification case',
         moderator
       );
+      await this.moderationQueueService?.deleteObservedAlertMirror(detectionEvent.id);
       this.captureMemberAnalytics(
         member,
         'observed detection action completed',
@@ -2229,6 +2240,7 @@ export class SecurityActionService implements ISecurityActionService {
         'restricted this user',
         moderator
       );
+      await this.moderationQueueService?.deleteObservedAlertMirror(detectionEvent.id);
       this.captureMemberAnalytics(
         member,
         'observed detection action completed',
@@ -2311,6 +2323,7 @@ export class SecurityActionService implements ISecurityActionService {
         'banned this user',
         moderator
       );
+      await this.moderationQueueService?.deleteObservedAlertMirror(detectionEvent.id);
       this.captureMemberAnalytics(
         member,
         'observed detection action completed',
@@ -2374,6 +2387,7 @@ export class SecurityActionService implements ISecurityActionService {
           : 'dismissed this alert',
         moderator
       );
+      await this.moderationQueueService?.deleteObservedAlertMirror(detectionEvent.id);
       void this.productAnalyticsService.captureUserEvent(
         guildId,
         userId,
@@ -2442,6 +2456,7 @@ export class SecurityActionService implements ISecurityActionService {
           : 'undid the dismissal',
         moderator
       );
+      await this.moderationQueueService?.upsertObservedAlertMirror(restoredDetectionEvent);
       void this.productAnalyticsService.captureUserEvent(
         guildId,
         userId,
@@ -2553,6 +2568,7 @@ export class SecurityActionService implements ISecurityActionService {
           moderator
         );
       }
+      await this.moderationQueueService?.upsertObservedAlertMirror(updatedDetectionEvent);
     } catch (error) {
       if (!actionRecorded) {
         await this.rollbackDetectionMetadata(detectionEvent);
@@ -2608,6 +2624,7 @@ export class SecurityActionService implements ISecurityActionService {
         verificationEvent,
         VerificationStatus.PENDING
       );
+      await this.moderationQueueService?.upsertCaseMirror(updatedEvent);
 
       await this.adminActionService.recordAction({
         server_id: verificationEvent.server_id,

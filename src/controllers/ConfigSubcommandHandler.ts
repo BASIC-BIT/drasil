@@ -50,6 +50,11 @@ import {
   REPORT_AI_TRIAGE_ENABLED_SETTING_KEY,
 } from '../utils/reportAiSettings';
 import {
+  getModerationQueueSettings,
+  MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY,
+} from '../utils/moderationQueueSettings';
+import { IModerationQueueService } from '../services/ModerationQueueService';
+import {
   decodeExpectedTopicsInput,
   EXPECTED_TOPICS_SETTING_KEY,
   getServerContextSettings,
@@ -83,7 +88,8 @@ export class ConfigSubcommandHandler {
   public constructor(
     private readonly configService: IConfigService,
     private readonly heuristicService: IHeuristicService,
-    private readonly productAnalyticsService: IProductAnalyticsService
+    private readonly productAnalyticsService: IProductAnalyticsService,
+    private readonly moderationQueueService?: IModerationQueueService
   ) {}
 
   private formatKeywordSummary(keywords: readonly string[]): string {
@@ -169,6 +175,85 @@ export class ConfigSubcommandHandler {
       `Thread member cap: \`${settings.threadMemberCap}\``,
       `Guild ID: \`${guildId}\``,
     ].join('\n');
+  }
+
+  private formatCaseQueueSettings(
+    guildId: string,
+    settings: ReturnType<typeof getModerationQueueSettings>
+  ): string {
+    return [
+      `Queue channel: ${settings.channelId ? `<#${settings.channelId}>` : '`disabled`'}`,
+      `Guild ID: \`${guildId}\``,
+    ].join('\n');
+  }
+
+  public async handleCaseQueueConfigCommand(
+    interaction: ChatInputCommandInteraction,
+    guildId: string
+  ): Promise<void> {
+    const subcommand = interaction.options.getSubcommand(true);
+
+    try {
+      switch (subcommand) {
+        case 'view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const settings = getModerationQueueSettings(serverConfig.settings);
+          await interaction.reply({
+            content:
+              'Current live moderation queue settings:\n\n' +
+              this.formatCaseQueueSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-channel': {
+          const channel = interaction.options.getChannel('channel', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY]: channel.id,
+          });
+          await this.moderationQueueService?.syncServerQueue(guildId);
+          const settings = getModerationQueueSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated live moderation queue channel and synced current pending items.\n\n' +
+              this.formatCaseQueueSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'clear-channel': {
+          const deletedCount = (await this.moderationQueueService?.clearServerQueue(guildId)) ?? 0;
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY]: null,
+          });
+          const settings = getModerationQueueSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `Disabled the live moderation queue and removed ${deletedCount} live queue message(s).\n\n` +
+              this.formatCaseQueueSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        default:
+          await interaction.reply({
+            content: 'Unsupported /config case-queue subcommand.',
+            flags: MessageFlags.Ephemeral,
+          });
+      }
+    } catch (error) {
+      console.error(`Failed to update live moderation queue settings for guild ${guildId}:`, error);
+      await interaction.reply({
+        content: 'Failed to update live moderation queue settings. Please try again later.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   }
 
   private formatReportAiSettings(settings: ReturnType<typeof getReportAiSettings>): string {

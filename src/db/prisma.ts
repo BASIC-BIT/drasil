@@ -9,6 +9,7 @@ export {
   detection_type,
   moderation_outcome_source,
   moderation_outcome_type,
+  moderation_queue_item_type,
   report_intake_evidence_kind,
   report_intake_status,
   verification_status,

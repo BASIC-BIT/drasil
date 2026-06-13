@@ -64,6 +64,10 @@ import {
   handleSlashCommandConfirmationButton,
   isSlashCommandConfirmationCustomId,
 } from '../utils/slashCommandConfirmations';
+import {
+  IModerationQueueService,
+  ModerationQueueService,
+} from '../services/ModerationQueueService';
 // Load environment variables
 dotenv.config();
 
@@ -104,6 +108,7 @@ export class InteractionHandler implements IInteractionHandler {
   private adminActionRepository: IAdminActionRepository;
   private reportInteractionHandler: ReportInteractionHandler;
   private setupVerificationModalHandler: SetupVerificationModalHandler;
+  private moderationQueueService?: IModerationQueueService;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -126,7 +131,10 @@ export class InteractionHandler implements IInteractionHandler {
     productAnalyticsService?: IProductAnalyticsService,
     @inject(TYPES.ServerMemberRepository)
     @optional()
-    serverMemberRepository?: IServerMemberRepository
+    serverMemberRepository?: IServerMemberRepository,
+    @inject(TYPES.ModerationQueueService)
+    @optional()
+    moderationQueueService?: IModerationQueueService
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -137,6 +145,7 @@ export class InteractionHandler implements IInteractionHandler {
     this.serverMemberRepository = serverMemberRepository;
     this.threadManager = threadManager;
     this.adminActionRepository = adminActionRepository;
+    this.moderationQueueService = moderationQueueService;
     const reportSubmissionService = new ReportSubmissionService(
       this.configService,
       this.securityActionService
@@ -183,6 +192,16 @@ export class InteractionHandler implements IInteractionHandler {
 
       if (isSlashCommandConfirmationCustomId(customId)) {
         await handleSlashCommandConfirmationButton(interaction);
+        return;
+      }
+
+      const queueAcknowledgeItemId = ModerationQueueService.parseAcknowledgeCustomId(customId);
+      if (queueAcknowledgeItemId) {
+        await this.handleQueueAcknowledgeButtonInteraction(
+          interaction,
+          guildId,
+          queueAcknowledgeItemId
+        );
         return;
       }
 
@@ -344,6 +363,34 @@ export class InteractionHandler implements IInteractionHandler {
         await interaction.reply(response);
       }
     }
+  }
+
+  private async handleQueueAcknowledgeButtonInteraction(
+    interaction: ButtonInteraction,
+    guildId: string,
+    itemId: string
+  ): Promise<void> {
+    if (!(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need moderation permissions to acknowledge queue reminders.'
+      );
+      return;
+    }
+
+    if (!this.moderationQueueService) {
+      await interaction.reply({
+        content: 'Live moderation queue support is unavailable in this process.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const acknowledged = await this.moderationQueueService.acknowledgeAttentionItem(itemId);
+    await interaction.editReply(
+      acknowledged ? 'Queue reminder acknowledged.' : 'That queue reminder was already handled.'
+    );
   }
 
   public async handleStringSelectMenuInteraction(

@@ -68,6 +68,10 @@ import {
   ModerationOutcomeRepository,
 } from '../repositories/ModerationOutcomeRepository';
 import {
+  IModerationQueueRepository,
+  ModerationQueueRepository,
+} from '../repositories/ModerationQueueRepository';
+import {
   IReportCandidateService,
   ReportCandidateService,
 } from '../services/ReportCandidateService';
@@ -84,6 +88,10 @@ import {
   IModerationOutcomeService,
   ModerationOutcomeService,
 } from '../services/ModerationOutcomeService';
+import {
+  IModerationQueueService,
+  ModerationQueueService,
+} from '../services/ModerationQueueService';
 // Initialize container
 const container = new Container();
 
@@ -173,6 +181,10 @@ function configureRepositories(container: Container): void {
   container
     .bind<IModerationOutcomeRepository>(TYPES.ModerationOutcomeRepository)
     .to(ModerationOutcomeRepository)
+    .inSingletonScope();
+  container
+    .bind<IModerationQueueRepository>(TYPES.ModerationQueueRepository)
+    .to(ModerationQueueRepository)
     .inSingletonScope();
 
   // Add more repository bindings as they're refactored
@@ -274,6 +286,11 @@ function configureServices(container: Container): void {
   container
     .bind<IModerationOutcomeService>(TYPES.ModerationOutcomeService)
     .to(ModerationOutcomeService)
+    .inSingletonScope();
+
+  container
+    .bind<IModerationQueueService>(TYPES.ModerationQueueService)
+    .to(ModerationQueueService)
     .inSingletonScope();
 }
 

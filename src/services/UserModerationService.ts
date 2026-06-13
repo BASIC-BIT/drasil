@@ -18,6 +18,7 @@ import {
   ModerationOutcomeSource,
   ModerationOutcomeType,
 } from './ModerationOutcomeService';
+import { IModerationQueueService } from './ModerationQueueService';
 
 /**
  * Interface for the UserModerationService
@@ -117,6 +118,7 @@ export class UserModerationService implements IUserModerationService {
   private threadManager: IThreadManager;
   private productAnalyticsService: IProductAnalyticsService;
   private moderationOutcomeService?: IModerationOutcomeService;
+  private moderationQueueService?: IModerationQueueService;
 
   constructor(
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
@@ -131,7 +133,10 @@ export class UserModerationService implements IUserModerationService {
     productAnalyticsService?: IProductAnalyticsService,
     @inject(TYPES.ModerationOutcomeService)
     @optional()
-    moderationOutcomeService?: IModerationOutcomeService
+    moderationOutcomeService?: IModerationOutcomeService,
+    @inject(TYPES.ModerationQueueService)
+    @optional()
+    moderationQueueService?: IModerationQueueService
   ) {
     this.serverMemberRepository = serverMemberRepository;
     this.notificationManager = notificationManager;
@@ -141,6 +146,7 @@ export class UserModerationService implements IUserModerationService {
     this.threadManager = threadManager;
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.moderationOutcomeService = moderationOutcomeService;
+    this.moderationQueueService = moderationQueueService;
   }
 
   private captureModerationAction(
@@ -306,6 +312,8 @@ export class UserModerationService implements IUserModerationService {
         );
       }
     }
+
+    await this.moderationQueueService?.deleteCaseMirror(verificationEvent.id);
   }
 
   private async finalizeResolvedVerificationEvent(
@@ -357,6 +365,8 @@ export class UserModerationService implements IUserModerationService {
       new_status: newStatus,
       notes: options.notes ?? null,
     });
+
+    await this.moderationQueueService?.deleteCaseMirror(verificationEvent.id);
   }
 
   /**

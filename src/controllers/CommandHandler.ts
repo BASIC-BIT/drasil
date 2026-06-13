@@ -42,6 +42,7 @@ import { SetupCommandHandler } from './SetupCommandHandler';
 import { TestCommandHandler } from './TestCommandHandler';
 import { isUserInstallReportingEnabled } from '../utils/userInstallReporting';
 import { IReportIntakeService } from '../services/ReportIntakeService';
+import { IModerationQueueService } from '../services/ModerationQueueService';
 import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
 import { buildAdminGuildSetupUrl } from '../utils/publicWebLinks';
 import 'reflect-metadata';
@@ -118,7 +119,10 @@ export class CommandHandler implements ICommandHandler {
     restrictedRoleLockdownService?: IRestrictedRoleLockdownService,
     @inject(TYPES.ReportIntakeService)
     @optional()
-    reportIntakeService?: IReportIntakeService
+    reportIntakeService?: IReportIntakeService,
+    @inject(TYPES.ModerationQueueService)
+    @optional()
+    moderationQueueService?: IModerationQueueService
   ) {
     this.client = client;
     this.configService = configService;
@@ -128,7 +132,8 @@ export class CommandHandler implements ICommandHandler {
     this.configSubcommandHandler = new ConfigSubcommandHandler(
       this.configService,
       heuristicService,
-      resolvedProductAnalyticsService
+      resolvedProductAnalyticsService,
+      moderationQueueService
     );
     this.caseCommandHandler = new CaseCommandHandler(
       this.configService,
@@ -391,6 +396,11 @@ export class CommandHandler implements ICommandHandler {
 
     if (subcommandGroup === 'case-review') {
       await this.configSubcommandHandler.handleCaseReviewConfigCommand(interaction, guild.id);
+      return;
+    }
+
+    if (subcommandGroup === 'case-queue') {
+      await this.configSubcommandHandler.handleCaseQueueConfigCommand(interaction, guild.id);
       return;
     }
 
