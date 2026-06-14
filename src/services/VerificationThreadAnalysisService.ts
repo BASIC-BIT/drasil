@@ -6,12 +6,13 @@ import type { IGPTService, VerificationThreadAnalysisResult } from './GPTService
 import type { INotificationManager } from './NotificationManager';
 import type { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import type { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
-import { VerificationStatus } from '../repositories/types';
+import { VerificationEvent, VerificationStatus } from '../repositories/types';
 import {
   getVerificationThreadAnalysisSettings,
   VERIFICATION_THREAD_ANALYSIS_FETCH_LIMIT,
 } from '../utils/verificationThreadAnalysisSettings';
 import { IModerationQueueService } from './ModerationQueueService';
+import { markSupportThreadReminderUserResponded } from '../utils/supportThreadReminderState';
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds: string[];
@@ -82,10 +83,12 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     message: Message,
     verificationEventId: string
   ): Promise<void> {
-    const verificationEvent = await this.verificationEventRepository.findById(verificationEventId);
+    let verificationEvent = await this.verificationEventRepository.findById(verificationEventId);
     if (!verificationEvent || verificationEvent.status !== VerificationStatus.PENDING) {
       return;
     }
+
+    verificationEvent = await this.markSupportThreadReminderResponded(verificationEvent, message);
 
     await this.notificationManager.mirrorVerificationThreadMessageToEvidenceThread(
       verificationEvent,
@@ -173,6 +176,28 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
         `[VerificationThreadAnalysis] Failed to persist metadata for verification event ${verificationEvent.id}`,
         error
       );
+    }
+  }
+
+  private async markSupportThreadReminderResponded(
+    verificationEvent: VerificationEvent,
+    message: Message
+  ): Promise<VerificationEvent> {
+    const metadata = markSupportThreadReminderUserResponded(
+      verificationEvent.metadata,
+      new Date(message.createdTimestamp || Date.now())
+    ) as VerificationEvent['metadata'];
+    try {
+      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
+        metadata,
+      });
+      return updatedEvent ?? { ...verificationEvent, metadata };
+    } catch (error) {
+      console.warn(
+        `[VerificationThreadAnalysis] Failed to persist support-thread response metadata for verification event ${verificationEvent.id}`,
+        error
+      );
+      return { ...verificationEvent, metadata };
     }
   }
 

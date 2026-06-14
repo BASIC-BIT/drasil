@@ -154,7 +154,20 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
   - the embed says no automatic restriction was applied
   - the embed shows heuristic reasons separately from the `Risk Analysis` field
 
-### 10. Observe-only notification coalescing
+### 10. Case review and user reminder flow
+
+- Start a fresh pending verification case with a user-facing verification thread.
+- For deterministic local QA, set the case `updated_at` and reminder metadata in a test database instead of waiting real days.
+- Run the bot long enough for `CaseReviewReminderService` to tick.
+- Expected result:
+  - admin digest groups pending cases into fresh, stale, and very stale
+  - digest lines include the target user mention and direct admin/thread links
+  - digest lines show the next user reminder timestamp or final manual review language
+  - user reminder posts in the user-facing verification thread and pings only the target user
+  - user reminder does not post within one hour after the admin digest
+  - target-user replies stop later user reminders and still notify admins through evidence mirroring/live queue
+
+### 11. Observe-only notification coalescing
 
 - Keep detection mode set to `notify_only`.
 - Set the window with `/config detection set-notification-window minutes:60`.
@@ -163,7 +176,7 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
   - the second detection updates the recent observed notification
   - the second detection does not send a second role ping inside the window
 
-### 11. Server-context prompt flow
+### 12. Server-context prompt flow
 
 - Set `server-about`, `verification-context`, and `expected-topics` in `/config verification context-set`.
 - Preview them with `/config verification context-view`.

@@ -7,6 +7,8 @@ import { VerificationThreadAnalysisService } from '../../services/VerificationTh
 import { DetectionType, VerificationStatus } from '../../repositories/types';
 
 describe('VerificationThreadAnalysisService (unit)', () => {
+  const messageCreatedTimestamp = Date.parse('2026-06-03T12:00:00.000Z');
+
   const buildMessage = (overrides: Partial<any> = {}) => {
     const messages = new Collection<string, any>();
     const base = {
@@ -14,6 +16,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       guildId: 'guild-1',
       channelId: 'thread-1',
       content: 'I joined for the weekly speedrun races.',
+      createdTimestamp: messageCreatedTimestamp,
       author: {
         id: 'user-1',
         username: 'runner',
@@ -259,6 +262,10 @@ describe('VerificationThreadAnalysisService (unit)', () => {
 
     const updated = await verificationRepo.findById(verificationEvent.id);
     expect(updated?.metadata).toEqual({
+      support_thread_reminder: {
+        reminderCount: 0,
+        userRespondedAt: '2026-06-03T12:00:00.000Z',
+      },
       thread_analysis: {
         analyzedMessageIds: ['msg-1'],
         latestAnalysis: {
@@ -558,7 +565,12 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       );
 
       const updated = await verificationRepo.findById(verificationEvent.id);
-      expect(updated?.metadata).toBeNull();
+      expect(updated?.metadata).toEqual({
+        support_thread_reminder: {
+          reminderCount: 0,
+          userRespondedAt: '2026-06-03T12:00:00.000Z',
+        },
+      });
     } finally {
       warnSpy.mockRestore();
     }

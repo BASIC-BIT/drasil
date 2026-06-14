@@ -75,6 +75,7 @@ export interface ServerSettings {
   case_review_reminders_enabled?: boolean;
   case_review_reminder_stale_hours?: number;
   case_review_reminder_repeat_hours?: number;
+  case_review_very_stale_days?: number;
   case_review_digest_last_sent_at?: string | null;
   moderation_queue_channel_id?: string | null;
   setup_nudge_last_attempt_at?: string | null;
