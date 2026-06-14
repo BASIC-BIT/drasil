@@ -70,6 +70,18 @@ describe('caseReviewReminderSchedule (unit)', () => {
     expect(plan.nextUserReminderAt).toBeNull();
   });
 
+  it('does not mark unsupported cases as user reminder complete', () => {
+    const now = new Date('2026-06-05T10:00:00.000Z');
+    const event = buildEvent(new Date('2026-06-02T10:00:00.000Z'));
+
+    const plan = buildCaseReminderPlan(event, settings, now, { supportsUserReminder: false });
+
+    expect(plan.supportsUserReminder).toBe(false);
+    expect(plan.userReminderLimit).toBe(0);
+    expect(plan.userRemindersComplete).toBe(false);
+    expect(plan.nextUserReminderAt).toBeNull();
+  });
+
   it('stops user reminders before a shifted reminder would cross the very-stale cutoff', () => {
     const now = new Date('2026-06-05T13:00:00.000Z');
     const event = buildEvent(new Date('2026-06-02T10:00:00.000Z'), {

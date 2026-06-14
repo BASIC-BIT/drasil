@@ -16,6 +16,7 @@ export interface CaseReminderPlan {
   readonly freshness: CaseFreshness;
   readonly ageHours: number;
   readonly nextUserReminderAt: Date | null;
+  readonly supportsUserReminder: boolean;
   readonly userReminderCount: number;
   readonly userReminderLimit: number;
   readonly userResponded: boolean;
@@ -34,13 +35,17 @@ export function buildCaseReminderPlan(
   const freshness =
     ageHours >= veryStaleHours ? 'very_stale' : ageHours >= settings.staleHours ? 'stale' : 'fresh';
   const reminderState = getSupportThreadReminderState(event.metadata);
-  const userReminderLimit = getUserReminderLimit(settings.staleHours, veryStaleHours);
+  const supportsUserReminder = options.supportsUserReminder !== false;
+  const userReminderLimit = supportsUserReminder
+    ? getUserReminderLimit(settings.staleHours, veryStaleHours)
+    : 0;
   const userResponded = Boolean(reminderState.userRespondedAt);
   const cutoffReached = freshness === 'very_stale';
-  let userRemindersComplete = cutoffReached || reminderState.reminderCount >= userReminderLimit;
+  let userRemindersComplete =
+    supportsUserReminder && (cutoffReached || reminderState.reminderCount >= userReminderLimit);
   let nextUserReminderAt: Date | null = null;
 
-  if (options.supportsUserReminder !== false && !userResponded && !userRemindersComplete) {
+  if (supportsUserReminder && !userResponded && !userRemindersComplete) {
     const candidate = avoidAdminReviewWindow(
       getRawNextUserReminderAt(event, reminderState.lastReminderAt, settings.staleHours),
       now,
@@ -57,6 +62,7 @@ export function buildCaseReminderPlan(
     freshness,
     ageHours,
     nextUserReminderAt,
+    supportsUserReminder,
     userReminderCount: Math.min(reminderState.reminderCount, userReminderLimit),
     userReminderLimit,
     userResponded,

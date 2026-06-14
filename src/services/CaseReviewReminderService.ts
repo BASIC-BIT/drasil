@@ -15,6 +15,7 @@ import {
   CaseFreshness,
   CaseReminderPlan,
   renderSupportThreadReminder,
+  SUPPORT_THREAD_REMINDER_INTERVAL_HOURS,
 } from '../utils/caseReviewReminderSchedule';
 import { markSupportThreadReminderSent } from '../utils/supportThreadReminderState';
 import { buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
@@ -245,7 +246,7 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
 
     lines.push(
       '',
-      'User-facing support reminders are sent every 24h until the very-stale threshold, then moderators should make a final manual call.'
+      `User-facing support reminders are sent every ${SUPPORT_THREAD_REMINDER_INTERVAL_HOURS}h until the very-stale threshold, then moderators should make a final manual call.`
     );
 
     return lines.join('\n');
@@ -318,7 +319,7 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
   }
 
   private formatUserReminderStatus(plan: CaseReminderPlan | undefined): string | null {
-    if (!plan) {
+    if (!plan || !plan.supportsUserReminder) {
       return null;
     }
     if (plan.userResponded) {
