@@ -45,6 +45,7 @@ describe('caseReviewReminderSchedule (unit)', () => {
     });
 
     expect(plan.nextUserReminderAt?.toISOString()).toBe('2026-06-03T13:00:00.000Z');
+    expect(plan.userReminderLimit).toBe(2);
   });
 
   it('uses the stale threshold for the first user reminder', () => {
@@ -56,6 +57,7 @@ describe('caseReviewReminderSchedule (unit)', () => {
     });
 
     expect(plan.nextUserReminderAt?.toISOString()).toBe('2026-06-04T10:00:00.000Z');
+    expect(plan.userReminderLimit).toBe(1);
   });
 
   it('marks cases very stale at the configured day threshold', () => {
@@ -65,20 +67,43 @@ describe('caseReviewReminderSchedule (unit)', () => {
     const plan = buildCaseReminderPlan(event, settings, now, { supportsUserReminder: true });
 
     expect(plan.freshness).toBe('very_stale');
+    expect(plan.nextUserReminderAt).toBeNull();
   });
 
-  it('stops user reminders once the very stale reminder count is reached', () => {
-    const now = new Date('2026-06-05T10:00:00.000Z');
+  it('stops user reminders before a shifted reminder would cross the very-stale cutoff', () => {
+    const now = new Date('2026-06-05T13:00:00.000Z');
     const event = buildEvent(new Date('2026-06-02T10:00:00.000Z'), {
       support_thread_reminder: {
-        lastReminderAt: '2026-06-04T10:00:00.000Z',
-        reminderCount: 3,
+        lastReminderAt: '2026-06-04T13:00:00.000Z',
+        reminderCount: 2,
       },
     });
 
     const plan = buildCaseReminderPlan(event, settings, now, { supportsUserReminder: true });
 
     expect(plan.userRemindersComplete).toBe(true);
+    expect(plan.userReminderLimit).toBe(2);
+    expect(plan.userReminderCount).toBe(2);
+    expect(plan.nextUserReminderAt).toBeNull();
+  });
+
+  it('caps reminders for custom stale thresholds before the very-stale cutoff', () => {
+    const now = new Date('2026-06-05T10:00:00.000Z');
+    const event = buildEvent(new Date('2026-06-02T10:00:00.000Z'), {
+      support_thread_reminder: {
+        lastReminderAt: '2026-06-04T10:00:00.000Z',
+        reminderCount: 1,
+      },
+    });
+
+    const plan = buildCaseReminderPlan(event, { ...settings, staleHours: 48 }, now, {
+      supportsUserReminder: true,
+    });
+
+    expect(plan.freshness).toBe('very_stale');
+    expect(plan.userRemindersComplete).toBe(true);
+    expect(plan.userReminderLimit).toBe(1);
+    expect(plan.userReminderCount).toBe(1);
     expect(plan.nextUserReminderAt).toBeNull();
   });
 

@@ -325,6 +325,10 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       return 'user responded; awaiting staff review';
     }
     if (plan.userRemindersComplete) {
+      if (plan.userReminderLimit === 0) {
+        return 'user reminder window closed; final manual check recommended';
+      }
+
       return `user reminders sent ${plan.userReminderCount}/${plan.userReminderLimit}; final manual check recommended`;
     }
     if (plan.nextUserReminderAt) {

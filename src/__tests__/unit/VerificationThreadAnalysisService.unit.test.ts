@@ -91,6 +91,62 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
   });
 
+  it('does not rewrite support reminder response metadata after the first target reply', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      private_evidence_thread_id: 'evidence-thread-1',
+      metadata: {
+        support_thread_reminder: {
+          lastReminderAt: '2026-06-02T12:00:00.000Z',
+          reminderCount: 1,
+          userRespondedAt: '2026-06-03T12:00:00.000Z',
+        },
+      },
+    });
+
+    const gptService = {
+      analyzeVerificationThreadResponses: jest.fn(),
+    } as any;
+    const notificationManager = {
+      updateVerificationThreadAnalysis: jest.fn(),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
+    } as any;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          verification_ai_thread_analysis_enabled: false,
+          verification_ai_thread_analysis_message_limit: 3,
+        },
+      }),
+    } as any;
+    const service = new VerificationThreadAnalysisService(
+      configService,
+      gptService,
+      notificationManager,
+      verificationRepo,
+      detectionRepo
+    );
+    const updateSpy = jest.spyOn(verificationRepo, 'update');
+
+    const { message } = buildMessage({ id: 'msg-2' });
+    const handled = await service.handleThreadMessage(message as any);
+
+    expect(handled).toBe(true);
+    expect(
+      notificationManager.mirrorVerificationThreadMessageToEvidenceThread
+    ).toHaveBeenCalledWith(expect.objectContaining({ id: verificationEvent.id }), message);
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
+  });
+
   it('ignores non-verification threads before hitting the repository', async () => {
     const verificationRepo = {
       findByThreadId: jest.fn(),

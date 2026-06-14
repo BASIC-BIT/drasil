@@ -30,26 +30,34 @@ export function buildCaseReminderPlan(
 ): CaseReminderPlan {
   const ageHours = getElapsedHours(event.updated_at, now);
   const veryStaleHours = Math.max(settings.veryStaleDays * DAY_HOURS, settings.staleHours);
+  const veryStaleAt = addHours(event.updated_at, veryStaleHours);
   const freshness =
     ageHours >= veryStaleHours ? 'very_stale' : ageHours >= settings.staleHours ? 'stale' : 'fresh';
   const reminderState = getSupportThreadReminderState(event.metadata);
-  const userReminderLimit = settings.veryStaleDays;
+  const userReminderLimit = getUserReminderLimit(settings.staleHours, veryStaleHours);
   const userResponded = Boolean(reminderState.userRespondedAt);
-  const userRemindersComplete = reminderState.reminderCount >= userReminderLimit;
-  const nextUserReminderAt =
-    options.supportsUserReminder === false || userResponded || userRemindersComplete
-      ? null
-      : avoidAdminReviewWindow(
-          getRawNextUserReminderAt(event, reminderState.lastReminderAt, settings.staleHours),
-          now,
-          options.lastAdminDigestAt ?? null
-        );
+  const cutoffReached = freshness === 'very_stale';
+  let userRemindersComplete = cutoffReached || reminderState.reminderCount >= userReminderLimit;
+  let nextUserReminderAt: Date | null = null;
+
+  if (options.supportsUserReminder !== false && !userResponded && !userRemindersComplete) {
+    const candidate = avoidAdminReviewWindow(
+      getRawNextUserReminderAt(event, reminderState.lastReminderAt, settings.staleHours),
+      now,
+      options.lastAdminDigestAt ?? null
+    );
+    if (candidate < veryStaleAt) {
+      nextUserReminderAt = candidate;
+    } else {
+      userRemindersComplete = true;
+    }
+  }
 
   return {
     freshness,
     ageHours,
     nextUserReminderAt,
-    userReminderCount: reminderState.reminderCount,
+    userReminderCount: Math.min(reminderState.reminderCount, userReminderLimit),
     userReminderLimit,
     userResponded,
     userRemindersComplete,
@@ -107,6 +115,15 @@ function getRawNextUserReminderAt(
   }
 
   return addHours(event.updated_at, staleHours);
+}
+
+function getUserReminderLimit(staleHours: number, veryStaleHours: number): number {
+  const reminderWindowHours = veryStaleHours - staleHours;
+  if (reminderWindowHours <= 0) {
+    return 0;
+  }
+
+  return Math.ceil(reminderWindowHours / SUPPORT_THREAD_REMINDER_INTERVAL_HOURS);
 }
 
 function parseDate(value: string | undefined): Date | null {

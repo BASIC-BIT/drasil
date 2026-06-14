@@ -12,7 +12,10 @@ import {
   VERIFICATION_THREAD_ANALYSIS_FETCH_LIMIT,
 } from '../utils/verificationThreadAnalysisSettings';
 import { IModerationQueueService } from './ModerationQueueService';
-import { markSupportThreadReminderUserResponded } from '../utils/supportThreadReminderState';
+import {
+  getSupportThreadReminderState,
+  markSupportThreadReminderUserResponded,
+} from '../utils/supportThreadReminderState';
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds: string[];
@@ -183,6 +186,10 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     verificationEvent: VerificationEvent,
     message: Message
   ): Promise<VerificationEvent> {
+    if (getSupportThreadReminderState(verificationEvent.metadata).userRespondedAt) {
+      return verificationEvent;
+    }
+
     const metadata = markSupportThreadReminderUserResponded(
       verificationEvent.metadata,
       new Date(message.createdTimestamp || Date.now())

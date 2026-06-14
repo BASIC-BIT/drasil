@@ -162,7 +162,7 @@ describe('CaseReviewReminderService (unit)', () => {
     const content = adminSend.mock.calls[0][0].content;
     expect(content).toContain('<@&123456789012345678>');
     expect(content.indexOf('Stale - waiting')).toBeLessThan(content.indexOf('Fresh - pending'));
-    expect(content).toContain('next user reminder <t:1780491600:F> (0/3 sent)');
+    expect(content).toContain('next user reminder <t:1780491600:F> (0/2 sent)');
     expect(content).toContain(
       'admin: https://discord.com/channels/guild-1/admin-channel-actual/admin-message-1'
     );
@@ -279,7 +279,7 @@ describe('CaseReviewReminderService (unit)', () => {
     const veryStaleCase = buildPendingCase(new Date('2026-06-02T10:00:00.000Z'), {
       support_thread_reminder: {
         lastReminderAt: '2026-06-05T12:00:00.000Z',
-        reminderCount: 3,
+        reminderCount: 2,
       },
     });
     const adminSend = jest.fn().mockResolvedValue(undefined);
@@ -297,7 +297,7 @@ describe('CaseReviewReminderService (unit)', () => {
 
     const content = adminSend.mock.calls[0][0].content;
     expect(content).toContain('Very stale - final manual check recommended (1)');
-    expect(content).toContain('user reminders sent 3/3; final manual check recommended');
+    expect(content).toContain('user reminders sent 2/2; final manual check recommended');
     expect(client.channels.fetch).not.toHaveBeenCalled();
     expect(verificationEventRepository.update).not.toHaveBeenCalled();
   });
