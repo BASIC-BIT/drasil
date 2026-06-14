@@ -20,6 +20,7 @@ export interface IDetectionEventsRepository {
   findByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]>;
   findCountedByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]>;
   findRecentByServer(serverId: string, limit?: number): Promise<DetectionEvent[]>;
+  findUnresolvedObservedNotificationsByServer(serverId: string): Promise<DetectionEvent[]>;
   findByReportIntakeId(reportIntakeId: string): Promise<DetectionEvent | null>;
   recordAdminAction(
     id: string,
@@ -191,6 +192,22 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
       return events as DetectionEvent[];
     } catch (error) {
       this.handleError(error, 'findRecentByServer');
+    }
+  }
+
+  async findUnresolvedObservedNotificationsByServer(serverId: string): Promise<DetectionEvent[]> {
+    try {
+      const events = await this.prisma.$queryRaw<DetectionEvent[]>`
+        SELECT *
+        FROM detection_events
+        WHERE server_id = ${serverId}
+          AND COALESCE(metadata, '{}'::jsonb) ? 'observed_notification_message_id'
+          AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'observed_action')
+        ORDER BY detected_at ASC
+      `;
+      return events as DetectionEvent[];
+    } catch (error) {
+      this.handleError(error, 'findUnresolvedObservedNotificationsByServer');
     }
   }
 

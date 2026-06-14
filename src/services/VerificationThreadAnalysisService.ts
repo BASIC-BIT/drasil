@@ -1,4 +1,4 @@
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import type { Message } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import type { IConfigService } from '../config/ConfigService';
@@ -11,6 +11,7 @@ import {
   getVerificationThreadAnalysisSettings,
   VERIFICATION_THREAD_ANALYSIS_FETCH_LIMIT,
 } from '../utils/verificationThreadAnalysisSettings';
+import { IModerationQueueService } from './ModerationQueueService';
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds: string[];
@@ -44,7 +45,10 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     @inject(TYPES.VerificationEventRepository)
     private verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.DetectionEventsRepository)
-    private detectionEventsRepository: IDetectionEventsRepository
+    private detectionEventsRepository: IDetectionEventsRepository,
+    @inject(TYPES.ModerationQueueService)
+    @optional()
+    private moderationQueueService?: IModerationQueueService
   ) {}
 
   public async handleThreadMessage(message: Message): Promise<boolean> {
@@ -87,6 +91,14 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       verificationEvent,
       message
     );
+    await this.moderationQueueService
+      ?.recordSupportThreadAttention(verificationEvent, message)
+      .catch((error) => {
+        console.warn(
+          `[VerificationThreadAnalysis] Failed to queue support-thread attention for verification event ${verificationEvent.id}`,
+          error
+        );
+      });
 
     const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
     const settings = getVerificationThreadAnalysisSettings(serverConfig.settings);

@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, GuildMember, Message } from 'discord.js';
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
@@ -12,6 +12,7 @@ import { getReportAiSettings, ReportAttachmentMetadata } from '../utils/reportAi
 import { selectEligibleMessageReportImageAttachments } from '../utils/reportAttachments';
 import type { ReportIntakeEvidenceExtraction } from './GPTService';
 import { IReportCandidateService, ReportCandidate } from './ReportCandidateService';
+import { IModerationQueueService } from './ModerationQueueService';
 
 const REPORT_INTAKE_CLOSE_COMMANDS = new Set(['close report', 'cancel report', 'close intake']);
 const REPORT_INTAKE_REASON_TEXT_MAX_LENGTH = 1000;
@@ -96,7 +97,10 @@ export class ReportIntakeService implements IReportIntakeService {
     @inject(TYPES.UserRepository) private userRepository: IUserRepository,
     @inject(TYPES.ServerMemberRepository) private serverMemberRepository: IServerMemberRepository,
     @inject(TYPES.ConfigService) private configService: IConfigService,
-    @inject(TYPES.ReportCandidateService) private candidateService: IReportCandidateService
+    @inject(TYPES.ReportCandidateService) private candidateService: IReportCandidateService,
+    @inject(TYPES.ModerationQueueService)
+    @optional()
+    private moderationQueueService?: IModerationQueueService
   ) {}
 
   async openIntakeFromThread(input: OpenReportIntakeInput): Promise<ReportIntake> {
@@ -146,6 +150,16 @@ export class ReportIntakeService implements IReportIntakeService {
     }
 
     await this.recordMessageEvidence(intake, message);
+    if (message.author.id === intake.reporter_id && !this.isReporterCloseCommand(message.content)) {
+      await this.moderationQueueService
+        ?.recordReportThreadAttention(intake, message)
+        .catch((error) => {
+          console.warn(
+            `[ReportIntake] Failed to queue report-thread attention for intake ${intake.id}`,
+            error
+          );
+        });
+    }
     return true;
   }
 
@@ -378,6 +392,7 @@ export class ReportIntakeService implements IReportIntakeService {
         submitted_at: new Date().toISOString(),
       },
     });
+    await this.clearReportThreadAttention(input.intakeId);
   }
 
   async markOpenFailed(input: { intakeId: string; reason: string }): Promise<void> {
@@ -395,6 +410,7 @@ export class ReportIntakeService implements IReportIntakeService {
         open_failed_at: new Date().toISOString(),
       },
     });
+    await this.clearReportThreadAttention(input.intakeId);
   }
 
   async closeIntakeForThread(input: {
@@ -772,6 +788,16 @@ export class ReportIntakeService implements IReportIntakeService {
         closed_reason: input.closedByStaff ? 'staff_request' : 'reporter_request',
         ...(input.closedByStaff ? { closed_by_staff: true } : {}),
       },
+    });
+    await this.clearReportThreadAttention(intake.id);
+  }
+
+  private async clearReportThreadAttention(intakeId: string): Promise<void> {
+    await this.moderationQueueService?.deleteReportThreadAttention(intakeId).catch((error) => {
+      console.warn(
+        `[ReportIntake] Failed to clear report-thread attention for intake ${intakeId}`,
+        error
+      );
     });
   }
 }

@@ -516,6 +516,29 @@ const baseApplicationCommandBuilders = [
     )
     .addSubcommandGroup((group) =>
       group
+        .setName('case-queue')
+        .setDescription('Manage the live moderation queue channel')
+        .addSubcommand((subcommand) =>
+          subcommand.setName('view').setDescription('View live moderation queue settings')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set-channel')
+            .setDescription('Set the live moderation queue channel')
+            .addChannelOption((option) =>
+              option
+                .setName('channel')
+                .setDescription('Channel for pending cases and live attention reminders')
+                .addChannelTypes(ChannelType.GuildText)
+                .setRequired(true)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand.setName('clear-channel').setDescription('Disable and clear the live queue')
+        )
+    )
+    .addSubcommandGroup((group) =>
+      group
         .setName('report')
         .setDescription('Manage user report settings')
         .addSubcommand((subcommand) =>

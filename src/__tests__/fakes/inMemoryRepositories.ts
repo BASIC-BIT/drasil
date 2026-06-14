@@ -183,6 +183,20 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
       .map((event) => ({ ...event }));
   }
 
+  async findUnresolvedObservedNotificationsByServer(serverId: string): Promise<DetectionEvent[]> {
+    return this.events
+      .filter((event) => {
+        const metadata = event.metadata ?? {};
+        return (
+          event.server_id === serverId &&
+          typeof metadata.observed_notification_message_id === 'string' &&
+          typeof metadata.observed_action !== 'string'
+        );
+      })
+      .sort((a, b) => toTimestamp(a.detected_at) - toTimestamp(b.detected_at))
+      .map((event) => ({ ...event }));
+  }
+
   async findByReportIntakeId(reportIntakeId: string): Promise<DetectionEvent | null> {
     const event = this.events.find(
       (item) =>

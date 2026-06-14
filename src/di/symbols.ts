@@ -27,6 +27,7 @@ export const TYPES = {
   ReportIntakeAgentService: Symbol.for('ReportIntakeAgentService'),
   CaseReviewReminderService: Symbol.for('CaseReviewReminderService'),
   ModerationOutcomeService: Symbol.for('ModerationOutcomeService'),
+  ModerationQueueService: Symbol.for('ModerationQueueService'),
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),
@@ -38,6 +39,7 @@ export const TYPES = {
   MessageContextRepository: Symbol.for('MessageContextRepository'),
   ReportIntakeRepository: Symbol.for('ReportIntakeRepository'),
   ModerationOutcomeRepository: Symbol.for('ModerationOutcomeRepository'),
+  ModerationQueueRepository: Symbol.for('ModerationQueueRepository'),
 
   // External dependencies
   DiscordClient: Symbol.for('DiscordClient'),

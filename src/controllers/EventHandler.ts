@@ -51,6 +51,7 @@ import {
   ObservedDiscordBanOptions,
 } from '../services/UserModerationService';
 import { ModerationOutcomeSource } from '../services/ModerationOutcomeService';
+import { IModerationQueueService } from '../services/ModerationQueueService';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -108,6 +109,7 @@ export class EventHandler implements IEventHandler {
   private caseReviewReminderService?: ICaseReviewReminderService;
   private messageContextRepository?: IMessageContextRepository;
   private userModerationService?: IUserModerationService;
+  private moderationQueueService?: IModerationQueueService;
   private serverConfigWarmups: Set<string> = new Set();
   private configInitializePromise: Promise<void> | null = null;
   private lastMessageContextPruneAt = 0;
@@ -142,7 +144,10 @@ export class EventHandler implements IEventHandler {
     messageContextRepository?: IMessageContextRepository,
     @inject(TYPES.UserModerationService)
     @optional()
-    userModerationService?: IUserModerationService
+    userModerationService?: IUserModerationService,
+    @inject(TYPES.ModerationQueueService)
+    @optional()
+    moderationQueueService?: IModerationQueueService
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -159,6 +164,7 @@ export class EventHandler implements IEventHandler {
     this.caseReviewReminderService = caseReviewReminderService;
     this.messageContextRepository = messageContextRepository;
     this.userModerationService = userModerationService;
+    this.moderationQueueService = moderationQueueService;
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -183,6 +189,9 @@ export class EventHandler implements IEventHandler {
     await this.ensureConfigInitialized();
 
     await this.commandHandler.registerCommands();
+    void this.moderationQueueService?.syncAllActiveServerQueues().catch((error) => {
+      console.warn('Failed to sync live moderation queues on startup:', error);
+    });
     this.caseReviewReminderService?.start();
   }
 
@@ -391,11 +400,23 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    await this.notificationManager.upsertObservedDetectionNotification(
+    const notification = await this.notificationManager.upsertObservedDetectionNotification(
       member,
       detectionResult,
       sourceMessage
     );
+    if (notification && detectionResult.detectionEventId) {
+      try {
+        await this.moderationQueueService?.upsertObservedAlertMirrorById(
+          detectionResult.detectionEventId
+        );
+      } catch (error) {
+        console.warn(
+          `Failed to mirror observed alert ${detectionResult.detectionEventId} to the live moderation queue:`,
+          error
+        );
+      }
+    }
   }
 
   private async handleAutomaticDetection(

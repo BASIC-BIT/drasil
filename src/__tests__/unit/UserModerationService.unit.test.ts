@@ -21,6 +21,7 @@ import {
 import { INotificationManager } from '../../services/NotificationManager';
 import { IRoleManager } from '../../services/RoleManager';
 import { IThreadManager } from '../../services/ThreadManager';
+import type { IModerationQueueService } from '../../services/ModerationQueueService';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -411,6 +412,62 @@ describe('UserModerationService (unit)', () => {
     );
     expect(notificationManager.logActionToMessage).toHaveBeenCalled();
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
+  });
+
+  it('verifies a user when live queue cleanup fails', async () => {
+    const guildId = 'guild-verify-queue-fails';
+    const userId = 'user-verify-queue-fails';
+    const moderator = { id: 'mod-verify-queue-fails' } as User;
+    const member = buildMember(guildId, userId);
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const moderationQueueService = {
+      deleteCaseMirror: jest.fn().mockRejectedValue(new Error('queue unavailable')),
+    } as unknown as IModerationQueueService;
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService,
+      moderationQueueService
+    );
+
+    try {
+      await expect(service.verifyUser(member, moderator)).resolves.toBe(true);
+      expect(consoleWarn).toHaveBeenCalledWith(
+        expect.stringContaining(`Failed to delete case ${verificationEvent.id}`),
+        expect.any(Error)
+      );
+    } finally {
+      consoleWarn.mockRestore();
+    }
+
+    const updatedEvent = await verificationEventRepository.findById(verificationEvent.id);
+    expect(updatedEvent?.status).toBe(VerificationStatus.VERIFIED);
+    const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
+    expect(adminActions).toHaveLength(1);
+    expect(adminActions[0].action_type).toBe(AdminActionType.VERIFY);
+    expect(moderationQueueService.deleteCaseMirror).toHaveBeenCalledWith(verificationEvent.id);
   });
 
   it('closes a pending case with no action and removes existing restriction', async () => {

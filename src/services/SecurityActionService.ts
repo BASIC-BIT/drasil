@@ -55,6 +55,7 @@ import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { ReportAiAnalyzer } from './ReportAiAnalyzer';
 import { ReportDetectionBuilder } from './ReportDetectionBuilder';
 import { RoleIntakeProcessor } from './RoleIntakeProcessor';
+import { IModerationQueueService } from './ModerationQueueService';
 
 const DELAYED_THREAD_REPAIR_DELAY_MS = 70_000;
 /**
@@ -288,6 +289,7 @@ export class SecurityActionService implements ISecurityActionService {
   private client: Client;
   private gptService?: IGPTService;
   private productAnalyticsService: IProductAnalyticsService;
+  private moderationQueueService?: IModerationQueueService;
   private reportAiAnalyzer: ReportAiAnalyzer;
   private reportDetectionBuilder: ReportDetectionBuilder;
   private roleIntakeProcessor: RoleIntakeProcessor;
@@ -308,7 +310,10 @@ export class SecurityActionService implements ISecurityActionService {
     @optional() @inject(TYPES.GPTService) gptService?: IGPTService,
     @inject(TYPES.ProductAnalyticsService)
     @optional()
-    productAnalyticsService?: IProductAnalyticsService
+    productAnalyticsService?: IProductAnalyticsService,
+    @inject(TYPES.ModerationQueueService)
+    @optional()
+    moderationQueueService?: IModerationQueueService
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -322,6 +327,7 @@ export class SecurityActionService implements ISecurityActionService {
     this.client = client;
     this.gptService = gptService;
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
+    this.moderationQueueService = moderationQueueService;
     this.reportAiAnalyzer = new ReportAiAnalyzer(this.serverRepository, this.gptService);
     this.reportDetectionBuilder = new ReportDetectionBuilder(
       this.detectionEventsRepository,
@@ -331,6 +337,21 @@ export class SecurityActionService implements ISecurityActionService {
       this.verificationEventRepository,
       (member, moderator, options) => this.openAdminCase(member, moderator, options)
     );
+  }
+
+  private async runModerationQueueTask(
+    action: string,
+    task: (moderationQueueService: IModerationQueueService) => Promise<void>
+  ): Promise<void> {
+    if (!this.moderationQueueService) {
+      return;
+    }
+
+    try {
+      await task(this.moderationQueueService);
+    } catch (error) {
+      console.warn(`Failed to ${action}:`, error);
+    }
   }
 
   /**
@@ -894,6 +915,11 @@ export class SecurityActionService implements ISecurityActionService {
         notificationMessage,
         sourceMessage
       );
+      await this.runModerationQueueTask(
+        `mirror observed alert ${detectionEventId} to the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.upsertObservedAlertMirrorById(detectionEventId)
+      );
       return;
     }
 
@@ -908,6 +934,10 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     await this.upsertNotification(member, detectionResult, activeVerificationEvent);
+    await this.runModerationQueueTask(
+      `mirror case ${activeVerificationEvent.id} to the live moderation queue`,
+      (moderationQueueService) => moderationQueueService.upsertCaseMirror(activeVerificationEvent)
+    );
   }
 
   private async ensureObservedEvidenceThread(
@@ -1393,6 +1423,11 @@ export class SecurityActionService implements ISecurityActionService {
           active_case_existed: true,
         }
       );
+      await this.runModerationQueueTask(
+        `mirror case ${notificationVerificationEvent.id} to the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.upsertCaseMirror(notificationVerificationEvent)
+      );
       return true;
     }
 
@@ -1460,6 +1495,10 @@ export class SecurityActionService implements ISecurityActionService {
         report_review_thread: shouldUseReviewThread,
         active_case_existed: false,
       }
+    );
+    await this.runModerationQueueTask(
+      `mirror case ${newVerificationEvent.id} to the live moderation queue`,
+      (moderationQueueService) => moderationQueueService.upsertCaseMirror(newVerificationEvent)
     );
 
     return true;
@@ -2170,6 +2209,11 @@ export class SecurityActionService implements ISecurityActionService {
         'opened a verification case',
         moderator
       );
+      await this.runModerationQueueTask(
+        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
+      );
       this.captureMemberAnalytics(
         member,
         'observed detection action completed',
@@ -2228,6 +2272,11 @@ export class SecurityActionService implements ISecurityActionService {
         detectionEvent.id,
         'restricted this user',
         moderator
+      );
+      await this.runModerationQueueTask(
+        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
       );
       this.captureMemberAnalytics(
         member,
@@ -2311,6 +2360,11 @@ export class SecurityActionService implements ISecurityActionService {
         'banned this user',
         moderator
       );
+      await this.runModerationQueueTask(
+        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
+      );
       this.captureMemberAnalytics(
         member,
         'observed detection action completed',
@@ -2373,6 +2427,11 @@ export class SecurityActionService implements ISecurityActionService {
           ? 'marked this detection as a false positive'
           : 'dismissed this alert',
         moderator
+      );
+      await this.runModerationQueueTask(
+        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
       );
       void this.productAnalyticsService.captureUserEvent(
         guildId,
@@ -2441,6 +2500,11 @@ export class SecurityActionService implements ISecurityActionService {
           ? 'undid the dismissal and reverted the false positive indication'
           : 'undid the dismissal',
         moderator
+      );
+      await this.runModerationQueueTask(
+        `restore observed alert ${restoredDetectionEvent.id} to the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.upsertObservedAlertMirror(restoredDetectionEvent)
       );
       void this.productAnalyticsService.captureUserEvent(
         guildId,
@@ -2553,6 +2617,11 @@ export class SecurityActionService implements ISecurityActionService {
           moderator
         );
       }
+      await this.runModerationQueueTask(
+        `restore observed alert ${updatedDetectionEvent.id} to the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.upsertObservedAlertMirror(updatedDetectionEvent)
+      );
     } catch (error) {
       if (!actionRecorded) {
         await this.rollbackDetectionMetadata(detectionEvent);
@@ -2607,6 +2676,10 @@ export class SecurityActionService implements ISecurityActionService {
       await this.notificationManager.updateNotificationButtons(
         verificationEvent,
         VerificationStatus.PENDING
+      );
+      await this.runModerationQueueTask(
+        `mirror case ${updatedEvent.id} to the live moderation queue`,
+        (moderationQueueService) => moderationQueueService.upsertCaseMirror(updatedEvent)
       );
 
       await this.adminActionService.recordAction({
