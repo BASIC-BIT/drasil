@@ -411,7 +411,11 @@ export class UserModerationService implements IUserModerationService {
   }
 
   private shouldRollbackRoleQuarantine(metadata: Record<string, unknown> | null): boolean {
-    return typeof metadata?.snapshot_id === 'string';
+    return (
+      metadata !== null &&
+      metadata.status === 'quarantined' &&
+      typeof metadata.snapshot_id === 'string'
+    );
   }
 
   private formatError(error: unknown): string {

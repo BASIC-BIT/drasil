@@ -351,6 +351,75 @@ describe('UserModerationService (unit)', () => {
     expect(serverMember?.is_restricted).not.toBe(true);
   });
 
+  it('does not restore already-active role quarantine when restricted role assignment fails', async () => {
+    const guildId = 'guild-role-quarantine-already-active-fails';
+    const userId = 'user-role-quarantine-already-active-fails';
+    const moderator = { id: 'mod-role-quarantine' } as User;
+    const member = buildMember(guildId, userId);
+    roleManager.assignRestrictedRole.mockResolvedValueOnce(false);
+    const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      quarantineMember: jest.fn().mockResolvedValue({
+        status: 'already_active',
+        mode: 'automatic',
+        snapshotId: 'role-quarantine-existing',
+        originalRoleIds: ['role-1'],
+        plannedRoleIds: ['role-1'],
+        removedRoleIds: ['role-1'],
+        skippedRoles: [],
+        failedRemovals: [],
+      }),
+      restoreMemberRoles: jest.fn().mockResolvedValue({
+        status: 'restored',
+        snapshotId: 'role-quarantine-existing',
+        attemptedRoleIds: ['role-1'],
+        restoredRoleIds: ['role-1'],
+        skippedRoles: [],
+        failedRestores: [],
+      }),
+      abandonActiveSnapshot: jest.fn().mockResolvedValue({
+        status: 'no_active_snapshot',
+        snapshotId: null,
+      }),
+    };
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.ADMIN_CASE,
+      confidence: 1,
+      reasons: ['Admin case'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService,
+      undefined,
+      roleQuarantineService
+    );
+
+    await expect(service.restrictUser(member, moderator)).rejects.toThrow(
+      'Failed to assign restricted role'
+    );
+    expect(roleQuarantineService.restoreMemberRoles).not.toHaveBeenCalled();
+    const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
+    expect(serverMember?.is_restricted).not.toBe(true);
+  });
+
   it('lifts a restriction without resolving the pending case', async () => {
     const guildId = 'guild-lift-restriction';
     const userId = 'user-lift-restriction';
