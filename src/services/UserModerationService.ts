@@ -1251,6 +1251,13 @@ export class UserModerationService implements IUserModerationService {
             last_status_change: new Date(),
             updated_by: moderator.id,
           });
+        } else if (!member) {
+          await this.tryAbandonRoleQuarantine(
+            guild.id,
+            userId,
+            'close_no_action_member_absent',
+            moderator.id
+          );
         }
 
         return 0;

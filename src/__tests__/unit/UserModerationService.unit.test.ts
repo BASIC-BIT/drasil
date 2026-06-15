@@ -938,6 +938,67 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
+  it('abandons role quarantine when retrying no-action cleanup for an absent member', async () => {
+    const guildId = 'guild-close-absent-retry';
+    const userId = 'user-close-absent-retry';
+    const moderator = { id: 'mod-close-absent-retry' } as User;
+    const guild = buildGuildWithoutMember(guildId);
+    const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      quarantineMember: jest.fn(),
+      restoreMemberRoles: jest.fn(),
+      abandonActiveSnapshot: jest.fn().mockResolvedValue({
+        status: 'abandoned',
+        snapshotId: 'role-quarantine-1',
+      }),
+    };
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      is_restricted: true,
+      verification_status: VerificationStatus.CLOSED_NO_ACTION,
+    });
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.CLOSED_NO_ACTION
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService,
+      undefined,
+      roleQuarantineService
+    );
+
+    const closedCount = await service.closeCaseNoAction(guild, userId, moderator);
+
+    expect(closedCount).toBe(0);
+    expect(roleManager.removeRestrictedRole).not.toHaveBeenCalled();
+    expect(roleQuarantineService.restoreMemberRoles).not.toHaveBeenCalled();
+    expect(roleQuarantineService.abandonActiveSnapshot).toHaveBeenCalledWith(
+      guildId,
+      userId,
+      'close_no_action_member_absent',
+      moderator.id
+    );
+  });
+
   it('bans a user and records admin action', async () => {
     const guildId = 'guild-ban';
     const userId = 'user-ban';
