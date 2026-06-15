@@ -48,6 +48,27 @@ const buildPendingCase = (
   metadata,
 });
 
+const buildLargePendingCases = (count: number, updatedAt: Date): VerificationEvent[] =>
+  Array.from({ length: count }, (_, index) => {
+    const suffix = String(index + 1).padStart(2, '0');
+    const longId = `${suffix}12345678901234567890123456789012345678901234567890`;
+
+    return buildPendingCase(
+      updatedAt,
+      {
+        source_channel_id: `source-channel-${longId}`,
+        source_message_id: `source-message-${longId}`,
+      },
+      {
+        id: `ver-${suffix}`,
+        user_id: longId,
+        notification_message_id: `admin-message-${longId}`,
+        private_evidence_thread_id: `evidence-thread-${longId}`,
+        thread_id: `case-thread-${longId}`,
+      }
+    );
+  });
+
 function buildService(input: {
   server: Server;
   pendingCases: VerificationEvent[];
@@ -173,6 +194,8 @@ describe('CaseReviewReminderService (unit)', () => {
     expect(content).toContain(
       'User-facing support reminders are sent every 24h until the very-stale threshold'
     );
+    expect(content).toContain('Very stale cases remain pending for moderator review.');
+    expect(content).not.toContain('then moderators should make a final manual call');
     expect(adminSend.mock.calls[0][0].components).toHaveLength(1);
     expect(configService.updateServerSettings).toHaveBeenCalledWith(
       'guild-1',
@@ -182,6 +205,42 @@ describe('CaseReviewReminderService (unit)', () => {
     );
     expect(client.channels.fetch).not.toHaveBeenCalled();
     expect(verificationEventRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('splits large admin digests on whole line boundaries and only pings roles once', async () => {
+    const now = new Date('2026-06-03T12:00:00.000Z');
+    const adminSend = jest.fn().mockResolvedValue(undefined);
+    const { service } = buildService({
+      server: buildServer({
+        case_review_reminder_stale_hours: 24,
+        case_review_reminder_repeat_hours: 24,
+        case_responder_role_ids: ['123456789012345678'],
+        case_responder_routing_mode: 'ping_only',
+      }),
+      pendingCases: buildLargePendingCases(10, new Date('2026-06-02T10:00:00.000Z')),
+      adminSend,
+    });
+
+    await service.runOnce(now);
+
+    expect(adminSend.mock.calls.length).toBeGreaterThan(1);
+    const payloads = adminSend.mock.calls.map(([payload]) => payload);
+    expect(payloads[0].allowedMentions.roles).toEqual(['123456789012345678']);
+    expect(payloads[0].components).toHaveLength(1);
+
+    for (const payload of payloads) {
+      expect(payload.content.length).toBeLessThanOrEqual(4000);
+      const caseLines = payload.content
+        .split('\n')
+        .filter((line: string) => line.includes('since update'));
+      expect(caseLines.every((line: string) => line.startsWith('- <@'))).toBe(true);
+    }
+
+    for (const payload of payloads.slice(1)) {
+      expect(payload.content).toMatch(/^Case review reminder continued\n/);
+      expect(payload.allowedMentions.roles).toEqual([]);
+      expect(payload.components).toBeUndefined();
+    }
   });
 
   it('adds a web queue link to the digest when the public web URL is configured', async () => {
@@ -274,7 +333,51 @@ describe('CaseReviewReminderService (unit)', () => {
     );
   });
 
-  it('keeps very stale cases in final manual review after user reminders are complete', async () => {
+  it('continues user reminders when the admin digest fails to send', async () => {
+    const now = new Date('2026-06-03T12:00:00.000Z');
+    const staleCase = buildPendingCase(new Date('2026-06-02T10:00:00.000Z'));
+    const adminSend = jest.fn().mockRejectedValue(new Error('digest too long'));
+    const threadSend = jest.fn().mockResolvedValue(undefined);
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { service, configService, verificationEventRepository } = buildService({
+      server: buildServer({
+        case_review_reminder_stale_hours: 24,
+        case_review_reminder_repeat_hours: 24,
+      }),
+      pendingCases: [staleCase],
+      adminSend,
+      threadSend,
+    });
+
+    try {
+      await service.runOnce(now);
+    } finally {
+      consoleWarn.mockRestore();
+    }
+
+    expect(adminSend).toHaveBeenCalled();
+    expect(threadSend).toHaveBeenCalledWith({
+      content: 'Ticket reminder: 26h elapsed. <@user-1> See above.',
+      allowedMentions: {
+        parse: [],
+        users: ['user-1'],
+        roles: [],
+        repliedUser: false,
+      },
+    });
+    expect(configService.updateServerSettings).not.toHaveBeenCalled();
+    expect(verificationEventRepository.update).toHaveBeenCalledWith(
+      staleCase.id,
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          support_thread_reminder: expect.objectContaining({ reminderCount: 1 }),
+        }),
+      }),
+      { touchUpdatedAt: false }
+    );
+  });
+
+  it('keeps very stale cases pending for moderator review after user reminders are complete', async () => {
     const now = new Date('2026-06-06T12:00:00.000Z');
     const veryStaleCase = buildPendingCase(new Date('2026-06-02T10:00:00.000Z'), {
       support_thread_reminder: {
@@ -296,8 +399,8 @@ describe('CaseReviewReminderService (unit)', () => {
     await service.runOnce(now);
 
     const content = adminSend.mock.calls[0][0].content;
-    expect(content).toContain('Very stale - final manual check recommended (1)');
-    expect(content).toContain('user reminders sent 2/2; final manual check recommended');
+    expect(content).toContain('Very stale - awaiting moderator review (1)');
+    expect(content).toContain('user reminders sent 2/2; awaiting moderator review');
     expect(client.channels.fetch).not.toHaveBeenCalled();
     expect(verificationEventRepository.update).not.toHaveBeenCalled();
   });
