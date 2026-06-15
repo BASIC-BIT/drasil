@@ -7,6 +7,8 @@ import { VerificationThreadAnalysisService } from '../../services/VerificationTh
 import { DetectionType, VerificationStatus } from '../../repositories/types';
 
 describe('VerificationThreadAnalysisService (unit)', () => {
+  const messageCreatedTimestamp = Date.parse('2026-06-03T12:00:00.000Z');
+
   const buildMessage = (overrides: Partial<any> = {}) => {
     const messages = new Collection<string, any>();
     const base = {
@@ -14,6 +16,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       guildId: 'guild-1',
       channelId: 'thread-1',
       content: 'I joined for the weekly speedrun races.',
+      createdTimestamp: messageCreatedTimestamp,
       author: {
         id: 'user-1',
         username: 'runner',
@@ -85,6 +88,62 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     expect(
       notificationManager.mirrorVerificationThreadMessageToEvidenceThread
     ).toHaveBeenCalledWith(expect.objectContaining({ id: verificationEvent.id }), message);
+    expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
+  });
+
+  it('does not rewrite support reminder response metadata after the first target reply', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      private_evidence_thread_id: 'evidence-thread-1',
+      metadata: {
+        support_thread_reminder: {
+          lastReminderAt: '2026-06-02T12:00:00.000Z',
+          reminderCount: 1,
+          userRespondedAt: '2026-06-03T12:00:00.000Z',
+        },
+      },
+    });
+
+    const gptService = {
+      analyzeVerificationThreadResponses: jest.fn(),
+    } as any;
+    const notificationManager = {
+      updateVerificationThreadAnalysis: jest.fn(),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
+    } as any;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          verification_ai_thread_analysis_enabled: false,
+          verification_ai_thread_analysis_message_limit: 3,
+        },
+      }),
+    } as any;
+    const service = new VerificationThreadAnalysisService(
+      configService,
+      gptService,
+      notificationManager,
+      verificationRepo,
+      detectionRepo
+    );
+    const updateSpy = jest.spyOn(verificationRepo, 'update');
+
+    const { message } = buildMessage({ id: 'msg-2' });
+    const handled = await service.handleThreadMessage(message as any);
+
+    expect(handled).toBe(true);
+    expect(
+      notificationManager.mirrorVerificationThreadMessageToEvidenceThread
+    ).toHaveBeenCalledWith(expect.objectContaining({ id: verificationEvent.id }), message);
+    expect(updateSpy).not.toHaveBeenCalled();
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
   });
 
@@ -259,6 +318,10 @@ describe('VerificationThreadAnalysisService (unit)', () => {
 
     const updated = await verificationRepo.findById(verificationEvent.id);
     expect(updated?.metadata).toEqual({
+      support_thread_reminder: {
+        reminderCount: 0,
+        userRespondedAt: '2026-06-03T12:00:00.000Z',
+      },
       thread_analysis: {
         analyzedMessageIds: ['msg-1'],
         latestAnalysis: {
@@ -558,7 +621,12 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       );
 
       const updated = await verificationRepo.findById(verificationEvent.id);
-      expect(updated?.metadata).toBeNull();
+      expect(updated?.metadata).toEqual({
+        support_thread_reminder: {
+          reminderCount: 0,
+          userRespondedAt: '2026-06-03T12:00:00.000Z',
+        },
+      });
     } finally {
       warnSpy.mockRestore();
     }

@@ -11,7 +11,9 @@ import {
 import { MAX_CASE_RESPONDER_THREAD_MEMBER_CAP } from '../utils/caseResponderSettings';
 import {
   MAX_CASE_REVIEW_REMINDER_HOURS,
+  MAX_CASE_REVIEW_VERY_STALE_DAYS,
   MIN_CASE_REVIEW_REMINDER_HOURS,
+  MIN_CASE_REVIEW_VERY_STALE_DAYS,
 } from '../utils/caseReviewReminderSettings';
 import { MAX_REPORT_AI_MAX_IMAGE_BYTES, MAX_REPORT_AI_MAX_IMAGES } from '../utils/reportAiSettings';
 import { USER_REPORT_REASON_MAX_LENGTH } from '../utils/userReportSettings';
@@ -551,6 +553,19 @@ const baseApplicationCommandBuilders = [
                 .setRequired(true)
                 .setMinValue(MIN_CASE_REVIEW_REMINDER_HOURS)
                 .setMaxValue(MAX_CASE_REVIEW_REMINDER_HOURS)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set-very-stale-days')
+            .setDescription('Set days before pending cases need final manual review')
+            .addIntegerOption((option) =>
+              option
+                .setName('days')
+                .setDescription('Days before a pending case is very stale')
+                .setRequired(true)
+                .setMinValue(MIN_CASE_REVIEW_VERY_STALE_DAYS)
+                .setMaxValue(MAX_CASE_REVIEW_VERY_STALE_DAYS)
             )
         )
     )

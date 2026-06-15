@@ -18,6 +18,8 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
 - Verify button: restricted role removed, thread resolved, notification updated, admin action logged.
 - Ban button: member banned, verification status set to BANNED (if present), thread resolved, admin action logged.
 - Reopen button: verification returns to PENDING, thread reopened, user restricted again.
+- Stale case digest: groups pending cases into fresh, stale, and very stale; very stale users are shown for final manual review.
+- User-facing support reminder: pings only the target user in their verification thread, not admins, and stops after the target replies or reaches the very-stale day threshold.
 
 ## Automated tests (high-signal, easy to maintain)
 
@@ -45,6 +47,11 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
 - `UserModerationService.banUser`
   - Calls Discord ban and updates `server_member` to BANNED.
   - Updates `verification_event` and resolves thread when one exists.
+- `CaseReviewReminderService`
+  - Sends one grouped admin digest per repeat window.
+  - Shows next user reminder timestamps using the same scheduling logic that sends reminders.
+  - Moves user reminders to the end of the admin review window when they collide with a digest.
+  - Stops user reminders after target response or the very-stale reminder limit.
 
 ## Full-stack smoke test (optional)
 
