@@ -33,10 +33,18 @@ export interface DetectionResult {
   profileData?: UserProfileData;
   detectionEventId?: string;
   gptAnalysis?: GPTProfileAnalysis;
+  gptTriggerReasons?: DetectionGptTriggerReason[];
   reportAiAnalysis?: ReportAIAnalysis;
 }
 
+export type DetectionGptTriggerReason =
+  | 'first_recent_messages'
+  | 'new_account'
+  | 'new_server_member'
+  | 'borderline_score';
+
 export interface DetectionMessageOptions {
+  /** Requires profileData because GPT analysis is profile-context based. */
   forceGpt?: boolean;
 }
 
@@ -246,15 +254,28 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
         profileData.recentMessages = [...profileData.recentMessages, content];
       }
 
+      const gptTriggerReasons: DetectionGptTriggerReason[] = [];
+      if (options.forceGpt === true) {
+        gptTriggerReasons.push('first_recent_messages');
+      }
+      if (isNewAccount) {
+        gptTriggerReasons.push('new_account');
+      }
+      if (isNewServerMember) {
+        gptTriggerReasons.push('new_server_member');
+      }
+      if (suspicionScore >= this.BORDERLINE_LOWER && suspicionScore <= this.BORDERLINE_UPPER) {
+        gptTriggerReasons.push('borderline_score');
+      }
+
+      if (options.forceGpt === true && profileData === undefined) {
+        console.warn('forceGpt requested without profileData; skipping GPT analysis.');
+      }
+
       // Determine if we should use GPT
       // Use GPT if explicitly requested by the caller, if the user is new, or if the
       // suspicion score is borderline (not clearly OK or clearly SUSPICIOUS).
-      const shouldUseGPT =
-        (options.forceGpt === true ||
-          isNewAccount ||
-          isNewServerMember ||
-          (suspicionScore >= this.BORDERLINE_LOWER && suspicionScore <= this.BORDERLINE_UPPER)) &&
-        profileData !== undefined;
+      const shouldUseGPT = gptTriggerReasons.length > 0 && profileData !== undefined;
 
       let result: DetectionResult;
       let gptAnalysis: GPTProfileAnalysis | undefined;
@@ -281,6 +302,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
           triggerContent: content,
           profileData: profileData,
           gptAnalysis,
+          gptTriggerReasons,
         };
       } else {
         result = {

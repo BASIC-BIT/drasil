@@ -53,6 +53,7 @@ describe('EventHandler (unit)', () => {
           detection_response_mode: 'notify_only',
           min_confidence_threshold: 70,
         },
+        gptTriggerReasons: ['first_recent_messages'],
       }),
       updateServerConfig: jest.fn().mockResolvedValue({}),
       updateServerSettings: jest.fn().mockResolvedValue({}),
@@ -616,6 +617,7 @@ describe('EventHandler (unit)', () => {
           promptVersion: 'test-prompt',
           isFallback: false,
         },
+        gptTriggerReasons: ['first_recent_messages'],
       }),
       detectNewJoin: jest.fn(),
     };
@@ -670,6 +672,8 @@ describe('EventHandler (unit)', () => {
         confidence_bucket: '50-69',
         detection_response_mode: 'notify_only',
         gpt_force_reason: 'first_recent_messages',
+        gpt_force_net_new: true,
+        gpt_trigger_reasons: ['first_recent_messages'],
         recent_message_count: 0,
         gpt_message_check_count: 3,
         gpt_used: true,
@@ -741,6 +745,56 @@ describe('EventHandler (unit)', () => {
       })
     );
     expect(productAnalyticsService.captureUserEvent).not.toHaveBeenCalled();
+  });
+
+  it('clamps the forced GPT message window to retained context capacity', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'free nitro',
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'notify_only',
+          gpt_message_check_count: 25,
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const messageContextRepository = {
+      findRecentByServerAndUser: jest.fn().mockResolvedValue(
+        Array.from({ length: 20 }, (_, index) => ({
+          content_preview: `message ${index + 1}`,
+        }))
+      ),
+      recordMessage: jest.fn().mockResolvedValue(undefined),
+      pruneExpired: jest.fn().mockResolvedValue(0),
+    };
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      messageContextRepository,
+    });
+
+    await (handler as any).handleMessage(buildMessage(new PermissionsBitField()));
+
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'free nitro',
+      expect.objectContaining({
+        recentMessages: expect.arrayContaining(['message 1', 'message 20']),
+      })
+    );
+    expect(detectionOrchestrator.detectMessage.mock.calls[0]).toHaveLength(4);
   });
 
   it('loads config before exempting moderators when no cached config exists', async () => {

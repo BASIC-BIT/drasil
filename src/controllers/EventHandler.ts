@@ -742,7 +742,7 @@ export class EventHandler implements IEventHandler {
       Number.isFinite(configuredCount) &&
       configuredCount > 0
     ) {
-      return configuredCount;
+      return Math.min(configuredCount, MESSAGE_CONTEXT_USER_LIMIT);
     }
 
     return null;
@@ -766,6 +766,10 @@ export class EventHandler implements IEventHandler {
         confidence_bucket: getConfidenceBucket(detectionResult.confidence),
         detection_response_mode: responseSettings.mode,
         gpt_force_reason: 'first_recent_messages',
+        gpt_force_net_new:
+          detectionResult.gptTriggerReasons?.length === 1 &&
+          detectionResult.gptTriggerReasons[0] === 'first_recent_messages',
+        gpt_trigger_reasons: detectionResult.gptTriggerReasons,
         recent_message_count: recentMessageCount,
         gpt_message_check_count: gptMessageCheckCount,
         gpt_used: detectionResult.gptAnalysis !== undefined,
