@@ -22,6 +22,7 @@ import {
   CASE_REVIEW_REMINDER_REPEAT_HOURS_SETTING_KEY,
   CASE_REVIEW_REMINDER_STALE_HOURS_SETTING_KEY,
   CASE_REVIEW_REMINDERS_ENABLED_SETTING_KEY,
+  CASE_REVIEW_VERY_STALE_DAYS_SETTING_KEY,
   getCaseReviewReminderSettings,
 } from '../utils/caseReviewReminderSettings';
 import {
@@ -744,6 +745,21 @@ export class ConfigSubcommandHandler {
           return;
         }
 
+        case 'set-very-stale-days': {
+          const days = interaction.options.getInteger('days', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [CASE_REVIEW_VERY_STALE_DAYS_SETTING_KEY]: days,
+          });
+          const settings = getCaseReviewReminderSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated very stale case threshold.\n\n' +
+              this.formatCaseReviewReminderSettings(settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
         default:
           await interaction.reply({
             content: 'Unsupported case-review subcommand.',
@@ -769,7 +785,9 @@ export class ConfigSubcommandHandler {
       `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
       `Stale threshold: \`${settings.staleHours}h\``,
       `Repeat interval: \`${settings.repeatHours}h\``,
-      'Reminders post to the admin channel and mention configured case responder roles.',
+      `Very stale threshold: \`${settings.veryStaleDays}d\``,
+      'Admin reminders post to the admin channel and mention configured case responder roles.',
+      'User-facing support reminders post every 24h until the very-stale threshold.',
     ].join('\n');
   }
 

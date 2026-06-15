@@ -121,6 +121,26 @@ The user-facing verification thread, when present, remains separate in the
 verification/quarantine channel and is linked prominently in the admin embed's
 `Case Threads` field.
 
+## Case review reminders
+
+`CaseReviewReminderService` runs every 15 minutes and uses a daily, opinionated
+case-review workflow by default.
+
+- Admin stale-case digests post to the admin channel at most once per server repeat
+  window. The default stale threshold and repeat cadence are 24 hours.
+- Digests group pending cases as fresh, stale, and very stale. Very stale cases are
+  cases beyond the configured day threshold, defaulting to 3 days, and should get a
+  final manual ban/no-ban review.
+- User-facing support-thread reminders post only in the normal user-facing
+  verification thread. They ping the target user, not admins.
+- User reminders use fixed copy: `Ticket reminder: {elapsed} elapsed. {user_mention} See above.`
+- User reminders run every 24 hours until the very-stale day threshold or until the
+  target user responds. Target replies are also mirrored to admin evidence and the
+  live moderation queue when configured.
+- User reminders do not post inside the one-hour admin review window after a stale
+  digest. If a reminder would collide with that window, it is moved to the end of
+  the window and the digest shows the same next-reminder timestamp.
+
 ## User report
 
 1. A user submits the report modal.
