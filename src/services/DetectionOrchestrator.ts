@@ -36,6 +36,10 @@ export interface DetectionResult {
   reportAiAnalysis?: ReportAIAnalysis;
 }
 
+export interface DetectionMessageOptions {
+  forceGpt?: boolean;
+}
+
 /**
  * Interface for the DetectionOrchestrator service
  */
@@ -53,7 +57,8 @@ export interface IDetectionOrchestrator {
     serverId: string,
     userId: string,
     content: string,
-    profileData?: UserProfileData
+    profileData?: UserProfileData,
+    options?: DetectionMessageOptions
   ): Promise<DetectionResult>;
 
   /**
@@ -170,7 +175,8 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     serverId: string,
     userId: string,
     content: string,
-    profileData?: UserProfileData // Make optional to match caller
+    profileData?: UserProfileData, // Make optional to match caller
+    options: DetectionMessageOptions = {}
   ): Promise<DetectionResult> {
     try {
       // Add outer try block
@@ -241,11 +247,11 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       }
 
       // Determine if we should use GPT
-      // Use GPT if:
-      // 1. The user is new (either to Discord or to the server) OR
-      // 2. The suspicion score is borderline (not clearly OK or clearly SUSPICIOUS)
+      // Use GPT if explicitly requested by the caller, if the user is new, or if the
+      // suspicion score is borderline (not clearly OK or clearly SUSPICIOUS).
       const shouldUseGPT =
-        (isNewAccount ||
+        (options.forceGpt === true ||
+          isNewAccount ||
           isNewServerMember ||
           (suspicionScore >= this.BORDERLINE_LOWER && suspicionScore <= this.BORDERLINE_UPPER)) &&
         profileData !== undefined;
