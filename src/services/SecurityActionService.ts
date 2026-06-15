@@ -247,6 +247,8 @@ export interface RoleIntakeOptions {
   execute: boolean;
   limit?: number;
   delayMs?: number;
+  memberTimeoutMs?: number;
+  onProgress?: (progress: RoleIntakeProgress) => Promise<void> | void;
 }
 
 export interface RoleIntakeFailure {
@@ -269,6 +271,11 @@ export interface RoleIntakeResult {
   skippedOverLimit: number;
   failed: number;
   failures: RoleIntakeFailure[];
+}
+
+export interface RoleIntakeProgress {
+  result: RoleIntakeResult;
+  completedMembers: number;
 }
 
 /**
@@ -1714,12 +1721,58 @@ export class SecurityActionService implements ISecurityActionService {
       repairCase = await this.tryRestrictUser(member, activeCase);
     }
 
-    const threadRepair = await this.threadManager.repairVerificationThread(member, repairCase);
+    let threadRepair: VerificationThreadRepairResult;
+    try {
+      threadRepair = await this.threadManager.repairVerificationThread(member, repairCase);
+    } catch (error) {
+      console.error(`Failed to repair active case thread for ${member.user.tag}:`, error);
+      repairCase = await this.recordVerificationActionFailure(repairCase, 'thread', error);
+
+      try {
+        await this.notificationManager.updateNotificationButtons(
+          repairCase,
+          VerificationStatus.PENDING
+        );
+      } catch (notificationError) {
+        console.error(
+          `Failed to update notification for failed case repair ${repairCase.id}; continuing repair flow:`,
+          notificationError
+        );
+      }
+
+      return {
+        repaired: false,
+        message: `Could not create or repair the verification thread for ${member.user.tag}: ${this.formatActionFailureMessage(error)}`,
+        verificationEventId: repairCase.id,
+        threadId: null,
+        threadCreated: false,
+        userAdded: false,
+        promptSent: false,
+        promptAlreadyPresent: false,
+      };
+    }
     if (!threadRepair.threadId) {
+      const error = new Error(
+        `Could not create or repair the verification thread for ${member.user.tag}.`
+      );
+      repairCase = await this.recordVerificationActionFailure(repairCase, 'thread', error);
+
+      try {
+        await this.notificationManager.updateNotificationButtons(
+          repairCase,
+          VerificationStatus.PENDING
+        );
+      } catch (notificationError) {
+        console.error(
+          `Failed to update notification for failed case repair ${repairCase.id}; continuing repair flow:`,
+          notificationError
+        );
+      }
+
       return {
         ...threadRepair,
         repaired: false,
-        message: `Could not create or repair the verification thread for ${member.user.tag}.`,
+        message: error.message,
         verificationEventId: repairCase.id,
       };
     }

@@ -1407,8 +1407,9 @@ export class InteractionHandler implements IInteractionHandler {
       });
     } catch (error) {
       console.error('Error repairing active case:', error);
+      const message = error instanceof Error && error.message ? error.message : 'Unknown error';
       await interaction.followUp({
-        content: 'An error occurred while repairing the active case.',
+        content: `An error occurred while repairing the active case: ${message}`,
         flags: MessageFlags.Ephemeral,
       });
     }

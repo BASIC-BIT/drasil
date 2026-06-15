@@ -768,6 +768,56 @@ describe('SecurityActionService (unit)', () => {
     }
   });
 
+  it('records a thread warning when active case repair still cannot add the user', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const guildId = 'guild-case-repair-still-fails';
+    const userId = 'user-case-repair-still-fails';
+    const member = buildMember(guildId, userId);
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    verificationEvent.thread_id = 'thread-1';
+    await verificationEventRepository.update(verificationEvent.id, verificationEvent);
+    threadManager.repairVerificationThread.mockRejectedValueOnce(
+      new Error('Failed to add flagged user to verification thread: Missing Access')
+    );
+
+    try {
+      const result = await buildService().repairActiveCase(member);
+      const updatedCase = await verificationEventRepository.findById(verificationEvent.id);
+
+      expect(result).toMatchObject({
+        repaired: false,
+        verificationEventId: verificationEvent.id,
+        threadId: null,
+        userAdded: false,
+      });
+      expect(result.message).toContain('Missing Access');
+      expect(getVerificationActionFailures(updatedCase?.metadata)).toEqual([
+        expect.objectContaining({
+          action: 'thread',
+          message: 'Failed to add flagged user to verification thread: Missing Access',
+        }),
+      ]);
+      expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: verificationEvent.id,
+          metadata: expect.objectContaining({
+            [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: [
+              expect.objectContaining({ action: 'thread' }),
+            ],
+          }),
+        }),
+        VerificationStatus.PENDING
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('refreshes the latest resolved case notification from stored state', async () => {
     const member = buildMember('guild-1', 'user-refresh');
     const pendingEvent = await verificationEventRepository.createFromDetection(

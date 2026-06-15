@@ -7,7 +7,11 @@ import {
   Role,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
-import { AdminCaseAction, ISecurityActionService } from '../services/SecurityActionService';
+import {
+  AdminCaseAction,
+  ISecurityActionService,
+  RoleIntakeProgress,
+} from '../services/SecurityActionService';
 import { requestSlashCommandConfirmation } from '../utils/slashCommandConfirmations';
 
 type ReplyGuildInstallRequired = (interaction: ChatInputCommandInteraction) => Promise<void>;
@@ -317,6 +321,7 @@ export class CaseCommandHandler {
     execute: boolean,
     limit: number | undefined
   ): Promise<void> {
+    let lastProgressUpdateAt = 0;
     try {
       const result = await this.securityActionService.intakeRoleMembers({
         role,
@@ -325,6 +330,25 @@ export class CaseCommandHandler {
         action,
         execute,
         limit,
+        onProgress: execute
+          ? async (progress): Promise<void> => {
+              const now = Date.now();
+              const shouldUpdate =
+                progress.completedMembers === 1 ||
+                progress.completedMembers === progress.result.processed ||
+                progress.completedMembers % 5 === 0 ||
+                now - lastProgressUpdateAt > 15_000;
+              if (!shouldUpdate) {
+                return;
+              }
+
+              lastProgressUpdateAt = now;
+              await interaction.editReply({
+                content: this.formatRoleIntakeProgress(progress),
+                allowedMentions: { parse: [] },
+              });
+            }
+          : undefined,
       });
 
       await interaction.editReply({
@@ -383,5 +407,18 @@ export class CaseCommandHandler {
     }
 
     return lines.join('\n');
+  }
+
+  private formatRoleIntakeProgress(progress: RoleIntakeProgress): string {
+    const result = progress.result;
+    return [
+      `Executing role intake for ${result.roleName} (${result.roleId})`,
+      `Batch: ${result.batchId}`,
+      `Action: ${result.action}`,
+      `Progress: ${progress.completedMembers}/${result.processed} selected members processed`,
+      `Cases opened: ${result.opened}`,
+      `Skipped active cases: ${result.skippedActiveCases}`,
+      `Failures: ${result.failed}`,
+    ].join('\n');
   }
 }
