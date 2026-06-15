@@ -53,7 +53,6 @@ describe('EventHandler (unit)', () => {
           detection_response_mode: 'notify_only',
           min_confidence_threshold: 70,
         },
-        gptTriggerReasons: ['first_recent_messages'],
       }),
       updateServerConfig: jest.fn().mockResolvedValue({}),
       updateServerSettings: jest.fn().mockResolvedValue({}),
