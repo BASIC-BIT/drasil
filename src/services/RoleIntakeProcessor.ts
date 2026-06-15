@@ -200,6 +200,7 @@ export class RoleIntakeProcessor {
     try {
       return await Promise.race([operation, timeoutPromise]);
     } finally {
+      void operation.catch(() => undefined);
       if (timeout) {
         clearTimeout(timeout);
       }
