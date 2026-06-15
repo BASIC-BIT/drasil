@@ -24,7 +24,7 @@ import { REPORT_REVIEW_THREAD_TYPE, VERIFICATION_THREAD_TYPE_METADATA_KEY } from
 
 const CASE_REVIEW_REMINDER_INTERVAL_MS = 15 * 60 * 1000;
 const CASE_REVIEW_REMINDER_MAX_VISIBLE_CASES = 10;
-const CASE_REVIEW_DIGEST_MESSAGE_MAX_LENGTH = 3500;
+const CASE_REVIEW_DIGEST_MESSAGE_MAX_LENGTH = 1900;
 const CASE_REVIEW_DIGEST_CONTINUED_HEADING = 'Case review reminder continued';
 
 export interface ICaseReviewReminderService {
@@ -127,7 +127,6 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
 
       if (digestSent) {
         adminDigestSentAt = now;
-        await this.stampAdminDigestSent(server.guild_id, now);
       }
     }
 
@@ -204,13 +203,21 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
           allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
           components: [this.createDigestActionRow(server.guild_id)],
         });
+        await this.stampAdminDigestSent(server.guild_id, now);
         continue;
       }
 
-      await channel.send({
-        content: messages[index],
-        allowedMentions: this.presentationBuilder.createAdminAllowedMentions([]),
-      });
+      await channel
+        .send({
+          content: messages[index],
+          allowedMentions: this.presentationBuilder.createAdminAllowedMentions([]),
+        })
+        .catch((error) => {
+          console.warn(
+            `Failed to send continuation case review digest for guild ${server.guild_id}:`,
+            error
+          );
+        });
     }
 
     return messages.length > 0;

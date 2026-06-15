@@ -229,7 +229,7 @@ describe('CaseReviewReminderService (unit)', () => {
     expect(payloads[0].components).toHaveLength(1);
 
     for (const payload of payloads) {
-      expect(payload.content.length).toBeLessThanOrEqual(4000);
+      expect(payload.content.length).toBeLessThanOrEqual(1900);
       const caseLines = payload.content
         .split('\n')
         .filter((line: string) => line.includes('since update'));
@@ -241,6 +241,39 @@ describe('CaseReviewReminderService (unit)', () => {
       expect(payload.allowedMentions.roles).toEqual([]);
       expect(payload.components).toBeUndefined();
     }
+  });
+
+  it('stamps the digest after the role-ping chunk when continuation chunks fail', async () => {
+    const now = new Date('2026-06-03T12:00:00.000Z');
+    const adminSend = jest
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new Error('continuation failed'));
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { service, configService } = buildService({
+      server: buildServer({
+        case_review_reminder_stale_hours: 24,
+        case_review_reminder_repeat_hours: 24,
+        case_responder_role_ids: ['123456789012345678'],
+        case_responder_routing_mode: 'ping_only',
+      }),
+      pendingCases: buildLargePendingCases(10, new Date('2026-06-02T10:00:00.000Z')),
+      adminSend,
+    });
+
+    try {
+      await service.runOnce(now);
+    } finally {
+      consoleWarn.mockRestore();
+    }
+
+    expect(adminSend.mock.calls.length).toBeGreaterThan(1);
+    expect(configService.updateServerSettings).toHaveBeenCalledWith(
+      'guild-1',
+      expect.objectContaining({
+        [CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]: now.toISOString(),
+      })
+    );
   });
 
   it('adds a web queue link to the digest when the public web URL is configured', async () => {
