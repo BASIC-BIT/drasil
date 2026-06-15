@@ -24,6 +24,8 @@ import { REPORT_REVIEW_THREAD_TYPE, VERIFICATION_THREAD_TYPE_METADATA_KEY } from
 
 const CASE_REVIEW_REMINDER_INTERVAL_MS = 15 * 60 * 1000;
 const CASE_REVIEW_REMINDER_MAX_VISIBLE_CASES = 10;
+const CASE_REVIEW_DIGEST_MESSAGE_MAX_LENGTH = 1900;
+const CASE_REVIEW_DIGEST_CONTINUED_HEADING = 'Case review reminder continued';
 
 export interface ICaseReviewReminderService {
   start(): void;
@@ -116,42 +118,15 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       staleCases.length > 0 &&
       this.shouldSendDigest(lastAdminDigestAt, now, settings.repeatHours)
     ) {
-      const channel = await this.configService.getAdminChannel(server.guild_id);
-      if (channel) {
-        const digestPlans = new Map(
-          pendingCases.map((event) => [
-            event.id,
-            buildCaseReminderPlan(event, settings, now, {
-              lastAdminDigestAt: now,
-              supportsUserReminder: this.isUserFacingSupportCase(event),
-            }),
-          ])
-        );
-        const roleIds = this.presentationBuilder.getCaseNotificationRoleIds(server);
-        await channel.send({
-          content: this.buildReminderMessage(
-            server.guild_id,
-            channel.id,
-            this.sortPendingCasesForDigest(pendingCases, digestPlans),
-            digestPlans,
-            now,
-            this.presentationBuilder.formatRoleMentions(roleIds)
-          ),
-          allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
-          components: [this.createDigestActionRow(server.guild_id)],
-        });
-
-        adminDigestSentAt = now;
-        try {
-          await this.configService.updateServerSettings(server.guild_id, {
-            [CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]: now.toISOString(),
-          });
-        } catch (error) {
-          console.error(
-            `Failed to stamp case review digest metadata for ${server.guild_id}:`,
-            error
-          );
+      const digestSent = await this.sendAdminDigest(server, pendingCases, settings, now).catch(
+        (error) => {
+          console.warn(`Failed to send case review digest for guild ${server.guild_id}:`, error);
+          return false;
         }
+      );
+
+      if (digestSent) {
+        adminDigestSentAt = now;
       }
     }
 
@@ -191,27 +166,109 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     });
   }
 
-  private buildReminderMessage(
+  private async sendAdminDigest(
+    server: Server,
+    pendingCases: VerificationEvent[],
+    settings: ReturnType<typeof getCaseReviewReminderSettings>,
+    now: Date
+  ): Promise<boolean> {
+    const channel = await this.configService.getAdminChannel(server.guild_id);
+    if (!channel) {
+      return false;
+    }
+
+    const digestPlans = new Map(
+      pendingCases.map((event) => [
+        event.id,
+        buildCaseReminderPlan(event, settings, now, {
+          lastAdminDigestAt: now,
+          supportsUserReminder: this.isUserFacingSupportCase(event),
+        }),
+      ])
+    );
+    const roleIds = this.presentationBuilder.getCaseNotificationRoleIds(server);
+    const messages = this.buildReminderMessages(
+      server.guild_id,
+      channel.id,
+      this.sortPendingCasesForDigest(pendingCases, digestPlans),
+      digestPlans,
+      now,
+      this.presentationBuilder.formatRoleMentions(roleIds)
+    );
+
+    for (let index = 0; index < messages.length; index += 1) {
+      if (index === 0) {
+        await channel.send({
+          content: messages[index],
+          allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
+          components: [this.createDigestActionRow(server.guild_id)],
+        });
+        await this.stampAdminDigestSent(server.guild_id, now);
+        continue;
+      }
+
+      await channel
+        .send({
+          content: messages[index],
+          allowedMentions: this.presentationBuilder.createAdminAllowedMentions([]),
+        })
+        .catch((error) => {
+          console.warn(
+            `Failed to send continuation case review digest for guild ${server.guild_id}:`,
+            error
+          );
+        });
+    }
+
+    return messages.length > 0;
+  }
+
+  private async stampAdminDigestSent(guildId: string, now: Date): Promise<void> {
+    try {
+      await this.configService.updateServerSettings(guildId, {
+        [CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]: now.toISOString(),
+      });
+    } catch (error) {
+      console.error(`Failed to stamp case review digest metadata for ${guildId}:`, error);
+    }
+  }
+
+  private buildReminderMessages(
     guildId: string,
     adminChannelId: string,
     events: VerificationEvent[],
     plans: Map<string, CaseReminderPlan>,
     now: Date,
     heading = 'Case review reminder'
-  ): string {
+  ): string[] {
+    return this.splitDigestLines(
+      this.buildReminderMessageLines(guildId, adminChannelId, events, plans, now, heading)
+    );
+  }
+
+  private buildReminderMessageLines(
+    guildId: string,
+    adminChannelId: string,
+    events: VerificationEvent[],
+    plans: Map<string, CaseReminderPlan>,
+    now: Date,
+    heading = 'Case review reminder'
+  ): string[] {
     const groupedEvents = this.groupEventsByFreshness(events, plans);
     const staleCount = groupedEvents.stale.length;
     const veryStaleCount = groupedEvents.very_stale.length;
     const lines = [
-      heading,
       `There ${events.length === 1 ? 'is' : 'are'} ${events.length} pending case${events.length === 1 ? '' : 's'} needing review: ${groupedEvents.fresh.length} fresh, ${staleCount} stale, ${veryStaleCount} very stale.`,
     ];
+    if (heading) {
+      lines.unshift(heading);
+    }
 
     let remainingVisibleCases = CASE_REVIEW_REMINDER_MAX_VISIBLE_CASES;
 
     remainingVisibleCases = this.appendCaseGroup(
       lines,
-      'Very stale - final manual check recommended',
+      'Very stale - awaiting moderator review',
       groupedEvents.very_stale,
       plans,
       guildId,
@@ -246,10 +303,46 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
 
     lines.push(
       '',
-      `User-facing support reminders are sent every ${SUPPORT_THREAD_REMINDER_INTERVAL_HOURS}h until the very-stale threshold, then moderators should make a final manual call.`
+      `User-facing support reminders are sent every ${SUPPORT_THREAD_REMINDER_INTERVAL_HOURS}h until the very-stale threshold. Very stale cases remain pending for moderator review.`
     );
 
-    return lines.join('\n');
+    return lines;
+  }
+
+  private splitDigestLines(lines: string[]): string[] {
+    const messages: string[] = [];
+    let currentLines: string[] = [];
+
+    for (const line of lines) {
+      const candidateLines = [...currentLines, line];
+      if (
+        currentLines.length > 0 &&
+        candidateLines.join('\n').length > CASE_REVIEW_DIGEST_MESSAGE_MAX_LENGTH
+      ) {
+        messages.push(currentLines.join('\n'));
+        currentLines = [CASE_REVIEW_DIGEST_CONTINUED_HEADING];
+      }
+
+      if (currentLines.length === 1 && currentLines[0] === CASE_REVIEW_DIGEST_CONTINUED_HEADING) {
+        if (line === '') {
+          continue;
+        }
+
+        const continuedCandidate = [...currentLines, line].join('\n');
+        if (continuedCandidate.length > CASE_REVIEW_DIGEST_MESSAGE_MAX_LENGTH) {
+          messages.push(currentLines.join('\n'));
+          currentLines = [];
+        }
+      }
+
+      currentLines.push(line);
+    }
+
+    if (currentLines.length > 0) {
+      messages.push(currentLines.join('\n'));
+    }
+
+    return messages;
   }
 
   private groupEventsByFreshness(
@@ -327,10 +420,10 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     }
     if (plan.userRemindersComplete) {
       if (plan.userReminderLimit === 0) {
-        return 'user reminder window closed; final manual check recommended';
+        return 'user reminder window closed; awaiting moderator review';
       }
 
-      return `user reminders sent ${plan.userReminderCount}/${plan.userReminderLimit}; final manual check recommended`;
+      return `user reminders sent ${plan.userReminderCount}/${plan.userReminderLimit}; awaiting moderator review`;
     }
     if (plan.nextUserReminderAt) {
       return `next user reminder ${this.formatTimestamp(plan.nextUserReminderAt)} (${plan.userReminderCount}/${plan.userReminderLimit} sent)`;
