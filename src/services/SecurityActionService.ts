@@ -856,7 +856,9 @@ export class SecurityActionService implements ISecurityActionService {
       if (!restricted) {
         throw new Error(`Failed to restrict user ${member.user.tag}`);
       }
-      return verificationEvent;
+      return (
+        (await this.verificationEventRepository.findById(verificationEvent.id)) ?? verificationEvent
+      );
     } catch (error) {
       console.error(`Failed to restrict user ${member.user.tag}; continuing case flow:`, error);
       return this.recordVerificationActionFailure(verificationEvent, 'restrict', error);

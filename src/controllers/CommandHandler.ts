@@ -379,6 +379,11 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    if (subcommandGroup === 'role-quarantine') {
+      await this.configSubcommandHandler.handleRoleQuarantineConfigCommand(interaction, guild.id);
+      return;
+    }
+
     if (subcommandGroup === 'heuristic') {
       await this.configSubcommandHandler.handleHeuristicConfigCommand(interaction, guild.id);
       return;

@@ -1,6 +1,10 @@
 export const VERIFICATION_ACTION_FAILURES_METADATA_KEY = 'action_failures';
 
-export type VerificationActionFailureKind = 'restrict' | 'thread' | 'private_evidence_thread';
+export type VerificationActionFailureKind =
+  | 'restrict'
+  | 'thread'
+  | 'private_evidence_thread'
+  | 'role_quarantine';
 
 export interface VerificationActionFailure {
   action: VerificationActionFailureKind;
@@ -17,7 +21,12 @@ function metadataToRecord(metadata: unknown): Record<string, unknown> {
 }
 
 function isVerificationActionFailureKind(value: unknown): value is VerificationActionFailureKind {
-  return value === 'restrict' || value === 'thread' || value === 'private_evidence_thread';
+  return (
+    value === 'restrict' ||
+    value === 'thread' ||
+    value === 'private_evidence_thread' ||
+    value === 'role_quarantine'
+  );
 }
 
 function isVerificationActionFailure(value: unknown): value is VerificationActionFailure {

@@ -216,6 +216,46 @@ const baseApplicationCommandBuilders = [
     )
     .addSubcommandGroup((group) =>
       group
+        .setName('role-quarantine')
+        .setDescription('Configure restricted-user role quarantine')
+        .addSubcommand((subcommand) =>
+          subcommand.setName('view').setDescription('View role quarantine settings')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set-mode')
+            .setDescription('Set role quarantine behavior for future restrictions')
+            .addStringOption((option) =>
+              option
+                .setName('mode')
+                .setDescription('Role quarantine mode')
+                .setRequired(true)
+                .addChoices(
+                  { name: 'Off', value: 'off' },
+                  { name: 'Audit only', value: 'audit_only' },
+                  { name: 'Automatic', value: 'automatic' }
+                )
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('exempt-add')
+            .setDescription('Keep a role during automatic role quarantine')
+            .addRoleOption((option) =>
+              option.setName('role').setDescription('Role to exempt').setRequired(true)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('exempt-remove')
+            .setDescription('Remove a role from the role quarantine exemption list')
+            .addRoleOption((option) =>
+              option.setName('role').setDescription('Role to stop exempting').setRequired(true)
+            )
+        )
+    )
+    .addSubcommandGroup((group) =>
+      group
         .setName('heuristic')
         .setDescription('Manage heuristic detection settings')
         .addSubcommand((subcommand) =>
