@@ -212,6 +212,10 @@ describe('UserModerationService (unit)', () => {
         skippedRoles: [],
         failedRestores: [],
       }),
+      abandonActiveSnapshot: jest.fn().mockResolvedValue({
+        status: 'no_active_snapshot',
+        snapshotId: null,
+      }),
     };
 
     await serverRepository.getOrCreateServer(guildId);
@@ -268,6 +272,75 @@ describe('UserModerationService (unit)', () => {
         role_quarantine: expect.objectContaining({ removed_role_count: 1 }),
       })
     );
+  });
+
+  it('restores quarantined roles when restricted role assignment fails', async () => {
+    const guildId = 'guild-role-quarantine-restrict-fails';
+    const userId = 'user-role-quarantine-restrict-fails';
+    const moderator = { id: 'mod-role-quarantine' } as User;
+    const member = buildMember(guildId, userId);
+    roleManager.assignRestrictedRole.mockResolvedValueOnce(false);
+    const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      quarantineMember: jest.fn().mockResolvedValue({
+        status: 'quarantined',
+        mode: 'automatic',
+        snapshotId: 'role-quarantine-1',
+        originalRoleIds: ['role-1'],
+        plannedRoleIds: ['role-1'],
+        removedRoleIds: ['role-1'],
+        skippedRoles: [],
+        failedRemovals: [],
+      }),
+      restoreMemberRoles: jest.fn().mockResolvedValue({
+        status: 'restored',
+        snapshotId: 'role-quarantine-1',
+        attemptedRoleIds: ['role-1'],
+        restoredRoleIds: ['role-1'],
+        skippedRoles: [],
+        failedRestores: [],
+      }),
+      abandonActiveSnapshot: jest.fn().mockResolvedValue({
+        status: 'no_active_snapshot',
+        snapshotId: null,
+      }),
+    };
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.ADMIN_CASE,
+      confidence: 1,
+      reasons: ['Admin case'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService,
+      undefined,
+      roleQuarantineService
+    );
+
+    await expect(service.restrictUser(member, moderator)).rejects.toThrow(
+      'Failed to assign restricted role'
+    );
+    expect(roleQuarantineService.restoreMemberRoles).toHaveBeenCalledWith(member, moderator);
+    const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
+    expect(serverMember?.is_restricted).not.toBe(true);
   });
 
   it('lifts a restriction without resolving the pending case', async () => {
@@ -511,6 +584,10 @@ describe('UserModerationService (unit)', () => {
         restoredRoleIds: ['role-1'],
         skippedRoles: [],
         failedRestores: [],
+      }),
+      abandonActiveSnapshot: jest.fn().mockResolvedValue({
+        status: 'no_active_snapshot',
+        snapshotId: null,
       }),
     };
 
@@ -794,6 +871,14 @@ describe('UserModerationService (unit)', () => {
     const userId = 'user-ban';
     const moderator = { id: 'mod-ban' } as User;
     const member = buildMember(guildId, userId);
+    const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      quarantineMember: jest.fn(),
+      restoreMemberRoles: jest.fn(),
+      abandonActiveSnapshot: jest.fn().mockResolvedValue({
+        status: 'abandoned',
+        snapshotId: 'role-quarantine-1',
+      }),
+    };
 
     await serverRepository.getOrCreateServer(guildId);
     await userRepository.getOrCreateUser(userId, 'test-user');
@@ -822,7 +907,9 @@ describe('UserModerationService (unit)', () => {
       adminActionService,
       threadManager,
       undefined,
-      moderationOutcomeService
+      moderationOutcomeService,
+      undefined,
+      roleQuarantineService
     );
 
     await service.banUser(member, 'banned in test', moderator);
@@ -862,6 +949,12 @@ describe('UserModerationService (unit)', () => {
     );
     expect(notificationManager.logActionToMessage).toHaveBeenCalled();
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
+    expect(roleQuarantineService.abandonActiveSnapshot).toHaveBeenCalledWith(
+      guildId,
+      userId,
+      'drasil_ban',
+      moderator.id
+    );
   });
 
   it('bans all duplicate pending cases for a user', async () => {

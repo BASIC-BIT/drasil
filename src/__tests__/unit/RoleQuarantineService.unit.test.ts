@@ -113,7 +113,7 @@ describe('RoleQuarantineService (unit)', () => {
       id: 'privileged-role',
       permissions: [PermissionFlagsBits.ManageGuild],
     });
-    const exemptRole = createRole({ id: '100005' });
+    const exemptRole = createRole({ id: '100000000000000005' });
     const highRole = createRole({ id: 'high-role', position: 100 });
     const restrictedRole = createRole({ id: 'restricted-role' });
     const member = createMember([
@@ -129,7 +129,7 @@ describe('RoleQuarantineService (unit)', () => {
     const service = new RoleQuarantineService(
       createConfigService({
         role_quarantine_mode: 'automatic',
-        role_quarantine_exempt_role_ids: ['100005'],
+        role_quarantine_exempt_role_ids: ['100000000000000005'],
       }),
       snapshots
     );
@@ -146,10 +146,40 @@ describe('RoleQuarantineService (unit)', () => {
     );
     expect(member.roles.cache.has('safe-role')).toBe(false);
     expect(result.skippedRoles.map((role) => role.role_id)).toEqual(
-      expect.arrayContaining(['managed-role', 'bot-role', 'privileged-role', '100005', 'high-role'])
+      expect.arrayContaining([
+        'managed-role',
+        'bot-role',
+        'privileged-role',
+        '100000000000000005',
+        'high-role',
+      ])
     );
     const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
     expect(snapshot?.removed_role_ids).toEqual(['safe-role']);
+  });
+
+  it('records planned restore role ids before Discord removals are finalized', async () => {
+    const safeRole = createRole({ id: 'safe-role' });
+    const member = createMember([safeRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'automatic' }),
+      snapshots
+    );
+    const updateSnapshot = jest
+      .spyOn(snapshots, 'update')
+      .mockRejectedValueOnce(new Error('Database unavailable'));
+
+    try {
+      await expect(service.quarantineMember(member, createVerificationEvent())).rejects.toThrow(
+        'Database unavailable'
+      );
+      const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+      expect(snapshot?.removed_role_ids).toEqual(['safe-role']);
+      expect(member.roles.cache.has('safe-role')).toBe(false);
+    } finally {
+      updateSnapshot.mockRestore();
+    }
   });
 
   it('audits removable roles without creating a snapshot or removing roles', async () => {
@@ -270,5 +300,61 @@ describe('RoleQuarantineService (unit)', () => {
     expect(secondResult.restoredRoleIds).toEqual(['restored-role']);
     expect(member.roles.cache.has('restored-role')).toBe(true);
     await expect(snapshots.findActiveByServerAndUser('guild-1', 'user-1')).resolves.toBeNull();
+  });
+
+  it('keeps a snapshot active when restore skips a retryable role hierarchy issue', async () => {
+    const highRole = createRole({ id: 'high-role', position: 100 });
+    const member = createMember([], [highRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const snapshot = await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'verification-1',
+      mode: 'automatic',
+      originalRoleIds: ['high-role'],
+      plannedRoleIds: ['high-role'],
+      removedRoleIds: ['high-role'],
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'automatic' }),
+      snapshots
+    );
+
+    const result = await service.restoreMemberRoles(member, { id: 'moderator-1' } as User);
+
+    expect(result.status).toBe('partially_restored');
+    expect(result.skippedRoles).toEqual([
+      expect.objectContaining({ role_id: 'high-role', reason: 'role is at or above Drasil role' }),
+    ]);
+    await expect(snapshots.findActiveByServerAndUser('guild-1', 'user-1')).resolves.toEqual(
+      expect.objectContaining({ id: snapshot.id })
+    );
+  });
+
+  it('abandons an active snapshot without restoring roles', async () => {
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const snapshot = await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'verification-1',
+      mode: 'automatic',
+      originalRoleIds: ['role-1'],
+      plannedRoleIds: ['role-1'],
+      removedRoleIds: ['role-1'],
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'automatic' }),
+      snapshots
+    );
+
+    const result = await service.abandonActiveSnapshot('guild-1', 'user-1', 'ban', 'moderator-1');
+
+    expect(result).toEqual({ status: 'abandoned', snapshotId: snapshot.id });
+    await expect(snapshots.findActiveByServerAndUser('guild-1', 'user-1')).resolves.toBeNull();
+    const updated = await snapshots.update(snapshot.id, {});
+    expect(updated?.status).toBe(RoleQuarantineSnapshotStatus.ABANDONED);
+    expect(updated?.metadata).toEqual(
+      expect.objectContaining({ abandon_reason: 'ban', abandoned_by: 'moderator-1' })
+    );
   });
 });

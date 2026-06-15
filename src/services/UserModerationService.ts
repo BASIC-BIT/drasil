@@ -342,7 +342,7 @@ export class UserModerationService implements IUserModerationService {
   private async tryRestoreRoleQuarantine(
     member: GuildMember,
     verificationEvent: VerificationEvent | null,
-    moderator: User
+    moderator?: User
   ): Promise<{
     verificationEvent: VerificationEvent | null;
     metadata: Record<string, unknown> | null;
@@ -391,6 +391,27 @@ export class UserModerationService implements IUserModerationService {
         },
       };
     }
+  }
+
+  private async tryAbandonRoleQuarantine(
+    guildId: string,
+    userId: string,
+    reason: string,
+    actorId?: string | null
+  ): Promise<void> {
+    if (!this.roleQuarantineService) {
+      return;
+    }
+
+    try {
+      await this.roleQuarantineService.abandonActiveSnapshot(guildId, userId, reason, actorId);
+    } catch (error) {
+      console.warn(`Failed to abandon role quarantine snapshot for ${userId}:`, error);
+    }
+  }
+
+  private shouldRollbackRoleQuarantine(metadata: Record<string, unknown> | null): boolean {
+    return typeof metadata?.snapshot_id === 'string';
   }
 
   private formatError(error: unknown): string {
@@ -667,9 +688,29 @@ export class UserModerationService implements IUserModerationService {
         roleQuarantineMetadata = quarantineResult.metadata;
       }
 
+      const rollbackRoleQuarantine = async (): Promise<void> => {
+        if (!verificationEvent || !this.shouldRollbackRoleQuarantine(roleQuarantineMetadata)) {
+          return;
+        }
+
+        const rollbackResult = await this.tryRestoreRoleQuarantine(
+          member,
+          verificationEvent,
+          moderator
+        );
+        verificationEvent = rollbackResult.verificationEvent ?? verificationEvent;
+      };
+
       // Assign the role using RoleManager
-      const roleAssigned = await this.roleManager.assignRestrictedRole(member);
+      let roleAssigned: boolean;
+      try {
+        roleAssigned = await this.roleManager.assignRestrictedRole(member);
+      } catch (assignError) {
+        await rollbackRoleQuarantine();
+        throw assignError;
+      }
       if (!roleAssigned) {
+        await rollbackRoleQuarantine();
         throw new Error(`Failed to assign restricted role to ${member.user.tag}`);
       }
 
@@ -980,6 +1021,7 @@ export class UserModerationService implements IUserModerationService {
       // Perform the ban
       await member.ban({ reason });
       console.log(`Banned user ${member.user.tag}. Reason: ${reason}`);
+      await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'drasil_ban', moderator.id);
 
       try {
         // Update server member status
@@ -1058,6 +1100,12 @@ export class UserModerationService implements IUserModerationService {
         (event) => event.status === VerificationStatus.PENDING
       );
       if (pendingVerificationEvents.length === 0) {
+        await this.tryAbandonRoleQuarantine(
+          guild.id,
+          userId,
+          'sync_existing_discord_ban',
+          moderator.id
+        );
         return 0;
       }
 
@@ -1093,6 +1141,12 @@ export class UserModerationService implements IUserModerationService {
         is_restricted: true,
         last_status_change: new Date(),
       });
+      await this.tryAbandonRoleQuarantine(
+        guild.id,
+        userId,
+        'sync_existing_discord_ban',
+        moderator.id
+      );
 
       const target = {
         guildId: guild.id,
@@ -1345,6 +1399,12 @@ export class UserModerationService implements IUserModerationService {
         (event) => event.status === VerificationStatus.PENDING
       );
       if (pendingVerificationEvents.length === 0) {
+        await this.tryAbandonRoleQuarantine(
+          guild.id,
+          user.id,
+          'observed_discord_ban',
+          options.actorId ?? null
+        );
         return 0;
       }
 
@@ -1391,6 +1451,12 @@ export class UserModerationService implements IUserModerationService {
         is_restricted: true,
         last_status_change: new Date(),
       });
+      await this.tryAbandonRoleQuarantine(
+        guild.id,
+        user.id,
+        'observed_discord_ban',
+        options.actorId ?? null
+      );
 
       for (const resolvedEvent of resolvedEvents) {
         await this.finalizeExternallyResolvedVerificationEvent(
@@ -1449,6 +1515,7 @@ export class UserModerationService implements IUserModerationService {
         (event) => event.status === VerificationStatus.PENDING
       );
       if (pendingVerificationEvents.length === 0) {
+        await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'member_left');
         return 0;
       }
 
@@ -1463,6 +1530,7 @@ export class UserModerationService implements IUserModerationService {
         member
       );
       const markedEvents: VerificationEvent[] = [];
+      await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'member_left');
 
       for (const pendingEvent of pendingVerificationEvents) {
         const eventToUpdate = {

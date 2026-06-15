@@ -14,6 +14,7 @@ import { getRoleQuarantineSettings, RoleQuarantineMode } from '../utils/roleQuar
 
 export type RoleQuarantineApplyStatus = 'off' | 'audit_only' | 'already_active' | 'quarantined';
 export type RoleQuarantineRestoreStatus = 'no_active_snapshot' | 'partially_restored' | 'restored';
+export type RoleQuarantineAbandonStatus = 'no_active_snapshot' | 'abandoned';
 
 export interface RoleQuarantineApplyResult {
   readonly status: RoleQuarantineApplyStatus;
@@ -35,13 +36,24 @@ export interface RoleQuarantineRestoreResult {
   readonly failedRestores: readonly RoleQuarantineRoleDetail[];
 }
 
+export interface RoleQuarantineAbandonResult {
+  readonly status: RoleQuarantineAbandonStatus;
+  readonly snapshotId: string | null;
+}
+
 export interface IRoleQuarantineService {
   quarantineMember(
     member: GuildMember,
     verificationEvent: VerificationEvent,
     moderator?: User
   ): Promise<RoleQuarantineApplyResult>;
-  restoreMemberRoles(member: GuildMember, moderator: User): Promise<RoleQuarantineRestoreResult>;
+  restoreMemberRoles(member: GuildMember, moderator?: User): Promise<RoleQuarantineRestoreResult>;
+  abandonActiveSnapshot(
+    serverId: string,
+    userId: string,
+    reason: string,
+    actorId?: string | null
+  ): Promise<RoleQuarantineAbandonResult>;
 }
 
 interface ClassifiedRole {
@@ -129,6 +141,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       mode: settings.mode,
       originalRoleIds,
       plannedRoleIds,
+      removedRoleIds: plannedRoleIds,
       skippedRoles: skippedRoles as unknown as Prisma.JsonValue,
       metadata: {
         created_by: moderator?.id ?? null,
@@ -148,7 +161,6 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     }
 
     const updatedSnapshot = await this.snapshotRepository.update(snapshot.id, {
-      removedRoleIds,
       failedRemovals: failedRemovals as unknown as Prisma.JsonValue,
     });
 
@@ -166,7 +178,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
 
   public async restoreMemberRoles(
     member: GuildMember,
-    moderator: User
+    moderator?: User
   ): Promise<RoleQuarantineRestoreResult> {
     const snapshot = await this.snapshotRepository.findActiveByServerAndUser(
       member.guild.id,
@@ -208,15 +220,20 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       }
 
       try {
-        await member.roles.add(role, `Drasil role quarantine restore by ${moderator.id}`);
+        await member.roles.add(role, this.formatRestoreReason(moderator));
         restoredRoleIds.push(role.id);
       } catch (error) {
         failedRestores.push(this.toRoleDetail(role, this.formatError(error)));
       }
     }
 
+    const retryableSkippedRoles = skippedRoles.filter((role) =>
+      this.isRetryableRestoreSkipReason(role.reason)
+    );
     const restoreStatus: RoleQuarantineRestoreStatus =
-      failedRestores.length > 0 ? 'partially_restored' : 'restored';
+      failedRestores.length > 0 || retryableSkippedRoles.length > 0
+        ? 'partially_restored'
+        : 'restored';
     const restoreCompleted = restoreStatus === 'restored';
 
     await this.snapshotRepository.update(snapshot.id, {
@@ -228,9 +245,10 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       metadata: {
         ...this.metadataToRecord(snapshot.metadata),
         restore_skipped_roles: skippedRoles,
+        restore_retryable_skipped_roles: retryableSkippedRoles,
       } as unknown as Prisma.JsonValue,
       restoredAt: restoreCompleted ? new Date() : undefined,
-      restoredBy: restoreCompleted ? moderator.id : undefined,
+      restoredBy: restoreCompleted ? (moderator?.id ?? null) : undefined,
     });
 
     return {
@@ -241,6 +259,30 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       skippedRoles,
       failedRestores,
     };
+  }
+
+  public async abandonActiveSnapshot(
+    serverId: string,
+    userId: string,
+    reason: string,
+    actorId?: string | null
+  ): Promise<RoleQuarantineAbandonResult> {
+    const snapshot = await this.snapshotRepository.findActiveByServerAndUser(serverId, userId);
+    if (!snapshot) {
+      return { status: 'no_active_snapshot', snapshotId: null };
+    }
+
+    await this.snapshotRepository.update(snapshot.id, {
+      status: RoleQuarantineSnapshotStatus.ABANDONED,
+      metadata: {
+        ...this.metadataToRecord(snapshot.metadata),
+        abandoned_at: new Date().toISOString(),
+        abandoned_by: actorId ?? null,
+        abandon_reason: reason,
+      } as unknown as Prisma.JsonValue,
+    });
+
+    return { status: 'abandoned', snapshotId: snapshot.id };
   }
 
   private async classifyMemberRoles(
@@ -311,6 +353,18 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     }
 
     return undefined;
+  }
+
+  private isRetryableRestoreSkipReason(reason: string): boolean {
+    return (
+      reason === 'Drasil member could not be loaded' || reason === 'role is at or above Drasil role'
+    );
+  }
+
+  private formatRestoreReason(moderator?: User): string {
+    return moderator
+      ? `Drasil role quarantine restore by ${moderator.id}`
+      : 'Drasil role quarantine restore rollback';
   }
 
   private hasPrivilegedPermissions(role: Role): boolean {

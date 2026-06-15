@@ -291,10 +291,15 @@ export class ConfigSubcommandHandler {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      await interaction.reply({
+      const errorResponse = {
         content: `Failed to process role quarantine settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
-      });
+      } as const;
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(errorResponse);
+      } else {
+        await interaction.reply(errorResponse);
+      }
     }
   }
 

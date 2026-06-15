@@ -13,7 +13,7 @@ export interface RoleQuarantineSettings {
   readonly exemptRoleIds: readonly string[];
 }
 
-const DISCORD_ID_PATTERN = /^\d{6,}$/;
+const DISCORD_ID_PATTERN = /^\d{17,20}$/;
 
 export function isRoleQuarantineMode(value: string): value is RoleQuarantineMode {
   return ROLE_QUARANTINE_MODES.includes(value as RoleQuarantineMode);
