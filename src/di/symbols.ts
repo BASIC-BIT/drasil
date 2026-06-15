@@ -28,6 +28,7 @@ export const TYPES = {
   CaseReviewReminderService: Symbol.for('CaseReviewReminderService'),
   ModerationOutcomeService: Symbol.for('ModerationOutcomeService'),
   ModerationQueueService: Symbol.for('ModerationQueueService'),
+  RoleQuarantineService: Symbol.for('RoleQuarantineService'),
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),
@@ -40,6 +41,7 @@ export const TYPES = {
   ReportIntakeRepository: Symbol.for('ReportIntakeRepository'),
   ModerationOutcomeRepository: Symbol.for('ModerationOutcomeRepository'),
   ModerationQueueRepository: Symbol.for('ModerationQueueRepository'),
+  RoleQuarantineSnapshotRepository: Symbol.for('RoleQuarantineSnapshotRepository'),
 
   // External dependencies
   DiscordClient: Symbol.for('DiscordClient'),

@@ -146,6 +146,17 @@ export class NotificationPresentationBuilder {
       });
     }
 
+    const roleQuarantineFieldValue = this.formatRoleQuarantineFieldValue(
+      verificationEvent.metadata
+    );
+    if (roleQuarantineFieldValue) {
+      embed.addFields({
+        name: 'Role Quarantine',
+        value: roleQuarantineFieldValue,
+        inline: false,
+      });
+    }
+
     const caseStaffWarningFieldValue = this.formatCaseStaffRoutingWarningFieldValue(
       verificationEvent.metadata
     );
@@ -1035,7 +1046,9 @@ export class NotificationPresentationBuilder {
             ? 'Apply restricted role'
             : failure.action === 'private_evidence_thread'
               ? 'Create admin evidence thread'
-              : 'Create case thread';
+              : failure.action === 'role_quarantine'
+                ? 'Role quarantine'
+                : 'Create case thread';
         const when = Number.isFinite(timestamp) ? ` <t:${timestamp}:R>` : '';
         return `Warning: ${action} failed${when}: ${failure.message}`;
       })
@@ -1044,6 +1057,61 @@ export class NotificationPresentationBuilder {
     return this.truncateEmbedFieldValue(
       `${value}\nCase record was still created so moderators can review and fix permissions.`
     );
+  }
+
+  private formatRoleQuarantineFieldValue(metadata: unknown): string | null {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return null;
+    }
+
+    const roleQuarantine = (metadata as Record<string, unknown>).role_quarantine;
+    if (!roleQuarantine || typeof roleQuarantine !== 'object' || Array.isArray(roleQuarantine)) {
+      return null;
+    }
+
+    const lines: string[] = [];
+    const restriction = (roleQuarantine as Record<string, unknown>).restriction;
+    if (restriction && typeof restriction === 'object' && !Array.isArray(restriction)) {
+      const record = restriction as Record<string, unknown>;
+      const status = this.formatUnknownValue(record.status);
+      const mode = this.formatUnknownValue(record.mode);
+      const removedCount = this.formatUnknownValue(record.removed_role_count);
+      const plannedCount = this.formatUnknownValue(record.planned_role_count);
+      const skippedCount = this.formatUnknownValue(record.skipped_role_count);
+      const failedCount = this.formatUnknownValue(record.failed_removal_count);
+      lines.push(
+        `Restriction: ${status}${mode ? ` (${mode})` : ''}; removed ${removedCount || '0'} of ${plannedCount || '0'} planned role(s), skipped ${skippedCount || '0'}, failed ${failedCount || '0'}.`
+      );
+    }
+
+    const restore = (roleQuarantine as Record<string, unknown>).restore;
+    if (restore && typeof restore === 'object' && !Array.isArray(restore)) {
+      const record = restore as Record<string, unknown>;
+      const status = this.formatUnknownValue(record.status);
+      const restoredCount = this.formatUnknownValue(record.restored_role_count);
+      const attemptedCount = this.formatUnknownValue(record.attempted_role_count);
+      const skippedCount = this.formatUnknownValue(record.skipped_role_count);
+      const failedCount = this.formatUnknownValue(record.failed_restore_count);
+      lines.push(
+        `Restore: ${status}; restored ${restoredCount || '0'} of ${attemptedCount || '0'} role(s), skipped ${skippedCount || '0'}, failed ${failedCount || '0'}.`
+      );
+    }
+
+    if (lines.length === 0) {
+      return null;
+    }
+
+    return this.truncateEmbedFieldValue(lines.join('\n'));
+  }
+
+  private formatUnknownValue(value: unknown): string {
+    if (typeof value === 'string') {
+      return value;
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value.toString();
+    }
+    return '';
   }
 
   private formatCaseStaffRoutingWarningFieldValue(metadata: unknown): string | null {

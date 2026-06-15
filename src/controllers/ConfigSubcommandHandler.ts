@@ -50,6 +50,14 @@ import {
   REPORT_AI_TRIAGE_ENABLED_SETTING_KEY,
 } from '../utils/reportAiSettings';
 import {
+  getRoleQuarantineSettings,
+  isRoleQuarantineMode,
+  normalizeRoleQuarantineRoleIds,
+  ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY,
+  ROLE_QUARANTINE_MODE_SETTING_KEY,
+  ROLE_QUARANTINE_MODES,
+} from '../utils/roleQuarantineSettings';
+import {
   getModerationQueueSettings,
   MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY,
 } from '../utils/moderationQueueSettings';
@@ -185,6 +193,108 @@ export class ConfigSubcommandHandler {
       `Queue channel: ${settings.channelId ? `<#${settings.channelId}>` : '`disabled`'}`,
       `Guild ID: \`${guildId}\``,
     ].join('\n');
+  }
+
+  private formatRoleQuarantineSettings(
+    guildId: string,
+    settings: ReturnType<typeof getRoleQuarantineSettings>
+  ): string {
+    return [
+      `Mode: \`${settings.mode}\``,
+      `Exempt roles: ${settings.exemptRoleIds.length ? settings.exemptRoleIds.map((roleId) => `<@&${roleId}>`).join(', ') : '`none`'}`,
+      'Automatic mode removes all removable non-exempt roles during future restrictions and restores them additively when restrictions are lifted.',
+      'Privileged, managed, bot-managed, and above-Drasil roles are always skipped.',
+      `Guild ID: \`${guildId}\``,
+    ].join('\n');
+  }
+
+  public async handleRoleQuarantineConfigCommand(
+    interaction: ChatInputCommandInteraction,
+    guildId: string
+  ): Promise<void> {
+    const subcommand = interaction.options.getSubcommand(true);
+
+    try {
+      switch (subcommand) {
+        case 'view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const settings = getRoleQuarantineSettings(serverConfig.settings);
+          await interaction.reply({
+            content:
+              'Current role quarantine settings:\n\n' +
+              this.formatRoleQuarantineSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-mode': {
+          const mode = interaction.options.getString('mode', true);
+          if (!isRoleQuarantineMode(mode)) {
+            await interaction.reply({
+              content: `Unsupported role quarantine mode. Choose one of: ${ROLE_QUARANTINE_MODES.map((value) => `\`${value}\``).join(', ')}`,
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [ROLE_QUARANTINE_MODE_SETTING_KEY]: mode,
+          });
+          const settings = getRoleQuarantineSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated role quarantine mode.\n\n' +
+              this.formatRoleQuarantineSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'exempt-add':
+        case 'exempt-remove': {
+          const role = interaction.options.getRole('role', true);
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const existingIds = new Set(
+            normalizeRoleQuarantineRoleIds(
+              serverConfig.settings[ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY]
+            )
+          );
+          if (subcommand === 'exempt-add') {
+            existingIds.add(role.id);
+          } else {
+            existingIds.delete(role.id);
+          }
+
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY]: [...existingIds],
+          });
+          const settings = getRoleQuarantineSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `Role <@&${role.id}> ${subcommand === 'exempt-add' ? 'added to' : 'removed from'} the role quarantine exemption list.\n\n` +
+              this.formatRoleQuarantineSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        default:
+          await interaction.reply({
+            content: 'Unsupported /config role-quarantine subcommand.',
+            flags: MessageFlags.Ephemeral,
+          });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      await interaction.reply({
+        content: `Failed to process role quarantine settings: ${errorMessage}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   }
 
   public async handleCaseQueueConfigCommand(

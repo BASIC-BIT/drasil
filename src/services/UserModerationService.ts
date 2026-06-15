@@ -1,5 +1,6 @@
 import { Guild, GuildMember, PartialGuildMember, User } from 'discord.js';
 import { injectable, inject, optional } from 'inversify';
+import { Prisma } from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import { INotificationManager } from './NotificationManager';
@@ -19,6 +20,12 @@ import {
   ModerationOutcomeType,
 } from './ModerationOutcomeService';
 import { IModerationQueueService } from './ModerationQueueService';
+import {
+  IRoleQuarantineService,
+  RoleQuarantineApplyResult,
+  RoleQuarantineRestoreResult,
+} from './RoleQuarantineService';
+import { appendVerificationActionFailure } from '../utils/verificationActionFailures';
 
 /**
  * Interface for the UserModerationService
@@ -119,6 +126,7 @@ export class UserModerationService implements IUserModerationService {
   private productAnalyticsService: IProductAnalyticsService;
   private moderationOutcomeService?: IModerationOutcomeService;
   private moderationQueueService?: IModerationQueueService;
+  private roleQuarantineService?: IRoleQuarantineService;
 
   constructor(
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
@@ -136,7 +144,10 @@ export class UserModerationService implements IUserModerationService {
     moderationOutcomeService?: IModerationOutcomeService,
     @inject(TYPES.ModerationQueueService)
     @optional()
-    moderationQueueService?: IModerationQueueService
+    moderationQueueService?: IModerationQueueService,
+    @inject(TYPES.RoleQuarantineService)
+    @optional()
+    roleQuarantineService?: IRoleQuarantineService
   ) {
     this.serverMemberRepository = serverMemberRepository;
     this.notificationManager = notificationManager;
@@ -147,6 +158,7 @@ export class UserModerationService implements IUserModerationService {
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.moderationOutcomeService = moderationOutcomeService;
     this.moderationQueueService = moderationQueueService;
+    this.roleQuarantineService = roleQuarantineService;
   }
 
   private async deleteLiveQueueCaseMirror(verificationEventId: string): Promise<void> {
@@ -162,6 +174,231 @@ export class UserModerationService implements IUserModerationService {
         error
       );
     }
+  }
+
+  private buildRoleQuarantineApplyMetadata(
+    result: RoleQuarantineApplyResult
+  ): Record<string, unknown> | null {
+    if (result.status === 'off') {
+      return null;
+    }
+
+    return {
+      status: result.status,
+      mode: result.mode,
+      snapshot_id: result.snapshotId,
+      original_role_count: result.originalRoleIds.length,
+      planned_role_count: result.plannedRoleIds.length,
+      removed_role_count: result.removedRoleIds.length,
+      skipped_role_count: result.skippedRoles.length,
+      failed_removal_count: result.failedRemovals.length,
+      removed_role_ids: result.removedRoleIds,
+      skipped_roles: result.skippedRoles,
+      failed_removals: result.failedRemovals,
+      at: new Date().toISOString(),
+    };
+  }
+
+  private buildRoleQuarantineRestoreMetadata(
+    result: RoleQuarantineRestoreResult
+  ): Record<string, unknown> | null {
+    if (result.status === 'no_active_snapshot') {
+      return null;
+    }
+
+    return {
+      status: result.status,
+      snapshot_id: result.snapshotId,
+      attempted_role_count: result.attemptedRoleIds.length,
+      restored_role_count: result.restoredRoleIds.length,
+      skipped_role_count: result.skippedRoles.length,
+      failed_restore_count: result.failedRestores.length,
+      restored_role_ids: result.restoredRoleIds,
+      skipped_roles: result.skippedRoles,
+      failed_restores: result.failedRestores,
+      at: new Date().toISOString(),
+    };
+  }
+
+  private withRoleQuarantineMetadata(
+    metadata: VerificationEvent['metadata'],
+    phase: 'restriction' | 'restore',
+    details: Record<string, unknown>
+  ): VerificationEvent['metadata'] {
+    const record = this.metadataToRecord(metadata);
+    const existing = record.role_quarantine;
+    const existingRecord =
+      existing && typeof existing === 'object' && !Array.isArray(existing)
+        ? (existing as Record<string, unknown>)
+        : {};
+
+    return {
+      ...record,
+      role_quarantine: {
+        ...existingRecord,
+        [phase]: details,
+      },
+    } as VerificationEvent['metadata'];
+  }
+
+  private async updateRoleQuarantineMetadata(
+    verificationEvent: VerificationEvent,
+    phase: 'restriction' | 'restore',
+    details: Record<string, unknown>
+  ): Promise<VerificationEvent> {
+    const metadata = this.withRoleQuarantineMetadata(verificationEvent.metadata, phase, details);
+    const fallbackEvent = {
+      ...verificationEvent,
+      metadata,
+    };
+
+    try {
+      return (
+        (await this.verificationEventRepository.update(verificationEvent.id, { metadata })) ??
+        fallbackEvent
+      );
+    } catch (error) {
+      console.warn(
+        `Failed to record role quarantine metadata for verification event ${verificationEvent.id}:`,
+        error
+      );
+      return fallbackEvent;
+    }
+  }
+
+  private async recordRoleQuarantineFailure(
+    verificationEvent: VerificationEvent,
+    error: unknown
+  ): Promise<VerificationEvent> {
+    const metadata = appendVerificationActionFailure(verificationEvent.metadata, {
+      action: 'role_quarantine',
+      message: this.formatError(error),
+      at: new Date().toISOString(),
+    });
+    const fallbackEvent = {
+      ...verificationEvent,
+      metadata: metadata as VerificationEvent['metadata'],
+    };
+
+    try {
+      return (
+        (await this.verificationEventRepository.update(verificationEvent.id, {
+          metadata: metadata as VerificationEvent['metadata'],
+        })) ?? fallbackEvent
+      );
+    } catch (recordError) {
+      console.warn(
+        `Failed to record role quarantine failure for verification event ${verificationEvent.id}:`,
+        recordError
+      );
+      return fallbackEvent;
+    }
+  }
+
+  private async tryApplyRoleQuarantine(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    moderator?: User
+  ): Promise<{ verificationEvent: VerificationEvent; metadata: Record<string, unknown> | null }> {
+    if (!this.roleQuarantineService) {
+      return { verificationEvent, metadata: null };
+    }
+
+    try {
+      const result = await this.roleQuarantineService.quarantineMember(
+        member,
+        verificationEvent,
+        moderator
+      );
+      const metadata = this.buildRoleQuarantineApplyMetadata(result);
+      if (!metadata) {
+        return { verificationEvent, metadata: null };
+      }
+
+      return {
+        verificationEvent: await this.updateRoleQuarantineMetadata(
+          verificationEvent,
+          'restriction',
+          metadata
+        ),
+        metadata,
+      };
+    } catch (error) {
+      console.error(
+        `Failed to quarantine roles for ${member.user.tag}; continuing restriction:`,
+        error
+      );
+      return {
+        verificationEvent: await this.recordRoleQuarantineFailure(verificationEvent, error),
+        metadata: {
+          status: 'failed',
+          message: this.formatError(error),
+          at: new Date().toISOString(),
+        },
+      };
+    }
+  }
+
+  private async tryRestoreRoleQuarantine(
+    member: GuildMember,
+    verificationEvent: VerificationEvent | null,
+    moderator: User
+  ): Promise<{
+    verificationEvent: VerificationEvent | null;
+    metadata: Record<string, unknown> | null;
+  }> {
+    if (!this.roleQuarantineService) {
+      return { verificationEvent, metadata: null };
+    }
+
+    try {
+      const result = await this.roleQuarantineService.restoreMemberRoles(member, moderator);
+      const metadata = this.buildRoleQuarantineRestoreMetadata(result);
+      if (!metadata || !verificationEvent) {
+        return { verificationEvent, metadata };
+      }
+
+      return {
+        verificationEvent: await this.updateRoleQuarantineMetadata(
+          verificationEvent,
+          'restore',
+          metadata
+        ),
+        metadata,
+      };
+    } catch (error) {
+      console.error(
+        `Failed to restore quarantined roles for ${member.user.tag}; continuing:`,
+        error
+      );
+      if (!verificationEvent) {
+        return {
+          verificationEvent,
+          metadata: {
+            status: 'failed',
+            message: this.formatError(error),
+            at: new Date().toISOString(),
+          },
+        };
+      }
+
+      return {
+        verificationEvent: await this.recordRoleQuarantineFailure(verificationEvent, error),
+        metadata: {
+          status: 'failed',
+          message: this.formatError(error),
+          at: new Date().toISOString(),
+        },
+      };
+    }
+  }
+
+  private formatError(error: unknown): string {
+    if (error instanceof Error && error.message) {
+      return error.message;
+    }
+
+    return String(error || 'Unknown error');
   }
 
   private captureModerationAction(
@@ -342,7 +579,11 @@ export class UserModerationService implements IUserModerationService {
     actionType: AdminActionType.VERIFY | AdminActionType.BAN | AdminActionType.CLOSE_NO_ACTION,
     moderator: User,
     strictNotification: boolean,
-    options: { notes?: string | null; detectionEventId?: string | null } = {}
+    options: {
+      notes?: string | null;
+      detectionEventId?: string | null;
+      metadata?: Record<string, unknown>;
+    } = {}
   ): Promise<void> {
     await this.threadManager.resolveVerificationThread(verificationEvent, newStatus, moderator.id);
 
@@ -379,6 +620,7 @@ export class UserModerationService implements IUserModerationService {
       previous_status: previousStatus,
       new_status: newStatus,
       notes: options.notes ?? null,
+      metadata: options.metadata as unknown as Prisma.JsonValue | undefined,
     });
 
     await this.deleteLiveQueueCaseMirror(verificationEvent.id);
@@ -391,11 +633,12 @@ export class UserModerationService implements IUserModerationService {
    */
   public async restrictUser(member: GuildMember, moderator?: User): Promise<boolean> {
     try {
-      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+      let verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
         member.id,
         member.guild.id
       );
       const previousStatus = verificationEvent?.status ?? null;
+      let roleQuarantineMetadata: Record<string, unknown> | null = null;
 
       if (!verificationEvent) {
         // If no active event, we might still need to restrict based on other logic,
@@ -412,6 +655,16 @@ export class UserModerationService implements IUserModerationService {
           verificationEvent.status = VerificationStatus.PENDING;
           await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
         }
+      }
+
+      if (verificationEvent) {
+        const quarantineResult = await this.tryApplyRoleQuarantine(
+          member,
+          verificationEvent,
+          moderator
+        );
+        verificationEvent = quarantineResult.verificationEvent;
+        roleQuarantineMetadata = quarantineResult.metadata;
       }
 
       // Assign the role using RoleManager
@@ -443,7 +696,11 @@ export class UserModerationService implements IUserModerationService {
         verificationEvent ? [verificationEvent] : [],
         {
           actorId: moderator?.id,
-          metadata: this.buildOutcomeMetadata({}, member.user, member),
+          metadata: this.buildOutcomeMetadata(
+            roleQuarantineMetadata ? { role_quarantine: roleQuarantineMetadata } : {},
+            member.user,
+            member
+          ),
           recordWithoutVerificationEvent: !verificationEvent,
         }
       );
@@ -465,6 +722,9 @@ export class UserModerationService implements IUserModerationService {
           previous_status: previousStatus,
           new_status: VerificationStatus.PENDING,
           notes: 'Restricted while case remains pending.',
+          metadata: roleQuarantineMetadata
+            ? ({ role_quarantine: roleQuarantineMetadata } as unknown as Prisma.JsonValue)
+            : undefined,
         });
       }
       return true;
@@ -476,7 +736,7 @@ export class UserModerationService implements IUserModerationService {
 
   public async liftRestriction(member: GuildMember, moderator: User): Promise<boolean> {
     try {
-      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+      let verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
         member.id,
         member.guild.id
       );
@@ -497,6 +757,13 @@ export class UserModerationService implements IUserModerationService {
         throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
       }
 
+      const restoreResult = await this.tryRestoreRoleQuarantine(
+        member,
+        verificationEvent,
+        moderator
+      );
+      verificationEvent = restoreResult.verificationEvent ?? verificationEvent;
+
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
         is_restricted: false,
         verification_status: VerificationStatus.PENDING,
@@ -514,6 +781,9 @@ export class UserModerationService implements IUserModerationService {
         previous_status: verificationEvent.status,
         new_status: VerificationStatus.PENDING,
         notes: 'Restriction lifted while case remains pending.',
+        metadata: restoreResult.metadata
+          ? ({ role_quarantine: restoreResult.metadata } as unknown as Prisma.JsonValue)
+          : undefined,
       });
 
       if (verificationEvent.notification_message_id) {
@@ -588,6 +858,23 @@ export class UserModerationService implements IUserModerationService {
         throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
       }
 
+      const restoreResult = await this.tryRestoreRoleQuarantine(
+        member,
+        resolvedEvents[0]?.event ?? verificationEvent,
+        moderator
+      );
+      if (restoreResult.verificationEvent) {
+        const restoredEventIndex = resolvedEvents.findIndex(
+          (resolvedEvent) => resolvedEvent.event.id === restoreResult.verificationEvent?.id
+        );
+        if (restoredEventIndex >= 0) {
+          resolvedEvents[restoredEventIndex] = {
+            ...resolvedEvents[restoredEventIndex],
+            event: restoreResult.verificationEvent,
+          };
+        }
+      }
+
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
         is_restricted: false,
         verification_status: VerificationStatus.VERIFIED,
@@ -603,7 +890,12 @@ export class UserModerationService implements IUserModerationService {
           VerificationStatus.VERIFIED,
           AdminActionType.VERIFY,
           moderator,
-          resolvedEvent.event.id === verificationEvent.id
+          resolvedEvent.event.id === verificationEvent.id,
+          {
+            metadata: restoreResult.metadata
+              ? { role_quarantine: restoreResult.metadata }
+              : undefined,
+          }
         );
       }
 
@@ -614,7 +906,11 @@ export class UserModerationService implements IUserModerationService {
         resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
         {
           actorId: moderator.id,
-          metadata: this.buildOutcomeMetadata({}, member.user, member),
+          metadata: this.buildOutcomeMetadata(
+            restoreResult.metadata ? { role_quarantine: restoreResult.metadata } : {},
+            member.user,
+            member
+          ),
         }
       );
 
@@ -893,6 +1189,8 @@ export class UserModerationService implements IUserModerationService {
             throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
           }
 
+          await this.tryRestoreRoleQuarantine(member, null, moderator);
+
           await this.serverMemberRepository.upsertMember(guild.id, userId, {
             is_restricted: false,
             verification_status: VerificationStatus.CLOSED_NO_ACTION,
@@ -940,6 +1238,21 @@ export class UserModerationService implements IUserModerationService {
         }
       }
 
+      const restoreResult = member
+        ? await this.tryRestoreRoleQuarantine(member, resolvedEvents[0]?.event ?? null, moderator)
+        : { verificationEvent: null, metadata: null };
+      if (restoreResult.verificationEvent) {
+        const restoredEventIndex = resolvedEvents.findIndex(
+          (resolvedEvent) => resolvedEvent.event.id === restoreResult.verificationEvent?.id
+        );
+        if (restoredEventIndex >= 0) {
+          resolvedEvents[restoredEventIndex] = {
+            ...resolvedEvents[restoredEventIndex],
+            event: restoreResult.verificationEvent,
+          };
+        }
+      }
+
       await this.serverMemberRepository.upsertMember(guild.id, userId, {
         is_restricted: false,
         verification_status: VerificationStatus.CLOSED_NO_ACTION,
@@ -970,6 +1283,9 @@ export class UserModerationService implements IUserModerationService {
           {
             notes: resolutionNotes,
             detectionEventId: resolvedEvent.event.detection_event_id,
+            metadata: restoreResult.metadata
+              ? { role_quarantine: restoreResult.metadata }
+              : undefined,
           }
         );
       }
@@ -982,7 +1298,13 @@ export class UserModerationService implements IUserModerationService {
         {
           actorId: moderator.id,
           reason: resolutionNotes,
-          metadata: member ? this.buildOutcomeMetadata({}, member.user, member) : {},
+          metadata: member
+            ? this.buildOutcomeMetadata(
+                restoreResult.metadata ? { role_quarantine: restoreResult.metadata } : {},
+                member.user,
+                member
+              )
+            : {},
         }
       );
 

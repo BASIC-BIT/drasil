@@ -72,6 +72,8 @@ export interface ServerSettings {
   restricted_lockdown_enabled?: boolean;
   restricted_lockdown_allowed_channel_ids?: string[];
   restricted_lockdown_allowed_category_ids?: string[];
+  role_quarantine_mode?: 'off' | 'audit_only' | 'automatic';
+  role_quarantine_exempt_role_ids?: string[];
   case_review_reminders_enabled?: boolean;
   case_review_reminder_stale_hours?: number;
   case_review_reminder_repeat_hours?: number;
@@ -196,6 +198,66 @@ export enum ModerationQueueItemType {
   OBSERVED_ALERT_MIRROR = 'observed_alert_mirror',
   SUPPORT_THREAD_ATTENTION = 'support_thread_attention',
   REPORT_THREAD_ATTENTION = 'report_thread_attention',
+}
+
+export enum RoleQuarantineSnapshotStatus {
+  ACTIVE = 'active',
+  RESTORED = 'restored',
+  ABANDONED = 'abandoned',
+}
+
+export interface RoleQuarantineRoleDetail {
+  role_id: string;
+  role_name?: string;
+  reason: string;
+}
+
+export interface RoleQuarantineSnapshot {
+  id: string;
+  server_id: string;
+  user_id: string;
+  verification_event_id: string | null;
+  status: RoleQuarantineSnapshotStatus;
+  mode: string;
+  original_role_ids: string[];
+  planned_role_ids: string[];
+  removed_role_ids: string[];
+  restored_role_ids: string[];
+  skipped_roles: Prisma.JsonValue | null;
+  failed_removals: Prisma.JsonValue | null;
+  failed_restores: Prisma.JsonValue | null;
+  created_at: Date | null;
+  updated_at: Date | null;
+  restored_at: Date | null;
+  restored_by: string | null;
+  metadata: Prisma.JsonValue | null;
+}
+
+export interface RoleQuarantineSnapshotCreate {
+  serverId: string;
+  userId: string;
+  verificationEventId?: string | null;
+  mode: string;
+  originalRoleIds: string[];
+  plannedRoleIds: string[];
+  removedRoleIds?: string[];
+  restoredRoleIds?: string[];
+  skippedRoles?: Prisma.JsonValue | null;
+  failedRemovals?: Prisma.JsonValue | null;
+  failedRestores?: Prisma.JsonValue | null;
+  metadata?: Prisma.JsonValue | null;
+}
+
+export interface RoleQuarantineSnapshotUpdate {
+  status?: RoleQuarantineSnapshotStatus;
+  removedRoleIds?: string[];
+  restoredRoleIds?: string[];
+  skippedRoles?: Prisma.JsonValue | null;
+  failedRemovals?: Prisma.JsonValue | null;
+  failedRestores?: Prisma.JsonValue | null;
+  restoredAt?: Date | null;
+  restoredBy?: string | null;
+  metadata?: Prisma.JsonValue | null;
 }
 
 export interface VerificationEvent {

@@ -38,28 +38,28 @@ model admin_actions {
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model detection_events {
-  id                                                                                     String                @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  id                                                                                     String                   @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
   server_id                                                                              String?
   user_id                                                                                String?
   detection_type                                                                         detection_type
-  confidence                                                                             Float                 @db.Real
-  detected_at                                                                            DateTime?             @default(now()) @db.Timestamptz(6)
+  confidence                                                                             Float                    @db.Real
+  detected_at                                                                            DateTime?                @default(now()) @db.Timestamptz(6)
   message_id                                                                             String?
   channel_id                                                                             String?
   thread_id                                                                              String?
   reasons                                                                                String[]
-  metadata                                                                               Json?                 @default("{}")
+  metadata                                                                               Json?                    @default("{}")
   admin_action                                                                           String?
   admin_action_by                                                                        String?
-  admin_action_at                                                                        DateTime?             @db.Timestamptz(6)
-  latest_verification_event_id                                                           String?               @db.Uuid
+  admin_action_at                                                                        DateTime?                @db.Timestamptz(6)
+  latest_verification_event_id                                                           String?                  @db.Uuid
   admin_actions                                                                          admin_actions[]
   moderation_outcomes                                                                    moderation_outcomes[]
   moderation_queue_items                                                                 moderation_queue_items[]
-  servers                                                                                servers?              @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
-  users                                                                                  users?                @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
-  verification_events_detection_events_latest_verification_event_idToverification_events verification_events?  @relation("detection_events_latest_verification_event_idToverification_events", fields: [latest_verification_event_id], references: [id], onUpdate: NoAction, map: "fk_detection_events_verification")
-  verification_events_verification_events_detection_event_idTodetection_events           verification_events[] @relation("verification_events_detection_event_idTodetection_events")
+  servers                                                                                servers?                 @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
+  users                                                                                  users?                   @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
+  verification_events_detection_events_latest_verification_event_idToverification_events verification_events?     @relation("detection_events_latest_verification_event_idToverification_events", fields: [latest_verification_event_id], references: [id], onUpdate: NoAction, map: "fk_detection_events_verification")
+  verification_events_verification_events_detection_event_idTodetection_events           verification_events[]    @relation("verification_events_detection_event_idTodetection_events")
 
   @@index([detected_at], map: "idx_detection_events_detected_at")
   @@index([detected_at], map: "idx_detection_events_detected_at_range", type: Brin)
@@ -100,6 +100,36 @@ model moderation_queue_items {
   @@index([source_thread_id], map: "idx_moderation_queue_items_thread")
   @@index([user_id], map: "idx_moderation_queue_items_user")
   @@index([verification_event_id], map: "idx_moderation_queue_items_verification")
+}
+
+model role_quarantine_snapshots {
+  id                    String                          @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  server_id             String
+  user_id               String
+  verification_event_id String?                         @db.Uuid
+  status                role_quarantine_snapshot_status @default(active)
+  mode                  String                          @default("automatic")
+  original_role_ids     String[]                        @default([])
+  planned_role_ids      String[]                        @default([])
+  removed_role_ids      String[]                        @default([])
+  restored_role_ids     String[]                        @default([])
+  skipped_roles         Json?                           @default("[]")
+  failed_removals       Json?                           @default("[]")
+  failed_restores       Json?                           @default("[]")
+  created_at            DateTime?                       @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime?                       @default(now()) @db.Timestamptz(6)
+  restored_at           DateTime?                       @db.Timestamptz(6)
+  restored_by           String?
+  metadata              Json?                           @default("{}")
+  servers               servers                         @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
+  users                 users                           @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
+  verification_events   verification_events?            @relation(fields: [verification_event_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([server_id], map: "idx_role_quarantine_snapshots_server")
+  @@index([status], map: "idx_role_quarantine_snapshots_status")
+  @@index([user_id], map: "idx_role_quarantine_snapshots_user")
+  @@index([server_id, user_id, status], map: "idx_role_quarantine_snapshots_user_status")
+  @@index([verification_event_id], map: "idx_role_quarantine_snapshots_verification")
 }
 
 model message_contexts {
@@ -176,24 +206,25 @@ model server_members {
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model servers {
-  guild_id                            String                @id
+  guild_id                            String                      @id
   restricted_role_id                  String?
   admin_channel_id                    String?
   verification_channel_id             String?
   admin_notification_role_id          String?
-  heuristic_message_threshold         Int                   @default(5)
-  heuristic_message_timeframe_seconds Int                   @default(10)
-  heuristic_suspicious_keywords       String[]              @default(["nitro scam", "free discord nitro", "free nitro", "discord nitro", "steam gift", "gift card", "click this link", "claim your prize", "crypto giveaway", "airdrop", "free robux"])
-  created_at                          DateTime?             @default(now()) @db.Timestamptz(6)
-  updated_at                          DateTime?             @default(now()) @db.Timestamptz(6)
+  heuristic_message_threshold         Int                         @default(5)
+  heuristic_message_timeframe_seconds Int                         @default(10)
+  heuristic_suspicious_keywords       String[]                    @default(["nitro scam", "free discord nitro", "free nitro", "discord nitro", "steam gift", "gift card", "click this link", "claim your prize", "crypto giveaway", "airdrop", "free robux"])
+  created_at                          DateTime?                   @default(now()) @db.Timestamptz(6)
+  updated_at                          DateTime?                   @default(now()) @db.Timestamptz(6)
   updated_by                          String?
-  settings                            Json?                 @default("{}")
-  is_active                           Boolean?              @default(true)
+  settings                            Json?                       @default("{}")
+  is_active                           Boolean?                    @default(true)
   admin_actions                       admin_actions[]
   detection_events                    detection_events[]
   moderation_outcomes                 moderation_outcomes[]
   moderation_queue_items              moderation_queue_items[]
   report_intakes                      report_intakes[]
+  role_quarantine_snapshots           role_quarantine_snapshots[]
   server_members                      server_members[]
   verification_events                 verification_events[]
 }
@@ -201,24 +232,25 @@ model servers {
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model users {
-  discord_id              String                @id
-  username                String?
-  created_at              DateTime?             @default(now()) @db.Timestamptz(6)
-  updated_at              DateTime?             @default(now()) @db.Timestamptz(6)
-  created_by              String?
-  updated_by              String?
-  global_reputation_score Float?                @db.Real
-  suspicious_server_count Int?                  @default(0)
-  first_flagged_at        DateTime?             @db.Timestamptz(6)
-  account_created_at      DateTime?             @db.Timestamptz(6)
-  metadata                Json?                 @default("{}")
-  admin_actions           admin_actions[]
-  detection_events        detection_events[]
-  moderation_outcomes     moderation_outcomes[]
-  moderation_queue_items  moderation_queue_items[]
-  report_intakes          report_intakes[]
-  server_members          server_members[]
-  verification_events     verification_events[]
+  discord_id                String                      @id
+  username                  String?
+  created_at                DateTime?                   @default(now()) @db.Timestamptz(6)
+  updated_at                DateTime?                   @default(now()) @db.Timestamptz(6)
+  created_by                String?
+  updated_by                String?
+  global_reputation_score   Float?                      @db.Real
+  suspicious_server_count   Int?                        @default(0)
+  first_flagged_at          DateTime?                   @db.Timestamptz(6)
+  account_created_at        DateTime?                   @db.Timestamptz(6)
+  metadata                  Json?                       @default("{}")
+  admin_actions             admin_actions[]
+  detection_events          detection_events[]
+  moderation_outcomes       moderation_outcomes[]
+  moderation_queue_items    moderation_queue_items[]
+  report_intakes            report_intakes[]
+  role_quarantine_snapshots role_quarantine_snapshots[]
+  server_members            server_members[]
+  verification_events       verification_events[]
 }
 
 model report_intakes {
@@ -263,28 +295,29 @@ model report_intake_evidence {
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model verification_events {
-  id                                                                                  String                @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  id                                                                                  String                      @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
   server_id                                                                           String?
   user_id                                                                             String?
-  detection_event_id                                                                  String?               @db.Uuid
+  detection_event_id                                                                  String?                     @db.Uuid
   thread_id                                                                           String?
   private_evidence_thread_id                                                          String?
   notification_channel_id                                                             String?
   notification_message_id                                                             String?
-  status                                                                              verification_status   @default(pending)
-  created_at                                                                          DateTime?             @default(now()) @db.Timestamptz(6)
-  updated_at                                                                          DateTime?             @default(now()) @db.Timestamptz(6)
-  resolved_at                                                                         DateTime?             @db.Timestamptz(6)
+  status                                                                              verification_status         @default(pending)
+  created_at                                                                          DateTime?                   @default(now()) @db.Timestamptz(6)
+  updated_at                                                                          DateTime?                   @default(now()) @db.Timestamptz(6)
+  resolved_at                                                                         DateTime?                   @db.Timestamptz(6)
   resolved_by                                                                         String?
   notes                                                                               String?
-  metadata                                                                            Json?                 @default("{}")
+  metadata                                                                            Json?                       @default("{}")
   admin_actions                                                                       admin_actions[]
-  detection_events_detection_events_latest_verification_event_idToverification_events detection_events[]    @relation("detection_events_latest_verification_event_idToverification_events")
-  detection_events_verification_events_detection_event_idTodetection_events           detection_events?     @relation("verification_events_detection_event_idTodetection_events", fields: [detection_event_id], references: [id], onUpdate: NoAction)
+  detection_events_detection_events_latest_verification_event_idToverification_events detection_events[]          @relation("detection_events_latest_verification_event_idToverification_events")
+  detection_events_verification_events_detection_event_idTodetection_events           detection_events?           @relation("verification_events_detection_event_idTodetection_events", fields: [detection_event_id], references: [id], onUpdate: NoAction)
   moderation_outcomes                                                                 moderation_outcomes[]
   moderation_queue_items                                                              moderation_queue_items[]
-  servers                                                                             servers?              @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
-  users                                                                               users?                @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
+  role_quarantine_snapshots                                                           role_quarantine_snapshots[]
+  servers                                                                             servers?                    @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
+  users                                                                               users?                      @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([created_at], map: "idx_verification_events_created_at_range", type: Brin)
   @@index([detection_event_id], map: "idx_verification_events_detection")
@@ -345,6 +378,12 @@ enum moderation_queue_item_type {
   observed_alert_mirror
   support_thread_attention
   report_thread_attention
+}
+
+enum role_quarantine_snapshot_status {
+  active
+  restored
+  abandoned
 }
 
 enum report_intake_status {

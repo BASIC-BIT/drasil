@@ -89,6 +89,29 @@ describe('CommandHandler command catalog (unit)', () => {
     expect(applySubcommand.options.map((option: any) => option.name)).toContain('unsync-allowed');
   });
 
+  it('registers role quarantine config commands', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const configCommand = commands.find((c) => c.name === 'config');
+    const quarantineGroup = configCommand.options.find(
+      (option: any) => option.name === 'role-quarantine'
+    );
+
+    expect(quarantineGroup).toBeDefined();
+    expect(quarantineGroup.options.map((option: any) => option.name)).toEqual(
+      expect.arrayContaining(['view', 'set-mode', 'exempt-add', 'exempt-remove'])
+    );
+    const setModeSubcommand = quarantineGroup.options.find(
+      (option: any) => option.name === 'set-mode'
+    );
+    const modeOption = setModeSubcommand.options.find((option: any) => option.name === 'mode');
+    expect(modeOption.choices.map((choice: any) => choice.value)).toEqual([
+      'off',
+      'audit_only',
+      'automatic',
+    ]);
+  });
+
   it('registers /setupverification with typed role and channel options', () => {
     const { handler } = buildHandler();
     const commands = (handler as any).commands as any[];

@@ -6,6 +6,7 @@ import type { IUserRepository } from '../../repositories/UserRepository';
 import type { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import type { IReportIntakeRepository } from '../../repositories/ReportIntakeRepository';
 import type { IModerationOutcomeRepository } from '../../repositories/ModerationOutcomeRepository';
+import type { IRoleQuarantineSnapshotRepository } from '../../repositories/RoleQuarantineSnapshotRepository';
 import { verification_status } from '../../db/prisma';
 import {
   AdminAction,
@@ -19,6 +20,10 @@ import {
   ReportIntakeEvidenceCreate,
   ReportIntakeStatus,
   ReportIntakeUpdate,
+  RoleQuarantineSnapshot,
+  RoleQuarantineSnapshotCreate,
+  RoleQuarantineSnapshotStatus,
+  RoleQuarantineSnapshotUpdate,
   Server,
   ServerMember,
   ServerSettings,
@@ -73,6 +78,11 @@ import {
   REPORT_AI_RESTRICT_THRESHOLD_SETTING_KEY,
   REPORT_AI_TRIAGE_ENABLED_SETTING_KEY,
 } from '../../utils/reportAiSettings';
+import {
+  DEFAULT_ROLE_QUARANTINE_MODE,
+  ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY,
+  ROLE_QUARANTINE_MODE_SETTING_KEY,
+} from '../../utils/roleQuarantineSettings';
 
 const toTimestamp = (value: string | Date | null | undefined): number => {
   if (!value) {
@@ -115,6 +125,8 @@ const baseSettings: ServerSettings = {
   report_intake_agent_debounce_ms: 15_000,
   report_intake_agent_min_interval_ms: 60_000,
   report_intake_confirmed_response_mode: 'observed_alert',
+  [ROLE_QUARANTINE_MODE_SETTING_KEY]: DEFAULT_ROLE_QUARANTINE_MODE,
+  [ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY]: [],
 };
 
 const defaultHeuristicThreshold = globalSettings.defaultServerSettings.messageThreshold;
@@ -1206,5 +1218,101 @@ export class InMemoryModerationOutcomeRepository implements IModerationOutcomeRe
       .filter((outcome) => outcome.verification_event_id === verificationEventId)
       .sort((a, b) => toTimestamp(b.occurred_at) - toTimestamp(a.occurred_at))
       .map((outcome) => ({ ...outcome }));
+  }
+}
+
+export class InMemoryRoleQuarantineSnapshotRepository implements IRoleQuarantineSnapshotRepository {
+  private snapshots: RoleQuarantineSnapshot[] = [];
+  private idCounter = 0;
+
+  private nextId(): string {
+    this.idCounter += 1;
+    return `role-quarantine-${this.idCounter}`;
+  }
+
+  async create(data: RoleQuarantineSnapshotCreate): Promise<RoleQuarantineSnapshot> {
+    const now = new Date();
+    const snapshot: RoleQuarantineSnapshot = {
+      id: this.nextId(),
+      server_id: data.serverId,
+      user_id: data.userId,
+      verification_event_id: data.verificationEventId ?? null,
+      status: RoleQuarantineSnapshotStatus.ACTIVE,
+      mode: data.mode,
+      original_role_ids: [...data.originalRoleIds],
+      planned_role_ids: [...data.plannedRoleIds],
+      removed_role_ids: [...(data.removedRoleIds ?? [])],
+      restored_role_ids: [...(data.restoredRoleIds ?? [])],
+      skipped_roles: data.skippedRoles ?? [],
+      failed_removals: data.failedRemovals ?? [],
+      failed_restores: data.failedRestores ?? [],
+      created_at: now,
+      updated_at: now,
+      restored_at: null,
+      restored_by: null,
+      metadata: data.metadata ?? {},
+    };
+    this.snapshots.push(snapshot);
+    return this.clone(snapshot);
+  }
+
+  async findActiveByServerAndUser(
+    serverId: string,
+    userId: string
+  ): Promise<RoleQuarantineSnapshot | null> {
+    const snapshots = this.snapshots
+      .filter(
+        (item) =>
+          item.server_id === serverId &&
+          item.user_id === userId &&
+          item.status === RoleQuarantineSnapshotStatus.ACTIVE
+      )
+      .sort((a, b) => toTimestamp(b.created_at) - toTimestamp(a.created_at));
+    if (snapshots.length === 0) {
+      return null;
+    }
+
+    return this.clone(snapshots[0]);
+  }
+
+  async update(
+    id: string,
+    data: RoleQuarantineSnapshotUpdate
+  ): Promise<RoleQuarantineSnapshot | null> {
+    const index = this.snapshots.findIndex((snapshot) => snapshot.id === id);
+    if (index === -1) {
+      return null;
+    }
+
+    const existing = this.snapshots[index];
+    const updated: RoleQuarantineSnapshot = {
+      ...existing,
+      status: data.status ?? existing.status,
+      removed_role_ids: data.removedRoleIds ? [...data.removedRoleIds] : existing.removed_role_ids,
+      restored_role_ids: data.restoredRoleIds
+        ? [...data.restoredRoleIds]
+        : existing.restored_role_ids,
+      skipped_roles: data.skippedRoles === undefined ? existing.skipped_roles : data.skippedRoles,
+      failed_removals:
+        data.failedRemovals === undefined ? existing.failed_removals : data.failedRemovals,
+      failed_restores:
+        data.failedRestores === undefined ? existing.failed_restores : data.failedRestores,
+      restored_at: data.restoredAt === undefined ? existing.restored_at : data.restoredAt,
+      restored_by: data.restoredBy === undefined ? existing.restored_by : data.restoredBy,
+      metadata: data.metadata === undefined ? existing.metadata : data.metadata,
+      updated_at: new Date(),
+    };
+    this.snapshots[index] = updated;
+    return this.clone(updated);
+  }
+
+  private clone(snapshot: RoleQuarantineSnapshot): RoleQuarantineSnapshot {
+    return {
+      ...snapshot,
+      original_role_ids: [...snapshot.original_role_ids],
+      planned_role_ids: [...snapshot.planned_role_ids],
+      removed_role_ids: [...snapshot.removed_role_ids],
+      restored_role_ids: [...snapshot.restored_role_ids],
+    };
   }
 }
