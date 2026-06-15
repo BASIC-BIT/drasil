@@ -162,7 +162,7 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 - Expected result:
   - admin digest groups pending cases into fresh, stale, and very stale
   - digest lines include the target user mention and direct admin/thread links
-  - digest lines show the next user reminder timestamp or final manual review language
+  - digest lines show the next user reminder timestamp or moderator-review language
   - user reminder posts in the user-facing verification thread and pings only the target user
   - user reminder does not post within one hour after the admin digest
   - target-user replies stop later user reminders and still notify admins through evidence mirroring/live queue

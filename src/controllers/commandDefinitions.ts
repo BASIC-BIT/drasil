@@ -558,7 +558,7 @@ const baseApplicationCommandBuilders = [
         .addSubcommand((subcommand) =>
           subcommand
             .setName('set-very-stale-days')
-            .setDescription('Set days before pending cases need final manual review')
+            .setDescription('Set days before pending cases are very stale')
             .addIntegerOption((option) =>
               option
                 .setName('days')

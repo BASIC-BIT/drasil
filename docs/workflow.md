@@ -129,8 +129,8 @@ case-review workflow by default.
 - Admin stale-case digests post to the admin channel at most once per server repeat
   window. The default stale threshold and repeat cadence are 24 hours.
 - Digests group pending cases as fresh, stale, and very stale. Very stale cases are
-  cases beyond the configured day threshold, defaulting to 3 days, and should get a
-  final manual ban/no-ban review.
+  cases beyond the configured day threshold, defaulting to 3 days, and remain pending
+  for moderator review.
 - User-facing support-thread reminders post only in the normal user-facing
   verification thread. They ping the target user, not admins.
 - User reminders use fixed copy: `Ticket reminder: {elapsed} elapsed. {user_mention} See above.`
