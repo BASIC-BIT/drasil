@@ -161,6 +161,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     }
 
     const updatedSnapshot = await this.snapshotRepository.update(snapshot.id, {
+      removedRoleIds,
       failedRemovals: failedRemovals as unknown as Prisma.JsonValue,
     });
 

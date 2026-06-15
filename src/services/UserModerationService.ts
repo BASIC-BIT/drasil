@@ -1295,6 +1295,14 @@ export class UserModerationService implements IUserModerationService {
       const restoreResult = member
         ? await this.tryRestoreRoleQuarantine(member, resolvedEvents[0]?.event ?? null, moderator)
         : { verificationEvent: null, metadata: null };
+      if (!member) {
+        await this.tryAbandonRoleQuarantine(
+          guild.id,
+          userId,
+          'close_no_action_member_absent',
+          moderator.id
+        );
+      }
       if (restoreResult.verificationEvent) {
         const restoredEventIndex = resolvedEvents.findIndex(
           (resolvedEvent) => resolvedEvent.event.id === restoreResult.verificationEvent?.id

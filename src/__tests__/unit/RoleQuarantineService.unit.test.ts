@@ -182,6 +182,33 @@ describe('RoleQuarantineService (unit)', () => {
     }
   });
 
+  it('records only successfully removed role ids after failed removals are known', async () => {
+    const safeRole = createRole({ id: 'safe-role' });
+    const failedRole = createRole({ id: 'failed-role' });
+    const member = createMember([safeRole, failedRole]);
+    (member.roles.remove as jest.Mock).mockImplementation(async (role: Role) => {
+      if (role.id === failedRole.id) {
+        throw new Error('Missing permissions');
+      }
+      member.roles.cache.delete(role.id);
+    });
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'automatic' }),
+      snapshots
+    );
+
+    const result = await service.quarantineMember(member, createVerificationEvent());
+
+    expect(result.plannedRoleIds).toEqual(['safe-role', 'failed-role']);
+    expect(result.removedRoleIds).toEqual(['safe-role']);
+    expect(result.failedRemovals).toEqual([
+      expect.objectContaining({ role_id: 'failed-role', reason: 'Missing permissions' }),
+    ]);
+    const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+    expect(snapshot?.removed_role_ids).toEqual(['safe-role']);
+  });
+
   it('audits removable roles without creating a snapshot or removing roles', async () => {
     const safeRole = createRole({ id: 'safe-role' });
     const member = createMember([safeRole]);

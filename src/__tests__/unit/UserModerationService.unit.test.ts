@@ -59,6 +59,14 @@ const buildGuildWithMember = (guildId: string, member: GuildMember): Guild =>
     },
   }) as unknown as Guild;
 
+const buildGuildWithoutMember = (guildId: string): Guild =>
+  ({
+    id: guildId,
+    members: {
+      fetch: jest.fn().mockRejectedValue(new Error('Unknown member')),
+    },
+  }) as unknown as Guild;
+
 describe('UserModerationService (unit)', () => {
   let serverMemberRepository: InMemoryServerMemberRepository;
   let verificationEventRepository: InMemoryVerificationEventRepository;
@@ -864,6 +872,70 @@ describe('UserModerationService (unit)', () => {
     );
     expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
     expect(notificationManager.logActionToMessage).not.toHaveBeenCalled();
+  });
+
+  it('abandons role quarantine when closing no-action for an absent member', async () => {
+    const guildId = 'guild-close-absent';
+    const userId = 'user-close-absent';
+    const moderator = { id: 'mod-close-absent' } as User;
+    const guild = buildGuildWithoutMember(guildId);
+    const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      quarantineMember: jest.fn(),
+      restoreMemberRoles: jest.fn(),
+      abandonActiveSnapshot: jest.fn().mockResolvedValue({
+        status: 'abandoned',
+        snapshotId: 'role-quarantine-1',
+      }),
+    };
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      is_restricted: true,
+      verification_status: VerificationStatus.PENDING,
+    });
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService,
+      undefined,
+      roleQuarantineService
+    );
+
+    const closedCount = await service.closeCaseNoAction(guild, userId, moderator);
+
+    expect(closedCount).toBe(1);
+    expect(roleManager.removeRestrictedRole).not.toHaveBeenCalled();
+    expect(roleQuarantineService.restoreMemberRoles).not.toHaveBeenCalled();
+    expect(roleQuarantineService.abandonActiveSnapshot).toHaveBeenCalledWith(
+      guildId,
+      userId,
+      'close_no_action_member_absent',
+      moderator.id
+    );
+    expect(await verificationEventRepository.findById(verificationEvent.id)).toEqual(
+      expect.objectContaining({ status: VerificationStatus.CLOSED_NO_ACTION })
+    );
   });
 
   it('bans a user and records admin action', async () => {
