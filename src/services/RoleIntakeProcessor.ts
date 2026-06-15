@@ -3,9 +3,13 @@ import type { IVerificationEventRepository } from '../repositories/VerificationE
 import type {
   AdminCaseOptions,
   AdminCaseResult,
+  RoleIntakeFailure,
   RoleIntakeOptions,
+  RoleIntakeProgress,
   RoleIntakeResult,
 } from './SecurityActionService';
+
+const DEFAULT_ROLE_INTAKE_MEMBER_TIMEOUT_MS = 60_000;
 
 type OpenAdminCase = (
   member: GuildMember,
@@ -21,6 +25,13 @@ interface RoleIntakeMemberSelection {
   skippedOverLimit: number;
 }
 
+interface RoleIntakeMemberResult {
+  opened: number;
+  skippedActiveCases: number;
+  failed: number;
+  failures: RoleIntakeFailure[];
+}
+
 export class RoleIntakeProcessor {
   public constructor(
     private readonly verificationEventRepository: Pick<
@@ -34,6 +45,10 @@ export class RoleIntakeProcessor {
     const batchId = `role-intake-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const limit = Math.max(1, Math.min(options.limit ?? 250, 250));
     const delayMs = Math.max(0, options.delayMs ?? 250);
+    const memberTimeoutMs = Math.max(
+      1,
+      options.memberTimeoutMs ?? DEFAULT_ROLE_INTAKE_MEMBER_TIMEOUT_MS
+    );
     const memberSelection = await this.selectRoleMembersForIntake(options.role, limit);
     const { selectedMembers } = memberSelection;
     const result: RoleIntakeResult = {
@@ -53,45 +68,15 @@ export class RoleIntakeProcessor {
       failures: [],
     };
 
+    let completedMembers = 0;
     for (const member of selectedMembers) {
-      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
-        member.id,
-        member.guild.id
-      );
-      if (activeCase && options.action !== 'restrict') {
-        result.skippedActiveCases += 1;
-        continue;
-      }
-
-      if (!options.execute) {
-        continue;
-      }
-
       try {
-        const caseResult = await this.openAdminCase(member, options.moderator, {
-          action: options.action,
-          reason: options.reason,
-          metadata: {
-            type: 'admin_role_intake',
-            bulk_intake: true,
-            batchId,
-            sourceRoleId: options.role.id,
-            sourceRoleName: options.role.name,
-          },
-        });
-        if (caseResult.opened) {
-          result.opened += 1;
-          if (options.action === 'restrict' && !caseResult.restricted) {
-            result.failed += 1;
-            result.failures.push({
-              userId: member.id,
-              message: 'Case opened but restriction failed',
-            });
-          }
-        } else {
-          result.failed += 1;
-          result.failures.push({ userId: member.id, message: 'Case flow returned false' });
-        }
+        const memberResult = await this.withTimeout(
+          this.processSelectedMember(options, member, batchId),
+          memberTimeoutMs,
+          `Role intake for ${member.id}`
+        );
+        this.applyMemberResult(result, memberResult);
       } catch (error) {
         result.failed += 1;
         result.failures.push({
@@ -100,12 +85,125 @@ export class RoleIntakeProcessor {
         });
       }
 
+      completedMembers += 1;
+      await this.reportProgress(options, result, completedMembers);
+
       if (delayMs > 0) {
         await this.sleep(delayMs);
       }
     }
 
     return result;
+  }
+
+  private async processSelectedMember(
+    options: RoleIntakeOptions,
+    member: GuildMember,
+    batchId: string
+  ): Promise<RoleIntakeMemberResult> {
+    const memberResult: RoleIntakeMemberResult = {
+      opened: 0,
+      skippedActiveCases: 0,
+      failed: 0,
+      failures: [],
+    };
+
+    const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+      member.id,
+      member.guild.id
+    );
+    if (activeCase && options.action !== 'restrict') {
+      memberResult.skippedActiveCases += 1;
+      return memberResult;
+    }
+
+    if (!options.execute) {
+      return memberResult;
+    }
+
+    const caseResult = await this.openAdminCase(member, options.moderator, {
+      action: options.action,
+      reason: options.reason,
+      metadata: {
+        type: 'admin_role_intake',
+        bulk_intake: true,
+        batchId,
+        sourceRoleId: options.role.id,
+        sourceRoleName: options.role.name,
+      },
+    });
+    if (caseResult.opened) {
+      memberResult.opened += 1;
+      if (options.action === 'restrict' && !caseResult.restricted) {
+        memberResult.failed += 1;
+        memberResult.failures.push({
+          userId: member.id,
+          message: 'Case opened but restriction failed',
+        });
+      }
+      return memberResult;
+    }
+
+    memberResult.failed += 1;
+    memberResult.failures.push({ userId: member.id, message: 'Case flow returned false' });
+    return memberResult;
+  }
+
+  private applyMemberResult(result: RoleIntakeResult, memberResult: RoleIntakeMemberResult): void {
+    result.opened += memberResult.opened;
+    result.skippedActiveCases += memberResult.skippedActiveCases;
+    result.failed += memberResult.failed;
+    result.failures.push(...memberResult.failures);
+  }
+
+  private async reportProgress(
+    options: RoleIntakeOptions,
+    result: RoleIntakeResult,
+    completedMembers: number
+  ): Promise<void> {
+    if (!options.onProgress) {
+      return;
+    }
+
+    const progress: RoleIntakeProgress = {
+      result: {
+        ...result,
+        failures: [...result.failures],
+      },
+      completedMembers,
+    };
+
+    try {
+      await options.onProgress(progress);
+    } catch (error) {
+      console.warn(`Failed to publish role intake progress for batch ${result.batchId}:`, error);
+    }
+  }
+
+  private async withTimeout<T>(
+    operation: Promise<T>,
+    timeoutMs: number,
+    description: string
+  ): Promise<T> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<T>((_, reject) => {
+      timeout = setTimeout(() => {
+        reject(
+          new Error(
+            `${description} did not finish within ${Math.ceil(timeoutMs / 1000)}s; it may still complete in the background.`
+          )
+        );
+      }, timeoutMs);
+      timeout.unref();
+    });
+
+    try {
+      return await Promise.race([operation, timeoutPromise]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 
   private async selectRoleMembersForIntake(

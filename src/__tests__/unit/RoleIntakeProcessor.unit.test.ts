@@ -1,5 +1,6 @@
 import { Guild, GuildMember, Role, User } from 'discord.js';
 import { VerificationStatus } from '../../repositories/types';
+import type { AdminCaseResult } from '../../services/SecurityActionService';
 import { RoleIntakeProcessor } from '../../services/RoleIntakeProcessor';
 
 const buildMember = (guildId: string, userId: string, bot = false): GuildMember =>
@@ -157,6 +158,56 @@ describe('RoleIntakeProcessor (unit)', () => {
       member,
       moderator,
       expect.objectContaining({ action: 'restrict' })
+    );
+  });
+
+  it('records a failure and continues when one role intake member times out', async () => {
+    const guildId = 'guild-role-intake-timeout';
+    const hangingMember = buildMember(guildId, 'user-hangs');
+    const okMember = buildMember(guildId, 'user-ok');
+    const role = buildRole(guildId, [hangingMember, okMember]);
+    const verificationEventRepository = {
+      findActiveByUserAndServer: jest.fn().mockResolvedValue(null),
+    };
+    const openAdminCase = jest.fn((member: GuildMember): Promise<AdminCaseResult> => {
+      if (member.id === hangingMember.id) {
+        return new Promise<AdminCaseResult>(() => undefined);
+      }
+
+      return Promise.resolve({
+        opened: true,
+        restrictionAttempted: false,
+        restricted: false,
+      });
+    });
+    const onProgress = jest.fn();
+    const processor = new RoleIntakeProcessor(verificationEventRepository, openAdminCase);
+
+    const result = await processor.intakeRoleMembers({
+      role,
+      moderator,
+      action: 'open_case',
+      execute: true,
+      delayMs: 0,
+      memberTimeoutMs: 1,
+      onProgress,
+    });
+
+    expect(result.opened).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        userId: hangingMember.id,
+        message: expect.stringContaining('did not finish'),
+      }),
+    ]);
+    expect(openAdminCase).toHaveBeenCalledTimes(2);
+    expect(onProgress).toHaveBeenCalledTimes(2);
+    expect(onProgress).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        completedMembers: 2,
+        result: expect.objectContaining({ opened: 1, failed: 1 }),
+      })
     );
   });
 });
