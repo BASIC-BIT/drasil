@@ -22,6 +22,7 @@ describe('EventHandler (unit)', () => {
     reportIntakeAgentService?: Record<string, jest.Mock>;
     messageContextRepository?: Record<string, jest.Mock>;
     userModerationService?: Record<string, jest.Mock>;
+    productAnalyticsService?: Record<string, jest.Mock>;
   }): EventHandler {
     const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
     const detectionOrchestrator = overrides?.detectionOrchestrator ?? {
@@ -70,7 +71,7 @@ describe('EventHandler (unit)', () => {
       { handleTestCommands: jest.fn(), registerCommands: jest.fn() } as any,
       { handleButtonInteraction: jest.fn(), handleModalSubmit: jest.fn() } as any,
       { handleThreadMessage: jest.fn().mockResolvedValue(false) } as any,
-      undefined,
+      overrides?.productAnalyticsService as any,
       overrides?.setupDiagnosticsService as any,
       overrides?.reportIntakeService as any,
       overrides?.reportIntakeAgentService as any,
@@ -594,6 +595,205 @@ describe('EventHandler (unit)', () => {
       })
     );
     expect(messageContextRepository.recordMessage).toHaveBeenCalled();
+  });
+
+  it('forces GPT for messages inside the configured first-message window', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0.6,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'free nitro',
+        gptAnalysis: {
+          result: 'OK',
+          confidence: 0.8,
+          reasons: ['Context looks legitimate'],
+          reasonCodes: ['normal_context'],
+          primarySignal: 'none',
+          summary: 'Context looks legitimate.',
+          model: 'test-model',
+          promptVersion: 'test-prompt',
+          isFallback: false,
+        },
+        gptTriggerReasons: ['first_recent_messages'],
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const productAnalyticsService = {
+      getStatus: jest.fn(),
+      captureGuildEvent: jest.fn(),
+      captureUserEvent: jest.fn().mockResolvedValue(undefined),
+      shutdown: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'notify_only',
+          gpt_message_check_count: 3,
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const messageContextRepository = {
+      findRecentByServerAndUser: jest.fn().mockResolvedValue([]),
+      recordMessage: jest.fn().mockResolvedValue(undefined),
+      pruneExpired: jest.fn().mockResolvedValue(0),
+    };
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      messageContextRepository,
+      productAnalyticsService,
+    });
+
+    await (handler as any).handleMessage(buildMessage(new PermissionsBitField()));
+
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'free nitro',
+      expect.objectContaining({
+        recentMessages: [],
+      }),
+      { forceGpt: true }
+    );
+    expect(productAnalyticsService.captureUserEvent).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'message detection forced gpt analyzed',
+      expect.objectContaining({
+        detection_type: DetectionType.SUSPICIOUS_CONTENT,
+        detection_label: 'OK',
+        confidence: 0.6,
+        confidence_bucket: '50-69',
+        detection_response_mode: 'notify_only',
+        gpt_force_reason: 'first_recent_messages',
+        gpt_force_net_new: true,
+        gpt_trigger_reasons: ['first_recent_messages'],
+        recent_message_count: 0,
+        gpt_message_check_count: 3,
+        gpt_used: true,
+        gpt_result: 'OK',
+        gpt_confidence: 0.8,
+        gpt_confidence_bucket: '70-89',
+        gpt_primary_signal: 'none',
+        gpt_reason_codes: ['normal_context'],
+        gpt_is_fallback: false,
+      }),
+      { detectionEventId: undefined }
+    );
+  });
+
+  it('does not force GPT after the configured first-message window is full', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'free nitro',
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const productAnalyticsService = {
+      getStatus: jest.fn(),
+      captureGuildEvent: jest.fn(),
+      captureUserEvent: jest.fn().mockResolvedValue(undefined),
+      shutdown: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'notify_only',
+          gpt_message_check_count: 3,
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const messageContextRepository = {
+      findRecentByServerAndUser: jest
+        .fn()
+        .mockResolvedValue([
+          { content_preview: 'message 1' },
+          { content_preview: 'message 2' },
+          { content_preview: 'message 3' },
+        ]),
+      recordMessage: jest.fn().mockResolvedValue(undefined),
+      pruneExpired: jest.fn().mockResolvedValue(0),
+    };
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      messageContextRepository,
+      productAnalyticsService,
+    });
+
+    await (handler as any).handleMessage(buildMessage(new PermissionsBitField()));
+
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'free nitro',
+      expect.objectContaining({
+        recentMessages: ['message 1', 'message 2', 'message 3'],
+      })
+    );
+    expect(productAnalyticsService.captureUserEvent).not.toHaveBeenCalled();
+  });
+
+  it('clamps the forced GPT message window to retained context capacity', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'free nitro',
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'notify_only',
+          gpt_message_check_count: 25,
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const messageContextRepository = {
+      findRecentByServerAndUser: jest.fn().mockResolvedValue(
+        Array.from({ length: 20 }, (_, index) => ({
+          content_preview: `message ${index + 1}`,
+        }))
+      ),
+      recordMessage: jest.fn().mockResolvedValue(undefined),
+      pruneExpired: jest.fn().mockResolvedValue(0),
+    };
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      messageContextRepository,
+    });
+
+    await (handler as any).handleMessage(buildMessage(new PermissionsBitField()));
+
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'free nitro',
+      expect.objectContaining({
+        recentMessages: expect.arrayContaining(['message 1', 'message 20']),
+      })
+    );
+    expect(detectionOrchestrator.detectMessage.mock.calls[0]).toHaveLength(4);
   });
 
   it('loads config before exempting moderators when no cached config exists', async () => {

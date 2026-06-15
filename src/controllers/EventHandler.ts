@@ -31,8 +31,9 @@ import {
   IProductAnalyticsService,
   NOOP_PRODUCT_ANALYTICS_SERVICE,
 } from '../services/ProductAnalyticsService';
+import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { REPORT_INTAKE_THREAD_NAME_PREFIX } from '../services/ThreadManager';
-import { Server } from '../repositories/types';
+import { Server, ServerSettings } from '../repositories/types';
 import {
   ISetupDiagnosticsService,
   SetupDiagnosticReport,
@@ -305,6 +306,9 @@ export class EventHandler implements IEventHandler {
       }
 
       const recentMessages = await this.getRecentUserMessages(serverId, userId);
+      const gptMessageCheckCount = this.getGptMessageCheckCount(serverConfig.settings);
+      const forceGpt =
+        gptMessageCheckCount !== null && recentMessages.length < gptMessageCheckCount;
 
       // Get user profile data for detection context
       const profileData = this.extractUserProfileData(message.member, {
@@ -313,12 +317,21 @@ export class EventHandler implements IEventHandler {
       });
 
       // Use the detection orchestrator to analyze the message
-      const detectionResult = await this.detectionOrchestrator.detectMessage(
-        serverId,
-        userId,
-        content,
-        profileData
-      );
+      const detectionResult = forceGpt
+        ? await this.detectionOrchestrator.detectMessage(serverId, userId, content, profileData, {
+            forceGpt: true,
+          })
+        : await this.detectionOrchestrator.detectMessage(serverId, userId, content, profileData);
+
+      if (forceGpt) {
+        this.captureForcedGptMessageAnalytics(
+          message.member,
+          detectionResult,
+          responseSettings,
+          recentMessages.length,
+          gptMessageCheckCount
+        );
+      }
 
       await this.handleAutomaticDetection(
         message.member,
@@ -720,6 +733,57 @@ export class EventHandler implements IEventHandler {
       );
       return [];
     }
+  }
+
+  private getGptMessageCheckCount(settings: ServerSettings): number | null {
+    const configuredCount = settings.gpt_message_check_count;
+    if (
+      typeof configuredCount === 'number' &&
+      Number.isFinite(configuredCount) &&
+      configuredCount > 0
+    ) {
+      return Math.min(configuredCount, MESSAGE_CONTEXT_USER_LIMIT);
+    }
+
+    return null;
+  }
+
+  private captureForcedGptMessageAnalytics(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    responseSettings: DetectionResponseSettings,
+    recentMessageCount: number,
+    gptMessageCheckCount: number
+  ): void {
+    void this.productAnalyticsService.captureUserEvent(
+      member.guild.id,
+      member.id,
+      'message detection forced gpt analyzed',
+      {
+        detection_type: detectionResult.triggerSource,
+        detection_label: detectionResult.label,
+        confidence: detectionResult.confidence,
+        confidence_bucket: getConfidenceBucket(detectionResult.confidence),
+        detection_response_mode: responseSettings.mode,
+        gpt_force_reason: 'first_recent_messages',
+        gpt_force_net_new:
+          detectionResult.gptTriggerReasons?.length === 1 &&
+          detectionResult.gptTriggerReasons[0] === 'first_recent_messages',
+        gpt_trigger_reasons: detectionResult.gptTriggerReasons,
+        recent_message_count: recentMessageCount,
+        gpt_message_check_count: gptMessageCheckCount,
+        gpt_used: detectionResult.gptAnalysis !== undefined,
+        gpt_result: detectionResult.gptAnalysis?.result,
+        gpt_confidence: detectionResult.gptAnalysis?.confidence,
+        gpt_confidence_bucket: detectionResult.gptAnalysis
+          ? getConfidenceBucket(detectionResult.gptAnalysis.confidence)
+          : undefined,
+        gpt_primary_signal: detectionResult.gptAnalysis?.primarySignal,
+        gpt_reason_codes: detectionResult.gptAnalysis?.reasonCodes,
+        gpt_is_fallback: detectionResult.gptAnalysis?.isFallback,
+      },
+      { detectionEventId: detectionResult.detectionEventId }
+    );
   }
 
   private rememberRecentMessage(message: Message): void {

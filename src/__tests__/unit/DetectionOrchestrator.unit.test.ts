@@ -256,6 +256,81 @@ describe('DetectionOrchestrator (unit)', () => {
     expect(events).toHaveLength(2);
   });
 
+  it('uses GPT for established users when message detection is forced', async () => {
+    heuristicService.analyzeMessage.mockReturnValue({ result: 'OK', reasons: [] });
+    gptService.analyzeProfile.mockResolvedValue(
+      makeGptAnalysis({
+        result: 'SUSPICIOUS',
+        confidence: 0.85,
+        reasons: ['AI analysis flagged recent message context as suspicious'],
+        reasonCodes: ['call_to_action'],
+        primarySignal: 'message_content',
+        summary: 'Recent message context contains suspicious outreach.',
+      })
+    );
+
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository
+    );
+
+    const profile: UserProfileData = {
+      username: 'established-user',
+      accountCreatedAt: new Date('2020-01-01T00:00:00.000Z'),
+      joinedServerAt: new Date('2020-01-01T00:00:00.000Z'),
+      recentMessages: [],
+    };
+
+    const result = await orchestrator.detectMessage(
+      serverId,
+      userId,
+      'commission advert',
+      profile,
+      {
+        forceGpt: true,
+      }
+    );
+
+    expect(gptService.analyzeProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recentMessages: ['commission advert'],
+      })
+    );
+    expect(result.gptTriggerReasons).toEqual(['first_recent_messages']);
+    expect(result.label).toBe('SUSPICIOUS');
+    expect(result.detectionEventId).toBeDefined();
+  });
+
+  it('warns when forced GPT is requested without profile data', async () => {
+    heuristicService.analyzeMessage.mockReturnValue({ result: 'OK', reasons: [] });
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const orchestrator = new DetectionOrchestrator(
+        heuristicService,
+        gptService,
+        detectionEventsRepository,
+        userRepository,
+        serverRepository
+      );
+
+      const result = await orchestrator.detectMessage(serverId, userId, 'hello', undefined, {
+        forceGpt: true,
+      });
+
+      expect(gptService.analyzeProfile).not.toHaveBeenCalled();
+      expect(result.gptAnalysis).toBeUndefined();
+      expect(consoleWarn).toHaveBeenCalledWith(
+        'forceGpt requested without profileData; skipping GPT analysis.'
+      );
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
+
   it('does not count false-positive detections toward future suspicion', async () => {
     await detectionEventsRepository.create({
       server_id: serverId,
