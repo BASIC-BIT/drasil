@@ -1133,15 +1133,7 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     if (route === 'kick') {
-      const handled = await this.autoKickSuspiciousMember(
-        member,
-        detectionResult,
-        undefined,
-        'report_intake'
-      );
-      if (!handled) {
-        throw new Error('Failed to route confirmed report intake as kick');
-      }
+      await this.autoKickSuspiciousMember(member, detectionResult, undefined, 'report_intake');
       return;
     }
 

@@ -598,6 +598,8 @@ export class InteractionHandler implements IInteractionHandler {
             this.adminActionButton(parsed, 'thread', 'Create Thread', ButtonStyle.Primary)
           );
         }
+      } else if (canKick) {
+        actionButtons.push(this.adminActionButton(parsed, 'kick', 'Kick User', ButtonStyle.Danger));
       }
       if (!memberLeft && alreadyBanned) {
         actionButtons.push(
@@ -2321,20 +2323,28 @@ export class InteractionHandler implements IInteractionHandler {
     userId: string,
     detectionEventId: string
   ): Promise<void> {
-    const member = await this.getObservedTargetMember(guildId, userId);
-    const kicked = await this.securityActionService.kickObservedDetection(
-      member,
-      detectionEventId,
-      interaction.user,
-      OBSERVED_KICK_DEFAULT_REASON
-    );
-    await interaction.followUp({
-      content: kicked
-        ? `Kicked <@${userId}> from the observed alert.`
-        : `This observed alert for <@${userId}> was already actioned.`,
-      allowedMentions: { parse: [] },
-      flags: MessageFlags.Ephemeral,
-    });
+    try {
+      const member = await this.getObservedTargetMember(guildId, userId);
+      const kicked = await this.securityActionService.kickObservedDetection(
+        member,
+        detectionEventId,
+        interaction.user,
+        OBSERVED_KICK_DEFAULT_REASON
+      );
+      await interaction.followUp({
+        content: kicked
+          ? `Kicked <@${userId}> from the observed alert.`
+          : `This observed alert for <@${userId}> was already actioned.`,
+        allowedMentions: { parse: [] },
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error('Error kicking user from observed alert:', error);
+      await interaction.followUp({
+        content: 'An error occurred while kicking the user.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   }
 
   private async showObservedBanModal(

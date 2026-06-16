@@ -1309,6 +1309,48 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
+  it('surfaces post-kick case update failures to callers', async () => {
+    const guildId = 'guild-kick-update-fails';
+    const userId = 'user-kick-update-fails';
+    const moderator = { id: 'mod-kick' } as User;
+    const member = buildMember(guildId, userId);
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    jest.spyOn(verificationEventRepository, 'update').mockRejectedValueOnce(new Error('DB down'));
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.kickUser(member, 'unresolved legitimacy', moderator)).rejects.toThrow(
+      'DB down'
+    );
+    expect(member.kick).toHaveBeenCalledWith('unresolved legitimacy');
+  });
+
   it('syncs all duplicate pending cases for a user Discord already banned', async () => {
     const guildId = 'guild-sync-ban-duplicates';
     const userId = 'user-sync-ban-duplicates';

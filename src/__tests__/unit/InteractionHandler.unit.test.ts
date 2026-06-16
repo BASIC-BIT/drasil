@@ -147,6 +147,16 @@ const grantOnlyBanMembersPermission = (
   });
 };
 
+const grantOnlyKickMembersPermission = (
+  interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction
+): void => {
+  Object.assign(interaction, {
+    memberPermissions: {
+      has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.KickMembers),
+    },
+  });
+};
+
 const buildNoIssueSetupDiagnosticsService = (): any => ({
   validateGuildSetup: jest.fn(),
   validateSetupCandidate: jest.fn().mockResolvedValue({
@@ -639,6 +649,35 @@ describe('InteractionHandler (unit)', () => {
         url: 'https://drasilbot.com/admin/guild/guild-1/cases/ver-selected',
       }
     );
+  });
+
+  it('shows case kick action to kick-only moderators when enabled', async () => {
+    enableCaseKickActions();
+    const activeCase = buildVerificationEvent('ver-1', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(activeCase);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([activeCase]);
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('admin_actions:m:c:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantOnlyKickMembersPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    const response = (interaction.reply as jest.Mock).mock.calls[0][0] as any;
+    const buttons = response.components.flatMap(
+      (row: { toJSON(): { components: any[] } }) => row.toJSON().components
+    );
+    expect(buttons.map((button: { label?: string }) => button.label)).toEqual(['Kick User']);
   });
 
   it('shows observed admin actions with a resolved display label and no confirmation copy', async () => {
@@ -1322,6 +1361,39 @@ describe('InteractionHandler (unit)', () => {
     expect(interaction.followUp).toHaveBeenCalledWith({
       content: 'Kicked <@user-1> from the observed alert.',
       allowedMentions: { parse: [] },
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('reports observed kick failures after deferred confirmation', async () => {
+    enableObservedKickActions();
+    securityActionService.kickObservedDetection.mockRejectedValueOnce(
+      new Error('Discord rejected')
+    );
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_observed_kick:observed:user-1:det-1',
+      'guild-1',
+      {
+        id: 'admin-1',
+      } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.deferUpdate).toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'An error occurred while kicking the user.',
       flags: MessageFlags.Ephemeral,
     });
   });

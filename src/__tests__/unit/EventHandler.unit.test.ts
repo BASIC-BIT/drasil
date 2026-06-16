@@ -1009,12 +1009,17 @@ describe('EventHandler (unit)', () => {
       handleSuspiciousMessage: jest.fn(),
       openCaseForSuspiciousMessage: jest.fn(),
     };
+    const notificationManager = {
+      upsertObservedDetectionNotification: jest.fn().mockResolvedValue(null),
+      setupVerificationChannel: jest.fn(),
+    };
     const userModerationService = {
       findLatestKickOutcome: jest.fn().mockResolvedValue(priorKick),
     };
     const handler = buildHandler({
       detectionOrchestrator,
       securityActionService,
+      notificationManager,
       userModerationService,
     });
     const member = buildMember(new PermissionsBitField());
@@ -1026,10 +1031,12 @@ describe('EventHandler (unit)', () => {
       member,
       priorKick
     );
-    expect(securityActionService.openCaseForSuspiciousJoin).toHaveBeenCalledWith(
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledWith(
       member,
-      detectionResult
+      detectionResult,
+      undefined
     );
+    expect(securityActionService.openCaseForSuspiciousJoin).not.toHaveBeenCalled();
     expect(detectionOrchestrator.detectNewJoin).not.toHaveBeenCalled();
   });
 

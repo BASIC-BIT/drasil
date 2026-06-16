@@ -71,7 +71,7 @@ export class AdminActionService implements IAdminActionService {
         summary = `🔨 Banned by ${adminMention}`;
         break;
       case AdminActionType.KICK:
-        summary = `Kicked by ${adminMention}`;
+        summary = `👢 Kicked by ${adminMention}`;
         break;
       case AdminActionType.CLOSE_NO_ACTION:
         summary = `Closed with no action by ${adminMention}`;

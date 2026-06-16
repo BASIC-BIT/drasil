@@ -752,11 +752,6 @@ export class EventHandler implements IEventHandler {
       return true;
     }
 
-    if (responseSettings.mode === 'notify_only') {
-      await this.securityActionService.openCaseForSuspiciousJoin(member, detectionResult);
-      return true;
-    }
-
     await this.handleAutomaticDetection(member, detectionResult, responseSettings, actionThreshold);
     return true;
   }

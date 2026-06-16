@@ -1216,6 +1216,7 @@ export class UserModerationService implements IUserModerationService {
           `Kick succeeded for ${member.user.tag}, but post-kick updates failed:`,
           postKickError
         );
+        throw postKickError;
       }
 
       await this.tryRecordModerationOutcomes(
