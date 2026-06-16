@@ -242,7 +242,6 @@ describe('UserModerationService (unit)', () => {
       userId,
       VerificationStatus.PENDING
     );
-
     const service = new UserModerationService(
       serverMemberRepository,
       notificationManager,
@@ -598,7 +597,6 @@ describe('UserModerationService (unit)', () => {
       userId,
       VerificationStatus.PENDING
     );
-
     const service = new UserModerationService(
       serverMemberRepository,
       notificationManager,
@@ -1571,6 +1569,12 @@ describe('UserModerationService (unit)', () => {
       userId,
       VerificationStatus.PENDING
     );
+    notificationManager.logActionToMessage.mockResolvedValue(false);
+    (guild.bans.create as jest.Mock).mockImplementation(async () => {
+      const updatedBeforeBan = await verificationEventRepository.findById(verificationEvent.id);
+      expect(updatedBeforeBan?.status).toBe(VerificationStatus.BANNED);
+      return {};
+    });
 
     const service = new UserModerationService(
       serverMemberRepository,

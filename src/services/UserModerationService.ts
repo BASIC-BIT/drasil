@@ -1139,40 +1139,60 @@ export class UserModerationService implements IUserModerationService {
       const pendingVerificationEvents = verificationEvents.filter(
         (event) => event.status === VerificationStatus.PENDING
       );
+      const resolvedAt = new Date();
+      const resolvedEvents: Array<{
+        event: VerificationEvent;
+        previousEvent: VerificationEvent;
+        previousStatus: VerificationStatus;
+      }> = [];
 
-      await guild.bans.create(targetUser ?? userId, { reason });
+      for (const pendingEvent of pendingVerificationEvents) {
+        const previousStatus = pendingEvent.status;
+        const eventToUpdate = {
+          ...pendingEvent,
+          status: VerificationStatus.BANNED,
+          resolved_by: moderator.id,
+          resolved_at: resolvedAt,
+          notes: reason,
+          metadata: {
+            ...this.metadataToRecord(pendingEvent.metadata),
+            ...(targetUser ? { user_snapshot: this.buildUserSnapshot(targetUser) } : {}),
+            membership_state: 'left_or_removed',
+            banned_by_id_at: resolvedAt.toISOString(),
+          } as VerificationEvent['metadata'],
+        };
+        const updatedEvent = await this.verificationEventRepository.update(
+          pendingEvent.id,
+          eventToUpdate
+        );
+        resolvedEvents.push({
+          event: updatedEvent ?? eventToUpdate,
+          previousEvent: pendingEvent,
+          previousStatus,
+        });
+      }
+
+      try {
+        await guild.bans.create(targetUser ?? userId, { reason });
+      } catch (banError) {
+        for (const resolvedEvent of resolvedEvents) {
+          await this.verificationEventRepository
+            .update(resolvedEvent.previousEvent.id, resolvedEvent.previousEvent)
+            .catch((rollbackError) => {
+              console.warn(
+                `Failed to roll back case ${resolvedEvent.previousEvent.id} after ban by ID failed:`,
+                rollbackError
+              );
+            });
+        }
+
+        throw banError;
+      }
+
       console.log(`Banned user ${targetUser?.tag ?? userId} by ID. Reason: ${reason}`);
       await this.tryAbandonRoleQuarantine(guild.id, userId, 'drasil_ban_by_id', moderator.id);
 
       try {
-        const resolvedAt = new Date();
-        const resolvedEvents: Array<{
-          event: VerificationEvent;
-          previousStatus: VerificationStatus;
-        }> = [];
-
-        for (const pendingEvent of pendingVerificationEvents) {
-          const previousStatus = pendingEvent.status;
-          const eventToUpdate = {
-            ...pendingEvent,
-            status: VerificationStatus.BANNED,
-            resolved_by: moderator.id,
-            resolved_at: resolvedAt,
-            notes: reason,
-            metadata: {
-              ...this.metadataToRecord(pendingEvent.metadata),
-              ...(targetUser ? { user_snapshot: this.buildUserSnapshot(targetUser) } : {}),
-              membership_state: 'left_or_removed',
-              banned_by_id_at: resolvedAt.toISOString(),
-            } as VerificationEvent['metadata'],
-          };
-          const updatedEvent = await this.verificationEventRepository.update(
-            pendingEvent.id,
-            eventToUpdate
-          );
-          resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
-        }
-
         await this.serverMemberRepository.upsertMember(guild.id, userId, {
           verification_status: VerificationStatus.BANNED,
           is_restricted: true,
@@ -1195,7 +1215,8 @@ export class UserModerationService implements IUserModerationService {
             VerificationStatus.BANNED,
             AdminActionType.BAN,
             moderator,
-            resolvedEvent.event.id === resolvedEvents[0]?.event.id,
+            Boolean(resolvedEvent.event.notification_message_id) &&
+              resolvedEvent.event.id === resolvedEvents[0]?.event.id,
             {
               notes: reason,
               detectionEventId: detectionEventId ?? resolvedEvent.event.detection_event_id,

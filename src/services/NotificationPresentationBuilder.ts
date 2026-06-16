@@ -35,7 +35,7 @@ interface AdminActionRowOptions {
   readonly caseMembershipState?: CaseMembershipState;
 }
 
-type CaseMembershipState = 'in_server' | 'left_or_removed' | 'unknown';
+type CaseMembershipState = 'in_server' | 'left_or_removed';
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds?: unknown;
@@ -96,16 +96,12 @@ export class NotificationPresentationBuilder {
       member.guild.id
     );
 
-    const membershipPresentation = this.getPendingMembershipPresentation(verificationEvent);
-
     if (verificationEvent.status === VerificationStatus.VERIFIED) {
       embedColor = CASE_COLOR_VERIFIED;
     } else if (verificationEvent.status === VerificationStatus.BANNED) {
       embedColor = CASE_COLOR_BANNED;
     } else if (verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION) {
       embedColor = CASE_COLOR_CLOSED;
-    } else if (membershipPresentation) {
-      embedColor = CASE_COLOR_WARNING;
     }
 
     const resolutionPresentation = this.getVerificationResolutionPresentation(verificationEvent);
@@ -113,17 +109,14 @@ export class NotificationPresentationBuilder {
       .setColor(embedColor)
       .setTitle(
         resolutionPresentation?.title ??
-          membershipPresentation?.title ??
           this.getPendingCaseTitle(detectionResult, verificationEvent)
       )
       .setDescription(
         resolutionPresentation
           ? `<@${member.id}> has been handled. No further moderator action is pending.`
-          : membershipPresentation
-            ? membershipPresentation.description
-            : countedDetectionEvents.length > 1
-              ? `<@${member.id}> has been flagged as suspicious ${countedDetectionEvents.length} times.`
-              : `<@${member.id}> has been flagged as suspicious.`
+          : countedDetectionEvents.length > 1
+            ? `<@${member.id}> has been flagged as suspicious ${countedDetectionEvents.length} times.`
+            : `<@${member.id}> has been flagged as suspicious.`
       )
       .setThumbnail(member.user.displayAvatarURL())
       .addFields(
@@ -493,7 +486,7 @@ export class NotificationPresentationBuilder {
     includeBanAction: boolean,
     caseMembershipState: CaseMembershipState
   ): ButtonBuilder[] {
-    if (caseMembershipState === 'left_or_removed' || caseMembershipState === 'unknown') {
+    if (caseMembershipState === 'left_or_removed') {
       const buttons = [
         this.createCustomButton(`history_${userId}`, 'History', ButtonStyle.Secondary),
       ];
