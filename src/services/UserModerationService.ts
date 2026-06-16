@@ -78,7 +78,12 @@ export interface IUserModerationService {
     detectionEventId?: string
   ): Promise<boolean>;
 
-  kickUser(member: GuildMember, reason: string, moderator: User): Promise<boolean>;
+  kickUser(
+    member: GuildMember,
+    reason: string,
+    moderator: User,
+    detectionEventId?: string
+  ): Promise<boolean>;
 
   /**
    * Synchronizes pending verification cases when Discord already has an existing ban.
@@ -1146,7 +1151,12 @@ export class UserModerationService implements IUserModerationService {
     }
   }
 
-  public async kickUser(member: GuildMember, reason: string, moderator: User): Promise<boolean> {
+  public async kickUser(
+    member: GuildMember,
+    reason: string,
+    moderator: User,
+    detectionEventId?: string
+  ): Promise<boolean> {
     try {
       const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
       const verificationEvent =
@@ -1197,7 +1207,7 @@ export class UserModerationService implements IUserModerationService {
             resolvedEvent.event.id === verificationEvent?.id,
             {
               notes: reason,
-              detectionEventId: resolvedEvent.event.detection_event_id,
+              detectionEventId: detectionEventId ?? resolvedEvent.event.detection_event_id,
             }
           );
         }
@@ -1216,7 +1226,7 @@ export class UserModerationService implements IUserModerationService {
         {
           actorId: moderator.id,
           reason,
-          detectionEventId: verificationEvent?.detection_event_id ?? null,
+          detectionEventId: detectionEventId ?? verificationEvent?.detection_event_id ?? null,
           metadata: this.buildOutcomeMetadata({}, member.user, member),
           recordWithoutVerificationEvent: true,
         }
@@ -1227,7 +1237,7 @@ export class UserModerationService implements IUserModerationService {
         AdminActionType.KICK,
         moderator,
         verificationEvent?.id,
-        verificationEvent?.detection_event_id
+        detectionEventId ?? verificationEvent?.detection_event_id
       );
       return true;
     } catch (error) {

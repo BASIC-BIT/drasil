@@ -248,6 +248,7 @@ describe('InteractionHandler (unit)', () => {
       openObservedDetectionCase: jest.fn().mockResolvedValue(true),
       restrictObservedDetection: jest.fn().mockResolvedValue(true),
       banObservedDetection: jest.fn().mockResolvedValue(true),
+      kickObservedDetection: jest.fn().mockResolvedValue(true),
       banObservedDetectionById: jest.fn().mockResolvedValue(true),
       dismissObservedDetection: jest.fn().mockResolvedValue(true),
       undoObservedDetectionAction: jest.fn().mockResolvedValue(AdminActionType.DISMISS),
@@ -1269,6 +1270,41 @@ describe('InteractionHandler (unit)', () => {
     );
     expect(interaction.followUp).toHaveBeenCalledWith({
       content: 'Opened a verification case for <@user-1>.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles observed kick button for present members', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_observed_kick:observed:user-1:det-1',
+      'guild-1',
+      {
+        id: 'admin-1',
+      } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(securityActionService.kickObservedDetection).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'det-1',
+      interaction.user,
+      'Kicked from observed suspicious notification'
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'Kicked <@user-1> from the observed alert.',
+      allowedMentions: { parse: [] },
       flags: MessageFlags.Ephemeral,
     });
   });

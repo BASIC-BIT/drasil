@@ -162,6 +162,13 @@ export interface ISecurityActionService {
     reason: string
   ): Promise<boolean>;
 
+  kickObservedDetection(
+    member: GuildMember,
+    detectionEventId: string,
+    moderator: User,
+    reason: string
+  ): Promise<boolean>;
+
   banObservedDetectionById(
     guild: Guild,
     userId: string,
@@ -2578,6 +2585,93 @@ export class SecurityActionService implements ISecurityActionService {
           detectionEvent,
           moderator,
           AdminActionType.BAN
+        );
+      }
+      throw error;
+    }
+  }
+
+  public async kickObservedDetection(
+    member: GuildMember,
+    detectionEventId: string,
+    moderator: User,
+    reason: string
+  ): Promise<boolean> {
+    const detectionEvent = await this.getObservedDetectionForMember(member, detectionEventId);
+    if (this.hasObservedAction(detectionEvent)) {
+      return false;
+    }
+    const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
+      detectionEvent,
+      moderator,
+      AdminActionType.KICK
+    );
+    if (!claimedDetectionEvent) {
+      return false;
+    }
+    let actionApplied = false;
+    try {
+      await this.ensureObservedEntitiesExist(member.guild.id, member.id);
+      const activeVerificationEvent =
+        await this.verificationEventRepository.findActiveByUserAndServer(
+          member.id,
+          member.guild.id
+        );
+      const kicked = await this.userModerationService.kickUser(
+        member,
+        reason,
+        moderator,
+        detectionEvent.id
+      );
+      this.requireModerationSuccess(kicked, 'kick', member);
+      actionApplied = true;
+      const actionAlreadyRecorded = await this.hasRecordedObservedAction(
+        member.guild.id,
+        member.id,
+        claimedDetectionEvent.id,
+        AdminActionType.KICK
+      );
+      if (!actionAlreadyRecorded) {
+        const currentVerificationEvent = activeVerificationEvent
+          ? await this.verificationEventRepository.findById(activeVerificationEvent.id)
+          : null;
+        await this.recordObservedAction({
+          serverId: member.guild.id,
+          userId: member.id,
+          moderator,
+          detectionEvent: claimedDetectionEvent,
+          verificationEvent: currentVerificationEvent ?? activeVerificationEvent ?? undefined,
+          actionType: AdminActionType.KICK,
+          notes: reason,
+        });
+      }
+      await this.notificationManager.markObservedDetectionActionTaken(
+        detectionEvent.id,
+        'kicked this user',
+        moderator,
+        AdminActionType.KICK
+      );
+      await this.runModerationQueueTask(
+        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
+      );
+      this.captureMemberAnalytics(
+        member,
+        'observed detection action completed',
+        { action_type: AdminActionType.KICK },
+        {
+          moderatorId: moderator.id,
+          detectionEventId: detectionEvent.id,
+        }
+      );
+      return true;
+    } catch (error) {
+      if (!actionApplied) {
+        await this.releaseDetectionMetadataForObservedAction(
+          detectionEvent,
+          moderator,
+          AdminActionType.KICK
         );
       }
       throw error;

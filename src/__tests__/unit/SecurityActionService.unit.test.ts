@@ -2901,6 +2901,83 @@ describe('SecurityActionService (unit)', () => {
     });
   });
 
+  it('kicks an observed detection while preserving observed action provenance', async () => {
+    const guildId = 'guild-observed-kick';
+    const userId = 'user-observed-kick';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+
+    await expect(
+      buildService().kickObservedDetection(
+        member,
+        detectionEvent.id,
+        moderator,
+        'Suspected compromised account'
+      )
+    ).resolves.toBe(true);
+
+    expect(userModerationService.kickUser).toHaveBeenCalledWith(
+      member,
+      'Suspected compromised account',
+      moderator,
+      detectionEvent.id
+    );
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(updatedDetection?.metadata).toMatchObject({
+      observed_action: AdminActionType.KICK,
+      observed_action_by: moderator.id,
+    });
+    expect(adminActionService.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        server_id: guildId,
+        user_id: userId,
+        detection_event_id: detectionEvent.id,
+        action_type: AdminActionType.KICK,
+        notes: 'Suspected compromised account',
+      })
+    );
+    expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
+      detectionEvent.id,
+      'kicked this user',
+      moderator,
+      AdminActionType.KICK
+    );
+  });
+
+  it('releases an observed kick claim when the kick service returns false', async () => {
+    const guildId = 'guild-observed-kick-false';
+    const userId = 'user-observed-kick-false';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+    userModerationService.kickUser.mockResolvedValueOnce(false);
+
+    await expect(
+      buildService().kickObservedDetection(member, detectionEvent.id, moderator, 'Compromised')
+    ).rejects.toThrow('Failed to kick user test-user#0001');
+
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
+    expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
+    expect(adminActionService.recordAction).not.toHaveBeenCalled();
+    expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
+  });
+
   it('uses a verification thread when restricting an observed user report', async () => {
     const guildId = 'guild-observed-report-restrict';
     const userId = 'user-observed-report-restrict';
