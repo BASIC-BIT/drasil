@@ -96,6 +96,15 @@ interface ModerationOutcomeRow {
 
 const DEFAULT_STALE_HOURS = 24;
 
+type CaseSurfaceKind = CaseSurfaceLink['kind'];
+
+const ACTIONS_BY_PRESENCE_STATE: Partial<Record<CasePresenceState, CaseAction[]>> = {
+  banned: ['view_history', 'sync_existing_ban'],
+  kicked: ['view_history'],
+  left_or_removed: ['view_history', 'ban_by_id', 'close_no_action'],
+  unknown: ['view_history', 'ban_by_id', 'close_no_action'],
+};
+
 function toIsoString(value: unknown): string {
   if (value instanceof Date) {
     return value.toISOString();
@@ -154,11 +163,11 @@ function readNestedRecord(record: Record<string, unknown>, key: string): Record<
 }
 
 function createDiscordSurface(
-  kind: CaseSurfaceLink['kind'],
+  kind: CaseSurfaceKind,
   label: string,
   guildId: string,
   channelId: string,
-  messageId?: string | null
+  messageId: string | null = null
 ): CaseSurfaceLink {
   const url = discordMessageUrl(guildId, channelId, messageId);
   const desktopUrl = discordDesktopUrl(guildId, channelId, messageId);
@@ -317,17 +326,9 @@ function resolveAllowedActions(
   row: CaseSummaryRow,
   presenceState: CasePresenceState
 ): CaseAction[] {
-  if (presenceState === 'banned') {
-    return ['view_history', 'sync_existing_ban'];
-  }
-  if (presenceState === 'kicked') {
-    return ['view_history'];
-  }
-  if (presenceState === 'left_or_removed') {
-    return ['view_history', 'ban_by_id', 'close_no_action'];
-  }
-  if (presenceState === 'unknown') {
-    return ['view_history', 'ban_by_id', 'close_no_action'];
+  const presenceActions = ACTIONS_BY_PRESENCE_STATE[presenceState];
+  if (presenceActions) {
+    return [...presenceActions];
   }
 
   const actions: CaseAction[] = [
