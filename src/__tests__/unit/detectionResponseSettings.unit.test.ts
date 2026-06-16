@@ -15,7 +15,7 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.automaticDetectionExemptModerators).toBe(true);
     expect(settings.observedActionBanRequiresReason).toBe(false);
     expect(settings.moderatorBanActionEnabled).toBe(true);
-    expect(settings.moderatorKickActionEnabled).toBe(false);
+    expect(settings.moderatorKickActionEnabled).toBe(true);
     expect(settings.observedActionKickEnabled).toBe(false);
     expect(settings.messageDetectionAutoKickEnabled).toBe(false);
     expect(settings.joinDetectionAutoKickEnabled).toBe(false);
@@ -23,13 +23,18 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.autoKickMinConfidenceThreshold).toBe(95);
   });
 
-  it('defaults new configs to restrict with moderator ban actions', () => {
+  it('defaults new configs to restrict with manual case actions enabled', () => {
     const settings = getDetectionResponseSettings({});
 
     expect(settings.mode).toBe('restrict');
     expect(settings.messageMode).toBe('restrict');
     expect(settings.joinMode).toBe('restrict');
     expect(settings.moderatorBanActionEnabled).toBe(true);
+    expect(settings.moderatorKickActionEnabled).toBe(true);
+    expect(settings.observedActionKickEnabled).toBe(false);
+    expect(settings.messageDetectionAutoKickEnabled).toBe(false);
+    expect(settings.joinDetectionAutoKickEnabled).toBe(false);
+    expect(settings.reportIntakeAutoKickEnabled).toBe(false);
   });
 
   it('maps legacy auto_restrict=false configs to notify_only', () => {
@@ -105,6 +110,14 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.messageDetectionAutoKickEnabled).toBe(true);
     expect(settings.joinDetectionAutoKickEnabled).toBe(true);
     expect(settings.reportIntakeAutoKickEnabled).toBe(true);
+  });
+
+  it('allows moderator kick actions to be explicitly disabled', () => {
+    const settings = getDetectionResponseSettings({
+      moderator_kick_action_enabled: false,
+    });
+
+    expect(settings.moderatorKickActionEnabled).toBe(false);
   });
 
   it('allows moderator automatic detection exemption to be disabled', () => {

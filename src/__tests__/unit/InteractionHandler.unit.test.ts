@@ -367,12 +367,6 @@ describe('InteractionHandler (unit)', () => {
     });
   };
 
-  const enableCaseKickActions = (): void => {
-    (configService.getServerConfig as jest.Mock).mockResolvedValue({
-      settings: { [MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY]: true },
-    });
-  };
-
   const enableObservedKickActions = (): void => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       settings: { [OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY]: true },
@@ -651,8 +645,7 @@ describe('InteractionHandler (unit)', () => {
     );
   });
 
-  it('shows case kick action to kick-only moderators when enabled', async () => {
-    enableCaseKickActions();
+  it('shows case kick action to kick-only moderators by default', async () => {
     const activeCase = buildVerificationEvent('ver-1', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(activeCase);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([activeCase]);
@@ -1398,8 +1391,7 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
-  it('handles case kick button when case kick policy is enabled', async () => {
-    enableCaseKickActions();
+  it('handles case kick button by default', async () => {
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -1430,6 +1422,9 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('blocks confirmed case kick when the case kick policy is disabled', async () => {
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      settings: { [MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY]: false },
+    });
     const handler = new InteractionHandler(
       client,
       notificationManager,
