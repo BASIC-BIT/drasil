@@ -29,7 +29,7 @@ export type DetectionResponseEvent = 'message' | 'join';
 
 export const DEFAULT_DETECTION_RESPONSE_MODE: DetectionResponseMode = 'restrict';
 export const DEFAULT_MODERATOR_BAN_ACTION_ENABLED = true;
-export const DEFAULT_MODERATOR_KICK_ACTION_ENABLED = false;
+export const DEFAULT_MODERATOR_KICK_ACTION_ENABLED = true;
 export const DEFAULT_OBSERVED_ACTION_KICK_ENABLED = false;
 export const DEFAULT_MESSAGE_DETECTION_AUTO_KICK_ENABLED = false;
 export const DEFAULT_JOIN_DETECTION_AUTO_KICK_ENABLED = false;
