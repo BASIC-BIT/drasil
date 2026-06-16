@@ -37,6 +37,7 @@ const buildMember = (guildId: string, userId: string): GuildMember =>
       add: jest.fn().mockResolvedValue(undefined),
       remove: jest.fn().mockResolvedValue(undefined),
     },
+    kick: jest.fn().mockResolvedValue(undefined),
     ban: jest.fn().mockResolvedValue(undefined),
   }) as unknown as GuildMember;
 
@@ -1226,6 +1227,130 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
+  it('kicks a pending case and records a recoverable Drasil kick outcome', async () => {
+    const guildId = 'guild-kick';
+    const userId = 'user-kick';
+    const moderator = { id: 'mod-kick' } as User;
+    const member = buildMember(guildId, userId);
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.kickUser(member, 'unresolved legitimacy', moderator)).resolves.toBe(true);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.KICKED,
+        resolved_by: moderator.id,
+        notes: 'unresolved legitimacy',
+      })
+    );
+    const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
+    expect(serverMember?.verification_status).toBe(VerificationStatus.KICKED);
+    expect(serverMember?.is_restricted).toBe(false);
+    const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
+    expect(adminActions).toHaveLength(1);
+    expect(adminActions[0]).toEqual(
+      expect.objectContaining({
+        action_type: AdminActionType.KICK,
+        notes: 'unresolved legitimacy',
+        verification_event_id: verificationEvent.id,
+        detection_event_id: detectionEvent.id,
+      })
+    );
+    const outcomes = await moderationOutcomeRepository.findByUserAndServer(userId, guildId);
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toEqual(
+      expect.objectContaining({
+        outcome_type: ModerationOutcomeType.KICKED,
+        source: ModerationOutcomeSource.DRASIL,
+        actor_id: moderator.id,
+        reason: 'unresolved legitimacy',
+        verification_event_id: verificationEvent.id,
+        detection_event_id: detectionEvent.id,
+      })
+    );
+    expect(member.kick).toHaveBeenCalledWith('unresolved legitimacy');
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      VerificationStatus.KICKED,
+      moderator.id
+    );
+    expect(notificationManager.logActionToMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      AdminActionType.KICK,
+      moderator
+    );
+  });
+
+  it('surfaces post-kick case update failures to callers', async () => {
+    const guildId = 'guild-kick-update-fails';
+    const userId = 'user-kick-update-fails';
+    const moderator = { id: 'mod-kick' } as User;
+    const member = buildMember(guildId, userId);
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    jest.spyOn(verificationEventRepository, 'update').mockRejectedValueOnce(new Error('DB down'));
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.kickUser(member, 'unresolved legitimacy', moderator)).rejects.toThrow(
+      'DB down'
+    );
+    expect(member.kick).toHaveBeenCalledWith('unresolved legitimacy');
+  });
+
   it('syncs all duplicate pending cases for a user Discord already banned', async () => {
     const guildId = 'guild-sync-ban-duplicates';
     const userId = 'user-sync-ban-duplicates';
@@ -1431,6 +1556,78 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
+  it('resolves pending cases when a native Discord kick is observed', async () => {
+    const guildId = 'guild-observed-kick';
+    const userId = 'user-observed-kick';
+    const nativeModeratorId = 'native-mod';
+    const member = buildMember(guildId, userId);
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.recordObservedDiscordKick(member, {
+        source: ModerationOutcomeSource.NATIVE_DISCORD,
+        actorId: nativeModeratorId,
+        reason: 'native moderation kick',
+        auditLogEntryId: 'audit-kick-1',
+      })
+    ).resolves.toBe(1);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.KICKED,
+        resolved_by: nativeModeratorId,
+        notes: 'Observed Discord kick: native moderation kick',
+      })
+    );
+    const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
+    expect(adminActions).toHaveLength(0);
+    const outcomes = await moderationOutcomeRepository.findByUserAndServer(userId, guildId);
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toEqual(
+      expect.objectContaining({
+        outcome_type: ModerationOutcomeType.KICKED,
+        source: ModerationOutcomeSource.NATIVE_DISCORD,
+        actor_id: nativeModeratorId,
+        reason: 'native moderation kick',
+        verification_event_id: verificationEvent.id,
+        detection_event_id: detectionEvent.id,
+      })
+    );
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      VerificationStatus.KICKED,
+      nativeModeratorId
+    );
+  });
+
   it('marks pending cases when a member leaves without closing them', async () => {
     const guildId = 'guild-member-left';
     const userId = 'user-member-left';
@@ -1480,7 +1677,7 @@ describe('UserModerationService (unit)', () => {
     expect(outcomes[0]).toEqual(
       expect.objectContaining({
         outcome_type: ModerationOutcomeType.MEMBER_LEFT,
-        source: ModerationOutcomeSource.NATIVE_DISCORD,
+        source: ModerationOutcomeSource.UNKNOWN_EXTERNAL,
         verification_event_id: verificationEvent.id,
         detection_event_id: detectionEvent.id,
       })

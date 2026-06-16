@@ -56,6 +56,7 @@ describe('activeCaseDataAdapter', () => {
         allowedActions: [
           'view_history',
           'verify_user',
+          'kick_user',
           'ban_user',
           'close_no_action',
           'repair_thread',

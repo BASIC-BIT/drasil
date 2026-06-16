@@ -52,6 +52,7 @@ dotenv.config();
 
 const DRASIL_GUILD_INSTALL_PERMISSIONS =
   PermissionFlagsBits.ManageRoles |
+  PermissionFlagsBits.KickMembers |
   PermissionFlagsBits.BanMembers |
   PermissionFlagsBits.ViewAuditLog |
   PermissionFlagsBits.ManageChannels |

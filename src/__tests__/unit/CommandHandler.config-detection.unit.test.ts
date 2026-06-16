@@ -264,6 +264,155 @@ describe('CommandHandler detection config commands (unit)', () => {
     });
   });
 
+  it.each([
+    [
+      'kick-action-enable',
+      'moderator_kick_action_enabled',
+      true,
+      'Moderator kick action enabled: `yes`',
+      undefined,
+    ],
+    [
+      'kick-action-disable',
+      'moderator_kick_action_enabled',
+      false,
+      'Moderator kick action enabled: `no`',
+      undefined,
+    ],
+    [
+      'observed-kick-enable',
+      'observed_action_kick_enabled',
+      true,
+      'Observed kick action enabled: `yes`',
+      undefined,
+    ],
+    [
+      'observed-kick-disable',
+      'observed_action_kick_enabled',
+      false,
+      'Observed kick action enabled: `no`',
+      undefined,
+    ],
+    [
+      'auto-kick-enable',
+      'message_detection_auto_kick_enabled',
+      true,
+      'Message auto-kick: `enabled`',
+      'message',
+    ],
+    [
+      'auto-kick-disable',
+      'message_detection_auto_kick_enabled',
+      false,
+      'Message auto-kick: `disabled`',
+      'message',
+    ],
+    [
+      'auto-kick-enable',
+      'join_detection_auto_kick_enabled',
+      true,
+      'Join auto-kick: `enabled`',
+      'join',
+    ],
+    [
+      'auto-kick-disable',
+      'join_detection_auto_kick_enabled',
+      false,
+      'Join auto-kick: `disabled`',
+      'join',
+    ],
+    [
+      'auto-kick-enable',
+      'report_intake_auto_kick_enabled',
+      true,
+      'Report-intake auto-kick: `enabled`',
+      'report_intake',
+    ],
+    [
+      'auto-kick-disable',
+      'report_intake_auto_kick_enabled',
+      false,
+      'Report-intake auto-kick: `disabled`',
+      'report_intake',
+    ],
+  ])('handles /config detection %s', async (subcommand, key, value, responseText, source) => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        [key]: value,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild: {
+        id: 'guild-1',
+        members: {
+          fetch: jest.fn().mockResolvedValue({
+            permissions: { has: jest.fn().mockReturnValue(true) },
+          }),
+        },
+      },
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('detection'),
+        getSubcommand: jest.fn().mockReturnValue(subcommand),
+        getString: jest.fn().mockReturnValue(source),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      [key]: value,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining(responseText),
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('handles /config detection set-auto-kick-threshold', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        auto_kick_min_confidence_threshold: 98,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild: {
+        id: 'guild-1',
+        members: {
+          fetch: jest.fn().mockResolvedValue({
+            permissions: { has: jest.fn().mockReturnValue(true) },
+          }),
+        },
+      },
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('detection'),
+        getSubcommand: jest.fn().mockReturnValue('set-auto-kick-threshold'),
+        getInteger: jest.fn().mockReturnValue(98),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      auto_kick_min_confidence_threshold: 98,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Auto-kick threshold: `98%`'),
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
   it('handles /config detection moderator-exemption-enable', async () => {
     const updateServerSettings = jest.fn().mockResolvedValue({
       settings: {

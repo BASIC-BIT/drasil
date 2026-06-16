@@ -244,6 +244,13 @@ describe('CommandHandler command catalog (unit)', () => {
         'moderator-exemption-disable',
         'ban-action-enable',
         'ban-action-disable',
+        'kick-action-enable',
+        'kick-action-disable',
+        'observed-kick-enable',
+        'observed-kick-disable',
+        'auto-kick-enable',
+        'auto-kick-disable',
+        'set-auto-kick-threshold',
       ])
     );
   });
@@ -300,6 +307,7 @@ describe('CommandHandler command catalog (unit)', () => {
         'reason-require',
         'reason-optional',
         'external-reports',
+        'intake-confirmed-response',
         'ai-set-max-images',
         'ai-set-max-image-mb',
       ])

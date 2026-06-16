@@ -109,11 +109,14 @@ describeIntegration('SecurityActionService (integration)', () => {
       restrictUser: jest.fn().mockResolvedValue(true),
       liftRestriction: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
+      kickUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
       banUserById: jest.fn().mockResolvedValue(true),
       syncAlreadyBannedUser: jest.fn().mockResolvedValue(1),
       closeCaseNoAction: jest.fn().mockResolvedValue(1),
       recordObservedDiscordBan: jest.fn().mockResolvedValue(0),
+      recordObservedDiscordKick: jest.fn().mockResolvedValue(0),
+      findLatestKickOutcome: jest.fn().mockResolvedValue(null),
       recordMemberLeftGuild: jest.fn().mockResolvedValue(0),
     };
   });

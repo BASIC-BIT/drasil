@@ -21,6 +21,11 @@ export interface IModerationOutcomeRepository {
     serverId: string,
     options?: { limit?: number; offset?: number }
   ): Promise<ModerationOutcome[]>;
+  findLatestByTypeForUserAndServer(
+    userId: string,
+    serverId: string,
+    outcomeType: ModerationOutcomeType
+  ): Promise<ModerationOutcome | null>;
   findByVerificationEvent(verificationEventId: string): Promise<ModerationOutcome[]>;
 }
 
@@ -93,6 +98,26 @@ export class ModerationOutcomeRepository implements IModerationOutcomeRepository
       return outcomes as ModerationOutcome[];
     } catch (error) {
       this.handleError(error, 'findByUserAndServer');
+    }
+  }
+
+  async findLatestByTypeForUserAndServer(
+    userId: string,
+    serverId: string,
+    outcomeType: ModerationOutcomeType
+  ): Promise<ModerationOutcome | null> {
+    try {
+      const outcome = await this.prisma.moderation_outcomes.findFirst({
+        where: {
+          user_id: userId,
+          server_id: serverId,
+          outcome_type: outcomeType as unknown as moderation_outcome_type,
+        },
+        orderBy: { occurred_at: 'desc' },
+      });
+      return outcome as ModerationOutcome | null;
+    } catch (error) {
+      this.handleError(error, 'findLatestByTypeForUserAndServer');
     }
   }
 

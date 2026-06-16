@@ -334,6 +334,7 @@ enum admin_action_type {
   verify
   reject
   ban
+  kick
   close_no_action
   reopen
   create_thread
@@ -350,6 +351,7 @@ enum detection_type {
   suspicious_content
   gpt_analysis
   new_account
+  rejoin_after_kick
   pattern_match
   user_report
   admin_case
@@ -369,6 +371,7 @@ enum moderation_outcome_type {
   restricted
   verified
   banned
+  kicked
   closed_no_action
   member_left
 }
@@ -412,5 +415,6 @@ enum verification_status {
   pending
   verified
   banned
+  kicked
   closed_no_action
 }

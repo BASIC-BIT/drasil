@@ -60,6 +60,9 @@ export class VerificationHistoryFormatter {
       case AdminActionType.BAN:
         output = `🔨 Banned by ${adminMention}`;
         break;
+      case AdminActionType.KICK:
+        output = `Kicked by ${adminMention}`;
+        break;
       case AdminActionType.CLOSE_NO_ACTION:
         output = `Closed with no action by ${adminMention}`;
         break;

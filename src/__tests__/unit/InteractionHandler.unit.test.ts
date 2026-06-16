@@ -25,7 +25,11 @@ import {
   SETUP_VERIFICATION_MODAL_ID,
   SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
 } from '../../constants/setupVerificationWizard';
-import { MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY } from '../../utils/detectionResponseSettings';
+import {
+  MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY,
+  MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY,
+  OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY,
+} from '../../utils/detectionResponseSettings';
 import {
   buildCaseReviewDigestSelectCustomId,
   CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID,
@@ -143,6 +147,16 @@ const grantOnlyBanMembersPermission = (
   });
 };
 
+const grantOnlyKickMembersPermission = (
+  interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction
+): void => {
+  Object.assign(interaction, {
+    memberPermissions: {
+      has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.KickMembers),
+    },
+  });
+};
+
 const buildNoIssueSetupDiagnosticsService = (): any => ({
   validateGuildSetup: jest.fn(),
   validateSetupCandidate: jest.fn().mockResolvedValue({
@@ -206,11 +220,14 @@ describe('InteractionHandler (unit)', () => {
       restrictUser: jest.fn().mockResolvedValue(true),
       liftRestriction: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
+      kickUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
       banUserById: jest.fn().mockResolvedValue(true),
       syncAlreadyBannedUser: jest.fn().mockResolvedValue(1),
       closeCaseNoAction: jest.fn().mockResolvedValue(1),
       recordObservedDiscordBan: jest.fn().mockResolvedValue(0),
+      recordObservedDiscordKick: jest.fn().mockResolvedValue(0),
+      findLatestKickOutcome: jest.fn().mockResolvedValue(null),
       recordMemberLeftGuild: jest.fn().mockResolvedValue(0),
     };
     securityActionService = {
@@ -245,11 +262,13 @@ describe('InteractionHandler (unit)', () => {
       openObservedDetectionCase: jest.fn().mockResolvedValue(true),
       restrictObservedDetection: jest.fn().mockResolvedValue(true),
       banObservedDetection: jest.fn().mockResolvedValue(true),
+      kickObservedDetection: jest.fn().mockResolvedValue(true),
       banObservedDetectionById: jest.fn().mockResolvedValue(true),
       dismissObservedDetection: jest.fn().mockResolvedValue(true),
       undoObservedDetectionAction: jest.fn().mockResolvedValue(AdminActionType.DISMISS),
       excludeDetectionFromAccounting: jest.fn().mockResolvedValue({} as any),
       restoreDetectionAccounting: jest.fn().mockResolvedValue({} as any),
+      recordRejoinAfterKickDetection: jest.fn().mockResolvedValue({} as any),
       reopenVerification: jest.fn().mockResolvedValue(true),
     };
     notificationManager = {
@@ -345,6 +364,18 @@ describe('InteractionHandler (unit)', () => {
   const enableModeratorBanActions = (): void => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       settings: { [MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY]: true },
+    });
+  };
+
+  const enableCaseKickActions = (): void => {
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      settings: { [MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY]: true },
+    });
+  };
+
+  const enableObservedKickActions = (): void => {
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      settings: { [OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY]: true },
     });
   };
 
@@ -618,6 +649,35 @@ describe('InteractionHandler (unit)', () => {
         url: 'https://drasilbot.com/admin/guild/guild-1/cases/ver-selected',
       }
     );
+  });
+
+  it('shows case kick action to kick-only moderators when enabled', async () => {
+    enableCaseKickActions();
+    const activeCase = buildVerificationEvent('ver-1', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(activeCase);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([activeCase]);
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('admin_actions:m:c:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantOnlyKickMembersPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    const response = (interaction.reply as jest.Mock).mock.calls[0][0] as any;
+    const buttons = response.components.flatMap(
+      (row: { toJSON(): { components: any[] } }) => row.toJSON().components
+    );
+    expect(buttons.map((button: { label?: string }) => button.label)).toEqual(['Kick User']);
   });
 
   it('shows observed admin actions with a resolved display label and no confirmation copy', async () => {
@@ -1265,6 +1325,162 @@ describe('InteractionHandler (unit)', () => {
     );
     expect(interaction.followUp).toHaveBeenCalledWith({
       content: 'Opened a verification case for <@user-1>.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles observed kick button for present members', async () => {
+    enableObservedKickActions();
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_observed_kick:observed:user-1:det-1',
+      'guild-1',
+      {
+        id: 'admin-1',
+      } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(securityActionService.kickObservedDetection).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'det-1',
+      interaction.user,
+      'Kicked from observed suspicious notification'
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'Kicked <@user-1> from the observed alert.',
+      allowedMentions: { parse: [] },
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('reports observed kick failures after deferred confirmation', async () => {
+    enableObservedKickActions();
+    securityActionService.kickObservedDetection.mockRejectedValueOnce(
+      new Error('Discord rejected')
+    );
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_observed_kick:observed:user-1:det-1',
+      'guild-1',
+      {
+        id: 'admin-1',
+      } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.deferUpdate).toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'An error occurred while kicking the user.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles case kick button when case kick policy is enabled', async () => {
+    enableCaseKickActions();
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('admin_actions:confirm_kick:case:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(userModerationService.kickUser).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'Kicked by moderator during verification',
+      interaction.user
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'Kicked <@user-1> and resolved pending verification cases as kicked.',
+      allowedMentions: { parse: [] },
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('blocks confirmed case kick when the case kick policy is disabled', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('admin_actions:confirm_kick:case:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(userModerationService.kickUser).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content:
+        'Drasil case kick actions are disabled for this server or the bot lacks Kick Members permission.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('blocks confirmed observed kick when the observed kick policy is disabled', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_observed_kick:observed:user-1:det-1',
+      'guild-1',
+      {
+        id: 'admin-1',
+      } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(securityActionService.kickObservedDetection).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content:
+        'Drasil observed alert kick actions are disabled for this server or the bot lacks Kick Members permission.',
       flags: MessageFlags.Ephemeral,
     });
   });

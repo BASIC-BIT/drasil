@@ -241,6 +241,14 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       });
     }
 
+    if (!botMember.permissions.has(PermissionFlagsBits.KickMembers)) {
+      issues.push({
+        severity: 'warning',
+        code: 'guild-kick-members',
+        message: 'Drasil is missing Kick Members, so moderator kick actions will fail.',
+      });
+    }
+
     if (!botMember.permissions.has(PermissionFlagsBits.ViewAuditLog)) {
       issues.push({
         severity: 'warning',

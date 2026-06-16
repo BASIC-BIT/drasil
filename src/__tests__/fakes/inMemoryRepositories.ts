@@ -14,6 +14,7 @@ import {
   DetectionEvent,
   ModerationOutcome,
   ModerationOutcomeCreate,
+  ModerationOutcomeType,
   ReportIntake,
   ReportIntakeCreate,
   ReportIntakeEvidence,
@@ -569,7 +570,9 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       updated.status = data.status;
       if (
         data.status === VerificationStatus.VERIFIED ||
-        data.status === VerificationStatus.BANNED
+        data.status === VerificationStatus.BANNED ||
+        data.status === VerificationStatus.KICKED ||
+        data.status === VerificationStatus.CLOSED_NO_ACTION
       ) {
         updated.resolved_at = data.resolved_at ?? new Date();
         updated.resolved_by = data.resolved_by ?? updated.resolved_by;
@@ -1211,6 +1214,23 @@ export class InMemoryModerationOutcomeRepository implements IModerationOutcomeRe
     const start = options.offset ?? 0;
     const end = options.limit ? start + options.limit : undefined;
     return filtered.slice(start, end).map((outcome) => ({ ...outcome }));
+  }
+
+  async findLatestByTypeForUserAndServer(
+    userId: string,
+    serverId: string,
+    outcomeType: ModerationOutcomeType
+  ): Promise<ModerationOutcome | null> {
+    const outcome = [...this.outcomes]
+      .sort((a, b) => toTimestamp(b.occurred_at) - toTimestamp(a.occurred_at))
+      .find(
+        (item) =>
+          item.user_id === userId &&
+          item.server_id === serverId &&
+          item.outcome_type === outcomeType
+      );
+
+    return outcome ? { ...outcome } : null;
   }
 
   async findByVerificationEvent(verificationEventId: string): Promise<ModerationOutcome[]> {

@@ -231,6 +231,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
         if (
           data.status === VerificationStatus.VERIFIED ||
           data.status === VerificationStatus.BANNED ||
+          data.status === VerificationStatus.KICKED ||
           data.status === VerificationStatus.CLOSED_NO_ACTION
         ) {
           // Set resolution fields if status is resolved

@@ -52,6 +52,17 @@ interface ThreadAnalysisMetadata {
   };
 }
 
+interface VerificationResolutionPresentation {
+  title: string;
+  fieldValue: string;
+}
+
+interface PendingMembershipPresentation {
+  title: string;
+  description: string;
+  fieldValue: string;
+}
+
 const EMBED_FIELD_VALUE_MAX_LENGTH = 1024;
 const CASE_COLOR_PENDING = 0xff0000;
 const CASE_COLOR_WARNING = 0xffc107;
@@ -100,6 +111,8 @@ export class NotificationPresentationBuilder {
       embedColor = CASE_COLOR_VERIFIED;
     } else if (verificationEvent.status === VerificationStatus.BANNED) {
       embedColor = CASE_COLOR_BANNED;
+    } else if (verificationEvent.status === VerificationStatus.KICKED) {
+      embedColor = CASE_COLOR_WARNING;
     } else if (verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION) {
       embedColor = CASE_COLOR_CLOSED;
     }
@@ -706,6 +719,8 @@ export class NotificationPresentationBuilder {
       embed.setColor(CASE_COLOR_VERIFIED);
     } else if (status === VerificationStatus.BANNED) {
       embed.setColor(CASE_COLOR_BANNED);
+    } else if (status === VerificationStatus.KICKED) {
+      embed.setColor(CASE_COLOR_WARNING);
     } else if (status === VerificationStatus.CLOSED_NO_ACTION) {
       embed.setColor(CASE_COLOR_CLOSED);
     }
@@ -842,6 +857,9 @@ export class NotificationPresentationBuilder {
     if (detectionResult.triggerSource === DetectionType.NEW_ACCOUNT) {
       return 'Observed upon joining server';
     }
+    if (detectionResult.triggerSource === DetectionType.REJOIN_AFTER_KICK) {
+      return 'Observed on rejoin after prior kick';
+    }
     if (detectionResult.triggerSource === DetectionType.USER_REPORT) {
       return `Observed via user report: \`${detectionResult.triggerContent || 'No reason provided'}\``;
     }
@@ -897,6 +915,9 @@ export class NotificationPresentationBuilder {
     if (detectionResult.triggerSource === DetectionType.NEW_ACCOUNT) {
       return 'Flagged upon joining server';
     }
+    if (detectionResult.triggerSource === DetectionType.REJOIN_AFTER_KICK) {
+      return 'Flagged on rejoin after prior kick';
+    }
 
     return 'Flagged for suspicious activity';
   }
@@ -931,6 +952,8 @@ export class NotificationPresentationBuilder {
     switch (actionTaken) {
       case AdminActionType.BAN:
         return 'Banned';
+      case AdminActionType.KICK:
+        return 'Kicked';
       case AdminActionType.CLOSE_NO_ACTION:
         return 'Closed with no action';
       case AdminActionType.VERIFY:
@@ -1011,7 +1034,7 @@ export class NotificationPresentationBuilder {
 
   private getVerificationResolutionPresentation(
     verificationEvent: VerificationEvent
-  ): { title: string; fieldValue: string } | null {
+  ): VerificationResolutionPresentation | null {
     const actionTaken = this.getResolutionAction(verificationEvent.status);
     if (!actionTaken) {
       return null;
@@ -1040,6 +1063,7 @@ export class NotificationPresentationBuilder {
     if (
       actionTaken !== AdminActionType.VERIFY &&
       actionTaken !== AdminActionType.BAN &&
+      actionTaken !== AdminActionType.KICK &&
       actionTaken !== AdminActionType.CLOSE_NO_ACTION
     ) {
       return;
@@ -1062,6 +1086,8 @@ export class NotificationPresentationBuilder {
     switch (status) {
       case VerificationStatus.BANNED:
         return AdminActionType.BAN;
+      case VerificationStatus.KICKED:
+        return AdminActionType.KICK;
       case VerificationStatus.VERIFIED:
         return AdminActionType.VERIFY;
       case VerificationStatus.CLOSED_NO_ACTION:
@@ -1124,7 +1150,7 @@ export class NotificationPresentationBuilder {
 
   private getPendingMembershipPresentation(
     verificationEvent: VerificationEvent
-  ): { title: string; description: string; fieldValue: string } | null {
+  ): PendingMembershipPresentation | null {
     if (verificationEvent.status !== VerificationStatus.PENDING) {
       return null;
     }
@@ -1430,6 +1456,8 @@ export class NotificationPresentationBuilder {
         return 'GPT analysis';
       case DetectionType.NEW_ACCOUNT:
         return 'new account';
+      case DetectionType.REJOIN_AFTER_KICK:
+        return 'rejoin after kick';
       case DetectionType.PATTERN_MATCH:
         return 'pattern match';
       case DetectionType.USER_REPORT:
@@ -1455,6 +1483,7 @@ export class NotificationPresentationBuilder {
     const threadStatus =
       verificationEvent.status === VerificationStatus.VERIFIED ||
       verificationEvent.status === VerificationStatus.BANNED ||
+      verificationEvent.status === VerificationStatus.KICKED ||
       verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
         ? `${verificationEvent.status}${verificationEvent.resolved_by ? ` by <@${verificationEvent.resolved_by}>` : ''}`
         : 'pending';

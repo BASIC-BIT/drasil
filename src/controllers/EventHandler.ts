@@ -50,6 +50,7 @@ import {
 import {
   IUserModerationService,
   ObservedDiscordBanOptions,
+  ObservedDiscordKickOptions,
 } from '../services/UserModerationService';
 import { ModerationOutcomeSource } from '../services/ModerationOutcomeService';
 import { IModerationQueueService } from '../services/ModerationQueueService';
@@ -60,6 +61,7 @@ const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
 const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
 const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
+const DISCORD_MEMBER_REMOVE_AUDIT_WINDOW_MS = 60 * 1000;
 
 type SetupNudgeSource = 'audit_log_installer' | 'owner';
 type SetupNudgeResult = 'sent' | 'dm_failed' | 'no_recipient';
@@ -517,6 +519,13 @@ export class EventHandler implements IEventHandler {
         return;
       }
 
+      const actionThreshold =
+        serverConfig.settings.min_confidence_threshold ??
+        globalConfig.getSettings().defaultServerSettings.minConfidenceThreshold;
+      if (await this.handleRejoinAfterKick(member, responseSettings, actionThreshold)) {
+        return;
+      }
+
       // Extract profile data
       const profileData = this.extractUserProfileData(member);
 
@@ -531,8 +540,7 @@ export class EventHandler implements IEventHandler {
         member,
         detectionResult,
         responseSettings,
-        serverConfig.settings.min_confidence_threshold ??
-          globalConfig.getSettings().defaultServerSettings.minConfidenceThreshold
+        actionThreshold
       );
     } catch (error) {
       console.error('Error handling new member:', error);
@@ -568,6 +576,20 @@ export class EventHandler implements IEventHandler {
 
     try {
       if (!(await this.isDefinitelyNotBanned(member))) {
+        return;
+      }
+
+      const kickOptions = await this.resolveObservedKickOptions(member);
+      if (kickOptions) {
+        const kickedCount = await this.userModerationService.recordObservedDiscordKick(
+          member,
+          kickOptions
+        );
+        if (kickedCount > 0) {
+          console.log(
+            `Resolved ${kickedCount} pending case(s) for ${member.user.tag} after observing Discord kick in guild ${member.guild.id}.`
+          );
+        }
         return;
       }
 
@@ -630,7 +652,7 @@ export class EventHandler implements IEventHandler {
 
       return {
         ...baseOptions,
-        source: this.resolveBanOutcomeSource(banEntry.executor.id, banEntry.executor.bot),
+        source: this.resolveAuditLogOutcomeSource(banEntry.executor.id, banEntry.executor.bot),
         actorId: banEntry.executor.id,
         auditLogEntryId: banEntry.id,
       };
@@ -640,7 +662,59 @@ export class EventHandler implements IEventHandler {
     }
   }
 
-  private resolveBanOutcomeSource(
+  private async resolveObservedKickOptions(
+    member: GuildMember | PartialGuildMember
+  ): Promise<ObservedDiscordKickOptions | null> {
+    if (typeof member.guild.fetchAuditLogs !== 'function') {
+      return null;
+    }
+
+    try {
+      const auditLogs = await member.guild.fetchAuditLogs({
+        type: AuditLogEvent.MemberKick,
+        limit: 5,
+      });
+      const kickEntry = auditLogs.entries.find(
+        (entry) => entry.target?.id === member.id && this.isRecentMemberRemoveAuditEntry(entry)
+      );
+      if (!kickEntry) {
+        return null;
+      }
+
+      const occurredAt = this.getAuditLogEntryDate(kickEntry);
+      return {
+        source: kickEntry.executor
+          ? this.resolveAuditLogOutcomeSource(kickEntry.executor.id, kickEntry.executor.bot)
+          : ModerationOutcomeSource.UNKNOWN_EXTERNAL,
+        actorId: kickEntry.executor?.id ?? null,
+        reason: kickEntry.reason ?? null,
+        sourceDetail: 'guildMemberRemove:memberKickAuditLog',
+        auditLogEntryId: kickEntry.id,
+        ...(occurredAt ? { occurredAt } : {}),
+      };
+    } catch (error) {
+      console.warn(`Could not read kick audit log for guild ${member.guild.id}:`, error);
+      return null;
+    }
+  }
+
+  private isRecentMemberRemoveAuditEntry(entry: { createdTimestamp?: unknown }): boolean {
+    if (typeof entry.createdTimestamp !== 'number' || !Number.isFinite(entry.createdTimestamp)) {
+      return true;
+    }
+
+    return Date.now() - entry.createdTimestamp <= DISCORD_MEMBER_REMOVE_AUDIT_WINDOW_MS;
+  }
+
+  private getAuditLogEntryDate(entry: { createdTimestamp?: unknown }): Date | null {
+    if (typeof entry.createdTimestamp !== 'number' || !Number.isFinite(entry.createdTimestamp)) {
+      return null;
+    }
+
+    return new Date(entry.createdTimestamp);
+  }
+
+  private resolveAuditLogOutcomeSource(
     executorId: string,
     executorIsBot: boolean
   ): ModerationOutcomeSource {
@@ -651,6 +725,35 @@ export class EventHandler implements IEventHandler {
     return executorIsBot
       ? ModerationOutcomeSource.EXTERNAL_BOT
       : ModerationOutcomeSource.NATIVE_DISCORD;
+  }
+
+  private async handleRejoinAfterKick(
+    member: GuildMember,
+    responseSettings: DetectionResponseSettings,
+    actionThreshold: number
+  ): Promise<boolean> {
+    const priorKick = await this.userModerationService?.findLatestKickOutcome(
+      member.guild.id,
+      member.id
+    );
+    if (!priorKick) {
+      return false;
+    }
+
+    const detectionResult = await this.securityActionService.recordRejoinAfterKickDetection(
+      member,
+      priorKick
+    );
+
+    if (responseSettings.mode === 'record_only') {
+      console.log(
+        `Recorded rejoin-after-kick detection for ${member.user.tag}; response mode is record_only.`
+      );
+      return true;
+    }
+
+    await this.handleAutomaticDetection(member, detectionResult, responseSettings, actionThreshold);
+    return true;
   }
 
   /**

@@ -81,11 +81,12 @@ describe('SetupDiagnosticsService (unit)', () => {
     const report = await service.validateGuildSetup(guild);
 
     expect(report.errorCount).toBe(4);
-    expect(report.warningCount).toBe(2);
+    expect(report.warningCount).toBe(3);
     expect(report.issues.map((issue) => issue.code)).toEqual(
       expect.arrayContaining([
         'guild-manage-roles',
         'guild-ban-members',
+        'guild-kick-members',
         'guild-view-audit-log',
         'restricted-role-missing',
         'admin-channel-missing',

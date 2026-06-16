@@ -91,6 +91,12 @@ function SummaryPanel({ detail }: { readonly detail: CaseDetail }) {
           <span>Confirm whether to sync the ban or close the case.</span>
         </div>
       ) : null}
+      {detail.presenceState === 'kicked' ? (
+        <div className="member-warning neutral-warning">
+          <strong>User Already Kicked</strong>
+          <span>This case has been resolved by removing the user from the server.</span>
+        </div>
+      ) : null}
       {detail.presenceState === 'unknown' ? (
         <div className="member-warning neutral-warning">
           <strong>Member State Unknown</strong>

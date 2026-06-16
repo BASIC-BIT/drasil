@@ -96,6 +96,15 @@ interface ModerationOutcomeRow {
 
 const DEFAULT_STALE_HOURS = 24;
 
+type CaseSurfaceKind = CaseSurfaceLink['kind'];
+
+const ACTIONS_BY_PRESENCE_STATE: Partial<Record<CasePresenceState, CaseAction[]>> = {
+  banned: ['view_history', 'sync_existing_ban'],
+  kicked: ['view_history'],
+  left_or_removed: ['view_history', 'ban_by_id', 'close_no_action'],
+  unknown: ['view_history', 'ban_by_id', 'close_no_action'],
+};
+
 function toIsoString(value: unknown): string {
   if (value instanceof Date) {
     return value.toISOString();
@@ -154,17 +163,20 @@ function readNestedRecord(record: Record<string, unknown>, key: string): Record<
 }
 
 function createDiscordSurface(
-  kind: CaseSurfaceLink['kind'],
+  kind: CaseSurfaceKind,
   label: string,
   guildId: string,
   channelId: string,
-  messageId?: string | null
+  messageId: string | null = null
 ): CaseSurfaceLink {
+  const url = discordMessageUrl(guildId, channelId, messageId);
+  const desktopUrl = discordDesktopUrl(guildId, channelId, messageId);
+
   return {
     kind,
     label,
-    url: discordMessageUrl(guildId, channelId, messageId),
-    desktopUrl: discordDesktopUrl(guildId, channelId, messageId),
+    url,
+    desktopUrl,
   };
 }
 
@@ -295,6 +307,9 @@ function resolvePresenceState(row: CaseSummaryRow): CasePresenceState {
   if (row.latest_outcome_type === 'banned') {
     return 'banned';
   }
+  if (row.latest_outcome_type === 'kicked') {
+    return 'kicked';
+  }
   if (
     row.latest_outcome_type === 'member_left' ||
     metadata.membership_state === 'left_or_removed'
@@ -311,17 +326,18 @@ function resolveAllowedActions(
   row: CaseSummaryRow,
   presenceState: CasePresenceState
 ): CaseAction[] {
-  if (presenceState === 'banned') {
-    return ['view_history', 'sync_existing_ban'];
-  }
-  if (presenceState === 'left_or_removed') {
-    return ['view_history', 'ban_by_id', 'close_no_action'];
-  }
-  if (presenceState === 'unknown') {
-    return ['view_history', 'ban_by_id', 'close_no_action'];
+  const presenceActions = ACTIONS_BY_PRESENCE_STATE[presenceState];
+  if (presenceActions) {
+    return [...presenceActions];
   }
 
-  const actions: CaseAction[] = ['view_history', 'verify_user', 'ban_user', 'close_no_action'];
+  const actions: CaseAction[] = [
+    'view_history',
+    'verify_user',
+    'kick_user',
+    'ban_user',
+    'close_no_action',
+  ];
   if (row.thread_id) {
     actions.push('repair_thread');
   } else {
