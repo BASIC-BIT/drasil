@@ -52,6 +52,17 @@ interface ThreadAnalysisMetadata {
   };
 }
 
+interface VerificationResolutionPresentation {
+  title: string;
+  fieldValue: string;
+}
+
+interface PendingMembershipPresentation {
+  title: string;
+  description: string;
+  fieldValue: string;
+}
+
 const EMBED_FIELD_VALUE_MAX_LENGTH = 1024;
 const CASE_COLOR_PENDING = 0xff0000;
 const CASE_COLOR_WARNING = 0xffc107;
@@ -1023,7 +1034,7 @@ export class NotificationPresentationBuilder {
 
   private getVerificationResolutionPresentation(
     verificationEvent: VerificationEvent
-  ): { title: string; fieldValue: string } | null {
+  ): VerificationResolutionPresentation | null {
     const actionTaken = this.getResolutionAction(verificationEvent.status);
     if (!actionTaken) {
       return null;
@@ -1139,7 +1150,7 @@ export class NotificationPresentationBuilder {
 
   private getPendingMembershipPresentation(
     verificationEvent: VerificationEvent
-  ): { title: string; description: string; fieldValue: string } | null {
+  ): PendingMembershipPresentation | null {
     if (verificationEvent.status !== VerificationStatus.PENDING) {
       return null;
     }

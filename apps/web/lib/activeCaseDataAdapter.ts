@@ -160,11 +160,14 @@ function createDiscordSurface(
   channelId: string,
   messageId?: string | null
 ): CaseSurfaceLink {
+  const url = discordMessageUrl(guildId, channelId, messageId);
+  const desktopUrl = discordDesktopUrl(guildId, channelId, messageId);
+
   return {
     kind,
     label,
-    url: discordMessageUrl(guildId, channelId, messageId),
-    desktopUrl: discordDesktopUrl(guildId, channelId, messageId),
+    url,
+    desktopUrl,
   };
 }
 
