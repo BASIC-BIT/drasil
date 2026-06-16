@@ -1,6 +1,7 @@
 import { injectable, inject, optional } from 'inversify';
 import {
   GuildMember,
+  Guild,
   Message,
   Client,
   User,
@@ -150,6 +151,14 @@ export interface ISecurityActionService {
 
   banObservedDetection(
     member: GuildMember,
+    detectionEventId: string,
+    moderator: User,
+    reason: string
+  ): Promise<boolean>;
+
+  banObservedDetectionById(
+    guild: Guild,
+    userId: string,
     detectionEventId: string,
     moderator: User,
     reason: string
@@ -579,6 +588,60 @@ export class SecurityActionService implements ISecurityActionService {
       console.warn(`Failed to refresh user snapshot for case ${verificationEvent.id}:`, error);
       return verificationEvent;
     }
+  }
+
+  private async adoptObservedNotificationForCase(
+    verificationEvent: VerificationEvent,
+    detectionEvent?: DetectionEvent
+  ): Promise<VerificationEvent> {
+    if (!detectionEvent || verificationEvent.notification_message_id) {
+      return verificationEvent;
+    }
+
+    const metadata = this.metadataToRecord(detectionEvent.metadata);
+    const notificationMessageId = metadata.observed_notification_message_id;
+    if (typeof notificationMessageId !== 'string') {
+      return verificationEvent;
+    }
+
+    const notificationChannelId = metadata.observed_notification_channel_id;
+    const observedEvidenceThreadId = metadata.observed_evidence_thread_id;
+    const adoptedMetadata = {
+      ...this.metadataToRecord(verificationEvent.metadata),
+      case_origin: 'observed_alert',
+      observed_detection_event_id: detectionEvent.id,
+    } as VerificationEvent['metadata'];
+    const adoptedEvent = {
+      ...verificationEvent,
+      notification_message_id: notificationMessageId,
+      notification_channel_id:
+        typeof notificationChannelId === 'string' ? notificationChannelId : null,
+      private_evidence_thread_id:
+        typeof observedEvidenceThreadId === 'string'
+          ? observedEvidenceThreadId
+          : verificationEvent.private_evidence_thread_id,
+      metadata: adoptedMetadata,
+    };
+
+    return (
+      (await this.verificationEventRepository.update(verificationEvent.id, {
+        notification_message_id: adoptedEvent.notification_message_id,
+        notification_channel_id: adoptedEvent.notification_channel_id,
+        private_evidence_thread_id: adoptedEvent.private_evidence_thread_id,
+        metadata: adoptedEvent.metadata,
+      })) ?? adoptedEvent
+    );
+  }
+
+  private isObservedNotificationAdopted(
+    verificationEvent: VerificationEvent,
+    detectionEvent: DetectionEvent
+  ): boolean {
+    const metadata = this.metadataToRecord(detectionEvent.metadata);
+    return (
+      typeof metadata.observed_notification_message_id === 'string' &&
+      metadata.observed_notification_message_id === verificationEvent.notification_message_id
+    );
   }
 
   private shouldUseReportReviewThread(): boolean {
@@ -1138,7 +1201,10 @@ export class SecurityActionService implements ISecurityActionService {
       detectionResult,
       undefined,
       false,
-      shouldUseReviewThread
+      shouldUseReviewThread,
+      false,
+      undefined,
+      detectionEvent
     );
 
     const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
@@ -1341,7 +1407,8 @@ export class SecurityActionService implements ISecurityActionService {
     restrictUser = true,
     useReportReviewThread?: boolean,
     entitiesAlreadyEnsured = false,
-    moderator?: User
+    moderator?: User,
+    notificationSourceDetectionEvent?: DetectionEvent
   ): Promise<boolean> {
     const shouldUseReviewThread = useReportReviewThread ?? this.shouldUseReportReviewThread();
 
@@ -1368,6 +1435,10 @@ export class SecurityActionService implements ISecurityActionService {
       let notificationVerificationEvent = await this.refreshVerificationUserSnapshot(
         activeVerificationEvent,
         member
+      );
+      notificationVerificationEvent = await this.adoptObservedNotificationForCase(
+        notificationVerificationEvent,
+        notificationSourceDetectionEvent
       );
       console.log(
         `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Updating notification.`
@@ -1451,6 +1522,10 @@ export class SecurityActionService implements ISecurityActionService {
       VerificationStatus.PENDING
     );
     newVerificationEvent = await this.refreshVerificationUserSnapshot(newVerificationEvent, member);
+    newVerificationEvent = await this.adoptObservedNotificationForCase(
+      newVerificationEvent,
+      notificationSourceDetectionEvent
+    );
 
     const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
       detectionEventId,
@@ -2259,11 +2334,20 @@ export class SecurityActionService implements ISecurityActionService {
         actionType: AdminActionType.OPEN_CASE,
       });
       actionRecorded = true;
-      await this.notificationManager.markObservedDetectionActionTaken(
-        detectionEvent.id,
-        'opened a verification case',
-        moderator
-      );
+      if (this.isObservedNotificationAdopted(verificationEvent, detectionEvent)) {
+        await this.notificationManager.logActionToMessage(
+          verificationEvent,
+          AdminActionType.OPEN_CASE,
+          moderator
+        );
+      } else {
+        await this.notificationManager.markObservedDetectionActionTaken(
+          detectionEvent.id,
+          'opened a verification case',
+          moderator,
+          AdminActionType.OPEN_CASE
+        );
+      }
       await this.runModerationQueueTask(
         `delete observed alert ${detectionEvent.id} from the live moderation queue`,
         (moderationQueueService) =>
@@ -2323,11 +2407,20 @@ export class SecurityActionService implements ISecurityActionService {
         verificationEvent,
         actionType: AdminActionType.RESTRICT,
       });
-      await this.notificationManager.markObservedDetectionActionTaken(
-        detectionEvent.id,
-        'restricted this user',
-        moderator
-      );
+      if (this.isObservedNotificationAdopted(verificationEvent, detectionEvent)) {
+        await this.notificationManager.logActionToMessage(
+          verificationEvent,
+          AdminActionType.RESTRICT,
+          moderator
+        );
+      } else {
+        await this.notificationManager.markObservedDetectionActionTaken(
+          detectionEvent.id,
+          'restricted this user',
+          moderator,
+          AdminActionType.RESTRICT
+        );
+      }
       await this.runModerationQueueTask(
         `delete observed alert ${detectionEvent.id} from the live moderation queue`,
         (moderationQueueService) =>
@@ -2413,7 +2506,8 @@ export class SecurityActionService implements ISecurityActionService {
       await this.notificationManager.markObservedDetectionActionTaken(
         detectionEvent.id,
         'banned this user',
-        moderator
+        moderator,
+        AdminActionType.BAN
       );
       await this.runModerationQueueTask(
         `delete observed alert ${detectionEvent.id} from the live moderation queue`,
@@ -2424,6 +2518,99 @@ export class SecurityActionService implements ISecurityActionService {
         member,
         'observed detection action completed',
         { action_type: AdminActionType.BAN },
+        {
+          moderatorId: moderator.id,
+          detectionEventId: detectionEvent.id,
+        }
+      );
+      return true;
+    } catch (error) {
+      if (!actionApplied) {
+        await this.releaseDetectionMetadataForObservedAction(
+          detectionEvent,
+          moderator,
+          AdminActionType.BAN
+        );
+      }
+      throw error;
+    }
+  }
+
+  public async banObservedDetectionById(
+    guild: Guild,
+    userId: string,
+    detectionEventId: string,
+    moderator: User,
+    reason: string
+  ): Promise<boolean> {
+    const detectionEvent = await this.getObservedDetectionForUser(
+      guild.id,
+      userId,
+      detectionEventId
+    );
+    if (this.hasObservedAction(detectionEvent)) {
+      return false;
+    }
+    const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
+      detectionEvent,
+      moderator,
+      AdminActionType.BAN
+    );
+    if (!claimedDetectionEvent) {
+      return false;
+    }
+    let actionApplied = false;
+    try {
+      await this.ensureObservedEntitiesExist(guild.id, userId);
+      const activeVerificationEvent =
+        await this.verificationEventRepository.findActiveByUserAndServer(userId, guild.id);
+      const banned = await this.userModerationService.banUserById(
+        guild,
+        userId,
+        reason,
+        moderator,
+        detectionEvent.id
+      );
+      if (!banned) {
+        throw new Error(`Failed to ban user ${userId}`);
+      }
+      actionApplied = true;
+      const actionAlreadyRecorded = await this.hasRecordedObservedAction(
+        guild.id,
+        userId,
+        claimedDetectionEvent.id,
+        AdminActionType.BAN
+      );
+      if (!actionAlreadyRecorded) {
+        const currentVerificationEvent = activeVerificationEvent
+          ? await this.verificationEventRepository.findById(activeVerificationEvent.id)
+          : null;
+        await this.recordObservedAction({
+          serverId: guild.id,
+          userId,
+          moderator,
+          detectionEvent: claimedDetectionEvent,
+          verificationEvent: currentVerificationEvent ?? activeVerificationEvent ?? undefined,
+          actionType: AdminActionType.BAN,
+          notes: reason,
+        });
+      }
+      await this.notificationManager.markObservedDetectionActionTaken(
+        detectionEvent.id,
+        'banned this user by ID',
+        moderator,
+        AdminActionType.BAN
+      );
+      await this.runModerationQueueTask(
+        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
+        (moderationQueueService) =>
+          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
+      );
+      void this.productAnalyticsService.captureUserEvent(
+        guild.id,
+        userId,
+        'observed detection action completed',
+        { action_type: AdminActionType.BAN, source_detail: 'ban_by_id' },
         {
           moderatorId: moderator.id,
           detectionEventId: detectionEvent.id,
@@ -2481,7 +2668,8 @@ export class SecurityActionService implements ISecurityActionService {
         actionType === AdminActionType.FALSE_POSITIVE
           ? 'marked this detection as a false positive'
           : 'dismissed this alert',
-        moderator
+        moderator,
+        actionType
       );
       await this.runModerationQueueTask(
         `delete observed alert ${detectionEvent.id} from the live moderation queue`,

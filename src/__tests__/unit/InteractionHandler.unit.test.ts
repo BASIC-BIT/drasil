@@ -207,6 +207,7 @@ describe('InteractionHandler (unit)', () => {
       liftRestriction: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
+      banUserById: jest.fn().mockResolvedValue(true),
       syncAlreadyBannedUser: jest.fn().mockResolvedValue(1),
       closeCaseNoAction: jest.fn().mockResolvedValue(1),
       recordObservedDiscordBan: jest.fn().mockResolvedValue(0),
@@ -244,6 +245,7 @@ describe('InteractionHandler (unit)', () => {
       openObservedDetectionCase: jest.fn().mockResolvedValue(true),
       restrictObservedDetection: jest.fn().mockResolvedValue(true),
       banObservedDetection: jest.fn().mockResolvedValue(true),
+      banObservedDetectionById: jest.fn().mockResolvedValue(true),
       dismissObservedDetection: jest.fn().mockResolvedValue(true),
       undoObservedDetectionAction: jest.fn().mockResolvedValue(AdminActionType.DISMISS),
       excludeDetectionFromAccounting: jest.fn().mockResolvedValue({} as any),
@@ -791,6 +793,48 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('shows ban-by-id and close actions for a departed pending case', async () => {
+    const verificationEvent = {
+      ...buildVerificationEvent('ver-left', 'user-1'),
+      metadata: { membership_state: 'left_or_removed' },
+    };
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      bans: { fetch: jest.fn().mockRejectedValue({ code: 10026 }) },
+      members: {
+        me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'admin-1')),
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      buildNoIssueSetupDiagnosticsService()
+    );
+    const interaction = buildInteraction('admin_actions:menu:case:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
+    const renderedComponents = JSON.stringify(reply.components);
+    expect(reply.content).toContain('Membership: left or removed');
+    expect(renderedComponents).toContain('Ban by ID');
+    expect(renderedComponents).toContain('Close No Action');
+    expect(renderedComponents).not.toContain('Verify User');
+    expect(renderedComponents).not.toContain('Restrict User');
+  });
+
   it('handles thread button and creates a verification thread', async () => {
     const verificationEvent: VerificationEvent = {
       id: 'ver-1',
@@ -1062,6 +1106,52 @@ describe('InteractionHandler (unit)', () => {
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'User <@user-1> has been banned from the server.',
     });
+  });
+
+  it('submits verifier ban modal by ID when the member left', async () => {
+    enableModeratorBanActions();
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      id: 'guild-1',
+      members: {
+        me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetch: jest.fn().mockRejectedValue(new Error('Unknown Member')),
+      },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = {
+      customId: 'verification:ban_modal:user-left',
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn(() => 'ban after leave'),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+    grantOnlyBanMembersPermission(interaction);
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(userModerationService.banUser).not.toHaveBeenCalled();
+    expect(userModerationService.banUserById).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'guild-1' }),
+      'user-left',
+      'ban after leave',
+      interaction.user
+    );
   });
 
   it('submits verifier ban modal with the default reason when notes are blank', async () => {

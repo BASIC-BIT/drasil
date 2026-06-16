@@ -32,7 +32,10 @@ interface AdminActionRowOptions {
   readonly verificationEventId?: string;
   readonly verificationStatus?: VerificationStatus;
   readonly includeBanAction?: boolean;
+  readonly caseMembershipState?: CaseMembershipState;
 }
+
+type CaseMembershipState = 'in_server' | 'left_or_removed';
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds?: unknown;
@@ -50,6 +53,11 @@ interface ThreadAnalysisMetadata {
 }
 
 const EMBED_FIELD_VALUE_MAX_LENGTH = 1024;
+const CASE_COLOR_PENDING = 0xff0000;
+const CASE_COLOR_WARNING = 0xffc107;
+const CASE_COLOR_VERIFIED = 0x00ff00;
+const CASE_COLOR_BANNED = 0x000000;
+const CASE_COLOR_CLOSED = 0x808080;
 
 export class NotificationPresentationBuilder {
   public static readonly THREAD_ANALYSIS_FIELD_NAME = 'Thread Analysis';
@@ -74,7 +82,7 @@ export class NotificationPresentationBuilder {
       : 'Unknown';
 
     const signalField = this.formatSignalField(detectionResult);
-    let embedColor = 0xff0000;
+    let embedColor = CASE_COLOR_PENDING;
 
     const reasonsFormatted = detectionResult.reasons.map((reason) => `• ${reason}`).join('\n');
     const countedDetectionEvents = detectionEvents.filter(
@@ -89,17 +97,20 @@ export class NotificationPresentationBuilder {
     );
 
     if (verificationEvent.status === VerificationStatus.VERIFIED) {
-      embedColor = 0x00ff00;
+      embedColor = CASE_COLOR_VERIFIED;
     } else if (verificationEvent.status === VerificationStatus.BANNED) {
-      embedColor = 0x000000;
+      embedColor = CASE_COLOR_BANNED;
     } else if (verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION) {
-      embedColor = 0x808080;
+      embedColor = CASE_COLOR_CLOSED;
     }
 
     const resolutionPresentation = this.getVerificationResolutionPresentation(verificationEvent);
     const embed = new EmbedBuilder()
       .setColor(embedColor)
-      .setTitle(resolutionPresentation?.title ?? this.getPendingCaseTitle(detectionResult))
+      .setTitle(
+        resolutionPresentation?.title ??
+          this.getPendingCaseTitle(detectionResult, verificationEvent)
+      )
       .setDescription(
         resolutionPresentation
           ? `<@${member.id}> has been handled. No further moderator action is pending.`
@@ -132,6 +143,7 @@ export class NotificationPresentationBuilder {
       )
       .setTimestamp();
 
+    this.upsertPendingMembershipField(embed, verificationEvent);
     this.upsertLatestResolutionField(embed, verificationEvent);
     this.addOptionalAnalysisFields(embed, detectionResult, detectionEventsNewestFirst);
 
@@ -262,7 +274,15 @@ export class NotificationPresentationBuilder {
     return embed;
   }
 
-  private getPendingCaseTitle(detectionResult: DetectionResult): string {
+  private getPendingCaseTitle(
+    detectionResult: DetectionResult,
+    verificationEvent?: VerificationEvent
+  ): string {
+    const metadata = this.verificationMetadataToRecord(verificationEvent?.metadata);
+    if (metadata.case_origin === 'observed_alert') {
+      return 'Moderation Case Opened';
+    }
+
     if (detectionResult.triggerSource === DetectionType.USER_REPORT) {
       return 'User Report Submitted';
     }
@@ -354,7 +374,11 @@ export class NotificationPresentationBuilder {
     const isPending =
       !options.verificationStatus || options.verificationStatus === VerificationStatus.PENDING;
     const primaryButtons = isPending
-      ? this.createPendingCaseAdminButtons(userId, options.includeBanAction !== false)
+      ? this.createPendingCaseAdminButtons(
+          userId,
+          options.includeBanAction !== false,
+          options.caseMembershipState ?? 'in_server'
+        )
       : [
           this.createCustomButton(`reopen_${userId}`, 'Reopen', ButtonStyle.Primary),
           this.createCustomButton(`history_${userId}`, 'History', ButtonStyle.Secondary),
@@ -385,8 +409,29 @@ export class NotificationPresentationBuilder {
     userId: string,
     detectionEventId: string,
     guildId?: string,
-    options: Pick<AdminActionRowOptions, 'includeBanAction'> = {}
+    options: Pick<AdminActionRowOptions, 'includeBanAction'> & { actioned?: boolean } = {}
   ): ActionRowBuilder<ButtonBuilder>[] {
+    if (options.actioned) {
+      const buttons = [
+        this.createCustomButton(
+          buildObservedAdminActionsCustomId(userId, detectionEventId),
+          'Other Actions',
+          ButtonStyle.Secondary
+        ),
+      ];
+      const webQueueUrl = guildId ? buildAdminCaseQueueUrl(guildId) : null;
+      const rows = [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
+      if (webQueueUrl) {
+        rows.push(
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            this.createLinkButton('Web Queue', webQueueUrl)
+          )
+        );
+      }
+
+      return rows;
+    }
+
     const buttons = [
       this.createCustomButton(
         `observed:open:${userId}:${detectionEventId}`,
@@ -438,8 +483,30 @@ export class NotificationPresentationBuilder {
 
   private createPendingCaseAdminButtons(
     userId: string,
-    includeBanAction: boolean
+    includeBanAction: boolean,
+    caseMembershipState: CaseMembershipState
   ): ButtonBuilder[] {
+    if (caseMembershipState === 'left_or_removed') {
+      const buttons = [
+        this.createCustomButton(`history_${userId}`, 'History', ButtonStyle.Secondary),
+      ];
+
+      if (includeBanAction) {
+        buttons.push(this.createCustomButton(`ban_${userId}`, 'Ban by ID...', ButtonStyle.Danger));
+      }
+
+      buttons.push(
+        this.createCustomButton(`close_${userId}`, 'Close', ButtonStyle.Secondary),
+        this.createCustomButton(
+          buildCaseAdminActionsCustomId(userId),
+          'Other Actions',
+          ButtonStyle.Secondary
+        )
+      );
+
+      return buttons;
+    }
+
     const buttons = [
       this.createCustomButton(`verify_${userId}`, 'Verify', ButtonStyle.Success),
       this.createCustomButton(`restrict_${userId}`, 'Restrict', ButtonStyle.Danger),
@@ -506,8 +573,13 @@ export class NotificationPresentationBuilder {
     embed: EmbedBuilder,
     actionDescription: string,
     adminId: string,
-    timestamp: number
+    timestamp: number,
+    actionType?: AdminActionType
   ): void {
+    if (actionType) {
+      this.applyObservedActionPresentation(embed, actionType);
+    }
+
     const field = {
       name: 'Action Taken',
       value: `<@${adminId}> ${actionDescription} <t:${timestamp}:R>`,
@@ -527,6 +599,7 @@ export class NotificationPresentationBuilder {
     adminId: string,
     timestamp: number
   ): void {
+    this.restoreObservedPendingPresentation(embed);
     const field = {
       name: 'Action Reverted',
       value: `<@${adminId}> ${actionDescription} <t:${timestamp}:R>`,
@@ -625,15 +698,16 @@ export class NotificationPresentationBuilder {
     const actionTaken = this.getResolutionAction(status);
     if (!actionTaken) {
       this.clearResolvedCasePresentation(embed);
+      this.upsertPendingMembershipField(embed, verificationEvent);
       return;
     }
 
     if (status === VerificationStatus.VERIFIED) {
-      embed.setColor(0x00ff00);
+      embed.setColor(CASE_COLOR_VERIFIED);
     } else if (status === VerificationStatus.BANNED) {
-      embed.setColor(0x000000);
+      embed.setColor(CASE_COLOR_BANNED);
     } else if (status === VerificationStatus.CLOSED_NO_ACTION) {
-      embed.setColor(0x808080);
+      embed.setColor(CASE_COLOR_CLOSED);
     }
 
     const resolvedAt = verificationEvent.resolved_at
@@ -669,12 +743,14 @@ export class NotificationPresentationBuilder {
       return;
     }
 
-    embed.setColor(0xff0000);
+    embed.setColor(CASE_COLOR_PENDING);
     embed.setTitle(this.getPendingTitleFromExistingEmbed(embed));
     embed.setDescription(this.getPendingDescriptionFromExistingEmbed(embed));
     embed.setFields(
       ...fields.filter(
-        (field) => field.name !== NotificationPresentationBuilder.RESOLUTION_FIELD_NAME
+        (field) =>
+          field.name !== NotificationPresentationBuilder.RESOLUTION_FIELD_NAME &&
+          field.name !== 'Membership'
       )
     );
   }
@@ -1029,6 +1105,120 @@ export class NotificationPresentationBuilder {
     }
 
     return { ...metadata } as Record<string, unknown>;
+  }
+
+  private verificationMetadataToRecord(
+    metadata: VerificationEvent['metadata'] | undefined
+  ): Record<string, unknown> {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return {};
+    }
+
+    return { ...metadata } as Record<string, unknown>;
+  }
+
+  public getCaseMembershipState(verificationEvent: VerificationEvent): CaseMembershipState {
+    const metadata = this.verificationMetadataToRecord(verificationEvent.metadata);
+    return metadata.membership_state === 'left_or_removed' ? 'left_or_removed' : 'in_server';
+  }
+
+  private getPendingMembershipPresentation(
+    verificationEvent: VerificationEvent
+  ): { title: string; description: string; fieldValue: string } | null {
+    if (verificationEvent.status !== VerificationStatus.PENDING) {
+      return null;
+    }
+
+    const metadata = this.verificationMetadataToRecord(verificationEvent.metadata);
+    if (metadata.membership_state !== 'left_or_removed') {
+      return null;
+    }
+
+    const memberLeftAt =
+      typeof metadata.member_left_at === 'string'
+        ? Math.floor(new Date(metadata.member_left_at).getTime() / 1000)
+        : null;
+    const when = memberLeftAt && Number.isFinite(memberLeftAt) ? ` at <t:${memberLeftAt}:F>` : '';
+
+    return {
+      title: 'Member Left Server',
+      description: `<@${verificationEvent.user_id}> left or was removed while this case is still pending. They cannot respond in the verification thread.`,
+      fieldValue: `Left or removed${when}. Use Ban by ID if moderation should continue, or Close No Action if no action is needed.`,
+    };
+  }
+
+  private upsertPendingMembershipField(
+    embed: EmbedBuilder,
+    verificationEvent: VerificationEvent
+  ): void {
+    const membershipPresentation = this.getPendingMembershipPresentation(verificationEvent);
+    const fields = (embed.data.fields ?? []).filter((field) => field.name !== 'Membership');
+
+    if (!membershipPresentation) {
+      embed.setFields(...fields);
+      return;
+    }
+
+    embed.setColor(CASE_COLOR_WARNING);
+    embed.setTitle(membershipPresentation.title);
+    embed.setDescription(membershipPresentation.description);
+    const triggerIndex = fields.findIndex((field) => field.name === 'Trigger');
+    const insertIndex = triggerIndex >= 0 ? triggerIndex : fields.length;
+    fields.splice(insertIndex, 0, {
+      name: 'Membership',
+      value: membershipPresentation.fieldValue,
+      inline: false,
+    });
+    embed.setFields(...fields);
+  }
+
+  private applyObservedActionPresentation(embed: EmbedBuilder, actionType: AdminActionType): void {
+    const userId = embed.data.fields?.find((field) => field.name === 'User ID')?.value;
+    const userReference = userId ? `<@${userId}>` : 'This user';
+
+    switch (actionType) {
+      case AdminActionType.DISMISS:
+        embed.setColor(CASE_COLOR_CLOSED);
+        embed.setTitle('Observed Alert Dismissed');
+        embed.setDescription(
+          `${userReference}'s observed alert was dismissed. No further moderator action is pending for this alert.`
+        );
+        return;
+      case AdminActionType.FALSE_POSITIVE:
+        embed.setColor(CASE_COLOR_VERIFIED);
+        embed.setTitle('Observed Alert Marked False Positive');
+        embed.setDescription(
+          `${userReference}'s observed alert was marked as a false positive. No further moderator action is pending for this alert.`
+        );
+        return;
+      case AdminActionType.BAN:
+        embed.setColor(CASE_COLOR_BANNED);
+        embed.setTitle('Observed Alert Handled: Banned');
+        embed.setDescription(`${userReference} was banned from this observed alert.`);
+        return;
+      case AdminActionType.RESTRICT:
+        embed.setColor(CASE_COLOR_PENDING);
+        embed.setTitle('Moderation Case Opened');
+        embed.setDescription(`${userReference} was restricted and moved into a moderation case.`);
+        return;
+      case AdminActionType.OPEN_CASE:
+        embed.setColor(CASE_COLOR_PENDING);
+        embed.setTitle('Moderation Case Opened');
+        embed.setDescription(`${userReference} was moved into a moderation case.`);
+        return;
+      default:
+        return;
+    }
+  }
+
+  private restoreObservedPendingPresentation(embed: EmbedBuilder): void {
+    const userId = embed.data.fields?.find((field) => field.name === 'User ID')?.value;
+    const userReference = userId ? `<@${userId}>` : 'this user';
+    embed.setColor(CASE_COLOR_WARNING);
+    embed.setTitle('Suspicious Activity Observed');
+    embed.setDescription(
+      `Drasil observed suspicious activity from ${userReference}. No automatic restriction was applied.`
+    );
   }
 
   private formatVerificationActionFailureFieldValue(metadata: unknown): string | null {

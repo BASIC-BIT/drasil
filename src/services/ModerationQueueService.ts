@@ -375,10 +375,16 @@ export class ModerationQueueService implements IModerationQueueService {
     verificationEvent: VerificationEvent,
     includeBanAction: boolean
   ): QueueMessagePayload {
+    const memberLeft =
+      this.toRecord(verificationEvent.metadata).membership_state === 'left_or_removed';
     const embed = new EmbedBuilder()
-      .setColor(0xf97316)
-      .setTitle('Pending Moderation Case')
-      .setDescription(`<@${verificationEvent.user_id}> has an open case awaiting moderator action.`)
+      .setColor(memberLeft ? 0xffc107 : 0xf97316)
+      .setTitle(memberLeft ? 'Pending Case: Member Left Server' : 'Pending Moderation Case')
+      .setDescription(
+        memberLeft
+          ? `<@${verificationEvent.user_id}> left or was removed while this case is still pending.`
+          : `<@${verificationEvent.user_id}> has an open case awaiting moderator action.`
+      )
       .addFields(
         {
           name: 'User',
@@ -408,6 +414,15 @@ export class ModerationQueueService implements IModerationQueueService {
       embed.addFields({ name: 'Admin Notification', value: notificationLink, inline: false });
     }
 
+    if (memberLeft) {
+      embed.addFields({
+        name: 'Membership',
+        value:
+          'Use Ban by ID if moderation should continue, or Close No Action if no action is needed.',
+        inline: false,
+      });
+    }
+
     return {
       allowedMentions: { parse: [] },
       embeds: [embed],
@@ -417,6 +432,7 @@ export class ModerationQueueService implements IModerationQueueService {
           guildId: verificationEvent.server_id,
           verificationEventId: verificationEvent.id,
           verificationStatus: verificationEvent.status,
+          caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
           includeBanAction,
         }
       ),

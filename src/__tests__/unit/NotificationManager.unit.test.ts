@@ -669,7 +669,7 @@ describe('NotificationManager (unit)', () => {
     });
   });
 
-  it('keeps undo controls after marking an observed false positive', async () => {
+  it('updates presentation and keeps admin actions after marking an observed false positive', async () => {
     const detectionEvent = await detectionRepository.create({
       server_id: 'guild-1',
       user_id: 'user-1',
@@ -681,7 +681,11 @@ describe('NotificationManager (unit)', () => {
     });
     const message: MockMessage = {
       id: 'message-1',
-      embeds: [new EmbedBuilder().setTitle('Observed suspicious activity')],
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('Observed suspicious activity')
+          .addFields({ name: 'User ID', value: 'user-1' }),
+      ],
       edit: jest.fn().mockResolvedValue(undefined),
     };
     adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
@@ -694,17 +698,17 @@ describe('NotificationManager (unit)', () => {
     await manager.markObservedDetectionActionTaken(
       detectionEvent.id,
       'marked this detection as a false positive',
-      { id: 'admin-1' } as User
+      { id: 'admin-1' } as User,
+      AdminActionType.FALSE_POSITIVE
     );
 
-    const editArgs = message.edit.mock.calls[0][0] as { components: unknown[] };
-    expect(extractLabels(editArgs.components)).toEqual([
-      'Open Case',
-      'Restrict',
-      'Ban...',
-      'Dismiss',
-      'Other Actions',
-    ]);
+    const editArgs = message.edit.mock.calls[0][0] as {
+      components: unknown[];
+      embeds: EmbedBuilder[];
+    };
+    expect(extractLabels(editArgs.components)).toEqual(['Other Actions']);
+    expect(editArgs.embeds[0].data.title).toBe('Observed Alert Marked False Positive');
+    expect(editArgs.embeds[0].data.color).toBe(0x00ff00);
   });
 
   it('restores observed action buttons after undo', async () => {

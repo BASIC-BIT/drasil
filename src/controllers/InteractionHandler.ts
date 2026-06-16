@@ -525,11 +525,11 @@ export class InteractionHandler implements IInteractionHandler {
       activeCase?.status === VerificationStatus.PENDING && hasBanMembersPermission
         ? await this.isUserBanned(guildId, parsed.userId)
         : false;
+    const memberLeft = activeCase ? this.hasMemberLeft(activeCase) : false;
     const canBan =
       hasBanMembersPermission && !alreadyBanned && (await this.canUseModeratorBanAction(guildId));
-    const restrictionState = activeCase
-      ? await this.getCaseRestrictionState(guildId, parsed.userId)
-      : null;
+    const restrictionState =
+      activeCase && !memberLeft ? await this.getCaseRestrictionState(guildId, parsed.userId) : null;
 
     const actionButtons: ButtonBuilder[] = [];
     if (hasModerationPermission) {
@@ -539,7 +539,27 @@ export class InteractionHandler implements IInteractionHandler {
     }
 
     if (activeCase?.status === VerificationStatus.PENDING) {
-      if (hasModerationPermission) {
+      if (memberLeft) {
+        if (hasBanMembersPermission && alreadyBanned) {
+          actionButtons.push(
+            this.adminActionButton(parsed, 'sync_ban', 'Sync Existing Ban', ButtonStyle.Danger)
+          );
+        } else if (canBan) {
+          actionButtons.push(
+            this.adminActionButton(parsed, 'ban', 'Ban by ID...', ButtonStyle.Danger)
+          );
+        }
+        if (hasModerationPermission) {
+          actionButtons.push(
+            this.adminActionButton(
+              parsed,
+              'close_no_action',
+              'Close No Action',
+              ButtonStyle.Secondary
+            )
+          );
+        }
+      } else if (hasModerationPermission) {
         actionButtons.push(
           restrictionState === true
             ? this.adminActionButton(
@@ -566,12 +586,12 @@ export class InteractionHandler implements IInteractionHandler {
           );
         }
       }
-      if (alreadyBanned) {
+      if (!memberLeft && alreadyBanned) {
         actionButtons.push(
           this.adminActionButton(parsed, 'sync_ban', 'Sync Existing Ban', ButtonStyle.Danger)
         );
       }
-      if (canBan) {
+      if (!memberLeft && canBan) {
         actionButtons.push(
           this.adminActionButton(parsed, 'ban', 'Ban User...', ButtonStyle.Danger)
         );
@@ -592,7 +612,11 @@ export class InteractionHandler implements IInteractionHandler {
     const userLabel = await this.resolveUserDisplayLabel(guildId, parsed.userId);
     const details = [`Admin actions for ${userLabel}.`];
     if (activeCase?.status === VerificationStatus.PENDING) {
-      details.push(`Restriction: ${this.formatCaseRestrictionState(restrictionState)}.`);
+      details.push(
+        memberLeft
+          ? 'Membership: left or removed. Use Ban by ID if moderation should continue, or Close No Action if no action is needed.'
+          : `Restriction: ${this.formatCaseRestrictionState(restrictionState)}.`
+      );
     }
     const latestCaseLinks = latestCase
       ? this.formatVerificationCaseLinks(guildId, latestCase, adminChannelId)
@@ -990,6 +1014,10 @@ export class InteractionHandler implements IInteractionHandler {
       event.thread_id ? `case: https://discord.com/channels/${guildId}/${event.thread_id}` : null,
       this.formatSourceMessageLink(guildId, event),
     ].filter((value): value is string => Boolean(value));
+  }
+
+  private hasMemberLeft(event: VerificationEvent): boolean {
+    return this.metadataToRecord(event.metadata).membership_state === 'left_or_removed';
   }
 
   private formatSourceMessageLink(guildId: string, event: VerificationEvent): string | null {
@@ -1828,9 +1856,13 @@ export class InteractionHandler implements IInteractionHandler {
 
     try {
       const guild = await this.client.guilds.fetch(interaction.guildId);
-      const member = await guild.members.fetch(userId);
+      const member = await guild.members.fetch(userId).catch(() => null);
 
-      await this.userModerationService.banUser(member, banReason, interaction.user);
+      if (member) {
+        await this.userModerationService.banUser(member, banReason, interaction.user);
+      } else {
+        await this.userModerationService.banUserById(guild, userId, banReason, interaction.user);
+      }
 
       await interaction.editReply({
         content: `User <@${userId}> has been banned from the server.`,
@@ -2214,13 +2246,22 @@ export class InteractionHandler implements IInteractionHandler {
 
     const reason = providedReason || OBSERVED_BAN_DEFAULT_REASON;
     try {
-      const member = await this.getObservedTargetMember(interaction.guildId, parsed.userId);
-      const banned = await this.securityActionService.banObservedDetection(
-        member,
-        parsed.detectionEventId,
-        interaction.user,
-        reason
-      );
+      const guild = await this.client.guilds.fetch(interaction.guildId);
+      const member = await guild.members.fetch(parsed.userId).catch(() => null);
+      const banned = member
+        ? await this.securityActionService.banObservedDetection(
+            member,
+            parsed.detectionEventId,
+            interaction.user,
+            reason
+          )
+        : await this.securityActionService.banObservedDetectionById(
+            guild,
+            parsed.userId,
+            parsed.detectionEventId,
+            interaction.user,
+            reason
+          );
       await interaction.reply({
         content: banned
           ? `Banned <@${parsed.userId}>.`

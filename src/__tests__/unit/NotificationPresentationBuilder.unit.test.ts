@@ -197,6 +197,27 @@ describe('NotificationPresentationBuilder (unit)', () => {
     );
   });
 
+  it('fronts departed membership when rendering pending case notifications', () => {
+    const embed = builder.createSuspiciousUserEmbed(
+      buildMember(),
+      buildDetectionResult(),
+      buildVerificationEvent({
+        metadata: {
+          membership_state: 'left_or_removed',
+          member_left_at: '2026-01-05T00:00:00.000Z',
+        },
+      }),
+      []
+    );
+
+    expect(embed.data.title).toBe('Member Left Server');
+    expect(embed.data.color).toBe(0xffc107);
+    expect(embed.data.description).toContain(
+      'left or was removed while this case is still pending'
+    );
+    expect(getField(embed, 'Membership')).toContain('Left or removed at <t:1767571200:F>');
+  });
+
   it('clears stale handled presentation when refreshing a pending case', () => {
     const embed = new EmbedBuilder()
       .setTitle('Case Handled: Verified')
@@ -294,6 +315,43 @@ describe('NotificationPresentationBuilder (unit)', () => {
     expect(observedButtons[5]).toMatchObject({
       url: 'https://drasilbot.com/admin/guild/guild-1/cases',
     });
+  });
+
+  it('uses departed-case admin notification rows with ban-by-id actions', () => {
+    const rows = builder.createAdminNotificationActionRows('user-1', {
+      guildId: 'guild-1',
+      verificationEventId: 'ver-1',
+      verificationStatus: VerificationStatus.PENDING,
+      caseMembershipState: 'left_or_removed',
+    });
+    const buttons = rows.flatMap(
+      (row) => row.toJSON().components as Array<{ label?: string; custom_id?: string }>
+    );
+
+    expect(buttons.map((button) => button.label)).toEqual([
+      'History',
+      'Ban by ID...',
+      'Close',
+      'Other Actions',
+    ]);
+    expect(buttons.map((button) => button.custom_id)).toEqual([
+      'history_user-1',
+      'ban_user-1',
+      'close_user-1',
+      'admin_actions:m:c:user-1',
+    ]);
+  });
+
+  it('collapses observed action rows after an observed alert is actioned', () => {
+    const rows = builder.createObservedActionRows('user-1', 'det-1', 'guild-1', {
+      actioned: true,
+    });
+    const buttons = rows.flatMap(
+      (row) => row.toJSON().components as Array<{ label?: string; custom_id?: string }>
+    );
+
+    expect(buttons.map((button) => button.label)).toEqual(['Other Actions']);
+    expect(buttons[0].custom_id).toBe('admin_actions:m:o:user-1:det-1');
   });
 
   it('uses resolved-case admin notification rows after a case is handled', () => {

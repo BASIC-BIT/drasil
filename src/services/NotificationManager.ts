@@ -130,7 +130,8 @@ export interface INotificationManager {
   markObservedDetectionActionTaken(
     detectionEventId: string,
     actionDescription: string,
-    admin: User
+    admin: User,
+    actionType?: AdminActionType
   ): Promise<boolean>;
 
   restoreObservedDetectionActions(
@@ -213,6 +214,7 @@ export class NotificationManager implements INotificationManager {
         guildId: member.guild.id,
         verificationEventId: verificationEvent.id,
         verificationStatus: verificationEvent.status,
+        caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
         includeBanAction: responseSettings.moderatorBanActionEnabled,
       });
 
@@ -339,7 +341,8 @@ export class NotificationManager implements INotificationManager {
   public async markObservedDetectionActionTaken(
     detectionEventId: string,
     actionDescription: string,
-    admin: User
+    admin: User,
+    actionType?: AdminActionType
   ): Promise<boolean> {
     try {
       const detectionEvent = await this.detectionEventsRepository.findById(detectionEventId);
@@ -387,14 +390,15 @@ export class NotificationManager implements INotificationManager {
         updatedEmbed,
         actionDescription,
         admin.id,
-        timestamp
+        timestamp,
+        actionType
       );
 
       const components = this.presentationBuilder.createObservedActionRows(
         detectionEvent.user_id,
         detectionEvent.id,
         detectionEvent.server_id,
-        { includeBanAction: responseSettings.moderatorBanActionEnabled }
+        { includeBanAction: responseSettings.moderatorBanActionEnabled, actioned: true }
       );
 
       await message.edit({
@@ -1008,6 +1012,7 @@ export class NotificationManager implements INotificationManager {
           guildId: verificationEvent.server_id,
           verificationEventId: verificationEvent.id,
           verificationStatus: newStatus,
+          caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
           includeBanAction: responseSettings?.moderatorBanActionEnabled ?? true,
         }
       ),
