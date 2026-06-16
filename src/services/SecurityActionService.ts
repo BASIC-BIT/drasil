@@ -37,6 +37,7 @@ import { getUserReportSettings } from '../utils/userReportSettings';
 import type { IGPTService, ReportAIAnalysis } from './GPTService';
 import { getReportAiSettings, ReportAttachmentMetadata } from '../utils/reportAiSettings';
 import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
+import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import {
   appendVerificationActionFailure,
   clearVerificationActionFailures,
@@ -60,6 +61,8 @@ import { RoleIntakeProcessor } from './RoleIntakeProcessor';
 import { IModerationQueueService } from './ModerationQueueService';
 
 const DELAYED_THREAD_REPAIR_DELAY_MS = 70_000;
+const AUTO_KICK_DEFAULT_REASON =
+  'Suspected compromised account: high-confidence scam activity detected by Drasil.';
 /**
  * Interface for the SecurityActionService
  */
@@ -1115,15 +1118,30 @@ export class SecurityActionService implements ISecurityActionService {
   ): Promise<void> {
     const server = await this.serverRepository.findByGuildId(member.guild.id);
     const intakeSettings = getReportIntakeSettings(server?.settings);
+    const detectionSettings = getDetectionResponseSettings(server?.settings ?? {});
     const reportAiSettings = getReportAiSettings(server?.settings);
     const route = this.resolveConfirmedReportIntakeRoute(
       intakeSettings.confirmedResponseMode,
       reportAiSettings,
+      detectionSettings,
       detectionResult.reportAiAnalysis
     );
 
     if (route === 'observed_alert') {
       await this.upsertReportObservedAlertOrActiveCase(member, detectionResult, detectionEventId);
+      return;
+    }
+
+    if (route === 'kick') {
+      const handled = await this.autoKickSuspiciousMember(
+        member,
+        detectionResult,
+        undefined,
+        'report_intake'
+      );
+      if (!handled) {
+        throw new Error('Failed to route confirmed report intake as kick');
+      }
       return;
     }
 
@@ -1141,15 +1159,30 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   private resolveConfirmedReportIntakeRoute(
-    configuredMode: 'observed_alert' | 'open_case' | 'restrict',
+    configuredMode: 'observed_alert' | 'open_case' | 'restrict' | 'kick',
     reportAiSettings: ReturnType<typeof getReportAiSettings>,
+    detectionSettings: ReturnType<typeof getDetectionResponseSettings>,
     reportAiAnalysis?: ReportAIAnalysis
-  ): 'observed_alert' | 'open_case' | 'restrict' {
+  ): 'observed_alert' | 'open_case' | 'restrict' | 'kick' {
     if (configuredMode === 'observed_alert') {
       return 'observed_alert';
     }
 
     if (!reportAiAnalysis) {
+      this.warnConfirmedReportIntakeFallback(configuredMode, reportAiSettings.maxAction);
+      return 'observed_alert';
+    }
+
+    if (configuredMode === 'kick') {
+      if (
+        detectionSettings.reportIntakeAutoKickEnabled &&
+        reportAiSettings.maxAction === 'restrict' &&
+        reportAiAnalysis.recommendedAction === 'restrict' &&
+        reportAiAnalysis.confidence * 100 >= detectionSettings.autoKickMinConfidenceThreshold
+      ) {
+        return 'kick';
+      }
+
       this.warnConfirmedReportIntakeFallback(configuredMode, reportAiSettings.maxAction);
       return 'observed_alert';
     }
@@ -1178,7 +1211,7 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   private warnConfirmedReportIntakeFallback(
-    configuredMode: 'open_case' | 'restrict',
+    configuredMode: 'open_case' | 'restrict' | 'kick',
     maxAction: string
   ): void {
     console.warn(
@@ -1455,6 +1488,92 @@ export class SecurityActionService implements ISecurityActionService {
     await this.serverMemberRepository.upsertMember(guildId, userId, {});
   }
 
+  private async shouldAutoKickDetection(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    source: 'message' | 'join'
+  ): Promise<boolean> {
+    if (detectionResult.triggerSource === DetectionType.REJOIN_AFTER_KICK) {
+      return false;
+    }
+
+    const server = await this.serverRepository.findByGuildId(member.guild.id);
+    const settings = getDetectionResponseSettings(server?.settings ?? {});
+    const sourceEnabled =
+      source === 'message'
+        ? settings.messageDetectionAutoKickEnabled
+        : settings.joinDetectionAutoKickEnabled;
+
+    return (
+      sourceEnabled && detectionResult.confidence * 100 >= settings.autoKickMinConfidenceThreshold
+    );
+  }
+
+  private async autoKickSuspiciousMember(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage: Message | undefined,
+    source: 'message' | 'join' | 'report_intake'
+  ): Promise<boolean> {
+    const actor = this.client.user;
+    if (!actor) {
+      throw new Error('Cannot auto-kick without an authenticated bot user.');
+    }
+
+    await this.ensureEntitiesExist(
+      member.guild.id,
+      member.id,
+      member.user.username,
+      member.joinedAt?.toISOString()
+    );
+
+    const detectionEventId = await this.ensureDetectionEventId(
+      member,
+      detectionResult,
+      sourceMessage
+    );
+    const activeVerificationEvent =
+      await this.verificationEventRepository.findActiveByUserAndServer(member.id, member.guild.id);
+    const kicked = await this.userModerationService.kickUser(
+      member,
+      AUTO_KICK_DEFAULT_REASON,
+      actor,
+      detectionEventId
+    );
+    this.requireModerationSuccess(kicked, 'kick', member);
+
+    if (!activeVerificationEvent) {
+      await this.adminActionService.recordAction({
+        server_id: member.guild.id,
+        user_id: member.id,
+        admin_id: actor.id,
+        verification_event_id: null,
+        detection_event_id: detectionEventId,
+        action_type: AdminActionType.KICK,
+        previous_status: null,
+        new_status: VerificationStatus.KICKED,
+        notes: AUTO_KICK_DEFAULT_REASON,
+        metadata: {
+          source: 'auto_kick_policy',
+          kick_policy_source: source,
+          confidence: detectionResult.confidence,
+        },
+      });
+    }
+
+    this.captureMemberAnalytics(
+      member,
+      'auto kick completed',
+      {
+        source,
+        confidence_bucket: getConfidenceBucket(detectionResult.confidence),
+      },
+      { detectionEventId }
+    );
+
+    return true;
+  }
+
   private async handleSuspiciousMember(
     member: GuildMember,
     detectionResult: DetectionResult,
@@ -1659,6 +1778,14 @@ export class SecurityActionService implements ISecurityActionService {
     try {
       console.log(`Suspicious message detected for: ${member.user.tag} (${member.id})`);
       console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
+      if (await this.shouldAutoKickDetection(member, detectionResult, 'message')) {
+        return await this.autoKickSuspiciousMember(
+          member,
+          detectionResult,
+          sourceMessage,
+          'message'
+        );
+      }
       return await this.handleSuspiciousMember(member, detectionResult, sourceMessage);
     } catch (error) {
       console.error(`Failed to handle suspicious message for ${member.user.tag}:`, error);
@@ -1680,6 +1807,9 @@ export class SecurityActionService implements ISecurityActionService {
     try {
       console.log(`Suspicious join detected for: ${member.user.tag} (${member.id})`);
       console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
+      if (await this.shouldAutoKickDetection(member, detectionResult, 'join')) {
+        return await this.autoKickSuspiciousMember(member, detectionResult, undefined, 'join');
+      }
       return await this.handleSuspiciousMember(member, detectionResult);
     } catch (error) {
       console.error(`Failed to handle suspicious join for ${member.user.tag}:`, error);
@@ -2597,6 +2727,12 @@ export class SecurityActionService implements ISecurityActionService {
     moderator: User,
     reason: string
   ): Promise<boolean> {
+    const server = await this.serverRepository.findByGuildId(member.guild.id);
+    const settings = getDetectionResponseSettings(server?.settings ?? {});
+    if (!settings.observedActionKickEnabled) {
+      throw new Error('Observed alert kick actions are disabled by server policy.');
+    }
+
     const detectionEvent = await this.getObservedDetectionForMember(member, detectionEventId);
     if (this.hasObservedAction(detectionEvent)) {
       return false;

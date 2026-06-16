@@ -15,6 +15,12 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.automaticDetectionExemptModerators).toBe(true);
     expect(settings.observedActionBanRequiresReason).toBe(false);
     expect(settings.moderatorBanActionEnabled).toBe(true);
+    expect(settings.moderatorKickActionEnabled).toBe(false);
+    expect(settings.observedActionKickEnabled).toBe(false);
+    expect(settings.messageDetectionAutoKickEnabled).toBe(false);
+    expect(settings.joinDetectionAutoKickEnabled).toBe(false);
+    expect(settings.reportIntakeAutoKickEnabled).toBe(false);
+    expect(settings.autoKickMinConfidenceThreshold).toBe(95);
   });
 
   it('defaults new configs to restrict with moderator ban actions', () => {
@@ -85,6 +91,22 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.moderatorBanActionEnabled).toBe(true);
   });
 
+  it('allows kick policy gates to be explicitly enabled', () => {
+    const settings = getDetectionResponseSettings({
+      moderator_kick_action_enabled: true,
+      observed_action_kick_enabled: true,
+      message_detection_auto_kick_enabled: true,
+      join_detection_auto_kick_enabled: true,
+      report_intake_auto_kick_enabled: true,
+    });
+
+    expect(settings.moderatorKickActionEnabled).toBe(true);
+    expect(settings.observedActionKickEnabled).toBe(true);
+    expect(settings.messageDetectionAutoKickEnabled).toBe(true);
+    expect(settings.joinDetectionAutoKickEnabled).toBe(true);
+    expect(settings.reportIntakeAutoKickEnabled).toBe(true);
+  });
+
   it('allows moderator automatic detection exemption to be disabled', () => {
     const settings = getDetectionResponseSettings({
       automatic_detection_exempt_moderators: false,
@@ -109,6 +131,17 @@ describe('detectionResponseSettings (unit)', () => {
 
     expect(settings.observedMinConfidenceThreshold).toBe(100);
     expect(settings.observedNotificationWindowMinutes).toBe(1);
+  });
+
+  it('clamps auto-kick confidence threshold to the strict range', () => {
+    expect(
+      getDetectionResponseSettings({ auto_kick_min_confidence_threshold: 150 })
+        .autoKickMinConfidenceThreshold
+    ).toBe(100);
+    expect(
+      getDetectionResponseSettings({ auto_kick_min_confidence_threshold: 50 })
+        .autoKickMinConfidenceThreshold
+    ).toBe(90);
   });
 
   it('validates detection response modes', () => {

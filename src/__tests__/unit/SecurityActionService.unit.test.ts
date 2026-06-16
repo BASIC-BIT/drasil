@@ -293,6 +293,113 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
+  it('auto-kicks high-confidence message detections only when message policy allows it', async () => {
+    const guildId = 'guild-auto-kick-message';
+    const userId = 'user-auto-kick-message';
+    const channelId = 'channel-1';
+    const member = buildMember(guildId, userId);
+    const message = buildMessage(guildId, channelId);
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        message_detection_auto_kick_enabled: true,
+        auto_kick_min_confidence_threshold: 95,
+      },
+    });
+    const botUser = { id: 'bot-1' } as User;
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.99,
+      reasons: ['High-confidence scam content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: message.content,
+    };
+
+    await expect(
+      buildService({ user: botUser } as Client).handleSuspiciousMessage(
+        member,
+        detectionResult,
+        message
+      )
+    ).resolves.toBe(true);
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(userModerationService.kickUser).toHaveBeenCalledWith(
+      member,
+      'Suspected compromised account: high-confidence scam activity detected by Drasil.',
+      botUser,
+      detectionEvents[0].id
+    );
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(adminActionService.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        server_id: guildId,
+        user_id: userId,
+        admin_id: 'bot-1',
+        detection_event_id: detectionEvents[0].id,
+        action_type: AdminActionType.KICK,
+        new_status: VerificationStatus.KICKED,
+      })
+    );
+  });
+
+  it('falls back to restriction when auto-kick confidence is below threshold', async () => {
+    const guildId = 'guild-auto-kick-under-threshold';
+    const userId = 'user-auto-kick-under-threshold';
+    const member = buildMember(guildId, userId);
+    const message = buildMessage(guildId, 'channel-1');
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        message_detection_auto_kick_enabled: true,
+        auto_kick_min_confidence_threshold: 99,
+      },
+    });
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.98,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: message.content,
+    };
+
+    await buildService({ user: { id: 'bot-1' } } as Client).handleSuspiciousMessage(
+      member,
+      detectionResult,
+      message
+    );
+
+    expect(userModerationService.kickUser).not.toHaveBeenCalled();
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not auto-kick on rejoin-after-kick context alone', async () => {
+    const guildId = 'guild-auto-kick-rejoin';
+    const userId = 'user-auto-kick-rejoin';
+    const member = buildMember(guildId, userId);
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        join_detection_auto_kick_enabled: true,
+        auto_kick_min_confidence_threshold: 95,
+      },
+    });
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 1,
+      reasons: ['Previously kicked from this server; review required on rejoin.'],
+      triggerSource: DetectionType.REJOIN_AFTER_KICK,
+      triggerContent: 'Rejoined after prior kick',
+    };
+
+    await buildService({ user: { id: 'bot-1' } } as Client).handleSuspiciousJoin(
+      member,
+      detectionResult
+    );
+
+    expect(userModerationService.kickUser).not.toHaveBeenCalled();
+    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+  });
+
   it('continues case creation when live queue mirroring fails', async () => {
     const guildId = 'guild-queue-fails';
     const userId = 'user-queue-fails';
@@ -1449,6 +1556,101 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertObservedDetectionNotification).not.toHaveBeenCalled();
   });
 
+  it('auto-kicks confirmed report intake only when kick policy and strict report analysis allow it', async () => {
+    const guildId = 'guild-intake-kick';
+    const userId = 'user-intake-kick';
+    const member = buildMember(guildId, userId);
+    const botUser = { id: 'bot-1' } as User;
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        report_intake_confirmed_response_mode: 'kick',
+        report_intake_auto_kick_enabled: true,
+        auto_kick_min_confidence_threshold: 95,
+        report_ai_triage_enabled: true,
+        report_ai_analyze_text: true,
+        report_ai_max_action: 'restrict',
+      },
+    });
+    gptService.analyzeReportEvidence.mockResolvedValueOnce({
+      result: 'likely_abusive',
+      confidence: 0.96,
+      summary: 'Report evidence shows a high-confidence compromise scam.',
+      reasonCodes: ['scam'],
+      evidenceCategories: ['report_text'],
+      concerns: ['Likely compromised account scam'],
+      recommendedAction: 'restrict',
+      analyzedImageCount: 0,
+      model: 'gpt-4o-mini',
+      promptVersion: 'report-triage-v1',
+      isFallback: false,
+    });
+
+    await buildService({ user: botUser } as Client).handleConfirmedReportIntake(
+      member,
+      { id: 'reporter-intake' } as User,
+      {
+        reason: 'intake evidence summary',
+        intakeId: 'intake-kick',
+      }
+    );
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    expect(userModerationService.kickUser).toHaveBeenCalledWith(
+      member,
+      'Suspected compromised account: high-confidence scam activity detected by Drasil.',
+      botUser,
+      detectionEvents[0].id
+    );
+    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    expect(notificationManager.upsertObservedDetectionNotification).not.toHaveBeenCalled();
+  });
+
+  it('falls back to observed alert when report intake kick route is configured but policy is disabled', async () => {
+    const guildId = 'guild-intake-kick-disabled';
+    const userId = 'user-intake-kick-disabled';
+    const member = buildMember(guildId, userId);
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: {
+        report_intake_confirmed_response_mode: 'kick',
+        report_intake_auto_kick_enabled: false,
+        report_ai_triage_enabled: true,
+        report_ai_analyze_text: true,
+        report_ai_max_action: 'restrict',
+      },
+    });
+    gptService.analyzeReportEvidence.mockResolvedValueOnce({
+      result: 'likely_abusive',
+      confidence: 0.99,
+      summary: 'Report evidence would otherwise meet kick threshold.',
+      reasonCodes: ['scam'],
+      evidenceCategories: ['report_text'],
+      concerns: ['Likely compromised account scam'],
+      recommendedAction: 'restrict',
+      analyzedImageCount: 0,
+      model: 'gpt-4o-mini',
+      promptVersion: 'report-triage-v1',
+      isFallback: false,
+    });
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      await buildService().handleConfirmedReportIntake(member, { id: 'reporter-intake' } as User, {
+        reason: 'intake evidence summary',
+        intakeId: 'intake-kick-disabled',
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('falling back to observed_alert')
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    expect(userModerationService.kickUser).not.toHaveBeenCalled();
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalled();
+  });
+
   it('does not create duplicate detection events when confirmed report intake submission is retried', async () => {
     const guildId = 'guild-intake-retry';
     const userId = 'user-intake-retry';
@@ -2237,6 +2439,8 @@ describe('SecurityActionService (unit)', () => {
     const userId = 'user-observed-open';
     const moderator = { id: 'admin-observed' } as User;
     const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await serverRepository.updateSettings(guildId, { observed_action_kick_enabled: true });
     const detectionEvent = await detectionEventsRepository.create({
       server_id: guildId,
       user_id: userId,
@@ -2906,6 +3110,8 @@ describe('SecurityActionService (unit)', () => {
     const userId = 'user-observed-kick';
     const moderator = { id: 'admin-observed' } as User;
     const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await serverRepository.updateSettings(guildId, { observed_action_kick_enabled: true });
     const detectionEvent = await detectionEventsRepository.create({
       server_id: guildId,
       user_id: userId,
@@ -2957,6 +3163,8 @@ describe('SecurityActionService (unit)', () => {
     const userId = 'user-observed-kick-false';
     const moderator = { id: 'admin-observed' } as User;
     const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await serverRepository.updateSettings(guildId, { observed_action_kick_enabled: true });
     const detectionEvent = await detectionEventsRepository.create({
       server_id: guildId,
       user_id: userId,
@@ -2976,6 +3184,30 @@ describe('SecurityActionService (unit)', () => {
     expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
     expect(adminActionService.recordAction).not.toHaveBeenCalled();
     expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
+  });
+
+  it('rejects observed kick before claiming metadata when policy is disabled', async () => {
+    const guildId = 'guild-observed-kick-disabled';
+    const userId = 'user-observed-kick-disabled';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.82,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+    });
+
+    await expect(
+      buildService().kickObservedDetection(member, detectionEvent.id, moderator, 'Compromised')
+    ).rejects.toThrow('Observed alert kick actions are disabled by server policy.');
+
+    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
+    expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
+    expect(userModerationService.kickUser).not.toHaveBeenCalled();
+    expect(adminActionService.recordAction).not.toHaveBeenCalled();
   });
 
   it('uses a verification thread when restricting an observed user report', async () => {

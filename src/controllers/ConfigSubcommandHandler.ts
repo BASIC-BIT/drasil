@@ -26,16 +26,22 @@ import {
   getCaseReviewReminderSettings,
 } from '../utils/caseReviewReminderSettings';
 import {
+  AUTO_KICK_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY,
   AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY,
   DETECTION_RESPONSE_MODE_SETTING_KEY,
   DETECTION_RESPONSE_MODES,
+  JOIN_DETECTION_AUTO_KICK_ENABLED_SETTING_KEY,
   JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY,
+  MESSAGE_DETECTION_AUTO_KICK_ENABLED_SETTING_KEY,
   MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY,
   MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY,
+  MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY,
   OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY,
+  OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY,
   OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY,
   OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY,
   OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES_SETTING_KEY,
+  REPORT_INTAKE_AUTO_KICK_ENABLED_SETTING_KEY,
   getDetectionResponseSettings,
   isDetectionResponseMode,
 } from '../utils/detectionResponseSettings';
@@ -50,6 +56,12 @@ import {
   REPORT_AI_MAX_IMAGES_SETTING_KEY,
   REPORT_AI_TRIAGE_ENABLED_SETTING_KEY,
 } from '../utils/reportAiSettings';
+import {
+  getReportIntakeSettings,
+  isReportIntakeConfirmedResponseMode,
+  REPORT_INTAKE_CONFIRMED_RESPONSE_MODE_SETTING_KEY,
+  REPORT_INTAKE_CONFIRMED_RESPONSE_MODES,
+} from '../utils/reportIntakeSettings';
 import {
   getRoleQuarantineSettings,
   isRoleQuarantineMode,
@@ -140,8 +152,18 @@ export class ConfigSubcommandHandler {
       `Observed notification window: \`${settings.observedNotificationWindowMinutes} minutes\``,
       `Observed ban reason required: \`${settings.observedActionBanRequiresReason ? 'yes' : 'no'}\``,
       `Moderator ban action enabled: \`${settings.moderatorBanActionEnabled ? 'yes' : 'no'}\``,
+      `Moderator kick action enabled: \`${settings.moderatorKickActionEnabled ? 'yes' : 'no'}\``,
+      `Observed kick action enabled: \`${settings.observedActionKickEnabled ? 'yes' : 'no'}\``,
+      `Message auto-kick: \`${settings.messageDetectionAutoKickEnabled ? 'enabled' : 'disabled'}\``,
+      `Join auto-kick: \`${settings.joinDetectionAutoKickEnabled ? 'enabled' : 'disabled'}\``,
+      `Report-intake auto-kick: \`${settings.reportIntakeAutoKickEnabled ? 'enabled' : 'disabled'}\``,
+      `Auto-kick threshold: \`${settings.autoKickMinConfidenceThreshold}%\``,
       `Guild ID: \`${guildId}\``,
     ].join('\n');
+  }
+
+  private formatReportIntakeSettings(settings: ReturnType<typeof getReportIntakeSettings>): string {
+    return [`Confirmed report intake response: \`${settings.confirmedResponseMode}\``].join('\n');
   }
 
   private formatUserReportSettings(
@@ -673,6 +695,87 @@ export class ConfigSubcommandHandler {
           return;
         }
 
+        case 'kick-action-enable':
+        case 'kick-action-disable': {
+          const enabled = subcommand === 'kick-action-enable';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY]: enabled,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated moderator kick action policy.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'observed-kick-enable':
+        case 'observed-kick-disable': {
+          const enabled = subcommand === 'observed-kick-enable';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY]: enabled,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated observed alert kick action policy.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'auto-kick-enable':
+        case 'auto-kick-disable': {
+          const enabled = subcommand === 'auto-kick-enable';
+          const source = interaction.options.getString('source', true);
+          const sourceSettingKey =
+            source === 'message'
+              ? MESSAGE_DETECTION_AUTO_KICK_ENABLED_SETTING_KEY
+              : source === 'join'
+                ? JOIN_DETECTION_AUTO_KICK_ENABLED_SETTING_KEY
+                : source === 'report_intake'
+                  ? REPORT_INTAKE_AUTO_KICK_ENABLED_SETTING_KEY
+                  : null;
+
+          if (!sourceSettingKey) {
+            throw new Error('Invalid auto-kick source. Use message, join, or report_intake.');
+          }
+
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [sourceSettingKey]: enabled,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `Updated ${source.replace('_', '-')} auto-kick policy.\n\n` +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-auto-kick-threshold': {
+          const value = interaction.options.getInteger('value', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [AUTO_KICK_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY]: value,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated auto-kick confidence threshold.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
         default:
           await interaction.reply({
             content: 'Unsupported detection subcommand.',
@@ -917,11 +1020,14 @@ export class ConfigSubcommandHandler {
         case 'view': {
           const serverConfig = await this.configService.getServerConfig(guildId);
           const settings = getUserReportSettings(serverConfig.settings);
+          const intakeSettings = getReportIntakeSettings(serverConfig.settings);
           const aiSettings = getReportAiSettings(serverConfig.settings);
           await interaction.reply({
             content:
               'Current user report settings:\n\n' +
               this.formatUserReportSettings(guildId, settings) +
+              '\n\nReport intake:\n' +
+              this.formatReportIntakeSettings(intakeSettings) +
               '\n\nAI report triage:\n' +
               this.formatReportAiSettings(aiSettings),
             flags: MessageFlags.Ephemeral,
@@ -960,6 +1066,26 @@ export class ConfigSubcommandHandler {
             content:
               'Updated user report settings.\n\n' +
               this.formatUserReportSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        case 'intake-confirmed-response': {
+          const mode = interaction.options.getString('mode', true);
+          if (!isReportIntakeConfirmedResponseMode(mode)) {
+            throw new Error(
+              `Invalid report intake response mode. Use one of: ${REPORT_INTAKE_CONFIRMED_RESPONSE_MODES.join(', ')}`
+            );
+          }
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [REPORT_INTAKE_CONFIRMED_RESPONSE_MODE_SETTING_KEY]: mode,
+          });
+          const settings = getReportIntakeSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated report intake response settings.\n\n' +
+              this.formatReportIntakeSettings(settings),
             flags: MessageFlags.Ephemeral,
           });
           return;

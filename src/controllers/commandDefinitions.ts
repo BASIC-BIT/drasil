@@ -15,6 +15,10 @@ import {
   MIN_CASE_REVIEW_REMINDER_HOURS,
   MIN_CASE_REVIEW_VERY_STALE_DAYS,
 } from '../utils/caseReviewReminderSettings';
+import {
+  MAX_AUTO_KICK_CONFIDENCE_THRESHOLD,
+  MIN_AUTO_KICK_CONFIDENCE_THRESHOLD,
+} from '../utils/detectionResponseSettings';
 import { MAX_REPORT_AI_MAX_IMAGE_BYTES, MAX_REPORT_AI_MAX_IMAGES } from '../utils/reportAiSettings';
 import { USER_REPORT_REASON_MAX_LENGTH } from '../utils/userReportSettings';
 import { MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT } from '../utils/verificationThreadAnalysisSettings';
@@ -459,6 +463,73 @@ const baseApplicationCommandBuilders = [
             .setName('ban-action-disable')
             .setDescription('Hide and block Drasil moderator ban actions')
         )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('kick-action-enable')
+            .setDescription('Show and allow Drasil moderator kick actions')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('kick-action-disable')
+            .setDescription('Hide and block Drasil moderator kick actions')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('observed-kick-enable')
+            .setDescription('Allow kick actions from observed alerts')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('observed-kick-disable')
+            .setDescription('Block kick actions from observed alerts')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('auto-kick-enable')
+            .setDescription('Allow high-confidence detections from one source to kick')
+            .addStringOption((option) =>
+              option
+                .setName('source')
+                .setDescription('Source allowed to auto-kick')
+                .setRequired(true)
+                .addChoices(
+                  { name: 'Message detections', value: 'message' },
+                  { name: 'Join detections', value: 'join' },
+                  { name: 'Confirmed report intake', value: 'report_intake' }
+                )
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('auto-kick-disable')
+            .setDescription('Block detections from one source from auto-kicking')
+            .addStringOption((option) =>
+              option
+                .setName('source')
+                .setDescription('Source blocked from auto-kicking')
+                .setRequired(true)
+                .addChoices(
+                  { name: 'Message detections', value: 'message' },
+                  { name: 'Join detections', value: 'join' },
+                  { name: 'Confirmed report intake', value: 'report_intake' }
+                )
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set-auto-kick-threshold')
+            .setDescription('Set the minimum confidence for any automatic kick')
+            .addIntegerOption((option) =>
+              option
+                .setName('value')
+                .setDescription(
+                  `Minimum confidence percentage (${MIN_AUTO_KICK_CONFIDENCE_THRESHOLD}-${MAX_AUTO_KICK_CONFIDENCE_THRESHOLD})`
+                )
+                .setRequired(true)
+                .setMinValue(MIN_AUTO_KICK_CONFIDENCE_THRESHOLD)
+                .setMaxValue(MAX_AUTO_KICK_CONFIDENCE_THRESHOLD)
+            )
+        )
     )
     .addSubcommandGroup((group) =>
       group
@@ -620,6 +691,23 @@ const baseApplicationCommandBuilders = [
                   { name: 'Off', value: 'off' },
                   { name: 'Notify only', value: 'notify_only' },
                   { name: 'Open case', value: 'open_case' }
+                )
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('intake-confirmed-response')
+            .setDescription('Set how confirmed report-intake evidence is handled')
+            .addStringOption((option) =>
+              option
+                .setName('mode')
+                .setDescription('observed_alert, open_case, restrict, or kick')
+                .setRequired(true)
+                .addChoices(
+                  { name: 'Observed alert', value: 'observed_alert' },
+                  { name: 'Open case', value: 'open_case' },
+                  { name: 'Restrict pending review', value: 'restrict' },
+                  { name: 'Kick high-confidence compromise', value: 'kick' }
                 )
             )
         )

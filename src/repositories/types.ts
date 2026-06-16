@@ -49,6 +49,12 @@ export interface ServerSettings {
   automatic_detection_exempt_moderators?: boolean;
   observed_action_ban_requires_reason?: boolean;
   moderator_ban_action_enabled?: boolean;
+  moderator_kick_action_enabled?: boolean;
+  observed_action_kick_enabled?: boolean;
+  message_detection_auto_kick_enabled?: boolean;
+  join_detection_auto_kick_enabled?: boolean;
+  report_intake_auto_kick_enabled?: boolean;
+  auto_kick_min_confidence_threshold?: number;
   user_report_reason_required?: boolean;
   user_report_external_response_mode?: 'off' | 'notify_only' | 'open_case';
   analytics_consent_level?: 'off' | 'anonymous' | 'full';
@@ -66,7 +72,7 @@ export interface ServerSettings {
   report_intake_agent_enabled?: boolean;
   report_intake_agent_debounce_ms?: number;
   report_intake_agent_min_interval_ms?: number;
-  report_intake_confirmed_response_mode?: 'observed_alert' | 'open_case' | 'restrict';
+  report_intake_confirmed_response_mode?: 'observed_alert' | 'open_case' | 'restrict' | 'kick';
   report_instructions_channel_id?: string | null;
   report_instructions_message_id?: string | null;
   restricted_lockdown_enabled?: boolean;

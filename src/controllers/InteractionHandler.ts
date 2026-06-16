@@ -535,7 +535,9 @@ export class InteractionHandler implements IInteractionHandler {
     const canBan =
       hasBanMembersPermission && !alreadyBanned && (await this.canUseModeratorBanAction(guildId));
     const canKick =
-      hasKickMembersPermission && !memberLeft && (await this.canUseModeratorKickAction(guildId));
+      hasKickMembersPermission &&
+      !memberLeft &&
+      (await this.canUseModeratorKickAction(guildId, 'case'));
     const restrictionState =
       activeCase && !memberLeft ? await this.getCaseRestrictionState(guildId, parsed.userId) : null;
 
@@ -684,7 +686,8 @@ export class InteractionHandler implements IInteractionHandler {
     const canBan =
       permissions.hasBanMembersPermission && (await this.canUseModeratorBanAction(guildId));
     const canKick =
-      permissions.hasKickMembersPermission && (await this.canUseModeratorKickAction(guildId));
+      permissions.hasKickMembersPermission &&
+      (await this.canUseModeratorKickAction(guildId, 'observed'));
     const actionButtons: ButtonBuilder[] = [];
     if (permissions.hasModerationPermission) {
       actionButtons.push(
@@ -1390,10 +1393,10 @@ export class InteractionHandler implements IInteractionHandler {
         );
         return;
       }
-      if (!(await this.canUseModeratorKickAction(guildId))) {
+      if (!(await this.canUseModeratorKickAction(guildId, 'case'))) {
         await interaction.reply({
           content:
-            'Drasil kick actions are disabled because the bot lacks Kick Members permission.',
+            'Drasil case kick actions are disabled for this server or the bot lacks Kick Members permission.',
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -1430,10 +1433,10 @@ export class InteractionHandler implements IInteractionHandler {
         );
         return;
       }
-      if (!(await this.canUseModeratorKickAction(guildId))) {
+      if (!(await this.canUseModeratorKickAction(guildId, 'observed'))) {
         await interaction.reply({
           content:
-            'Drasil kick actions are disabled because the bot lacks Kick Members permission.',
+            'Drasil observed alert kick actions are disabled for this server or the bot lacks Kick Members permission.',
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -2044,7 +2047,20 @@ export class InteractionHandler implements IInteractionHandler {
     return botMember?.permissions.has(PermissionFlagsBits.BanMembers) ?? false;
   }
 
-  private async canUseModeratorKickAction(guildId: string): Promise<boolean> {
+  private async canUseModeratorKickAction(
+    guildId: string,
+    source: 'case' | 'observed' = 'case'
+  ): Promise<boolean> {
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    const policyEnabled =
+      source === 'observed'
+        ? settings.observedActionKickEnabled
+        : settings.moderatorKickActionEnabled;
+    if (!policyEnabled) {
+      return false;
+    }
+
     const guild = await this.client.guilds.fetch(guildId).catch(() => null);
     const botMember =
       guild?.members.me ??

@@ -11,6 +11,7 @@ export const REPORT_INTAKE_CONFIRMED_RESPONSE_MODES = [
   'observed_alert',
   'open_case',
   'restrict',
+  'kick',
 ] as const;
 
 export type ReportIntakeConfirmedResponseMode =
@@ -55,6 +56,15 @@ export function getReportIntakeSettings(settings: ServerSettings = {}): ReportIn
   };
 }
 
+export function isReportIntakeConfirmedResponseMode(
+  value: unknown
+): value is ReportIntakeConfirmedResponseMode {
+  return (
+    typeof value === 'string' &&
+    REPORT_INTAKE_CONFIRMED_RESPONSE_MODES.includes(value as ReportIntakeConfirmedResponseMode)
+  );
+}
+
 function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
@@ -68,8 +78,5 @@ function readInteger(value: unknown, fallback: number, minimum: number, maximum:
 }
 
 function readConfirmedResponseMode(value: unknown): ReportIntakeConfirmedResponseMode {
-  return typeof value === 'string' &&
-    REPORT_INTAKE_CONFIRMED_RESPONSE_MODES.includes(value as ReportIntakeConfirmedResponseMode)
-    ? (value as ReportIntakeConfirmedResponseMode)
-    : 'observed_alert';
+  return isReportIntakeConfirmedResponseMode(value) ? value : 'observed_alert';
 }

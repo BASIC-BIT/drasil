@@ -1,4 +1,5 @@
 import { MessageFlags } from 'discord.js';
+import { REPORT_INTAKE_CONFIRMED_RESPONSE_MODE_SETTING_KEY } from '../../utils/reportIntakeSettings';
 import {
   USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY,
   USER_REPORT_REASON_REQUIRED_SETTING_KEY,
@@ -85,6 +86,48 @@ describe('CommandHandler report config commands (unit)', () => {
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining('External reports: `notify_only`'),
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('handles /config report intake-confirmed-response', async () => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        [REPORT_INTAKE_CONFIRMED_RESPONSE_MODE_SETTING_KEY]: 'kick',
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: {
+            has: jest.fn().mockReturnValue(true),
+          },
+        }),
+      },
+    } as any;
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('report'),
+        getSubcommand: jest.fn().mockReturnValue('intake-confirmed-response'),
+        getString: jest.fn().mockReturnValue('kick'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      [REPORT_INTAKE_CONFIRMED_RESPONSE_MODE_SETTING_KEY]: 'kick',
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Confirmed report intake response: `kick`'),
       flags: MessageFlags.Ephemeral,
     });
   });

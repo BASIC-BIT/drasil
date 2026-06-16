@@ -14,6 +14,13 @@ export const AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY =
 export const OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY =
   'observed_action_ban_requires_reason';
 export const MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY = 'moderator_ban_action_enabled';
+export const MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY = 'moderator_kick_action_enabled';
+export const OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY = 'observed_action_kick_enabled';
+export const MESSAGE_DETECTION_AUTO_KICK_ENABLED_SETTING_KEY =
+  'message_detection_auto_kick_enabled';
+export const JOIN_DETECTION_AUTO_KICK_ENABLED_SETTING_KEY = 'join_detection_auto_kick_enabled';
+export const REPORT_INTAKE_AUTO_KICK_ENABLED_SETTING_KEY = 'report_intake_auto_kick_enabled';
+export const AUTO_KICK_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY = 'auto_kick_min_confidence_threshold';
 
 export const DETECTION_RESPONSE_MODES = ['off', 'record_only', 'notify_only', 'restrict'] as const;
 
@@ -22,6 +29,14 @@ export type DetectionResponseEvent = 'message' | 'join';
 
 export const DEFAULT_DETECTION_RESPONSE_MODE: DetectionResponseMode = 'restrict';
 export const DEFAULT_MODERATOR_BAN_ACTION_ENABLED = true;
+export const DEFAULT_MODERATOR_KICK_ACTION_ENABLED = false;
+export const DEFAULT_OBSERVED_ACTION_KICK_ENABLED = false;
+export const DEFAULT_MESSAGE_DETECTION_AUTO_KICK_ENABLED = false;
+export const DEFAULT_JOIN_DETECTION_AUTO_KICK_ENABLED = false;
+export const DEFAULT_REPORT_INTAKE_AUTO_KICK_ENABLED = false;
+export const DEFAULT_AUTO_KICK_MIN_CONFIDENCE_THRESHOLD = 95;
+export const MIN_AUTO_KICK_CONFIDENCE_THRESHOLD = 90;
+export const MAX_AUTO_KICK_CONFIDENCE_THRESHOLD = 100;
 
 export interface DetectionResponseSettings {
   mode: DetectionResponseMode;
@@ -34,6 +49,12 @@ export interface DetectionResponseSettings {
   automaticDetectionExemptModerators: boolean;
   observedActionBanRequiresReason: boolean;
   moderatorBanActionEnabled: boolean;
+  moderatorKickActionEnabled: boolean;
+  observedActionKickEnabled: boolean;
+  messageDetectionAutoKickEnabled: boolean;
+  joinDetectionAutoKickEnabled: boolean;
+  reportIntakeAutoKickEnabled: boolean;
+  autoKickMinConfidenceThreshold: number;
 }
 
 export const DEFAULT_OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD = 70;
@@ -117,5 +138,24 @@ export function getDetectionResponseSettings(
       settings[OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY] === true,
     moderatorBanActionEnabled:
       settings[MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY] ?? DEFAULT_MODERATOR_BAN_ACTION_ENABLED,
+    moderatorKickActionEnabled:
+      settings[MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY] ?? DEFAULT_MODERATOR_KICK_ACTION_ENABLED,
+    observedActionKickEnabled:
+      settings[OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY] ?? DEFAULT_OBSERVED_ACTION_KICK_ENABLED,
+    messageDetectionAutoKickEnabled:
+      settings[MESSAGE_DETECTION_AUTO_KICK_ENABLED_SETTING_KEY] ??
+      DEFAULT_MESSAGE_DETECTION_AUTO_KICK_ENABLED,
+    joinDetectionAutoKickEnabled:
+      settings[JOIN_DETECTION_AUTO_KICK_ENABLED_SETTING_KEY] ??
+      DEFAULT_JOIN_DETECTION_AUTO_KICK_ENABLED,
+    reportIntakeAutoKickEnabled:
+      settings[REPORT_INTAKE_AUTO_KICK_ENABLED_SETTING_KEY] ??
+      DEFAULT_REPORT_INTAKE_AUTO_KICK_ENABLED,
+    autoKickMinConfidenceThreshold: readNumberSetting(
+      settings[AUTO_KICK_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY],
+      DEFAULT_AUTO_KICK_MIN_CONFIDENCE_THRESHOLD,
+      MIN_AUTO_KICK_CONFIDENCE_THRESHOLD,
+      MAX_AUTO_KICK_CONFIDENCE_THRESHOLD
+    ),
   };
 }
