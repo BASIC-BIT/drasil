@@ -110,6 +110,7 @@ describeIntegration('SecurityActionService (integration)', () => {
       liftRestriction: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
+      banUserById: jest.fn().mockResolvedValue(true),
       syncAlreadyBannedUser: jest.fn().mockResolvedValue(1),
       closeCaseNoAction: jest.fn().mockResolvedValue(1),
       recordObservedDiscordBan: jest.fn().mockResolvedValue(0),

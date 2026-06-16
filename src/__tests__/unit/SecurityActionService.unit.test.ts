@@ -119,6 +119,7 @@ describe('SecurityActionService (unit)', () => {
       liftRestriction: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
+      banUserById: jest.fn().mockResolvedValue(true),
       syncAlreadyBannedUser: jest.fn().mockResolvedValue(1),
       closeCaseNoAction: jest.fn().mockResolvedValue(1),
       recordObservedDiscordBan: jest.fn().mockResolvedValue(0),
@@ -2194,6 +2195,59 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
       detectionEvent.id,
       'opened a verification case',
+      moderator,
+      AdminActionType.OPEN_CASE
+    );
+  });
+
+  it('converts an observed alert notification into the case notification when opening a case', async () => {
+    const guildId = 'guild-observed-adopt';
+    const userId = 'user-observed-adopt';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.88,
+      reasons: ['Suspicious content'],
+      detected_at: new Date(),
+      metadata: {
+        content: 'free discord nitro',
+        observed_notification_channel_id: 'alerts-channel',
+        observed_notification_message_id: 'observed-message',
+        observed_evidence_thread_id: 'observed-evidence-thread',
+      },
+    });
+    notificationManager.upsertSuspiciousUserNotification.mockImplementation(
+      async (_member, _detectionResult, verificationEvent) =>
+        ({
+          id: verificationEvent.notification_message_id ?? 'new-message',
+          channelId: verificationEvent.notification_channel_id ?? 'new-channel',
+        }) as Message
+    );
+
+    await buildService().openObservedDetectionCase(member, detectionEvent.id, moderator);
+
+    const [verificationEvent] = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvent).toEqual(
+      expect.objectContaining({
+        notification_channel_id: 'alerts-channel',
+        notification_message_id: 'observed-message',
+        private_evidence_thread_id: 'observed-evidence-thread',
+        metadata: expect.objectContaining({
+          case_origin: 'observed_alert',
+          observed_detection_event_id: detectionEvent.id,
+        }),
+      })
+    );
+    expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
+    expect(notificationManager.logActionToMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ notification_message_id: 'observed-message' }),
+      AdminActionType.OPEN_CASE,
       moderator
     );
   });
@@ -2300,7 +2354,8 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
       detectionEvent.id,
       'marked this detection as a false positive',
-      moderator
+      moderator,
+      AdminActionType.FALSE_POSITIVE
     );
   });
 
@@ -2798,7 +2853,8 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
       detectionEvent.id,
       'restricted this user',
-      moderator
+      moderator,
+      AdminActionType.RESTRICT
     );
   });
 
@@ -2917,7 +2973,8 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
       detectionEvent.id,
       'restricted this user',
-      moderator
+      moderator,
+      AdminActionType.RESTRICT
     );
   });
 
@@ -2954,7 +3011,8 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
       detectionEvent.id,
       'banned this user',
-      moderator
+      moderator,
+      AdminActionType.BAN
     );
     expect(adminActionService.recordAction).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -1537,4 +1537,74 @@ describe('UserModerationService (unit)', () => {
     );
     consoleError.mockRestore();
   });
+
+  it('bans by ID and resolves pending cases after the member leaves', async () => {
+    const guildId = 'guild-ban-by-id';
+    const userId = 'user-ban-by-id';
+    const moderator = { id: 'mod-ban' } as User;
+    const targetUser = {
+      id: userId,
+      tag: 'left-user#0001',
+      username: 'left-user',
+      createdTimestamp: new Date('2026-01-01T00:00:00Z').getTime(),
+    } as User;
+    const guild = {
+      id: guildId,
+      client: { users: { fetch: jest.fn().mockResolvedValue(targetUser) } },
+      bans: { create: jest.fn().mockResolvedValue({}) },
+    } as unknown as Guild;
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'left-user');
+
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.banUserById(guild, userId, 'banned after leave', moderator, detectionEvent.id)
+    ).resolves.toBe(true);
+
+    expect(guild.bans.create).toHaveBeenCalledWith(targetUser, { reason: 'banned after leave' });
+    const updatedEvent = await verificationEventRepository.findById(verificationEvent.id);
+    expect(updatedEvent?.status).toBe(VerificationStatus.BANNED);
+    expect(updatedEvent?.metadata).toEqual(
+      expect.objectContaining({
+        membership_state: 'left_or_removed',
+        banned_by_id_at: expect.any(String),
+      })
+    );
+    const outcomes = await moderationOutcomeRepository.findByUserAndServer(userId, guildId);
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toEqual(
+      expect.objectContaining({
+        outcome_type: ModerationOutcomeType.BANNED,
+        source: ModerationOutcomeSource.DRASIL,
+        verification_event_id: verificationEvent.id,
+        detection_event_id: detectionEvent.id,
+      })
+    );
+  });
 });

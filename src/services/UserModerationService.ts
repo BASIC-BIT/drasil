@@ -65,6 +65,14 @@ export interface IUserModerationService {
     detectionEventId?: string
   ): Promise<boolean>;
 
+  banUserById(
+    guild: Guild,
+    userId: string,
+    reason: string,
+    moderator: User,
+    detectionEventId?: string
+  ): Promise<boolean>;
+
   /**
    * Synchronizes pending verification cases when Discord already has an existing ban.
    */
@@ -173,6 +181,36 @@ export class UserModerationService implements IUserModerationService {
         `Failed to delete case ${verificationEventId} from the live moderation queue:`,
         error
       );
+    }
+  }
+
+  private async refreshLiveQueueCaseMirror(verificationEvent: VerificationEvent): Promise<void> {
+    if (!this.moderationQueueService) {
+      return;
+    }
+
+    try {
+      await this.moderationQueueService.upsertCaseMirror(verificationEvent);
+    } catch (error) {
+      console.warn(
+        `Failed to refresh case ${verificationEvent.id} in the live moderation queue:`,
+        error
+      );
+    }
+  }
+
+  private async refreshCaseNotification(verificationEvent: VerificationEvent): Promise<void> {
+    if (!verificationEvent.notification_message_id) {
+      return;
+    }
+
+    try {
+      await this.notificationManager.updateNotificationButtons(
+        verificationEvent,
+        verificationEvent.status
+      );
+    } catch (error) {
+      console.warn(`Failed to refresh case notification ${verificationEvent.id}:`, error);
     }
   }
 
@@ -1085,6 +1123,131 @@ export class UserModerationService implements IUserModerationService {
     }
   }
 
+  public async banUserById(
+    guild: Guild,
+    userId: string,
+    reason: string,
+    moderator: User,
+    detectionEventId?: string
+  ): Promise<boolean> {
+    try {
+      const targetUser = await guild.client.users.fetch(userId).catch(() => null);
+      const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
+        userId,
+        guild.id
+      );
+      const pendingVerificationEvents = verificationEvents.filter(
+        (event) => event.status === VerificationStatus.PENDING
+      );
+
+      await guild.bans.create(targetUser ?? userId, { reason });
+      console.log(`Banned user ${targetUser?.tag ?? userId} by ID. Reason: ${reason}`);
+      await this.tryAbandonRoleQuarantine(guild.id, userId, 'drasil_ban_by_id', moderator.id);
+
+      try {
+        const resolvedAt = new Date();
+        const resolvedEvents: Array<{
+          event: VerificationEvent;
+          previousStatus: VerificationStatus;
+        }> = [];
+
+        for (const pendingEvent of pendingVerificationEvents) {
+          const previousStatus = pendingEvent.status;
+          const eventToUpdate = {
+            ...pendingEvent,
+            status: VerificationStatus.BANNED,
+            resolved_by: moderator.id,
+            resolved_at: resolvedAt,
+            notes: reason,
+            metadata: {
+              ...this.metadataToRecord(pendingEvent.metadata),
+              ...(targetUser ? { user_snapshot: this.buildUserSnapshot(targetUser) } : {}),
+              membership_state: 'left_or_removed',
+              banned_by_id_at: resolvedAt.toISOString(),
+            } as VerificationEvent['metadata'],
+          };
+          const updatedEvent = await this.verificationEventRepository.update(
+            pendingEvent.id,
+            eventToUpdate
+          );
+          resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
+        }
+
+        await this.serverMemberRepository.upsertMember(guild.id, userId, {
+          verification_status: VerificationStatus.BANNED,
+          is_restricted: true,
+          last_status_change: resolvedAt,
+        });
+
+        const target: ModerationTarget = {
+          guildId: guild.id,
+          userId,
+          userTag: targetUser?.tag ?? userId,
+          username: targetUser?.username ?? null,
+          accountCreatedAt: targetUser ? this.getUserAccountCreatedAt(targetUser) : null,
+        };
+
+        for (const resolvedEvent of resolvedEvents) {
+          await this.finalizeResolvedVerificationEvent(
+            target,
+            resolvedEvent.event,
+            resolvedEvent.previousStatus,
+            VerificationStatus.BANNED,
+            AdminActionType.BAN,
+            moderator,
+            resolvedEvent.event.id === resolvedEvents[0]?.event.id,
+            {
+              notes: reason,
+              detectionEventId: detectionEventId ?? resolvedEvent.event.detection_event_id,
+              metadata: { source_detail: 'ban_by_id' },
+            }
+          );
+        }
+
+        await this.tryRecordModerationOutcomes(
+          target,
+          ModerationOutcomeType.BANNED,
+          ModerationOutcomeSource.DRASIL,
+          resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
+          {
+            actorId: moderator.id,
+            reason,
+            detectionEventId:
+              detectionEventId ?? resolvedEvents[0]?.event.detection_event_id ?? null,
+            metadata: this.buildOutcomeMetadata(
+              { source_detail: 'ban_by_id' },
+              targetUser ?? undefined
+            ),
+            recordWithoutVerificationEvent: true,
+          }
+        );
+
+        void this.productAnalyticsService.captureUserEvent(
+          guild.id,
+          userId,
+          'moderation action completed',
+          { action_type: AdminActionType.BAN, source_detail: 'ban_by_id' },
+          {
+            moderatorId: moderator.id,
+            verificationEventId: resolvedEvents[0]?.event.id,
+            detectionEventId:
+              detectionEventId ?? resolvedEvents[0]?.event.detection_event_id ?? undefined,
+          }
+        );
+      } catch (postBanError) {
+        console.error(
+          `Ban by ID succeeded for ${targetUser?.tag ?? userId}, but post-ban updates failed:`,
+          postBanError
+        );
+      }
+
+      return true;
+    } catch (error) {
+      console.error(`Failed to ban user ${userId} by ID:`, error);
+      throw error;
+    }
+  }
+
   public async syncAlreadyBannedUser(
     guild: Guild,
     userId: string,
@@ -1564,7 +1727,10 @@ export class UserModerationService implements IUserModerationService {
           eventToUpdate,
           { touchUpdatedAt: false }
         );
-        markedEvents.push(updatedEvent ?? eventToUpdate);
+        const markedEvent = updatedEvent ?? eventToUpdate;
+        markedEvents.push(markedEvent);
+        await this.refreshCaseNotification(markedEvent);
+        await this.refreshLiveQueueCaseMirror(markedEvent);
       }
 
       await this.tryRecordModerationOutcomes(

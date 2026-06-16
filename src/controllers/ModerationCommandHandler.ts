@@ -64,22 +64,26 @@ export class ModerationCommandHandler {
     }
 
     const member = await guild.members.fetch(targetUser.id).catch(() => null);
-    if (!member) {
-      await interaction.reply({
-        content: `Could not find user ${targetUser.tag} in this server.`,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
 
     await requestSlashCommandConfirmation(interaction, {
-      message: `Ban ${targetUser.tag} from this server?`,
-      confirmLabel: 'Ban User',
+      message: member
+        ? `Ban ${targetUser.tag} from this server?`
+        : `Ban ${targetUser.tag} from this server by ID?`,
+      confirmLabel: member ? 'Ban User' : 'Ban by ID',
       confirmStyle: ButtonStyle.Danger,
       execute: async (buttonInteraction) => {
         await buttonInteraction.update({ content: `Banning ${targetUser.tag}...`, components: [] });
         try {
-          await this.userModerationService.banUser(member, reason, interaction.user);
+          if (member) {
+            await this.userModerationService.banUser(member, reason, interaction.user);
+          } else {
+            await this.userModerationService.banUserById(
+              guild,
+              targetUser.id,
+              reason,
+              interaction.user
+            );
+          }
           await buttonInteraction.editReply({ content: `User ${targetUser.tag} has been banned.` });
         } catch (error) {
           console.error('Failed to ban user via command:', error);
