@@ -4,12 +4,14 @@ export const casePresenceStateSchema = z.enum([
   'in_server',
   'left_or_removed',
   'banned',
+  'kicked',
   'unknown',
 ]);
 
 export const caseActionSchema = z.enum([
   'view_history',
   'verify_user',
+  'kick_user',
   'ban_user',
   'ban_by_id',
   'sync_existing_ban',

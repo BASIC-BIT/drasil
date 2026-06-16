@@ -76,6 +76,7 @@ const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notificatio
 const VERIFICATION_BAN_MODAL_PREFIX = 'verification:ban_modal';
 const VERIFICATION_BAN_NOTES_FIELD_ID = 'verification_ban_notes';
 const VERIFICATION_BAN_DEFAULT_REASON = 'Banned by moderator during verification';
+const VERIFICATION_KICK_DEFAULT_REASON = 'Kicked by moderator during verification';
 const CASE_REVIEW_DIGEST_PAGE_SIZE = 25;
 /**
  * Interface for the Bot class
@@ -493,8 +494,11 @@ export class InteractionHandler implements IInteractionHandler {
     const hasBanMembersPermission = await this.hasAnyPermission(interaction, guildId, [
       PermissionFlagsBits.BanMembers,
     ]);
+    const hasKickMembersPermission = await this.hasAnyPermission(interaction, guildId, [
+      PermissionFlagsBits.KickMembers,
+    ]);
 
-    if (!hasModerationPermission && !hasBanMembersPermission) {
+    if (!hasModerationPermission && !hasBanMembersPermission && !hasKickMembersPermission) {
       await this.replyPermissionDenied(
         interaction,
         'You need moderation permissions to use admin actions.'
@@ -528,6 +532,8 @@ export class InteractionHandler implements IInteractionHandler {
     const memberLeft = activeCase ? this.hasMemberLeft(activeCase) : false;
     const canBan =
       hasBanMembersPermission && !alreadyBanned && (await this.canUseModeratorBanAction(guildId));
+    const canKick =
+      hasKickMembersPermission && !memberLeft && (await this.canUseModeratorKickAction(guildId));
     const restrictionState =
       activeCase && !memberLeft ? await this.getCaseRestrictionState(guildId, parsed.userId) : null;
 
@@ -572,6 +578,9 @@ export class InteractionHandler implements IInteractionHandler {
         );
         actionButtons.push(
           this.adminActionButton(parsed, 'verify', 'Verify User', ButtonStyle.Success),
+          ...(canKick
+            ? [this.adminActionButton(parsed, 'kick', 'Kick User', ButtonStyle.Danger)]
+            : []),
           this.adminActionButton(
             parsed,
             'close_no_action',
@@ -1128,6 +1137,12 @@ export class InteractionHandler implements IInteractionHandler {
           message: `Sync pending verification cases for ${target} to banned because Discord already has an existing ban?`,
           style: ButtonStyle.Danger,
         };
+      case 'kick':
+        return {
+          label: 'Confirm Kick',
+          message: `Kick ${target} from this server and resolve pending verification cases as kicked? If they rejoin, Drasil will use the prior kick as review context.`,
+          style: ButtonStyle.Danger,
+        };
       case 'reopen':
         return {
           label: 'Confirm Reopen',
@@ -1337,6 +1352,26 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
       await this.handleSyncAlreadyBannedButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
+    if (action === 'kick') {
+      if (!(await this.hasAnyPermission(interaction, guildId, [PermissionFlagsBits.KickMembers]))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need Kick Members permission to kick a user.'
+        );
+        return;
+      }
+      if (!(await this.canUseModeratorKickAction(guildId))) {
+        await interaction.reply({
+          content:
+            'Drasil kick actions are disabled because the bot lacks Kick Members permission.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      await this.handleKickButton(interaction, guildId, parsed.userId);
       return;
     }
 
@@ -1550,6 +1585,40 @@ export class InteractionHandler implements IInteractionHandler {
       await interaction.followUp({
         content:
           'Could not sync the existing ban. Confirm the user is still banned and Drasil can view server bans.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  private async handleKickButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    await interaction.deferUpdate();
+
+    try {
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) {
+        throw new Error('Could not find member in guild');
+      }
+
+      await this.userModerationService.kickUser(
+        member,
+        VERIFICATION_KICK_DEFAULT_REASON,
+        interaction.user
+      );
+
+      await interaction.followUp({
+        content: `Kicked <@${userId}> and resolved pending verification cases as kicked.`,
+        allowedMentions: { parse: [] },
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      console.error('Error kicking user from case action:', error);
+      await interaction.followUp({
+        content: 'An error occurred while kicking the user.',
         flags: MessageFlags.Ephemeral,
       });
     }
@@ -1925,6 +1994,16 @@ export class InteractionHandler implements IInteractionHandler {
         ? await guild.members.fetchMe().catch(() => null)
         : null);
     return botMember?.permissions.has(PermissionFlagsBits.BanMembers) ?? false;
+  }
+
+  private async canUseModeratorKickAction(guildId: string): Promise<boolean> {
+    const guild = await this.client.guilds.fetch(guildId).catch(() => null);
+    const botMember =
+      guild?.members.me ??
+      (guild && typeof guild.members.fetchMe === 'function'
+        ? await guild.members.fetchMe().catch(() => null)
+        : null);
+    return botMember?.permissions.has(PermissionFlagsBits.KickMembers) ?? false;
   }
 
   private async isUserBanned(guildId: string, userId: string): Promise<boolean> {

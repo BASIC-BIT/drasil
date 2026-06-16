@@ -1,7 +1,13 @@
 import { Client, Guild, GuildMember, Message, User } from 'discord.js';
 import { SecurityActionService } from '../../services/SecurityActionService';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
-import { AdminActionType, DetectionType, VerificationStatus } from '../../repositories/types';
+import {
+  AdminActionType,
+  DetectionType,
+  ModerationOutcomeSource,
+  ModerationOutcomeType,
+  VerificationStatus,
+} from '../../repositories/types';
 import {
   InMemoryDetectionEventsRepository,
   InMemoryServerMemberRepository,
@@ -118,11 +124,14 @@ describe('SecurityActionService (unit)', () => {
       }),
       liftRestriction: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
+      kickUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
       banUserById: jest.fn().mockResolvedValue(true),
       syncAlreadyBannedUser: jest.fn().mockResolvedValue(1),
       closeCaseNoAction: jest.fn().mockResolvedValue(1),
       recordObservedDiscordBan: jest.fn().mockResolvedValue(0),
+      recordObservedDiscordKick: jest.fn().mockResolvedValue(0),
+      findLatestKickOutcome: jest.fn().mockResolvedValue(null),
       recordMemberLeftGuild: jest.fn().mockResolvedValue(0),
     };
 
@@ -161,6 +170,68 @@ describe('SecurityActionService (unit)', () => {
       client,
       gptService as any
     );
+
+  it('records deterministic rejoin-after-kick detections with prior kick metadata', async () => {
+    const guildId = 'guild-rejoin-kick';
+    const userId = 'user-rejoin-kick';
+    const member = buildMember(guildId, userId);
+    const priorKick = {
+      id: 'out-kick-1',
+      server_id: guildId,
+      user_id: userId,
+      detection_event_id: null,
+      verification_event_id: 'ver-kick-1',
+      outcome_type: ModerationOutcomeType.KICKED,
+      source: ModerationOutcomeSource.NATIVE_DISCORD,
+      actor_id: 'native-mod',
+      reason: 'prior kick reason',
+      occurred_at: new Date('2026-06-01T00:00:00.000Z'),
+      created_at: new Date('2026-06-01T00:00:00.000Z'),
+      metadata: null,
+    };
+    const service = buildService();
+
+    const result = await service.recordRejoinAfterKickDetection(member, priorKick);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        label: 'SUSPICIOUS',
+        confidence: 1,
+        triggerSource: DetectionType.REJOIN_AFTER_KICK,
+        triggerContent: 'Rejoined after prior kick',
+      })
+    );
+    expect(result.reasons).toEqual(
+      expect.arrayContaining([
+        'Previously kicked from this server; review required on rejoin.',
+        'Prior kick reason: prior kick reason',
+      ])
+    );
+    const detectionEvent = await detectionEventsRepository.findById(result.detectionEventId ?? '');
+    expect(detectionEvent).toEqual(
+      expect.objectContaining({
+        server_id: guildId,
+        user_id: userId,
+        detection_type: DetectionType.REJOIN_AFTER_KICK,
+        confidence: 1,
+      })
+    );
+    expect(detectionEvent?.metadata).toEqual(
+      expect.objectContaining({
+        rejoin_after_kick: true,
+        prior_kick_outcome_id: priorKick.id,
+        prior_kick_source: priorKick.source,
+        prior_kick_actor_id: priorKick.actor_id,
+        prior_kick_at: priorKick.occurred_at.toISOString(),
+      })
+    );
+    await expect(serverRepository.findByGuildId(guildId)).resolves.toEqual(
+      expect.objectContaining({ guild_id: guildId })
+    );
+    await expect(userRepository.findById(userId)).resolves.toEqual(
+      expect.objectContaining({ discord_id: userId })
+    );
+  });
 
   it('creates detection and verification when none exists', async () => {
     const guildId = 'guild-1';

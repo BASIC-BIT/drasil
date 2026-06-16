@@ -1,4 +1,5 @@
 import {
+  AuditLogEvent,
   Events,
   GuildMember,
   Message,
@@ -7,7 +8,11 @@ import {
   PermissionsBitField,
 } from 'discord.js';
 import { EventHandler } from '../../controllers/EventHandler';
-import { DetectionType, ModerationOutcomeSource } from '../../repositories/types';
+import {
+  DetectionType,
+  ModerationOutcomeSource,
+  ModerationOutcomeType,
+} from '../../repositories/types';
 
 const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
 
@@ -17,6 +22,7 @@ describe('EventHandler (unit)', () => {
     detectionOrchestrator?: Record<string, jest.Mock>;
     configService?: Record<string, jest.Mock>;
     notificationManager?: Record<string, jest.Mock>;
+    securityActionService?: Record<string, jest.Mock>;
     setupDiagnosticsService?: Record<string, jest.Mock>;
     reportIntakeService?: Record<string, jest.Mock>;
     reportIntakeAgentService?: Record<string, jest.Mock>;
@@ -67,7 +73,13 @@ describe('EventHandler (unit)', () => {
       detectionOrchestrator as any,
       notificationManager as any,
       configService as any,
-      { handleSuspiciousMessage: jest.fn(), openCaseForSuspiciousMessage: jest.fn() } as any,
+      (overrides?.securityActionService ?? {
+        handleSuspiciousMessage: jest.fn(),
+        handleSuspiciousJoin: jest.fn(),
+        openCaseForSuspiciousMessage: jest.fn(),
+        openCaseForSuspiciousJoin: jest.fn(),
+        recordRejoinAfterKickDetection: jest.fn(),
+      }) as any,
       { handleTestCommands: jest.fn(), registerCommands: jest.fn() } as any,
       { handleButtonInteraction: jest.fn(), handleModalSubmit: jest.fn() } as any,
       { handleThreadMessage: jest.fn().mockResolvedValue(false) } as any,
@@ -193,6 +205,58 @@ describe('EventHandler (unit)', () => {
     await removeHandler?.(member as any);
 
     expect(userModerationService.recordMemberLeftGuild).toHaveBeenCalledWith(member);
+  });
+
+  it('records observed kicks from recent member-kick audit logs instead of member-left', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const userModerationService = {
+      recordObservedDiscordBan: jest.fn(),
+      recordObservedDiscordKick: jest.fn().mockResolvedValue(1),
+      recordMemberLeftGuild: jest.fn(),
+    };
+    const handler = buildHandler({ client, userModerationService });
+    await handler.setupEventHandlers();
+    const removeHandler = client.on.mock.calls.find(
+      ([event]) => event === Events.GuildMemberRemove
+    )?.[1];
+    const member = {
+      id: 'user-1',
+      user: { id: 'user-1', tag: 'test-user#0001' },
+      guild: {
+        id: 'guild-1',
+        bans: { fetch: jest.fn().mockRejectedValue({ code: DISCORD_UNKNOWN_BAN_ERROR_CODE }) },
+        fetchAuditLogs: jest.fn().mockResolvedValue({
+          entries: [
+            {
+              id: 'kick-audit-1',
+              target: { id: 'user-1' },
+              executor: { id: 'native-mod', bot: false },
+              reason: 'native kick reason',
+              createdTimestamp: Date.now(),
+            },
+          ],
+        }),
+      },
+    };
+
+    await removeHandler?.(member as any);
+
+    expect(member.guild.fetchAuditLogs).toHaveBeenCalledWith({
+      type: AuditLogEvent.MemberKick,
+      limit: 5,
+    });
+    expect(userModerationService.recordObservedDiscordKick).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({
+        source: ModerationOutcomeSource.NATIVE_DISCORD,
+        actorId: 'native-mod',
+        reason: 'native kick reason',
+        sourceDetail: 'guildMemberRemove:memberKickAuditLog',
+        auditLogEntryId: 'kick-audit-1',
+        occurredAt: expect.any(Date),
+      })
+    );
+    expect(userModerationService.recordMemberLeftGuild).not.toHaveBeenCalled();
   });
 
   it('does not mark member removals when ban state cannot be confirmed', async () => {
@@ -909,6 +973,64 @@ describe('EventHandler (unit)', () => {
         username: 'test-user',
       })
     );
+  });
+
+  it('routes rejoin-after-kick through join response without normal profile scan', async () => {
+    const priorKick = {
+      id: 'out-kick-1',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_event_id: null,
+      verification_event_id: 'ver-kick-1',
+      outcome_type: ModerationOutcomeType.KICKED,
+      source: ModerationOutcomeSource.NATIVE_DISCORD,
+      actor_id: 'native-mod',
+      reason: 'prior unresolved legitimacy',
+      occurred_at: new Date('2026-06-01T00:00:00.000Z'),
+      created_at: new Date('2026-06-01T00:00:00.000Z'),
+      metadata: null,
+    };
+    const detectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 1,
+      reasons: ['Previously kicked from this server; review required on rejoin.'],
+      triggerSource: DetectionType.REJOIN_AFTER_KICK,
+      triggerContent: 'Rejoined after prior kick',
+      detectionEventId: 'det-rejoin-1',
+    };
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const securityActionService = {
+      recordRejoinAfterKickDetection: jest.fn().mockResolvedValue(detectionResult),
+      openCaseForSuspiciousJoin: jest.fn().mockResolvedValue(true),
+      handleSuspiciousJoin: jest.fn().mockResolvedValue(true),
+      handleSuspiciousMessage: jest.fn(),
+      openCaseForSuspiciousMessage: jest.fn(),
+    };
+    const userModerationService = {
+      findLatestKickOutcome: jest.fn().mockResolvedValue(priorKick),
+    };
+    const handler = buildHandler({
+      detectionOrchestrator,
+      securityActionService,
+      userModerationService,
+    });
+    const member = buildMember(new PermissionsBitField());
+
+    await (handler as any).handleGuildMemberAdd(member);
+
+    expect(userModerationService.findLatestKickOutcome).toHaveBeenCalledWith('guild-1', 'user-1');
+    expect(securityActionService.recordRejoinAfterKickDetection).toHaveBeenCalledWith(
+      member,
+      priorKick
+    );
+    expect(securityActionService.openCaseForSuspiciousJoin).toHaveBeenCalledWith(
+      member,
+      detectionResult
+    );
+    expect(detectionOrchestrator.detectNewJoin).not.toHaveBeenCalled();
   });
 
   it('sends a setup nudge to the audit-log installer on guild create', async () => {

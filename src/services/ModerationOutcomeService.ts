@@ -17,6 +17,11 @@ export interface ModerationOutcomeRecordInput extends ModerationOutcomeCreate {
 
 export interface IModerationOutcomeService {
   recordOutcome(data: ModerationOutcomeRecordInput): Promise<ModerationOutcome>;
+  findLatestOutcomeByType(
+    serverId: string,
+    userId: string,
+    outcomeType: ModerationOutcomeType
+  ): Promise<ModerationOutcome | null>;
 }
 
 @injectable()
@@ -50,6 +55,18 @@ export class ModerationOutcomeService implements IModerationOutcomeService {
       occurred_at: data.occurred_at,
       metadata: data.metadata,
     });
+  }
+
+  async findLatestOutcomeByType(
+    serverId: string,
+    userId: string,
+    outcomeType: ModerationOutcomeType
+  ): Promise<ModerationOutcome | null> {
+    return this.moderationOutcomeRepository.findLatestByTypeForUserAndServer(
+      userId,
+      serverId,
+      outcomeType
+    );
   }
 }
 

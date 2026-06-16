@@ -6,7 +6,12 @@ import { IServerMemberRepository } from '../repositories/ServerMemberRepository'
 import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
-import { AdminActionType, VerificationEvent, VerificationStatus } from '../repositories/types';
+import {
+  AdminActionType,
+  ModerationOutcome,
+  VerificationEvent,
+  VerificationStatus,
+} from '../repositories/types';
 import { IAdminActionService } from './AdminActionService';
 import { IThreadManager } from './ThreadManager';
 import {
@@ -73,6 +78,8 @@ export interface IUserModerationService {
     detectionEventId?: string
   ): Promise<boolean>;
 
+  kickUser(member: GuildMember, reason: string, moderator: User): Promise<boolean>;
+
   /**
    * Synchronizes pending verification cases when Discord already has an existing ban.
    */
@@ -97,6 +104,13 @@ export interface IUserModerationService {
     options: ObservedDiscordBanOptions
   ): Promise<number>;
 
+  recordObservedDiscordKick(
+    member: GuildMember | PartialGuildMember,
+    options: ObservedDiscordKickOptions
+  ): Promise<number>;
+
+  findLatestKickOutcome(serverId: string, userId: string): Promise<ModerationOutcome | null>;
+
   /**
    * Marks pending verification cases when the user leaves or is removed without closing the case.
    */
@@ -111,6 +125,8 @@ export interface ObservedDiscordBanOptions {
   auditLogEntryId?: string | null;
   occurredAt?: Date;
 }
+
+export type ObservedDiscordKickOptions = ObservedDiscordBanOptions;
 
 interface ModerationTarget {
   guildId: string;
@@ -484,7 +500,9 @@ export class UserModerationService implements IUserModerationService {
     );
   }
 
-  private async getPendingVerificationEvents(member: GuildMember): Promise<VerificationEvent[]> {
+  private async getPendingVerificationEvents(
+    member: GuildMember | PartialGuildMember
+  ): Promise<VerificationEvent[]> {
     const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
       member.id,
       member.guild.id
@@ -607,7 +625,7 @@ export class UserModerationService implements IUserModerationService {
 
   private async finalizeExternallyResolvedVerificationEvent(
     verificationEvent: VerificationEvent,
-    newStatus: VerificationStatus.BANNED,
+    newStatus: VerificationStatus.BANNED | VerificationStatus.KICKED,
     source: ModerationOutcomeSource,
     actorId?: string | null
   ): Promise<void> {
@@ -638,8 +656,13 @@ export class UserModerationService implements IUserModerationService {
     newStatus:
       | VerificationStatus.VERIFIED
       | VerificationStatus.BANNED
+      | VerificationStatus.KICKED
       | VerificationStatus.CLOSED_NO_ACTION,
-    actionType: AdminActionType.VERIFY | AdminActionType.BAN | AdminActionType.CLOSE_NO_ACTION,
+    actionType:
+      | AdminActionType.VERIFY
+      | AdminActionType.BAN
+      | AdminActionType.KICK
+      | AdminActionType.CLOSE_NO_ACTION,
     moderator: User,
     strictNotification: boolean,
     options: {
@@ -1119,6 +1142,96 @@ export class UserModerationService implements IUserModerationService {
       return true; // Ban succeeded
     } catch (error) {
       console.error(`Failed to ban user ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
+  public async kickUser(member: GuildMember, reason: string, moderator: User): Promise<boolean> {
+    try {
+      const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
+      const verificationEvent =
+        pendingVerificationEvents.length > 0 ? pendingVerificationEvents[0] : null;
+      const resolvedAt = new Date();
+
+      await member.kick(reason);
+      console.log(`Kicked user ${member.user.tag}. Reason: ${reason}`);
+      await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'drasil_kick', moderator.id);
+
+      const resolvedEvents: Array<{
+        event: VerificationEvent;
+        previousStatus: VerificationStatus;
+      }> = [];
+
+      try {
+        for (const pendingEvent of pendingVerificationEvents) {
+          const previousStatus = pendingEvent.status;
+          const eventToUpdate = {
+            ...pendingEvent,
+            status: VerificationStatus.KICKED,
+            resolved_by: moderator.id,
+            resolved_at: resolvedAt,
+            notes: reason,
+            metadata: this.withUserSnapshot(pendingEvent.metadata, member.user, member),
+          };
+          const updatedEvent = await this.verificationEventRepository.update(
+            pendingEvent.id,
+            eventToUpdate
+          );
+          resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
+        }
+
+        await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+          verification_status: VerificationStatus.KICKED,
+          is_restricted: false,
+          last_status_change: new Date(),
+        });
+
+        for (const resolvedEvent of resolvedEvents) {
+          await this.finalizeResolvedVerificationEvent(
+            this.getModerationTarget(member),
+            resolvedEvent.event,
+            resolvedEvent.previousStatus,
+            VerificationStatus.KICKED,
+            AdminActionType.KICK,
+            moderator,
+            resolvedEvent.event.id === verificationEvent?.id,
+            {
+              notes: reason,
+              detectionEventId: resolvedEvent.event.detection_event_id,
+            }
+          );
+        }
+      } catch (postKickError) {
+        console.error(
+          `Kick succeeded for ${member.user.tag}, but post-kick updates failed:`,
+          postKickError
+        );
+      }
+
+      await this.tryRecordModerationOutcomes(
+        this.getModerationTarget(member),
+        ModerationOutcomeType.KICKED,
+        ModerationOutcomeSource.DRASIL,
+        resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
+        {
+          actorId: moderator.id,
+          reason,
+          detectionEventId: verificationEvent?.detection_event_id ?? null,
+          metadata: this.buildOutcomeMetadata({}, member.user, member),
+          recordWithoutVerificationEvent: true,
+        }
+      );
+
+      this.captureModerationAction(
+        member,
+        AdminActionType.KICK,
+        moderator,
+        verificationEvent?.id,
+        verificationEvent?.detection_event_id
+      );
+      return true;
+    } catch (error) {
+      console.error(`Failed to kick user ${member.user.tag}:`, error);
       throw error;
     }
   }
@@ -1708,6 +1821,124 @@ export class UserModerationService implements IUserModerationService {
     }
   }
 
+  public async recordObservedDiscordKick(
+    member: GuildMember | PartialGuildMember,
+    options: ObservedDiscordKickOptions
+  ): Promise<number> {
+    try {
+      if (options.source === ModerationOutcomeSource.DRASIL) {
+        return 0;
+      }
+
+      const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
+      const resolvedAt = options.occurredAt ?? new Date();
+      const notes = options.reason?.trim()
+        ? `Observed Discord kick: ${options.reason.trim()}`
+        : 'Observed Discord kick.';
+      const outcomeMetadata = this.buildOutcomeMetadata(
+        {
+          source_detail: options.sourceDetail ?? 'guildMemberRemove',
+          audit_log_entry_id: options.auditLogEntryId ?? null,
+          membership_state: 'kicked',
+          kicked_at: resolvedAt.toISOString(),
+        },
+        member.user,
+        member
+      );
+      const resolvedEvents: Array<{
+        event: VerificationEvent;
+        previousStatus: VerificationStatus;
+      }> = [];
+
+      for (const pendingEvent of pendingVerificationEvents) {
+        const previousStatus = pendingEvent.status;
+        const eventToUpdate = {
+          ...pendingEvent,
+          status: VerificationStatus.KICKED,
+          resolved_by: options.actorId ?? null,
+          resolved_at: resolvedAt,
+          notes,
+          metadata: {
+            ...this.metadataToRecord(pendingEvent.metadata),
+            ...outcomeMetadata,
+            moderation_outcome_source: options.source,
+            moderation_outcome_actor_id: options.actorId ?? null,
+          } as VerificationEvent['metadata'],
+        };
+        const updatedEvent = await this.verificationEventRepository.update(
+          pendingEvent.id,
+          eventToUpdate
+        );
+        resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
+      }
+
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        verification_status: VerificationStatus.KICKED,
+        is_restricted: false,
+        last_status_change: new Date(),
+      });
+      await this.tryAbandonRoleQuarantine(
+        member.guild.id,
+        member.id,
+        'observed_discord_kick',
+        options.actorId ?? null
+      );
+
+      for (const resolvedEvent of resolvedEvents) {
+        await this.finalizeExternallyResolvedVerificationEvent(
+          resolvedEvent.event,
+          VerificationStatus.KICKED,
+          options.source,
+          options.actorId
+        );
+      }
+
+      await this.tryRecordModerationOutcomes(
+        this.getModerationTarget(member),
+        ModerationOutcomeType.KICKED,
+        options.source,
+        resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
+        {
+          actorId: options.actorId ?? null,
+          reason: options.reason ?? null,
+          metadata: outcomeMetadata,
+          occurredAt: resolvedAt,
+          recordWithoutVerificationEvent: true,
+        }
+      );
+
+      void this.productAnalyticsService.captureUserEvent(
+        member.guild.id,
+        member.id,
+        'moderation action completed',
+        { action_type: AdminActionType.KICK, source: options.source },
+        {
+          moderatorId: options.actorId ?? undefined,
+          verificationEventId: resolvedEvents[0]?.event.id,
+          detectionEventId: resolvedEvents[0]?.event.detection_event_id ?? undefined,
+        }
+      );
+
+      return resolvedEvents.length;
+    } catch (error) {
+      console.error(`Failed to record observed Discord kick for user ${member.id}:`, error);
+      throw error;
+    }
+  }
+
+  public async findLatestKickOutcome(
+    serverId: string,
+    userId: string
+  ): Promise<ModerationOutcome | null> {
+    return (
+      (await this.moderationOutcomeService?.findLatestOutcomeByType(
+        serverId,
+        userId,
+        ModerationOutcomeType.KICKED
+      )) ?? null
+    );
+  }
+
   public async recordMemberLeftGuild(member: GuildMember | PartialGuildMember): Promise<number> {
     try {
       const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
@@ -1717,16 +1948,12 @@ export class UserModerationService implements IUserModerationService {
       const pendingVerificationEvents = verificationEvents.filter(
         (event) => event.status === VerificationStatus.PENDING
       );
-      if (pendingVerificationEvents.length === 0) {
-        await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'member_left');
-        return 0;
-      }
-
       const occurredAt = new Date();
       const outcomeMetadata = this.buildOutcomeMetadata(
         {
           source_detail: 'guildMemberRemove',
           membership_state: 'left_or_removed',
+          removal_type: 'left_or_unknown',
           member_left_at: occurredAt.toISOString(),
         },
         member.user,
@@ -1757,11 +1984,12 @@ export class UserModerationService implements IUserModerationService {
       await this.tryRecordModerationOutcomes(
         this.getModerationTarget(member),
         ModerationOutcomeType.MEMBER_LEFT,
-        ModerationOutcomeSource.NATIVE_DISCORD,
+        ModerationOutcomeSource.UNKNOWN_EXTERNAL,
         markedEvents,
         {
           metadata: outcomeMetadata,
           occurredAt,
+          recordWithoutVerificationEvent: true,
         }
       );
 

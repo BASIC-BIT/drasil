@@ -69,6 +69,15 @@ function MemberStateNotice({ item }: { readonly item: CaseSummary }) {
     );
   }
 
+  if (item.presenceState === 'kicked') {
+    return (
+      <div className="member-warning neutral-warning">
+        <strong>User Already Kicked</strong>
+        <span>This case has been resolved by removing the user from the server.</span>
+      </div>
+    );
+  }
+
   return (
     <div className="member-warning neutral-warning">
       <strong>Member State Unknown</strong>

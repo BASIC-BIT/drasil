@@ -130,6 +130,7 @@ export enum DetectionType {
   SUSPICIOUS_CONTENT = 'suspicious_content',
   GPT_ANALYSIS = 'gpt_analysis',
   NEW_ACCOUNT = 'new_account',
+  REJOIN_AFTER_KICK = 'rejoin_after_kick',
   PATTERN_MATCH = 'pattern_match',
   USER_REPORT = 'user_report',
   ADMIN_CASE = 'admin_case',
@@ -160,6 +161,7 @@ export enum VerificationStatus {
   PENDING = 'pending',
   VERIFIED = 'verified',
   BANNED = 'banned',
+  KICKED = 'kicked',
   CLOSED_NO_ACTION = 'closed_no_action',
 }
 
@@ -167,6 +169,7 @@ export enum AdminActionType {
   VERIFY = 'verify',
   REJECT = 'reject',
   BAN = 'ban',
+  KICK = 'kick',
   CLOSE_NO_ACTION = 'close_no_action',
   REOPEN = 'reopen',
   CREATE_THREAD = 'create_thread',
@@ -190,6 +193,7 @@ export enum ModerationOutcomeType {
   RESTRICTED = 'restricted',
   VERIFIED = 'verified',
   BANNED = 'banned',
+  KICKED = 'kicked',
   CLOSED_NO_ACTION = 'closed_no_action',
   MEMBER_LEFT = 'member_left',
 }

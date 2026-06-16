@@ -5,6 +5,7 @@ const actionLabels: Record<CaseAction, string> = {
   ban_user: 'Ban User',
   close_no_action: 'Close No Action',
   create_thread: 'Create Thread',
+  kick_user: 'Kick User',
   repair_thread: 'Repair Thread',
   sync_existing_ban: 'Sync Existing Ban',
   verify_user: 'Verify User',
@@ -14,6 +15,7 @@ const actionLabels: Record<CaseAction, string> = {
 const presenceLabels: Record<CasePresenceState, string> = {
   banned: 'Banned',
   in_server: 'Member On Server',
+  kicked: 'Kicked',
   left_or_removed: 'Member Left Server',
   unknown: 'Member State Unknown',
 };
@@ -21,6 +23,7 @@ const presenceLabels: Record<CasePresenceState, string> = {
 const presenceStatusClasses: Record<CasePresenceState, string> = {
   banned: 'status error',
   in_server: 'status info',
+  kicked: 'status warning',
   left_or_removed: 'status warning',
   unknown: 'status neutral',
 };
@@ -89,6 +92,8 @@ export function moderationOutcomeStatusClass(value: string): string {
     case 'ban':
       return 'status error';
     case 'restricted':
+    case 'kicked':
+    case 'kick':
     case 'member_left':
       return 'status warning';
     case 'verified':

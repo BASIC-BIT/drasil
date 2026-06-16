@@ -303,7 +303,7 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
 
     lines.push(
       '',
-      `User-facing support reminders are sent every ${SUPPORT_THREAD_REMINDER_INTERVAL_HOURS}h until the very-stale threshold. Very stale cases remain pending for moderator review.`
+      `User-facing support reminders are sent every ${SUPPORT_THREAD_REMINDER_INTERVAL_HOURS}h until the very-stale threshold. Very stale cases remain pending for moderator review; use Admin Actions to verify, kick, ban, or close after review.`
     );
 
     return lines;

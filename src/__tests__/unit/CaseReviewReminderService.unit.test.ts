@@ -194,7 +194,7 @@ describe('CaseReviewReminderService (unit)', () => {
     expect(content).toContain(
       'User-facing support reminders are sent every 24h until the very-stale threshold'
     );
-    expect(content).toContain('Very stale cases remain pending for moderator review.');
+    expect(content).toContain('Very stale cases remain pending for moderator review;');
     expect(content).not.toContain('then moderators should make a final manual call');
     expect(adminSend.mock.calls[0][0].components).toHaveLength(1);
     expect(configService.updateServerSettings).toHaveBeenCalledWith(

@@ -18,6 +18,7 @@ import {
   AdminActionType,
   DetectionEvent,
   DetectionType,
+  ModerationOutcome,
   VerificationEvent,
   VerificationStatus,
 } from '../repositories/types';
@@ -96,6 +97,11 @@ export interface ISecurityActionService {
     member: GuildMember,
     detectionResult: DetectionResult
   ): Promise<boolean>;
+
+  recordRejoinAfterKickDetection(
+    member: GuildMember,
+    priorKick: ModerationOutcome
+  ): Promise<DetectionResult>;
 
   /**
    * Handle a manual flag initiated by an admin
@@ -505,6 +511,48 @@ export class SecurityActionService implements ISecurityActionService {
       triggerContent: content ?? '',
       detectionEventId: detectionEvent.id,
       reportAiAnalysis: this.reportAiAnalyzer.getAnalysisFromMetadata(metadata),
+    };
+  }
+
+  public async recordRejoinAfterKickDetection(
+    member: GuildMember,
+    priorKick: ModerationOutcome
+  ): Promise<DetectionResult> {
+    await this.ensureEntitiesExist(
+      member.guild.id,
+      member.id,
+      member.user.username,
+      member.joinedAt?.toISOString()
+    );
+
+    const reasons = ['Previously kicked from this server; review required on rejoin.'];
+    if (priorKick.reason?.trim()) {
+      reasons.push(`Prior kick reason: ${priorKick.reason.trim()}`);
+    }
+
+    const detectionEvent = await this.detectionEventsRepository.create({
+      server_id: member.guild.id,
+      user_id: member.id,
+      detection_type: DetectionType.REJOIN_AFTER_KICK,
+      confidence: 1.0,
+      reasons,
+      detected_at: new Date(),
+      metadata: withDetectionTestingMetadata({
+        rejoin_after_kick: true,
+        prior_kick_outcome_id: priorKick.id,
+        prior_kick_source: priorKick.source,
+        prior_kick_actor_id: priorKick.actor_id,
+        prior_kick_at: priorKick.occurred_at?.toISOString() ?? null,
+      }),
+    });
+
+    return {
+      label: 'SUSPICIOUS',
+      confidence: detectionEvent.confidence,
+      reasons: detectionEvent.reasons,
+      triggerSource: DetectionType.REJOIN_AFTER_KICK,
+      triggerContent: 'Rejoined after prior kick',
+      detectionEventId: detectionEvent.id,
     };
   }
 

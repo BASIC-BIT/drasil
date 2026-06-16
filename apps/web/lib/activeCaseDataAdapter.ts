@@ -295,6 +295,9 @@ function resolvePresenceState(row: CaseSummaryRow): CasePresenceState {
   if (row.latest_outcome_type === 'banned') {
     return 'banned';
   }
+  if (row.latest_outcome_type === 'kicked') {
+    return 'kicked';
+  }
   if (
     row.latest_outcome_type === 'member_left' ||
     metadata.membership_state === 'left_or_removed'
@@ -314,6 +317,9 @@ function resolveAllowedActions(
   if (presenceState === 'banned') {
     return ['view_history', 'sync_existing_ban'];
   }
+  if (presenceState === 'kicked') {
+    return ['view_history'];
+  }
   if (presenceState === 'left_or_removed') {
     return ['view_history', 'ban_by_id', 'close_no_action'];
   }
@@ -321,7 +327,13 @@ function resolveAllowedActions(
     return ['view_history', 'ban_by_id', 'close_no_action'];
   }
 
-  const actions: CaseAction[] = ['view_history', 'verify_user', 'ban_user', 'close_no_action'];
+  const actions: CaseAction[] = [
+    'view_history',
+    'verify_user',
+    'kick_user',
+    'ban_user',
+    'close_no_action',
+  ];
   if (row.thread_id) {
     actions.push('repair_thread');
   } else {

@@ -1254,6 +1254,7 @@ export class ThreadManager implements IThreadManager {
     return (
       resolution === VerificationStatus.VERIFIED ||
       resolution === VerificationStatus.BANNED ||
+      resolution === VerificationStatus.KICKED ||
       resolution === VerificationStatus.CLOSED_NO_ACTION
     );
   }
@@ -1262,6 +1263,8 @@ export class ThreadManager implements IThreadManager {
     switch (resolution) {
       case VerificationStatus.BANNED:
         return 'banned';
+      case VerificationStatus.KICKED:
+        return 'kicked';
       case VerificationStatus.VERIFIED:
         return 'verified';
       case VerificationStatus.CLOSED_NO_ACTION:
