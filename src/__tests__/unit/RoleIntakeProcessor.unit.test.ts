@@ -98,8 +98,8 @@ describe('RoleIntakeProcessor (unit)', () => {
     };
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
-      restrictionAttempted: false,
-      restricted: false,
+      restrictionAttempted: true,
+      restricted: true,
     });
     const processor = new RoleIntakeProcessor(verificationEventRepository, openAdminCase);
 
@@ -127,7 +127,7 @@ describe('RoleIntakeProcessor (unit)', () => {
     });
   });
 
-  it('restricts active cases during role intake when restrict is requested', async () => {
+  it('skips active cases during role intake', async () => {
     const guildId = 'guild-role-intake-restrict-active';
     const member = buildMember(guildId, 'user-role-intake-active');
     const role = buildRole(guildId, [member]);
@@ -147,18 +147,14 @@ describe('RoleIntakeProcessor (unit)', () => {
     const result = await processor.intakeRoleMembers({
       role,
       moderator,
-      action: 'restrict',
+      action: 'open_case',
       execute: true,
       delayMs: 0,
     });
 
-    expect(result.opened).toBe(1);
-    expect(result.skippedActiveCases).toBe(0);
-    expect(openAdminCase).toHaveBeenCalledWith(
-      member,
-      moderator,
-      expect.objectContaining({ action: 'restrict' })
-    );
+    expect(result.opened).toBe(0);
+    expect(result.skippedActiveCases).toBe(1);
+    expect(openAdminCase).not.toHaveBeenCalled();
   });
 
   it('records a failure and continues when one role intake member times out', async () => {
@@ -176,8 +172,8 @@ describe('RoleIntakeProcessor (unit)', () => {
 
       return Promise.resolve({
         opened: true,
-        restrictionAttempted: false,
-        restricted: false,
+        restrictionAttempted: true,
+        restricted: true,
       });
     });
     const onProgress = jest.fn();

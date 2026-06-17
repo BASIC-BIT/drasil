@@ -11,7 +11,7 @@ Initial capabilities:
 - Discord OAuth admin login with `identify` and `guilds` scopes.
 - Guild selection for Discord owners or users with Manage Server.
 - Live setup diagnostics using the bot token where available.
-- Core setup editing for restricted role, admin/verification/report channels, detection response policy, report policy, analytics consent, and report AI authority.
+- Core setup editing for case role, admin/verification/report channels, detection response policy, report policy, analytics consent, and report AI authority.
 - Read-only active case queue and case detail views for pending verification events.
 - Shared setup and active case contracts in `packages/contracts`.
 

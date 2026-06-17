@@ -217,6 +217,7 @@ describe('InteractionHandler (unit)', () => {
     } as unknown as Client;
 
     userModerationService = {
+      applyCaseRole: jest.fn().mockResolvedValue(true),
       restrictUser: jest.fn().mockResolvedValue(true),
       liftRestriction: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
@@ -398,7 +399,7 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
-  it('handles restrict-user case action without resolving the case', async () => {
+  it('maps legacy restrict-user case action to repair', async () => {
     const activeCase = buildVerificationEvent('ver-restrict', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(activeCase);
     const handler = new InteractionHandler(
@@ -420,26 +421,21 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(securityActionService.restrictActiveCase).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'user-1' }),
-      interaction.user
+    expect(securityActionService.repairActiveCase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' })
     );
-    expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
-      activeCase,
-      VerificationStatus.PENDING
-    );
+    expect(notificationManager.updateNotificationButtons).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledWith({
-      content: 'Restricted <@user-1> while keeping the case open.',
+      content: 'Repaired active verification case for test-user#0001.',
       flags: MessageFlags.Ephemeral,
-      allowedMentions: { parse: [] },
     });
   });
 
   it.each([
-    ['restrict_user-1', 'Restrict <@user-1> while keeping their case pending?'],
+    ['restrict_user-1', 'Repair the active verification case for <@user-1>?'],
     [
       'close_user-1',
-      'Close pending verification cases for <@user-1> without verifying or banning them? If Drasil has them marked restricted, the restricted role will be removed.',
+      'Close pending verification cases for <@user-1> without verifying or banning them? The case role will be removed.',
     ],
   ])('opens an ephemeral confirmation for persistent %s button', async (customId, message) => {
     const handler = new InteractionHandler(
@@ -463,7 +459,7 @@ describe('InteractionHandler (unit)', () => {
     expect(interaction.update).not.toHaveBeenCalled();
   });
 
-  it('handles lift-restriction case action without resolving the case', async () => {
+  it('maps legacy lift-restriction case action to repair', async () => {
     const activeCase = buildVerificationEvent('ver-lift', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(activeCase);
     const handler = new InteractionHandler(
@@ -485,18 +481,13 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(userModerationService.liftRestriction).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'user-1' }),
-      interaction.user
+    expect(securityActionService.repairActiveCase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' })
     );
-    expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
-      activeCase,
-      VerificationStatus.PENDING
-    );
+    expect(notificationManager.updateNotificationButtons).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledWith({
-      content: 'Lifted restrictions for <@user-1> while keeping the case open.',
+      content: 'Repaired active verification case for test-user#0001.',
       flags: MessageFlags.Ephemeral,
-      allowedMentions: { parse: [] },
     });
   });
 
@@ -1758,7 +1749,7 @@ describe('InteractionHandler (unit)', () => {
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nRestricted role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nVerification channel: <#123456789012345680>',
+        'Setup complete.\nCase role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nVerification channel: <#123456789012345680>',
       flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
@@ -1836,7 +1827,7 @@ describe('InteractionHandler (unit)', () => {
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nRestricted role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nCreated verification channel: <#123456789012345681>',
+        'Setup complete.\nCase role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nCreated verification channel: <#123456789012345681>',
       flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
@@ -2028,8 +2019,7 @@ describe('InteractionHandler (unit)', () => {
 
     expect(configService.updateServerConfig).not.toHaveBeenCalled();
     expect(interaction.reply).toHaveBeenCalledWith({
-      content:
-        'Please provide a valid restricted role ID or role mention (for example `<@&123...>`).',
+      content: 'Please provide a valid case role ID or role mention (for example `<@&123...>`).',
       flags: MessageFlags.Ephemeral,
     });
   });

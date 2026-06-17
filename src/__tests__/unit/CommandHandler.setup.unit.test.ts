@@ -47,7 +47,7 @@ describe('CommandHandler setup commands (unit)', () => {
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
+        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
       allowedMentions: { parse: [] },
     });
   });
@@ -99,7 +99,7 @@ describe('CommandHandler setup commands (unit)', () => {
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nCreated verification channel: <#created-channel-1>',
+        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nCreated verification channel: <#created-channel-1>',
       allowedMentions: { parse: [] },
     });
   });
@@ -326,7 +326,7 @@ describe('CommandHandler setup commands (unit)', () => {
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
+        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
       allowedMentions: { parse: [] },
     });
   });
@@ -339,7 +339,7 @@ describe('CommandHandler setup commands (unit)', () => {
         {
           severity: 'error',
           code: 'restricted-role-hierarchy',
-          message: "Drasil's highest role must be above restricted role <@&role-1>.",
+          message: "Drasil's highest role must be above case role <@&role-1>.",
         },
       ],
       errorCount: 1,
@@ -694,7 +694,7 @@ describe('CommandHandler setup commands (unit)', () => {
       verification_channel_id: 'created-channel-1',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: expect.stringContaining('Created restricted role: <@&created-role-1>'),
+      content: expect.stringContaining('Created case role: <@&created-role-1>'),
       allowedMentions: { parse: [] },
     });
     expect(interaction.editReply.mock.calls[0][0].content).toContain(
@@ -783,10 +783,10 @@ describe('CommandHandler setup commands (unit)', () => {
       verification_channel_id: 'created-channel-1',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: expect.stringContaining('Restricted role: <@&default-role-1>'),
+      content: expect.stringContaining('Case role: <@&default-role-1>'),
       allowedMentions: { parse: [] },
     });
-    expect(interaction.editReply.mock.calls[0][0].content).not.toContain('Created restricted role');
+    expect(interaction.editReply.mock.calls[0][0].content).not.toContain('Created case role');
   });
 
   it('honors restricted-role-name over a differently named configured role', async () => {
@@ -869,9 +869,7 @@ describe('CommandHandler setup commands (unit)', () => {
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
     });
-    expect(interaction.editReply.mock.calls[0][0].content).toContain(
-      'Restricted role: <@&named-role-1>'
-    );
+    expect(interaction.editReply.mock.calls[0][0].content).toContain('Case role: <@&named-role-1>');
     expect(interaction.editReply.mock.calls[0][0].content).not.toContain('<@&old-role-1>');
   });
 
@@ -1000,7 +998,7 @@ describe('CommandHandler setup commands (unit)', () => {
       'Rolling back Drasil setup after verification channel setup failed'
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: expect.stringContaining('newly created restricted role was removed'),
+      content: expect.stringContaining('newly created case role was removed'),
       allowedMentions: { parse: [] },
     });
     consoleError.mockRestore();
@@ -1093,7 +1091,7 @@ describe('CommandHandler setup commands (unit)', () => {
       'newly created verification channel was removed'
     );
     expect(interaction.editReply.mock.calls[0][0].content).toContain(
-      'newly created restricted role was removed'
+      'newly created case role was removed'
     );
     consoleError.mockRestore();
   });
@@ -1197,7 +1195,7 @@ describe('CommandHandler setup commands (unit)', () => {
       'The newly created verification channel was removed.'
     );
     expect(interaction.editReply.mock.calls[0][0].content).toContain(
-      'The newly created restricted role was removed.'
+      'The newly created case role was removed.'
     );
   });
 
@@ -1412,7 +1410,7 @@ describe('CommandHandler setup commands (unit)', () => {
         {
           severity: 'error',
           code: 'restricted-role-missing',
-          message: 'Restricted role is not configured.',
+          message: 'Case role is not configured.',
         },
         {
           severity: 'warning',
@@ -1453,7 +1451,7 @@ describe('CommandHandler setup commands (unit)', () => {
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(setupDiagnosticsService.validateGuildSetup).toHaveBeenCalledWith(guild);
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: expect.stringContaining('[ERROR] Restricted role is not configured.'),
+      content: expect.stringContaining('[ERROR] Case role is not configured.'),
       allowedMentions: { parse: [] },
     });
     expect(interaction.editReply.mock.calls[0][0].content).toContain(

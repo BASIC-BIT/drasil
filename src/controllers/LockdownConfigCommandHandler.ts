@@ -81,7 +81,7 @@ export class LockdownConfigCommandHandler {
     } catch (error) {
       console.error(`Failed to run lockdown ${subcommand} for guild ${guild.id}:`, error);
       await interaction.editReply({
-        content: 'Failed to run restricted-role lockdown. Please check permissions and try again.',
+        content: 'Failed to run case-role lockdown. Please check permissions and try again.',
       });
     }
   }
@@ -214,7 +214,7 @@ export class LockdownConfigCommandHandler {
 
     lines.push(
       '',
-      'Role-order note: keep the Drasil bot role above the restricted role for assignment. Channel overwrites, not role order, decide quarantine visibility.',
+      'Role-order note: keep the Drasil bot role above the case role for assignment. Channel overwrites, not role order, decide quarantine visibility.',
       'Message deletion is intentionally not part of lockdown V1.'
     );
 

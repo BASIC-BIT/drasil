@@ -3,7 +3,7 @@ import { ServerSettings } from '../repositories/types';
 export const ROLE_QUARANTINE_MODE_SETTING_KEY = 'role_quarantine_mode';
 export const ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY = 'role_quarantine_exempt_role_ids';
 
-export const ROLE_QUARANTINE_MODES = ['off', 'audit_only', 'automatic'] as const;
+export const ROLE_QUARANTINE_MODES = ['off', 'on'] as const;
 export type RoleQuarantineMode = (typeof ROLE_QUARANTINE_MODES)[number];
 
 export const DEFAULT_ROLE_QUARANTINE_MODE: RoleQuarantineMode = 'off';

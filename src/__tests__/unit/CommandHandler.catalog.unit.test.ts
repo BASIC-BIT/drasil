@@ -105,11 +105,7 @@ describe('CommandHandler command catalog (unit)', () => {
       (option: any) => option.name === 'set-mode'
     );
     const modeOption = setModeSubcommand.options.find((option: any) => option.name === 'mode');
-    expect(modeOption.choices.map((choice: any) => choice.value)).toEqual([
-      'off',
-      'audit_only',
-      'automatic',
-    ]);
+    expect(modeOption.choices.map((choice: any) => choice.value)).toEqual(['off', 'on']);
   });
 
   it('registers /setupverification with typed role and channel options', () => {
@@ -272,7 +268,7 @@ describe('CommandHandler command catalog (unit)', () => {
     ]);
 
     const open = caseCommand.options.find((option: any) => option.name === 'open');
-    expect(open.options.map((option: any) => option.name)).toEqual(['user', 'restrict', 'reason']);
+    expect(open.options.map((option: any) => option.name)).toEqual(['user', 'reason']);
 
     const repair = caseCommand.options.find((option: any) => option.name === 'repair');
     expect(repair.options.map((option: any) => option.name)).toEqual(['user']);
@@ -284,7 +280,6 @@ describe('CommandHandler command catalog (unit)', () => {
     expect(intakeRole.options.map((option: any) => option.name)).toEqual([
       'role',
       'execute',
-      'action',
       'limit',
       'reason',
     ]);

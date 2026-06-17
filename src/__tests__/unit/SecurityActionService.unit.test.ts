@@ -115,6 +115,13 @@ describe('SecurityActionService (unit)', () => {
       }),
     };
     userModerationService = {
+      applyCaseRole: jest.fn().mockImplementation(async (member: GuildMember) => {
+        await serverMemberRepository.upsertMember(member.guild.id, member.id, {
+          is_restricted: true,
+          verification_status: VerificationStatus.PENDING,
+        });
+        return true;
+      }),
       restrictUser: jest.fn().mockImplementation(async (member: GuildMember) => {
         await serverMemberRepository.upsertMember(member.guild.id, member.id, {
           is_restricted: true,
@@ -288,7 +295,7 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(detectionEvents[0].latest_verification_event_id).toBe(verificationEvents[0].id);
 
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
@@ -329,7 +336,7 @@ describe('SecurityActionService (unit)', () => {
       botUser,
       detectionEvents[0].id
     );
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(adminActionService.recordAction).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -369,7 +376,7 @@ describe('SecurityActionService (unit)', () => {
     );
 
     expect(userModerationService.kickUser).not.toHaveBeenCalled();
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
   });
 
@@ -397,7 +404,7 @@ describe('SecurityActionService (unit)', () => {
     );
 
     expect(userModerationService.kickUser).not.toHaveBeenCalled();
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
   });
 
   it('continues case creation when live queue mirroring fails', async () => {
@@ -465,7 +472,7 @@ describe('SecurityActionService (unit)', () => {
       is_restricted: true,
       verification_status: VerificationStatus.PENDING,
     });
-    userModerationService.restrictUser.mockRejectedValueOnce(new Error('Missing Permissions'));
+    userModerationService.applyCaseRole.mockRejectedValueOnce(new Error('Missing Permissions'));
 
     const detectionResult: DetectionResult = {
       label: 'SUSPICIOUS',
@@ -484,14 +491,14 @@ describe('SecurityActionService (unit)', () => {
       consoleErrorSpy.mockRestore();
     }
 
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
 
     const notifiedVerificationEvent =
       notificationManager.upsertSuspiciousUserNotification.mock.calls[0][2];
     expect(getVerificationActionFailures(notifiedVerificationEvent.metadata)).toEqual([
-      expect.objectContaining({ action: 'restrict', message: 'Missing Permissions' }),
+      expect.objectContaining({ action: 'case_role', message: 'Missing Permissions' }),
     ]);
 
     const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
@@ -504,7 +511,7 @@ describe('SecurityActionService (unit)', () => {
     const userId = 'user-restrict-record-fails';
     const member = buildMember(guildId, userId);
     const message = buildMessage(guildId, 'channel-1');
-    userModerationService.restrictUser.mockRejectedValueOnce(new Error('Missing Permissions'));
+    userModerationService.applyCaseRole.mockRejectedValueOnce(new Error('Missing Permissions'));
     jest.spyOn(verificationEventRepository, 'update').mockRejectedValueOnce(new Error('DB down'));
 
     const detectionResult: DetectionResult = {
@@ -530,7 +537,7 @@ describe('SecurityActionService (unit)', () => {
     const notifiedVerificationEvent =
       notificationManager.upsertSuspiciousUserNotification.mock.calls[0][2];
     expect(getVerificationActionFailures(notifiedVerificationEvent.metadata)).toEqual([
-      expect.objectContaining({ action: 'restrict', message: 'Missing Permissions' }),
+      expect.objectContaining({ action: 'case_role', message: 'Missing Permissions' }),
     ]);
   });
 
@@ -558,7 +565,7 @@ describe('SecurityActionService (unit)', () => {
       consoleErrorSpy.mockRestore();
     }
 
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
 
     const notifiedVerificationEvent =
@@ -672,11 +679,11 @@ describe('SecurityActionService (unit)', () => {
     expect(followUpDetection?.latest_verification_event_id).toBe(activeCase.id);
 
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('opens a case without restricting when requested by detection policy', async () => {
+  it('opens a case and applies the case role when requested by detection policy', async () => {
     const guildId = 'guild-open-case';
     const userId = 'user-open-case';
     const member = buildMember(guildId, userId);
@@ -709,12 +716,12 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('opens an admin case without restricting the user', async () => {
+  it('opens an admin case and applies the case role', async () => {
     const guildId = 'guild-admin-open-case';
     const userId = 'user-admin-open-case';
     const moderator = { id: 'admin-open-case' } as User;
@@ -743,21 +750,21 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member, moderator);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(getOrCreateServer).toHaveBeenCalledTimes(1);
     expect(getOrCreateUser).toHaveBeenCalledTimes(1);
     expect(getOrCreateMember).toHaveBeenCalledTimes(1);
   });
 
-  it('opens an admin case and restricts the user when requested', async () => {
+  it('opens a high-risk admin case and applies the case role', async () => {
     const guildId = 'guild-admin-restrict-case';
     const userId = 'user-admin-restrict-case';
     const moderator = { id: 'admin-restrict-case' } as User;
     const member = buildMember(guildId, userId);
 
     await buildService().openAdminCase(member, moderator, {
-      action: 'restrict',
+      action: 'open_case',
       reason: 'high risk manual review',
     });
 
@@ -765,13 +772,13 @@ describe('SecurityActionService (unit)', () => {
     expect(detectionEvents[0].metadata).toMatchObject({
       type: 'admin_case',
       adminId: moderator.id,
-      action: 'restrict',
+      action: 'open_case',
     });
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member, moderator);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member, moderator);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
   });
 
-  it('restricts an existing active admin case when requested', async () => {
+  it('applies the case role to an existing active admin case', async () => {
     const guildId = 'guild-admin-restrict-existing-case';
     const userId = 'user-admin-restrict-existing-case';
     const moderator = { id: 'admin-restrict-existing-case' } as User;
@@ -792,14 +799,14 @@ describe('SecurityActionService (unit)', () => {
     );
 
     await buildService().openAdminCase(member, moderator, {
-      action: 'restrict',
+      action: 'open_case',
       reason: 'escalated manual review',
     });
 
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member, moderator);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member, moderator);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
-    expect(threadManager.createVerificationThread.mock.invocationCallOrder[0]).toBeLessThan(
-      userModerationService.restrictUser.mock.invocationCallOrder[0]
+    expect(userModerationService.applyCaseRole.mock.invocationCallOrder[0]).toBeLessThan(
+      threadManager.createVerificationThread.mock.invocationCallOrder[0]
     );
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
@@ -823,7 +830,7 @@ describe('SecurityActionService (unit)', () => {
 
     const result = await buildService().repairActiveCase(member);
 
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.repairVerificationThread).toHaveBeenCalledWith(
       member,
       expect.objectContaining({ id: verificationEvent.id, thread_id: 'thread-1' })
@@ -869,7 +876,7 @@ describe('SecurityActionService (unit)', () => {
           at: new Date().toISOString(),
         },
         {
-          action: 'restrict',
+          action: 'case_role',
           message: 'Role hierarchy issue',
           at: new Date().toISOString(),
         },
@@ -886,14 +893,14 @@ describe('SecurityActionService (unit)', () => {
 
     expect(result.repaired).toBe(true);
     expect(getVerificationActionFailures(updatedCase?.metadata)).toEqual([
-      expect.objectContaining({ action: 'restrict', message: 'Role hierarchy issue' }),
+      expect.objectContaining({ action: 'case_role', message: 'Role hierarchy issue' }),
     ]);
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
       expect.objectContaining({
         id: verificationEvent.id,
         metadata: expect.objectContaining({
           [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: [
-            expect.objectContaining({ action: 'restrict' }),
+            expect.objectContaining({ action: 'case_role' }),
           ],
         }),
       }),
@@ -1088,7 +1095,7 @@ describe('SecurityActionService (unit)', () => {
     expect(result.message).toContain('moderator-only report review thread');
   });
 
-  it('repairs a missing user-facing thread before restricting an active case', async () => {
+  it('applies the case role before repairing a missing user-facing thread', async () => {
     const guildId = 'guild-case-action-restrict-thread';
     const userId = 'user-case-action-restrict-thread';
     const moderator = { id: 'admin-case-action-restrict' } as User;
@@ -1106,13 +1113,13 @@ describe('SecurityActionService (unit)', () => {
       member,
       expect.objectContaining({ user_id: userId })
     );
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member, moderator);
-    expect(threadManager.repairVerificationThread.mock.invocationCallOrder[0]).toBeLessThan(
-      userModerationService.restrictUser.mock.invocationCallOrder[0]
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member, moderator);
+    expect(userModerationService.applyCaseRole.mock.invocationCallOrder[0]).toBeLessThan(
+      threadManager.repairVerificationThread.mock.invocationCallOrder[0]
     );
   });
 
-  it('does not restrict an already restricted active case again', async () => {
+  it('repairs an already case-role-marked active case', async () => {
     const guildId = 'guild-case-action-restrict-idempotent';
     const userId = 'user-case-action-restrict-idempotent';
     const moderator = { id: 'admin-case-action-restrict-idempotent' } as User;
@@ -1130,12 +1137,15 @@ describe('SecurityActionService (unit)', () => {
 
     await buildService().restrictActiveCase(member, moderator);
 
-    expect(threadManager.repairVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.repairVerificationThread).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ user_id: userId })
+    );
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member, moderator);
   });
 
-  it('creates a new verification thread before restricting a legacy report-review case', async () => {
+  it('applies the case role before creating a new thread for a legacy report-review case', async () => {
     const guildId = 'guild-case-action-restrict-report-review';
     const userId = 'user-case-action-restrict-report-review';
     const moderator = { id: 'admin-case-action-restrict-report-review' } as User;
@@ -1159,9 +1169,9 @@ describe('SecurityActionService (unit)', () => {
       member,
       expect.objectContaining({ id: verificationEvent.id, thread_id: 'review-thread-1' })
     );
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member, moderator);
-    expect(threadManager.createVerificationThread.mock.invocationCallOrder[0]).toBeLessThan(
-      userModerationService.restrictUser.mock.invocationCallOrder[0]
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member, moderator);
+    expect(userModerationService.applyCaseRole.mock.invocationCallOrder[0]).toBeLessThan(
+      threadManager.createVerificationThread.mock.invocationCallOrder[0]
     );
   });
 
@@ -1198,7 +1208,7 @@ describe('SecurityActionService (unit)', () => {
       metadata: {
         type: 'admin_role_intake',
         adminId: 'admin-spoofed',
-        action: 'restrict',
+        action: 'spoofed_action',
         reason: 'spoofed reason',
       },
     });
@@ -1247,7 +1257,7 @@ describe('SecurityActionService (unit)', () => {
       guildId
     );
     expect(verificationEvents).toHaveLength(0);
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
     expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledWith(
@@ -1322,7 +1332,7 @@ describe('SecurityActionService (unit)', () => {
       reasonCodes: ['harassment'],
       evidenceCategories: ['report_text'],
       concerns: ['Likely targeted abuse'],
-      recommendedAction: 'restrict',
+      recommendedAction: 'open_case',
       analyzedImageCount: 0,
       model: 'gpt-4o-mini',
       promptVersion: 'report-triage-v1',
@@ -1355,7 +1365,7 @@ describe('SecurityActionService (unit)', () => {
         }),
       })
     );
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
   });
 
   it('caps report AI recommendations by configured thresholds without taking action', async () => {
@@ -1366,9 +1376,8 @@ describe('SecurityActionService (unit)', () => {
       settings: {
         report_ai_triage_enabled: true,
         report_ai_analyze_text: true,
-        report_ai_max_action: 'restrict',
+        report_ai_max_action: 'open_case',
         report_ai_open_case_threshold: 0.85,
-        report_ai_restrict_threshold: 0.95,
       },
     });
     gptService.analyzeReportEvidence.mockResolvedValue({
@@ -1378,7 +1387,7 @@ describe('SecurityActionService (unit)', () => {
       reasonCodes: ['harassment'],
       evidenceCategories: ['report_text'],
       concerns: ['Likely targeted abuse'],
-      recommendedAction: 'restrict',
+      recommendedAction: 'open_case',
       analyzedImageCount: 0,
       model: 'gpt-4o-mini',
       promptVersion: 'report-triage-v1',
@@ -1393,7 +1402,7 @@ describe('SecurityActionService (unit)', () => {
         recommendedAction: 'open_case',
       },
     });
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
   });
 
@@ -1469,7 +1478,7 @@ describe('SecurityActionService (unit)', () => {
     expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).toHaveBeenCalled();
     expect(notificationManager.upsertObservedDetectionNotification).not.toHaveBeenCalled();
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
   });
 
   it('warns when confirmed report intake escalation is blocked by report AI max action', async () => {
@@ -1517,28 +1526,27 @@ describe('SecurityActionService (unit)', () => {
     expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
   });
 
-  it('restricts a confirmed report intake only when configured and report AI meets restrict threshold', async () => {
-    const guildId = 'guild-intake-restrict';
-    const userId = 'user-intake-restrict';
+  it('opens a confirmed report intake only when configured and report AI meets open-case threshold', async () => {
+    const guildId = 'guild-intake-open-case-threshold';
+    const userId = 'user-intake-open-case-threshold';
     const member = buildMember(guildId, userId);
     await serverRepository.upsertByGuildId(guildId, {
       settings: {
-        report_intake_confirmed_response_mode: 'restrict',
+        report_intake_confirmed_response_mode: 'open_case',
         report_ai_triage_enabled: true,
         report_ai_analyze_text: true,
-        report_ai_max_action: 'restrict',
+        report_ai_max_action: 'open_case',
         report_ai_open_case_threshold: 0.85,
-        report_ai_restrict_threshold: 0.95,
       },
     });
     gptService.analyzeReportEvidence.mockResolvedValueOnce({
       result: 'likely_abusive',
       confidence: 0.96,
-      summary: 'Report evidence meets configured restrict threshold.',
+      summary: 'Report evidence meets configured open-case threshold.',
       reasonCodes: ['harassment'],
       evidenceCategories: ['report_text'],
       concerns: ['Likely targeted abuse'],
-      recommendedAction: 'restrict',
+      recommendedAction: 'open_case',
       analyzedImageCount: 0,
       model: 'gpt-4o-mini',
       promptVersion: 'report-triage-v1',
@@ -1547,10 +1555,10 @@ describe('SecurityActionService (unit)', () => {
 
     await buildService().handleConfirmedReportIntake(member, { id: 'reporter-intake' } as User, {
       reason: 'intake evidence summary',
-      intakeId: 'intake-restrict',
+      intakeId: 'intake-open-case-threshold',
     });
 
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalled();
     expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
     expect(notificationManager.upsertObservedDetectionNotification).not.toHaveBeenCalled();
@@ -1568,7 +1576,7 @@ describe('SecurityActionService (unit)', () => {
         auto_kick_min_confidence_threshold: 95,
         report_ai_triage_enabled: true,
         report_ai_analyze_text: true,
-        report_ai_max_action: 'restrict',
+        report_ai_max_action: 'open_case',
       },
     });
     gptService.analyzeReportEvidence.mockResolvedValueOnce({
@@ -1578,7 +1586,7 @@ describe('SecurityActionService (unit)', () => {
       reasonCodes: ['scam'],
       evidenceCategories: ['report_text'],
       concerns: ['Likely compromised account scam'],
-      recommendedAction: 'restrict',
+      recommendedAction: 'open_case',
       analyzedImageCount: 0,
       model: 'gpt-4o-mini',
       promptVersion: 'report-triage-v1',
@@ -1601,7 +1609,7 @@ describe('SecurityActionService (unit)', () => {
       botUser,
       detectionEvents[0].id
     );
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(notificationManager.upsertObservedDetectionNotification).not.toHaveBeenCalled();
   });
@@ -1616,7 +1624,7 @@ describe('SecurityActionService (unit)', () => {
         report_intake_auto_kick_enabled: false,
         report_ai_triage_enabled: true,
         report_ai_analyze_text: true,
-        report_ai_max_action: 'restrict',
+        report_ai_max_action: 'open_case',
       },
     });
     gptService.analyzeReportEvidence.mockResolvedValueOnce({
@@ -1626,7 +1634,7 @@ describe('SecurityActionService (unit)', () => {
       reasonCodes: ['scam'],
       evidenceCategories: ['report_text'],
       concerns: ['Likely compromised account scam'],
-      recommendedAction: 'restrict',
+      recommendedAction: 'open_case',
       analyzedImageCount: 0,
       model: 'gpt-4o-mini',
       promptVersion: 'report-triage-v1',
@@ -1723,7 +1731,7 @@ describe('SecurityActionService (unit)', () => {
       },
     });
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
   });
 
   it('marks user-installed message reports as globally excluded in detection test mode', async () => {
@@ -1838,7 +1846,7 @@ describe('SecurityActionService (unit)', () => {
         triggerContent: 'local suspicious message',
       })
     );
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
   });
 
   it('continues storing local message reports when report AI analysis fails', async () => {
@@ -1942,7 +1950,7 @@ describe('SecurityActionService (unit)', () => {
         triggerContent: 'reported from native context menu',
       })
     );
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
   });
 
   it('notifies opted-in servers for external message reports', async () => {
@@ -1982,7 +1990,7 @@ describe('SecurityActionService (unit)', () => {
       })
     );
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
   });
 
   it('posts observed alerts in open-case opted-in servers for external message reports', async () => {
@@ -2028,7 +2036,7 @@ describe('SecurityActionService (unit)', () => {
         triggerContent: 'external suspicious DM',
       })
     );
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
   });
 
   it('continues notify-only message report fan-out when one server notification fails', async () => {
@@ -2094,7 +2102,7 @@ describe('SecurityActionService (unit)', () => {
       );
       expect(firstDetections).toHaveLength(1);
       expect(secondDetections).toHaveLength(1);
-      expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+      expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
     } finally {
       consoleError.mockRestore();
     }
@@ -2173,7 +2181,7 @@ describe('SecurityActionService (unit)', () => {
       type: 'admin_flag',
       adminId: moderatorId,
     });
-    expect(userModerationService.restrictUser).toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).toHaveBeenCalled();
     expect(threadManager.createVerificationThread).toHaveBeenCalled();
   });
 
@@ -2255,7 +2263,7 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
@@ -2298,7 +2306,7 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(
       member,
       expect.objectContaining({ id: moderatorId })
     );
@@ -2349,7 +2357,7 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
@@ -2383,7 +2391,7 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.VERIFIED);
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
     expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
     expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledWith(
@@ -2427,7 +2435,7 @@ describe('SecurityActionService (unit)', () => {
       VerificationStatus.BANNED,
       VerificationStatus.PENDING,
     ]);
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(
       member,
       expect.objectContaining({ id: moderatorId })
     );
@@ -2459,7 +2467,7 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(verificationEvents).toHaveLength(1);
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
-    expect(userModerationService.restrictUser).not.toHaveBeenCalled();
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(adminActionService.recordAction).toHaveBeenCalledWith(
       expect.objectContaining({
         detection_event_id: detectionEvent.id,
@@ -3229,16 +3237,16 @@ describe('SecurityActionService (unit)', () => {
 
     expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).toHaveBeenCalled();
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
       detectionEvent.id,
-      'restricted this user',
+      'opened a verification case',
       moderator,
-      AdminActionType.RESTRICT
+      AdminActionType.OPEN_CASE
     );
   });
 
-  it('releases an observed restrict claim when restriction returns false', async () => {
+  it('preserves an observed open-case claim when case-role application returns false', async () => {
     const guildId = 'guild-observed-restrict-false';
     const userId = 'user-observed-restrict-false';
     const moderator = { id: 'admin-observed' } as User;
@@ -3251,20 +3259,29 @@ describe('SecurityActionService (unit)', () => {
       reasons: ['Suspicious content'],
       detected_at: new Date(),
     });
-    userModerationService.restrictUser.mockResolvedValueOnce(false);
+    userModerationService.applyCaseRole.mockResolvedValueOnce(false);
 
     await expect(
       buildService().restrictObservedDetection(member, detectionEvent.id, moderator)
-    ).rejects.toThrow('Failed to restrict user test-user#0001');
+    ).resolves.toBe(true);
 
     const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
-    expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
-    expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
-    expect(adminActionService.recordAction).not.toHaveBeenCalled();
-    expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
+    expect(updatedDetection?.metadata).toMatchObject({
+      observed_action: AdminActionType.OPEN_CASE,
+      observed_action_by: moderator.id,
+    });
+    expect(adminActionService.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({ action_type: AdminActionType.OPEN_CASE })
+    );
+    expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
+      detectionEvent.id,
+      'opened a verification case',
+      moderator,
+      AdminActionType.OPEN_CASE
+    );
   });
 
-  it('upgrades an existing report review thread when restricting a user report', async () => {
+  it('upgrades an existing report review thread when opening a case for a user report', async () => {
     const guildId = 'guild-observed-existing-report-restrict';
     const userId = 'user-observed-existing-report-restrict';
     const moderator = { id: 'admin-observed' } as User;
@@ -3295,10 +3312,10 @@ describe('SecurityActionService (unit)', () => {
 
     expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).toHaveBeenCalled();
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
   });
 
-  it('restricts an observed user report even when the missing case thread cannot be recreated', async () => {
+  it('opens an observed user report case even when the missing case thread cannot be recreated', async () => {
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const guildId = 'guild-observed-report-restrict-thread-fails';
     const userId = 'user-observed-report-restrict-thread-fails';
@@ -3332,7 +3349,7 @@ describe('SecurityActionService (unit)', () => {
     const updatedCase = await verificationEventRepository.findById(existingCase.id);
     const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
     expect(threadManager.createVerificationThread).toHaveBeenCalled();
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(updatedCase?.thread_id).toBeNull();
     expect(getVerificationActionFailures(updatedCase?.metadata)).toEqual([
       expect.objectContaining({
@@ -3341,7 +3358,7 @@ describe('SecurityActionService (unit)', () => {
       }),
     ]);
     expect(updatedDetection?.metadata).toMatchObject({
-      observed_action: AdminActionType.RESTRICT,
+      observed_action: AdminActionType.OPEN_CASE,
       observed_action_by: moderator.id,
     });
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledWith(
@@ -3352,9 +3369,9 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
       detectionEvent.id,
-      'restricted this user',
+      'opened a verification case',
       moderator,
-      AdminActionType.RESTRICT
+      AdminActionType.OPEN_CASE
     );
   });
 
@@ -3487,7 +3504,7 @@ describe('SecurityActionService (unit)', () => {
     expect(adminActionService.recordAction).not.toHaveBeenCalled();
   });
 
-  it('keeps an observed restrict claim when audit fails after restricting', async () => {
+  it('releases an observed open-case claim when audit fails', async () => {
     const guildId = 'guild-observed-restrict-audit-fails';
     const userId = 'user-observed-restrict-audit-fails';
     const moderator = { id: 'admin-observed' } as User;
@@ -3507,15 +3524,13 @@ describe('SecurityActionService (unit)', () => {
     ).rejects.toThrow('DB unavailable');
 
     const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
-    expect(updatedDetection?.metadata).toMatchObject({
-      observed_action: AdminActionType.RESTRICT,
-      observed_action_by: moderator.id,
-    });
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
+    expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
+    expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
     expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
   });
 
-  it('reopens verification and re-restricts the user', async () => {
+  it('reopens verification and reapplies the case role', async () => {
     const guildId = 'guild-5';
     const userId = 'user-5';
     const moderator = { id: 'admin-2' } as User;
@@ -3558,7 +3573,7 @@ describe('SecurityActionService (unit)', () => {
     expect(updatedEvent?.resolved_at).toBeNull();
     expect(updatedEvent?.resolved_by).toBeNull();
     expect(threadManager.reopenVerificationThread).toHaveBeenCalledWith(verificationEvent);
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member, moderator);
     expect(notificationManager.logActionToMessage).toHaveBeenCalledWith(
       verificationEvent,
       AdminActionType.REOPEN,

@@ -60,11 +60,11 @@ const baseApplicationCommandBuilders = [
     .setContexts(InteractionContextType.Guild),
   new SlashCommandBuilder()
     .setName('setupverification')
-    .setDescription('Set up a dedicated verification channel for restricted users')
+    .setDescription('Set up a dedicated verification channel for active cases')
     .addRoleOption((option) =>
       option
         .setName('restricted-role')
-        .setDescription('Role to apply while a user is restricted')
+        .setDescription('Role to apply while a user has an active case')
         .setRequired(true)
     )
     .addChannelOption((option) =>
@@ -95,7 +95,7 @@ const baseApplicationCommandBuilders = [
     .addSubcommand((subcommand) =>
       subcommand
         .setName('setup')
-        .setDescription('Configure required Drasil channels and restricted role')
+        .setDescription('Configure required Drasil channels and case role')
         .addChannelOption((option) =>
           option
             .setName('admin-channel')
@@ -106,13 +106,13 @@ const baseApplicationCommandBuilders = [
         .addRoleOption((option) =>
           option
             .setName('restricted-role')
-            .setDescription('Existing restricted role; omit to reuse or create a default one')
+            .setDescription('Existing case role; omit to reuse or create a default one')
             .setRequired(false)
         )
         .addStringOption((option) =>
           option
             .setName('restricted-role-name')
-            .setDescription('Role name to reuse or create when restricted-role is omitted')
+            .setDescription('Role name to reuse or create when case role is omitted')
             .setRequired(false)
             .setMaxLength(100)
         )
@@ -141,7 +141,7 @@ const baseApplicationCommandBuilders = [
             .setDescription('The configuration key to update')
             .setRequired(true)
             .addChoices(
-              { name: 'Restricted Role ID', value: 'restricted_role_id' },
+              { name: 'Case Role ID', value: 'restricted_role_id' },
               { name: 'Admin Channel ID', value: 'admin_channel_id' },
               { name: 'Verification Channel ID', value: 'verification_channel_id' },
               { name: 'Admin Notification Role ID', value: 'admin_notification_role_id' }
@@ -154,17 +154,17 @@ const baseApplicationCommandBuilders = [
     .addSubcommandGroup((group) =>
       group
         .setName('lockdown')
-        .setDescription('Audit or apply restricted-role quarantine channel overwrites')
+        .setDescription('Audit or apply case-role quarantine channel overwrites')
         .addSubcommand((subcommand) =>
-          subcommand.setName('view').setDescription('View restricted-role lockdown settings')
+          subcommand.setName('view').setDescription('View case-role lockdown settings')
         )
         .addSubcommand((subcommand) =>
-          subcommand.setName('audit').setDescription('Preview restricted-role lockdown changes')
+          subcommand.setName('audit').setDescription('Preview case-role lockdown changes')
         )
         .addSubcommand((subcommand) =>
           subcommand
             .setName('apply')
-            .setDescription('Apply missing restricted-role lockdown denies')
+            .setDescription('Apply missing case-role lockdown denies')
             .addBooleanOption((option) =>
               option
                 .setName('unsync-allowed')
@@ -180,11 +180,11 @@ const baseApplicationCommandBuilders = [
         .addSubcommand((subcommand) =>
           subcommand
             .setName('allow-add')
-            .setDescription('Exclude a channel or category from restricted-role lockdown')
+            .setDescription('Exclude a channel or category from case-role lockdown')
             .addChannelOption((option) =>
               option
                 .setName('channel')
-                .setDescription('Channel or category restricted users may still access')
+                .setDescription('Channel or category active-case users may still access')
                 .addChannelTypes(
                   ChannelType.GuildText,
                   ChannelType.GuildAnnouncement,
@@ -221,30 +221,26 @@ const baseApplicationCommandBuilders = [
     .addSubcommandGroup((group) =>
       group
         .setName('role-quarantine')
-        .setDescription('Configure restricted-user role quarantine')
+        .setDescription('Configure case-role quarantine')
         .addSubcommand((subcommand) =>
           subcommand.setName('view').setDescription('View role quarantine settings')
         )
         .addSubcommand((subcommand) =>
           subcommand
             .setName('set-mode')
-            .setDescription('Set role quarantine behavior for future restrictions')
+            .setDescription('Set role quarantine behavior for future cases')
             .addStringOption((option) =>
               option
                 .setName('mode')
                 .setDescription('Role quarantine mode')
                 .setRequired(true)
-                .addChoices(
-                  { name: 'Off', value: 'off' },
-                  { name: 'Audit only', value: 'audit_only' },
-                  { name: 'Automatic', value: 'automatic' }
-                )
+                .addChoices({ name: 'Off', value: 'off' }, { name: 'On', value: 'on' })
             )
         )
         .addSubcommand((subcommand) =>
           subcommand
             .setName('exempt-add')
-            .setDescription('Keep a role during automatic role quarantine')
+            .setDescription('Keep a role during role quarantine')
             .addRoleOption((option) =>
               option.setName('role').setDescription('Role to exempt').setRequired(true)
             )
@@ -336,13 +332,13 @@ const baseApplicationCommandBuilders = [
             .addStringOption((option) =>
               option
                 .setName('mode')
-                .setDescription('off, record_only, notify_only, or restrict')
+                .setDescription('off, record_only, notify_only, or open_case')
                 .setRequired(true)
                 .addChoices(
                   { name: 'Off', value: 'off' },
                   { name: 'Record only', value: 'record_only' },
                   { name: 'Notify only', value: 'notify_only' },
-                  { name: 'Restrict pending review', value: 'restrict' }
+                  { name: 'Open case', value: 'restrict' }
                 )
             )
         )
@@ -363,13 +359,13 @@ const baseApplicationCommandBuilders = [
             .addStringOption((option) =>
               option
                 .setName('mode')
-                .setDescription('off, record_only, notify_only, or restrict')
+                .setDescription('off, record_only, notify_only, or open_case')
                 .setRequired(true)
                 .addChoices(
                   { name: 'Off', value: 'off' },
                   { name: 'Record only', value: 'record_only' },
                   { name: 'Notify only', value: 'notify_only' },
-                  { name: 'Restrict pending review', value: 'restrict' }
+                  { name: 'Open case', value: 'restrict' }
                 )
             )
         )
@@ -701,12 +697,11 @@ const baseApplicationCommandBuilders = [
             .addStringOption((option) =>
               option
                 .setName('mode')
-                .setDescription('observed_alert, open_case, restrict, or kick')
+                .setDescription('observed_alert, open_case, or kick')
                 .setRequired(true)
                 .addChoices(
                   { name: 'Observed alert', value: 'observed_alert' },
                   { name: 'Open case', value: 'open_case' },
-                  { name: 'Restrict pending review', value: 'restrict' },
                   { name: 'Kick high-confidence compromise', value: 'kick' }
                 )
             )
@@ -739,13 +734,12 @@ const baseApplicationCommandBuilders = [
             .addStringOption((option) =>
               option
                 .setName('action')
-                .setDescription('off, hints, open_case, or restrict')
+                .setDescription('off, hints, or open_case')
                 .setRequired(true)
                 .addChoices(
                   { name: 'Off', value: 'off' },
                   { name: 'Hints only', value: 'hints' },
-                  { name: 'Recommend open case', value: 'open_case' },
-                  { name: 'Recommend restriction review', value: 'restrict' }
+                  { name: 'Recommend open case', value: 'open_case' }
                 )
             )
         )
@@ -965,19 +959,13 @@ const baseApplicationCommandBuilders = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
     .setName('case')
-    .setDescription('Open moderation cases or bulk-intake restricted users')
+    .setDescription('Open moderation cases or bulk-intake case-role users')
     .addSubcommand((subcommand) =>
       subcommand
         .setName('open')
-        .setDescription('Open a moderation case; restricts the user by default')
+        .setDescription('Open a moderation case and apply the case role')
         .addUserOption((option) =>
           option.setName('user').setDescription('The user to review').setRequired(true)
-        )
-        .addBooleanOption((option) =>
-          option
-            .setName('restrict')
-            .setDescription('Restrict the user pending review; defaults to true')
-            .setRequired(false)
         )
         .addStringOption((option) =>
           option
@@ -1022,7 +1010,7 @@ const baseApplicationCommandBuilders = [
         .addRoleOption((option) =>
           option
             .setName('role')
-            .setDescription('Role to intake; defaults to the configured restricted role')
+            .setDescription('Role to intake; defaults to the configured case role')
             .setRequired(false)
         )
         .addBooleanOption((option) =>
@@ -1030,16 +1018,6 @@ const baseApplicationCommandBuilders = [
             .setName('execute')
             .setDescription('Actually open cases; defaults to false for dry-run preview')
             .setRequired(false)
-        )
-        .addStringOption((option) =>
-          option
-            .setName('action')
-            .setDescription('Whether to open cases only or restrict users too')
-            .setRequired(false)
-            .addChoices(
-              { name: 'Open cases only', value: 'open_case' },
-              { name: 'Restrict pending review', value: 'restrict' }
-            )
         )
         .addIntegerOption((option) =>
           option

@@ -10,7 +10,6 @@ export const REPORT_INTAKE_CONFIRMED_RESPONSE_MODE_SETTING_KEY =
 export const REPORT_INTAKE_CONFIRMED_RESPONSE_MODES = [
   'observed_alert',
   'open_case',
-  'restrict',
   'kick',
 ] as const;
 

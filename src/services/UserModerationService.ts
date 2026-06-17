@@ -37,6 +37,11 @@ import { appendVerificationActionFailure } from '../utils/verificationActionFail
  */
 export interface IUserModerationService {
   /**
+   * Applies the configured case role required for active user-facing cases.
+   */
+  applyCaseRole(member: GuildMember, moderator?: User): Promise<boolean>;
+
+  /**
    * Restricts a user by assigning the restricted role and updating their verification status
    * @param member The guild member to restrict
    * @returns Promise resolving to true if successful, false if the restriction failed
@@ -722,6 +727,71 @@ export class UserModerationService implements IUserModerationService {
    * @param member The guild member to restrict
    * @returns Promise resolving to true if successful, false if the restriction failed
    */
+  public async applyCaseRole(member: GuildMember, moderator?: User): Promise<boolean> {
+    try {
+      let verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+      let roleQuarantineMetadata: Record<string, unknown> | null = null;
+
+      if (!verificationEvent) {
+        console.warn(`ApplyCaseRole called for ${member.user.tag} but no active case was found.`);
+      } else if (verificationEvent.status !== VerificationStatus.PENDING) {
+        verificationEvent.status = VerificationStatus.PENDING;
+        await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
+      }
+
+      if (verificationEvent) {
+        const quarantineResult = await this.tryApplyRoleQuarantine(
+          member,
+          verificationEvent,
+          moderator
+        );
+        verificationEvent = quarantineResult.verificationEvent;
+        roleQuarantineMetadata = quarantineResult.metadata;
+      }
+
+      const rollbackRoleQuarantine = async (): Promise<void> => {
+        if (!verificationEvent || !this.shouldRollbackRoleQuarantine(roleQuarantineMetadata)) {
+          return;
+        }
+
+        const rollbackResult = await this.tryRestoreRoleQuarantine(
+          member,
+          verificationEvent,
+          moderator
+        );
+        verificationEvent = rollbackResult.verificationEvent ?? verificationEvent;
+      };
+
+      let roleAssigned: boolean;
+      try {
+        roleAssigned = await this.roleManager.assignRestrictedRole(member);
+      } catch (assignError) {
+        await rollbackRoleQuarantine();
+        throw assignError;
+      }
+      if (!roleAssigned) {
+        await rollbackRoleQuarantine();
+        throw new Error(`Failed to assign case role to ${member.user.tag}`);
+      }
+
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        is_restricted: true,
+        verification_status: VerificationStatus.PENDING,
+        last_status_change: new Date(),
+        updated_by: moderator?.id,
+      });
+
+      console.log(`Successfully applied case role to ${member.user.tag}`);
+      return true;
+    } catch (error) {
+      console.error(`Failed to apply case role to ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
   public async restrictUser(member: GuildMember, moderator?: User): Promise<boolean> {
     try {
       let verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(

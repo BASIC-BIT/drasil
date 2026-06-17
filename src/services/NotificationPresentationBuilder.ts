@@ -243,7 +243,7 @@ export class NotificationPresentationBuilder {
       .setColor(0xffc107)
       .setTitle('Suspicious Activity Observed')
       .setDescription(
-        `Drasil observed suspicious activity from <@${member.id}>. No automatic restriction was applied.`
+        `Drasil observed suspicious activity from <@${member.id}>. No case was opened automatically.`
       )
       .setThumbnail(member.user.displayAvatarURL())
       .addFields(
@@ -451,11 +451,6 @@ export class NotificationPresentationBuilder {
         'Open Case',
         ButtonStyle.Primary
       ),
-      this.createCustomButton(
-        `observed:restrict:${userId}:${detectionEventId}`,
-        'Restrict',
-        ButtonStyle.Danger
-      ),
     ];
 
     if (options.includeBanAction !== false) {
@@ -520,10 +515,7 @@ export class NotificationPresentationBuilder {
       return buttons;
     }
 
-    const buttons = [
-      this.createCustomButton(`verify_${userId}`, 'Verify', ButtonStyle.Success),
-      this.createCustomButton(`restrict_${userId}`, 'Restrict', ButtonStyle.Danger),
-    ];
+    const buttons = [this.createCustomButton(`verify_${userId}`, 'Verify', ButtonStyle.Success)];
 
     if (includeBanAction) {
       buttons.push(this.createCustomButton(`ban_${userId}`, 'Ban...', ButtonStyle.Danger));
@@ -1225,7 +1217,7 @@ export class NotificationPresentationBuilder {
       case AdminActionType.RESTRICT:
         embed.setColor(CASE_COLOR_PENDING);
         embed.setTitle('Moderation Case Opened');
-        embed.setDescription(`${userReference} was restricted and moved into a moderation case.`);
+        embed.setDescription(`${userReference} was moved into a moderation case.`);
         return;
       case AdminActionType.OPEN_CASE:
         embed.setColor(CASE_COLOR_PENDING);
@@ -1243,7 +1235,7 @@ export class NotificationPresentationBuilder {
     embed.setColor(CASE_COLOR_WARNING);
     embed.setTitle('Suspicious Activity Observed');
     embed.setDescription(
-      `Drasil observed suspicious activity from ${userReference}. No automatic restriction was applied.`
+      `Drasil observed suspicious activity from ${userReference}. No case was opened automatically.`
     );
   }
 
@@ -1258,8 +1250,8 @@ export class NotificationPresentationBuilder {
       .map((failure) => {
         const timestamp = Math.floor(new Date(failure.at).getTime() / 1000);
         const action =
-          failure.action === 'restrict'
-            ? 'Apply restricted role'
+          failure.action === 'case_role' || failure.action === 'restrict'
+            ? 'Apply case role'
             : failure.action === 'private_evidence_thread'
               ? 'Create admin evidence thread'
               : failure.action === 'role_quarantine'

@@ -436,7 +436,7 @@ describe('GPTService (unit)', () => {
         reason_codes: ['harassment', 'image_evidence'],
         evidence_categories: ['report_text', 'image'],
         concerns: ['The image appears targeted at the reported user.'],
-        recommended_action: 'restrict',
+        recommended_action: 'open_case',
       },
       { input_tokens: 4, output_tokens: 5, total_tokens: 9 }
     );
@@ -465,7 +465,7 @@ describe('GPTService (unit)', () => {
         confidence: 0.93,
         reasonCodes: ['harassment', 'image_evidence'],
         evidenceCategories: ['report_text', 'image'],
-        recommendedAction: 'restrict',
+        recommendedAction: 'open_case',
         analyzedImageCount: 1,
         isFallback: false,
       })

@@ -295,24 +295,22 @@ describe('NotificationPresentationBuilder (unit)', () => {
 
     expect(caseButtons.map((button) => button.label)).toEqual([
       'Verify',
-      'Restrict',
       'Ban...',
       'Close',
       'Other Actions',
       'Web Case',
     ]);
-    expect(caseButtons[5]).toMatchObject({
+    expect(caseButtons[4]).toMatchObject({
       url: 'https://drasilbot.com/admin/guild/guild-1/cases/ver-1',
     });
     expect(observedButtons.map((button) => button.label)).toEqual([
       'Open Case',
-      'Restrict',
       'Ban...',
       'Dismiss',
       'Other Actions',
       'Web Queue',
     ]);
-    expect(observedButtons[5]).toMatchObject({
+    expect(observedButtons[4]).toMatchObject({
       url: 'https://drasilbot.com/admin/guild/guild-1/cases',
     });
   });

@@ -112,7 +112,7 @@ export class RoleIntakeProcessor {
       member.id,
       member.guild.id
     );
-    if (activeCase && options.action !== 'restrict') {
+    if (activeCase) {
       memberResult.skippedActiveCases += 1;
       return memberResult;
     }
@@ -134,11 +134,11 @@ export class RoleIntakeProcessor {
     });
     if (caseResult.opened) {
       memberResult.opened += 1;
-      if (options.action === 'restrict' && !caseResult.restricted) {
+      if (!caseResult.restricted) {
         memberResult.failed += 1;
         memberResult.failures.push({
           userId: member.id,
-          message: 'Case opened but restriction failed',
+          message: 'Case opened but case role failed',
         });
       }
       return memberResult;

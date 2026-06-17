@@ -1,6 +1,7 @@
 export const VERIFICATION_ACTION_FAILURES_METADATA_KEY = 'action_failures';
 
 export type VerificationActionFailureKind =
+  | 'case_role'
   | 'restrict'
   | 'thread'
   | 'private_evidence_thread'
@@ -22,6 +23,7 @@ function metadataToRecord(metadata: unknown): Record<string, unknown> {
 
 function isVerificationActionFailureKind(value: unknown): value is VerificationActionFailureKind {
   return (
+    value === 'case_role' ||
     value === 'restrict' ||
     value === 'thread' ||
     value === 'private_evidence_thread' ||

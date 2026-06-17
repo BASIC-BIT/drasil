@@ -4,7 +4,7 @@
 
 For a real-server walkthrough, use `docs/manual-qa.md`.
 
-- Suspicious message: user gets restricted, verification thread auto-created, admin notification sent.
+- Suspicious message: user gets the case role, verification thread auto-created, admin notification sent.
 - Additional suspicious message while pending: no new verification event; notification updated.
 - New suspicious message after verification resolved: new verification event and new notification message.
 - Suspicious join: same flow as suspicious message.
@@ -15,9 +15,9 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
 - Repeated pending-case reports/flags link the new detection event to the reused case.
 - User report after resolution: posts a new observed alert instead of reopening a case automatically.
 - Manual flag after resolution: opens a new pending case.
-- Verify button: restricted role removed, thread resolved, notification updated, admin action logged.
+- Verify button: case role removed, thread resolved, notification updated, admin action logged.
 - Ban button: member banned, verification status set to BANNED (if present), thread resolved, admin action logged.
-- Reopen button: verification returns to PENDING, thread reopened, user restricted again.
+- Reopen button: verification returns to PENDING, thread reopened, case role reapplied.
 - Stale case digest: groups pending cases into fresh, stale, and very stale; very stale users remain pending for moderator review.
 - User-facing support reminder: pings only the target user in their verification thread, not admins, and stops after the target replies or reaches the very-stale day threshold.
 
@@ -25,7 +25,7 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
 
 - `SecurityActionService.handleSuspiciousMessage`
   - Creates `detection_event` if `detectionEventId` is missing.
-  - Creates `verification_event` and restricts user when none exists.
+  - Creates `verification_event` and applies the case role when none exists.
   - Creates a verification thread and upserts the admin notification.
 - `SecurityActionService.handleSuspiciousMessage` with active verification
   - Does not create a new `verification_event` or thread.
@@ -42,7 +42,7 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
   - Links repeated manual flags to the reused pending `verification_event`.
 - `UserModerationService.verifyUser`
   - Updates `verification_event` to VERIFIED with `resolved_by` and `resolved_at`.
-  - Removes restricted role and updates `server_member`.
+  - Removes the case role and updates `server_member`.
   - Resolves thread, updates notification, records admin action.
 - `UserModerationService.banUser`
   - Calls Discord ban and updates `server_member` to BANNED.

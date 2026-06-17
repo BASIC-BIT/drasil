@@ -1292,7 +1292,7 @@ describe('EventHandler (unit)', () => {
           {
             severity: 'error',
             code: 'restricted-role-missing',
-            message: 'Restricted role is not configured.',
+            message: 'Case role is not configured.',
           },
         ],
         errorCount: 1,
@@ -1389,7 +1389,7 @@ describe('EventHandler (unit)', () => {
           {
             severity: 'error',
             code: 'restricted-role-missing',
-            message: 'Restricted role is not configured.',
+            message: 'Case role is not configured.',
           },
           {
             severity: 'error',

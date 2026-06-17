@@ -59,7 +59,7 @@ The implementation includes:
 - **Account Age Evaluation**: Recently created accounts receive extra scrutiny
 - **Profile Characteristic Analysis**: Username patterns, discriminators, and nicknames are evaluated
 - **Message Content Analysis**: First messages from new users are carefully examined
-- **Early Restriction**: Suspicious users are restricted before they can spam
+- **Early Case Opening**: Suspicious users are moved into an active case before they can spam
 
 ### 2. Hybrid Detection Approach
 
@@ -88,7 +88,7 @@ This multi-layered approach provides both speed and accuracy.
 
 For flagged users, the bot implements a structured verification process:
 
-- **Automatically assigns a restricted role** limiting server access
+- **Automatically assigns a case role** for active-case access control
 - **Creates dedicated verification threads** in a private channel
 - **Sends verification instructions** to guide legitimate users
 - **Maintains privacy** by isolating verification conversations
@@ -109,7 +109,7 @@ Administrators receive:
   - Trigger source (message content or join event)
 
 - **Interactive buttons** for one-click actions:
-  - Verify User (removes restricted role)
+  - Verify User (removes case role)
   - Ban User (removes from server)
   - Create Thread (for verification conversation)
 
@@ -143,7 +143,7 @@ The Discord Anti-Spam Bot is a specialized bot for Discord servers that detects 
 
 - **Reduced Workload**:
   - Automatic detection of suspicious users
-  - Proactive restriction before spam occurs
+  - Proactive case opening before spam occurs
   - One-click moderation actions
   - Organized verification system
 
@@ -175,7 +175,7 @@ The Discord Anti-Spam Bot is a specialized bot for Discord servers that detects 
 
 - **Minimal Friction**:
   - No verification for most legitimate users
-  - Targeted restrictions only for suspicious accounts
+  - Targeted active cases only for suspicious accounts
   - Simple verification process if flagged incorrectly
   - Quick resolution through dedicated threads
 
@@ -220,7 +220,7 @@ What sets our bot apart from existing solutions is our AI-first approach to spam
 2. **Proactive vs. Reactive**:
    - New join analysis before any messages
    - Account age and creation time evaluation
-   - Early restriction of suspicious accounts
+   - Early case-role application for suspicious accounts
    - Prevention rather than cleanup
 
 3. **Admin-Optimized UX**:
@@ -267,7 +267,7 @@ What sets our bot apart from existing solutions is our AI-first approach to spam
 The bot provides a streamlined onboarding experience:
 
 1. Introduction and benefits explanation
-2. Configurable restricted role setup
+2. Configurable case role setup
 3. Configurable admin notification role setup
 4. Optional admin summary channel configuration
 5. Initial full server scan and summarized results

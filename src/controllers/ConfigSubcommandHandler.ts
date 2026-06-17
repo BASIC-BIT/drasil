@@ -225,7 +225,7 @@ export class ConfigSubcommandHandler {
     return [
       `Mode: \`${settings.mode}\``,
       `Exempt roles: ${settings.exemptRoleIds.length ? settings.exemptRoleIds.map((roleId) => `<@&${roleId}>`).join(', ') : '`none`'}`,
-      'Automatic mode removes all removable non-exempt roles during future restrictions and restores them additively when restrictions are lifted.',
+      'On mode removes all removable non-exempt roles while applying the case role and restores them additively when the case resolves.',
       'Privileged, managed, bot-managed, and above-Drasil roles are always skipped.',
       `Guild ID: \`${guildId}\``,
     ].join('\n');
@@ -408,7 +408,6 @@ export class ConfigSubcommandHandler {
       `Analyze images: \`${settings.analyzeImages ? 'yes' : 'no'}\``,
       `Max recommended action: \`${settings.maxAction}\``,
       `Open-case threshold: \`${Math.round(settings.openCaseThreshold * 100)}%\``,
-      `Restrict threshold: \`${Math.round(settings.restrictThreshold * 100)}%\``,
       `Max images: \`${settings.maxImages}\``,
       `Max image size: \`${Math.round(settings.maxImageBytes / (1024 * 1024))} MB\``,
     ].join('\n');

@@ -172,7 +172,7 @@ export class SetupCommandHandler {
 
       const responseLines = [
         'Setup complete.',
-        `Restricted role: <@&${restrictedRole.id}>`,
+        `Case role: <@&${restrictedRole.id}>`,
         `Admin channel: <#${adminChannel.id}>`,
         verificationChannelMessage,
       ];
@@ -652,7 +652,7 @@ export class SetupCommandHandler {
           : 'Verification channel';
     const lines = [
       'Setup complete.',
-      `${setupResult.restrictedRoleWasCreated ? 'Created restricted role' : 'Restricted role'}: <@&${setupResult.restrictedRoleId}>`,
+      `${setupResult.restrictedRoleWasCreated ? 'Created case role' : 'Case role'}: <@&${setupResult.restrictedRoleId}>`,
       `Admin channel: <#${adminChannelId}>`,
       `${verificationChannelAction}: <#${setupResult.verificationChannelId}>`,
     ];
@@ -762,12 +762,12 @@ export class SetupCommandHandler {
     }
 
     if (codes.has('restricted-role-hierarchy')) {
-      lines.add('Move the Drasil bot role above the restricted role in Discord role settings.');
+      lines.add('Move the Drasil bot role above the case role in Discord role settings.');
     }
 
     if (codes.has('restricted-role-managed') || codes.has('restricted-role-everyone')) {
       lines.add(
-        'Choose a normal assignable restricted role with `/config setup restricted-role:<role>`.'
+        'Choose a normal assignable case role with `/config setup restricted-role:<role>`.'
       );
     }
 

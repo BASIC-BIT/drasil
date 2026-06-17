@@ -229,7 +229,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       issues.push({
         severity: 'error',
         code: 'guild-manage-roles',
-        message: 'Drasil is missing Manage Roles, so it cannot apply the restricted role.',
+        message: 'Drasil is missing Manage Roles, so it cannot apply the case role.',
       });
     }
 
@@ -295,7 +295,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     issues.push({
       severity: 'error',
       code: 'restricted-role-missing',
-      message: 'Restricted role is not configured.',
+      message: 'Case role is not configured.',
     });
   }
 
@@ -309,7 +309,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       issues.push({
         severity: 'error',
         code: 'restricted-role-missing',
-        message: 'Restricted role is not configured.',
+        message: 'Case role is not configured.',
       });
       return;
     }
@@ -319,7 +319,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       issues.push({
         severity: 'error',
         code: 'restricted-role-not-found',
-        message: `Restricted role ${restrictedRoleId} no longer exists.`,
+        message: `Case role ${restrictedRoleId} no longer exists.`,
       });
       return;
     }
@@ -328,7 +328,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       issues.push({
         severity: 'error',
         code: 'restricted-role-everyone',
-        message: 'Restricted role cannot be @everyone.',
+        message: 'Case role cannot be @everyone.',
       });
     }
 
@@ -336,7 +336,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       issues.push({
         severity: 'error',
         code: 'restricted-role-managed',
-        message: `Restricted role <@&${restrictedRole.id}> is managed by an integration and cannot be assigned by Drasil.`,
+        message: `Case role <@&${restrictedRole.id}> is managed by an integration and cannot be assigned by Drasil.`,
       });
     }
 
@@ -344,7 +344,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       issues.push({
         severity: 'error',
         code: 'restricted-role-hierarchy',
-        message: `Move the Drasil role above the selected restricted role <@&${restrictedRole.id}>.`,
+        message: `Move the Drasil role above the selected case role <@&${restrictedRole.id}>.`,
       });
     }
   }

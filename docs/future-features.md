@@ -11,7 +11,7 @@ Open a verification event for a user manually
 
 ## /setupverification
 
-Go through a wizard to set up the verificaiton channel, admin channel, and restriction role
+Go through a wizard to set up the verificaiton channel, admin channel, and case role
 
 ## Ban/Verification/Reopen confirmation
 

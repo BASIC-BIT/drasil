@@ -555,7 +555,7 @@ describe('ThreadManager (unit)', () => {
     expect(thread.members.add).not.toHaveBeenCalled();
     expect(thread.setInvitable).toHaveBeenCalledWith(false, expect.any(String));
     expect(thread.send).toHaveBeenCalledWith({
-      content: expect.stringContaining('No automatic restriction was applied.'),
+      content: expect.stringContaining('No case was opened automatically.'),
       allowedMentions: {
         parse: [],
         users: [],
@@ -567,7 +567,6 @@ describe('ThreadManager (unit)', () => {
     const prompt = thread.send.mock.calls[0][0] as { components: unknown[] };
     expect(extractComponentLabels(prompt.components)).toEqual([
       'Verify',
-      'Restrict',
       'Ban...',
       'Close',
       'Other Actions',
@@ -665,7 +664,6 @@ describe('ThreadManager (unit)', () => {
     const prompt = thread.send.mock.calls[0][0] as { components: unknown[] };
     expect(extractComponentLabels(prompt.components)).toEqual([
       'Verify',
-      'Restrict',
       'Ban...',
       'Close',
       'Other Actions',

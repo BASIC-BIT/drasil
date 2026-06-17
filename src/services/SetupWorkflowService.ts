@@ -231,8 +231,8 @@ export class SetupWorkflowService {
       );
       rollbackDetails.push(
         rolledBack
-          ? 'The newly created restricted role was removed.'
-          : `The newly created restricted role <@&${createdRestrictedRole.id}> could not be removed; delete it or pass it as restricted-role when rerunning setup.`
+          ? 'The newly created case role was removed.'
+          : `The newly created case role <@&${createdRestrictedRole.id}> could not be removed; delete it or pass it as restricted-role when rerunning setup.`
       );
     }
 
@@ -276,7 +276,7 @@ export class SetupWorkflowService {
       await role.delete(reason);
       return true;
     } catch (error) {
-      console.error(`Failed to roll back restricted role ${role.id} for guild ${guildId}:`, error);
+      console.error(`Failed to roll back case role ${role.id} for guild ${guildId}:`, error);
       return false;
     }
   }

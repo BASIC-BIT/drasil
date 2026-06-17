@@ -69,8 +69,7 @@ export class SetupVerificationModalHandler {
     const restrictedRoleId = parseRoleId(restrictedRoleInput);
     if (!restrictedRoleId) {
       await interaction.reply({
-        content:
-          'Please provide a valid restricted role ID or role mention (for example `<@&123...>`).',
+        content: 'Please provide a valid case role ID or role mention (for example `<@&123...>`).',
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -123,7 +122,7 @@ export class SetupVerificationModalHandler {
       const restrictedRole = await guild.roles.fetch(restrictedRoleId);
       if (!restrictedRole) {
         await interaction.reply({
-          content: `Could not find restricted role <@&${restrictedRoleId}> in this server.`,
+          content: `Could not find case role <@&${restrictedRoleId}> in this server.`,
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -203,7 +202,7 @@ export class SetupVerificationModalHandler {
       await interaction.reply({
         content:
           'Setup complete.\n' +
-          `Restricted role: <@&${setupResult.restrictedRoleId}>\n` +
+          `Case role: <@&${setupResult.restrictedRoleId}>\n` +
           `Admin channel: <#${adminChannelId}>\n` +
           `${verificationChannelMessage}`,
         flags: MessageFlags.Ephemeral,

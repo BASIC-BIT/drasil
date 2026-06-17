@@ -25,7 +25,7 @@ This project is an AI-powered Discord bot designed to prevent spam and manage us
    - Track moderation actions for accountability
 
 4. **Minimal Friction**:
-   - Target restrictions only to suspicious users
+   - Target active cases only to suspicious users
    - Provide clear verification paths for legitimate users
    - Implement cross-server reputation for established users
    - Balance security with user experience
@@ -52,7 +52,7 @@ This project is an AI-powered Discord bot designed to prevent spam and manage us
   - Efficient message history tracking
 
 - **Verification System**:
-  - Automatic restricted role assignment
+  - Automatic case role assignment
   - Dedicated verification channel with proper permissions
   - Private threads for individual verification cases
   - Clear verification instructions and process

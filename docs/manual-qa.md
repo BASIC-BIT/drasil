@@ -20,7 +20,7 @@ Use a dedicated staging server and test accounts:
 
 Recommended server setup:
 
-- one restricted role with visibly reduced permissions
+- one case role used for active-case access control
 - one admin/mod channel for notifications
 - one verification channel where private threads are created
 - one general channel where test messages can be sent safely
@@ -30,7 +30,7 @@ Recommended app/env setup:
 - `DISCORD_TOKEN`, `OPENAI_API_KEY`, and `DATABASE_URL` configured
 - Prisma migrations applied
 - bot role has `Manage Roles`, `Ban Members`, `View Channels`, `Send Messages`, `Manage Threads`, and private-thread creation permissions
-- bot role is above the restricted role in the role hierarchy
+- bot role is above the case role in the role hierarchy
 
 ## How to run the bot
 
@@ -51,11 +51,11 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 ### 1. Verification setup sanity check
 
 - Run `/config setup admin-channel:<channel>` if the staging server is not configured yet.
-- Omit `restricted-role` to verify Drasil can reuse or create the default restricted role, or pass an existing role when testing role selection.
+- Omit `restricted-role` to verify Drasil can reuse or create the default case role, or pass an existing role when testing role selection.
 - Omit `verification-channel` to verify Drasil can create or reuse the `verification` channel, or pass an existing text channel when testing channel reuse.
 - If multiple `#verification` channels exist, confirm setup blocks saving until `verification-channel:<channel>` is provided.
 - Run `/config validate` after setup.
-- Confirm the restricted role, admin channel, and verification channel are configured.
+- Confirm the case role, admin channel, and verification channel are configured.
 - Expected result:
   - commands succeed without permission errors
   - setup hard errors block saving and warnings do not
@@ -67,7 +67,7 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 
 - Use `/flaguser` against the suspicious-user test account.
 - Expected result:
-  - user gets the restricted role
+  - user gets the case role
   - one verification event is created
   - one private verification thread is created for that user
   - one admin notification appears in the admin channel
@@ -85,7 +85,7 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 
 - Click the verify action from the admin notification.
 - Expected result:
-  - restricted role is removed
+  - case role is removed
   - verification status becomes `VERIFIED`
   - thread is archived/locked or otherwise resolved
   - admin notification reflects the resolved state
@@ -108,7 +108,7 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 - Click the reopen action.
 - Expected result:
   - verification status returns to `PENDING`
-  - user is restricted again
+  - case role is reapplied
   - thread is reopened or reactivated
   - admin notification reflects the reopened state
   - reopen admin action is recorded
@@ -120,12 +120,12 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 - Expected result:
   - detection event is created with `USER_REPORT`
   - rerunning report setup updates the existing instructions message instead of duplicating it
-  - no restricted role is applied
+  - no case role is applied
   - no verification thread is created by default
   - an observed alert appears with report details and moderator action buttons
   - `Dismiss...` supports dismiss, false positive, and undo
-  - `Restrict` creates a user-visible verification thread
-  - `Ban` bans and logs the action without creating a verification thread first
+  - `Open Case` applies the case role and creates a user-visible verification thread
+  - `Kick` or `Ban` logs the action without creating a verification thread first
 
 ### 8. GPT verification-thread analysis flow
 
@@ -145,13 +145,13 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
 - Confirm settings with `/config detection view`.
 - Trigger a suspicious automatic detection from a safe test account.
 - Expected result:
-  - no restricted role is assigned
+  - no case role is assigned
   - no verification event/case is created
   - a `detection_event` is recorded
   - `detection_event.metadata.gpt` has model, prompt version, result, confidence,
     reason codes, primary signal, summary, and token/trace details when available
   - an admin-channel `Suspicious Activity Observed` embed is posted
-  - the embed says no automatic restriction was applied
+  - the embed says no case was opened automatically
   - the embed shows heuristic reasons separately from the `Risk Analysis` field
 
 ### 10. Case review and user reminder flow

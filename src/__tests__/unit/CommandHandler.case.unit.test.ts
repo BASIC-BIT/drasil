@@ -20,7 +20,7 @@ const confirmLastSlashCommand = async (interaction: any): Promise<any> => {
 };
 
 describe('CommandHandler case commands (unit)', () => {
-  it('opens and restricts an admin case by default via /case open', async () => {
+  it('opens an admin case and applies the case role via /case open', async () => {
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
       restrictionAttempted: true,
@@ -62,26 +62,26 @@ describe('CommandHandler case commands (unit)', () => {
     expect(securityActionService.openAdminCase).not.toHaveBeenCalled();
     expect(interaction.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: 'Open a case for target#0001 and restrict them pending review?',
+        content: 'Open a case for target#0001 and apply the case role?',
       })
     );
 
     await confirmLastSlashCommand(interaction);
 
     expect(securityActionService.openAdminCase).toHaveBeenCalledWith(targetMember, invoker, {
-      action: 'restrict',
+      action: 'open_case',
       reason: 'manual review',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Opened a case for target#0001 and restricted them pending review.',
+      content: 'Opened a case for target#0001 and applied the case role.',
       allowedMentions: { parse: [] },
     });
   });
 
-  it('opens an unrestricted admin case via /case open restrict:false', async () => {
+  it('surfaces case role failure via /case open', async () => {
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
-      restrictionAttempted: false,
+      restrictionAttempted: true,
       restricted: false,
     });
     const { handler, securityActionService } = buildHandler({ openAdminCase });
@@ -125,7 +125,8 @@ describe('CommandHandler case commands (unit)', () => {
       reason: 'manual review',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Opened an unrestricted case for target#0001.',
+      content:
+        'Opened a case for target#0001, but I could not apply the case role. Check bot permissions and role hierarchy.',
       allowedMentions: { parse: [] },
     });
   });
@@ -173,7 +174,7 @@ describe('CommandHandler case commands (unit)', () => {
 
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Opened a case for target#0001, but I could not apply the restricted role. Check bot permissions and role hierarchy.',
+        'Opened a case for target#0001, but I could not apply the case role. Check bot permissions and role hierarchy.',
       allowedMentions: { parse: [] },
     });
   });

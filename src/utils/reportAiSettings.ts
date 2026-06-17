@@ -5,11 +5,10 @@ export const REPORT_AI_ANALYZE_TEXT_SETTING_KEY = 'report_ai_analyze_text';
 export const REPORT_AI_ANALYZE_IMAGES_SETTING_KEY = 'report_ai_analyze_images';
 export const REPORT_AI_MAX_ACTION_SETTING_KEY = 'report_ai_max_action';
 export const REPORT_AI_OPEN_CASE_THRESHOLD_SETTING_KEY = 'report_ai_open_case_threshold';
-export const REPORT_AI_RESTRICT_THRESHOLD_SETTING_KEY = 'report_ai_restrict_threshold';
 export const REPORT_AI_MAX_IMAGES_SETTING_KEY = 'report_ai_max_images';
 export const REPORT_AI_MAX_IMAGE_BYTES_SETTING_KEY = 'report_ai_max_image_bytes';
 
-export const REPORT_AI_MAX_ACTIONS = ['off', 'hints', 'open_case', 'restrict'] as const;
+export const REPORT_AI_MAX_ACTIONS = ['off', 'hints', 'open_case'] as const;
 export type ReportAiMaxAction = (typeof REPORT_AI_MAX_ACTIONS)[number];
 
 export interface ReportAiSettings {
@@ -18,7 +17,6 @@ export interface ReportAiSettings {
   analyzeImages: boolean;
   maxAction: ReportAiMaxAction;
   openCaseThreshold: number;
-  restrictThreshold: number;
   maxImages: number;
   maxImageBytes: number;
 }
@@ -33,7 +31,6 @@ export interface ReportAttachmentMetadata {
 }
 
 export const DEFAULT_REPORT_AI_OPEN_CASE_THRESHOLD = 0.85;
-export const DEFAULT_REPORT_AI_RESTRICT_THRESHOLD = 0.95;
 export const DEFAULT_REPORT_AI_TRIAGE_ENABLED = true;
 export const DEFAULT_REPORT_AI_MAX_IMAGES = 4;
 export const DEFAULT_REPORT_AI_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -80,12 +77,6 @@ export function getReportAiSettings(settings: ServerSettings = {}): ReportAiSett
     openCaseThreshold: readNumber(
       settings[REPORT_AI_OPEN_CASE_THRESHOLD_SETTING_KEY],
       DEFAULT_REPORT_AI_OPEN_CASE_THRESHOLD,
-      0,
-      1
-    ),
-    restrictThreshold: readNumber(
-      settings[REPORT_AI_RESTRICT_THRESHOLD_SETTING_KEY],
-      DEFAULT_REPORT_AI_RESTRICT_THRESHOLD,
       0,
       1
     ),

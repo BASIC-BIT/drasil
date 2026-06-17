@@ -293,9 +293,10 @@ Potential modes:
 
 - `collect_only`: collect evidence, notify moderators, no candidate submission.
 - `triage`: summarize evidence and propose candidates.
-- `open_case`: submit confirmed reports into observed alert/case workflow.
-- `restrict_pending_review`: allow restriction only after confirmation and policy
-  thresholds.
+- `open_case`: submit confirmed reports into the observed alert/case workflow and
+  open a case only when policy thresholds allow it.
+- `kick`: kick only after confirmation, source-specific opt-in, and high-confidence
+  policy thresholds.
 
 Hard rules:
 

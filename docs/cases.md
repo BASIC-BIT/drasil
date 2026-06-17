@@ -14,7 +14,7 @@ captures the near-term lifecycle for one user in one server.
 ## Statuses
 
 - `pending`: the case is open and needs moderator review.
-- `verified`: the case was resolved as legitimate, and the user was unrestricted.
+- `verified`: the case was resolved as legitimate, and the case role was removed.
 - `banned`: the case was resolved by banning the user.
 - `closed_no_action`: the case was resolved without verifying or banning the user.
 
@@ -22,23 +22,19 @@ Additional product labels such as `duplicate`, `needs_more_info`, or
 `false_report` should be added only when a concrete UI or moderation workflow
 requires them.
 
-## Restriction State
+## Case Role State
 
-`pending` cases can be restricted or unrestricted. Restriction is tracked on the
-server member and can change while the case remains open:
-
-- Restricted cases use the configured restricted role and a normal user-visible
-  verification/case thread.
-- Unrestricted cases are still normal cases with a user-visible thread; they are
-  not moderator-only report review workspaces.
-- Moderators can use case actions to restrict the user or lift restriction
-  without moving the case to a terminal status.
+`pending` cases always use the configured case role plus a normal user-visible
+verification/case thread. The current database still stores this as
+`servers.restricted_role_id` and `server_members.is_restricted`, but product
+behavior treats that state as active-case access control rather than a separate
+restricted/unrestricted case mode.
 
 ## Case Entry Points
 
 - Suspicious message or join: records the detection result. Server response
-  settings can leave it as record/notification only or restrict the user; there
-  is no automatic open-case-without-restriction mode for these detections.
+  settings can leave it as record/notification only or open a case by applying
+  the case role and creating a user-visible thread.
 - User report: creates a `user_report` detection event. The default path is a
   moderator-facing observed alert; configured report-intake escalation or
   moderator actions can create or reuse a pending case.

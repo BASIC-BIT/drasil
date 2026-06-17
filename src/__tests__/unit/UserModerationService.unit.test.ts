@@ -205,7 +205,7 @@ describe('UserModerationService (unit)', () => {
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
       quarantineMember: jest.fn().mockResolvedValue({
         status: 'quarantined',
-        mode: 'automatic',
+        mode: 'on',
         snapshotId: 'role-quarantine-1',
         originalRoleIds: ['role-1'],
         plannedRoleIds: ['role-1'],
@@ -291,7 +291,7 @@ describe('UserModerationService (unit)', () => {
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
       quarantineMember: jest.fn().mockResolvedValue({
         status: 'quarantined',
-        mode: 'automatic',
+        mode: 'on',
         snapshotId: 'role-quarantine-1',
         originalRoleIds: ['role-1'],
         plannedRoleIds: ['role-1'],
@@ -360,7 +360,7 @@ describe('UserModerationService (unit)', () => {
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
       quarantineMember: jest.fn().mockResolvedValue({
         status: 'already_active',
-        mode: 'automatic',
+        mode: 'on',
         snapshotId: 'role-quarantine-existing',
         originalRoleIds: ['role-1'],
         plannedRoleIds: ['role-1'],
