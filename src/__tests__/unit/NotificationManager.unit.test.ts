@@ -1256,14 +1256,14 @@ describe('NotificationManager (unit)', () => {
 
     const manager = new NotificationManager({} as any, configService, detectionRepository);
 
-    const channelId = await manager.setupVerificationChannel(guild, 'restricted-role-1');
+    const channelId = await manager.setupVerificationChannel(guild, 'case-role-1');
 
     expect(channelId).toBe('verification-channel-1');
     expect(fetchChannel).toHaveBeenCalledWith('verification-channel-1');
     expect(overwriteSet).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ id: 'guild-1' }),
-        expect.objectContaining({ id: 'restricted-role-1' }),
+        expect.objectContaining({ id: 'case-role-1' }),
       ]),
       'Sync Drasil verification channel permissions'
     );
@@ -1304,7 +1304,7 @@ describe('NotificationManager (unit)', () => {
 
     const channelId = await manager.setupVerificationChannel(
       guild,
-      'restricted-role-1',
+      'case-role-1',
       false,
       undefined,
       'verification-channel-1'
@@ -1314,7 +1314,7 @@ describe('NotificationManager (unit)', () => {
     expect(configService.getServerConfig).not.toHaveBeenCalled();
     expect(fetchChannel).toHaveBeenCalledWith('verification-channel-1');
     expect(overwriteSet).toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ id: 'restricted-role-1' })]),
+      expect.arrayContaining([expect.objectContaining({ id: 'case-role-1' })]),
       'Sync Drasil verification channel permissions'
     );
     expect(createChannel).not.toHaveBeenCalled();
@@ -1354,12 +1354,12 @@ describe('NotificationManager (unit)', () => {
 
     const manager = new NotificationManager({} as any, configService, detectionRepository);
 
-    const channelId = await manager.setupVerificationChannel(guild, 'restricted-role-1');
+    const channelId = await manager.setupVerificationChannel(guild, 'case-role-1');
 
     expect(channelId).toBe('unrelated-verification-channel');
     expect(fetchChannel).not.toHaveBeenCalled();
     expect(overwriteSet).toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ id: 'restricted-role-1' })]),
+      expect.arrayContaining([expect.objectContaining({ id: 'case-role-1' })]),
       'Sync Drasil verification channel permissions'
     );
     expect(createChannel).not.toHaveBeenCalled();

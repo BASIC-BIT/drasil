@@ -54,7 +54,7 @@ export const serverSettingsSchema = z
 
 export const setupServerRecordSchema = z.object({
   guild_id: z.string(),
-  restricted_role_id: z.string().nullable(),
+  case_role_id: z.string().nullable(),
   admin_channel_id: z.string().nullable(),
   verification_channel_id: z.string().nullable(),
   admin_notification_role_id: z.string().nullable(),
@@ -90,7 +90,7 @@ export const setupDashboardSchema = z.object({
 export const guildSetupUpdateSchema = z.object({
   guildId: z.string(),
   updatedBy: z.string().nullable().optional(),
-  restrictedRoleId: z.string().nullable().optional(),
+  caseRoleId: z.string().nullable().optional(),
   adminChannelId: z.string().nullable().optional(),
   verificationChannelId: z.string().nullable().optional(),
   adminNotificationRoleId: z.string().nullable().optional(),

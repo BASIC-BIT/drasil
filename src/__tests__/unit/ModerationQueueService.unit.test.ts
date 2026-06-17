@@ -237,7 +237,7 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
 
 const buildServer = (): Server => ({
   guild_id: 'guild-1',
-  restricted_role_id: null,
+  case_role_id: null,
   admin_channel_id: null,
   verification_channel_id: null,
   admin_notification_role_id: 'admin-role',

@@ -63,7 +63,7 @@ const baseApplicationCommandBuilders = [
     .setDescription('Set up a dedicated verification channel for active cases')
     .addRoleOption((option) =>
       option
-        .setName('restricted-role')
+        .setName('case-role')
         .setDescription('Role to apply while a user has an active case')
         .setRequired(true)
     )
@@ -105,13 +105,13 @@ const baseApplicationCommandBuilders = [
         )
         .addRoleOption((option) =>
           option
-            .setName('restricted-role')
+            .setName('case-role')
             .setDescription('Existing case role; omit to reuse or create a default one')
             .setRequired(false)
         )
         .addStringOption((option) =>
           option
-            .setName('restricted-role-name')
+            .setName('case-role-name')
             .setDescription('Role name to reuse or create when case role is omitted')
             .setRequired(false)
             .setMaxLength(100)
@@ -141,7 +141,7 @@ const baseApplicationCommandBuilders = [
             .setDescription('The configuration key to update')
             .setRequired(true)
             .addChoices(
-              { name: 'Case Role ID', value: 'restricted_role_id' },
+              { name: 'Case Role ID', value: 'case_role_id' },
               { name: 'Admin Channel ID', value: 'admin_channel_id' },
               { name: 'Verification Channel ID', value: 'verification_channel_id' },
               { name: 'Admin Notification Role ID', value: 'admin_notification_role_id' }
@@ -891,12 +891,12 @@ const baseApplicationCommandBuilders = [
             .addStringOption((option) =>
               option
                 .setName('action')
-                .setDescription('off, hints, or restrict')
+                .setDescription('off, hints, or case review')
                 .setRequired(true)
                 .addChoices(
                   { name: 'Off', value: 'off' },
                   { name: 'Hints only', value: 'hints' },
-                  { name: 'Recommend restriction review', value: 'restrict' }
+                  { name: 'Recommend case review', value: 'restrict' }
                 )
             )
         )

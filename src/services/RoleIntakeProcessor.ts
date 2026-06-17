@@ -134,7 +134,7 @@ export class RoleIntakeProcessor {
     });
     if (caseResult.opened) {
       memberResult.opened += 1;
-      if (!caseResult.restricted) {
+      if (!caseResult.caseRoleActive) {
         memberResult.failed += 1;
         memberResult.failures.push({
           userId: member.id,

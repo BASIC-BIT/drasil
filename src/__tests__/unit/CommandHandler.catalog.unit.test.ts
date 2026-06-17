@@ -68,7 +68,7 @@ describe('CommandHandler command catalog (unit)', () => {
     expect(closeReportCommand.contexts).toEqual([InteractionContextType.Guild]);
   });
 
-  it('registers restricted-role lockdown config commands', () => {
+  it('registers case-role lockdown config commands', () => {
     const { handler } = buildHandler();
     const commands = (handler as any).commands as any[];
     const configCommand = commands.find((c) => c.name === 'config');
@@ -118,7 +118,7 @@ describe('CommandHandler command catalog (unit)', () => {
       PermissionFlagsBits.Administrator.toString()
     );
     expect(setupCommand.options.map((option: any) => option.name)).toEqual([
-      'restricted-role',
+      'case-role',
       'admin-channel',
       'verification-channel',
     ]);

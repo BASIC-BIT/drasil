@@ -18,7 +18,7 @@ import { SetupWorkflowService, type SetupWorkflowResult } from '../services/Setu
 import { truncatePreview } from '../utils/textPreview';
 import { ReportInstructionsManager } from './ReportInstructionsManager';
 
-const DEFAULT_RESTRICTED_ROLE_NAME = 'Drasil Restricted';
+const DEFAULT_CASE_ROLE_NAME = 'Drasil Case';
 const DEFAULT_SETUP_FAILURE_DETAIL = 'Please check permissions and try again.';
 const VERIFICATION_CHANNEL_NAME = 'verification';
 
@@ -81,7 +81,7 @@ export class SetupCommandHandler {
     let setupFailureDetail = DEFAULT_SETUP_FAILURE_DETAIL;
 
     try {
-      const restrictedRole = interaction.options.getRole('restricted-role', true);
+      const caseRole = interaction.options.getRole('case-role', true);
       const adminChannel = interaction.options.getChannel('admin-channel', true);
       const verificationChannel = interaction.options.getChannel('verification-channel');
 
@@ -123,7 +123,7 @@ export class SetupCommandHandler {
 
       const setupResult = await setupWorkflowService.completeSetup({
         guild,
-        restrictedRole: restrictedRole as Role,
+        caseRole: caseRole as Role,
         adminChannelId: adminChannel.id,
         initialVerificationChannelId: verificationChannel?.id ?? null,
         candidateVerificationChannelId: verificationChannelCandidate.channelId,
@@ -172,7 +172,7 @@ export class SetupCommandHandler {
 
       const responseLines = [
         'Setup complete.',
-        `Case role: <@&${restrictedRole.id}>`,
+        `Case role: <@&${caseRole.id}>`,
         `Admin channel: <#${adminChannel.id}>`,
         verificationChannelMessage,
       ];
@@ -305,24 +305,24 @@ export class SetupCommandHandler {
     );
   }
 
-  private async resolveRestrictedRoleCandidate(
+  private async resolveCaseRoleCandidate(
     guild: NonNullable<ChatInputCommandInteraction['guild']>,
-    explicitRestrictedRole: Role | null,
+    explicitCaseRole: Role | null,
     requestedRoleName: string | null
   ): Promise<{ role: Role | null; roleName: string; ambiguousRoleIds: readonly string[] }> {
-    if (explicitRestrictedRole) {
+    if (explicitCaseRole) {
       return {
-        role: explicitRestrictedRole,
-        roleName: explicitRestrictedRole.name,
+        role: explicitCaseRole,
+        roleName: explicitCaseRole.name,
         ambiguousRoleIds: [],
       };
     }
 
-    const roleName = requestedRoleName ?? DEFAULT_RESTRICTED_ROLE_NAME;
+    const roleName = requestedRoleName ?? DEFAULT_CASE_ROLE_NAME;
     const serverConfig = await this.configService.getServerConfig(guild.id).catch(() => null);
-    const configuredRestrictedRoleId = serverConfig?.restricted_role_id ?? null;
-    if (configuredRestrictedRoleId) {
-      const configuredRole = await guild.roles.fetch(configuredRestrictedRoleId).catch(() => null);
+    const configuredCaseRoleId = serverConfig?.case_role_id ?? null;
+    if (configuredCaseRoleId) {
+      const configuredRole = await guild.roles.fetch(configuredCaseRoleId).catch(() => null);
       if (configuredRole && (!requestedRoleName || configuredRole.name === roleName)) {
         return { role: configuredRole, roleName: configuredRole.name, ambiguousRoleIds: [] };
       }
@@ -369,8 +369,8 @@ export class SetupCommandHandler {
     }
 
     const adminChannel = interaction.options.getChannel('admin-channel', true);
-    const existingRestrictedRole = interaction.options.getRole('restricted-role');
-    const requestedRoleName = interaction.options.getString('restricted-role-name')?.trim() || null;
+    const existingCaseRole = interaction.options.getRole('case-role');
+    const requestedRoleName = interaction.options.getString('case-role-name')?.trim() || null;
     const verificationChannel = interaction.options.getChannel('verification-channel');
     const reportChannel = interaction.options.getChannel('report-channel');
 
@@ -379,7 +379,7 @@ export class SetupCommandHandler {
         adminChannel,
         verificationChannel,
         reportChannel,
-        hasExplicitRestrictedRole: Boolean(existingRestrictedRole),
+        hasExplicitCaseRole: Boolean(existingCaseRole),
         requestedRoleName,
       })
     ) {
@@ -395,16 +395,16 @@ export class SetupCommandHandler {
         guild,
         verificationChannel?.id ?? null
       );
-      const restrictedRoleCandidate = await this.resolveRestrictedRoleCandidate(
+      const caseRoleCandidate = await this.resolveCaseRoleCandidate(
         guild,
-        existingRestrictedRole as Role | null,
+        existingCaseRole as Role | null,
         requestedRoleName
       );
 
       if (
         await this.replyIfAmbiguousConfigSetupCandidates(
           interaction,
-          restrictedRoleCandidate,
+          caseRoleCandidate,
           verificationChannelCandidate
         )
       ) {
@@ -412,8 +412,8 @@ export class SetupCommandHandler {
       }
 
       const candidateReport = await this.setupDiagnosticsService.validateSetupCandidate(guild, {
-        restrictedRoleId: restrictedRoleCandidate.role?.id ?? null,
-        willCreateRestrictedRole: !restrictedRoleCandidate.role,
+        caseRoleId: caseRoleCandidate.role?.id ?? null,
+        willCreateCaseRole: !caseRoleCandidate.role,
         adminChannelId: adminChannel.id,
         verificationChannelId: verificationChannelCandidate.channelId,
         willCreateVerificationChannel: !verificationChannelCandidate.channelId,
@@ -427,20 +427,20 @@ export class SetupCommandHandler {
         return;
       }
 
-      let createdRestrictedRole: Role | null = null;
-      let restrictedRole = restrictedRoleCandidate.role;
-      if (!restrictedRole) {
-        createdRestrictedRole = await guild.roles.create({
-          name: restrictedRoleCandidate.roleName,
+      let createdCaseRole: Role | null = null;
+      let caseRole = caseRoleCandidate.role;
+      if (!caseRole) {
+        createdCaseRole = await guild.roles.create({
+          name: caseRoleCandidate.roleName,
           permissions: [],
           reason: `Drasil setup requested by ${interaction.user.username}`,
         });
-        restrictedRole = createdRestrictedRole;
+        caseRole = createdCaseRole;
       }
 
       const setupResult = await setupWorkflowService.completeSetup({
         guild,
-        restrictedRole,
+        caseRole,
         adminChannelId: adminChannel.id,
         initialVerificationChannelId: verificationChannel?.id ?? null,
         candidateVerificationChannelId: verificationChannelCandidate.channelId,
@@ -449,7 +449,7 @@ export class SetupCommandHandler {
           : {}),
         reportInstructionsChannelId: reportChannel?.id ?? null,
         candidateReport,
-        createdRestrictedRole,
+        createdCaseRole,
       });
 
       if (setupResult.status !== 'completed') {
@@ -497,7 +497,7 @@ export class SetupCommandHandler {
       adminChannel: { type: ChannelType };
       verificationChannel: { type: ChannelType } | null;
       reportChannel: { type: ChannelType } | null;
-      hasExplicitRestrictedRole: boolean;
+      hasExplicitCaseRole: boolean;
       requestedRoleName: string | null;
     }
   ): Promise<boolean> {
@@ -525,9 +525,9 @@ export class SetupCommandHandler {
       return true;
     }
 
-    if (options.hasExplicitRestrictedRole && options.requestedRoleName) {
+    if (options.hasExplicitCaseRole && options.requestedRoleName) {
       await interaction.reply({
-        content: '`restricted-role-name` cannot be combined with `restricted-role`.',
+        content: '`case-role-name` cannot be combined with `case-role`.',
         flags: MessageFlags.Ephemeral,
       });
       return true;
@@ -538,15 +538,15 @@ export class SetupCommandHandler {
 
   private async replyIfAmbiguousConfigSetupCandidates(
     interaction: ChatInputCommandInteraction,
-    restrictedRoleCandidate: { roleName: string; ambiguousRoleIds: readonly string[] },
+    caseRoleCandidate: { roleName: string; ambiguousRoleIds: readonly string[] },
     verificationChannelCandidate: { ambiguousChannelIds: readonly string[] }
   ): Promise<boolean> {
-    if (restrictedRoleCandidate.ambiguousRoleIds.length > 0) {
+    if (caseRoleCandidate.ambiguousRoleIds.length > 0) {
       await interaction.editReply({
         content:
-          `Setup not saved. Multiple roles named \`${restrictedRoleCandidate.roleName}\` already exist: ` +
-          restrictedRoleCandidate.ambiguousRoleIds.map((roleId) => `<@&${roleId}>`).join(', ') +
-          '. Choose one with `restricted-role` before rerunning /config setup.',
+          `Setup not saved. Multiple roles named \`${caseRoleCandidate.roleName}\` already exist: ` +
+          caseRoleCandidate.ambiguousRoleIds.map((roleId) => `<@&${roleId}>`).join(', ') +
+          '. Choose one with `case-role` before rerunning /config setup.',
         allowedMentions: { parse: [] },
       });
       return true;
@@ -652,7 +652,7 @@ export class SetupCommandHandler {
           : 'Verification channel';
     const lines = [
       'Setup complete.',
-      `${setupResult.restrictedRoleWasCreated ? 'Created case role' : 'Case role'}: <@&${setupResult.restrictedRoleId}>`,
+      `${setupResult.caseRoleWasCreated ? 'Created case role' : 'Case role'}: <@&${setupResult.caseRoleId}>`,
       `Admin channel: <#${adminChannelId}>`,
       `${verificationChannelAction}: <#${setupResult.verificationChannelId}>`,
     ];
@@ -742,8 +742,8 @@ export class SetupCommandHandler {
 
     if (
       this.hasAnySetupIssue(codes, [
-        'restricted-role-missing',
-        'restricted-role-not-found',
+        'case-role-missing',
+        'case-role-not-found',
         'admin-channel-missing',
         'admin-channel-not-found',
         'verification-channel-missing',
@@ -751,7 +751,7 @@ export class SetupCommandHandler {
       ])
     ) {
       lines.add(
-        'Run `/config setup admin-channel:<moderator-channel>` to repair core setup. Omit `restricted-role` and `verification-channel` to let Drasil reuse safe defaults or create them.'
+        'Run `/config setup admin-channel:<moderator-channel>` to repair core setup. Omit `case-role` and `verification-channel` to let Drasil reuse safe defaults or create them.'
       );
     }
 
@@ -761,14 +761,12 @@ export class SetupCommandHandler {
       );
     }
 
-    if (codes.has('restricted-role-hierarchy')) {
+    if (codes.has('case-role-hierarchy')) {
       lines.add('Move the Drasil bot role above the case role in Discord role settings.');
     }
 
-    if (codes.has('restricted-role-managed') || codes.has('restricted-role-everyone')) {
-      lines.add(
-        'Choose a normal assignable case role with `/config setup restricted-role:<role>`.'
-      );
+    if (codes.has('case-role-managed') || codes.has('case-role-everyone')) {
+      lines.add('Choose a normal assignable case role with `/config setup case-role:<role>`.');
     }
 
     if (

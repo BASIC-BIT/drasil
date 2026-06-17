@@ -29,15 +29,15 @@ Persistence uses Postgres (often Supabase) via Prisma. Orchestration is direct (
 - Orchestration is direct: controllers call services; services coordinate side effects.
 - DMs are ignored.
 - Failure handling is fail-fast; no retries/compensation yet.
-- Automatic message/join detections can record, notify, or restrict; they do not open unrestricted cases.
+- Automatic message/join detections can record, notify, open a case with the case role, or kick; observed alerts stay no-case/no-role until a moderator opens a case.
 - User reports create detection events first; default report triage is an observed alert until a moderator or configured report-intake escalation opens/restricts a case.
-- Cases use normal user-visible threads whether restricted or unrestricted; moderator-only report review threads are legacy fallback only.
+- Cases use normal user-visible threads and always apply the configured case role; moderator-only report review threads are legacy fallback only.
 
 Primary flow (see `docs/workflow.md`):
 
 1. `EventHandler` -> `DetectionOrchestrator` -> `SecurityActionService`.
 2. `SecurityActionService` ensures entities, ensures detection events, routes observed alerts or
-   cases, applies restriction when requested, creates case threads, and upserts admin notifications.
+   cases, applies the case role, creates case threads, and upserts admin notifications.
 3. `InteractionHandler`/`CommandHandler` call `UserModerationService` for verify/ban.
 4. `UserModerationService` updates verification status, roles, thread state, notifications,
    and admin actions.

@@ -25,7 +25,7 @@ import {
   NOOP_PRODUCT_ANALYTICS_SERVICE,
 } from '../services/ProductAnalyticsService';
 import { ISetupDiagnosticsService } from '../services/SetupDiagnosticsService';
-import { IRestrictedRoleLockdownService } from '../services/RestrictedRoleLockdownService';
+import { ICaseRoleLockdownService } from '../services/CaseRoleLockdownService';
 import { ReportSubmissionService } from '../services/ReportSubmissionService';
 import {
   buildApplicationCommands,
@@ -115,9 +115,9 @@ export class CommandHandler implements ICommandHandler {
     @inject(TYPES.SetupDiagnosticsService)
     @optional()
     setupDiagnosticsService?: ISetupDiagnosticsService,
-    @inject(TYPES.RestrictedRoleLockdownService)
+    @inject(TYPES.CaseRoleLockdownService)
     @optional()
-    restrictedRoleLockdownService?: IRestrictedRoleLockdownService,
+    caseRoleLockdownService?: ICaseRoleLockdownService,
     @inject(TYPES.ReportIntakeService)
     @optional()
     reportIntakeService?: IReportIntakeService,
@@ -143,7 +143,7 @@ export class CommandHandler implements ICommandHandler {
     );
     this.lockdownConfigCommandHandler = new LockdownConfigCommandHandler(
       this.configService,
-      restrictedRoleLockdownService
+      caseRoleLockdownService
     );
     const reportInstructionsManager = new ReportInstructionsManager(
       this.client,

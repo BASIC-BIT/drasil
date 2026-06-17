@@ -16,16 +16,16 @@ export interface IServerMemberRepository {
   ): Promise<ServerMember>;
   findByServer(serverId: string): Promise<ServerMember[]>;
   findByUser(userId: string): Promise<ServerMember[]>;
-  findRestrictedMembers(serverId: string): Promise<ServerMember[]>;
+  findCaseRoleActiveMembers(serverId: string): Promise<ServerMember[]>;
   updateReputationScore(
     serverId: string,
     userId: string,
     score: number
   ): Promise<ServerMember | null>;
-  updateRestrictionStatus(
+  updateCaseRoleStatus(
     serverId: string,
     userId: string,
-    isRestricted: boolean,
+    caseRoleActive: boolean,
     verificationStatus: verification_status, // Use Prisma enum type
     reason?: string,
     moderatorId?: string
@@ -93,7 +93,7 @@ export class ServerMemberRepository implements IServerMemberRepository {
         user_id: userId,
         join_date: data.join_date,
         reputation_score: data.reputation_score,
-        is_restricted: data.is_restricted,
+        case_role_active: data.case_role_active,
         last_verified_at: data.last_verified_at,
         last_message_at: data.last_message_at,
         message_count: data.message_count,
@@ -158,20 +158,20 @@ export class ServerMemberRepository implements IServerMemberRepository {
   }
 
   /**
-   * Find all restricted members in a server
+   * Find all members with the case role active in a server
    */
-  async findRestrictedMembers(serverId: string): Promise<ServerMember[]> {
+  async findCaseRoleActiveMembers(serverId: string): Promise<ServerMember[]> {
     try {
       const members = await this.prisma.server_members.findMany({
         where: {
           server_id: serverId,
-          is_restricted: true,
+          case_role_active: true,
         },
       });
       // findMany always returns an array, which is truthy. The `|| []` is unnecessary.
       return members as ServerMember[];
     } catch (error) {
-      this.handleError(error, 'findRestrictedMembers');
+      this.handleError(error, 'findCaseRoleActiveMembers');
     }
   }
 
@@ -206,23 +206,22 @@ export class ServerMemberRepository implements IServerMemberRepository {
   }
 
   /**
-   * Update member's restriction status
+   * Update a member's case-role status
    */
-  async updateRestrictionStatus(
+  async updateCaseRoleStatus(
     serverId: string,
     userId: string,
-    isRestricted: boolean,
+    caseRoleActive: boolean,
     verificationStatus: verification_status, // Use Prisma enum type
-    reason?: string, // Note: restriction_reason field doesn't exist in schema.prisma
+    reason?: string,
     moderatorId?: string
   ): Promise<ServerMember | null> {
     try {
       const now = new Date();
       const updateData: Prisma.server_membersUpdateInput = {
-        is_restricted: isRestricted,
+        case_role_active: caseRoleActive,
         verification_status: verificationStatus,
         last_status_change: now,
-        // restriction_reason: reason, // Field missing in schema
         updated_by: moderatorId,
       };
 
@@ -239,11 +238,11 @@ export class ServerMemberRepository implements IServerMemberRepository {
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
         console.warn(
-          `Attempted to update restriction status for non-existent member: Server ${serverId}, User ${userId}`
+          `Attempted to update case-role status for non-existent member: Server ${serverId}, User ${userId}`
         );
         return null;
       }
-      this.handleError(error, 'updateRestrictionStatus');
+      this.handleError(error, 'updateCaseRoleStatus');
     }
   }
 
@@ -302,7 +301,7 @@ export class ServerMemberRepository implements IServerMemberRepository {
     return await this.upsertMember(serverId, userId, {
       join_date: joinDate || new Date(),
       message_count: 0,
-      is_restricted: false,
+      case_role_active: false,
       reputation_score: 0, // Default neutral score (matches schema default)
       verification_status: VerificationStatus.PENDING, // Use enum member
     });

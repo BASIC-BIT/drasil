@@ -52,7 +52,7 @@ describe('EventHandler (unit)', () => {
       initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
-        restricted_role_id: null,
+        case_role_id: null,
         admin_channel_id: null,
         verification_channel_id: null,
         settings: {
@@ -1051,7 +1051,7 @@ describe('EventHandler (unit)', () => {
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: null,
+        case_role_id: null,
         admin_channel_id: null,
         verification_channel_id: null,
         settings: {},
@@ -1105,7 +1105,7 @@ describe('EventHandler (unit)', () => {
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: null,
+        case_role_id: null,
         admin_channel_id: null,
         verification_channel_id: null,
         settings: {},
@@ -1148,7 +1148,7 @@ describe('EventHandler (unit)', () => {
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: null,
+        case_role_id: null,
         admin_channel_id: null,
         verification_channel_id: null,
         settings: {},
@@ -1191,7 +1191,7 @@ describe('EventHandler (unit)', () => {
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: null,
+        case_role_id: null,
         admin_channel_id: null,
         verification_channel_id: null,
         settings: {},
@@ -1241,7 +1241,7 @@ describe('EventHandler (unit)', () => {
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: null,
+        case_role_id: null,
         admin_channel_id: null,
         verification_channel_id: null,
         settings: {
@@ -1277,7 +1277,7 @@ describe('EventHandler (unit)', () => {
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: null,
+        case_role_id: null,
         admin_channel_id: null,
         verification_channel_id: null,
         settings: {},
@@ -1291,7 +1291,7 @@ describe('EventHandler (unit)', () => {
         issues: [
           {
             severity: 'error',
-            code: 'restricted-role-missing',
+            code: 'case-role-missing',
             message: 'Case role is not configured.',
           },
         ],
@@ -1319,7 +1319,7 @@ describe('EventHandler (unit)', () => {
       setup_nudge_last_recipient_id: 'installer-1',
       setup_nudge_last_result: 'sent',
       setup_nudge_last_source: 'audit_log_installer',
-      setup_warning_last_fingerprint: 'restricted-role-missing',
+      setup_warning_last_fingerprint: 'case-role-missing',
     });
     expect(installer.send.mock.calls[0][0]).toContain('No message content is included in this DM.');
   });
@@ -1330,12 +1330,12 @@ describe('EventHandler (unit)', () => {
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: null,
+        case_role_id: null,
         admin_channel_id: null,
         verification_channel_id: null,
         settings: {
           setup_nudge_last_attempt_at: new Date().toISOString(),
-          setup_warning_last_fingerprint: 'restricted-role-missing',
+          setup_warning_last_fingerprint: 'case-role-missing',
         },
       }),
       updateServerSettings: jest.fn().mockResolvedValue({}),
@@ -1370,13 +1370,13 @@ describe('EventHandler (unit)', () => {
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: null,
+        case_role_id: null,
         admin_channel_id: null,
         verification_channel_id: null,
         settings: {
           setup_nudge_last_attempt_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
           setup_nudge_last_recipient_id: 'installer-1',
-          setup_warning_last_fingerprint: 'admin-channel-missing|restricted-role-missing',
+          setup_warning_last_fingerprint: 'admin-channel-missing|case-role-missing',
         },
       }),
       updateServerSettings: jest.fn().mockResolvedValue({}),
@@ -1388,7 +1388,7 @@ describe('EventHandler (unit)', () => {
         issues: [
           {
             severity: 'error',
-            code: 'restricted-role-missing',
+            code: 'case-role-missing',
             message: 'Case role is not configured.',
           },
           {
@@ -1431,7 +1431,7 @@ describe('EventHandler (unit)', () => {
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: null,
+        case_role_id: null,
         admin_channel_id: null,
         verification_channel_id: null,
         settings: {

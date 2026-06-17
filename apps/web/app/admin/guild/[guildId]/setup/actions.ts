@@ -52,7 +52,7 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
   const update = guildSetupUpdateSchema.parse({
     guildId,
     updatedBy: session.userId,
-    restrictedRoleId: readOptionalFormString(formData, 'restrictedRoleId'),
+    caseRoleId: readOptionalFormString(formData, 'caseRoleId'),
     adminChannelId: readOptionalFormString(formData, 'adminChannelId'),
     verificationChannelId: readOptionalFormString(formData, 'verificationChannelId'),
     adminNotificationRoleId: readOptionalFormString(formData, 'adminNotificationRoleId'),

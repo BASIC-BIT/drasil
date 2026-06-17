@@ -23,8 +23,8 @@ describe('CommandHandler case commands (unit)', () => {
   it('opens an admin case and applies the case role via /case open', async () => {
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
-      restrictionAttempted: true,
-      restricted: true,
+      caseRoleAttempted: true,
+      caseRoleActive: true,
     });
     const { handler, securityActionService } = buildHandler({ openAdminCase });
     const invoker = { id: 'admin-1' } as any;
@@ -81,8 +81,8 @@ describe('CommandHandler case commands (unit)', () => {
   it('surfaces case role failure via /case open', async () => {
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
-      restrictionAttempted: true,
-      restricted: false,
+      caseRoleAttempted: true,
+      caseRoleActive: false,
     });
     const { handler, securityActionService } = buildHandler({ openAdminCase });
     const invoker = { id: 'admin-1' } as any;
@@ -134,8 +134,8 @@ describe('CommandHandler case commands (unit)', () => {
   it('surfaces partial restriction failure via default /case open', async () => {
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
-      restrictionAttempted: true,
-      restricted: false,
+      caseRoleAttempted: true,
+      caseRoleActive: false,
     });
     const { handler } = buildHandler({ openAdminCase });
     const invoker = { id: 'admin-1' } as any;
@@ -376,7 +376,7 @@ describe('CommandHandler case commands (unit)', () => {
     consoleError.mockRestore();
   });
 
-  it('dry-runs restricted role intake via /case intake-role', async () => {
+  it('dry-runs case role intake via /case intake-role', async () => {
     const intakeRoleMembers = jest.fn().mockResolvedValue({
       batchId: 'role-intake-1',
       roleId: 'role-1',
@@ -414,7 +414,7 @@ describe('CommandHandler case commands (unit)', () => {
         getBoolean: jest.fn().mockReturnValue(false),
         getInteger: jest.fn().mockReturnValue(2),
         getString: jest.fn((name: string) =>
-          name === 'action' ? 'open_case' : 'restricted role cleanup'
+          name === 'action' ? 'open_case' : 'case role cleanup'
         ),
       },
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -428,7 +428,7 @@ describe('CommandHandler case commands (unit)', () => {
     expect(securityActionService.intakeRoleMembers).toHaveBeenCalledWith({
       role,
       moderator: invoker,
-      reason: 'restricted role cleanup',
+      reason: 'case role cleanup',
       action: 'open_case',
       execute: false,
       limit: 2,
@@ -498,8 +498,8 @@ describe('CommandHandler case commands (unit)', () => {
   it('denies /case commands for non-admin members', async () => {
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
-      restrictionAttempted: false,
-      restricted: false,
+      caseRoleAttempted: false,
+      caseRoleActive: false,
     });
     const { handler, securityActionService } = buildHandler({ openAdminCase });
     const guild = {

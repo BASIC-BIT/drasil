@@ -239,8 +239,8 @@ describe('InteractionHandler (unit)', () => {
       handleManualFlag: jest.fn().mockResolvedValue(true),
       openAdminCase: jest.fn().mockResolvedValue({
         opened: true,
-        restrictionAttempted: false,
-        restricted: false,
+        caseRoleAttempted: false,
+        caseRoleActive: false,
       }),
       refreshCaseNotification: jest.fn().mockResolvedValue({
         refreshed: true,
@@ -296,7 +296,7 @@ describe('InteractionHandler (unit)', () => {
       resetHeuristicSettings: jest.fn(),
       getAdminChannel: jest.fn(),
       getVerificationChannel: jest.fn(),
-      getRestrictedRole: jest.fn(),
+      getCaseRole: jest.fn(),
       clearCache: jest.fn(),
     } as unknown as jest.Mocked<IConfigService>;
     verificationEventRepository = {
@@ -966,7 +966,7 @@ describe('InteractionHandler (unit)', () => {
       interaction.user
     );
     expect(interaction.followUp).toHaveBeenCalledWith({
-      content: 'Verification for <@user-1> has been reopened. The user has been restricted again.',
+      content: 'Verification for <@user-1> has been reopened. The case role has been reapplied.',
       flags: MessageFlags.Ephemeral,
     });
   });
@@ -1743,7 +1743,7 @@ describe('InteractionHandler (unit)', () => {
     await handler.handleModalSubmit(interaction);
 
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      restricted_role_id: '123456789012345678',
+      case_role_id: '123456789012345678',
       admin_channel_id: '123456789012345679',
       verification_channel_id: '123456789012345680',
     });
@@ -1821,7 +1821,7 @@ describe('InteractionHandler (unit)', () => {
       expect.any(Function)
     );
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      restricted_role_id: '123456789012345678',
+      case_role_id: '123456789012345678',
       admin_channel_id: '123456789012345679',
       verification_channel_id: '123456789012345681',
     });

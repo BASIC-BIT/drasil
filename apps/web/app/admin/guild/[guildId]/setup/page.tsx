@@ -120,14 +120,14 @@ export default async function GuildSetupPage({ params }: PageProps) {
         </div>
         <div className="form-grid">
           <div className="field">
-            <label htmlFor="restrictedRoleId">Restricted role</label>
+            <label htmlFor="caseRoleId">Case role</label>
             <select
-              id="restrictedRoleId"
-              name="restrictedRoleId"
-              defaultValue={server?.restricted_role_id ?? ''}
+              id="caseRoleId"
+              name="caseRoleId"
+              defaultValue={server?.case_role_id ?? ''}
             >
               <option value="">Choose a role</option>
-              {roleOptions(roles, server?.restricted_role_id)}
+              {roleOptions(roles, server?.case_role_id)}
             </select>
           </div>
           <div className="field">

@@ -29,8 +29,8 @@ export type SetupWorkflowResult =
   | {
       status: 'completed';
       candidateReport: SetupDiagnosticReport;
-      restrictedRoleWasCreated: boolean;
-      restrictedRoleId: string;
+      caseRoleWasCreated: boolean;
+      caseRoleId: string;
       adminChannelId: string;
       verificationChannelId: string;
       verificationChannelAction: VerificationChannelSetupAction;
@@ -39,14 +39,14 @@ export type SetupWorkflowResult =
 export interface CompleteSetupWorkflowInput {
   guild: Guild;
   guildId?: string;
-  restrictedRole: Role;
+  caseRole: Role;
   adminChannelId: string;
   initialVerificationChannelId: string | null;
   candidateVerificationChannelId: string | null;
   willSyncVerificationChannelPermissions?: boolean;
   reportInstructionsChannelId: string | null;
   candidateReport?: SetupDiagnosticReport;
-  createdRestrictedRole?: Role | null;
+  createdCaseRole?: Role | null;
   captureAnalytics?: boolean;
 }
 
@@ -63,8 +63,8 @@ export class SetupWorkflowService {
     const candidateReport =
       input.candidateReport ??
       (await this.setupDiagnosticsService.validateSetupCandidate(input.guild, {
-        restrictedRoleId: input.restrictedRole.id,
-        willCreateRestrictedRole: false,
+        caseRoleId: input.caseRole.id,
+        willCreateCaseRole: false,
         adminChannelId: input.adminChannelId,
         verificationChannelId:
           input.initialVerificationChannelId ?? input.candidateVerificationChannelId,
@@ -94,14 +94,14 @@ export class SetupWorkflowService {
       verificationChannelId = input.candidateVerificationChannelId
         ? await this.notificationManager.setupVerificationChannel(
             input.guild,
-            input.restrictedRole.id,
+            input.caseRole.id,
             false,
             onChannelCreated,
             input.candidateVerificationChannelId
           )
         : await this.notificationManager.setupVerificationChannel(
             input.guild,
-            input.restrictedRole.id,
+            input.caseRole.id,
             false,
             onChannelCreated
           );
@@ -110,7 +110,7 @@ export class SetupWorkflowService {
         const setupFailureDetail = await this.rollbackCreatedArtifacts(
           input.guild,
           createdSetupArtifacts.verificationChannelId,
-          input.createdRestrictedRole,
+          input.createdCaseRole,
           guildId,
           'Verification channel setup failed.',
           'Rolling back Drasil setup after verification channel setup failed'
@@ -132,8 +132,8 @@ export class SetupWorkflowService {
     const finalCandidateReport = await this.setupDiagnosticsService.validateSetupCandidate(
       input.guild,
       {
-        restrictedRoleId: input.restrictedRole.id,
-        willCreateRestrictedRole: false,
+        caseRoleId: input.caseRole.id,
+        willCreateCaseRole: false,
         adminChannelId: input.adminChannelId,
         verificationChannelId,
         willCreateVerificationChannel: false,
@@ -144,7 +144,7 @@ export class SetupWorkflowService {
       const setupFailureDetail = await this.rollbackCreatedArtifacts(
         input.guild,
         createdSetupArtifacts.verificationChannelId,
-        input.createdRestrictedRole,
+        input.createdCaseRole,
         guildId,
         'Final validation failed.',
         'Rolling back Drasil setup after final validation failed'
@@ -159,7 +159,7 @@ export class SetupWorkflowService {
 
     try {
       await this.configService.updateServerConfig(guildId, {
-        restricted_role_id: input.restrictedRole.id,
+        case_role_id: input.caseRole.id,
         admin_channel_id: input.adminChannelId,
         verification_channel_id: verificationChannelId,
       });
@@ -167,7 +167,7 @@ export class SetupWorkflowService {
       const setupFailureDetail = await this.rollbackCreatedArtifacts(
         input.guild,
         createdSetupArtifacts.verificationChannelId,
-        input.createdRestrictedRole,
+        input.createdCaseRole,
         guildId,
         'Configuration could not be saved.',
         'Rolling back Drasil setup after config save failed'
@@ -185,15 +185,15 @@ export class SetupWorkflowService {
         verification_channel_created: verificationChannelAction === 'created',
         verification_channel_configured: Boolean(verificationChannelId),
         admin_channel_configured: true,
-        restricted_role_configured: true,
+        case_role_configured: true,
       });
     }
 
     return {
       status: 'completed',
       candidateReport,
-      restrictedRoleWasCreated: Boolean(input.createdRestrictedRole),
-      restrictedRoleId: input.restrictedRole.id,
+      caseRoleWasCreated: Boolean(input.createdCaseRole),
+      caseRoleId: input.caseRole.id,
       adminChannelId: input.adminChannelId,
       verificationChannelId,
       verificationChannelAction,
@@ -203,7 +203,7 @@ export class SetupWorkflowService {
   private async rollbackCreatedArtifacts(
     guild: Guild,
     createdVerificationChannelId: string | undefined,
-    createdRestrictedRole: Role | null | undefined,
+    createdCaseRole: Role | null | undefined,
     guildId: string,
     prefix: string,
     rollbackReason: string
@@ -223,16 +223,16 @@ export class SetupWorkflowService {
       );
     }
 
-    if (createdRestrictedRole) {
-      const rolledBack = await this.rollbackCreatedRestrictedRole(
-        createdRestrictedRole,
+    if (createdCaseRole) {
+      const rolledBack = await this.rollbackCreatedCaseRole(
+        createdCaseRole,
         guildId,
         rollbackReason
       );
       rollbackDetails.push(
         rolledBack
           ? 'The newly created case role was removed.'
-          : `The newly created case role <@&${createdRestrictedRole.id}> could not be removed; delete it or pass it as restricted-role when rerunning setup.`
+          : `The newly created case role <@&${createdCaseRole.id}> could not be removed; delete it or pass it as case-role when rerunning setup.`
       );
     }
 
@@ -267,7 +267,7 @@ export class SetupWorkflowService {
     }
   }
 
-  private async rollbackCreatedRestrictedRole(
+  private async rollbackCreatedCaseRole(
     role: Role,
     guildId: string,
     reason: string

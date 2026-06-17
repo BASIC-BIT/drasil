@@ -265,7 +265,7 @@ describe('ConfigService (unit)', () => {
     expect(discordClient.channels.fetch).toHaveBeenCalledWith('channel-1');
   });
 
-  it('returns restricted role when configured', async () => {
+  it('returns case role when configured', async () => {
     process.env.DATABASE_URL = 'in-memory';
     const serverRepository = new InMemoryServerRepository();
     const role = { id: 'role-1' } as Role;
@@ -273,11 +273,11 @@ describe('ConfigService (unit)', () => {
     const service = new ConfigService(serverRepository, discordClient);
 
     await serverRepository.upsertByGuildId('guild-7', {
-      restricted_role_id: 'role-1',
+      case_role_id: 'role-1',
     });
 
-    const restrictedRole = await service.getRestrictedRole('guild-7');
+    const caseRole = await service.getCaseRole('guild-7');
 
-    expect(restrictedRole?.id).toBe('role-1');
+    expect(caseRole?.id).toBe('role-1');
   });
 });

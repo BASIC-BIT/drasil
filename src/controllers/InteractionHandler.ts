@@ -1769,7 +1769,7 @@ export class InteractionHandler implements IInteractionHandler {
       await this.securityActionService.reopenVerification(verificationEvent, interaction.user);
 
       await interaction.followUp({
-        content: `Verification for <@${userId}> has been reopened. The user has been restricted again.`,
+        content: `Verification for <@${userId}> has been reopened. The case role has been reapplied.`,
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {

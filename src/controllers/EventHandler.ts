@@ -983,11 +983,11 @@ export class EventHandler implements IEventHandler {
       // Set up verification channel if auto_setup is enabled globally
       let verificationChannelWasCreated = false;
       if (globalConfig.getSettings().autoSetupVerificationChannels) {
-        const restrictedRoleId = config.restricted_role_id;
-        if (restrictedRoleId) {
+        const caseRoleId = config.case_role_id;
+        if (caseRoleId) {
           const channelId = await this.notificationManager.setupVerificationChannel(
             guild,
-            restrictedRoleId,
+            caseRoleId,
             false
           );
           if (channelId) {
@@ -1125,9 +1125,7 @@ export class EventHandler implements IEventHandler {
   }
 
   private isSetupIncomplete(config: Server): boolean {
-    return (
-      !config.restricted_role_id || !config.admin_channel_id || !config.verification_channel_id
-    );
+    return !config.case_role_id || !config.admin_channel_id || !config.verification_channel_id;
   }
 
   private wasSetupNudgeRecentlyAttempted(
@@ -1222,7 +1220,7 @@ export class EventHandler implements IEventHandler {
     return [
       `Thanks for installing Drasil in ${guild.name}.`,
       'Finish setup by running `/config setup admin-channel:<moderator-channel>` in the server.',
-      'Omit `restricted-role` and `verification-channel` if you want Drasil to create safe defaults.',
+      'Omit `case-role` and `verification-channel` if you want Drasil to create safe defaults.',
       'Add `report-channel:<channel>` if you want Drasil to create or update report instructions.',
       'Run `/config validate` afterwards to check permissions, channels, and role hierarchy.',
     ].join('\n');

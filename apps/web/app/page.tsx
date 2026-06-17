@@ -21,7 +21,7 @@ export default function HomePage() {
           <span className="eyebrow">Discord anti-spam operations</span>
           <h1>Review scams.</h1>
           <p className="lede">
-            Drasil turns reports, restrictions, verification, and AI triage into Discord-linked
+            Drasil turns reports, cases, verification, and triage into Discord-linked
             cases without replacing moderator judgment.
           </p>
           <div className="actions">

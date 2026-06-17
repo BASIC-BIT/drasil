@@ -117,14 +117,14 @@ describe('SecurityActionService (unit)', () => {
     userModerationService = {
       applyCaseRole: jest.fn().mockImplementation(async (member: GuildMember) => {
         await serverMemberRepository.upsertMember(member.guild.id, member.id, {
-          is_restricted: true,
+          case_role_active: true,
           verification_status: VerificationStatus.PENDING,
         });
         return true;
       }),
       restrictUser: jest.fn().mockImplementation(async (member: GuildMember) => {
         await serverMemberRepository.upsertMember(member.guild.id, member.id, {
-          is_restricted: true,
+          case_role_active: true,
           verification_status: VerificationStatus.PENDING,
         });
         return true;
@@ -469,7 +469,7 @@ describe('SecurityActionService (unit)', () => {
     const member = buildMember(guildId, userId);
     const message = buildMessage(guildId, 'channel-1');
     await serverMemberRepository.upsertMember(guildId, userId, {
-      is_restricted: true,
+      case_role_active: true,
       verification_status: VerificationStatus.PENDING,
     });
     userModerationService.applyCaseRole.mockRejectedValueOnce(new Error('Missing Permissions'));
@@ -502,7 +502,7 @@ describe('SecurityActionService (unit)', () => {
     ]);
 
     const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
-    expect(serverMember?.is_restricted).toBe(true);
+    expect(serverMember?.case_role_active).toBe(true);
     expect(serverMember?.verification_status).toBe(VerificationStatus.PENDING);
   });
 
@@ -640,7 +640,7 @@ describe('SecurityActionService (unit)', () => {
       VerificationStatus.PENDING
     );
     await serverMemberRepository.upsertMember(guildId, userId, {
-      is_restricted: true,
+      case_role_active: true,
       verification_status: VerificationStatus.PENDING,
     });
 
@@ -811,7 +811,7 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('repairs an active restricted case thread and reapplies the restricted role', async () => {
+  it('repairs an active restricted case thread and reapplies the case role', async () => {
     const guildId = 'guild-case-repair';
     const userId = 'user-case-repair';
     const member = buildMember(guildId, userId);
@@ -824,7 +824,7 @@ describe('SecurityActionService (unit)', () => {
     verificationEvent.thread_id = 'thread-1';
     await verificationEventRepository.update(verificationEvent.id, verificationEvent);
     await serverMemberRepository.upsertMember(guildId, userId, {
-      is_restricted: true,
+      case_role_active: true,
       verification_status: VerificationStatus.PENDING,
     });
 
@@ -884,7 +884,7 @@ describe('SecurityActionService (unit)', () => {
     };
     await verificationEventRepository.update(verificationEvent.id, verificationEvent);
     await serverMemberRepository.upsertMember(guildId, userId, {
-      is_restricted: true,
+      case_role_active: true,
       verification_status: VerificationStatus.PENDING,
     });
 
@@ -1131,7 +1131,7 @@ describe('SecurityActionService (unit)', () => {
       VerificationStatus.PENDING
     );
     await serverMemberRepository.upsertMember(guildId, userId, {
-      is_restricted: true,
+      case_role_active: true,
       verification_status: VerificationStatus.PENDING,
     });
 

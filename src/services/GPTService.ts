@@ -1346,7 +1346,7 @@ export class GPTService implements IGPTService {
       .join('\n');
 
     return [
-      'Review these verification thread responses from a restricted Discord user.',
+      'Review these verification thread responses from a Discord user with an active case.',
       detectionContext,
       serverContextBlock,
       `--- Begin untrusted user identity ---\n${untrustedIdentity}\n--- End untrusted user identity ---`,

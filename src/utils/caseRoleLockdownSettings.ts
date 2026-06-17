@@ -1,12 +1,12 @@
 import { ServerSettings } from '../repositories/types';
 
-export const RESTRICTED_LOCKDOWN_ENABLED_SETTING_KEY = 'restricted_lockdown_enabled';
-export const RESTRICTED_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY =
-  'restricted_lockdown_allowed_channel_ids';
-export const RESTRICTED_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY =
-  'restricted_lockdown_allowed_category_ids';
+export const CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY = 'case_role_lockdown_enabled';
+export const CASE_ROLE_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY =
+  'case_role_lockdown_allowed_channel_ids';
+export const CASE_ROLE_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY =
+  'case_role_lockdown_allowed_category_ids';
 
-export interface RestrictedLockdownSettings {
+export interface CaseRoleLockdownSettings {
   readonly enabled: boolean;
   readonly allowedChannelIds: readonly string[];
   readonly allowedCategoryIds: readonly string[];
@@ -38,16 +38,16 @@ function normalizeDiscordIds(value: unknown): string[] {
   return ids;
 }
 
-export function getRestrictedLockdownSettings(
+export function getCaseRoleLockdownSettings(
   settings: ServerSettings | undefined
-): RestrictedLockdownSettings {
+): CaseRoleLockdownSettings {
   return {
-    enabled: settings?.[RESTRICTED_LOCKDOWN_ENABLED_SETTING_KEY] === true,
+    enabled: settings?.[CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY] === true,
     allowedChannelIds: normalizeDiscordIds(
-      settings?.[RESTRICTED_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY]
+      settings?.[CASE_ROLE_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY]
     ),
     allowedCategoryIds: normalizeDiscordIds(
-      settings?.[RESTRICTED_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY]
+      settings?.[CASE_ROLE_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY]
     ),
   };
 }

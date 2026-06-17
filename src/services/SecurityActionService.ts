@@ -245,8 +245,8 @@ export interface AdminCaseOptions {
 
 export interface AdminCaseResult {
   opened: boolean;
-  restrictionAttempted: boolean;
-  restricted: boolean;
+  caseRoleAttempted: boolean;
+  caseRoleActive: boolean;
 }
 
 export interface ActiveCaseRepairResult extends VerificationThreadRepairResult {
@@ -1612,7 +1612,7 @@ export class SecurityActionService implements ISecurityActionService {
         member.guild.id,
         member.id
       );
-      if (serverMember?.is_restricted !== true) {
+      if (serverMember?.case_role_active !== true) {
         notificationVerificationEvent = await this.tryApplyCaseRole(
           member,
           notificationVerificationEvent,
@@ -1903,8 +1903,8 @@ export class SecurityActionService implements ISecurityActionService {
       );
       return {
         opened: handled,
-        restrictionAttempted: true,
-        restricted: serverMember?.is_restricted === true,
+        caseRoleAttempted: true,
+        caseRoleActive: serverMember?.case_role_active === true,
       };
     } catch (error) {
       console.error(`Failed to open admin case for ${member.user.tag}:`, error);
@@ -2096,12 +2096,12 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     const caseWithRole = await this.tryApplyCaseRole(member, activeCase, moderator);
-    await this.ensureUserFacingThreadForRestriction(member, caseWithRole);
+    await this.ensureUserFacingThreadForCaseRole(member, caseWithRole);
 
     return true;
   }
 
-  private async ensureUserFacingThreadForRestriction(
+  private async ensureUserFacingThreadForCaseRole(
     member: GuildMember,
     activeCase: VerificationEvent
   ): Promise<VerificationEvent> {

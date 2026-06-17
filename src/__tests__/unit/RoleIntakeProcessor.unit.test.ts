@@ -98,8 +98,8 @@ describe('RoleIntakeProcessor (unit)', () => {
     };
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
-      restrictionAttempted: true,
-      restricted: true,
+      caseRoleAttempted: true,
+      caseRoleActive: true,
     });
     const processor = new RoleIntakeProcessor(verificationEventRepository, openAdminCase);
 
@@ -108,7 +108,7 @@ describe('RoleIntakeProcessor (unit)', () => {
       moderator,
       action: 'open_case',
       execute: true,
-      reason: 'restricted role import',
+      reason: 'case role import',
       delayMs: 0,
     });
 
@@ -116,7 +116,7 @@ describe('RoleIntakeProcessor (unit)', () => {
     expect(result.failed).toBe(0);
     expect(openAdminCase).toHaveBeenCalledWith(member, moderator, {
       action: 'open_case',
-      reason: 'restricted role import',
+      reason: 'case role import',
       metadata: {
         type: 'admin_role_intake',
         bulk_intake: true,
@@ -139,8 +139,8 @@ describe('RoleIntakeProcessor (unit)', () => {
     };
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
-      restrictionAttempted: true,
-      restricted: true,
+      caseRoleAttempted: true,
+      caseRoleActive: true,
     });
     const processor = new RoleIntakeProcessor(verificationEventRepository, openAdminCase);
 
@@ -172,8 +172,8 @@ describe('RoleIntakeProcessor (unit)', () => {
 
       return Promise.resolve({
         opened: true,
-        restrictionAttempted: true,
-        restricted: true,
+        caseRoleAttempted: true,
+        caseRoleActive: true,
       });
     });
     const onProgress = jest.fn();

@@ -955,9 +955,9 @@ export class NotificationPresentationBuilder {
       case AdminActionType.REOPEN:
         return 'Reopened verification';
       case AdminActionType.RESTRICT:
-        return 'Restricted';
+        return 'Applied case role';
       case AdminActionType.LIFT_RESTRICTION:
-        return 'Lifted restriction';
+        return 'Removed case role';
       case AdminActionType.OPEN_CASE:
         return 'Opened case';
       case AdminActionType.DISMISS:
@@ -1288,7 +1288,7 @@ export class NotificationPresentationBuilder {
       const skippedCount = this.formatUnknownValue(record.skipped_role_count);
       const failedCount = this.formatUnknownValue(record.failed_removal_count);
       lines.push(
-        `Restriction: ${status}${mode ? ` (${mode})` : ''}; removed ${removedCount || '0'} of ${plannedCount || '0'} planned role(s), skipped ${skippedCount || '0'}, failed ${failedCount || '0'}.`
+        `Case role: ${status}${mode ? ` (${mode})` : ''}; removed ${removedCount || '0'} of ${plannedCount || '0'} planned role(s), skipped ${skippedCount || '0'}, failed ${failedCount || '0'}.`
       );
     }
 

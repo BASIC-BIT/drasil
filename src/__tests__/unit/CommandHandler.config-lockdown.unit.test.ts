@@ -6,7 +6,7 @@ describe('CommandHandler lockdown config commands (unit)', () => {
     const getServerConfig = jest.fn().mockResolvedValue({
       verification_channel_id: 'verification-channel-1',
       settings: {
-        restricted_lockdown_enabled: true,
+        case_role_lockdown_enabled: true,
       },
     });
     const { handler, configService } = buildHandler({ getServerConfig });
@@ -42,7 +42,7 @@ describe('CommandHandler lockdown config commands (unit)', () => {
     );
     expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: expect.stringContaining('Restricted lockdown: `enabled`'),
+      content: expect.stringContaining('Case-role lockdown: `enabled`'),
       allowedMentions: { parse: [] },
     });
   });
@@ -76,7 +76,7 @@ describe('CommandHandler lockdown config commands (unit)', () => {
 
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
-      restricted_lockdown_enabled: false,
+      case_role_lockdown_enabled: false,
     });
     expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
       configService.updateServerSettings.mock.invocationCallOrder[0]
@@ -84,7 +84,7 @@ describe('CommandHandler lockdown config commands (unit)', () => {
     expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Restricted-role lockdown marked disabled. Existing Discord channel overwrites were not removed.',
+        'Case-role lockdown marked disabled. Existing Discord channel overwrites were not removed.',
     });
   });
 
@@ -125,8 +125,8 @@ describe('CommandHandler lockdown config commands (unit)', () => {
 
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
-      restricted_lockdown_allowed_channel_ids: ['media-channel-1'],
-      restricted_lockdown_allowed_category_ids: [],
+      case_role_lockdown_allowed_channel_ids: ['media-channel-1'],
+      case_role_lockdown_allowed_category_ids: [],
     });
     expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
       configService.updateServerSettings.mock.invocationCallOrder[0]
@@ -172,7 +172,7 @@ describe('CommandHandler lockdown config commands (unit)', () => {
         warningCount: 1,
       }),
     };
-    const { handler } = buildHandler({ restrictedRoleLockdownService: lockdownService });
+    const { handler } = buildHandler({ caseRoleLockdownService: lockdownService });
     const guild = {
       id: 'guild-1',
       members: {

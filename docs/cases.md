@@ -26,9 +26,9 @@ requires them.
 
 `pending` cases always use the configured case role plus a normal user-visible
 verification/case thread. The current database still stores this as
-`servers.restricted_role_id` and `server_members.is_restricted`, but product
+`servers.case_role_id` and `server_members.case_role_active`, but product
 behavior treats that state as active-case access control rather than a separate
-restricted/unrestricted case mode.
+case-role/no-case split.
 
 ## Case Entry Points
 

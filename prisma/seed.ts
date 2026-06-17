@@ -8,7 +8,7 @@ async function main(): Promise<void> {
   const serverGuildId = '1249723747896918109';
   const serverData: Prisma.serversCreateInput = {
     guild_id: serverGuildId,
-    restricted_role_id: '1354218905937121402',
+    case_role_id: '1354218905937121402',
     admin_channel_id: '1278730769572958238',
     verification_channel_id: '1355206974630793227',
     admin_notification_role_id: null,
@@ -39,7 +39,7 @@ async function main(): Promise<void> {
     where: { guild_id: serverGuildId },
     update: {
       // Fields to update if server exists
-      restricted_role_id: serverData.restricted_role_id,
+      case_role_id: serverData.case_role_id,
       admin_channel_id: serverData.admin_channel_id,
       verification_channel_id: serverData.verification_channel_id,
       admin_notification_role_id: serverData.admin_notification_role_id,

@@ -35,7 +35,7 @@ export type HandlerOverrides = Partial<{
   validateSetupCandidate: jest.Mock;
   excludeDetectionFromAccounting: jest.Mock;
   restoreDetectionAccounting: jest.Mock;
-  restrictedRoleLockdownService: any;
+  caseRoleLockdownService: any;
   reportIntakeService: any;
   moderationQueueService: any;
   client: any;
@@ -86,8 +86,8 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
       overrides.openAdminCase ??
       jest.fn().mockResolvedValue({
         opened: true,
-        restrictionAttempted: false,
-        restricted: false,
+        caseRoleAttempted: false,
+        caseRoleActive: false,
       }),
     refreshCaseNotification:
       overrides.refreshCaseNotification ??
@@ -180,7 +180,7 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
       securityActionService,
       undefined,
       setupDiagnosticsService,
-      overrides.restrictedRoleLockdownService,
+      overrides.caseRoleLockdownService,
       overrides.reportIntakeService,
       overrides.moderationQueueService
     ),

@@ -23,8 +23,8 @@ export interface SetupDiagnosticReport {
 }
 
 export interface SetupCandidate {
-  readonly restrictedRoleId?: string | null;
-  readonly willCreateRestrictedRole?: boolean;
+  readonly caseRoleId?: string | null;
+  readonly willCreateCaseRole?: boolean;
   readonly adminChannelId: string | null;
   readonly verificationChannelId?: string | null;
   readonly willCreateVerificationChannel?: boolean;
@@ -121,7 +121,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
 
     this.checkGuildPermissions(botMember, issues);
-    await this.checkRestrictedRole(guild, botMember, serverConfig, issues);
+    await this.checkCaseRole(guild, botMember, serverConfig, issues);
     await this.checkConfiguredTextChannel(
       guild,
       botMember,
@@ -189,7 +189,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
 
     this.checkGuildPermissions(botMember, issues);
-    await this.checkRestrictedRoleCandidate(guild, botMember, candidate, issues);
+    await this.checkCaseRoleCandidate(guild, botMember, candidate, issues);
     await this.checkConfiguredTextChannel(
       guild,
       botMember,
@@ -268,83 +268,83 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
   }
 
-  private async checkRestrictedRole(
+  private async checkCaseRole(
     guild: Guild,
     botMember: GuildMember,
     serverConfig: Server,
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
-    await this.checkRestrictedRoleId(guild, botMember, serverConfig.restricted_role_id, issues);
+    await this.checkCaseRoleId(guild, botMember, serverConfig.case_role_id, issues);
   }
 
-  private async checkRestrictedRoleCandidate(
+  private async checkCaseRoleCandidate(
     guild: Guild,
     botMember: GuildMember,
     candidate: SetupCandidate,
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
-    if (candidate.restrictedRoleId) {
-      await this.checkRestrictedRoleId(guild, botMember, candidate.restrictedRoleId, issues);
+    if (candidate.caseRoleId) {
+      await this.checkCaseRoleId(guild, botMember, candidate.caseRoleId, issues);
       return;
     }
 
-    if (candidate.willCreateRestrictedRole) {
+    if (candidate.willCreateCaseRole) {
       return;
     }
 
     issues.push({
       severity: 'error',
-      code: 'restricted-role-missing',
+      code: 'case-role-missing',
       message: 'Case role is not configured.',
     });
   }
 
-  private async checkRestrictedRoleId(
+  private async checkCaseRoleId(
     guild: Guild,
     botMember: GuildMember,
-    restrictedRoleId: string | null | undefined,
+    caseRoleId: string | null | undefined,
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
-    if (!restrictedRoleId) {
+    if (!caseRoleId) {
       issues.push({
         severity: 'error',
-        code: 'restricted-role-missing',
+        code: 'case-role-missing',
         message: 'Case role is not configured.',
       });
       return;
     }
 
-    const restrictedRole = await guild.roles.fetch(restrictedRoleId).catch(() => null);
-    if (!restrictedRole) {
+    const caseRole = await guild.roles.fetch(caseRoleId).catch(() => null);
+    if (!caseRole) {
       issues.push({
         severity: 'error',
-        code: 'restricted-role-not-found',
-        message: `Case role ${restrictedRoleId} no longer exists.`,
+        code: 'case-role-not-found',
+        message: `Case role ${caseRoleId} no longer exists.`,
       });
       return;
     }
 
-    if (restrictedRole.id === guild.id) {
+    if (caseRole.id === guild.id) {
       issues.push({
         severity: 'error',
-        code: 'restricted-role-everyone',
+        code: 'case-role-everyone',
         message: 'Case role cannot be @everyone.',
       });
     }
 
-    if (restrictedRole.managed) {
+    if (caseRole.managed) {
       issues.push({
         severity: 'error',
-        code: 'restricted-role-managed',
-        message: `Case role <@&${restrictedRole.id}> is managed by an integration and cannot be assigned by Drasil.`,
+        code: 'case-role-managed',
+        message: `Case role <@&${caseRole.id}> is managed by an integration and cannot be assigned by Drasil.`,
       });
     }
 
-    if (botMember.roles.highest.comparePositionTo(restrictedRole) <= 0) {
+    if (botMember.roles.highest.comparePositionTo(caseRole) <= 0) {
       issues.push({
         severity: 'error',
-        code: 'restricted-role-hierarchy',
-        message: `Move the Drasil role above the selected case role <@&${restrictedRole.id}>.`,
+        code: 'case-role-hierarchy',
+        message: `Move the Drasil role above the selected case role <@&${caseRole.id}>.`,
       });
     }
   }

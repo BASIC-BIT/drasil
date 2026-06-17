@@ -144,12 +144,7 @@ function buildChecklist(args: BuildChecklistArgs) {
 
   checklist.push(
     hasPermission(guildPermissions, DISCORD_PERMISSIONS.ManageRoles)
-      ? item(
-          'manage-roles',
-          'Manage roles permission',
-          'ok',
-          'Drasil can assign the restricted role.'
-        )
+      ? item('manage-roles', 'Manage roles permission', 'ok', 'Drasil can assign the case role.')
       : item('manage-roles', 'Manage roles permission', 'error', 'Drasil is missing Manage Roles.')
   );
 
@@ -169,55 +164,45 @@ function buildChecklist(args: BuildChecklistArgs) {
         )
   );
 
-  const restrictedRole = findRole(resources.roles, server?.restricted_role_id);
+  const caseRole = findRole(resources.roles, server?.case_role_id);
   const highestBotRolePosition = Math.max(
     -1,
     ...resources.roles.filter((role) => botRoleIds.includes(role.id)).map((role) => role.position)
   );
-  if (!server?.restricted_role_id) {
+  if (!server?.case_role_id) {
     checklist.push(
       item(
-        'restricted-role',
-        'Restricted role',
+        'case-role',
+        'Case role',
         'error',
         'Choose the role Drasil applies while a user is under review.'
       )
     );
-  } else if (!restrictedRole) {
+  } else if (!caseRole) {
+    checklist.push(
+      item('case-role', 'Case role', 'error', 'The configured case role no longer exists.')
+    );
+  } else if (caseRole.managed) {
     checklist.push(
       item(
-        'restricted-role',
-        'Restricted role',
+        'case-role',
+        'Case role',
         'error',
-        'The configured restricted role no longer exists.'
+        `${formatRoleName(caseRole)} is managed by an integration.`
       )
     );
-  } else if (restrictedRole.managed) {
+  } else if (highestBotRolePosition <= caseRole.position) {
     checklist.push(
       item(
-        'restricted-role',
-        'Restricted role',
+        'case-role',
+        'Case role',
         'error',
-        `${formatRoleName(restrictedRole)} is managed by an integration.`
-      )
-    );
-  } else if (highestBotRolePosition <= restrictedRole.position) {
-    checklist.push(
-      item(
-        'restricted-role',
-        'Restricted role',
-        'error',
-        `Move Drasil's bot role above ${formatRoleName(restrictedRole)}.`
+        `Move Drasil's bot role above ${formatRoleName(caseRole)}.`
       )
     );
   } else {
     checklist.push(
-      item(
-        'restricted-role',
-        'Restricted role',
-        'ok',
-        `${formatRoleName(restrictedRole)} can be assigned by Drasil.`
-      )
+      item('case-role', 'Case role', 'ok', `${formatRoleName(caseRole)} can be assigned by Drasil.`)
     );
   }
 

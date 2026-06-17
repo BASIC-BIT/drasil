@@ -122,7 +122,7 @@ export class CaseCommandHandler {
           if (!result.opened) {
             throw new Error('Case flow returned false');
           }
-          const content = result.restricted
+          const content = result.caseRoleActive
             ? `Opened a case for ${targetUser.tag} and applied the case role.`
             : `Opened a case for ${targetUser.tag}, but I could not apply the case role. Check bot permissions and role hierarchy.`;
           await buttonInteraction.editReply({
@@ -236,11 +236,11 @@ export class CaseCommandHandler {
     }
 
     const serverConfig = await this.configService.getServerConfig(guild.id);
-    if (!serverConfig.restricted_role_id) {
+    if (!serverConfig.case_role_id) {
       return null;
     }
 
-    return await guild.roles.fetch(serverConfig.restricted_role_id).catch(() => null);
+    return await guild.roles.fetch(serverConfig.case_role_id).catch(() => null);
   }
 
   private async handleCaseRoleIntakeCommand(

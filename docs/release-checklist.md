@@ -57,7 +57,7 @@ Create or choose:
 Configure and validate the bot:
 
 - Run `/config setup admin-channel:<channel>`.
-- Pass `restricted-role:<role>` only when choosing a specific existing role; otherwise Drasil reuses a configured/default `Drasil Restricted` role or creates it if missing.
+- Pass `case-role:<role>` only when choosing a specific existing role; otherwise Drasil reuses a configured/default `Drasil Case` role or creates it if missing.
 - Pass `verification-channel:<channel>` only when reusing an existing channel; otherwise Drasil creates/reuses `verification`.
 - If multiple `#verification` channels exist, pass `verification-channel:<channel>` explicitly.
 - Optionally pass `report-channel:<channel>` to create/update report instructions.

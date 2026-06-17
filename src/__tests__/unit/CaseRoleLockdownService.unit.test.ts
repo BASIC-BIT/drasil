@@ -1,8 +1,8 @@
 import { ChannelType, OverwriteType, PermissionFlagsBits } from 'discord.js';
-import { RestrictedRoleLockdownService } from '../../services/RestrictedRoleLockdownService';
+import { CaseRoleLockdownService } from '../../services/CaseRoleLockdownService';
 
-describe('RestrictedRoleLockdownService (unit)', () => {
-  const restrictedRoleId = 'restricted-role-1';
+describe('CaseRoleLockdownService (unit)', () => {
+  const caseRoleId = 'case-role-1';
   const lockdownDenyPermissions = [
     PermissionFlagsBits.ViewChannel,
     PermissionFlagsBits.SendMessages,
@@ -24,7 +24,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     const allowFlags = new Set(options.allow ?? []);
     const denyFlags = new Set(options.deny ?? []);
     return {
-      id: options.id ?? restrictedRoleId,
+      id: options.id ?? caseRoleId,
       type: options.type ?? OverwriteType.Role,
       allow: { has: jest.fn((permission: bigint) => allowFlags.has(permission)), bitfield: 0n },
       deny: { has: jest.fn((permission: bigint) => denyFlags.has(permission)), bitfield: 0n },
@@ -40,14 +40,14 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     type: ChannelType;
     parentId?: string | null;
     permissionsLocked?: boolean | null;
-    restrictedOverwrite?: ReturnType<typeof createOverwrite>;
+    caseRoleOverwrite?: ReturnType<typeof createOverwrite>;
     extraOverwrites?: readonly ReturnType<typeof createOverwrite>[];
     keepPermissionsLockedAfterSet?: boolean;
     overwriteSetError?: Error;
   }) => {
-    const restrictedOverwrite = options.restrictedOverwrite ?? createOverwrite();
+    const caseRoleOverwrite = options.caseRoleOverwrite ?? createOverwrite();
     const cache = new Map([
-      [restrictedRoleId, restrictedOverwrite],
+      [caseRoleId, caseRoleOverwrite],
       ...(options.extraOverwrites ?? []).map((overwrite) => [overwrite.id, overwrite] as const),
     ]);
     const channel = {
@@ -93,8 +93,8 @@ describe('RestrictedRoleLockdownService (unit)', () => {
         },
       },
     };
-    const restrictedRole = {
-      id: restrictedRoleId,
+    const caseRole = {
+      id: caseRoleId,
       managed: false,
       permissions: {
         has: jest.fn().mockReturnValue(false),
@@ -109,7 +109,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
       roles: {
         everyone: { id: 'everyone-role' },
         cache: new Map(),
-        fetch: jest.fn().mockResolvedValue(restrictedRole),
+        fetch: jest.fn().mockResolvedValue(caseRole),
       },
       channels: {
         fetch: jest
@@ -122,7 +122,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
   const createConfigService = (settings: Record<string, unknown> = {}) => ({
     getServerConfig: jest.fn().mockResolvedValue({
       guild_id: 'guild-1',
-      restricted_role_id: restrictedRoleId,
+      case_role_id: caseRoleId,
       verification_channel_id: 'verification-channel-1',
       settings,
     }),
@@ -155,7 +155,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
       type: ChannelType.GuildText,
     });
     const guild = createGuild([category, unsyncedChannel, syncedChannel, verificationChannel]);
-    const service = new RestrictedRoleLockdownService(createConfigService() as any);
+    const service = new CaseRoleLockdownService(createConfigService() as any);
 
     const report = await service.auditGuild(guild);
 
@@ -184,7 +184,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     });
     const guild = createGuild([category, verificationChannel]);
     const configService = createConfigService();
-    const service = new RestrictedRoleLockdownService(configService as any);
+    const service = new CaseRoleLockdownService(configService as any);
 
     const report = await service.applyGuild(guild, 'admin-1');
 
@@ -211,18 +211,18 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     });
     const guild = createGuild([category, verificationChannel]);
     const configService = createConfigService();
-    const service = new RestrictedRoleLockdownService(configService as any);
+    const service = new CaseRoleLockdownService(configService as any);
 
     const report = await service.applyGuild(guild, 'admin-1', { unsyncAllowedChannels: true });
 
     expect(verificationChannel.permissionOverwrites.set).toHaveBeenCalledWith(
       expect.arrayContaining([
-        expect.objectContaining({ id: restrictedRoleId, ViewChannel: true, SendMessages: true }),
+        expect.objectContaining({ id: caseRoleId, ViewChannel: true, SendMessages: true }),
       ]),
       expect.stringContaining('admin-1')
     );
     expect(category.permissionOverwrites.edit).toHaveBeenCalledWith(
-      restrictedRoleId,
+      caseRoleId,
       expect.objectContaining({ ViewChannel: false, SendMessages: false }),
       expect.any(Object)
     );
@@ -232,7 +232,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     ]);
     expect(report.appliedActions.map((action) => action.channelId)).toEqual(['category-1']);
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
-      restricted_lockdown_enabled: true,
+      case_role_lockdown_enabled: true,
     });
   });
 
@@ -252,13 +252,13 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     });
     const guild = createGuild([category, verificationChannel]);
     const configService = createConfigService();
-    const service = new RestrictedRoleLockdownService(configService as any);
+    const service = new CaseRoleLockdownService(configService as any);
 
     const report = await service.applyGuild(guild, 'admin-1', { unsyncAllowedChannels: true });
 
     expect(verificationChannel.permissionOverwrites.set).toHaveBeenCalled();
     expect(category.permissionOverwrites.edit).toHaveBeenCalledWith(
-      restrictedRoleId,
+      caseRoleId,
       expect.objectContaining({ ViewChannel: false, SendMessages: false }),
       expect.any(Object)
     );
@@ -269,7 +269,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     ]);
     expect(report.appliedActions.map((action) => action.channelId)).toEqual(['category-1']);
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
-      restricted_lockdown_enabled: true,
+      case_role_lockdown_enabled: true,
     });
   });
 
@@ -299,7 +299,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     const configService = createConfigService({
       report_instructions_channel_id: 'report-channel-1',
     });
-    const service = new RestrictedRoleLockdownService(configService as any);
+    const service = new CaseRoleLockdownService(configService as any);
 
     const report = await service.applyGuild(guild, 'admin-1', { unsyncAllowedChannels: true });
 
@@ -336,7 +336,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     });
     const guild = createGuild([category, unsyncedChannel, verificationChannel]);
     const configService = createConfigService();
-    const service = new RestrictedRoleLockdownService(configService as any);
+    const service = new CaseRoleLockdownService(configService as any);
 
     const report = await service.applyGuild(guild, 'admin-1');
 
@@ -345,17 +345,17 @@ describe('RestrictedRoleLockdownService (unit)', () => {
       'channel-1',
     ]);
     expect(category.permissionOverwrites.edit).toHaveBeenCalledWith(
-      restrictedRoleId,
+      caseRoleId,
       expect.objectContaining({ ViewChannel: false, SendMessages: false }),
       expect.objectContaining({ reason: expect.stringContaining('admin-1') })
     );
     expect(unsyncedChannel.permissionOverwrites.edit).toHaveBeenCalledWith(
-      restrictedRoleId,
+      caseRoleId,
       expect.objectContaining({ ViewChannel: false, SendMessages: false }),
       expect.any(Object)
     );
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
-      restricted_lockdown_enabled: true,
+      case_role_lockdown_enabled: true,
     });
   });
 
@@ -364,7 +364,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
       id: 'category-1',
       name: 'public',
       type: ChannelType.GuildCategory,
-      restrictedOverwrite: createOverwrite({ deny: lockdownDenyPermissions }),
+      caseRoleOverwrite: createOverwrite({ deny: lockdownDenyPermissions }),
     });
     const verificationChannel = createChannel({
       id: 'verification-channel-1',
@@ -373,7 +373,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     });
     const guild = createGuild([category, verificationChannel]);
     const configService = createConfigService();
-    const service = new RestrictedRoleLockdownService(configService as any);
+    const service = new CaseRoleLockdownService(configService as any);
 
     const report = await service.applyGuild(guild, 'admin-1');
 
@@ -381,7 +381,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
     expect(report.appliedActions).toEqual([]);
     expect(category.permissionOverwrites.edit).not.toHaveBeenCalled();
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
-      restricted_lockdown_enabled: true,
+      case_role_lockdown_enabled: true,
     });
   });
 
@@ -403,7 +403,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
       type: ChannelType.GuildText,
     });
     const guild = createGuild([category, verificationChannel]);
-    const service = new RestrictedRoleLockdownService(createConfigService() as any);
+    const service = new CaseRoleLockdownService(createConfigService() as any);
 
     const report = await service.auditGuild(guild);
 
@@ -448,7 +448,7 @@ describe('RestrictedRoleLockdownService (unit)', () => {
       ['bot-role-1', { id: 'bot-role-1', managed: true }],
       ['human-role-1', { id: 'human-role-1', managed: false }],
     ]);
-    const service = new RestrictedRoleLockdownService(createConfigService() as any);
+    const service = new CaseRoleLockdownService(createConfigService() as any);
 
     const report = await service.auditGuild(guild);
 

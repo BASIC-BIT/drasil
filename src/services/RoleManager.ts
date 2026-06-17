@@ -8,18 +8,18 @@ import { IConfigService } from '../config/ConfigService';
  */
 export interface IRoleManager {
   /**
-   * Assigns the restricted role to a guild member
-   * @param member The guild member to restrict
+   * Assigns the case role to a guild member
+   * @param member The guild member receiving the case role
    * @returns Promise resolving to true if successful, false if the role couldn't be assigned
    */
-  assignRestrictedRole(member: GuildMember): Promise<boolean>;
+  assignCaseRole(member: GuildMember): Promise<boolean>;
 
   /**
-   * Removes the restricted role from a guild member
-   * @param member The guild member to unrestrict
+   * Removes the case role from a guild member
+   * @param member The guild member losing the case role
    * @returns Promise resolving to true if successful, false if the role couldn't be removed
    */
-  removeRestrictedRole(member: GuildMember): Promise<boolean>;
+  removeCaseRole(member: GuildMember): Promise<boolean>;
 }
 
 /**
@@ -35,35 +35,35 @@ export class RoleManager implements IRoleManager {
   }
 
   /**
-   * Assigns the restricted role to a guild member
-   * @param member The guild member to restrict
+   * Assigns the case role to a guild member
+   * @param member The guild member receiving the case role
    * @returns Promise resolving to true if successful, false if the role couldn't be assigned
    */
-  public async assignRestrictedRole(member: GuildMember): Promise<boolean> {
-    const restrictedRole = await this.configService.getRestrictedRole(member.guild.id);
-    if (!restrictedRole) {
-      console.error('No restricted role ID configured');
+  public async assignCaseRole(member: GuildMember): Promise<boolean> {
+    const caseRole = await this.configService.getCaseRole(member.guild.id);
+    if (!caseRole) {
+      console.error('No case role ID configured');
       return false;
     }
 
-    await member.roles.add(restrictedRole);
+    await member.roles.add(caseRole);
 
     return true;
   }
 
   /**
-   * Removes the restricted role from a guild member
-   * @param member The guild member to unrestrict
+   * Removes the case role from a guild member
+   * @param member The guild member losing the case role
    * @returns Promise resolving to true if successful, false if the role couldn't be removed
    */
-  public async removeRestrictedRole(member: GuildMember): Promise<boolean> {
-    const restrictedRole = await this.configService.getRestrictedRole(member.guild.id);
-    if (!restrictedRole) {
-      console.error('No restricted role ID configured');
+  public async removeCaseRole(member: GuildMember): Promise<boolean> {
+    const caseRole = await this.configService.getCaseRole(member.guild.id);
+    if (!caseRole) {
+      console.error('No case role ID configured');
       return false;
     }
 
-    await member.roles.remove(restrictedRole);
+    await member.roles.remove(caseRole);
 
     return true;
   }

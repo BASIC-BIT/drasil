@@ -27,7 +27,7 @@ export class ServerRepository implements IServerRepository {
 
   private toDomainServer(server: {
     guild_id: string;
-    restricted_role_id: string | null;
+    case_role_id: string | null;
     admin_channel_id: string | null;
     verification_channel_id: string | null;
     admin_notification_role_id: string | null;
@@ -42,7 +42,7 @@ export class ServerRepository implements IServerRepository {
   }): Server {
     return {
       guild_id: server.guild_id,
-      restricted_role_id: server.restricted_role_id,
+      case_role_id: server.case_role_id,
       admin_channel_id: server.admin_channel_id,
       verification_channel_id: server.verification_channel_id,
       admin_notification_role_id: server.admin_notification_role_id,
@@ -126,7 +126,7 @@ export class ServerRepository implements IServerRepository {
         // data.settings should always be an object based on the Server interface,
         // so the ?? fallback is unnecessary.
         settings: data.settings as unknown as Prisma.InputJsonValue,
-        restricted_role_id: data.restricted_role_id,
+        case_role_id: data.case_role_id,
         admin_channel_id: data.admin_channel_id,
         verification_channel_id: data.verification_channel_id,
         admin_notification_role_id: data.admin_notification_role_id,

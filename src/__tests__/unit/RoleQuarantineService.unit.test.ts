@@ -52,12 +52,12 @@ const createVerificationEvent = (): VerificationEvent =>
 
 const createConfigService = (
   settings: Record<string, unknown>,
-  restrictedRoleId = 'restricted-role'
+  caseRoleId = 'case-role'
 ): IConfigService =>
   ({
     getServerConfig: jest.fn().mockResolvedValue({
       guild_id: 'guild-1',
-      restricted_role_id: restrictedRoleId,
+      case_role_id: caseRoleId,
       settings,
     }),
   }) as unknown as IConfigService;
@@ -115,7 +115,7 @@ describe('RoleQuarantineService (unit)', () => {
     });
     const exemptRole = createRole({ id: '100000000000000005' });
     const highRole = createRole({ id: 'high-role', position: 100 });
-    const restrictedRole = createRole({ id: 'restricted-role' });
+    const caseRole = createRole({ id: 'case-role' });
     const member = createMember([
       safeRole,
       managedRole,
@@ -123,7 +123,7 @@ describe('RoleQuarantineService (unit)', () => {
       privilegedRole,
       exemptRole,
       highRole,
-      restrictedRole,
+      caseRole,
     ]);
     const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
     const service = new RoleQuarantineService(
@@ -139,7 +139,7 @@ describe('RoleQuarantineService (unit)', () => {
     expect(result.status).toBe('quarantined');
     expect(result.plannedRoleIds).toEqual(['safe-role']);
     expect(result.removedRoleIds).toEqual(['safe-role']);
-    expect(result.originalRoleIds).not.toContain('restricted-role');
+    expect(result.originalRoleIds).not.toContain('case-role');
     expect(member.roles.remove).toHaveBeenCalledWith(
       safeRole,
       'Drasil role quarantine for case verification-1'

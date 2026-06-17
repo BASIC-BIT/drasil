@@ -82,8 +82,8 @@ High-signal manual and automated test ideas live in `docs/test-cases.md`.
 
 1. **Run Unified Setup**:
    - Use `/config setup admin-channel:<channel>`.
-   - Optionally pass `restricted-role:<role>` to use an existing case role.
-   - Omit `restricted-role` to let Drasil reuse a configured/default `Drasil Restricted` role or create it if missing.
+   - Optionally pass `case-role:<role>` to use an existing case role.
+   - Omit `case-role` to let Drasil reuse a configured/default `Drasil Case` role or create it if missing.
    - Optionally pass `verification-channel:<channel>` to reuse an existing verification channel.
    - Omit `verification-channel` to let Drasil create or reuse a `verification` text channel.
    - If multiple `#verification` channels exist, pass `verification-channel:<channel>` explicitly.
