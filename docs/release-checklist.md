@@ -40,6 +40,9 @@ Role hierarchy:
 
 - `DATABASE_URL` points at your Postgres instance.
 - `OPENAI_API_KEY` is set (required for GPT-based analysis).
+- For production-impacting database changes, complete the backup gate in
+  `docs/deploy/database-backups.md` before applying migrations or data repairs.
+- Do not proceed on a red backup gate. A yellow gate requires an explicit owner waiver.
 - Run Prisma migrations for the environment (typical):
 
 ```bash
