@@ -76,16 +76,32 @@ Do not proceed on red. Yellow needs an explicit owner waiver for production-impa
 
 Use this when the project lacks automatic backups, when you need an extra pre-deploy restore point, or before risky data rewrites.
 
-Example with Supabase CLI:
+For Supabase, do not rely on the default `supabase db dump` command by itself. The default dump is schema-focused and does not capture Drasil's production rows. Capture roles, schema, and data as separate files:
 
 ```bash
-supabase db dump --db-url "$DATABASE_URL" --file "drasil-prod-YYYYMMDD-HHMMSS.dump"
+supabase db dump --db-url "$SOURCE_DATABASE_URL" --file "roles.sql" --role-only
+supabase db dump --db-url "$SOURCE_DATABASE_URL" --file "schema.sql"
+supabase db dump --db-url "$SOURCE_DATABASE_URL" --file "data.sql" --use-copy --data-only -x "storage.buckets_vectors" -x "storage.vector_indexes"
 ```
 
-Example with `pg_dump`:
+Restore those files into a safe target first, never directly over production during a drill:
 
 ```bash
-pg_dump --format=custom --no-owner --no-privileges --file "drasil-prod-YYYYMMDD-HHMMSS.dump" "$DATABASE_URL"
+psql \
+  --single-transaction \
+  --variable ON_ERROR_STOP=1 \
+  --file "roles.sql" \
+  --file "schema.sql" \
+  --command 'SET session_replication_role = replica' \
+  --file "data.sql" \
+  --dbname "$TARGET_DATABASE_URL"
+```
+
+Raw `pg_dump` is a fallback for non-Supabase Postgres or a restore-tested Postgres target where Supabase-managed schemas and permissions are understood. Do not use raw, unfiltered `pg_dump` as the primary Supabase backup path.
+
+```bash
+pg_dump --format=custom --no-owner --no-privileges --file "drasil-prod-YYYYMMDD-HHMMSS.dump" "$SOURCE_DATABASE_URL"
+pg_restore --clean --no-owner --no-privileges --dbname "$TARGET_DATABASE_URL" "drasil-prod-YYYYMMDD-HHMMSS.dump"
 ```
 
 After creating a dump:
@@ -108,7 +124,7 @@ Safe drill target options:
 Drill steps:
 
 1. Choose a restore source: daily backup, PITR timestamp, or manual dump.
-2. Restore into the safe target, not directly over production.
+2. Restore into the safe target, not directly over production. For manual Supabase dumps, use the `psql` restore command above against `TARGET_DATABASE_URL`.
 3. Set `DATABASE_URL` or `TEST_DATABASE_URL` to the restored target.
 4. Run `npx prisma migrate deploy` if the target needs current migrations applied.
 5. Run read-only smoke checks against key tables: `servers`, `users`, `server_members`, `detection_events`, `verification_events`, and `admin_actions`.
