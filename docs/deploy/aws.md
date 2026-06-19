@@ -166,6 +166,10 @@ The deploy workflow runs on pushes to `main` (and supports manual `workflow_disp
 
 ## 5) Deploy
 
+Before deploying a ref with production-impacting database migrations or data repairs, complete the
+database backup gate in `docs/deploy/database-backups.md`. Do not proceed on a red backup gate; a
+yellow gate requires an explicit owner waiver.
+
 Run the workflow:
 
 - GitHub -> Actions -> "Deploy (prod)" -> Run workflow
