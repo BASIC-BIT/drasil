@@ -101,7 +101,7 @@ Raw `pg_dump` is a fallback for non-Supabase Postgres or a restore-tested Postgr
 
 ```bash
 pg_dump --format=custom --no-owner --no-privileges --file "drasil-prod-YYYYMMDD-HHMMSS.dump" "$SOURCE_DATABASE_URL"
-pg_restore --clean --no-owner --no-privileges --dbname "$TARGET_DATABASE_URL" "drasil-prod-YYYYMMDD-HHMMSS.dump"
+pg_restore --clean --if-exists --no-owner --no-privileges --dbname "$TARGET_DATABASE_URL" "drasil-prod-YYYYMMDD-HHMMSS.dump"
 ```
 
 After creating a dump:
