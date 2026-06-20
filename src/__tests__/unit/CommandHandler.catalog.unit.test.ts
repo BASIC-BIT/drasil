@@ -138,8 +138,18 @@ describe('CommandHandler command catalog (unit)', () => {
       PermissionFlagsBits.ManageGuild.toString()
     );
     expect(auditCommand.options.map((option: any) => option.name)).toEqual([
+      'integrity',
       'ignore-detection',
       'restore-detection',
+    ]);
+    const integritySubcommand = auditCommand.options.find(
+      (option: any) => option.name === 'integrity'
+    );
+    expect(integritySubcommand.options.map((option: any) => option.name)).toEqual([
+      'scope',
+      'days',
+      'limit',
+      'user',
     ]);
   });
 

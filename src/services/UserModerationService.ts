@@ -31,6 +31,11 @@ import {
   RoleQuarantineRestoreResult,
 } from './RoleQuarantineService';
 import { appendVerificationActionFailure } from '../utils/verificationActionFailures';
+import {
+  getResolutionAdminActionType,
+  getResolutionModerationOutcomeType,
+  ResolvedVerificationStatus,
+} from '../utils/verificationResolution';
 
 /**
  * Interface for the UserModerationService
@@ -658,16 +663,7 @@ export class UserModerationService implements IUserModerationService {
     target: ModerationTarget,
     verificationEvent: VerificationEvent,
     previousStatus: VerificationStatus,
-    newStatus:
-      | VerificationStatus.VERIFIED
-      | VerificationStatus.BANNED
-      | VerificationStatus.KICKED
-      | VerificationStatus.CLOSED_NO_ACTION,
-    actionType:
-      | AdminActionType.VERIFY
-      | AdminActionType.BAN
-      | AdminActionType.KICK
-      | AdminActionType.CLOSE_NO_ACTION,
+    newStatus: ResolvedVerificationStatus,
     moderator: User,
     strictNotification: boolean,
     options: {
@@ -676,6 +672,8 @@ export class UserModerationService implements IUserModerationService {
       metadata?: Record<string, unknown>;
     } = {}
   ): Promise<void> {
+    const actionType = getResolutionAdminActionType(newStatus);
+
     await this.threadManager.resolveVerificationThread(verificationEvent, newStatus, moderator.id);
 
     const logged = await this.notificationManager.logActionToMessage(
@@ -999,7 +997,6 @@ export class UserModerationService implements IUserModerationService {
           resolvedEvent.event,
           resolvedEvent.previousStatus,
           VerificationStatus.VERIFIED,
-          AdminActionType.VERIFY,
           moderator,
           resolvedEvent.event.id === verificationEvent.id,
           {
@@ -1012,7 +1009,7 @@ export class UserModerationService implements IUserModerationService {
 
       await this.tryRecordModerationOutcomes(
         this.getModerationTarget(member),
-        ModerationOutcomeType.VERIFIED,
+        getResolutionModerationOutcomeType(VerificationStatus.VERIFIED),
         ModerationOutcomeSource.DRASIL,
         resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
         {
@@ -1107,7 +1104,6 @@ export class UserModerationService implements IUserModerationService {
             resolvedEvent.event,
             resolvedEvent.previousStatus,
             VerificationStatus.BANNED,
-            AdminActionType.BAN,
             moderator,
             resolvedEvent.event.id === verificationEvent?.id,
             {
@@ -1125,7 +1121,7 @@ export class UserModerationService implements IUserModerationService {
 
       await this.tryRecordModerationOutcomes(
         this.getModerationTarget(member),
-        ModerationOutcomeType.BANNED,
+        getResolutionModerationOutcomeType(VerificationStatus.BANNED),
         ModerationOutcomeSource.DRASIL,
         resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
         {
@@ -1202,7 +1198,6 @@ export class UserModerationService implements IUserModerationService {
             resolvedEvent.event,
             resolvedEvent.previousStatus,
             VerificationStatus.KICKED,
-            AdminActionType.KICK,
             moderator,
             resolvedEvent.event.id === verificationEvent?.id,
             {
@@ -1221,7 +1216,7 @@ export class UserModerationService implements IUserModerationService {
 
       await this.tryRecordModerationOutcomes(
         this.getModerationTarget(member),
-        ModerationOutcomeType.KICKED,
+        getResolutionModerationOutcomeType(VerificationStatus.KICKED),
         ModerationOutcomeSource.DRASIL,
         resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
         {
@@ -1337,7 +1332,6 @@ export class UserModerationService implements IUserModerationService {
             resolvedEvent.event,
             resolvedEvent.previousStatus,
             VerificationStatus.BANNED,
-            AdminActionType.BAN,
             moderator,
             Boolean(resolvedEvent.event.notification_message_id) &&
               resolvedEvent.event.id === resolvedEvents[0]?.event.id,
@@ -1351,7 +1345,7 @@ export class UserModerationService implements IUserModerationService {
 
         await this.tryRecordModerationOutcomes(
           target,
-          ModerationOutcomeType.BANNED,
+          getResolutionModerationOutcomeType(VerificationStatus.BANNED),
           ModerationOutcomeSource.DRASIL,
           resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
           {
@@ -1475,7 +1469,6 @@ export class UserModerationService implements IUserModerationService {
             resolvedEvent.event,
             resolvedEvent.previousStatus,
             VerificationStatus.BANNED,
-            AdminActionType.BAN,
             moderator,
             resolvedEvent.event.id === resolvedEvents[0].event.id,
             {
@@ -1493,7 +1486,7 @@ export class UserModerationService implements IUserModerationService {
 
       await this.tryRecordModerationOutcomes(
         target,
-        ModerationOutcomeType.BANNED,
+        getResolutionModerationOutcomeType(VerificationStatus.BANNED),
         ModerationOutcomeSource.MIGRATION_OR_SYNC,
         resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
         {
@@ -1657,7 +1650,6 @@ export class UserModerationService implements IUserModerationService {
           resolvedEvent.event,
           resolvedEvent.previousStatus,
           VerificationStatus.CLOSED_NO_ACTION,
-          AdminActionType.CLOSE_NO_ACTION,
           moderator,
           Boolean(resolvedEvent.event.notification_message_id) &&
             resolvedEvent.event.id === resolvedEvents[0].event.id,
@@ -1673,7 +1665,7 @@ export class UserModerationService implements IUserModerationService {
 
       await this.tryRecordModerationOutcomes(
         target,
-        ModerationOutcomeType.CLOSED_NO_ACTION,
+        getResolutionModerationOutcomeType(VerificationStatus.CLOSED_NO_ACTION),
         ModerationOutcomeSource.DRASIL,
         resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
         {
@@ -1802,7 +1794,7 @@ export class UserModerationService implements IUserModerationService {
           username: user.username,
           accountCreatedAt: this.getUserAccountCreatedAt(user),
         },
-        ModerationOutcomeType.BANNED,
+        getResolutionModerationOutcomeType(VerificationStatus.BANNED),
         options.source,
         resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
         {
@@ -1906,7 +1898,7 @@ export class UserModerationService implements IUserModerationService {
 
       await this.tryRecordModerationOutcomes(
         this.getModerationTarget(member),
-        ModerationOutcomeType.KICKED,
+        getResolutionModerationOutcomeType(VerificationStatus.KICKED),
         options.source,
         resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
         {
@@ -1945,7 +1937,7 @@ export class UserModerationService implements IUserModerationService {
       (await this.moderationOutcomeService?.findLatestOutcomeByType(
         serverId,
         userId,
-        ModerationOutcomeType.KICKED
+        getResolutionModerationOutcomeType(VerificationStatus.KICKED)
       )) ?? null
     );
   }

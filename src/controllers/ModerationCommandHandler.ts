@@ -6,6 +6,11 @@ import {
   PermissionFlagsBits,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
+import {
+  IIntegrityAuditService,
+  IntegrityAuditFinding,
+  IntegrityAuditReport,
+} from '../services/IntegrityAuditService';
 import { ISecurityActionService } from '../services/SecurityActionService';
 import { IUserModerationService } from '../services/UserModerationService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
@@ -13,12 +18,15 @@ import { requestSlashCommandConfirmation } from '../utils/slashCommandConfirmati
 
 type ReplyGuildInstallRequired = (interaction: ChatInputCommandInteraction) => Promise<void>;
 
+const AUDIT_INTEGRITY_RESPONSE_MAX_LENGTH = 1900;
+
 export class ModerationCommandHandler {
   public constructor(
     private readonly configService: IConfigService,
     private readonly userModerationService: IUserModerationService,
     private readonly securityActionService: ISecurityActionService,
-    private readonly replyGuildInstallRequired: ReplyGuildInstallRequired
+    private readonly replyGuildInstallRequired: ReplyGuildInstallRequired,
+    private readonly integrityAuditService?: IIntegrityAuditService
   ) {}
 
   public async handleBanCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -121,6 +129,11 @@ export class ModerationCommandHandler {
     }
 
     const subcommand = interaction.options.getSubcommand(true);
+    if (subcommand === 'integrity') {
+      await this.handleIntegrityAuditCommand(interaction, guild);
+      return;
+    }
+
     const detectionEventId = interaction.options.getString('detection-id', true).trim();
     const reason = interaction.options.getString('reason')?.trim() || undefined;
 
@@ -242,5 +255,80 @@ export class ModerationCommandHandler {
         ? await guild.members.fetchMe().catch(() => null)
         : null);
     return botMember?.permissions.has(PermissionFlagsBits.BanMembers) ?? false;
+  }
+
+  private async handleIntegrityAuditCommand(
+    interaction: ChatInputCommandInteraction,
+    guild: Guild
+  ): Promise<void> {
+    if (!this.integrityAuditService) {
+      await interaction.reply({
+        content: 'Integrity audit is not available in this runtime.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      const report = await this.integrityAuditService.auditGuild(guild, {
+        scope: interaction.options.getString('scope'),
+        days: interaction.options.getInteger('days'),
+        limit: interaction.options.getInteger('limit'),
+        userId: interaction.options.getUser('user')?.id,
+      });
+
+      await interaction.editReply({ content: this.formatIntegrityAuditReport(report) });
+    } catch (error) {
+      console.error(`Failed to run integrity audit for guild ${guild.id}:`, error);
+      await interaction.editReply({
+        content: 'Failed to run the integrity audit. No repair actions were applied.',
+      });
+    }
+  }
+
+  private formatIntegrityAuditReport(report: IntegrityAuditReport): string {
+    const severityCounts = this.countFindingsBySeverity(report.findings);
+    const lines = [
+      'Moderation integrity audit complete. No repair actions were applied.',
+      `Scope: ${report.scope}; lookback: ${report.days} days; limit: ${report.limit}${report.userId ? `; user: <@${report.userId}>` : ''}.`,
+      `Checked: ${report.candidateCounts.pendingCases} pending cases, ${report.candidateCounts.recentResolvedCases} recent resolved cases, ${report.candidateCounts.restrictedMembers} restricted members, ${report.candidateCounts.activeRoleQuarantines} active role quarantines, ${report.candidateCounts.queueItems} queue items.`,
+      `Findings: ${severityCounts.error} errors, ${severityCounts.warning} warnings, ${severityCounts.info} info.`,
+    ];
+
+    if (report.findings.length === 0) {
+      lines.push('No integrity findings found for the selected scope.');
+      return lines.join('\n');
+    }
+
+    lines.push('', 'Top findings:');
+    for (const finding of report.findings.slice(0, 12)) {
+      lines.push(this.formatIntegrityFinding(finding));
+    }
+    if (report.findings.length > 12) {
+      lines.push(`...and ${report.findings.length - 12} more findings.`);
+    }
+
+    const response = lines.join('\n');
+    return response.length <= AUDIT_INTEGRITY_RESPONSE_MAX_LENGTH
+      ? response
+      : `${response.slice(0, AUDIT_INTEGRITY_RESPONSE_MAX_LENGTH - 3)}...`;
+  }
+
+  private formatIntegrityFinding(finding: IntegrityAuditFinding): string {
+    return `- [${finding.severity}] ${finding.code}: ${finding.subject} - ${finding.detail}`;
+  }
+
+  private countFindingsBySeverity(
+    findings: IntegrityAuditFinding[]
+  ): Record<'error' | 'warning' | 'info', number> {
+    return findings.reduce(
+      (counts, finding) => ({
+        ...counts,
+        [finding.severity]: counts[finding.severity] + 1,
+      }),
+      { error: 0, warning: 0, info: 0 }
+    );
   }
 }

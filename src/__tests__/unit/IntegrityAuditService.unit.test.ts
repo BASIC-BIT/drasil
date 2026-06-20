@@ -1,0 +1,217 @@
+import { Guild } from 'discord.js';
+import { IntegrityAuditService } from '../../services/IntegrityAuditService';
+import {
+  IntegrityAuditCandidates,
+  IIntegrityAuditRepository,
+} from '../../repositories/IntegrityAuditRepository';
+import {
+  AdminActionType,
+  ModerationQueueItemType,
+  RoleQuarantineSnapshotStatus,
+  VerificationStatus,
+} from '../../repositories/types';
+
+const baseDate = new Date('2026-01-01T00:00:00.000Z');
+
+function buildCandidates(
+  overrides: Partial<IntegrityAuditCandidates> = {}
+): IntegrityAuditCandidates {
+  return {
+    pendingVerificationEvents: [],
+    recentResolvedVerificationEvents: [],
+    restrictedMembers: [],
+    activeRoleQuarantineSnapshots: [],
+    moderationQueueItems: [],
+    ...overrides,
+  };
+}
+
+describe('IntegrityAuditService (unit)', () => {
+  it('reports live Discord drift and missing durable rows without mutating state', async () => {
+    const candidates = buildCandidates({
+      pendingVerificationEvents: [
+        {
+          id: 'pending-1',
+          server_id: 'guild-1',
+          user_id: 'user-pending',
+          detection_event_id: null,
+          thread_id: 'thread-1',
+          private_evidence_thread_id: null,
+          notification_channel_id: 'notify-channel-1',
+          notification_message_id: 'notify-message-1',
+          status: VerificationStatus.PENDING,
+          created_at: baseDate,
+          updated_at: baseDate,
+          resolved_at: null,
+          resolved_by: null,
+          notes: null,
+          metadata: {},
+          admin_actions: [],
+          moderation_outcomes: [],
+        },
+      ],
+      recentResolvedVerificationEvents: [
+        {
+          id: 'resolved-1',
+          server_id: 'guild-1',
+          user_id: 'user-resolved',
+          detection_event_id: null,
+          thread_id: 'thread-2',
+          private_evidence_thread_id: null,
+          notification_channel_id: 'notify-channel-1',
+          notification_message_id: 'notify-message-2',
+          status: VerificationStatus.BANNED,
+          created_at: baseDate,
+          updated_at: baseDate,
+          resolved_at: baseDate,
+          resolved_by: 'admin-1',
+          notes: null,
+          metadata: {},
+          admin_actions: [
+            {
+              id: 'action-1',
+              server_id: 'guild-1',
+              user_id: 'user-resolved',
+              admin_id: 'admin-1',
+              verification_event_id: 'resolved-1',
+              detection_event_id: null,
+              action_type: AdminActionType.OPEN_CASE,
+              action_at: baseDate,
+              previous_status: null,
+              new_status: VerificationStatus.PENDING,
+              notes: null,
+              metadata: {},
+            },
+          ],
+          moderation_outcomes: [],
+        },
+      ],
+      restrictedMembers: [
+        {
+          server_id: 'guild-1',
+          user_id: 'user-restricted',
+          join_date: baseDate,
+          is_restricted: true,
+          last_verified_at: null,
+          last_message_at: null,
+          verification_status: VerificationStatus.PENDING,
+          last_status_change: baseDate,
+          created_by: null,
+          updated_by: null,
+        },
+      ],
+      activeRoleQuarantineSnapshots: [
+        {
+          id: 'snapshot-1',
+          server_id: 'guild-1',
+          user_id: 'user-restricted',
+          verification_event_id: null,
+          status: RoleQuarantineSnapshotStatus.ACTIVE,
+          mode: 'automatic',
+          original_role_ids: ['role-a'],
+          planned_role_ids: [],
+          removed_role_ids: ['role-a'],
+          restored_role_ids: [],
+          skipped_roles: [],
+          failed_removals: [],
+          failed_restores: [],
+          created_at: baseDate,
+          updated_at: baseDate,
+          restored_at: null,
+          restored_by: null,
+          metadata: {},
+        },
+      ],
+      moderationQueueItems: [
+        {
+          id: 'queue-1',
+          server_id: 'guild-1',
+          user_id: 'user-pending',
+          item_type: ModerationQueueItemType.CASE_MIRROR,
+          verification_event_id: 'resolved-1',
+          detection_event_id: null,
+          report_intake_id: null,
+          source_thread_id: null,
+          queue_channel_id: 'queue-channel-1',
+          queue_message_id: 'missing-message-1',
+          last_source_message_id: null,
+          last_notified_at: null,
+          created_at: baseDate,
+          updated_at: baseDate,
+          metadata: {},
+          verification_event_status: VerificationStatus.BANNED,
+        },
+      ],
+    });
+    const repository: IIntegrityAuditRepository = {
+      listCandidates: jest.fn().mockResolvedValue(candidates),
+    };
+    const service = new IntegrityAuditService(
+      {
+        channels: {
+          fetch: jest.fn(async (channelId: string) => ({
+            id: channelId,
+            messages: {
+              fetch: jest.fn(async (messageId: string) => {
+                if (messageId === 'missing-message-1') {
+                  throw { code: 10008, message: 'Unknown Message' };
+                }
+                return { id: messageId };
+              }),
+            },
+          })),
+        },
+      } as any,
+      {
+        getServerConfig: jest.fn().mockResolvedValue({
+          restricted_role_id: 'restricted-role-1',
+          settings: { moderation_queue_channel_id: 'queue-channel-1' },
+        }),
+      } as any,
+      repository
+    );
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn(async (userId: string) => {
+          if (userId === 'user-pending') {
+            throw { code: 10007, message: 'Unknown Member' };
+          }
+          return {
+            id: userId,
+            roles: { cache: { has: jest.fn().mockReturnValue(false) } },
+          };
+        }),
+      },
+      bans: {
+        fetch: jest.fn(async (userId: string) => {
+          if (userId === 'user-pending') {
+            return { user: { id: userId } };
+          }
+          throw { code: 10026, message: 'Unknown Ban' };
+        }),
+      },
+    } as unknown as Guild;
+
+    const report = await service.auditGuild(guild, { scope: 'all', days: 30, limit: 50 });
+
+    expect(repository.listCandidates).toHaveBeenCalledWith({
+      serverId: 'guild-1',
+      since: expect.any(Date),
+      limit: 50,
+      userId: undefined,
+    });
+    expect(report.findings.map((finding) => finding.code)).toEqual(
+      expect.arrayContaining([
+        'pending_case_user_banned',
+        'pending_case_member_missing',
+        'resolved_case_missing_admin_action',
+        'resolved_case_missing_moderation_outcome',
+        'banned_case_not_in_ban_list',
+        'restricted_member_role_missing',
+        'queue_case_mirror_not_pending',
+        'queue_message_missing',
+      ])
+    );
+  });
+});

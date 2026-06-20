@@ -22,6 +22,12 @@ import {
 import { MAX_REPORT_AI_MAX_IMAGE_BYTES, MAX_REPORT_AI_MAX_IMAGES } from '../utils/reportAiSettings';
 import { USER_REPORT_REASON_MAX_LENGTH } from '../utils/userReportSettings';
 import { MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT } from '../utils/verificationThreadAnalysisSettings';
+import {
+  INTEGRITY_AUDIT_MAX_DAYS,
+  INTEGRITY_AUDIT_MAX_LIMIT,
+  INTEGRITY_AUDIT_MIN_DAYS,
+  INTEGRITY_AUDIT_MIN_LIMIT,
+} from '../utils/integrityAuditSettings';
 
 export const REPORT_USER_CONTEXT_COMMAND_NAME = 'Report User';
 export const REPORT_MESSAGE_CONTEXT_COMMAND_NAME = 'Report Message';
@@ -911,7 +917,47 @@ const baseApplicationCommandBuilders = [
     .setContexts(InteractionContextType.Guild),
   new SlashCommandBuilder()
     .setName('audit')
-    .setDescription('Audit detection accounting')
+    .setDescription('Audit moderation accounting and live state')
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('integrity')
+        .setDescription('Read-only audit of Discord and database moderation state')
+        .addStringOption((option) =>
+          option
+            .setName('scope')
+            .setDescription('Audit area to check')
+            .setRequired(false)
+            .addChoices(
+              { name: 'All checks', value: 'all' },
+              { name: 'Cases', value: 'cases' },
+              { name: 'Restricted members', value: 'restricted' },
+              { name: 'Queue', value: 'queue' }
+            )
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName('days')
+            .setDescription(
+              `Resolved-case lookback window (${INTEGRITY_AUDIT_MIN_DAYS}-${INTEGRITY_AUDIT_MAX_DAYS} days)`
+            )
+            .setRequired(false)
+            .setMinValue(INTEGRITY_AUDIT_MIN_DAYS)
+            .setMaxValue(INTEGRITY_AUDIT_MAX_DAYS)
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName('limit')
+            .setDescription(
+              `Maximum rows to inspect per category (${INTEGRITY_AUDIT_MIN_LIMIT}-${INTEGRITY_AUDIT_MAX_LIMIT})`
+            )
+            .setRequired(false)
+            .setMinValue(INTEGRITY_AUDIT_MIN_LIMIT)
+            .setMaxValue(INTEGRITY_AUDIT_MAX_LIMIT)
+        )
+        .addUserOption((option) =>
+          option.setName('user').setDescription('Limit audit to one user').setRequired(false)
+        )
+    )
     .addSubcommand((subcommand) =>
       subcommand
         .setName('ignore-detection')
