@@ -756,7 +756,7 @@ export class EventHandler implements IEventHandler {
 
   private auditLogEntryAddedRole(entry: { changes?: unknown }, roleId: string): boolean {
     if (!Array.isArray(entry.changes)) {
-      return true;
+      return false;
     }
 
     const addedRoles = entry.changes.find(

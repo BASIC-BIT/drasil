@@ -256,6 +256,82 @@ describe('EventHandler (unit)', () => {
     }
   });
 
+  it('does not attribute manual intake to audit entries without role-change details', async () => {
+    jest.useFakeTimers();
+    try {
+      const openAdminCase = jest.fn().mockResolvedValue({
+        opened: true,
+        caseRoleAttempted: true,
+        caseRoleActive: true,
+      });
+      const client = { on: jest.fn(), user: { id: 'bot-1', bot: true } };
+      const role = { id: 'manual-role', name: 'Pending Investigation' };
+      const guild = {
+        id: 'guild-1',
+        roles: { cache: new Map([[role.id, role]]), fetch: jest.fn() },
+        members: { fetch: jest.fn() },
+        fetchAuditLogs: jest.fn().mockResolvedValue({
+          entries: [
+            {
+              id: 'audit-1',
+              target: { id: 'user-1' },
+              executor: { id: 'mod-1', bot: false },
+              createdTimestamp: Date.now(),
+            },
+          ],
+        }),
+      };
+      const currentMember = buildManualIntakeMember(guild, [role.id]);
+      (guild.members.fetch as jest.Mock).mockResolvedValue(currentMember);
+      const configService = {
+        initialize: jest.fn().mockResolvedValue(undefined),
+        getCachedServerConfig: jest.fn().mockReturnValue({}),
+        getServerConfig: jest.fn().mockResolvedValue({
+          case_role_id: 'case-role',
+          settings: {
+            manual_intake_enabled: true,
+            manual_intake_role_id: role.id,
+            manual_intake_grace_period_seconds: 0,
+          },
+        }),
+        updateServerConfig: jest.fn().mockResolvedValue({}),
+        updateServerSettings: jest.fn().mockResolvedValue({}),
+      };
+      const handler = buildHandler({
+        client,
+        configService,
+        securityActionService: {
+          handleSuspiciousMessage: jest.fn(),
+          handleSuspiciousJoin: jest.fn(),
+          openCaseForSuspiciousMessage: jest.fn(),
+          openCaseForSuspiciousJoin: jest.fn(),
+          openAdminCase,
+          recordRejoinAfterKickDetection: jest.fn(),
+        },
+      });
+      await handler.setupEventHandlers();
+      const updateHandler = client.on.mock.calls.find(
+        ([event]) => event === Events.GuildMemberUpdate
+      )?.[1];
+
+      await updateHandler?.(
+        buildManualIntakeMember(guild, []),
+        buildManualIntakeMember(guild, [role.id])
+      );
+      await jest.runOnlyPendingTimersAsync();
+
+      expect(openAdminCase).toHaveBeenCalledWith(
+        currentMember,
+        client.user,
+        expect.objectContaining({
+          metadata: expect.objectContaining({ assignedById: null }),
+        })
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('cancels manual intake when the trigger role is removed during the grace period', async () => {
     jest.useFakeTimers();
     try {

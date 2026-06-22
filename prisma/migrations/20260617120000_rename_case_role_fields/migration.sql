@@ -19,3 +19,15 @@ WHERE "settings" ?| ARRAY[
   'restricted_lockdown_allowed_channel_ids',
   'restricted_lockdown_allowed_category_ids'
 ];
+
+UPDATE "servers"
+SET "settings" = jsonb_set("settings", '{role_quarantine_mode}', '"on"', true)
+WHERE "settings" ->> 'role_quarantine_mode' = 'automatic';
+
+UPDATE "servers"
+SET "settings" = jsonb_set("settings", '{report_intake_confirmed_response_mode}', '"open_case"', true)
+WHERE "settings" ->> 'report_intake_confirmed_response_mode' = 'restrict';
+
+UPDATE "servers"
+SET "settings" = jsonb_set("settings", '{report_ai_max_action}', '"open_case"', true)
+WHERE "settings" ->> 'report_ai_max_action' = 'restrict';
