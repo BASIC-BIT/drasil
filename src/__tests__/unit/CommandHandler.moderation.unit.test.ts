@@ -18,6 +18,69 @@ const confirmLastSlashCommand = async (interaction: any): Promise<void> => {
 };
 
 describe('CommandHandler moderation commands (unit)', () => {
+  it('handles /audit integrity as a read-only ephemeral report', async () => {
+    const auditGuild = jest.fn().mockResolvedValue({
+      guildId: 'guild-1',
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      scope: 'all',
+      days: 30,
+      limit: 50,
+      candidateCounts: {
+        pendingCases: 1,
+        recentResolvedCases: 1,
+        restrictedMembers: 0,
+        activeRoleQuarantines: 0,
+        queueItems: 0,
+      },
+      findings: [
+        {
+          severity: 'error',
+          code: 'resolved_case_missing_admin_action',
+          subject: 'case ver-1',
+          detail: 'Resolved case has no durable admin action row.',
+          userId: 'user-1',
+          verificationEventId: 'ver-1',
+        },
+      ],
+    });
+    const { handler } = buildHandler({ integrityAuditService: { auditGuild } });
+
+    const guild = { id: 'guild-1' } as any;
+    const interaction = {
+      commandName: 'audit',
+      guild,
+      channelId: 'channel-1',
+      user: { id: 'admin-1' },
+      memberPermissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ManageGuild),
+      },
+      options: {
+        getSubcommand: jest.fn().mockReturnValue('integrity'),
+        getString: jest.fn((name: string) => (name === 'scope' ? 'all' : null)),
+        getInteger: jest.fn((name: string) => (name === 'days' ? 30 : null)),
+        getUser: jest.fn().mockReturnValue(null),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(auditGuild).toHaveBeenCalledWith(guild, {
+      scope: 'all',
+      days: 30,
+      limit: null,
+      userId: undefined,
+    });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('Moderation integrity audit complete'),
+    });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('resolved_case_missing_admin_action'),
+    });
+  });
+
   it('handles /audit ignore-detection for users with Manage Server permission', async () => {
     const excludeDetectionFromAccounting = jest.fn().mockResolvedValue({ id: 'det-1' });
     const { handler, securityActionService } = buildHandler({ excludeDetectionFromAccounting });

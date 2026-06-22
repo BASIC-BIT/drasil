@@ -41,6 +41,7 @@ import {
 import { IReportIntakeService } from '../services/ReportIntakeService';
 import { IReportIntakeAgentService } from '../services/ReportIntakeAgentService';
 import { ICaseReviewReminderService } from '../services/CaseReviewReminderService';
+import { isDiscordUnknownBanError } from '../utils/discordErrors';
 import {
   IMessageContextRepository,
   MESSAGE_CONTEXT_PREVIEW_MAX_LENGTH,
@@ -60,7 +61,6 @@ const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
 const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
-const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
 const DISCORD_MEMBER_REMOVE_AUDIT_WINDOW_MS = 60 * 1000;
 
 type SetupNudgeSource = 'audit_log_installer' | 'owner';
@@ -612,7 +612,7 @@ export class EventHandler implements IEventHandler {
       const existingBan = await member.guild.bans.fetch(member.id);
       return !existingBan;
     } catch (error) {
-      if (this.isUnknownBanError(error)) {
+      if (isDiscordUnknownBanError(error)) {
         return true;
       }
 
@@ -622,15 +622,6 @@ export class EventHandler implements IEventHandler {
       );
       return false;
     }
-  }
-
-  private isUnknownBanError(error: unknown): boolean {
-    return (
-      typeof error === 'object' &&
-      error !== null &&
-      'code' in error &&
-      (error as { code?: unknown }).code === DISCORD_UNKNOWN_BAN_ERROR_CODE
-    );
   }
 
   private async resolveObservedBanOptions(ban: GuildBan): Promise<ObservedDiscordBanOptions> {

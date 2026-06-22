@@ -72,6 +72,10 @@ import {
   ModerationQueueRepository,
 } from '../repositories/ModerationQueueRepository';
 import {
+  IIntegrityAuditRepository,
+  IntegrityAuditRepository,
+} from '../repositories/IntegrityAuditRepository';
+import {
   IReportCandidateService,
   ReportCandidateService,
 } from '../services/ReportCandidateService';
@@ -97,6 +101,7 @@ import {
   RoleQuarantineSnapshotRepository,
 } from '../repositories/RoleQuarantineSnapshotRepository';
 import { IRoleQuarantineService, RoleQuarantineService } from '../services/RoleQuarantineService';
+import { IIntegrityAuditService, IntegrityAuditService } from '../services/IntegrityAuditService';
 // Initialize container
 const container = new Container();
 
@@ -194,6 +199,10 @@ function configureRepositories(container: Container): void {
   container
     .bind<IRoleQuarantineSnapshotRepository>(TYPES.RoleQuarantineSnapshotRepository)
     .to(RoleQuarantineSnapshotRepository)
+    .inSingletonScope();
+  container
+    .bind<IIntegrityAuditRepository>(TYPES.IntegrityAuditRepository)
+    .to(IntegrityAuditRepository)
     .inSingletonScope();
 
   // Add more repository bindings as they're refactored
@@ -304,6 +313,11 @@ function configureServices(container: Container): void {
   container
     .bind<IRoleQuarantineService>(TYPES.RoleQuarantineService)
     .to(RoleQuarantineService)
+    .inSingletonScope();
+
+  container
+    .bind<IIntegrityAuditService>(TYPES.IntegrityAuditService)
+    .to(IntegrityAuditService)
     .inSingletonScope();
 }
 
