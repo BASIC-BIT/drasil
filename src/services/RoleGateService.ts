@@ -178,7 +178,9 @@ export class RoleGateService implements IRoleGateService {
       shouldRemoveHoneypot: Boolean(
         honeypotRole && (honeypotRole.current || honeypotRole.quarantined)
       ),
-      shouldAddMemberAccess: Boolean(memberAccessRole),
+      shouldAddMemberAccess: Boolean(
+        memberAccessRole && memberAccessRole.roleId !== honeypotRole?.roleId
+      ),
       warnings,
       activeSnapshotId: snapshot?.id ?? null,
     };
@@ -210,6 +212,11 @@ export class RoleGateService implements IRoleGateService {
     }
     if (memberAccessRole && !memberAccessRole.exists) {
       warnings.push(`Configured member access role ${memberAccessRole.roleId} no longer exists.`);
+    }
+    if (honeypotRole && memberAccessRole && honeypotRole.roleId === memberAccessRole.roleId) {
+      warnings.push(
+        'Configured honeypot role and member access role are the same role; member access cleanup will be skipped.'
+      );
     }
     if (
       honeypotRole &&

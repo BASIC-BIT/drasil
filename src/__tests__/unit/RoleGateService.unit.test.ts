@@ -191,4 +191,34 @@ describe('RoleGateService (unit)', () => {
       `add the member access role (<@&${memberAccessRole.id}>)`
     );
   });
+
+  it('does not re-add the honeypot role when member access is configured to the same role', async () => {
+    const sharedRole = createRole('111111111111111111', 'Human Check');
+    const member = createMember([sharedRole], [sharedRole]);
+    const { service } = createService({
+      role_gate_enabled: true,
+      honeypot_role_id: sharedRole.id,
+      member_access_role_id: sharedRole.id,
+    });
+
+    const preview = await service.previewResolution(member);
+    const result = await service.applyResolution(
+      member,
+      { id: 'mod-1' } as User,
+      'verify',
+      preview
+    );
+
+    expect(preview.shouldRemoveHoneypot).toBe(true);
+    expect(preview.shouldAddMemberAccess).toBe(false);
+    expect(preview.warnings).toContain(
+      'Configured honeypot role and member access role are the same role; member access cleanup will be skipped.'
+    );
+    expect(member.roles.remove).toHaveBeenCalledWith(
+      sharedRole,
+      expect.stringContaining('Drasil role gate cleanup')
+    );
+    expect(member.roles.add).not.toHaveBeenCalled();
+    expect(result.results.map((item) => item.operation)).toEqual(['remove_honeypot']);
+  });
 });
