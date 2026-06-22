@@ -225,8 +225,7 @@ export class RoleGateService implements IRoleGateService {
       memberAccessRole &&
       !honeypotRole.current &&
       !honeypotRole.quarantined &&
-      !memberAccessRole.current &&
-      !memberAccessRole.quarantined
+      (!memberAccessRole.exists || memberAccessRole.roleId === honeypotRole.roleId)
     ) {
       warnings.push(
         'Neither configured role is currently present or recorded in role quarantine for this member.'

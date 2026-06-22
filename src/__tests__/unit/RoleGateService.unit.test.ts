@@ -228,6 +228,27 @@ describe('RoleGateService (unit)', () => {
     );
   });
 
+  it('does not show a nothing-to-clean warning when member access will be added', async () => {
+    const honeypotRole = createRole('111111111111111111', 'Robot');
+    const memberAccessRole = createRole('222222222222222222', 'Human');
+    const member = createMember([], [honeypotRole, memberAccessRole]);
+    const { service } = createService({
+      role_gate_enabled: true,
+      honeypot_role_id: honeypotRole.id,
+      member_access_role_id: memberAccessRole.id,
+    });
+
+    const preview = await service.previewResolution(member);
+    const confirmation = service.formatResolutionConfirmation(preview);
+
+    expect(preview.shouldRemoveHoneypot).toBe(false);
+    expect(preview.shouldAddMemberAccess).toBe(true);
+    expect(confirmation).toContain(`add the member access role (<@&${memberAccessRole.id}>)`);
+    expect(confirmation).not.toContain(
+      'Neither configured role is currently present or recorded in role quarantine for this member.'
+    );
+  });
+
   it('does not re-add the honeypot role when member access is configured to the same role', async () => {
     const sharedRole = createRole('111111111111111111', 'Human Check');
     const member = createMember([sharedRole], [sharedRole]);
