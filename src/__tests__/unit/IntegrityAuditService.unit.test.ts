@@ -394,4 +394,128 @@ describe('IntegrityAuditService (unit)', () => {
     expect(findingCodes.filter((code) => code === 'member_fetch_failed')).toHaveLength(1);
     expect(findingCodes.filter((code) => code === 'ban_fetch_failed')).toHaveLength(1);
   });
+
+  it('does not expect restricted roles for unrestricted pending cases', async () => {
+    const candidates = buildCandidates({
+      pendingVerificationEvents: [
+        {
+          id: 'pending-open-case-1',
+          server_id: 'guild-1',
+          user_id: 'user-open-case',
+          detection_event_id: null,
+          thread_id: null,
+          private_evidence_thread_id: null,
+          notification_channel_id: null,
+          notification_message_id: null,
+          status: VerificationStatus.PENDING,
+          created_at: baseDate,
+          updated_at: baseDate,
+          resolved_at: null,
+          resolved_by: null,
+          notes: null,
+          metadata: {},
+          admin_actions: [],
+          moderation_outcomes: [],
+        },
+      ],
+    });
+    const repository: IIntegrityAuditRepository = {
+      listCandidates: jest.fn().mockResolvedValue(candidates),
+    };
+    const service = new IntegrityAuditService(
+      { channels: { fetch: jest.fn() } } as any,
+      {
+        getServerConfig: jest.fn().mockResolvedValue({
+          restricted_role_id: 'restricted-role-1',
+          settings: {},
+        }),
+      } as any,
+      repository
+    );
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn(async (userId: string) => ({
+          id: userId,
+          roles: { cache: { has: jest.fn().mockReturnValue(false) } },
+        })),
+      },
+      bans: { fetch: jest.fn(async () => Promise.reject({ code: 10026 })) },
+    } as unknown as Guild;
+
+    const report = await service.auditGuild(guild, { scope: 'cases', days: 30, limit: 50 });
+
+    expect(report.findings.map((finding) => finding.code)).not.toContain(
+      'pending_case_restricted_role_missing'
+    );
+  });
+
+  it('uses restricted-member role findings instead of duplicate pending-case findings under all scope', async () => {
+    const candidates = buildCandidates({
+      pendingVerificationEvents: [
+        {
+          id: 'pending-restricted-1',
+          server_id: 'guild-1',
+          user_id: 'user-restricted',
+          detection_event_id: null,
+          thread_id: null,
+          private_evidence_thread_id: null,
+          notification_channel_id: null,
+          notification_message_id: null,
+          status: VerificationStatus.PENDING,
+          created_at: baseDate,
+          updated_at: baseDate,
+          resolved_at: null,
+          resolved_by: null,
+          notes: null,
+          metadata: {},
+          admin_actions: [],
+          moderation_outcomes: [],
+        },
+      ],
+      restrictedMembers: [
+        {
+          server_id: 'guild-1',
+          user_id: 'user-restricted',
+          join_date: baseDate,
+          is_restricted: true,
+          last_verified_at: null,
+          last_message_at: null,
+          verification_status: VerificationStatus.PENDING,
+          last_status_change: baseDate,
+          created_by: null,
+          updated_by: null,
+        },
+      ],
+    });
+    const repository: IIntegrityAuditRepository = {
+      listCandidates: jest.fn().mockResolvedValue(candidates),
+    };
+    const service = new IntegrityAuditService(
+      { channels: { fetch: jest.fn() } } as any,
+      {
+        getServerConfig: jest.fn().mockResolvedValue({
+          restricted_role_id: 'restricted-role-1',
+          settings: {},
+        }),
+      } as any,
+      repository
+    );
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn(async (userId: string) => ({
+          id: userId,
+          roles: { cache: { has: jest.fn().mockReturnValue(false) } },
+        })),
+      },
+      bans: { fetch: jest.fn(async () => Promise.reject({ code: 10026 })) },
+    } as unknown as Guild;
+
+    const report = await service.auditGuild(guild, { scope: 'all', days: 30, limit: 50 });
+    const findingCodes = report.findings.map((finding) => finding.code);
+
+    expect(findingCodes).not.toContain('pending_case_restricted_role_missing');
+    expect(findingCodes).toContain('restricted_member_role_missing');
+  });
 });

@@ -139,6 +139,7 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     });
     const findings: IntegrityAuditFinding[] = [];
     const liveUsers = await this.inspectLiveUsers(guild, this.collectUserIds(candidates, scope));
+    const restrictedMemberIds = this.collectRestrictedMemberIds(candidates.restrictedMembers);
     this.addLiveUserFetchFindings(liveUsers, findings);
 
     if (this.includesCaseChecks(scope)) {
@@ -146,6 +147,8 @@ export class IntegrityAuditService implements IIntegrityAuditService {
         candidates.pendingVerificationEvents,
         liveUsers,
         serverConfig.restricted_role_id,
+        restrictedMemberIds,
+        !this.includesRestrictedChecks(scope),
         findings
       );
       this.auditResolvedCases(candidates.recentResolvedVerificationEvents, liveUsers, findings);
@@ -191,6 +194,8 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     cases: IntegrityAuditVerificationEvent[],
     liveUsers: Map<string, LiveUserState>,
     restrictedRoleId: string | null,
+    restrictedMemberIds: ReadonlySet<string>,
+    includeRestrictedRoleFindings: boolean,
     findings: IntegrityAuditFinding[]
   ): Promise<void> {
     for (const verificationEvent of cases) {
@@ -219,7 +224,9 @@ export class IntegrityAuditService implements IIntegrityAuditService {
       }
 
       if (
+        includeRestrictedRoleFindings &&
         restrictedRoleId &&
+        restrictedMemberIds.has(verificationEvent.user_id) &&
         liveUser?.member.status === 'found' &&
         !liveUser.member.value.roles.cache.has(restrictedRoleId)
       ) {
@@ -546,6 +553,16 @@ export class IntegrityAuditService implements IIntegrityAuditService {
       }
       for (const snapshot of candidates.activeRoleQuarantineSnapshots) {
         userIds.add(snapshot.user_id);
+      }
+    }
+    return userIds;
+  }
+
+  private collectRestrictedMemberIds(members: ServerMember[]): Set<string> {
+    const userIds = new Set<string>();
+    for (const member of members) {
+      if (member.is_restricted && this.shouldAuditRestrictedMember(member)) {
+        userIds.add(member.user_id);
       }
     }
     return userIds;
