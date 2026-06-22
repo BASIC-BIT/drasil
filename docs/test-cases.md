@@ -16,6 +16,7 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
 - User report after resolution: posts a new observed alert instead of reopening a case automatically.
 - Manual flag after resolution: opens a new pending case.
 - Verify button: restricted role removed, thread resolved, notification updated, admin action logged.
+- Verify button with role gate: honeypot role is removed or kept removed from quarantine, member access role is added when configured, and confirmation/result copy names the roles.
 - Ban button: member banned, verification status set to BANNED (if present), thread resolved, admin action logged.
 - Reopen button: verification returns to PENDING, thread reopened, user restricted again.
 - Stale case digest: groups pending cases into fresh, stale, and very stale; very stale users remain pending for moderator review.
@@ -43,6 +44,7 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
 - `UserModerationService.verifyUser`
   - Updates `verification_event` to VERIFIED with `resolved_by` and `resolved_at`.
   - Removes restricted role and updates `server_member`.
+  - Applies role-gate cleanup when configured.
   - Resolves thread, updates notification, records admin action.
 - `UserModerationService.banUser`
   - Calls Discord ban and updates `server_member` to BANNED.
@@ -52,6 +54,24 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
   - Shows next user reminder timestamps using the same scheduling logic that sends reminders.
   - Moves user reminders to the end of the admin review window when they collide with a digest.
   - Stops user reminders after target response or the very-stale reminder limit.
+- `RoleGateService`
+  - Supports honeypot-only, member-access-only, and combined role-gate setups.
+  - Removes/keeps removed the honeypot role during verify and close-no-action.
+  - Adds the member access role during verify and close-no-action when configured.
+  - Reports role hierarchy, managed role, missing role, and same-role diagnostics.
+- `EventHandler` honeypot role update
+  - Routes newly assigned configured honeypot roles through the configured response mode.
+  - Ignores disabled role gate, missing honeypot roles, bots, and unchanged role sets.
+- `RoleQuarantineService`
+  - Does not restore a configured honeypot role because role gate owns that role.
+
+## Role gate
+
+- Disabled role gate: role updates do not trigger honeypot handling and verify/close copy is unchanged.
+- Honeypot only: gaining the configured honeypot role records/routes a honeypot detection; verify/close removes the role.
+- Member access only: verify/close adds the configured member access role when permissions allow it.
+- Honeypot plus member access: gaining honeypot routes the detection; verify/close removes honeypot and adds member access.
+- Quarantined honeypot: verify/close does not restore the honeypot role from role quarantine.
 
 ## Full-stack smoke test (optional)
 

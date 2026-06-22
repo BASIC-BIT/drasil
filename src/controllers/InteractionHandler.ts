@@ -68,6 +68,7 @@ import {
   IModerationQueueService,
   ModerationQueueService,
 } from '../services/ModerationQueueService';
+import { IRoleGateService, RoleGateResolutionResult } from '../services/RoleGateService';
 // Load environment variables
 dotenv.config();
 
@@ -111,6 +112,7 @@ export class InteractionHandler implements IInteractionHandler {
   private reportInteractionHandler: ReportInteractionHandler;
   private setupVerificationModalHandler: SetupVerificationModalHandler;
   private moderationQueueService?: IModerationQueueService;
+  private roleGateService?: IRoleGateService;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -136,7 +138,10 @@ export class InteractionHandler implements IInteractionHandler {
     serverMemberRepository?: IServerMemberRepository,
     @inject(TYPES.ModerationQueueService)
     @optional()
-    moderationQueueService?: IModerationQueueService
+    moderationQueueService?: IModerationQueueService,
+    @inject(TYPES.RoleGateService)
+    @optional()
+    roleGateService?: IRoleGateService
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -148,6 +153,7 @@ export class InteractionHandler implements IInteractionHandler {
     this.threadManager = threadManager;
     this.adminActionRepository = adminActionRepository;
     this.moderationQueueService = moderationQueueService;
+    this.roleGateService = roleGateService;
     const reportSubmissionService = new ReportSubmissionService(
       this.configService,
       this.securityActionService
@@ -1230,7 +1236,11 @@ export class InteractionHandler implements IInteractionHandler {
       ),
     ];
     const response = {
-      content: confirmation.message,
+      content: await this.buildAdminActionConfirmationMessage(
+        interaction,
+        parsed,
+        confirmation.message
+      ),
       allowedMentions: { parse: [] },
       components,
     };
@@ -1241,6 +1251,29 @@ export class InteractionHandler implements IInteractionHandler {
     }
 
     await interaction.update(response);
+  }
+
+  private async buildAdminActionConfirmationMessage(
+    interaction: ButtonInteraction,
+    parsed: ParsedAdminActionCustomId,
+    baseMessage: string
+  ): Promise<string> {
+    if (
+      !this.roleGateService ||
+      parsed.surface !== 'case' ||
+      (parsed.action !== 'verify' && parsed.action !== 'close_no_action')
+    ) {
+      return baseMessage;
+    }
+
+    const member = await interaction.guild?.members.fetch(parsed.userId).catch(() => null);
+    if (!member) {
+      return baseMessage;
+    }
+
+    const preview = await this.roleGateService.previewResolution(member);
+    const roleGateMessage = this.roleGateService.formatResolutionConfirmation(preview);
+    return roleGateMessage ? `${baseMessage}\n\n${roleGateMessage}` : baseMessage;
   }
 
   private async showLegacyAdminActionConfirmation(
@@ -1686,19 +1719,32 @@ export class InteractionHandler implements IInteractionHandler {
 
     try {
       const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      const roleGatePreview = member
+        ? await this.roleGateService?.previewResolution(member)
+        : undefined;
       const closedCount = await this.userModerationService.closeCaseNoAction(
         guild,
         userId,
         interaction.user,
         'Closed with no action by moderator.'
       );
+      const roleGateResult =
+        member && closedCount > 0
+          ? await this.roleGateService?.applyResolution(
+              member,
+              interaction.user,
+              'close_no_action',
+              roleGatePreview
+            )
+          : undefined;
 
       const caseWord = closedCount === 1 ? 'case' : 'cases';
       await interaction.followUp({
         content:
           closedCount === 0
             ? `No pending verification cases remain for <@${userId}>.`
-            : `Closed ${closedCount} pending verification ${caseWord} for <@${userId}> with no action.`,
+            : `Closed ${closedCount} pending verification ${caseWord} for <@${userId}> with no action.${this.formatRoleGateResolutionResult(roleGateResult)}`,
         allowedMentions: { parse: [] },
         flags: MessageFlags.Ephemeral,
       });
@@ -1722,11 +1768,19 @@ export class InteractionHandler implements IInteractionHandler {
     try {
       const guild = await this.client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId);
+      const roleGatePreview = await this.roleGateService?.previewResolution(member);
 
       await this.userModerationService.verifyUser(member, interaction.user);
+      const roleGateResult = await this.roleGateService?.applyResolution(
+        member,
+        interaction.user,
+        'verify',
+        roleGatePreview
+      );
 
       await interaction.followUp({
-        content: `User <@${userId}> has been verified and can now access the server.`,
+        content: `User <@${userId}> has been verified and can now access the server.${this.formatRoleGateResolutionResult(roleGateResult)}`,
+        allowedMentions: { parse: [] },
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
@@ -1736,6 +1790,18 @@ export class InteractionHandler implements IInteractionHandler {
         flags: MessageFlags.Ephemeral,
       });
     }
+  }
+
+  private formatRoleGateResolutionResult(result?: RoleGateResolutionResult): string {
+    if (!result?.applied) {
+      return '';
+    }
+
+    const lines = [
+      ...result.summaryLines,
+      ...result.warnings.map((warning) => `Role gate warning: ${warning}`),
+    ];
+    return lines.length > 0 ? `\n\n${lines.join('\n')}` : '';
   }
 
   private async handleBanButton(interaction: ButtonInteraction, userId: string): Promise<void> {

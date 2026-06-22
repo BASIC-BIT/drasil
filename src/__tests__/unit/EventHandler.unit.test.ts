@@ -76,6 +76,7 @@ describe('EventHandler (unit)', () => {
       (overrides?.securityActionService ?? {
         handleSuspiciousMessage: jest.fn(),
         handleSuspiciousJoin: jest.fn(),
+        handleHoneypotRoleAssignment: jest.fn(),
         openCaseForSuspiciousMessage: jest.fn(),
         openCaseForSuspiciousJoin: jest.fn(),
         recordRejoinAfterKickDetection: jest.fn(),
@@ -136,11 +137,70 @@ describe('EventHandler (unit)', () => {
     expect(client.on).toHaveBeenCalledWith(Events.ClientReady, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.MessageCreate, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildMemberAdd, expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith(Events.GuildMemberUpdate, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildMemberRemove, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildBanAdd, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.InteractionCreate, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildCreate, expect.any(Function));
     expect(client.on).not.toHaveBeenCalledWith('ready', expect.any(Function));
+  });
+
+  it('routes newly assigned honeypot roles through role gate response mode', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const honeypotRole = { id: '111111111111111111', name: 'Robot' };
+    const oldMember = {
+      id: 'user-1',
+      partial: false,
+      user: { id: 'user-1', bot: false, username: 'test-user', tag: 'test-user#0001' },
+      roles: { cache: new Map() },
+      guild: { id: 'guild-1' },
+    };
+    const newMember = {
+      ...oldMember,
+      roles: { cache: new Map([[honeypotRole.id, honeypotRole]]) },
+      guild: {
+        id: 'guild-1',
+        roles: {
+          cache: new Map([[honeypotRole.id, honeypotRole]]),
+          fetch: jest.fn().mockResolvedValue(honeypotRole),
+        },
+      },
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        settings: {
+          role_gate_enabled: true,
+          honeypot_role_id: honeypotRole.id,
+          honeypot_role_response_mode: 'restrict',
+        },
+      }),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn(),
+      handleSuspiciousJoin: jest.fn(),
+      handleHoneypotRoleAssignment: jest.fn().mockResolvedValue(true),
+      openCaseForSuspiciousMessage: jest.fn(),
+      openCaseForSuspiciousJoin: jest.fn(),
+      recordRejoinAfterKickDetection: jest.fn(),
+    };
+    const handler = buildHandler({ client, configService, securityActionService });
+    await handler.setupEventHandlers();
+    const updateHandler = client.on.mock.calls.find(
+      ([event]) => event === Events.GuildMemberUpdate
+    )?.[1];
+
+    await updateHandler?.(oldMember as any, newMember as any);
+
+    expect(securityActionService.handleHoneypotRoleAssignment).toHaveBeenCalledWith(newMember, {
+      roleId: honeypotRole.id,
+      roleName: honeypotRole.name,
+      responseMode: 'restrict',
+    });
   });
 
   it('delegates observed Discord bans with native audit-log source attribution', async () => {

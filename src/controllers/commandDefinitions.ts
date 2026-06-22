@@ -266,6 +266,61 @@ const baseApplicationCommandBuilders = [
     )
     .addSubcommandGroup((group) =>
       group
+        .setName('role-gate')
+        .setDescription('Configure honeypot and member access roles')
+        .addSubcommand((subcommand) =>
+          subcommand.setName('view').setDescription('View role gate settings')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand.setName('enable').setDescription('Enable role gate handling')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand.setName('disable').setDescription('Disable role gate handling')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set-honeypot-role')
+            .setDescription('Set the honeypot role')
+            .addRoleOption((option) =>
+              option.setName('role').setDescription('Honeypot role').setRequired(true)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand.setName('clear-honeypot-role').setDescription('Clear the honeypot role')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set-member-access-role')
+            .setDescription('Set the member access role')
+            .addRoleOption((option) =>
+              option.setName('role').setDescription('Member access role').setRequired(true)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('clear-member-access-role')
+            .setDescription('Clear the member access role')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set-honeypot-response')
+            .setDescription('Set response when a member gains the honeypot role')
+            .addStringOption((option) =>
+              option
+                .setName('mode')
+                .setDescription('off, record_only, notify_only, or restrict')
+                .setRequired(true)
+                .addChoices(
+                  { name: 'Off', value: 'off' },
+                  { name: 'Record only', value: 'record_only' },
+                  { name: 'Notify only', value: 'notify_only' },
+                  { name: 'Restrict pending review', value: 'restrict' }
+                )
+            )
+        )
+    )
+    .addSubcommandGroup((group) =>
+      group
         .setName('heuristic')
         .setDescription('Manage heuristic detection settings')
         .addSubcommand((subcommand) =>

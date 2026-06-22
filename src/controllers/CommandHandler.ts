@@ -390,6 +390,11 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    if (subcommandGroup === 'role-gate') {
+      await this.configSubcommandHandler.handleRoleGateConfigCommand(interaction, guild.id);
+      return;
+    }
+
     if (subcommandGroup === 'heuristic') {
       await this.configSubcommandHandler.handleHeuristicConfigCommand(interaction, guild.id);
       return;

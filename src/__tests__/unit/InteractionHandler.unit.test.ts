@@ -14,6 +14,7 @@ import { InteractionHandler } from '../../controllers/InteractionHandler';
 import { INotificationManager } from '../../services/NotificationManager';
 import { IUserModerationService } from '../../services/UserModerationService';
 import { ISecurityActionService } from '../../services/SecurityActionService';
+import { IRoleGateService } from '../../services/RoleGateService';
 import { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import { IThreadManager } from '../../services/ThreadManager';
 import { IAdminActionRepository } from '../../repositories/AdminActionRepository';
@@ -233,6 +234,7 @@ describe('InteractionHandler (unit)', () => {
     securityActionService = {
       handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
       handleSuspiciousJoin: jest.fn().mockResolvedValue(true),
+      handleHoneypotRoleAssignment: jest.fn().mockResolvedValue(true),
       openCaseForSuspiciousMessage: jest.fn().mockResolvedValue(true),
       openCaseForSuspiciousJoin: jest.fn().mockResolvedValue(true),
       handleManualFlag: jest.fn().mockResolvedValue(true),
@@ -394,6 +396,7 @@ describe('InteractionHandler (unit)', () => {
     expect(userModerationService.verifyUser).toHaveBeenCalledTimes(1);
     expect(interaction.followUp).toHaveBeenCalledWith({
       content: 'User <@user-1> has been verified and can now access the server.',
+      allowedMentions: { parse: [] },
       flags: MessageFlags.Ephemeral,
     });
   });
@@ -528,6 +531,49 @@ describe('InteractionHandler (unit)', () => {
     );
     expect(interaction.followUp).toHaveBeenCalledWith({
       content: 'Closed 1 pending verification case for <@user-1> with no action.',
+      allowedMentions: { parse: [] },
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('does not apply role gate cleanup when close-no-action finds no pending case', async () => {
+    userModerationService.closeCaseNoAction.mockResolvedValue(0);
+    const roleGateService = {
+      previewResolution: jest.fn().mockResolvedValue({ enabled: true }),
+      formatResolutionConfirmation: jest.fn().mockReturnValue(null),
+      applyResolution: jest.fn().mockResolvedValue({ applied: true }),
+    } as unknown as jest.Mocked<IRoleGateService>;
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      roleGateService
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_close_no_action:case:user-1',
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(roleGateService.previewResolution).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' })
+    );
+    expect(roleGateService.applyResolution).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'No pending verification cases remain for <@user-1>.',
       allowedMentions: { parse: [] },
       flags: MessageFlags.Ephemeral,
     });

@@ -44,11 +44,22 @@ server member and can change while the case remains open:
   moderator actions can create or reuse a pending case.
 - Manual flag: creates a detection event with `metadata.type = "admin_flag"` and
   creates or reuses a pending case.
+- Honeypot role assignment: when role gate is enabled and a member newly receives
+  the configured honeypot role, Drasil creates a `honeypot_role` detection and
+  applies the configured honeypot response mode.
 
 If the target user already has a pending case in that server, Drasil records the
 new detection event, links it to the existing `verification_event`, and updates
 the existing admin notification instead of opening a duplicate case. If the
 previous case is resolved, a later report or flag opens a new pending case.
+
+## Role-Gate Resolution Cleanup
+
+When role gate is enabled, verify and close-no-action confirmations include the
+role effects that will happen with the resolution. Drasil removes a configured
+honeypot role if the member currently has it or if role quarantine already
+removed it, and adds the configured member access role when present. This is part
+of the same confirmed case action, not a separate follow-up button.
 
 ## Schema Decision
 

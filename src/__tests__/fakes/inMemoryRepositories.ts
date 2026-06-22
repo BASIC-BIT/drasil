@@ -84,6 +84,14 @@ import {
   ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY,
   ROLE_QUARANTINE_MODE_SETTING_KEY,
 } from '../../utils/roleQuarantineSettings';
+import {
+  DEFAULT_HONEYPOT_ROLE_RESPONSE_MODE,
+  DEFAULT_ROLE_GATE_ENABLED,
+  HONEYPOT_ROLE_ID_SETTING_KEY,
+  HONEYPOT_ROLE_RESPONSE_MODE_SETTING_KEY,
+  MEMBER_ACCESS_ROLE_ID_SETTING_KEY,
+  ROLE_GATE_ENABLED_SETTING_KEY,
+} from '../../utils/roleGateSettings';
 
 const toTimestamp = (value: string | Date | null | undefined): number => {
   if (!value) {
@@ -128,6 +136,10 @@ const baseSettings: ServerSettings = {
   report_intake_confirmed_response_mode: 'observed_alert',
   [ROLE_QUARANTINE_MODE_SETTING_KEY]: DEFAULT_ROLE_QUARANTINE_MODE,
   [ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY]: [],
+  [ROLE_GATE_ENABLED_SETTING_KEY]: DEFAULT_ROLE_GATE_ENABLED,
+  [HONEYPOT_ROLE_ID_SETTING_KEY]: null,
+  [MEMBER_ACCESS_ROLE_ID_SETTING_KEY]: null,
+  [HONEYPOT_ROLE_RESPONSE_MODE_SETTING_KEY]: DEFAULT_HONEYPOT_ROLE_RESPONSE_MODE,
 };
 
 const defaultHeuristicThreshold = globalSettings.defaultServerSettings.messageThreshold;
