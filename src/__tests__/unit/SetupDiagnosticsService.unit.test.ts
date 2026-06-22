@@ -225,6 +225,27 @@ describe('SetupDiagnosticsService (unit)', () => {
     expect(report.warningCount).toBeGreaterThanOrEqual(2);
   });
 
+  it('warns when manual intake is configured to use the case role', async () => {
+    const { guild } = buildConfiguredGuild();
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: {
+          manual_intake_enabled: true,
+          manual_intake_role_id: 'role-1',
+        },
+      }),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateGuildSetup(guild);
+
+    expect(report.issues.map((issue) => issue.code)).toContain('manual-intake-role-is-case-role');
+  });
+
   it('validates setup candidates that create the case role and verification channel', async () => {
     const { guild } = buildConfiguredGuild();
     const configService = {

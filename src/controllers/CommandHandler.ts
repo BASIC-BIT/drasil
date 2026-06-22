@@ -410,6 +410,11 @@ export class CommandHandler implements ICommandHandler {
       return;
     }
 
+    if (subcommandGroup === 'manual-intake') {
+      await this.configSubcommandHandler.handleManualIntakeConfigCommand(interaction, guild.id);
+      return;
+    }
+
     if (subcommandGroup === 'report') {
       await this.configSubcommandHandler.handleReportConfigCommand(interaction, guild.id);
       return;

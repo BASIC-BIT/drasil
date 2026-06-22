@@ -5,6 +5,7 @@ import { Server } from '../repositories/types';
 import { TYPES } from '../di/symbols';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
+import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 
 export type SetupDiagnosticSeverity = 'error' | 'warning';
 
@@ -168,6 +169,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
 
     await this.checkCaseResponderRoles(guild, serverConfig, issues);
+    await this.checkManualIntakeRole(guild, serverConfig, issues);
 
     return this.toReport(guild.id, issues);
   }
@@ -345,6 +347,36 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         severity: 'error',
         code: 'case-role-hierarchy',
         message: `Move the Drasil role above the selected case role <@&${caseRole.id}>.`,
+      });
+    }
+  }
+
+  private async checkManualIntakeRole(
+    guild: Guild,
+    serverConfig: Server,
+    issues: SetupDiagnosticIssue[]
+  ): Promise<void> {
+    const settings = getManualIntakeSettings(serverConfig.settings);
+    if (!settings.enabled || !settings.roleId) {
+      return;
+    }
+
+    if (settings.roleId === serverConfig.case_role_id) {
+      issues.push({
+        severity: 'warning',
+        code: 'manual-intake-role-is-case-role',
+        message:
+          'Manual intake trigger role matches the case role. Use a separate non-case role such as @Pending Investigation.',
+      });
+      return;
+    }
+
+    const role = await guild.roles.fetch(settings.roleId).catch(() => null);
+    if (!role) {
+      issues.push({
+        severity: 'warning',
+        code: 'manual-intake-role-not-found',
+        message: `Manual intake trigger role ${settings.roleId} no longer exists.`,
       });
     }
   }

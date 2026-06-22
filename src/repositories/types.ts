@@ -72,6 +72,9 @@ export interface ServerSettings {
   report_intake_agent_debounce_ms?: number;
   report_intake_agent_min_interval_ms?: number;
   report_intake_confirmed_response_mode?: 'observed_alert' | 'open_case' | 'kick';
+  manual_intake_enabled?: boolean;
+  manual_intake_role_id?: string | null;
+  manual_intake_grace_period_seconds?: number;
   report_instructions_channel_id?: string | null;
   report_instructions_message_id?: string | null;
   case_role_lockdown_enabled?: boolean;

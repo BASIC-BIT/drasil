@@ -24,6 +24,7 @@ import {
 } from '../utils/adminActionCustomIds';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { isDetectionEventExcludedFromAccounting } from '../utils/detectionEventAccounting';
+import { formatDiscordUserIdentity } from '../utils/discordUserIdentity';
 import { buildAdminCaseDetailUrl, buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
 import { getVerificationActionFailures } from '../utils/verificationActionFailures';
 
@@ -142,7 +143,11 @@ export class NotificationPresentationBuilder {
               },
             ]
           : []),
-        { name: 'Username', value: member.user.tag, inline: true },
+        {
+          name: 'User',
+          value: formatDiscordUserIdentity(member, { includeSnowflake: false }),
+          inline: false,
+        },
         { name: 'User ID', value: member.id, inline: true },
         { name: 'Account Created', value: accountCreatedFormatted, inline: false },
         { name: 'Joined Server', value: joinedServerFormatted, inline: false },
@@ -247,7 +252,11 @@ export class NotificationPresentationBuilder {
       )
       .setThumbnail(member.user.displayAvatarURL())
       .addFields(
-        { name: 'Username', value: member.user.tag, inline: true },
+        {
+          name: 'User',
+          value: formatDiscordUserIdentity(member, { includeSnowflake: false }),
+          inline: false,
+        },
         { name: 'User ID', value: member.id, inline: true },
         {
           name: 'Account Created',
@@ -329,7 +338,11 @@ export class NotificationPresentationBuilder {
         `A private report intake thread was opened by <@${reporter.id}>. No report has been submitted yet.`
       )
       .addFields(
-        { name: 'Reporter', value: `${reporter.user.tag} (${reporter.id})`, inline: false },
+        {
+          name: 'Reporter',
+          value: formatDiscordUserIdentity(reporter, { includeSnowflake: false }),
+          inline: false,
+        },
         {
           name: 'Report Thread',
           value: `[Open thread](${thread.url}) (${thread.id})`,

@@ -78,6 +78,7 @@ describe('EventHandler (unit)', () => {
         handleSuspiciousJoin: jest.fn(),
         openCaseForSuspiciousMessage: jest.fn(),
         openCaseForSuspiciousJoin: jest.fn(),
+        openAdminCase: jest.fn(),
         recordRejoinAfterKickDetection: jest.fn(),
       }) as any,
       { handleTestCommands: jest.fn(), registerCommands: jest.fn() } as any,
@@ -127,6 +128,26 @@ describe('EventHandler (unit)', () => {
     } as unknown as Message;
   }
 
+  function buildManualIntakeMember(guild: Record<string, unknown>, roleIds: string[]): GuildMember {
+    const roleIdSet = new Set(roleIds);
+    return {
+      id: 'user-1',
+      guild,
+      roles: {
+        cache: {
+          has: jest.fn((roleId: string) => roleIdSet.has(roleId)),
+        },
+        remove: jest.fn().mockResolvedValue(undefined),
+      },
+      user: {
+        id: 'user-1',
+        bot: false,
+        tag: 'test-user#0001',
+        username: 'test-user',
+      },
+    } as unknown as GuildMember;
+  }
+
   it('registers Discord event handlers with current event names', async () => {
     const client = { on: jest.fn(), user: { id: 'bot-1' } };
     const handler = buildHandler({ client });
@@ -136,11 +157,161 @@ describe('EventHandler (unit)', () => {
     expect(client.on).toHaveBeenCalledWith(Events.ClientReady, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.MessageCreate, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildMemberAdd, expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith(Events.GuildMemberUpdate, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildMemberRemove, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildBanAdd, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.InteractionCreate, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildCreate, expect.any(Function));
     expect(client.on).not.toHaveBeenCalledWith('ready', expect.any(Function));
+  });
+
+  it('opens a manual intake case when the configured trigger role remains after the grace period', async () => {
+    jest.useFakeTimers();
+    try {
+      const openAdminCase = jest.fn().mockResolvedValue({
+        opened: true,
+        caseRoleAttempted: true,
+        caseRoleActive: true,
+      });
+      const client = { on: jest.fn(), user: { id: 'bot-1', bot: true } };
+      const role = { id: 'manual-role', name: 'Pending Investigation' };
+      const moderator = { id: 'mod-1', bot: false };
+      const guild = {
+        id: 'guild-1',
+        roles: { cache: new Map([[role.id, role]]), fetch: jest.fn() },
+        members: { fetch: jest.fn() },
+        fetchAuditLogs: jest.fn().mockResolvedValue({
+          entries: [
+            {
+              id: 'audit-1',
+              target: { id: 'user-1' },
+              executor: moderator,
+              createdTimestamp: Date.now(),
+              changes: [{ key: '$add', new: [{ id: role.id, name: role.name }] }],
+            },
+          ],
+        }),
+      };
+      const currentMember = buildManualIntakeMember(guild, [role.id]);
+      (guild.members.fetch as jest.Mock).mockResolvedValue(currentMember);
+      const configService = {
+        initialize: jest.fn().mockResolvedValue(undefined),
+        getCachedServerConfig: jest.fn().mockReturnValue({}),
+        getServerConfig: jest.fn().mockResolvedValue({
+          case_role_id: 'case-role',
+          settings: {
+            manual_intake_enabled: true,
+            manual_intake_role_id: role.id,
+            manual_intake_grace_period_seconds: 0,
+          },
+        }),
+        updateServerConfig: jest.fn().mockResolvedValue({}),
+        updateServerSettings: jest.fn().mockResolvedValue({}),
+      };
+      const handler = buildHandler({
+        client,
+        configService,
+        securityActionService: {
+          handleSuspiciousMessage: jest.fn(),
+          handleSuspiciousJoin: jest.fn(),
+          openCaseForSuspiciousMessage: jest.fn(),
+          openCaseForSuspiciousJoin: jest.fn(),
+          openAdminCase,
+          recordRejoinAfterKickDetection: jest.fn(),
+        },
+      });
+      await handler.setupEventHandlers();
+      const updateHandler = client.on.mock.calls.find(
+        ([event]) => event === Events.GuildMemberUpdate
+      )?.[1];
+
+      await updateHandler?.(
+        buildManualIntakeMember(guild, []),
+        buildManualIntakeMember(guild, [role.id])
+      );
+      await jest.runOnlyPendingTimersAsync();
+
+      expect(openAdminCase).toHaveBeenCalledWith(
+        currentMember,
+        moderator,
+        expect.objectContaining({
+          action: 'open_case',
+          metadata: expect.objectContaining({
+            type: 'manual_role_intake',
+            bulk_intake: false,
+            trigger: 'manual_role_assignment',
+            sourceRoleId: role.id,
+            sourceRoleName: role.name,
+            assignedById: moderator.id,
+          }),
+        })
+      );
+      expect(currentMember.roles.remove).toHaveBeenCalledWith(
+        role.id,
+        'Manual intake trigger role consumed by Drasil'
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('cancels manual intake when the trigger role is removed during the grace period', async () => {
+    jest.useFakeTimers();
+    try {
+      const openAdminCase = jest.fn();
+      const client = { on: jest.fn(), user: { id: 'bot-1', bot: true } };
+      const role = { id: 'manual-role', name: 'Pending Investigation' };
+      const guild = {
+        id: 'guild-1',
+        roles: { cache: new Map([[role.id, role]]), fetch: jest.fn() },
+        members: { fetch: jest.fn() },
+        fetchAuditLogs: jest.fn(),
+      };
+      const configService = {
+        initialize: jest.fn().mockResolvedValue(undefined),
+        getCachedServerConfig: jest.fn().mockReturnValue({}),
+        getServerConfig: jest.fn().mockResolvedValue({
+          case_role_id: 'case-role',
+          settings: {
+            manual_intake_enabled: true,
+            manual_intake_role_id: role.id,
+            manual_intake_grace_period_seconds: 30,
+          },
+        }),
+        updateServerConfig: jest.fn().mockResolvedValue({}),
+        updateServerSettings: jest.fn().mockResolvedValue({}),
+      };
+      const handler = buildHandler({
+        client,
+        configService,
+        securityActionService: {
+          handleSuspiciousMessage: jest.fn(),
+          handleSuspiciousJoin: jest.fn(),
+          openCaseForSuspiciousMessage: jest.fn(),
+          openCaseForSuspiciousJoin: jest.fn(),
+          openAdminCase,
+          recordRejoinAfterKickDetection: jest.fn(),
+        },
+      });
+      await handler.setupEventHandlers();
+      const updateHandler = client.on.mock.calls.find(
+        ([event]) => event === Events.GuildMemberUpdate
+      )?.[1];
+
+      await updateHandler?.(
+        buildManualIntakeMember(guild, []),
+        buildManualIntakeMember(guild, [role.id])
+      );
+      await updateHandler?.(
+        buildManualIntakeMember(guild, [role.id]),
+        buildManualIntakeMember(guild, [])
+      );
+      await jest.advanceTimersByTimeAsync(30_000);
+
+      expect(openAdminCase).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('delegates observed Discord bans with native audit-log source attribution', async () => {

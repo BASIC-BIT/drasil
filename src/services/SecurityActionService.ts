@@ -1832,19 +1832,31 @@ export class SecurityActionService implements ISecurityActionService {
       );
 
       const normalizedReason = options.reason?.trim() || undefined;
-      const isRoleIntake = options.metadata?.type === 'admin_role_intake';
+      const isManualRoleIntake = options.metadata?.type === 'manual_role_intake';
+      const isRoleIntake = options.metadata?.type === 'admin_role_intake' || isManualRoleIntake;
       const sourceRoleId =
         typeof options.metadata?.sourceRoleId === 'string' ? options.metadata.sourceRoleId : null;
+      const assignedById =
+        typeof options.metadata?.assignedById === 'string' ? options.metadata.assignedById : null;
+      const assignedByText = assignedById ? `<@${assignedById}>` : 'an unknown moderator';
       const reasonSuffix = normalizedReason ? ` Reason: ${normalizedReason}` : '';
       const reasonText = isRoleIntake
-        ? sourceRoleId
-          ? `Role intake from <@&${sourceRoleId}> started by <@${moderator.id}>.${reasonSuffix}`
-          : `Role intake started by <@${moderator.id}>.${reasonSuffix}`
+        ? isManualRoleIntake
+          ? sourceRoleId
+            ? `Manual intake role <@&${sourceRoleId}> assigned by ${assignedByText}.${reasonSuffix}`
+            : `Manual intake role assigned by ${assignedByText}.${reasonSuffix}`
+          : sourceRoleId
+            ? `Role intake from <@&${sourceRoleId}> started by <@${moderator.id}>.${reasonSuffix}`
+            : `Role intake started by <@${moderator.id}>.${reasonSuffix}`
         : `Admin case opened by <@${moderator.id}>.${reasonSuffix}`;
       const triggerContent = isRoleIntake
-        ? sourceRoleId
-          ? `Role intake from <@&${sourceRoleId}> by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`
-          : `Role intake by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`
+        ? isManualRoleIntake
+          ? sourceRoleId
+            ? `Manual intake role <@&${sourceRoleId}> assigned by ${assignedByText}${normalizedReason ? `: ${normalizedReason}` : ''}`
+            : `Manual intake role assigned by ${assignedByText}${normalizedReason ? `: ${normalizedReason}` : ''}`
+          : sourceRoleId
+            ? `Role intake from <@&${sourceRoleId}> by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`
+            : `Role intake by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`
         : `Opened by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`;
       const detectionType = isRoleIntake ? DetectionType.ROLE_INTAKE : DetectionType.ADMIN_CASE;
       const detectionEvent = await this.detectionEventsRepository.create({

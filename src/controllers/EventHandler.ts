@@ -10,6 +10,7 @@ import {
   Events,
   MessageFlags,
   PermissionFlagsBits,
+  User,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject, optional } from 'inversify';
@@ -54,6 +55,7 @@ import {
 } from '../services/UserModerationService';
 import { ModerationOutcomeSource } from '../services/ModerationOutcomeService';
 import { IModerationQueueService } from '../services/ModerationQueueService';
+import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -61,7 +63,8 @@ const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
 const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
 const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
-const DISCORD_MEMBER_REMOVE_AUDIT_WINDOW_MS = 60 * 1000;
+const DISCORD_RECENT_AUDIT_WINDOW_MS = 60 * 1000;
+const MANUAL_INTAKE_ROLE_REMOVAL_REASON = 'Manual intake trigger role consumed by Drasil';
 
 type SetupNudgeSource = 'audit_log_installer' | 'owner';
 type SetupNudgeResult = 'sent' | 'dm_failed' | 'no_recipient';
@@ -114,6 +117,7 @@ export class EventHandler implements IEventHandler {
   private userModerationService?: IUserModerationService;
   private moderationQueueService?: IModerationQueueService;
   private serverConfigWarmups: Set<string> = new Set();
+  private manualIntakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private configInitializePromise: Promise<void> | null = null;
   private lastMessageContextPruneAt = 0;
 
@@ -174,6 +178,7 @@ export class EventHandler implements IEventHandler {
     this.client.on(Events.ClientReady, this.handleReady.bind(this));
     this.client.on(Events.MessageCreate, this.handleMessage.bind(this));
     this.client.on(Events.GuildMemberAdd, this.handleGuildMemberAdd.bind(this));
+    this.client.on(Events.GuildMemberUpdate, this.handleGuildMemberUpdate.bind(this));
     this.client.on(Events.GuildMemberRemove, this.handleGuildMemberRemove.bind(this));
     this.client.on(Events.GuildBanAdd, this.handleGuildBanAdd.bind(this));
     this.client.on(Events.InteractionCreate, this.handleInteraction.bind(this));
@@ -547,6 +552,202 @@ export class EventHandler implements IEventHandler {
     }
   }
 
+  private async handleGuildMemberUpdate(
+    oldMember: GuildMember | PartialGuildMember,
+    newMember: GuildMember
+  ): Promise<void> {
+    try {
+      await this.ensureConfigInitialized();
+      const serverConfig = await this.configService.getServerConfig(newMember.guild.id);
+      const settings = getManualIntakeSettings(serverConfig.settings);
+      if (!settings.enabled || !settings.roleId) {
+        return;
+      }
+      if (settings.roleId === serverConfig.case_role_id) {
+        console.warn(
+          `Manual intake trigger role for guild ${newMember.guild.id} matches the case role; skipping role-triggered intake.`
+        );
+        return;
+      }
+
+      const hadRole = this.memberHasRole(oldMember, settings.roleId);
+      const hasRole = this.memberHasRole(newMember, settings.roleId);
+      if (!hadRole && hasRole) {
+        this.scheduleManualIntake(newMember, settings.roleId, settings.gracePeriodSeconds);
+        return;
+      }
+
+      if (hadRole && !hasRole) {
+        this.cancelManualIntake(newMember.guild.id, newMember.id, settings.roleId);
+      }
+    } catch (error) {
+      console.error(`Error handling member role update for ${newMember.id}:`, error);
+    }
+  }
+
+  private scheduleManualIntake(
+    member: GuildMember,
+    roleId: string,
+    gracePeriodSeconds: number
+  ): void {
+    const key = this.buildManualIntakeKey(member.guild.id, member.id, roleId);
+    if (this.manualIntakeTimers.has(key)) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      this.manualIntakeTimers.delete(key);
+      void this.runManualIntake(member, roleId).catch((error) => {
+        console.error(`Failed to process manual intake role ${roleId} for ${member.id}:`, error);
+      });
+    }, gracePeriodSeconds * 1000);
+    (timer as { unref?: () => void }).unref?.();
+    this.manualIntakeTimers.set(key, timer);
+  }
+
+  private cancelManualIntake(guildId: string, userId: string, roleId: string): void {
+    const key = this.buildManualIntakeKey(guildId, userId, roleId);
+    const timer = this.manualIntakeTimers.get(key);
+    if (!timer) {
+      return;
+    }
+
+    clearTimeout(timer);
+    this.manualIntakeTimers.delete(key);
+  }
+
+  private buildManualIntakeKey(guildId: string, userId: string, roleId: string): string {
+    return `${guildId}:${userId}:${roleId}`;
+  }
+
+  private async runManualIntake(originalMember: GuildMember, roleId: string): Promise<void> {
+    const serverConfig = await this.configService.getServerConfig(originalMember.guild.id);
+    const settings = getManualIntakeSettings(serverConfig.settings);
+    if (!settings.enabled || settings.roleId !== roleId) {
+      return;
+    }
+    if (roleId === serverConfig.case_role_id) {
+      console.warn(
+        `Manual intake trigger role for guild ${originalMember.guild.id} matches the case role; skipping role-triggered intake.`
+      );
+      return;
+    }
+
+    const member = await originalMember.guild.members.fetch(originalMember.id).catch(() => null);
+    if (!member || member.user.bot || !this.memberHasRole(member, roleId)) {
+      return;
+    }
+
+    const assignedBy = await this.resolveManualIntakeAssignedBy(member, roleId);
+    const moderator = assignedBy ?? this.client.user;
+    if (!moderator) {
+      console.warn(
+        `Manual intake role ${roleId} assigned to ${member.id}, but no moderator or bot user was available to open a case.`
+      );
+      return;
+    }
+
+    const roleName = await this.resolveManualIntakeRoleName(member, roleId);
+    const result = await this.securityActionService.openAdminCase(member, moderator, {
+      action: 'open_case',
+      reason: `Manual intake role ${roleName} assigned.`,
+      metadata: {
+        type: 'manual_role_intake',
+        bulk_intake: false,
+        trigger: 'manual_role_assignment',
+        sourceRoleId: roleId,
+        sourceRoleName: roleName,
+        assignedById: assignedBy?.id ?? null,
+      },
+    });
+
+    if (result.opened) {
+      await this.removeManualIntakeRole(member, roleId);
+    }
+  }
+
+  private async resolveManualIntakeRoleName(member: GuildMember, roleId: string): Promise<string> {
+    const cachedRole = member.guild.roles.cache.get(roleId);
+    if (cachedRole) {
+      return cachedRole.name;
+    }
+
+    const fetchedRole = await member.guild.roles.fetch(roleId).catch(() => null);
+    return fetchedRole?.name ?? roleId;
+  }
+
+  private async removeManualIntakeRole(member: GuildMember, roleId: string): Promise<void> {
+    if (!this.memberHasRole(member, roleId)) {
+      return;
+    }
+
+    try {
+      await member.roles.remove(roleId, MANUAL_INTAKE_ROLE_REMOVAL_REASON);
+    } catch (error) {
+      console.warn(
+        `Failed to remove manual intake trigger role ${roleId} from ${member.id}:`,
+        error
+      );
+    }
+  }
+
+  private async resolveManualIntakeAssignedBy(
+    member: GuildMember,
+    roleId: string
+  ): Promise<User | null> {
+    if (typeof member.guild.fetchAuditLogs !== 'function') {
+      return null;
+    }
+
+    try {
+      const auditLogs = await member.guild.fetchAuditLogs({
+        type: AuditLogEvent.MemberRoleUpdate,
+        limit: 5,
+      });
+      const roleUpdateEntry = auditLogs.entries.find(
+        (entry) =>
+          entry.target?.id === member.id &&
+          this.isRecentAuditLogEntry(entry) &&
+          this.auditLogEntryAddedRole(entry, roleId)
+      );
+      const executor = roleUpdateEntry?.executor;
+      if (!executor) {
+        return null;
+      }
+
+      const userManager = (this.client as { users?: { fetch(id: string): Promise<User> } }).users;
+      return (await userManager?.fetch(executor.id).catch(() => null)) ?? (executor as User);
+    } catch (error) {
+      console.warn(
+        `Could not read member role update audit log for guild ${member.guild.id}:`,
+        error
+      );
+      return null;
+    }
+  }
+
+  private auditLogEntryAddedRole(entry: { changes?: unknown }, roleId: string): boolean {
+    if (!Array.isArray(entry.changes)) {
+      return true;
+    }
+
+    const addedRoles = entry.changes.find(
+      (change): change is { key: string; new: Array<{ id?: unknown }> } =>
+        typeof change === 'object' &&
+        change !== null &&
+        'key' in change &&
+        change.key === '$add' &&
+        'new' in change &&
+        Array.isArray(change.new)
+    );
+
+    return addedRoles?.new.some((role) => role.id === roleId) ?? false;
+  }
+
+  private memberHasRole(member: GuildMember | PartialGuildMember, roleId: string): boolean {
+    return member.roles.cache.has(roleId);
+  }
+
   private async handleGuildBanAdd(ban: GuildBan): Promise<void> {
     if (!this.userModerationService) {
       return;
@@ -675,7 +876,7 @@ export class EventHandler implements IEventHandler {
         limit: 5,
       });
       const kickEntry = auditLogs.entries.find(
-        (entry) => entry.target?.id === member.id && this.isRecentMemberRemoveAuditEntry(entry)
+        (entry) => entry.target?.id === member.id && this.isRecentAuditLogEntry(entry)
       );
       if (!kickEntry) {
         return null;
@@ -698,12 +899,12 @@ export class EventHandler implements IEventHandler {
     }
   }
 
-  private isRecentMemberRemoveAuditEntry(entry: { createdTimestamp?: unknown }): boolean {
+  private isRecentAuditLogEntry(entry: { createdTimestamp?: unknown }): boolean {
     if (typeof entry.createdTimestamp !== 'number' || !Number.isFinite(entry.createdTimestamp)) {
       return true;
     }
 
-    return Date.now() - entry.createdTimestamp <= DISCORD_MEMBER_REMOVE_AUDIT_WINDOW_MS;
+    return Date.now() - entry.createdTimestamp <= DISCORD_RECENT_AUDIT_WINDOW_MS;
   }
 
   private getAuditLogEntryDate(entry: { createdTimestamp?: unknown }): Date | null {

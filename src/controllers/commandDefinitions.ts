@@ -19,6 +19,10 @@ import {
   MAX_AUTO_KICK_CONFIDENCE_THRESHOLD,
   MIN_AUTO_KICK_CONFIDENCE_THRESHOLD,
 } from '../utils/detectionResponseSettings';
+import {
+  MAX_MANUAL_INTAKE_GRACE_PERIOD_SECONDS,
+  MIN_MANUAL_INTAKE_GRACE_PERIOD_SECONDS,
+} from '../utils/manualIntakeSettings';
 import { MAX_REPORT_AI_MAX_IMAGE_BYTES, MAX_REPORT_AI_MAX_IMAGES } from '../utils/reportAiSettings';
 import { USER_REPORT_REASON_MAX_LENGTH } from '../utils/userReportSettings';
 import { MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT } from '../utils/verificationThreadAnalysisSettings';
@@ -657,6 +661,47 @@ const baseApplicationCommandBuilders = [
         )
         .addSubcommand((subcommand) =>
           subcommand.setName('clear-channel').setDescription('Disable and clear the live queue')
+        )
+    )
+    .addSubcommandGroup((group) =>
+      group
+        .setName('manual-intake')
+        .setDescription('Manage role-triggered manual case intake')
+        .addSubcommand((subcommand) =>
+          subcommand.setName('view').setDescription('View manual intake role settings')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set-role')
+            .setDescription('Set and enable the manual intake trigger role')
+            .addRoleOption((option) =>
+              option
+                .setName('role')
+                .setDescription('Existing non-case role that opens a case when assigned')
+                .setRequired(true)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand.setName('clear-role').setDescription('Disable and clear the trigger role')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand.setName('enable').setDescription('Enable manual intake role handling')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand.setName('disable').setDescription('Disable manual intake role handling')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set-grace-period')
+            .setDescription('Set delay before opening a case after role assignment')
+            .addIntegerOption((option) =>
+              option
+                .setName('seconds')
+                .setDescription('Seconds to wait so accidental assignments can be removed')
+                .setRequired(true)
+                .setMinValue(MIN_MANUAL_INTAKE_GRACE_PERIOD_SECONDS)
+                .setMaxValue(MAX_MANUAL_INTAKE_GRACE_PERIOD_SECONDS)
+            )
         )
     )
     .addSubcommandGroup((group) =>
