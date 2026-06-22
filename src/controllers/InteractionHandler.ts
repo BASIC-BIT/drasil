@@ -1271,8 +1271,9 @@ export class InteractionHandler implements IInteractionHandler {
       return baseMessage;
     }
 
-    const preview = await this.roleGateService.previewResolution(member);
-    const roleGateMessage = this.roleGateService.formatResolutionConfirmation(preview);
+    const roleGateService = this.roleGateService;
+    const preview = await roleGateService.previewResolution(member).catch(() => null);
+    const roleGateMessage = preview ? roleGateService.formatResolutionConfirmation(preview) : null;
     return roleGateMessage ? `${baseMessage}\n\n${roleGateMessage}` : baseMessage;
   }
 
@@ -1720,9 +1721,10 @@ export class InteractionHandler implements IInteractionHandler {
     try {
       const guild = await this.client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId).catch(() => null);
-      const roleGatePreview = member
-        ? await this.roleGateService?.previewResolution(member)
-        : undefined;
+      const roleGatePreview =
+        member && this.roleGateService
+          ? await this.roleGateService.previewResolution(member).catch(() => undefined)
+          : undefined;
       const closedCount = await this.userModerationService.closeCaseNoAction(
         guild,
         userId,
@@ -1730,7 +1732,7 @@ export class InteractionHandler implements IInteractionHandler {
         'Closed with no action by moderator.'
       );
       const roleGateResult =
-        member && closedCount > 0
+        member && closedCount > 0 && roleGatePreview
           ? await this.roleGateService?.applyResolution(
               member,
               interaction.user,
@@ -1768,15 +1770,19 @@ export class InteractionHandler implements IInteractionHandler {
     try {
       const guild = await this.client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId);
-      const roleGatePreview = await this.roleGateService?.previewResolution(member);
+      const roleGatePreview = this.roleGateService
+        ? await this.roleGateService.previewResolution(member).catch(() => undefined)
+        : undefined;
 
       await this.userModerationService.verifyUser(member, interaction.user);
-      const roleGateResult = await this.roleGateService?.applyResolution(
-        member,
-        interaction.user,
-        'verify',
-        roleGatePreview
-      );
+      const roleGateResult = roleGatePreview
+        ? await this.roleGateService?.applyResolution(
+            member,
+            interaction.user,
+            'verify',
+            roleGatePreview
+          )
+        : undefined;
 
       await interaction.followUp({
         content: `User <@${userId}> has been verified and can now access the server.${this.formatRoleGateResolutionResult(roleGateResult)}`,
