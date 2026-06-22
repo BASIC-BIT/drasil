@@ -139,6 +139,7 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     });
     const findings: IntegrityAuditFinding[] = [];
     const liveUsers = await this.inspectLiveUsers(guild, this.collectUserIds(candidates, scope));
+    this.addLiveUserFetchFindings(liveUsers, findings);
 
     if (this.includesCaseChecks(scope)) {
       await this.auditPendingCases(
@@ -194,7 +195,6 @@ export class IntegrityAuditService implements IIntegrityAuditService {
   ): Promise<void> {
     for (const verificationEvent of cases) {
       const liveUser = liveUsers.get(verificationEvent.user_id);
-      this.addLiveUserFetchFindings(verificationEvent.user_id, liveUser, findings);
 
       if (liveUser?.ban.status === 'found') {
         findings.push(
@@ -273,7 +273,6 @@ export class IntegrityAuditService implements IIntegrityAuditService {
       }
 
       const liveUser = liveUsers.get(verificationEvent.user_id);
-      this.addLiveUserFetchFindings(verificationEvent.user_id, liveUser, findings);
 
       if (
         verificationEvent.status === VerificationStatus.BANNED &&
@@ -303,7 +302,6 @@ export class IntegrityAuditService implements IIntegrityAuditService {
       }
 
       const liveUser = liveUsers.get(member.user_id);
-      this.addLiveUserFetchFindings(member.user_id, liveUser, findings);
 
       if (liveUser?.member.status === 'missing') {
         findings.push({
@@ -350,7 +348,6 @@ export class IntegrityAuditService implements IIntegrityAuditService {
   ): void {
     for (const snapshot of snapshots) {
       const liveUser = liveUsers.get(snapshot.user_id);
-      this.addLiveUserFetchFindings(snapshot.user_id, liveUser, findings);
 
       if (liveUser?.member.status === 'missing') {
         findings.push({
@@ -624,30 +621,28 @@ export class IntegrityAuditService implements IIntegrityAuditService {
   }
 
   private addLiveUserFetchFindings(
-    userId: string,
-    liveUser: LiveUserState | undefined,
+    liveUsers: Map<string, LiveUserState>,
     findings: IntegrityAuditFinding[]
   ): void {
-    if (!liveUser) {
-      return;
-    }
-    if (liveUser.member.status === 'failed') {
-      findings.push({
-        severity: 'warning',
-        code: 'member_fetch_failed',
-        subject: `member ${userId}`,
-        detail: liveUser.member.detail,
-        userId,
-      });
-    }
-    if (liveUser.ban.status === 'failed') {
-      findings.push({
-        severity: 'warning',
-        code: 'ban_fetch_failed',
-        subject: `member ${userId}`,
-        detail: liveUser.ban.detail,
-        userId,
-      });
+    for (const [userId, liveUser] of liveUsers) {
+      if (liveUser.member.status === 'failed') {
+        findings.push({
+          severity: 'warning',
+          code: 'member_fetch_failed',
+          subject: `member ${userId}`,
+          detail: liveUser.member.detail,
+          userId,
+        });
+      }
+      if (liveUser.ban.status === 'failed') {
+        findings.push({
+          severity: 'warning',
+          code: 'ban_fetch_failed',
+          subject: `member ${userId}`,
+          detail: liveUser.ban.detail,
+          userId,
+        });
+      }
     }
   }
 

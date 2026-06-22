@@ -327,4 +327,71 @@ describe('IntegrityAuditService (unit)', () => {
     expect(findingCodes).not.toContain('restricted_member_role_missing');
     expect(findingCodes).not.toContain('restricted_member_resolved_status');
   });
+
+  it('emits live fetch failures once for users in multiple audit categories', async () => {
+    const candidates = buildCandidates({
+      restrictedMembers: [
+        {
+          server_id: 'guild-1',
+          user_id: 'user-restricted',
+          join_date: baseDate,
+          is_restricted: true,
+          last_verified_at: null,
+          last_message_at: null,
+          verification_status: VerificationStatus.PENDING,
+          last_status_change: baseDate,
+          created_by: null,
+          updated_by: null,
+        },
+      ],
+      activeRoleQuarantineSnapshots: [
+        {
+          id: 'snapshot-1',
+          server_id: 'guild-1',
+          user_id: 'user-restricted',
+          verification_event_id: null,
+          status: RoleQuarantineSnapshotStatus.ACTIVE,
+          mode: 'automatic',
+          original_role_ids: ['role-a'],
+          planned_role_ids: [],
+          removed_role_ids: ['role-a'],
+          restored_role_ids: [],
+          skipped_roles: [],
+          failed_removals: [],
+          failed_restores: [],
+          created_at: baseDate,
+          updated_at: baseDate,
+          restored_at: null,
+          restored_by: null,
+          metadata: {},
+        },
+      ],
+    });
+    const repository: IIntegrityAuditRepository = {
+      listCandidates: jest.fn().mockResolvedValue(candidates),
+    };
+    const service = new IntegrityAuditService(
+      { channels: { fetch: jest.fn() } } as any,
+      {
+        getServerConfig: jest.fn().mockResolvedValue({
+          restricted_role_id: 'restricted-role-1',
+          settings: {},
+        }),
+      } as any,
+      repository
+    );
+    const guild = {
+      id: 'guild-1',
+      members: { fetch: jest.fn(async () => Promise.reject(new Error('member api down'))) },
+      bans: { fetch: jest.fn(async () => Promise.reject(new Error('ban api down'))) },
+    } as unknown as Guild;
+
+    const report = await service.auditGuild(guild, { scope: 'restricted', days: 30, limit: 50 });
+    const findingCodes = report.findings.map((finding) => finding.code);
+
+    expect(guild.members.fetch).toHaveBeenCalledTimes(1);
+    expect(guild.bans.fetch).toHaveBeenCalledTimes(1);
+    expect(findingCodes.filter((code) => code === 'member_fetch_failed')).toHaveLength(1);
+    expect(findingCodes.filter((code) => code === 'ban_fetch_failed')).toHaveLength(1);
+  });
 });
