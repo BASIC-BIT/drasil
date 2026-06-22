@@ -62,10 +62,6 @@ export function isReportAiMaxAction(value: unknown): value is ReportAiMaxAction 
 }
 
 export function getReportAiSettings(settings: ServerSettings = {}): ReportAiSettings {
-  const maxAction = isReportAiMaxAction(settings[REPORT_AI_MAX_ACTION_SETTING_KEY])
-    ? settings[REPORT_AI_MAX_ACTION_SETTING_KEY]
-    : 'hints';
-
   return {
     enabled: readBoolean(
       settings[REPORT_AI_TRIAGE_ENABLED_SETTING_KEY],
@@ -73,7 +69,7 @@ export function getReportAiSettings(settings: ServerSettings = {}): ReportAiSett
     ),
     analyzeText: readBoolean(settings[REPORT_AI_ANALYZE_TEXT_SETTING_KEY], true),
     analyzeImages: readBoolean(settings[REPORT_AI_ANALYZE_IMAGES_SETTING_KEY], true),
-    maxAction,
+    maxAction: readReportAiMaxAction(settings[REPORT_AI_MAX_ACTION_SETTING_KEY]),
     openCaseThreshold: readNumber(
       settings[REPORT_AI_OPEN_CASE_THRESHOLD_SETTING_KEY],
       DEFAULT_REPORT_AI_OPEN_CASE_THRESHOLD,
@@ -93,6 +89,14 @@ export function getReportAiSettings(settings: ServerSettings = {}): ReportAiSett
       MAX_REPORT_AI_MAX_IMAGE_BYTES
     ),
   };
+}
+
+function readReportAiMaxAction(value: unknown): ReportAiMaxAction {
+  if (value === 'restrict') {
+    return 'open_case';
+  }
+
+  return isReportAiMaxAction(value) ? value : 'hints';
 }
 
 export function isEligibleReportImageAttachment(

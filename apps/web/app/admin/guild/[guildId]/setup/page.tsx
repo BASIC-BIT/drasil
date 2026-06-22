@@ -63,6 +63,10 @@ export default async function GuildSetupPage({ params }: PageProps) {
   const { dashboard, channels, roles } = await service.getDashboard(guildId, token.accessToken);
   const server = dashboard.server;
   const saveAction = saveGuildSetup.bind(null, guildId);
+  const reportAiMaxAction =
+    server?.settings.report_ai_max_action === 'restrict'
+      ? 'open_case'
+      : (server?.settings.report_ai_max_action ?? 'hints');
 
   return (
     <main className="shell stack">
@@ -264,12 +268,11 @@ export default async function GuildSetupPage({ params }: PageProps) {
             <select
               id="reportAiMaxAction"
               name="reportAiMaxAction"
-              defaultValue={server?.settings.report_ai_max_action ?? 'hints'}
+              defaultValue={reportAiMaxAction}
             >
               <option value="off">Off</option>
               <option value="hints">Hints only</option>
               <option value="open_case">Open case</option>
-              <option value="restrict">Restrict pending review</option>
             </select>
           </div>
         </div>

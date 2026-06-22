@@ -46,16 +46,20 @@ export function normalizeRoleQuarantineRoleIds(value: unknown): string[] {
 export function getRoleQuarantineSettings(
   settings: ServerSettings | undefined
 ): RoleQuarantineSettings {
-  const modeValue = settings?.[ROLE_QUARANTINE_MODE_SETTING_KEY];
-  const mode =
-    typeof modeValue === 'string' && isRoleQuarantineMode(modeValue)
-      ? modeValue
-      : DEFAULT_ROLE_QUARANTINE_MODE;
-
   return {
-    mode,
+    mode: readRoleQuarantineMode(settings?.[ROLE_QUARANTINE_MODE_SETTING_KEY]),
     exemptRoleIds: normalizeRoleQuarantineRoleIds(
       settings?.[ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY]
     ),
   };
+}
+
+function readRoleQuarantineMode(value: unknown): RoleQuarantineMode {
+  if (value === 'automatic') {
+    return 'on';
+  }
+
+  return typeof value === 'string' && isRoleQuarantineMode(value)
+    ? value
+    : DEFAULT_ROLE_QUARANTINE_MODE;
 }
