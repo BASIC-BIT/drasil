@@ -181,6 +181,7 @@ export class RoleGateService implements IRoleGateService {
       shouldAddMemberAccess: Boolean(
         memberAccessRole &&
         memberAccessRole.exists &&
+        !memberAccessRole.current &&
         memberAccessRole.roleId !== honeypotRole?.roleId
       ),
       warnings,

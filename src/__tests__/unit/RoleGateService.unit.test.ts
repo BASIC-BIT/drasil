@@ -249,6 +249,34 @@ describe('RoleGateService (unit)', () => {
     );
   });
 
+  it('does not record role gate cleanup when member access is already present', async () => {
+    const honeypotRole = createRole('111111111111111111', 'Robot');
+    const memberAccessRole = createRole('222222222222222222', 'Human');
+    const member = createMember([memberAccessRole], [honeypotRole, memberAccessRole]);
+    const { service, adminActionService } = createService({
+      role_gate_enabled: true,
+      honeypot_role_id: honeypotRole.id,
+      member_access_role_id: memberAccessRole.id,
+    });
+
+    const preview = await service.previewResolution(member);
+    const confirmation = service.formatResolutionConfirmation(preview);
+    const result = await service.applyResolution(
+      member,
+      { id: 'mod-1' } as User,
+      'verify',
+      preview
+    );
+
+    expect(preview.shouldRemoveHoneypot).toBe(false);
+    expect(preview.shouldAddMemberAccess).toBe(false);
+    expect(confirmation).toBeNull();
+    expect(member.roles.add).not.toHaveBeenCalled();
+    expect(result.applied).toBe(false);
+    expect(result.results).toEqual([]);
+    expect(adminActionService.recordAction).not.toHaveBeenCalled();
+  });
+
   it('does not re-add the honeypot role when member access is configured to the same role', async () => {
     const sharedRole = createRole('111111111111111111', 'Human Check');
     const member = createMember([sharedRole], [sharedRole]);
