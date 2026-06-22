@@ -606,8 +606,8 @@ export class EventHandler implements IEventHandler {
       await this.securityActionService.handleHoneypotRoleAssignment(newMember, {
         roleId: honeypotRoleId,
         roleName: role?.name ?? null,
-          responseMode: roleGateSettings.honeypotResponseMode,
-        });
+        responseMode: roleGateSettings.honeypotResponseMode,
+      });
     } catch (error) {
       console.error(`Error handling member role update for ${newMember.id}:`, error);
     }

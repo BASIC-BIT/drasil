@@ -1893,13 +1893,7 @@ export class SecurityActionService implements ISecurityActionService {
       return true;
     }
 
-    return await this.handleSuspiciousMember(
-      member,
-      detectionResult,
-      undefined,
-      undefined,
-      true
-    );
+    return await this.handleSuspiciousMember(member, detectionResult, undefined, undefined, true);
   }
 
   public async openAdminCase(
