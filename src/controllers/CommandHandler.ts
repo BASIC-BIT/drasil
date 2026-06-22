@@ -43,6 +43,7 @@ import { TestCommandHandler } from './TestCommandHandler';
 import { isUserInstallReportingEnabled } from '../utils/userInstallReporting';
 import { IReportIntakeService } from '../services/ReportIntakeService';
 import { IModerationQueueService } from '../services/ModerationQueueService';
+import { IIntegrityAuditService } from '../services/IntegrityAuditService';
 import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
 import { buildAdminGuildSetupUrl } from '../utils/publicWebLinks';
 import 'reflect-metadata';
@@ -123,7 +124,10 @@ export class CommandHandler implements ICommandHandler {
     reportIntakeService?: IReportIntakeService,
     @inject(TYPES.ModerationQueueService)
     @optional()
-    moderationQueueService?: IModerationQueueService
+    moderationQueueService?: IModerationQueueService,
+    @inject(TYPES.IntegrityAuditService)
+    @optional()
+    integrityAuditService?: IIntegrityAuditService
   ) {
     this.client = client;
     this.configService = configService;
@@ -157,7 +161,8 @@ export class CommandHandler implements ICommandHandler {
       this.configService,
       userModerationService,
       securityActionService,
-      (interaction) => this.replyGuildInstallRequired(interaction)
+      (interaction) => this.replyGuildInstallRequired(interaction),
+      integrityAuditService
     );
     this.reportCommandHandler = new ReportCommandHandler(
       reportSubmissionService,
@@ -382,6 +387,11 @@ export class CommandHandler implements ICommandHandler {
 
     if (subcommandGroup === 'role-quarantine') {
       await this.configSubcommandHandler.handleRoleQuarantineConfigCommand(interaction, guild.id);
+      return;
+    }
+
+    if (subcommandGroup === 'role-gate') {
+      await this.configSubcommandHandler.handleRoleGateConfigCommand(interaction, guild.id);
       return;
     }
 

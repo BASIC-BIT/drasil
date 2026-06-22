@@ -15,6 +15,7 @@ flowchart LR
     direction TB
     NewMessage["New guild message"]
     NewJoin["Discord member join"]
+    RoleUpdate["Member role update"]
     ReportButton["Report button clicked"]
     DirectReport["Direct / context report"]
     ModeratorCase["Moderator creates case"]
@@ -45,6 +46,9 @@ flowchart LR
     direction TB
     NewMessage --> Detection["DetectionOrchestrator"]
     NewJoin --> Detection
+    RoleUpdate --> HoneypotAssigned{"New honeypot role?"}
+    HoneypotAssigned -->|"No"| NoModeration
+    HoneypotAssigned -->|"Yes"| ResponseMode
     Detection --> Suspicious{"Suspicious?"}
     Suspicious -->|"No"| NoModeration["Terminal: no moderation surface"]
     Suspicious -->|"Yes"| ResponseMode{"Response mode"}
@@ -97,8 +101,10 @@ flowchart LR
     CaseMenu --> BanUser["Ban reason modal"]
     CaseMenu --> RepairCase{"Confirm repair / reopen / sync?"}
 
-    VerifyUser -->|"Yes"| Verified
-    CloseNoAction -->|"Yes"| ClosedNoAction
+    VerifyUser -->|"Yes"| RoleGateVerify["Apply role-gate cleanup"]
+    CloseNoAction -->|"Yes"| RoleGateClose["Apply role-gate cleanup"]
+    RoleGateVerify --> Verified
+    RoleGateClose --> ClosedNoAction
     KickUser --> Kicked
     BanUser --> Banned
     RepairCase -->|"Yes"| CaseMenu
@@ -120,9 +126,9 @@ flowchart LR
     Resolve --> CaseResolved
   end
 
-  class NewMessage,NewJoin,ReportButton,DirectReport,ModeratorCase,AdminFlag start
+  class NewMessage,NewJoin,RoleUpdate,ReportButton,DirectReport,ModeratorCase,AdminFlag start
   class ExistingThread,IntakeClosed,NoModeration,RecordedOnly,AlertDismissed,FalsePositive,Verified,ClosedNoAction,Kicked,Banned,CaseResolved terminal
-  class ExistingIntake,CandidateFound,TargetRejected,Suspicious,ResponseMode,ActiveCase,OpenObserved,DismissObserved,FalsePositiveObserved,VerifyUser,CloseNoAction,RepairCase decision
-  class CreateIntake,AddReporter,CollectEvidence,ExtractTargets,NeedMore,AskTargetConfirm,TargetConfirmed,SubmitIntakeReport,Detection,UserReport,ObservedAlert,ObservedMenu,RequestCase,ApplyCaseRole,CaseThread,EvidenceThread,CaseNotification,CaseMenu,Resolve,KickObserved,BanObserved,KickUser,BanUser,LinkEvidence action
+  class ExistingIntake,CandidateFound,TargetRejected,HoneypotAssigned,Suspicious,ResponseMode,ActiveCase,OpenObserved,DismissObserved,FalsePositiveObserved,VerifyUser,CloseNoAction,RepairCase decision
+  class CreateIntake,AddReporter,CollectEvidence,ExtractTargets,NeedMore,AskTargetConfirm,TargetConfirmed,SubmitIntakeReport,Detection,UserReport,ObservedAlert,ObservedMenu,RequestCase,ApplyCaseRole,CaseThread,EvidenceThread,CaseNotification,CaseMenu,RoleGateVerify,RoleGateClose,Resolve,KickObserved,BanObserved,KickUser,BanUser,LinkEvidence action
   class ActiveCaseState state
 ```

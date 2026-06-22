@@ -38,6 +38,7 @@ export type HandlerOverrides = Partial<{
   caseRoleLockdownService: any;
   reportIntakeService: any;
   moderationQueueService: any;
+  integrityAuditService: any;
   client: any;
 }>;
 
@@ -182,7 +183,8 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
       setupDiagnosticsService,
       overrides.caseRoleLockdownService,
       overrides.reportIntakeService,
-      overrides.moderationQueueService
+      overrides.moderationQueueService,
+      overrides.integrityAuditService
     ),
     client,
     userModerationService,
@@ -190,5 +192,6 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
     configService,
     securityActionService,
     setupDiagnosticsService,
+    integrityAuditService: overrides.integrityAuditService,
   };
 };

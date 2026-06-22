@@ -108,6 +108,37 @@ describe('CommandHandler command catalog (unit)', () => {
     expect(modeOption.choices.map((choice: any) => choice.value)).toEqual(['off', 'on']);
   });
 
+  it('registers role gate config commands', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const configCommand = commands.find((c) => c.name === 'config');
+    const roleGateGroup = configCommand.options.find((option: any) => option.name === 'role-gate');
+
+    expect(roleGateGroup).toBeDefined();
+    expect(roleGateGroup.options.map((option: any) => option.name)).toEqual(
+      expect.arrayContaining([
+        'view',
+        'enable',
+        'disable',
+        'set-honeypot-role',
+        'clear-honeypot-role',
+        'set-member-access-role',
+        'clear-member-access-role',
+        'set-honeypot-response',
+      ])
+    );
+    const responseSubcommand = roleGateGroup.options.find(
+      (option: any) => option.name === 'set-honeypot-response'
+    );
+    const modeOption = responseSubcommand.options.find((option: any) => option.name === 'mode');
+    expect(modeOption.choices.map((choice: any) => choice.value)).toEqual([
+      'off',
+      'record_only',
+      'notify_only',
+      'restrict',
+    ]);
+  });
+
   it('registers /setupverification with typed role and channel options', () => {
     const { handler } = buildHandler();
     const commands = (handler as any).commands as any[];
@@ -134,8 +165,18 @@ describe('CommandHandler command catalog (unit)', () => {
       PermissionFlagsBits.ManageGuild.toString()
     );
     expect(auditCommand.options.map((option: any) => option.name)).toEqual([
+      'integrity',
       'ignore-detection',
       'restore-detection',
+    ]);
+    const integritySubcommand = auditCommand.options.find(
+      (option: any) => option.name === 'integrity'
+    );
+    expect(integritySubcommand.options.map((option: any) => option.name)).toEqual([
+      'scope',
+      'days',
+      'limit',
+      'user',
     ]);
   });
 

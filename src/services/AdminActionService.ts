@@ -100,6 +100,9 @@ export class AdminActionService implements IAdminActionService {
       case AdminActionType.UNDO_OBSERVED_ACTION:
         summary = `Observed alert action undone by ${adminMention}`;
         break;
+      case AdminActionType.ROLE_GATE_CLEANUP:
+        summary = `Role gate cleanup by ${adminMention}`;
+        break;
       default:
         summary = `Action taken by ${adminMention}`;
     }

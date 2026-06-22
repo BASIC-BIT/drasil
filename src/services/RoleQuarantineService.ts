@@ -10,6 +10,7 @@ import {
   RoleQuarantineSnapshotStatus,
   VerificationEvent,
 } from '../repositories/types';
+import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { getRoleQuarantineSettings, RoleQuarantineMode } from '../utils/roleQuarantineSettings';
 
 export type RoleQuarantineApplyStatus = 'off' | 'already_active' | 'quarantined';
@@ -183,6 +184,13 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       };
     }
 
+    const serverConfig = await this.configService.getServerConfig(member.guild.id);
+    const roleGateSettings = getRoleGateSettings(serverConfig.settings);
+    const policyManagedRestoreSkips = new Set<string>();
+    if (roleGateSettings.enabled && roleGateSettings.honeypotRoleId) {
+      policyManagedRestoreSkips.add(roleGateSettings.honeypotRoleId);
+    }
+
     const botMember = await this.getBotMember(member);
     const attemptedRoleIds = [...snapshot.removed_role_ids];
     const restoredRoleIds: string[] = [];
@@ -196,7 +204,11 @@ export class RoleQuarantineService implements IRoleQuarantineService {
         continue;
       }
 
-      const restoreSkipReason = this.getRestoreSkipReason(role, botMember);
+      const restoreSkipReason = this.getRestoreSkipReason(
+        role,
+        botMember,
+        policyManagedRestoreSkips
+      );
       if (restoreSkipReason) {
         skippedRoles.push(this.toRoleDetail(role, restoreSkipReason));
         continue;
@@ -323,7 +335,14 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     return undefined;
   }
 
-  private getRestoreSkipReason(role: Role, botMember: GuildMember | null): string | undefined {
+  private getRestoreSkipReason(
+    role: Role,
+    botMember: GuildMember | null,
+    policyManagedRestoreSkips: ReadonlySet<string>
+  ): string | undefined {
+    if (policyManagedRestoreSkips.has(role.id)) {
+      return 'policy-managed role gate role';
+    }
     if (this.isBotRole(role)) {
       return 'bot-managed role';
     }

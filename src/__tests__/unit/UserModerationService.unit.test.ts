@@ -532,7 +532,7 @@ describe('UserModerationService (unit)', () => {
     expect(notificationManager.logActionToMessage).not.toHaveBeenCalled();
   });
 
-  it('does not lift a pending case without a restricted member record', async () => {
+  it('does not close a pending case without a case-role member record', async () => {
     const guildId = 'guild-lift-untracked';
     const userId = 'user-lift-untracked';
     const moderator = { id: 'mod-lift-untracked' } as User;

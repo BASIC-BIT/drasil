@@ -42,6 +42,7 @@ import {
 import { IReportIntakeService } from '../services/ReportIntakeService';
 import { IReportIntakeAgentService } from '../services/ReportIntakeAgentService';
 import { ICaseReviewReminderService } from '../services/CaseReviewReminderService';
+import { isDiscordUnknownBanError } from '../utils/discordErrors';
 import {
   IMessageContextRepository,
   MESSAGE_CONTEXT_PREVIEW_MAX_LENGTH,
@@ -56,13 +57,13 @@ import {
 import { ModerationOutcomeSource } from '../services/ModerationOutcomeService';
 import { IModerationQueueService } from '../services/ModerationQueueService';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
+import { getRoleGateSettings } from '../utils/roleGateSettings';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
 const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
-const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
 const DISCORD_RECENT_AUDIT_WINDOW_MS = 60 * 1000;
 const MANUAL_INTAKE_ROLE_REMOVAL_REASON = 'Manual intake trigger role consumed by Drasil';
 
@@ -557,29 +558,56 @@ export class EventHandler implements IEventHandler {
     newMember: GuildMember
   ): Promise<void> {
     try {
+      if (oldMember.partial || newMember.partial || newMember.user.bot) {
+        return;
+      }
+
       await this.ensureConfigInitialized();
       const serverConfig = await this.configService.getServerConfig(newMember.guild.id);
-      const settings = getManualIntakeSettings(serverConfig.settings);
-      if (!settings.enabled || !settings.roleId) {
-        return;
+
+      const manualSettings = getManualIntakeSettings(serverConfig.settings);
+      if (manualSettings.enabled && manualSettings.roleId) {
+        if (manualSettings.roleId === serverConfig.case_role_id) {
+          console.warn(
+            `Manual intake trigger role for guild ${newMember.guild.id} matches the case role; skipping role-triggered intake.`
+          );
+        } else {
+          const hadRole = this.memberHasRole(oldMember, manualSettings.roleId);
+          const hasRole = this.memberHasRole(newMember, manualSettings.roleId);
+          if (!hadRole && hasRole) {
+            this.scheduleManualIntake(
+              newMember,
+              manualSettings.roleId,
+              manualSettings.gracePeriodSeconds
+            );
+          } else if (hadRole && !hasRole) {
+            this.cancelManualIntake(newMember.guild.id, newMember.id, manualSettings.roleId);
+          }
+        }
       }
-      if (settings.roleId === serverConfig.case_role_id) {
-        console.warn(
-          `Manual intake trigger role for guild ${newMember.guild.id} matches the case role; skipping role-triggered intake.`
-        );
+
+      const roleGateSettings = getRoleGateSettings(serverConfig.settings);
+      if (
+        !roleGateSettings.enabled ||
+        !roleGateSettings.honeypotRoleId ||
+        roleGateSettings.honeypotResponseMode === 'off'
+      ) {
         return;
       }
 
-      const hadRole = this.memberHasRole(oldMember, settings.roleId);
-      const hasRole = this.memberHasRole(newMember, settings.roleId);
-      if (!hadRole && hasRole) {
-        this.scheduleManualIntake(newMember, settings.roleId, settings.gracePeriodSeconds);
+      const honeypotRoleId = roleGateSettings.honeypotRoleId;
+      if (oldMember.roles.cache.has(honeypotRoleId) || !newMember.roles.cache.has(honeypotRoleId)) {
         return;
       }
 
-      if (hadRole && !hasRole) {
-        this.cancelManualIntake(newMember.guild.id, newMember.id, settings.roleId);
-      }
+      const role =
+        newMember.guild.roles.cache.get(honeypotRoleId) ??
+        (await newMember.guild.roles.fetch(honeypotRoleId).catch(() => null));
+      await this.securityActionService.handleHoneypotRoleAssignment(newMember, {
+        roleId: honeypotRoleId,
+        roleName: role?.name ?? null,
+          responseMode: roleGateSettings.honeypotResponseMode,
+        });
     } catch (error) {
       console.error(`Error handling member role update for ${newMember.id}:`, error);
     }
@@ -813,7 +841,7 @@ export class EventHandler implements IEventHandler {
       const existingBan = await member.guild.bans.fetch(member.id);
       return !existingBan;
     } catch (error) {
-      if (this.isUnknownBanError(error)) {
+      if (isDiscordUnknownBanError(error)) {
         return true;
       }
 
@@ -823,15 +851,6 @@ export class EventHandler implements IEventHandler {
       );
       return false;
     }
-  }
-
-  private isUnknownBanError(error: unknown): boolean {
-    return (
-      typeof error === 'object' &&
-      error !== null &&
-      'code' in error &&
-      (error as { code?: unknown }).code === DISCORD_UNKNOWN_BAN_ERROR_CODE
-    );
   }
 
   private async resolveObservedBanOptions(ban: GuildBan): Promise<ObservedDiscordBanOptions> {

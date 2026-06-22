@@ -37,7 +37,10 @@ import { getUserReportSettings } from '../utils/userReportSettings';
 import type { IGPTService, ReportAIAnalysis } from './GPTService';
 import { getReportAiSettings, ReportAttachmentMetadata } from '../utils/reportAiSettings';
 import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
-import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
+import {
+  DetectionResponseMode,
+  getDetectionResponseSettings,
+} from '../utils/detectionResponseSettings';
 import {
   appendVerificationActionFailure,
   clearVerificationActionFailures,
@@ -138,6 +141,11 @@ export interface ISecurityActionService {
     member: GuildMember,
     reporter: User,
     report: ConfirmedReportIntakeContext
+  ): Promise<boolean>;
+
+  handleHoneypotRoleAssignment(
+    member: GuildMember,
+    context: HoneypotRoleAssignmentContext
   ): Promise<boolean>;
 
   handleMessageReport(
@@ -301,6 +309,12 @@ export interface RoleIntakeResult {
 export interface RoleIntakeProgress {
   result: RoleIntakeResult;
   completedMembers: number;
+}
+
+export interface HoneypotRoleAssignmentContext {
+  roleId: string;
+  roleName: string | null;
+  responseMode: DetectionResponseMode;
 }
 
 /**
@@ -1816,6 +1830,76 @@ export class SecurityActionService implements ISecurityActionService {
       console.error(`Failed to open join case for ${member.user.tag}:`, error);
       throw error;
     }
+  }
+
+  public async handleHoneypotRoleAssignment(
+    member: GuildMember,
+    context: HoneypotRoleAssignmentContext
+  ): Promise<boolean> {
+    if (context.responseMode === 'off') {
+      return false;
+    }
+
+    await this.ensureEntitiesExist(
+      member.guild.id,
+      member.id,
+      member.user.username,
+      member.joinedAt?.toISOString()
+    );
+
+    const roleLabel = context.roleName ? `${context.roleName} (${context.roleId})` : context.roleId;
+    const detectionEvent = await this.detectionEventsRepository.create({
+      server_id: member.guild.id,
+      user_id: member.id,
+      detection_type: DetectionType.HONEYPOT_ROLE,
+      confidence: 1.0,
+      reasons: [`Configured honeypot role ${roleLabel} was assigned.`],
+      detected_at: new Date(),
+      metadata: withDetectionTestingMetadata(
+        {
+          type: 'honeypot_role',
+          roleId: context.roleId,
+          roleName: context.roleName,
+          responseMode: context.responseMode,
+        },
+        'server'
+      ),
+    });
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 1.0,
+      reasons: [`Configured honeypot role ${roleLabel} was assigned.`],
+      triggerSource: DetectionType.HONEYPOT_ROLE,
+      triggerContent: `Honeypot role <@&${context.roleId}> assigned`,
+      detectionEventId: detectionEvent.id,
+    };
+
+    if (context.responseMode === 'record_only') {
+      return true;
+    }
+
+    if (context.responseMode === 'notify_only') {
+      const notification = await this.notificationManager.upsertObservedDetectionNotification(
+        member,
+        detectionResult
+      );
+      if (notification) {
+        await this.runModerationQueueTask(
+          `mirror honeypot observed alert ${detectionEvent.id} to the live moderation queue`,
+          (moderationQueueService) =>
+            moderationQueueService.upsertObservedAlertMirrorById(detectionEvent.id)
+        );
+      }
+      return true;
+    }
+
+    return await this.handleSuspiciousMember(
+      member,
+      detectionResult,
+      undefined,
+      undefined,
+      true
+    );
   }
 
   public async openAdminCase(

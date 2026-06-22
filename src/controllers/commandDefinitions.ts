@@ -26,6 +26,12 @@ import {
 import { MAX_REPORT_AI_MAX_IMAGE_BYTES, MAX_REPORT_AI_MAX_IMAGES } from '../utils/reportAiSettings';
 import { USER_REPORT_REASON_MAX_LENGTH } from '../utils/userReportSettings';
 import { MAX_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT } from '../utils/verificationThreadAnalysisSettings';
+import {
+  INTEGRITY_AUDIT_MAX_DAYS,
+  INTEGRITY_AUDIT_MAX_LIMIT,
+  INTEGRITY_AUDIT_MIN_DAYS,
+  INTEGRITY_AUDIT_MIN_LIMIT,
+} from '../utils/integrityAuditSettings';
 
 export const REPORT_USER_CONTEXT_COMMAND_NAME = 'Report User';
 export const REPORT_MESSAGE_CONTEXT_COMMAND_NAME = 'Report Message';
@@ -255,6 +261,61 @@ const baseApplicationCommandBuilders = [
             .setDescription('Remove a role from the role quarantine exemption list')
             .addRoleOption((option) =>
               option.setName('role').setDescription('Role to stop exempting').setRequired(true)
+            )
+        )
+    )
+    .addSubcommandGroup((group) =>
+      group
+        .setName('role-gate')
+        .setDescription('Configure honeypot and member access roles')
+        .addSubcommand((subcommand) =>
+          subcommand.setName('view').setDescription('View role gate settings')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand.setName('enable').setDescription('Enable role gate handling')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand.setName('disable').setDescription('Disable role gate handling')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set-honeypot-role')
+            .setDescription('Set the honeypot role')
+            .addRoleOption((option) =>
+              option.setName('role').setDescription('Honeypot role').setRequired(true)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand.setName('clear-honeypot-role').setDescription('Clear the honeypot role')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set-member-access-role')
+            .setDescription('Set the member access role')
+            .addRoleOption((option) =>
+              option.setName('role').setDescription('Member access role').setRequired(true)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('clear-member-access-role')
+            .setDescription('Clear the member access role')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('set-honeypot-response')
+            .setDescription('Set response when a member gains the honeypot role')
+            .addStringOption((option) =>
+              option
+                .setName('mode')
+                .setDescription('off, record_only, notify_only, or restrict')
+                .setRequired(true)
+                .addChoices(
+                  { name: 'Off', value: 'off' },
+                  { name: 'Record only', value: 'record_only' },
+                  { name: 'Notify only', value: 'notify_only' },
+                  { name: 'Restrict pending review', value: 'restrict' }
+                )
             )
         )
     )
@@ -941,7 +1002,7 @@ const baseApplicationCommandBuilders = [
                 .addChoices(
                   { name: 'Off', value: 'off' },
                   { name: 'Hints only', value: 'hints' },
-                  { name: 'Recommend case review', value: 'restrict' }
+                  { name: 'Recommend case review', value: 'open_case' }
                 )
             )
         )
@@ -950,7 +1011,47 @@ const baseApplicationCommandBuilders = [
     .setContexts(InteractionContextType.Guild),
   new SlashCommandBuilder()
     .setName('audit')
-    .setDescription('Audit detection accounting')
+    .setDescription('Audit moderation accounting and live state')
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('integrity')
+        .setDescription('Read-only audit of Discord and database moderation state')
+        .addStringOption((option) =>
+          option
+            .setName('scope')
+            .setDescription('Audit area to check')
+            .setRequired(false)
+            .addChoices(
+              { name: 'All checks', value: 'all' },
+              { name: 'Cases', value: 'cases' },
+              { name: 'Case-role members', value: 'case_role' },
+              { name: 'Queue', value: 'queue' }
+            )
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName('days')
+            .setDescription(
+              `Resolved-case lookback window (${INTEGRITY_AUDIT_MIN_DAYS}-${INTEGRITY_AUDIT_MAX_DAYS} days)`
+            )
+            .setRequired(false)
+            .setMinValue(INTEGRITY_AUDIT_MIN_DAYS)
+            .setMaxValue(INTEGRITY_AUDIT_MAX_DAYS)
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName('limit')
+            .setDescription(
+              `Maximum rows to inspect per category (${INTEGRITY_AUDIT_MIN_LIMIT}-${INTEGRITY_AUDIT_MAX_LIMIT})`
+            )
+            .setRequired(false)
+            .setMinValue(INTEGRITY_AUDIT_MIN_LIMIT)
+            .setMaxValue(INTEGRITY_AUDIT_MAX_LIMIT)
+        )
+        .addUserOption((option) =>
+          option.setName('user').setDescription('Limit audit to one user').setRequired(false)
+        )
+    )
     .addSubcommand((subcommand) =>
       subcommand
         .setName('ignore-detection')

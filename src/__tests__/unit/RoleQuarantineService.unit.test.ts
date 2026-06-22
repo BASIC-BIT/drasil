@@ -358,6 +358,44 @@ describe('RoleQuarantineService (unit)', () => {
     );
   });
 
+  it('does not restore a configured honeypot role during role gate cleanup', async () => {
+    const honeypotRole = createRole({ id: '111111111111111111', name: 'Robot' });
+    const member = createMember([], [honeypotRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const snapshot = await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'verification-1',
+      mode: 'automatic',
+      originalRoleIds: [honeypotRole.id],
+      plannedRoleIds: [honeypotRole.id],
+      removedRoleIds: [honeypotRole.id],
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({
+        role_quarantine_mode: 'automatic',
+        role_gate_enabled: true,
+        honeypot_role_id: honeypotRole.id,
+      }),
+      snapshots
+    );
+
+    const result = await service.restoreMemberRoles(member, { id: 'moderator-1' } as User);
+
+    expect(result.status).toBe('restored');
+    expect(result.restoredRoleIds).toEqual([]);
+    expect(result.skippedRoles).toEqual([
+      expect.objectContaining({
+        role_id: honeypotRole.id,
+        reason: 'policy-managed role gate role',
+      }),
+    ]);
+    expect(member.roles.add).not.toHaveBeenCalled();
+    await expect(snapshots.findActiveByServerAndUser('guild-1', 'user-1')).resolves.toBeNull();
+    const updated = await snapshots.update(snapshot.id, {});
+    expect(updated?.status).toBe(RoleQuarantineSnapshotStatus.RESTORED);
+  });
+
   it('abandons an active snapshot without restoring roles', async () => {
     const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
     const snapshot = await snapshots.create({

@@ -344,6 +344,7 @@ enum admin_action_type {
   dismiss
   false_positive
   undo_observed_action
+  role_gate_cleanup
 }
 
 enum detection_type {
@@ -357,6 +358,7 @@ enum detection_type {
   admin_case
   admin_flag
   role_intake
+  honeypot_role
 }
 
 enum moderation_outcome_source {

@@ -877,6 +877,9 @@ export class NotificationPresentationBuilder {
     if (detectionResult.triggerSource === DetectionType.ROLE_INTAKE) {
       return `Observed via role intake: ${detectionResult.triggerContent || 'Role intake'}`;
     }
+    if (detectionResult.triggerSource === DetectionType.HONEYPOT_ROLE) {
+      return `Observed via honeypot role: ${detectionResult.triggerContent || 'Honeypot role assigned'}`;
+    }
     if (detectionResult.triggerSource === DetectionType.GPT_ANALYSIS) {
       return `Observed via manual review: \`${detectionResult.triggerContent || 'Manual flag'}\``;
     }
@@ -910,6 +913,9 @@ export class NotificationPresentationBuilder {
     }
     if (detectionResult.triggerSource === DetectionType.ROLE_INTAKE) {
       return `Role intake: ${detectionResult.triggerContent || 'Role intake'}`;
+    }
+    if (detectionResult.triggerSource === DetectionType.HONEYPOT_ROLE) {
+      return `Honeypot role: ${detectionResult.triggerContent || 'Honeypot role assigned'}`;
     }
     if (detectionResult.triggerSource === DetectionType.GPT_ANALYSIS) {
       const safeContent = detectionResult.triggerContent
@@ -1473,6 +1479,8 @@ export class NotificationPresentationBuilder {
         return 'admin flag';
       case DetectionType.ROLE_INTAKE:
         return 'role intake';
+      case DetectionType.HONEYPOT_ROLE:
+        return 'honeypot role';
       default: {
         const exhaustive: never = detectionType;
         return String(exhaustive);
