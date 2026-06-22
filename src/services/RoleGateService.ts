@@ -131,7 +131,7 @@ export class RoleGateService implements IRoleGateService {
     }
 
     const summaryLines = results.map((result) => result.message);
-    const applied = results.length > 0 || warnings.length > 0;
+    const applied = results.length > 0;
     if (applied) {
       await this.recordRoleGateAction(
         member,
@@ -179,7 +179,9 @@ export class RoleGateService implements IRoleGateService {
         honeypotRole && (honeypotRole.current || honeypotRole.quarantined)
       ),
       shouldAddMemberAccess: Boolean(
-        memberAccessRole && memberAccessRole.roleId !== honeypotRole?.roleId
+        memberAccessRole &&
+        memberAccessRole.exists &&
+        memberAccessRole.roleId !== honeypotRole?.roleId
       ),
       warnings,
       activeSnapshotId: snapshot?.id ?? null,

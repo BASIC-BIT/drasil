@@ -221,4 +221,59 @@ describe('RoleGateService (unit)', () => {
     expect(member.roles.add).not.toHaveBeenCalled();
     expect(result.results.map((item) => item.operation)).toEqual(['remove_honeypot']);
   });
+
+  it('does not offer member access cleanup when the configured role is missing', async () => {
+    const missingRoleId = '222222222222222222';
+    const member = createMember([], []);
+    const { service, adminActionService } = createService({
+      role_gate_enabled: true,
+      member_access_role_id: missingRoleId,
+    });
+
+    const preview = await service.previewResolution(member);
+    const confirmation = service.formatResolutionConfirmation(preview);
+    const result = await service.applyResolution(
+      member,
+      { id: 'mod-1' } as User,
+      'verify',
+      preview
+    );
+
+    expect(preview.shouldAddMemberAccess).toBe(false);
+    expect(confirmation).not.toContain('this will add the member access role');
+    expect(confirmation).toContain(
+      `Configured member access role ${missingRoleId} no longer exists.`
+    );
+    expect(member.roles.add).not.toHaveBeenCalled();
+    expect(result.applied).toBe(false);
+    expect(result.results).toEqual([]);
+    expect(adminActionService.recordAction).not.toHaveBeenCalled();
+  });
+
+  it('does not record role gate cleanup when preview only has warnings', async () => {
+    const sharedRole = createRole('111111111111111111', 'Human Check');
+    const member = createMember([], [sharedRole]);
+    const { service, adminActionService } = createService({
+      role_gate_enabled: true,
+      honeypot_role_id: sharedRole.id,
+      member_access_role_id: sharedRole.id,
+    });
+
+    const preview = await service.previewResolution(member);
+    const result = await service.applyResolution(
+      member,
+      { id: 'mod-1' } as User,
+      'close_no_action',
+      preview
+    );
+
+    expect(preview.shouldRemoveHoneypot).toBe(false);
+    expect(preview.shouldAddMemberAccess).toBe(false);
+    expect(preview.warnings).toContain(
+      'Configured honeypot role and member access role are the same role; member access cleanup will be skipped.'
+    );
+    expect(result.applied).toBe(false);
+    expect(result.results).toEqual([]);
+    expect(adminActionService.recordAction).not.toHaveBeenCalled();
+  });
 });
