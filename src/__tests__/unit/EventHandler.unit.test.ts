@@ -256,6 +256,85 @@ describe('EventHandler (unit)', () => {
     }
   });
 
+  it('attributes delayed manual intake using the configured grace-period audit window', async () => {
+    jest.useFakeTimers();
+    try {
+      const openAdminCase = jest.fn().mockResolvedValue({
+        opened: true,
+        caseRoleAttempted: true,
+        caseRoleActive: true,
+      });
+      const client = { on: jest.fn(), user: { id: 'bot-1', bot: true } };
+      const role = { id: 'manual-role', name: 'Pending Investigation' };
+      const moderator = { id: 'mod-1', bot: false };
+      const assignedAt = Date.now();
+      const guild = {
+        id: 'guild-1',
+        roles: { cache: new Map([[role.id, role]]), fetch: jest.fn() },
+        members: { fetch: jest.fn() },
+        fetchAuditLogs: jest.fn().mockResolvedValue({
+          entries: [
+            {
+              id: 'audit-1',
+              target: { id: 'user-1' },
+              executor: moderator,
+              createdTimestamp: assignedAt,
+              changes: [{ key: '$add', new: [{ id: role.id, name: role.name }] }],
+            },
+          ],
+        }),
+      };
+      const currentMember = buildManualIntakeMember(guild, [role.id]);
+      (guild.members.fetch as jest.Mock).mockResolvedValue(currentMember);
+      const configService = {
+        initialize: jest.fn().mockResolvedValue(undefined),
+        getCachedServerConfig: jest.fn().mockReturnValue({}),
+        getServerConfig: jest.fn().mockResolvedValue({
+          case_role_id: 'case-role',
+          settings: {
+            manual_intake_enabled: true,
+            manual_intake_role_id: role.id,
+            manual_intake_grace_period_seconds: 120,
+          },
+        }),
+        updateServerConfig: jest.fn().mockResolvedValue({}),
+        updateServerSettings: jest.fn().mockResolvedValue({}),
+      };
+      const handler = buildHandler({
+        client,
+        configService,
+        securityActionService: {
+          handleSuspiciousMessage: jest.fn(),
+          handleSuspiciousJoin: jest.fn(),
+          openCaseForSuspiciousMessage: jest.fn(),
+          openCaseForSuspiciousJoin: jest.fn(),
+          openAdminCase,
+          recordRejoinAfterKickDetection: jest.fn(),
+        },
+      });
+      await handler.setupEventHandlers();
+      const updateHandler = client.on.mock.calls.find(
+        ([event]) => event === Events.GuildMemberUpdate
+      )?.[1];
+
+      await updateHandler?.(
+        buildManualIntakeMember(guild, []),
+        buildManualIntakeMember(guild, [role.id])
+      );
+      await jest.runOnlyPendingTimersAsync();
+
+      expect(openAdminCase).toHaveBeenCalledWith(
+        currentMember,
+        moderator,
+        expect.objectContaining({
+          metadata: expect.objectContaining({ assignedById: moderator.id }),
+        })
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('does not attribute manual intake to audit entries without role-change details', async () => {
     jest.useFakeTimers();
     try {

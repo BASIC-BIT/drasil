@@ -503,7 +503,7 @@ describe('InteractionHandler (unit)', () => {
     expect(interaction.update).not.toHaveBeenCalled();
   });
 
-  it('maps legacy lift-restriction case action to repair', async () => {
+  it('maps legacy lift-restriction case action to close no-action', async () => {
     const activeCase = buildVerificationEvent('ver-lift', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(activeCase);
     const handler = new InteractionHandler(
@@ -525,12 +525,17 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(securityActionService.repairActiveCase).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'user-1' })
+    expect(userModerationService.closeCaseNoAction).toHaveBeenCalledWith(
+      expect.objectContaining({ members: expect.any(Object) }),
+      'user-1',
+      interaction.user,
+      'Closed with no action by moderator.'
     );
+    expect(securityActionService.repairActiveCase).not.toHaveBeenCalled();
     expect(notificationManager.updateNotificationButtons).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledWith({
-      content: 'Repaired active verification case for test-user#0001.',
+      content: 'Closed 1 pending verification case for <@user-1> with no action.',
+      allowedMentions: { parse: [] },
       flags: MessageFlags.Ephemeral,
     });
   });

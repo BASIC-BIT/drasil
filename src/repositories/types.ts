@@ -80,7 +80,7 @@ export interface ServerSettings {
   case_role_lockdown_enabled?: boolean;
   case_role_lockdown_allowed_channel_ids?: string[];
   case_role_lockdown_allowed_category_ids?: string[];
-  role_quarantine_mode?: 'off' | 'on';
+  role_quarantine_mode?: 'off' | 'on' | 'audit_only';
   role_quarantine_exempt_role_ids?: string[];
   role_gate_enabled?: boolean;
   honeypot_role_id?: string | null;

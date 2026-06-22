@@ -496,11 +496,13 @@ export class InteractionHandler implements IInteractionHandler {
   private normalizeLegacyAdminAction(parsed: ParsedAdminActionCustomId): ParsedAdminActionCustomId {
     switch (parsed.action) {
       case 'restrict_user':
-      case 'lift_restriction':
         return { ...parsed, action: 'repair' };
+      case 'lift_restriction':
+        return { ...parsed, action: 'close_no_action' };
       case 'confirm_restrict_user':
-      case 'confirm_lift_restriction':
         return { ...parsed, action: 'confirm_repair' };
+      case 'confirm_lift_restriction':
+        return { ...parsed, action: 'confirm_close_no_action' };
       case 'observed_restrict':
         return { ...parsed, action: 'observed_open' };
       case 'confirm_observed_restrict':

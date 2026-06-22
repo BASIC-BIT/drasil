@@ -4,7 +4,8 @@ export const ROLE_QUARANTINE_MODE_SETTING_KEY = 'role_quarantine_mode';
 export const ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY = 'role_quarantine_exempt_role_ids';
 
 export const ROLE_QUARANTINE_MODES = ['off', 'on'] as const;
-export type RoleQuarantineMode = (typeof ROLE_QUARANTINE_MODES)[number];
+export type ConfigurableRoleQuarantineMode = (typeof ROLE_QUARANTINE_MODES)[number];
+export type RoleQuarantineMode = ConfigurableRoleQuarantineMode | 'audit_only';
 
 export const DEFAULT_ROLE_QUARANTINE_MODE: RoleQuarantineMode = 'off';
 
@@ -15,8 +16,8 @@ export interface RoleQuarantineSettings {
 
 const DISCORD_ID_PATTERN = /^\d{17,20}$/;
 
-export function isRoleQuarantineMode(value: string): value is RoleQuarantineMode {
-  return ROLE_QUARANTINE_MODES.includes(value as RoleQuarantineMode);
+export function isRoleQuarantineMode(value: string): value is ConfigurableRoleQuarantineMode {
+  return ROLE_QUARANTINE_MODES.includes(value as ConfigurableRoleQuarantineMode);
 }
 
 export function normalizeRoleQuarantineRoleIds(value: unknown): string[] {
@@ -57,6 +58,9 @@ export function getRoleQuarantineSettings(
 function readRoleQuarantineMode(value: unknown): RoleQuarantineMode {
   if (value === 'automatic') {
     return 'on';
+  }
+  if (value === 'audit_only') {
+    return 'audit_only';
   }
 
   return typeof value === 'string' && isRoleQuarantineMode(value)

@@ -209,7 +209,7 @@ describe('RoleQuarantineService (unit)', () => {
     expect(snapshot?.removed_role_ids).toEqual(['safe-role']);
   });
 
-  it('treats unsupported legacy audit-only mode as off', async () => {
+  it('preserves legacy audit-only mode without removing roles', async () => {
     const safeRole = createRole({ id: 'safe-role' });
     const member = createMember([safeRole]);
     const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
@@ -220,8 +220,8 @@ describe('RoleQuarantineService (unit)', () => {
 
     const result = await service.quarantineMember(member, createVerificationEvent());
 
-    expect(result.status).toBe('off');
-    expect(result.plannedRoleIds).toEqual([]);
+    expect(result.status).toBe('audit_only');
+    expect(result.plannedRoleIds).toEqual(['safe-role']);
     expect(result.removedRoleIds).toEqual([]);
     expect(member.roles.remove).not.toHaveBeenCalled();
     await expect(snapshots.findActiveByServerAndUser('guild-1', 'user-1')).resolves.toBeNull();

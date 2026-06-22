@@ -13,7 +13,7 @@ import {
 import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { getRoleQuarantineSettings, RoleQuarantineMode } from '../utils/roleQuarantineSettings';
 
-export type RoleQuarantineApplyStatus = 'off' | 'already_active' | 'quarantined';
+export type RoleQuarantineApplyStatus = 'off' | 'audit_only' | 'already_active' | 'quarantined';
 export type RoleQuarantineRestoreStatus = 'no_active_snapshot' | 'partially_restored' | 'restored';
 export type RoleQuarantineAbandonStatus = 'no_active_snapshot' | 'abandoned';
 
@@ -121,6 +121,19 @@ export class RoleQuarantineService implements IRoleQuarantineService {
         this.toRoleDetail(classifiedRole.role, classifiedRole.skipReason ?? 'skipped')
       );
     const plannedRoleIds = removableRoles.map((role) => role.id);
+
+    if (settings.mode === 'audit_only') {
+      return {
+        status: 'audit_only',
+        mode: settings.mode,
+        snapshotId: null,
+        originalRoleIds,
+        plannedRoleIds,
+        removedRoleIds: [],
+        skippedRoles,
+        failedRemovals: [],
+      };
+    }
 
     const snapshot = await this.snapshotRepository.create({
       serverId: member.guild.id,

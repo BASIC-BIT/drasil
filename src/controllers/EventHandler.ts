@@ -625,7 +625,7 @@ export class EventHandler implements IEventHandler {
 
     const timer = setTimeout(() => {
       this.manualIntakeTimers.delete(key);
-      void this.runManualIntake(member, roleId).catch((error) => {
+      void this.runManualIntake(member, roleId, gracePeriodSeconds).catch((error) => {
         console.error(`Failed to process manual intake role ${roleId} for ${member.id}:`, error);
       });
     }, gracePeriodSeconds * 1000);
@@ -648,7 +648,11 @@ export class EventHandler implements IEventHandler {
     return `${guildId}:${userId}:${roleId}`;
   }
 
-  private async runManualIntake(originalMember: GuildMember, roleId: string): Promise<void> {
+  private async runManualIntake(
+    originalMember: GuildMember,
+    roleId: string,
+    scheduledGracePeriodSeconds: number
+  ): Promise<void> {
     const serverConfig = await this.configService.getServerConfig(originalMember.guild.id);
     const settings = getManualIntakeSettings(serverConfig.settings);
     if (!settings.enabled || settings.roleId !== roleId) {
@@ -666,7 +670,12 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    const assignedBy = await this.resolveManualIntakeAssignedBy(member, roleId);
+    const auditLogAgeBudgetMs = scheduledGracePeriodSeconds * 1000 + DISCORD_RECENT_AUDIT_WINDOW_MS;
+    const assignedBy = await this.resolveManualIntakeAssignedBy(
+      member,
+      roleId,
+      auditLogAgeBudgetMs
+    );
     const moderator = assignedBy ?? this.client.user;
     if (!moderator) {
       console.warn(
@@ -721,7 +730,8 @@ export class EventHandler implements IEventHandler {
 
   private async resolveManualIntakeAssignedBy(
     member: GuildMember,
-    roleId: string
+    roleId: string,
+    maxAgeMs: number
   ): Promise<User | null> {
     if (typeof member.guild.fetchAuditLogs !== 'function') {
       return null;
@@ -735,7 +745,7 @@ export class EventHandler implements IEventHandler {
       const roleUpdateEntry = auditLogs.entries.find(
         (entry) =>
           entry.target?.id === member.id &&
-          this.isRecentAuditLogEntry(entry) &&
+          this.isRecentAuditLogEntry(entry, maxAgeMs) &&
           this.auditLogEntryAddedRole(entry, roleId)
       );
       const executor = roleUpdateEntry?.executor;
@@ -918,12 +928,15 @@ export class EventHandler implements IEventHandler {
     }
   }
 
-  private isRecentAuditLogEntry(entry: { createdTimestamp?: unknown }): boolean {
+  private isRecentAuditLogEntry(
+    entry: { createdTimestamp?: unknown },
+    maxAgeMs = DISCORD_RECENT_AUDIT_WINDOW_MS
+  ): boolean {
     if (typeof entry.createdTimestamp !== 'number' || !Number.isFinite(entry.createdTimestamp)) {
       return true;
     }
 
-    return Date.now() - entry.createdTimestamp <= DISCORD_RECENT_AUDIT_WINDOW_MS;
+    return Date.now() - entry.createdTimestamp <= maxAgeMs;
   }
 
   private getAuditLogEntryDate(entry: { createdTimestamp?: unknown }): Date | null {

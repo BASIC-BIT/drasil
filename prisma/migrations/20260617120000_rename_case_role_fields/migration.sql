@@ -24,6 +24,9 @@ UPDATE "servers"
 SET "settings" = jsonb_set("settings", '{role_quarantine_mode}', '"on"', true)
 WHERE "settings" ->> 'role_quarantine_mode' = 'automatic';
 
+-- Keep role_quarantine_mode = 'audit_only' unchanged. Runtime settings parsing preserves
+-- that legacy audit-only behavior because neither 'off' nor 'on' is equivalent.
+
 UPDATE "servers"
 SET "settings" = jsonb_set("settings", '{report_intake_confirmed_response_mode}', '"open_case"', true)
 WHERE "settings" ->> 'report_intake_confirmed_response_mode' = 'restrict';
