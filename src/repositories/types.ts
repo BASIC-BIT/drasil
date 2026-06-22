@@ -80,6 +80,10 @@ export interface ServerSettings {
   restricted_lockdown_allowed_category_ids?: string[];
   role_quarantine_mode?: 'off' | 'audit_only' | 'automatic';
   role_quarantine_exempt_role_ids?: string[];
+  role_gate_enabled?: boolean;
+  honeypot_role_id?: string | null;
+  member_access_role_id?: string | null;
+  honeypot_role_response_mode?: 'off' | 'record_only' | 'notify_only' | 'restrict';
   case_review_reminders_enabled?: boolean;
   case_review_reminder_stale_hours?: number;
   case_review_reminder_repeat_hours?: number;
@@ -142,6 +146,7 @@ export enum DetectionType {
   ADMIN_CASE = 'admin_case',
   ADMIN_FLAG = 'admin_flag',
   ROLE_INTAKE = 'role_intake',
+  HONEYPOT_ROLE = 'honeypot_role',
 }
 
 /**
@@ -185,6 +190,7 @@ export enum AdminActionType {
   DISMISS = 'dismiss',
   FALSE_POSITIVE = 'false_positive',
   UNDO_OBSERVED_ACTION = 'undo_observed_action',
+  ROLE_GATE_CLEANUP = 'role_gate_cleanup',
 }
 
 export enum ModerationOutcomeSource {

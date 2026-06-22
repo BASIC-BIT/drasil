@@ -14,6 +14,7 @@ import { InteractionHandler } from '../../controllers/InteractionHandler';
 import { INotificationManager } from '../../services/NotificationManager';
 import { IUserModerationService } from '../../services/UserModerationService';
 import { ISecurityActionService } from '../../services/SecurityActionService';
+import { IRoleGateService } from '../../services/RoleGateService';
 import { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import { IThreadManager } from '../../services/ThreadManager';
 import { IAdminActionRepository } from '../../repositories/AdminActionRepository';
@@ -233,6 +234,7 @@ describe('InteractionHandler (unit)', () => {
     securityActionService = {
       handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
       handleSuspiciousJoin: jest.fn().mockResolvedValue(true),
+      handleHoneypotRoleAssignment: jest.fn().mockResolvedValue(true),
       openCaseForSuspiciousMessage: jest.fn().mockResolvedValue(true),
       openCaseForSuspiciousJoin: jest.fn().mockResolvedValue(true),
       handleManualFlag: jest.fn().mockResolvedValue(true),
@@ -394,6 +396,48 @@ describe('InteractionHandler (unit)', () => {
     expect(userModerationService.verifyUser).toHaveBeenCalledTimes(1);
     expect(interaction.followUp).toHaveBeenCalledWith({
       content: 'User <@user-1> has been verified and can now access the server.',
+      allowedMentions: { parse: [] },
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('verifies the user when role gate preview fails', async () => {
+    const roleGateService = {
+      previewResolution: jest.fn().mockRejectedValue(new Error('role gate unavailable')),
+      formatResolutionConfirmation: jest.fn().mockReturnValue(null),
+      applyResolution: jest.fn().mockResolvedValue({ applied: true }),
+    } as unknown as jest.Mocked<IRoleGateService>;
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      roleGateService
+    );
+    const interaction = buildInteraction('admin_actions:confirm_verify:case:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(roleGateService.previewResolution).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' })
+    );
+    expect(userModerationService.verifyUser).toHaveBeenCalledTimes(1);
+    expect(roleGateService.applyResolution).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'User <@user-1> has been verified and can now access the server.',
+      allowedMentions: { parse: [] },
       flags: MessageFlags.Ephemeral,
     });
   });
@@ -531,6 +575,144 @@ describe('InteractionHandler (unit)', () => {
       allowedMentions: { parse: [] },
       flags: MessageFlags.Ephemeral,
     });
+  });
+
+  it('closes with no action when role gate preview fails', async () => {
+    const roleGateService = {
+      previewResolution: jest.fn().mockRejectedValue(new Error('role gate unavailable')),
+      formatResolutionConfirmation: jest.fn().mockReturnValue(null),
+      applyResolution: jest.fn().mockResolvedValue({ applied: true }),
+    } as unknown as jest.Mocked<IRoleGateService>;
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      roleGateService
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_close_no_action:case:user-1',
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(roleGateService.previewResolution).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' })
+    );
+    expect(userModerationService.closeCaseNoAction).toHaveBeenCalledWith(
+      expect.objectContaining({ members: expect.any(Object) }),
+      'user-1',
+      interaction.user,
+      'Closed with no action by moderator.'
+    );
+    expect(roleGateService.applyResolution).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'Closed 1 pending verification case for <@user-1> with no action.',
+      allowedMentions: { parse: [] },
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('does not apply role gate cleanup when close-no-action finds no pending case', async () => {
+    userModerationService.closeCaseNoAction.mockResolvedValue(0);
+    const roleGateService = {
+      previewResolution: jest.fn().mockResolvedValue({ enabled: true }),
+      formatResolutionConfirmation: jest.fn().mockReturnValue(null),
+      applyResolution: jest.fn().mockResolvedValue({ applied: true }),
+    } as unknown as jest.Mocked<IRoleGateService>;
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      roleGateService
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_close_no_action:case:user-1',
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(roleGateService.previewResolution).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' })
+    );
+    expect(roleGateService.applyResolution).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'No pending verification cases remain for <@user-1>.',
+      allowedMentions: { parse: [] },
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('opens the confirmation modal when role gate preview fails', async () => {
+    const roleGateService = {
+      previewResolution: jest.fn().mockRejectedValue(new Error('role gate unavailable')),
+      formatResolutionConfirmation: jest.fn().mockReturnValue('Role gate should not render'),
+      applyResolution: jest.fn().mockResolvedValue({ applied: true }),
+    } as unknown as jest.Mocked<IRoleGateService>;
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      roleGateService
+    );
+    const interaction = buildInteraction('close_user-1', 'guild-1', { id: 'admin-1' } as User);
+    Object.assign(interaction, {
+      guild: {
+        members: {
+          fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')),
+        },
+      },
+    });
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(roleGateService.previewResolution).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' })
+    );
+    expect(roleGateService.formatResolutionConfirmation).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          'Close pending verification cases for <@user-1> without verifying or banning them? If Drasil has them marked restricted, the restricted role will be removed.',
+        flags: MessageFlags.Ephemeral,
+      })
+    );
   });
 
   it('opens a paginated pending-case selector from the digest button', async () => {

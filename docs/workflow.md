@@ -98,6 +98,25 @@ not GPT detections.
   intake, the source role. Embed allowed-mentions remain disabled so these fields
   render clearly without causing extra pings.
 
+## Role gate
+
+Role gate is optional server configuration for onboarding patterns that use a
+honeypot role, a member access role, or both.
+
+- Honeypot role only: when a non-bot member newly receives the configured role,
+  Drasil records a `HONEYPOT_ROLE` detection and applies the configured response:
+  `off`, `record_only`, `notify_only`, or `restrict`.
+- Member access role only: no suspicious role trigger exists. During verify or
+  close-no-action, Drasil can add the configured member access role as part of
+  the same confirmed moderator action.
+- Both roles: honeypot assignment can trigger moderation. During verify or
+  close-no-action, Drasil removes the honeypot role if it is currently present or
+  was removed by role quarantine, and adds the member access role if needed.
+
+Role gate cleanup is shown in the existing verify/close confirmation copy. It is
+not a second follow-up prompt. When role quarantine restores roles, configured
+honeypot roles are treated as policy-managed and are not restored.
+
 ## Case threads and admin evidence
 
 Case notifications are posted in the configured admin channel. Drasil then starts
@@ -184,6 +203,7 @@ recommended future direction for report-only cases.
 2. Verify:
    - Update the case to VERIFIED with `resolved_by` and `resolved_at`.
    - Remove restricted role and update `server_member`.
+   - Apply role-gate cleanup when configured.
    - Resolve the verification thread and update the admin notification.
    - Record the admin action.
 3. Ban:

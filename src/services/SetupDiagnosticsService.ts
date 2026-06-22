@@ -5,6 +5,7 @@ import { Server } from '../repositories/types';
 import { TYPES } from '../di/symbols';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
+import { getRoleGateSettings } from '../utils/roleGateSettings';
 
 export type SetupDiagnosticSeverity = 'error' | 'warning';
 
@@ -168,6 +169,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
 
     await this.checkCaseResponderRoles(guild, serverConfig, issues);
+    await this.checkRoleGateRoles(guild, botMember, serverConfig, issues);
 
     return this.toReport(guild.id, issues);
   }
@@ -461,6 +463,102 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
           message: `Case responder role <@&${role.id}> has ${role.members.size} cached members, above cap ${settings.threadMemberCap}; Drasil will ping the role instead of adding every member to case threads.`,
         });
       }
+    }
+  }
+
+  private async checkRoleGateRoles(
+    guild: Guild,
+    botMember: GuildMember,
+    serverConfig: Server,
+    issues: SetupDiagnosticIssue[]
+  ): Promise<void> {
+    const settings = getRoleGateSettings(serverConfig.settings);
+    if (!settings.enabled) {
+      return;
+    }
+
+    if (!settings.honeypotRoleId && !settings.memberAccessRoleId) {
+      issues.push({
+        severity: 'warning',
+        code: 'role-gate-no-roles',
+        message:
+          'Role gate is enabled, but neither a honeypot role nor a member access role is configured.',
+      });
+      return;
+    }
+
+    if (
+      settings.honeypotRoleId &&
+      settings.memberAccessRoleId &&
+      settings.honeypotRoleId === settings.memberAccessRoleId
+    ) {
+      issues.push({
+        severity: 'warning',
+        code: 'role-gate-same-role',
+        message: 'Honeypot role and member access role should not be the same role.',
+      });
+    }
+
+    await this.checkRoleGateRoleId(
+      guild,
+      botMember,
+      settings.honeypotRoleId,
+      'honeypot-role',
+      'Honeypot role',
+      issues
+    );
+    await this.checkRoleGateRoleId(
+      guild,
+      botMember,
+      settings.memberAccessRoleId,
+      'member-access-role',
+      'Member access role',
+      issues
+    );
+  }
+
+  private async checkRoleGateRoleId(
+    guild: Guild,
+    botMember: GuildMember,
+    roleId: string | null,
+    codePrefix: string,
+    label: string,
+    issues: SetupDiagnosticIssue[]
+  ): Promise<void> {
+    if (!roleId) {
+      return;
+    }
+
+    const role = await guild.roles.fetch(roleId).catch(() => null);
+    if (!role) {
+      issues.push({
+        severity: 'warning',
+        code: `${codePrefix}-not-found`,
+        message: `${label} ${roleId} no longer exists.`,
+      });
+      return;
+    }
+
+    if (role.id === guild.id) {
+      issues.push({
+        severity: 'warning',
+        code: `${codePrefix}-everyone`,
+        message: `${label} cannot be @everyone.`,
+      });
+    }
+    if (role.managed) {
+      issues.push({
+        severity: 'warning',
+        code: `${codePrefix}-managed`,
+        message: `${label} <@&${role.id}> is managed by an integration and cannot be changed by Drasil.`,
+      });
+    }
+    if (botMember.roles.highest.comparePositionTo(role) <= 0) {
+      issues.push({
+        severity: 'warning',
+        code: `${codePrefix}-hierarchy`,
+        message: `Move the Drasil role above ${label.toLowerCase()} <@&${role.id}> for role-gate cleanup.`,
+      });
     }
   }
 

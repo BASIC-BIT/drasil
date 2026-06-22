@@ -71,6 +71,13 @@ import {
   ROLE_QUARANTINE_MODES,
 } from '../utils/roleQuarantineSettings';
 import {
+  getRoleGateSettings,
+  HONEYPOT_ROLE_ID_SETTING_KEY,
+  HONEYPOT_ROLE_RESPONSE_MODE_SETTING_KEY,
+  MEMBER_ACCESS_ROLE_ID_SETTING_KEY,
+  ROLE_GATE_ENABLED_SETTING_KEY,
+} from '../utils/roleGateSettings';
+import {
   getModerationQueueSettings,
   MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY,
 } from '../utils/moderationQueueSettings';
@@ -229,6 +236,140 @@ export class ConfigSubcommandHandler {
       'Privileged, managed, bot-managed, and above-Drasil roles are always skipped.',
       `Guild ID: \`${guildId}\``,
     ].join('\n');
+  }
+
+  private formatRoleGateSettings(
+    guildId: string,
+    settings: ReturnType<typeof getRoleGateSettings>
+  ): string {
+    return [
+      `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
+      `Honeypot role: ${settings.honeypotRoleId ? `<@&${settings.honeypotRoleId}>` : '`none`'}`,
+      `Member access role: ${settings.memberAccessRoleId ? `<@&${settings.memberAccessRoleId}>` : '`none`'}`,
+      `Honeypot response: \`${settings.honeypotResponseMode}\``,
+      'Verify and close-no-action clean up configured role-gate roles as part of the confirmed action.',
+      `Guild ID: \`${guildId}\``,
+    ].join('\n');
+  }
+
+  public async handleRoleGateConfigCommand(
+    interaction: ChatInputCommandInteraction,
+    guildId: string
+  ): Promise<void> {
+    const subcommand = interaction.options.getSubcommand(true);
+
+    try {
+      switch (subcommand) {
+        case 'view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const settings = getRoleGateSettings(serverConfig.settings);
+          await interaction.reply({
+            content:
+              'Current role gate settings:\n\n' + this.formatRoleGateSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'enable':
+        case 'disable': {
+          const enabled = subcommand === 'enable';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [ROLE_GATE_ENABLED_SETTING_KEY]: enabled,
+          });
+          const settings = getRoleGateSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `${enabled ? 'Enabled' : 'Disabled'} role gate handling.\n\n` +
+              this.formatRoleGateSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-honeypot-role':
+        case 'set-member-access-role': {
+          const role = interaction.options.getRole('role', true);
+          const key =
+            subcommand === 'set-honeypot-role'
+              ? HONEYPOT_ROLE_ID_SETTING_KEY
+              : MEMBER_ACCESS_ROLE_ID_SETTING_KEY;
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [key]: role.id,
+          });
+          const settings = getRoleGateSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `Updated ${subcommand === 'set-honeypot-role' ? 'honeypot' : 'member access'} role to <@&${role.id}>.\n\n` +
+              this.formatRoleGateSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'clear-honeypot-role':
+        case 'clear-member-access-role': {
+          const key =
+            subcommand === 'clear-honeypot-role'
+              ? HONEYPOT_ROLE_ID_SETTING_KEY
+              : MEMBER_ACCESS_ROLE_ID_SETTING_KEY;
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [key]: null,
+          });
+          const settings = getRoleGateSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `Cleared ${subcommand === 'clear-honeypot-role' ? 'honeypot' : 'member access'} role.\n\n` +
+              this.formatRoleGateSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-honeypot-response': {
+          const mode = interaction.options.getString('mode', true);
+          if (!isDetectionResponseMode(mode)) {
+            throw new Error(
+              `Invalid honeypot response mode. Use one of: ${DETECTION_RESPONSE_MODES.join(', ')}`
+            );
+          }
+
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [HONEYPOT_ROLE_RESPONSE_MODE_SETTING_KEY]: mode,
+          });
+          const settings = getRoleGateSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated honeypot role response mode.\n\n' +
+              this.formatRoleGateSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        default:
+          await interaction.reply({
+            content: 'Unsupported /config role-gate subcommand.',
+            flags: MessageFlags.Ephemeral,
+          });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorResponse = {
+        content: `Failed to process role gate settings: ${errorMessage}`,
+        flags: MessageFlags.Ephemeral,
+      } as const;
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(errorResponse);
+      } else {
+        await interaction.reply(errorResponse);
+      }
+    }
   }
 
   public async handleRoleQuarantineConfigCommand(

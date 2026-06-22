@@ -55,6 +55,7 @@ import {
 } from '../services/UserModerationService';
 import { ModerationOutcomeSource } from '../services/ModerationOutcomeService';
 import { IModerationQueueService } from '../services/ModerationQueueService';
+import { getRoleGateSettings } from '../utils/roleGateSettings';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -174,6 +175,7 @@ export class EventHandler implements IEventHandler {
     this.client.on(Events.ClientReady, this.handleReady.bind(this));
     this.client.on(Events.MessageCreate, this.handleMessage.bind(this));
     this.client.on(Events.GuildMemberAdd, this.handleGuildMemberAdd.bind(this));
+    this.client.on(Events.GuildMemberUpdate, this.handleGuildMemberUpdate.bind(this));
     this.client.on(Events.GuildMemberRemove, this.handleGuildMemberRemove.bind(this));
     this.client.on(Events.GuildBanAdd, this.handleGuildBanAdd.bind(this));
     this.client.on(Events.InteractionCreate, this.handleInteraction.bind(this));
@@ -544,6 +546,44 @@ export class EventHandler implements IEventHandler {
       );
     } catch (error) {
       console.error('Error handling new member:', error);
+    }
+  }
+
+  private async handleGuildMemberUpdate(
+    oldMember: GuildMember | PartialGuildMember,
+    newMember: GuildMember | PartialGuildMember
+  ): Promise<void> {
+    try {
+      if (oldMember.partial || newMember.partial || newMember.user.bot) {
+        return;
+      }
+
+      await this.ensureConfigInitialized();
+      const serverConfig = await this.configService.getServerConfig(newMember.guild.id);
+      const roleGateSettings = getRoleGateSettings(serverConfig.settings);
+      if (
+        !roleGateSettings.enabled ||
+        !roleGateSettings.honeypotRoleId ||
+        roleGateSettings.honeypotResponseMode === 'off'
+      ) {
+        return;
+      }
+
+      const honeypotRoleId = roleGateSettings.honeypotRoleId;
+      if (oldMember.roles.cache.has(honeypotRoleId) || !newMember.roles.cache.has(honeypotRoleId)) {
+        return;
+      }
+
+      const role =
+        newMember.guild.roles.cache.get(honeypotRoleId) ??
+        (await newMember.guild.roles.fetch(honeypotRoleId).catch(() => null));
+      await this.securityActionService.handleHoneypotRoleAssignment(newMember, {
+        roleId: honeypotRoleId,
+        roleName: role?.name ?? null,
+        responseMode: roleGateSettings.honeypotResponseMode,
+      });
+    } catch (error) {
+      console.error(`Error handling member role update for ${newMember.id}:`, error);
     }
   }
 
