@@ -243,6 +243,15 @@ export class RoleGateService implements IRoleGateService {
   ): Promise<RoleGateRoleResult> {
     const role = await this.getGuildRole(member, preview.roleId);
     if (!role) {
+      if (preview.quarantined) {
+        return this.roleResult(
+          preview,
+          'remove_honeypot',
+          'kept_removed_by_quarantine',
+          `Role gate: honeypot role (${preview.mention}) was already removed by role quarantine and no longer exists.`
+        );
+      }
+
       return this.roleResult(preview, 'remove_honeypot', 'failed', 'Honeypot role is missing.');
     }
 

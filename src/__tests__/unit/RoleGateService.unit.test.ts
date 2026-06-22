@@ -172,6 +172,42 @@ describe('RoleGateService (unit)', () => {
     );
   });
 
+  it('keeps quarantined honeypot role removed when the Discord role was deleted', async () => {
+    const honeypotRoleId = '111111111111111111';
+    const member = createMember([], []);
+    const { service, adminActionService } = createService(
+      {
+        role_gate_enabled: true,
+        honeypot_role_id: honeypotRoleId,
+      },
+      createSnapshot([honeypotRoleId])
+    );
+
+    const preview = await service.previewResolution(member);
+    const result = await service.applyResolution(
+      member,
+      { id: 'mod-1' } as User,
+      'close_no_action',
+      preview
+    );
+
+    expect(preview.shouldRemoveHoneypot).toBe(true);
+    expect(preview.honeypotRole?.exists).toBe(false);
+    expect(preview.honeypotRole?.quarantined).toBe(true);
+    expect(member.roles.remove).not.toHaveBeenCalled();
+    expect(result.applied).toBe(true);
+    expect(result.results).toEqual([
+      expect.objectContaining({
+        operation: 'remove_honeypot',
+        status: 'kept_removed_by_quarantine',
+        message: `Role gate: honeypot role (<@&${honeypotRoleId}>) was already removed by role quarantine and no longer exists.`,
+      }),
+    ]);
+    expect(adminActionService.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({ action_type: AdminActionType.ROLE_GATE_CLEANUP })
+    );
+  });
+
   it('formats confirmation copy with the configured role mentions', async () => {
     const honeypotRole = createRole('111111111111111111', 'Robot');
     const memberAccessRole = createRole('222222222222222222', 'Human');
