@@ -107,6 +107,7 @@ export class IntegrityAuditRepository implements IIntegrityAuditRepository {
           where: {
             server_id: query.serverId,
             is_restricted: true,
+            verification_status: { not: VerificationStatus.BANNED as verification_status },
             ...userFilter,
           },
           orderBy: { last_status_change: 'asc' },

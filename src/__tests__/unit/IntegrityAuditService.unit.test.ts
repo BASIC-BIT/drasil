@@ -6,6 +6,8 @@ import {
 } from '../../repositories/IntegrityAuditRepository';
 import {
   AdminActionType,
+  ModerationOutcomeSource,
+  ModerationOutcomeType,
   ModerationQueueItemType,
   RoleQuarantineSnapshotStatus,
   VerificationStatus,
@@ -213,5 +215,116 @@ describe('IntegrityAuditService (unit)', () => {
         'queue_message_missing',
       ])
     );
+  });
+
+  it('does not require admin actions for externally resolved cases with durable outcomes', async () => {
+    const candidates = buildCandidates({
+      recentResolvedVerificationEvents: [
+        {
+          id: 'external-ban-1',
+          server_id: 'guild-1',
+          user_id: 'user-external-ban',
+          detection_event_id: null,
+          thread_id: null,
+          private_evidence_thread_id: null,
+          notification_channel_id: null,
+          notification_message_id: null,
+          status: VerificationStatus.BANNED,
+          created_at: baseDate,
+          updated_at: baseDate,
+          resolved_at: baseDate,
+          resolved_by: 'native-mod-1',
+          notes: null,
+          metadata: { moderation_outcome_source: ModerationOutcomeSource.NATIVE_DISCORD },
+          admin_actions: [],
+          moderation_outcomes: [
+            {
+              id: 'outcome-1',
+              server_id: 'guild-1',
+              user_id: 'user-external-ban',
+              detection_event_id: null,
+              verification_event_id: 'external-ban-1',
+              outcome_type: ModerationOutcomeType.BANNED,
+              source: ModerationOutcomeSource.NATIVE_DISCORD,
+              actor_id: 'native-mod-1',
+              reason: null,
+              occurred_at: baseDate,
+              created_at: baseDate,
+              metadata: {},
+            },
+          ],
+        },
+      ],
+    });
+    const repository: IIntegrityAuditRepository = {
+      listCandidates: jest.fn().mockResolvedValue(candidates),
+    };
+    const service = new IntegrityAuditService(
+      { channels: { fetch: jest.fn() } } as any,
+      {
+        getServerConfig: jest.fn().mockResolvedValue({ restricted_role_id: null, settings: {} }),
+      } as any,
+      repository
+    );
+    const guild = {
+      id: 'guild-1',
+      members: { fetch: jest.fn(async () => ({ roles: { cache: { has: jest.fn() } } })) },
+      bans: { fetch: jest.fn(async (userId: string) => ({ user: { id: userId } })) },
+    } as unknown as Guild;
+
+    const report = await service.auditGuild(guild, { scope: 'cases', days: 30, limit: 50 });
+
+    expect(report.findings.map((finding) => finding.code)).not.toContain(
+      'resolved_case_missing_admin_action'
+    );
+    expect(report.findings.map((finding) => finding.code)).not.toContain(
+      'resolved_case_missing_moderation_outcome'
+    );
+  });
+
+  it('ignores banned restricted member rows because ban records keep that marker', async () => {
+    const candidates = buildCandidates({
+      restrictedMembers: [
+        {
+          server_id: 'guild-1',
+          user_id: 'user-banned',
+          join_date: baseDate,
+          is_restricted: true,
+          last_verified_at: null,
+          last_message_at: null,
+          verification_status: VerificationStatus.BANNED,
+          last_status_change: baseDate,
+          created_by: null,
+          updated_by: null,
+        },
+      ],
+    });
+    const repository: IIntegrityAuditRepository = {
+      listCandidates: jest.fn().mockResolvedValue(candidates),
+    };
+    const service = new IntegrityAuditService(
+      { channels: { fetch: jest.fn() } } as any,
+      {
+        getServerConfig: jest.fn().mockResolvedValue({
+          restricted_role_id: 'restricted-role-1',
+          settings: {},
+        }),
+      } as any,
+      repository
+    );
+    const guild = {
+      id: 'guild-1',
+      members: { fetch: jest.fn() },
+      bans: { fetch: jest.fn() },
+    } as unknown as Guild;
+
+    const report = await service.auditGuild(guild, { scope: 'restricted', days: 30, limit: 50 });
+
+    expect(guild.members.fetch).not.toHaveBeenCalled();
+    expect(guild.bans.fetch).not.toHaveBeenCalled();
+    const findingCodes = report.findings.map((finding) => finding.code);
+    expect(findingCodes).not.toContain('restricted_member_missing');
+    expect(findingCodes).not.toContain('restricted_member_role_missing');
+    expect(findingCodes).not.toContain('restricted_member_resolved_status');
   });
 });

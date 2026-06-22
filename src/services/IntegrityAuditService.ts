@@ -9,6 +9,7 @@ import {
   IntegrityAuditVerificationEvent,
 } from '../repositories/IntegrityAuditRepository';
 import {
+  ModerationOutcomeSource,
   ModerationQueueItemType,
   RoleQuarantineSnapshot,
   ServerMember,
@@ -37,6 +38,11 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ERROR_DETAIL_MAX_LENGTH = 180;
+const ADMIN_ACTION_EXEMPT_RESOLUTION_SOURCES = new Set<unknown>([
+  ModerationOutcomeSource.NATIVE_DISCORD,
+  ModerationOutcomeSource.EXTERNAL_BOT,
+  ModerationOutcomeSource.UNKNOWN_EXTERNAL,
+]);
 
 export type IntegrityAuditFindingSeverity = 'error' | 'warning' | 'info';
 
@@ -292,6 +298,10 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     findings: IntegrityAuditFinding[]
   ): void {
     for (const member of members) {
+      if (!this.shouldAuditRestrictedMember(member)) {
+        continue;
+      }
+
       const liveUser = liveUsers.get(member.user_id);
       this.addLiveUserFetchFindings(member.user_id, liveUser, findings);
 
@@ -532,6 +542,9 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     }
     if (this.includesRestrictedChecks(scope)) {
       for (const member of candidates.restrictedMembers) {
+        if (!this.shouldAuditRestrictedMember(member)) {
+          continue;
+        }
         userIds.add(member.user_id);
       }
       for (const snapshot of candidates.activeRoleQuarantineSnapshots) {
@@ -655,7 +668,10 @@ export class IntegrityAuditService implements IIntegrityAuditService {
   }
 
   private requiresAdminAction(verificationEvent: IntegrityAuditVerificationEvent): boolean {
-    return isResolvedVerificationStatus(verificationEvent.status);
+    return (
+      isResolvedVerificationStatus(verificationEvent.status) &&
+      !this.hasAdminActionExemptResolutionSource(verificationEvent)
+    );
   }
 
   private requiresModerationOutcome(verificationEvent: IntegrityAuditVerificationEvent): boolean {
@@ -680,6 +696,43 @@ export class IntegrityAuditService implements IIntegrityAuditService {
 
     const expectedAction = getResolutionAdminActionType(verificationEvent.status);
     return verificationEvent.admin_actions.some((action) => action.action_type === expectedAction);
+  }
+
+  private hasAdminActionExemptResolutionSource(
+    verificationEvent: IntegrityAuditVerificationEvent
+  ): boolean {
+    if (
+      this.isAdminActionExemptResolutionSource(this.getMetadataResolutionSource(verificationEvent))
+    ) {
+      return true;
+    }
+    if (!isResolvedVerificationStatus(verificationEvent.status)) {
+      return false;
+    }
+
+    const expectedOutcome = getResolutionModerationOutcomeType(verificationEvent.status);
+    return verificationEvent.moderation_outcomes.some(
+      (outcome) =>
+        outcome.outcome_type === expectedOutcome &&
+        this.isAdminActionExemptResolutionSource(outcome.source)
+    );
+  }
+
+  private getMetadataResolutionSource(verificationEvent: IntegrityAuditVerificationEvent): unknown {
+    const metadata = verificationEvent.metadata;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return undefined;
+    }
+
+    return (metadata as { moderation_outcome_source?: unknown }).moderation_outcome_source;
+  }
+
+  private isAdminActionExemptResolutionSource(source: unknown): boolean {
+    return ADMIN_ACTION_EXEMPT_RESOLUTION_SOURCES.has(source);
+  }
+
+  private shouldAuditRestrictedMember(member: ServerMember): boolean {
+    return member.verification_status !== VerificationStatus.BANNED;
   }
 
   private includesCaseChecks(scope: IntegrityAuditScope): boolean {
