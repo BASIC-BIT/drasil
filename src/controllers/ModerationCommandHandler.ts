@@ -293,7 +293,7 @@ export class ModerationCommandHandler {
     const lines = [
       'Moderation integrity audit complete. No repair actions were applied.',
       `Scope: ${report.scope}; lookback: ${report.days} days; limit: ${report.limit}${report.userId ? `; user: <@${report.userId}>` : ''}.`,
-      `Checked: ${report.candidateCounts.pendingCases} pending cases, ${report.candidateCounts.recentResolvedCases} recent resolved cases, ${report.candidateCounts.restrictedMembers} restricted members, ${report.candidateCounts.activeRoleQuarantines} active role quarantines, ${report.candidateCounts.queueItems} queue items.`,
+      `Checked: ${report.candidateCounts.pendingCases} pending cases, ${report.candidateCounts.recentResolvedCases} recent resolved cases, ${report.candidateCounts.caseRoleMembers} case-role members, ${report.candidateCounts.activeRoleQuarantines} active role quarantines, ${report.candidateCounts.queueItems} queue items.`,
       `Findings: ${severityCounts.error} errors, ${severityCounts.warning} warnings, ${severityCounts.info} info.`,
     ];
 

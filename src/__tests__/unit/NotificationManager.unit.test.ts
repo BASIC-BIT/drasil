@@ -209,10 +209,9 @@ describe('NotificationManager (unit)', () => {
       repliedUser: false,
     });
     const labels = extractLabels(sendArgs.components);
-    expect(labels).toEqual(['Verify', 'Restrict', 'Ban...', 'Close', 'Other Actions']);
+    expect(labels).toEqual(['Verify', 'Ban...', 'Close', 'Other Actions']);
     expect(extractCustomIds(sendArgs.components)).toEqual([
       'verify_user-1',
-      'restrict_user-1',
       'ban_user-1',
       'close_user-1',
       'admin_actions:m:c:user-1',
@@ -247,7 +246,6 @@ describe('NotificationManager (unit)', () => {
     const sendArgs = adminChannel.send.mock.calls[0][0] as { components: unknown[] };
     expect(extractLabels(sendArgs.components)).toEqual([
       'Verify',
-      'Restrict',
       'Ban...',
       'Close',
       'Other Actions',
@@ -312,7 +310,7 @@ describe('NotificationManager (unit)', () => {
       metadata: {
         [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: [
           {
-            action: 'restrict',
+            action: 'case_role',
             message: 'Missing Permissions',
             at: '2026-05-25T00:00:00.000Z',
           },
@@ -327,7 +325,7 @@ describe('NotificationManager (unit)', () => {
       (field) => field.name === 'Moderation Action Warning'
     );
 
-    expect(warningField?.value).toContain('Apply restricted role failed');
+    expect(warningField?.value).toContain('Apply case role failed');
     expect(warningField?.value).toContain('Missing Permissions');
     expect(warningField?.value).toContain('Case record was still created');
   });
@@ -493,7 +491,6 @@ describe('NotificationManager (unit)', () => {
     expect(sendArgs.components).toHaveLength(1);
     expect(extractLabels(sendArgs.components)).toEqual([
       'Open Case',
-      'Restrict',
       'Ban...',
       'Dismiss',
       'Other Actions',
@@ -747,7 +744,6 @@ describe('NotificationManager (unit)', () => {
     };
     expect(extractLabels(editArgs.components)).toEqual([
       'Open Case',
-      'Restrict',
       'Ban...',
       'Dismiss',
       'Other Actions',
@@ -831,7 +827,7 @@ describe('NotificationManager (unit)', () => {
     expect(editArgs.content).toBeUndefined();
     expect(editArgs.allowedMentions).toEqual({ parse: [] });
     const labels = extractLabels(editArgs.components);
-    expect(labels).toEqual(['Verify', 'Restrict', 'Ban...', 'Close', 'Other Actions']);
+    expect(labels).toEqual(['Verify', 'Ban...', 'Close', 'Other Actions']);
   });
 
   it('updates notification buttons for pending status with thread action', async () => {
@@ -853,7 +849,7 @@ describe('NotificationManager (unit)', () => {
     expect(message.edit).toHaveBeenCalledTimes(1);
     const editArgs = message.edit.mock.calls[0][0] as { components: unknown[] };
     const labels = extractLabels(editArgs.components);
-    expect(labels).toEqual(['Verify', 'Restrict', 'Ban...', 'Close', 'Other Actions']);
+    expect(labels).toEqual(['Verify', 'Ban...', 'Close', 'Other Actions']);
   });
 
   it('updates notification buttons from stored notification channel', async () => {
@@ -1260,14 +1256,14 @@ describe('NotificationManager (unit)', () => {
 
     const manager = new NotificationManager({} as any, configService, detectionRepository);
 
-    const channelId = await manager.setupVerificationChannel(guild, 'restricted-role-1');
+    const channelId = await manager.setupVerificationChannel(guild, 'case-role-1');
 
     expect(channelId).toBe('verification-channel-1');
     expect(fetchChannel).toHaveBeenCalledWith('verification-channel-1');
     expect(overwriteSet).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ id: 'guild-1' }),
-        expect.objectContaining({ id: 'restricted-role-1' }),
+        expect.objectContaining({ id: 'case-role-1' }),
       ]),
       'Sync Drasil verification channel permissions'
     );
@@ -1308,7 +1304,7 @@ describe('NotificationManager (unit)', () => {
 
     const channelId = await manager.setupVerificationChannel(
       guild,
-      'restricted-role-1',
+      'case-role-1',
       false,
       undefined,
       'verification-channel-1'
@@ -1318,7 +1314,7 @@ describe('NotificationManager (unit)', () => {
     expect(configService.getServerConfig).not.toHaveBeenCalled();
     expect(fetchChannel).toHaveBeenCalledWith('verification-channel-1');
     expect(overwriteSet).toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ id: 'restricted-role-1' })]),
+      expect.arrayContaining([expect.objectContaining({ id: 'case-role-1' })]),
       'Sync Drasil verification channel permissions'
     );
     expect(createChannel).not.toHaveBeenCalled();
@@ -1358,12 +1354,12 @@ describe('NotificationManager (unit)', () => {
 
     const manager = new NotificationManager({} as any, configService, detectionRepository);
 
-    const channelId = await manager.setupVerificationChannel(guild, 'restricted-role-1');
+    const channelId = await manager.setupVerificationChannel(guild, 'case-role-1');
 
     expect(channelId).toBe('unrelated-verification-channel');
     expect(fetchChannel).not.toHaveBeenCalled();
     expect(overwriteSet).toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ id: 'restricted-role-1' })]),
+      expect.arrayContaining([expect.objectContaining({ id: 'case-role-1' })]),
       'Sync Drasil verification channel permissions'
     );
     expect(createChannel).not.toHaveBeenCalled();

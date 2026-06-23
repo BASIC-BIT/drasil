@@ -25,7 +25,7 @@ import {
   NOOP_PRODUCT_ANALYTICS_SERVICE,
 } from '../services/ProductAnalyticsService';
 import { ISetupDiagnosticsService } from '../services/SetupDiagnosticsService';
-import { IRestrictedRoleLockdownService } from '../services/RestrictedRoleLockdownService';
+import { ICaseRoleLockdownService } from '../services/CaseRoleLockdownService';
 import { ReportSubmissionService } from '../services/ReportSubmissionService';
 import {
   buildApplicationCommands,
@@ -116,9 +116,9 @@ export class CommandHandler implements ICommandHandler {
     @inject(TYPES.SetupDiagnosticsService)
     @optional()
     setupDiagnosticsService?: ISetupDiagnosticsService,
-    @inject(TYPES.RestrictedRoleLockdownService)
+    @inject(TYPES.CaseRoleLockdownService)
     @optional()
-    restrictedRoleLockdownService?: IRestrictedRoleLockdownService,
+    caseRoleLockdownService?: ICaseRoleLockdownService,
     @inject(TYPES.ReportIntakeService)
     @optional()
     reportIntakeService?: IReportIntakeService,
@@ -147,7 +147,7 @@ export class CommandHandler implements ICommandHandler {
     );
     this.lockdownConfigCommandHandler = new LockdownConfigCommandHandler(
       this.configService,
-      restrictedRoleLockdownService
+      caseRoleLockdownService
     );
     const reportInstructionsManager = new ReportInstructionsManager(
       this.client,
@@ -417,6 +417,11 @@ export class CommandHandler implements ICommandHandler {
 
     if (subcommandGroup === 'case-queue') {
       await this.configSubcommandHandler.handleCaseQueueConfigCommand(interaction, guild.id);
+      return;
+    }
+
+    if (subcommandGroup === 'manual-intake') {
+      await this.configSubcommandHandler.handleManualIntakeConfigCommand(interaction, guild.id);
       return;
     }
 

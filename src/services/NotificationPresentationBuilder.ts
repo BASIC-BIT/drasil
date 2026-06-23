@@ -24,6 +24,7 @@ import {
 } from '../utils/adminActionCustomIds';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { isDetectionEventExcludedFromAccounting } from '../utils/detectionEventAccounting';
+import { formatDiscordUserIdentity } from '../utils/discordUserIdentity';
 import { buildAdminCaseDetailUrl, buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
 import { getVerificationActionFailures } from '../utils/verificationActionFailures';
 
@@ -142,7 +143,11 @@ export class NotificationPresentationBuilder {
               },
             ]
           : []),
-        { name: 'Username', value: member.user.tag, inline: true },
+        {
+          name: 'User',
+          value: formatDiscordUserIdentity(member, { includeSnowflake: false }),
+          inline: false,
+        },
         { name: 'User ID', value: member.id, inline: true },
         { name: 'Account Created', value: accountCreatedFormatted, inline: false },
         { name: 'Joined Server', value: joinedServerFormatted, inline: false },
@@ -243,11 +248,15 @@ export class NotificationPresentationBuilder {
       .setColor(0xffc107)
       .setTitle('Suspicious Activity Observed')
       .setDescription(
-        `Drasil observed suspicious activity from <@${member.id}>. No automatic restriction was applied.`
+        `Drasil observed suspicious activity from <@${member.id}>. No case was opened automatically.`
       )
       .setThumbnail(member.user.displayAvatarURL())
       .addFields(
-        { name: 'Username', value: member.user.tag, inline: true },
+        {
+          name: 'User',
+          value: formatDiscordUserIdentity(member, { includeSnowflake: false }),
+          inline: false,
+        },
         { name: 'User ID', value: member.id, inline: true },
         {
           name: 'Account Created',
@@ -329,7 +338,11 @@ export class NotificationPresentationBuilder {
         `A private report intake thread was opened by <@${reporter.id}>. No report has been submitted yet.`
       )
       .addFields(
-        { name: 'Reporter', value: `${reporter.user.tag} (${reporter.id})`, inline: false },
+        {
+          name: 'Reporter',
+          value: formatDiscordUserIdentity(reporter, { includeSnowflake: false }),
+          inline: false,
+        },
         {
           name: 'Report Thread',
           value: `[Open thread](${thread.url}) (${thread.id})`,
@@ -451,11 +464,6 @@ export class NotificationPresentationBuilder {
         'Open Case',
         ButtonStyle.Primary
       ),
-      this.createCustomButton(
-        `observed:restrict:${userId}:${detectionEventId}`,
-        'Restrict',
-        ButtonStyle.Danger
-      ),
     ];
 
     if (options.includeBanAction !== false) {
@@ -520,10 +528,7 @@ export class NotificationPresentationBuilder {
       return buttons;
     }
 
-    const buttons = [
-      this.createCustomButton(`verify_${userId}`, 'Verify', ButtonStyle.Success),
-      this.createCustomButton(`restrict_${userId}`, 'Restrict', ButtonStyle.Danger),
-    ];
+    const buttons = [this.createCustomButton(`verify_${userId}`, 'Verify', ButtonStyle.Success)];
 
     if (includeBanAction) {
       buttons.push(this.createCustomButton(`ban_${userId}`, 'Ban...', ButtonStyle.Danger));
@@ -969,9 +974,9 @@ export class NotificationPresentationBuilder {
       case AdminActionType.REOPEN:
         return 'Reopened verification';
       case AdminActionType.RESTRICT:
-        return 'Restricted';
+        return 'Applied case role';
       case AdminActionType.LIFT_RESTRICTION:
-        return 'Lifted restriction';
+        return 'Removed case role';
       case AdminActionType.OPEN_CASE:
         return 'Opened case';
       case AdminActionType.DISMISS:
@@ -1231,7 +1236,7 @@ export class NotificationPresentationBuilder {
       case AdminActionType.RESTRICT:
         embed.setColor(CASE_COLOR_PENDING);
         embed.setTitle('Moderation Case Opened');
-        embed.setDescription(`${userReference} was restricted and moved into a moderation case.`);
+        embed.setDescription(`${userReference} was moved into a moderation case.`);
         return;
       case AdminActionType.OPEN_CASE:
         embed.setColor(CASE_COLOR_PENDING);
@@ -1249,7 +1254,7 @@ export class NotificationPresentationBuilder {
     embed.setColor(CASE_COLOR_WARNING);
     embed.setTitle('Suspicious Activity Observed');
     embed.setDescription(
-      `Drasil observed suspicious activity from ${userReference}. No automatic restriction was applied.`
+      `Drasil observed suspicious activity from ${userReference}. No case was opened automatically.`
     );
   }
 
@@ -1264,8 +1269,8 @@ export class NotificationPresentationBuilder {
       .map((failure) => {
         const timestamp = Math.floor(new Date(failure.at).getTime() / 1000);
         const action =
-          failure.action === 'restrict'
-            ? 'Apply restricted role'
+          failure.action === 'case_role' || failure.action === 'restrict'
+            ? 'Apply case role'
             : failure.action === 'private_evidence_thread'
               ? 'Create admin evidence thread'
               : failure.action === 'role_quarantine'
@@ -1302,7 +1307,7 @@ export class NotificationPresentationBuilder {
       const skippedCount = this.formatUnknownValue(record.skipped_role_count);
       const failedCount = this.formatUnknownValue(record.failed_removal_count);
       lines.push(
-        `Restriction: ${status}${mode ? ` (${mode})` : ''}; removed ${removedCount || '0'} of ${plannedCount || '0'} planned role(s), skipped ${skippedCount || '0'}, failed ${failedCount || '0'}.`
+        `Case role: ${status}${mode ? ` (${mode})` : ''}; removed ${removedCount || '0'} of ${plannedCount || '0'} planned role(s), skipped ${skippedCount || '0'}, failed ${failedCount || '0'}.`
       );
     }
 

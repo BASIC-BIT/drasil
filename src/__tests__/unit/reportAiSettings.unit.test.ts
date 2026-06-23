@@ -17,6 +17,12 @@ describe('reportAiSettings (unit)', () => {
     );
   });
 
+  it('maps legacy restrict max action to open case', () => {
+    expect(getReportAiSettings({ report_ai_max_action: 'restrict' } as any).maxAction).toBe(
+      'open_case'
+    );
+  });
+
   it('selects only eligible capped image attachments', () => {
     const settings = getReportAiSettings({
       report_ai_triage_enabled: true,

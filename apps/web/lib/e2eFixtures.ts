@@ -80,7 +80,7 @@ export function fixtureGuildResources(): DiscordGuildResources {
     botMember: { roles: ['bot-role'] },
     roles: [
       { id: fixtureGuildId, name: '@everyone', permissions: '0', position: 0, managed: false },
-      { id: 'restricted-role', name: 'Restricted', permissions: '0', position: 1, managed: false },
+      { id: 'case-role', name: 'Case Role', permissions: '0', position: 1, managed: false },
       {
         id: 'admin-role',
         name: 'Moderators',
@@ -101,7 +101,7 @@ export function fixtureGuildResources(): DiscordGuildResources {
 export function fixtureServerRecord(): SetupServerRecord {
   return {
     guild_id: fixtureGuildId,
-    restricted_role_id: 'restricted-role',
+    case_role_id: 'case-role',
     admin_channel_id: 'admin-channel-1',
     verification_channel_id: 'verification-channel-1',
     admin_notification_role_id: 'admin-role',
@@ -124,7 +124,7 @@ export function fixtureServerRecord(): SetupServerRecord {
 export function updateFixtureServerRecord(update: GuildSetupUpdate): SetupServerRecord {
   return {
     ...fixtureServerRecord(),
-    restricted_role_id: update.restrictedRoleId ?? fixtureServerRecord().restricted_role_id,
+    case_role_id: update.caseRoleId ?? fixtureServerRecord().case_role_id,
     admin_channel_id: update.adminChannelId ?? fixtureServerRecord().admin_channel_id,
     verification_channel_id:
       update.verificationChannelId ?? fixtureServerRecord().verification_channel_id,

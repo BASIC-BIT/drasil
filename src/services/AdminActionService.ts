@@ -86,10 +86,10 @@ export class AdminActionService implements IAdminActionService {
         summary = `📝 Verification case opened by ${adminMention}`;
         break;
       case AdminActionType.RESTRICT:
-        summary = `🔒 Restricted by ${adminMention}`;
+        summary = `🔒 Case role applied by ${adminMention}`;
         break;
       case AdminActionType.LIFT_RESTRICTION:
-        summary = `🔓 Restriction lifted by ${adminMention}`;
+        summary = `🔓 Case role removed by ${adminMention}`;
         break;
       case AdminActionType.DISMISS:
         summary = `Dismissed by ${adminMention}`;

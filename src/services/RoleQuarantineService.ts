@@ -84,7 +84,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
   ): Promise<RoleQuarantineApplyResult> {
     const serverConfig = await this.configService.getServerConfig(member.guild.id);
     const settings = getRoleQuarantineSettings(serverConfig.settings);
-    const originalRoleIds = this.getSnapshotRoleIds(member, serverConfig.restricted_role_id);
+    const originalRoleIds = this.getSnapshotRoleIds(member, serverConfig.case_role_id);
 
     if (settings.mode === 'off') {
       return {
@@ -109,7 +109,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
 
     const classifiedRoles = await this.classifyMemberRoles(
       member,
-      serverConfig.restricted_role_id,
+      serverConfig.case_role_id,
       new Set(settings.exemptRoleIds)
     );
     const removableRoles = classifiedRoles
@@ -300,23 +300,23 @@ export class RoleQuarantineService implements IRoleQuarantineService {
 
   private async classifyMemberRoles(
     member: GuildMember,
-    restrictedRoleId: string | null,
+    caseRoleId: string | null,
     exemptRoleIds: ReadonlySet<string>
   ): Promise<ClassifiedRole[]> {
     const botMember = await this.getBotMember(member);
-    return this.getMemberRoles(member, restrictedRoleId).map((role) => ({
+    return this.getMemberRoles(member, caseRoleId).map((role) => ({
       role,
       skipReason: this.getQuarantineSkipReason(member, role, botMember, exemptRoleIds),
     }));
   }
 
-  private getSnapshotRoleIds(member: GuildMember, restrictedRoleId: string | null): string[] {
-    return this.getMemberRoles(member, restrictedRoleId).map((role) => role.id);
+  private getSnapshotRoleIds(member: GuildMember, caseRoleId: string | null): string[] {
+    return this.getMemberRoles(member, caseRoleId).map((role) => role.id);
   }
 
-  private getMemberRoles(member: GuildMember, restrictedRoleId: string | null): Role[] {
+  private getMemberRoles(member: GuildMember, caseRoleId: string | null): Role[] {
     return [...member.roles.cache.values()].filter(
-      (role) => role.id !== member.guild.id && role.id !== restrictedRoleId
+      (role) => role.id !== member.guild.id && role.id !== caseRoleId
     );
   }
 

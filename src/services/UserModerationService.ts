@@ -42,20 +42,24 @@ import {
  */
 export interface IUserModerationService {
   /**
-   * Restricts a user by assigning the restricted role and updating their verification status
-   * @param member The guild member to restrict
-   * @returns Promise resolving to true if successful, false if the restriction failed
+   * Applies the configured case role required for active user-facing cases.
+   */
+  applyCaseRole(member: GuildMember, moderator?: User): Promise<boolean>;
+
+  /**
+   * Legacy compatibility path that applies the case role and records historical restrict action types.
+   * New case-opening flows should call applyCaseRole.
    */
   restrictUser(member: GuildMember, moderator?: User): Promise<boolean>;
 
   /**
-   * Removes the restricted role while keeping the active case pending.
+   * Removes the case role while keeping the active case pending.
    */
   liftRestriction(member: GuildMember, moderator: User): Promise<boolean>;
 
   /**
-   * Removes the restricted role from a guild member and updates their verification status
-   * @param member The guild member to verify (unrestrict)
+   * Removes the case role from a guild member and updates their verification status.
+   * @param member The guild member to verify
    * @param moderator The user who performed the verification
    * @returns Promise resolving to true if successful, false if the role couldn't be removed
    */
@@ -389,7 +393,7 @@ export class UserModerationService implements IUserModerationService {
       };
     } catch (error) {
       console.error(
-        `Failed to quarantine roles for ${member.user.tag}; continuing restriction:`,
+        `Failed to quarantine roles for ${member.user.tag}; continuing case-role application:`,
         error
       );
       return {
@@ -716,10 +720,73 @@ export class UserModerationService implements IUserModerationService {
   }
 
   /**
-   * Restricts a user by assigning the restricted role and updating their verification status
-   * @param member The guild member to restrict
-   * @returns Promise resolving to true if successful, false if the restriction failed
+   * Applies the case role and updates the active case state.
    */
+  public async applyCaseRole(member: GuildMember, moderator?: User): Promise<boolean> {
+    try {
+      let verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+      let roleQuarantineMetadata: Record<string, unknown> | null = null;
+
+      if (!verificationEvent) {
+        console.warn(`ApplyCaseRole called for ${member.user.tag} but no active case was found.`);
+      } else if (verificationEvent.status !== VerificationStatus.PENDING) {
+        verificationEvent.status = VerificationStatus.PENDING;
+        await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
+      }
+
+      if (verificationEvent) {
+        const quarantineResult = await this.tryApplyRoleQuarantine(
+          member,
+          verificationEvent,
+          moderator
+        );
+        verificationEvent = quarantineResult.verificationEvent;
+        roleQuarantineMetadata = quarantineResult.metadata;
+      }
+
+      const rollbackRoleQuarantine = async (): Promise<void> => {
+        if (!verificationEvent || !this.shouldRollbackRoleQuarantine(roleQuarantineMetadata)) {
+          return;
+        }
+
+        const rollbackResult = await this.tryRestoreRoleQuarantine(
+          member,
+          verificationEvent,
+          moderator
+        );
+        verificationEvent = rollbackResult.verificationEvent ?? verificationEvent;
+      };
+
+      let roleAssigned: boolean;
+      try {
+        roleAssigned = await this.roleManager.assignCaseRole(member);
+      } catch (assignError) {
+        await rollbackRoleQuarantine();
+        throw assignError;
+      }
+      if (!roleAssigned) {
+        await rollbackRoleQuarantine();
+        throw new Error(`Failed to assign case role to ${member.user.tag}`);
+      }
+
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        case_role_active: true,
+        verification_status: VerificationStatus.PENDING,
+        last_status_change: new Date(),
+        updated_by: moderator?.id,
+      });
+
+      console.log(`Successfully applied case role to ${member.user.tag}`);
+      return true;
+    } catch (error) {
+      console.error(`Failed to apply case role to ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
+
   public async restrictUser(member: GuildMember, moderator?: User): Promise<boolean> {
     try {
       let verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
@@ -730,13 +797,13 @@ export class UserModerationService implements IUserModerationService {
       let roleQuarantineMetadata: Record<string, unknown> | null = null;
 
       if (!verificationEvent) {
-        // If no active event, we might still need to restrict based on other logic,
-        // but for now, let's assume restriction happens only with an active event.
+        // If no active event, we might still need to apply the role based on other logic,
+        // but for now, legacy calls are expected to happen only with an active event.
         // Alternatively, create a new PENDING event here? Needs clarification.
         console.warn(
           `RestrictUser called for ${member.user.tag} but no active verification event found.`
         );
-        // Let's try assigning the role anyway, assuming the intent is restriction.
+        // Let's try assigning the role anyway, assuming the legacy intent is case-role application.
         // return false;
       } else {
         // Update existing event status if needed (e.g., if it was reopened)
@@ -772,25 +839,25 @@ export class UserModerationService implements IUserModerationService {
       // Assign the role using RoleManager
       let roleAssigned: boolean;
       try {
-        roleAssigned = await this.roleManager.assignRestrictedRole(member);
+        roleAssigned = await this.roleManager.assignCaseRole(member);
       } catch (assignError) {
         await rollbackRoleQuarantine();
         throw assignError;
       }
       if (!roleAssigned) {
         await rollbackRoleQuarantine();
-        throw new Error(`Failed to assign restricted role to ${member.user.tag}`);
+        throw new Error(`Failed to assign case role to ${member.user.tag}`);
       }
 
       // Update server member record
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-        is_restricted: true,
+        case_role_active: true,
         verification_status: VerificationStatus.PENDING, // Ensure status matches
         last_status_change: new Date(),
         updated_by: moderator?.id,
       });
 
-      console.log(`Successfully restricted user ${member.user.tag}`);
+      console.log(`Successfully applied case role to ${member.user.tag}`);
       this.captureModerationAction(
         member,
         AdminActionType.RESTRICT,
@@ -830,7 +897,7 @@ export class UserModerationService implements IUserModerationService {
           action_type: AdminActionType.RESTRICT,
           previous_status: previousStatus,
           new_status: VerificationStatus.PENDING,
-          notes: 'Restricted while case remains pending.',
+          notes: 'Case role applied while case remains pending.',
           metadata: roleQuarantineMetadata
             ? ({ role_quarantine: roleQuarantineMetadata } as unknown as Prisma.JsonValue)
             : undefined,
@@ -838,7 +905,7 @@ export class UserModerationService implements IUserModerationService {
       }
       return true;
     } catch (error) {
-      console.error(`Failed to restrict user ${member.user.tag}:`, error);
+      console.error(`Failed to apply case role to ${member.user.tag}:`, error);
       throw error;
     }
   }
@@ -850,20 +917,20 @@ export class UserModerationService implements IUserModerationService {
         member.guild.id
       );
       if (!verificationEvent) {
-        throw new Error('No active verification event found to lift restriction');
+        throw new Error('No active verification event found to remove case role');
       }
 
       const serverMember = await this.serverMemberRepository.findByServerAndUser(
         member.guild.id,
         member.id
       );
-      if (serverMember?.is_restricted !== true) {
+      if (serverMember?.case_role_active !== true) {
         return true;
       }
 
-      const roleRemoved = await this.roleManager.removeRestrictedRole(member);
+      const roleRemoved = await this.roleManager.removeCaseRole(member);
       if (!roleRemoved) {
-        throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
+        throw new Error(`Failed to remove case role from ${member.user.tag}`);
       }
 
       const restoreResult = await this.tryRestoreRoleQuarantine(
@@ -874,7 +941,7 @@ export class UserModerationService implements IUserModerationService {
       verificationEvent = restoreResult.verificationEvent ?? verificationEvent;
 
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-        is_restricted: false,
+        case_role_active: false,
         verification_status: VerificationStatus.PENDING,
         last_status_change: new Date(),
         updated_by: moderator.id,
@@ -889,7 +956,7 @@ export class UserModerationService implements IUserModerationService {
         action_type: AdminActionType.LIFT_RESTRICTION,
         previous_status: verificationEvent.status,
         new_status: VerificationStatus.PENDING,
-        notes: 'Restriction lifted while case remains pending.',
+        notes: 'Case role removed while case remains pending.',
         metadata: restoreResult.metadata
           ? ({ role_quarantine: restoreResult.metadata } as unknown as Prisma.JsonValue)
           : undefined,
@@ -912,13 +979,13 @@ export class UserModerationService implements IUserModerationService {
       );
       return true;
     } catch (error) {
-      console.error(`Failed to lift restriction for user ${member.user.tag}:`, error);
+      console.error(`Failed to remove case role for user ${member.user.tag}:`, error);
       throw error;
     }
   }
 
   /**
-   * Removes the restricted role from a guild member and updates their verification status
+   * Removes the case role from a guild member and updates their verification status
    * @param member The guild member to verify (unrestrict)
    * @param moderator The user who performed the verification
    * @returns Promise resolving to true if successful, false if the role couldn't be removed
@@ -962,9 +1029,9 @@ export class UserModerationService implements IUserModerationService {
         resolvedEvents.push({ event: updatedEvent, previousStatus });
       }
 
-      const roleRemoved = await this.roleManager.removeRestrictedRole(member);
+      const roleRemoved = await this.roleManager.removeCaseRole(member);
       if (!roleRemoved) {
-        throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
+        throw new Error(`Failed to remove case role from ${member.user.tag}`);
       }
 
       const restoreResult = await this.tryRestoreRoleQuarantine(
@@ -985,7 +1052,7 @@ export class UserModerationService implements IUserModerationService {
       }
 
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-        is_restricted: false,
+        case_role_active: false,
         verification_status: VerificationStatus.VERIFIED,
         last_status_change: new Date(),
         last_verified_at: new Date().toISOString(),
@@ -1094,7 +1161,7 @@ export class UserModerationService implements IUserModerationService {
         // Update server member status
         await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
           verification_status: VerificationStatus.BANNED,
-          is_restricted: true, // Keep restricted flag? Or remove member record? Needs clarification. Let's keep restricted for now.
+          case_role_active: false,
           last_status_change: new Date(),
         });
 
@@ -1188,7 +1255,7 @@ export class UserModerationService implements IUserModerationService {
 
         await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
           verification_status: VerificationStatus.KICKED,
-          is_restricted: false,
+          case_role_active: false,
           last_status_change: new Date(),
         });
 
@@ -1314,7 +1381,7 @@ export class UserModerationService implements IUserModerationService {
       try {
         await this.serverMemberRepository.upsertMember(guild.id, userId, {
           verification_status: VerificationStatus.BANNED,
-          is_restricted: true,
+          case_role_active: false,
           last_status_change: resolvedAt,
         });
 
@@ -1444,7 +1511,7 @@ export class UserModerationService implements IUserModerationService {
 
       await this.serverMemberRepository.upsertMember(guild.id, userId, {
         verification_status: VerificationStatus.BANNED,
-        is_restricted: true,
+        case_role_active: false,
         last_status_change: new Date(),
       });
       await this.tryAbandonRoleQuarantine(
@@ -1539,19 +1606,19 @@ export class UserModerationService implements IUserModerationService {
 
       const member = await guild.members.fetch(userId).catch(() => null);
       const serverMember = await this.serverMemberRepository.findByServerAndUser(guild.id, userId);
-      const shouldRemoveRestrictedRole = member && serverMember?.is_restricted === true;
+      const shouldRemoveCaseRole = member && serverMember?.case_role_active === true;
 
       if (pendingVerificationEvents.length === 0) {
-        if (shouldRemoveRestrictedRole) {
-          const roleRemoved = await this.roleManager.removeRestrictedRole(member);
+        if (shouldRemoveCaseRole) {
+          const roleRemoved = await this.roleManager.removeCaseRole(member);
           if (!roleRemoved) {
-            throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
+            throw new Error(`Failed to remove case role from ${member.user.tag}`);
           }
 
           await this.tryRestoreRoleQuarantine(member, null, moderator);
 
           await this.serverMemberRepository.upsertMember(guild.id, userId, {
-            is_restricted: false,
+            case_role_active: false,
             verification_status: VerificationStatus.CLOSED_NO_ACTION,
             last_status_change: new Date(),
             updated_by: moderator.id,
@@ -1597,10 +1664,10 @@ export class UserModerationService implements IUserModerationService {
         resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
       }
 
-      if (shouldRemoveRestrictedRole) {
-        const roleRemoved = await this.roleManager.removeRestrictedRole(member);
+      if (shouldRemoveCaseRole) {
+        const roleRemoved = await this.roleManager.removeCaseRole(member);
         if (!roleRemoved) {
-          throw new Error(`Failed to remove restricted role from ${member.user.tag}`);
+          throw new Error(`Failed to remove case role from ${member.user.tag}`);
         }
       }
 
@@ -1628,7 +1695,7 @@ export class UserModerationService implements IUserModerationService {
       }
 
       await this.serverMemberRepository.upsertMember(guild.id, userId, {
-        is_restricted: false,
+        case_role_active: false,
         verification_status: VerificationStatus.CLOSED_NO_ACTION,
         last_status_change: resolvedAt,
         updated_by: moderator.id,
@@ -1767,7 +1834,7 @@ export class UserModerationService implements IUserModerationService {
 
       await this.serverMemberRepository.upsertMember(guild.id, user.id, {
         verification_status: VerificationStatus.BANNED,
-        is_restricted: true,
+        case_role_active: false,
         last_status_change: new Date(),
       });
       await this.tryAbandonRoleQuarantine(
@@ -1877,7 +1944,7 @@ export class UserModerationService implements IUserModerationService {
 
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
         verification_status: VerificationStatus.KICKED,
-        is_restricted: false,
+        case_role_active: false,
         last_status_change: new Date(),
       });
       await this.tryAbandonRoleQuarantine(

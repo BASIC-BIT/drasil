@@ -1,4 +1,4 @@
-import { EmbedBuilder, Guild, GuildMember, User } from 'discord.js';
+import { EmbedBuilder, Guild, GuildMember, ThreadChannel, User } from 'discord.js';
 import { NotificationPresentationBuilder } from '../../services/NotificationPresentationBuilder';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
 import {
@@ -13,11 +13,15 @@ import { VERIFICATION_ACTION_FAILURES_METADATA_KEY } from '../../utils/verificat
 const buildMember = (): GuildMember =>
   ({
     id: 'user-1',
+    displayName: 'Server Nick',
+    nickname: 'Server Nick',
     joinedAt: new Date('2026-01-02T00:00:00Z'),
     guild: { id: 'guild-1' } as unknown as Guild,
     user: {
       id: 'user-1',
+      username: 'test-user',
       tag: 'test-user#0001',
+      globalName: 'Global Name',
       createdTimestamp: new Date('2026-01-01T00:00:00Z').getTime(),
       displayAvatarURL: jest.fn().mockReturnValue('https://example.com/avatar.png'),
     } as unknown as User,
@@ -120,6 +124,10 @@ describe('NotificationPresentationBuilder (unit)', () => {
     );
 
     expect(getField(embed, 'Trigger')).toBe('Admin flag: triage');
+    expect(getField(embed, 'User')).toBe(
+      '<@user-1> (Discord username: `test-user`; Display name: `Global Name`; Server nickname: `Server Nick`)'
+    );
+    expect(getField(embed, 'User ID')).toBe('user-1');
     expect(getField(embed, 'Case Threads')).toBe(
       'Verification/review thread: https://discord.com/channels/guild-1/thread-1 status: verified by <@admin-1>\n' +
         'Admin evidence thread: https://discord.com/channels/guild-1/evidence-thread-1'
@@ -295,24 +303,22 @@ describe('NotificationPresentationBuilder (unit)', () => {
 
     expect(caseButtons.map((button) => button.label)).toEqual([
       'Verify',
-      'Restrict',
       'Ban...',
       'Close',
       'Other Actions',
       'Web Case',
     ]);
-    expect(caseButtons[5]).toMatchObject({
+    expect(caseButtons[4]).toMatchObject({
       url: 'https://drasilbot.com/admin/guild/guild-1/cases/ver-1',
     });
     expect(observedButtons.map((button) => button.label)).toEqual([
       'Open Case',
-      'Restrict',
       'Ban...',
       'Dismiss',
       'Other Actions',
       'Web Queue',
     ]);
-    expect(observedButtons[5]).toMatchObject({
+    expect(observedButtons[4]).toMatchObject({
       url: 'https://drasilbot.com/admin/guild/guild-1/cases',
     });
   });
@@ -421,5 +427,16 @@ describe('NotificationPresentationBuilder (unit)', () => {
       'Observed via admin-opened case: Manual review'
     );
     expect(getField(roleIntakeEmbed, 'Trigger')).toBe('Observed via role intake: new role');
+  });
+
+  it('formats report intake reporter identity with mention and text identifiers', () => {
+    const embed = builder.createReportIntakeStartedEmbed(buildMember(), {
+      id: 'thread-1',
+      url: 'https://discord.com/channels/guild-1/thread-1',
+    } as ThreadChannel);
+
+    expect(getField(embed, 'Reporter')).toBe(
+      '<@user-1> (Discord username: `test-user`; Display name: `Global Name`; Server nickname: `Server Nick`)'
+    );
   });
 });

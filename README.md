@@ -16,7 +16,7 @@ This bot uses:
 - **Proactive Detection**: Flags suspicious users quickly
 - **Configurable Heuristics**: Tune message frequency limits or spam keywords
 - **GPT Integration**: Intelligent classification for borderline cases
-- **Restricted Role**: Automate partial lockdown of flagged users
+- **Case Role**: Apply a configured role to users with active cases
 - **Verification Threads**: Quickly confirm or deny suspicious accounts
 
 ## Development
@@ -71,7 +71,7 @@ High-signal manual and automated test ideas live in `docs/test-cases.md`.
 ## Usage
 
 - Invite the bot to your server.
-- Run `/config setup` to configure the restricted role and channels.
+- Run `/config setup` to configure the case role and channels.
 - Run `/config validate` after permission or channel changes.
 - Update other config as needed (spam thresholds, OpenAI prompts).
 - Let the bot automatically classify new users or run the `/verify` command for manual overrides.
@@ -82,8 +82,8 @@ High-signal manual and automated test ideas live in `docs/test-cases.md`.
 
 1. **Run Unified Setup**:
    - Use `/config setup admin-channel:<channel>`.
-   - Optionally pass `restricted-role:<role>` to use an existing restricted role.
-   - Omit `restricted-role` to let Drasil reuse a configured/default `Drasil Restricted` role or create it if missing.
+   - Optionally pass `case-role:<role>` to use an existing case role.
+   - Omit `case-role` to let Drasil reuse a configured/default `Drasil Case` role or create it if missing.
    - Optionally pass `verification-channel:<channel>` to reuse an existing verification channel.
    - Omit `verification-channel` to let Drasil create or reuse a `verification` text channel.
    - If multiple `#verification` channels exist, pass `verification-channel:<channel>` explicitly.
@@ -102,7 +102,7 @@ High-signal manual and automated test ideas live in `docs/test-cases.md`.
 
 The bot automatically registers the following slash commands during startup:
 
-- `/config setup` - Configure required Drasil channels and restricted role
+- `/config setup` - Configure required Drasil channels and case role
 - `/config validate` - Check setup, permissions, channels, and role hierarchy
 - `/config set key:<key> value:<value>` - Configure low-level server settings
 
@@ -112,20 +112,20 @@ Slash commands are automatically registered when the bot starts up. There's no n
 
 When a user is flagged as suspicious, the bot will:
 
-1. Assign the configured restricted role to limit their server access
+1. Assign the configured case role for active-case access control
 2. Send a notification to the admin channel with:
    - User details (username, ID, join date, etc.)
    - Detection confidence level (Low, Medium, or High)
    - Trigger reason (message content or join event)
    - Bullet-pointed list of detection reasons
    - Interactive buttons:
-     - **Verify User** button to remove the restricted role
+     - **Verify User** button to remove the case role
      - **Ban User** button to ban the user from the server
      - **Create Thread** button (shown only if the auto-created thread is missing)
 3. Log all admin actions (button presses) directly in the notification message
 4. Create verification threads in a dedicated verification channel that's visible only to:
    - Server administrators and moderators
-   - The restricted user (only their own thread)
+   - The user with the active case (only their own thread)
 
 ## Spam Detection Heuristics
 

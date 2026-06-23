@@ -68,7 +68,6 @@ import {
   DEFAULT_REPORT_AI_MAX_IMAGE_BYTES,
   DEFAULT_REPORT_AI_MAX_IMAGES,
   DEFAULT_REPORT_AI_OPEN_CASE_THRESHOLD,
-  DEFAULT_REPORT_AI_RESTRICT_THRESHOLD,
   DEFAULT_REPORT_AI_TRIAGE_ENABLED,
   REPORT_AI_ANALYZE_IMAGES_SETTING_KEY,
   REPORT_AI_ANALYZE_TEXT_SETTING_KEY,
@@ -76,7 +75,6 @@ import {
   REPORT_AI_MAX_IMAGE_BYTES_SETTING_KEY,
   REPORT_AI_MAX_IMAGES_SETTING_KEY,
   REPORT_AI_OPEN_CASE_THRESHOLD_SETTING_KEY,
-  REPORT_AI_RESTRICT_THRESHOLD_SETTING_KEY,
   REPORT_AI_TRIAGE_ENABLED_SETTING_KEY,
 } from '../../utils/reportAiSettings';
 import {
@@ -127,7 +125,6 @@ const baseSettings: ServerSettings = {
   [REPORT_AI_ANALYZE_IMAGES_SETTING_KEY]: true,
   [REPORT_AI_MAX_ACTION_SETTING_KEY]: 'hints',
   [REPORT_AI_OPEN_CASE_THRESHOLD_SETTING_KEY]: DEFAULT_REPORT_AI_OPEN_CASE_THRESHOLD,
-  [REPORT_AI_RESTRICT_THRESHOLD_SETTING_KEY]: DEFAULT_REPORT_AI_RESTRICT_THRESHOLD,
   [REPORT_AI_MAX_IMAGES_SETTING_KEY]: DEFAULT_REPORT_AI_MAX_IMAGES,
   [REPORT_AI_MAX_IMAGE_BYTES_SETTING_KEY]: DEFAULT_REPORT_AI_MAX_IMAGE_BYTES,
   report_intake_agent_enabled: true,
@@ -758,7 +755,7 @@ export class InMemoryServerRepository implements IServerRepository {
     const now = new Date().toISOString();
     return {
       guild_id: guildId,
-      restricted_role_id: data.restricted_role_id ?? null,
+      case_role_id: data.case_role_id ?? null,
       admin_channel_id: data.admin_channel_id ?? null,
       verification_channel_id: data.verification_channel_id ?? null,
       admin_notification_role_id: data.admin_notification_role_id ?? null,
@@ -1014,7 +1011,7 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
       user_id: userId,
       join_date: data.join_date ?? existing?.join_date ?? null,
       reputation_score: data.reputation_score ?? existing?.reputation_score ?? 0,
-      is_restricted: data.is_restricted ?? existing?.is_restricted ?? false,
+      case_role_active: data.case_role_active ?? existing?.case_role_active ?? false,
       last_verified_at: data.last_verified_at ?? existing?.last_verified_at ?? null,
       last_message_at: data.last_message_at ?? existing?.last_message_at ?? null,
       message_count: data.message_count ?? existing?.message_count ?? 0,
@@ -1040,9 +1037,9 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
       .map((member) => ({ ...member }));
   }
 
-  async findRestrictedMembers(serverId: string): Promise<ServerMember[]> {
+  async findCaseRoleActiveMembers(serverId: string): Promise<ServerMember[]> {
     return Array.from(this.members.values())
-      .filter((member) => member.server_id === serverId && member.is_restricted)
+      .filter((member) => member.server_id === serverId && member.case_role_active)
       .map((member) => ({ ...member }));
   }
 
@@ -1063,10 +1060,10 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
     return { ...updated };
   }
 
-  async updateRestrictionStatus(
+  async updateCaseRoleStatus(
     serverId: string,
     userId: string,
-    isRestricted: boolean,
+    caseRoleActive: boolean,
     verificationStatus: verification_status,
     _reason?: string,
     moderatorId?: string
@@ -1077,7 +1074,7 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
     }
     const updated = {
       ...existing,
-      is_restricted: isRestricted,
+      case_role_active: caseRoleActive,
       verification_status: verificationStatus as VerificationStatus,
       last_status_change: new Date(),
       updated_by: moderatorId ?? null,
@@ -1115,7 +1112,7 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
     return this.upsertMember(serverId, userId, {
       join_date: joinDate ?? new Date(),
       message_count: 0,
-      is_restricted: false,
+      case_role_active: false,
       reputation_score: 0,
       verification_status: VerificationStatus.PENDING,
     });

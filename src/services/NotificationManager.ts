@@ -86,12 +86,12 @@ export interface INotificationManager {
   /**
    * Sets up a verification channel with appropriate permissions
    * @param guild The Discord guild to set up the channel in
-   * @param restrictedRoleId The ID of the restricted role
+   * @param caseRoleId The ID of the case role
    * @returns The ID of the created channel or null if creation failed
    */
   setupVerificationChannel(
     guild: Guild,
-    restrictedRoleId: string,
+    caseRoleId: string,
     persistConfig?: boolean,
     onChannelCreated?: (channelId: string) => void,
     configuredVerificationChannelId?: string
@@ -694,25 +694,25 @@ export class NotificationManager implements INotificationManager {
   /**
    * Sets up a verification channel with appropriate permissions
    * @param guild The Discord guild to set up the channel in
-   * @param restrictedRoleId The ID of the restricted role
+   * @param caseRoleId The ID of the case role
    * @returns The ID of the created channel or null if creation failed
    */
   public async setupVerificationChannel(
     guild: Guild,
-    restrictedRoleId: string,
+    caseRoleId: string,
     persistConfig = true,
     onChannelCreated?: (channelId: string) => void,
     configuredVerificationChannelId?: string
   ): Promise<string | null> {
-    if (!restrictedRoleId) {
-      console.error('Restricted role ID is required to set up verification channel');
+    if (!caseRoleId) {
+      console.error('Case role ID is required to set up verification channel');
       return null;
     }
 
     try {
       const permissionOverwrites = this.buildVerificationChannelPermissionOverwrites(
         guild,
-        restrictedRoleId
+        caseRoleId
       );
       const configuredVerificationChannel = await this.findConfiguredVerificationChannel(
         guild,
@@ -760,7 +760,7 @@ export class NotificationManager implements INotificationManager {
 
   private buildVerificationChannelPermissionOverwrites(
     guild: Guild,
-    restrictedRoleId: string
+    caseRoleId: string
   ): OverwriteResolvable[] {
     const permissionOverwrites: OverwriteResolvable[] = [
       // Default role (everyone) - deny access
@@ -774,9 +774,9 @@ export class NotificationManager implements INotificationManager {
           PermissionFlagsBits.CreatePrivateThreads,
         ],
       },
-      // Restricted role - can view and send messages, but not read history
+      // Case role - can view and send messages, but not read history
       {
-        id: restrictedRoleId,
+        id: caseRoleId,
         allow: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,

@@ -8,7 +8,7 @@ import { CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY } from '../../utils/caseRev
 
 const buildServer = (settings: Server['settings']): Server => ({
   guild_id: 'guild-1',
-  restricted_role_id: null,
+  case_role_id: null,
   admin_channel_id: 'admin-1',
   verification_channel_id: null,
   admin_notification_role_id: null,

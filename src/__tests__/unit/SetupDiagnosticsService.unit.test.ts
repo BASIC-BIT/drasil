@@ -5,7 +5,7 @@ describe('SetupDiagnosticsService (unit)', () => {
   const defaultChannelHas = (permission: bigint): boolean => typeof permission === 'bigint';
 
   const buildConfiguredGuild = (overrides: { channelHas?: typeof defaultChannelHas } = {}) => {
-    const restrictedRole = { id: 'role-1', managed: false };
+    const caseRole = { id: 'role-1', managed: false };
     const botMember = {
       permissions: {
         has: jest.fn((permission: bigint) => permission !== PermissionFlagsBits.Administrator),
@@ -32,14 +32,14 @@ describe('SetupDiagnosticsService (unit)', () => {
           fetchMe: jest.fn(),
         },
         roles: {
-          fetch: jest.fn().mockResolvedValue(restrictedRole),
+          fetch: jest.fn().mockResolvedValue(caseRole),
         },
         channels: {
           fetch: jest.fn().mockResolvedValue(channel),
         },
       } as any,
       botMember,
-      restrictedRole,
+      caseRole,
       channel,
     };
   };
@@ -49,7 +49,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: 'role-1',
+        case_role_id: 'role-1',
         admin_channel_id: 'admin-channel-1',
         verification_channel_id: 'verification-channel-1',
         settings: {},
@@ -70,7 +70,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: null,
+        case_role_id: null,
         admin_channel_id: null,
         verification_channel_id: null,
         settings: {},
@@ -88,7 +88,7 @@ describe('SetupDiagnosticsService (unit)', () => {
         'guild-ban-members',
         'guild-kick-members',
         'guild-view-audit-log',
-        'restricted-role-missing',
+        'case-role-missing',
         'admin-channel-missing',
         'verification-channel-missing',
       ])
@@ -103,7 +103,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: 'role-1',
+        case_role_id: 'role-1',
         admin_channel_id: 'admin-channel-1',
         verification_channel_id: 'verification-channel-1',
         settings: {},
@@ -115,7 +115,7 @@ describe('SetupDiagnosticsService (unit)', () => {
 
     expect(report.issues.map((issue) => issue.code)).toEqual(
       expect.arrayContaining([
-        'restricted-role-hierarchy',
+        'case-role-hierarchy',
         'admin-channel-send',
         'verification-channel-send',
       ])
@@ -130,7 +130,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: 'role-1',
+        case_role_id: 'role-1',
         admin_channel_id: 'admin-channel-1',
         verification_channel_id: 'verification-channel-1',
         settings: {},
@@ -153,7 +153,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: 'role-1',
+        case_role_id: 'role-1',
         admin_channel_id: 'admin-channel-1',
         verification_channel_id: 'verification-channel-1',
         settings: { report_instructions_channel_id: 'report-channel-1' },
@@ -175,7 +175,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: 'role-1',
+        case_role_id: 'role-1',
         admin_channel_id: 'admin-channel-1',
         verification_channel_id: 'verification-channel-1',
         settings: {},
@@ -192,13 +192,13 @@ describe('SetupDiagnosticsService (unit)', () => {
   });
 
   it('warns for unmentionable admin notification and missing case responder roles', async () => {
-    const { guild, restrictedRole } = buildConfiguredGuild({
+    const { guild, caseRole } = buildConfiguredGuild({
       channelHas: (permission) => permission !== PermissionFlagsBits.MentionEveryone,
     });
     const notifyRole = { id: 'notify-role-1', mentionable: false };
     guild.roles.fetch.mockImplementation((roleId: string) => {
       if (roleId === 'role-1') {
-        return Promise.resolve(restrictedRole);
+        return Promise.resolve(caseRole);
       }
       if (roleId === 'notify-role-1') {
         return Promise.resolve(notifyRole);
@@ -208,7 +208,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        restricted_role_id: 'role-1',
+        case_role_id: 'role-1',
         admin_channel_id: 'admin-channel-1',
         verification_channel_id: 'verification-channel-1',
         admin_notification_role_id: 'notify-role-1',
@@ -225,7 +225,28 @@ describe('SetupDiagnosticsService (unit)', () => {
     expect(report.warningCount).toBeGreaterThanOrEqual(2);
   });
 
-  it('validates setup candidates that create the restricted role and verification channel', async () => {
+  it('warns when manual intake is configured to use the case role', async () => {
+    const { guild } = buildConfiguredGuild();
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: {
+          manual_intake_enabled: true,
+          manual_intake_role_id: 'role-1',
+        },
+      }),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateGuildSetup(guild);
+
+    expect(report.issues.map((issue) => issue.code)).toContain('manual-intake-role-is-case-role');
+  });
+
+  it('validates setup candidates that create the case role and verification channel', async () => {
     const { guild } = buildConfiguredGuild();
     const configService = {
       getServerConfig: jest.fn(),
@@ -233,8 +254,8 @@ describe('SetupDiagnosticsService (unit)', () => {
     const service = new SetupDiagnosticsService(configService);
 
     const report = await service.validateSetupCandidate(guild, {
-      restrictedRoleId: null,
-      willCreateRestrictedRole: true,
+      caseRoleId: null,
+      willCreateCaseRole: true,
       adminChannelId: 'admin-channel-1',
       verificationChannelId: null,
       willCreateVerificationChannel: true,
@@ -258,8 +279,8 @@ describe('SetupDiagnosticsService (unit)', () => {
     const service = new SetupDiagnosticsService(configService);
 
     const report = await service.validateSetupCandidate(guild, {
-      restrictedRoleId: null,
-      willCreateRestrictedRole: true,
+      caseRoleId: null,
+      willCreateCaseRole: true,
       adminChannelId: 'admin-channel-1',
       verificationChannelId: null,
       willCreateVerificationChannel: true,
@@ -284,8 +305,8 @@ describe('SetupDiagnosticsService (unit)', () => {
     const service = new SetupDiagnosticsService(configService);
 
     const report = await service.validateSetupCandidate(guild, {
-      restrictedRoleId: 'role-1',
-      willCreateRestrictedRole: false,
+      caseRoleId: 'role-1',
+      willCreateCaseRole: false,
       adminChannelId: 'admin-channel-1',
       verificationChannelId: 'verification-channel-1',
       willCreateVerificationChannel: false,

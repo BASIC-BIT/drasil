@@ -60,7 +60,7 @@ Modes:
 - `notify_only`: post a moderator-facing observed alert to that server's observed/admin notification channel.
 - `open_case`: currently uses the same observed-alert surface as `notify_only`; it does not create a case thread for external reports yet. The separate mode is retained for compatibility and future UX polish.
 
-External reports never apply automatic restrictions. Moderators must review and choose any action.
+External reports never apply the case role or take terminal moderation actions automatically. Moderators must review and choose any action.
 
 ## Rollout Notes
 

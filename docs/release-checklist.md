@@ -11,7 +11,7 @@ This is intended to be concise and actionable. For flow details see:
 ## Pre-flight
 
 - CI is green on `main`.
-- You have a staging Discord server where you can safely test bans/restrictions.
+- You have a staging Discord server where you can safely test case-role, kick, and ban flows.
 - You have a staging Postgres database (or local Supabase) for persistence.
 
 ## Discord application setup
@@ -26,14 +26,14 @@ Bot token + intents:
 
 Bot permissions (minimum practical set):
 
-- Manage Roles (assign/remove restricted role)
+- Manage Roles (assign/remove case role)
 - Ban Members (ban flow)
 - View Channels / Send Messages / Read Message History (admin + verification channels)
 - Manage Threads + Create Private Threads (verification threads)
 
 Role hierarchy:
 
-- Bot role must be above the configured restricted role.
+- Bot role must be above the configured case role.
 - Bot role must be high enough to ban the members you want to ban.
 
 ## Database setup
@@ -53,14 +53,14 @@ npx prisma migrate deploy
 
 Create or choose:
 
-- Restricted role (limited permissions).
+- Case role (active-case access control).
 - Admin channel (mods only).
 - Verification channel (where the bot creates verification threads), or let setup create/reuse `verification`.
 
 Configure and validate the bot:
 
 - Run `/config setup admin-channel:<channel>`.
-- Pass `restricted-role:<role>` only when choosing a specific existing role; otherwise Drasil reuses a configured/default `Drasil Restricted` role or creates it if missing.
+- Pass `case-role:<role>` only when choosing a specific existing role; otherwise Drasil reuses a configured/default `Drasil Case` role or creates it if missing.
 - Pass `verification-channel:<channel>` only when reusing an existing channel; otherwise Drasil creates/reuses `verification`.
 - If multiple `#verification` channels exist, pass `verification-channel:<channel>` explicitly.
 - Optionally pass `report-channel:<channel>` to create/update report instructions.
@@ -73,11 +73,11 @@ Use `docs/test-cases.md` as the authoritative list. Minimum set:
 - If you want a step-by-step runbook instead of a short checklist, use `docs/manual-qa.md`.
 
 - Suspicious message:
-  - user restricted
+  - case role applied
   - verification thread created
   - admin notification sent
 - Verify:
-  - restricted role removed
+  - case role removed
   - thread archived/locked
   - admin action recorded
 - Ban:
@@ -87,11 +87,11 @@ Use `docs/test-cases.md` as the authoritative list. Minimum set:
 - Reopen:
   - verification returns to pending
   - thread reopened
-  - user restricted again
+  - case role reapplied
 
 Privacy check:
 
-- Verify the restricted user can only see their own verification thread.
+- Verify the user with the active case can only see their own verification thread.
 
 ## Common failure modes
 
@@ -102,7 +102,7 @@ No message content / missing events:
 Role assignment fails:
 
 - Check bot has Manage Roles permission.
-- Check role hierarchy (bot role above restricted role).
+- Check role hierarchy (bot role above case role).
 
 Thread creation fails:
 

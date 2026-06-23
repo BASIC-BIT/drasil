@@ -68,7 +68,7 @@ describe('CommandHandler command catalog (unit)', () => {
     expect(closeReportCommand.contexts).toEqual([InteractionContextType.Guild]);
   });
 
-  it('registers restricted-role lockdown config commands', () => {
+  it('registers case-role lockdown config commands', () => {
     const { handler } = buildHandler();
     const commands = (handler as any).commands as any[];
     const configCommand = commands.find((c) => c.name === 'config');
@@ -105,11 +105,7 @@ describe('CommandHandler command catalog (unit)', () => {
       (option: any) => option.name === 'set-mode'
     );
     const modeOption = setModeSubcommand.options.find((option: any) => option.name === 'mode');
-    expect(modeOption.choices.map((choice: any) => choice.value)).toEqual([
-      'off',
-      'audit_only',
-      'automatic',
-    ]);
+    expect(modeOption.choices.map((choice: any) => choice.value)).toEqual(['off', 'on']);
   });
 
   it('registers role gate config commands', () => {
@@ -153,7 +149,7 @@ describe('CommandHandler command catalog (unit)', () => {
       PermissionFlagsBits.Administrator.toString()
     );
     expect(setupCommand.options.map((option: any) => option.name)).toEqual([
-      'restricted-role',
+      'case-role',
       'admin-channel',
       'verification-channel',
     ]);
@@ -313,7 +309,7 @@ describe('CommandHandler command catalog (unit)', () => {
     ]);
 
     const open = caseCommand.options.find((option: any) => option.name === 'open');
-    expect(open.options.map((option: any) => option.name)).toEqual(['user', 'restrict', 'reason']);
+    expect(open.options.map((option: any) => option.name)).toEqual(['user', 'reason']);
 
     const repair = caseCommand.options.find((option: any) => option.name === 'repair');
     expect(repair.options.map((option: any) => option.name)).toEqual(['user']);
@@ -325,7 +321,6 @@ describe('CommandHandler command catalog (unit)', () => {
     expect(intakeRole.options.map((option: any) => option.name)).toEqual([
       'role',
       'execute',
-      'action',
       'limit',
       'reason',
     ]);

@@ -2,21 +2,21 @@ import { ChannelType, ChatInputCommandInteraction, Guild, MessageFlags } from 'd
 import { IConfigService } from '../config/ConfigService';
 import { ServerSettings } from '../repositories/types';
 import {
-  IRestrictedRoleLockdownService,
-  RestrictedLockdownReport,
-} from '../services/RestrictedRoleLockdownService';
+  ICaseRoleLockdownService,
+  CaseRoleLockdownReport,
+} from '../services/CaseRoleLockdownService';
 import {
-  getRestrictedLockdownSettings,
-  RESTRICTED_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY,
-  RESTRICTED_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY,
-  RESTRICTED_LOCKDOWN_ENABLED_SETTING_KEY,
-} from '../utils/restrictedLockdownSettings';
+  getCaseRoleLockdownSettings,
+  CASE_ROLE_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY,
+  CASE_ROLE_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY,
+  CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY,
+} from '../utils/caseRoleLockdownSettings';
 import { truncatePreview } from '../utils/textPreview';
 
 export class LockdownConfigCommandHandler {
   public constructor(
     private readonly configService: IConfigService,
-    private readonly restrictedRoleLockdownService?: IRestrictedRoleLockdownService
+    private readonly caseRoleLockdownService?: ICaseRoleLockdownService
   ) {}
 
   public async handleLockdownConfigCommand(
@@ -29,7 +29,7 @@ export class LockdownConfigCommandHandler {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const serverConfig = await this.configService.getServerConfig(guild.id);
       await interaction.editReply({
-        content: this.formatRestrictedLockdownSettings(
+        content: this.formatCaseRoleLockdownSettings(
           guild.id,
           serverConfig.verification_channel_id,
           serverConfig.settings
@@ -42,11 +42,11 @@ export class LockdownConfigCommandHandler {
     if (subcommand === 'disable') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await this.configService.updateServerSettings(guild.id, {
-        [RESTRICTED_LOCKDOWN_ENABLED_SETTING_KEY]: false,
+        [CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY]: false,
       });
       await interaction.editReply({
         content:
-          'Restricted-role lockdown marked disabled. Existing Discord channel overwrites were not removed.',
+          'Case-role lockdown marked disabled. Existing Discord channel overwrites were not removed.',
       });
       return;
     }
@@ -56,9 +56,9 @@ export class LockdownConfigCommandHandler {
       return;
     }
 
-    if (!this.restrictedRoleLockdownService) {
+    if (!this.caseRoleLockdownService) {
       await interaction.reply({
-        content: 'Restricted-role lockdown is not available in this runtime.',
+        content: 'Case-role lockdown is not available in this runtime.',
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -69,19 +69,19 @@ export class LockdownConfigCommandHandler {
     try {
       const report =
         subcommand === 'apply'
-          ? await this.restrictedRoleLockdownService.applyGuild(guild, interaction.user.id, {
+          ? await this.caseRoleLockdownService.applyGuild(guild, interaction.user.id, {
               unsyncAllowedChannels: interaction.options.getBoolean('unsync-allowed') ?? false,
             })
-          : await this.restrictedRoleLockdownService.auditGuild(guild);
+          : await this.caseRoleLockdownService.auditGuild(guild);
 
       await interaction.editReply({
-        content: this.formatRestrictedLockdownReport(report, subcommand === 'apply'),
+        content: this.formatCaseRoleLockdownReport(report, subcommand === 'apply'),
         allowedMentions: { parse: [] },
       });
     } catch (error) {
       console.error(`Failed to run lockdown ${subcommand} for guild ${guild.id}:`, error);
       await interaction.editReply({
-        content: 'Failed to run restricted-role lockdown. Please check permissions and try again.',
+        content: 'Failed to run case-role lockdown. Please check permissions and try again.',
       });
     }
   }
@@ -95,7 +95,7 @@ export class LockdownConfigCommandHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const serverConfig = await this.configService.getServerConfig(guildId);
-    const settings = getRestrictedLockdownSettings(serverConfig.settings);
+    const settings = getCaseRoleLockdownSettings(serverConfig.settings);
     const isCategory = channel.type === ChannelType.GuildCategory;
     const channelIds = new Set(settings.allowedChannelIds);
     const categoryIds = new Set(settings.allowedCategoryIds);
@@ -108,28 +108,28 @@ export class LockdownConfigCommandHandler {
     }
 
     await this.configService.updateServerSettings(guildId, {
-      [RESTRICTED_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY]: [...channelIds],
-      [RESTRICTED_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY]: [...categoryIds],
+      [CASE_ROLE_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY]: [...channelIds],
+      [CASE_ROLE_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY]: [...categoryIds],
     });
 
     await interaction.editReply({
-      content: `${isCategory ? 'Category' : 'Channel'} <#${channel.id}> ${added ? 'added to' : 'removed from'} the restricted lockdown allow-list. Run \`/config lockdown audit\` to check for conflicts.`,
+      content: `${isCategory ? 'Category' : 'Channel'} <#${channel.id}> ${added ? 'added to' : 'removed from'} the case-role lockdown allow-list. Run \`/config lockdown audit\` to check for conflicts.`,
       allowedMentions: { parse: [] },
     });
   }
 
-  private formatRestrictedLockdownSettings(
+  private formatCaseRoleLockdownSettings(
     guildId: string,
     verificationChannelId: string | null,
     settings: ServerSettings
   ): string {
-    const lockdownSettings = getRestrictedLockdownSettings(settings);
-    const autoAllowedChannelIds = this.getRestrictedLockdownAutoAllowedChannelIds(
+    const lockdownSettings = getCaseRoleLockdownSettings(settings);
+    const autoAllowedChannelIds = this.getCaseRoleLockdownAutoAllowedChannelIds(
       verificationChannelId,
       settings
     );
     return [
-      `Restricted lockdown: \`${lockdownSettings.enabled ? 'enabled' : 'disabled'}\``,
+      `Case-role lockdown: \`${lockdownSettings.enabled ? 'enabled' : 'disabled'}\``,
       `Explicit allowed channels: ${this.formatChannelIdList(lockdownSettings.allowedChannelIds)}`,
       `Explicit allowed categories: ${this.formatChannelIdList(lockdownSettings.allowedCategoryIds)}`,
       `Auto-allowed channels: ${this.formatChannelIdList(autoAllowedChannelIds)}`,
@@ -140,17 +140,14 @@ export class LockdownConfigCommandHandler {
     ].join('\n');
   }
 
-  private formatRestrictedLockdownReport(
-    report: RestrictedLockdownReport,
-    applied: boolean
-  ): string {
+  private formatCaseRoleLockdownReport(report: CaseRoleLockdownReport, applied: boolean): string {
     const actionLabel = applied ? 'apply' : 'audit';
     const status =
       report.errorCount > 0
-        ? `Restricted lockdown ${actionLabel} found ${report.errorCount} error(s) and ${report.warningCount} warning(s).`
+        ? `Case-role lockdown ${actionLabel} found ${report.errorCount} error(s) and ${report.warningCount} warning(s).`
         : report.warningCount > 0
-          ? `Restricted lockdown ${actionLabel} found ${report.warningCount} warning(s).`
-          : `Restricted lockdown ${actionLabel} passed with no issues.`;
+          ? `Case-role lockdown ${actionLabel} found ${report.warningCount} warning(s).`
+          : `Case-role lockdown ${actionLabel} passed with no issues.`;
 
     const lines = [
       status,
@@ -214,14 +211,14 @@ export class LockdownConfigCommandHandler {
 
     lines.push(
       '',
-      'Role-order note: keep the Drasil bot role above the restricted role for assignment. Channel overwrites, not role order, decide quarantine visibility.',
+      'Role-order note: keep the Drasil bot role above the case role for assignment. Channel overwrites, not role order, decide quarantine visibility.',
       'Message deletion is intentionally not part of lockdown V1.'
     );
 
     return truncatePreview(lines.join('\n'), 1900);
   }
 
-  private getRestrictedLockdownAutoAllowedChannelIds(
+  private getCaseRoleLockdownAutoAllowedChannelIds(
     verificationChannelId: string | null,
     settings: ServerSettings
   ): string[] {

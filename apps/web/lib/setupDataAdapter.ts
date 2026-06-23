@@ -97,7 +97,7 @@ function parseServerRow(row: Record<string, unknown>): SetupServerRecord {
   const settings = serverSettingsSchema.safeParse(row.settings ?? {});
   return setupServerRecordSchema.parse({
     guild_id: row.guild_id,
-    restricted_role_id: row.restricted_role_id ?? null,
+    case_role_id: row.case_role_id ?? null,
     admin_channel_id: row.admin_channel_id ?? null,
     verification_channel_id: row.verification_channel_id ?? null,
     admin_notification_role_id: row.admin_notification_role_id ?? null,
@@ -181,7 +181,7 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
     const result = await getPostgresPool().query(
       `insert into servers (
         guild_id,
-        restricted_role_id,
+        case_role_id,
         admin_channel_id,
         verification_channel_id,
         admin_notification_role_id,
@@ -190,7 +190,7 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
         updated_at
       ) values ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
       on conflict (guild_id) do update set
-        restricted_role_id = excluded.restricted_role_id,
+        case_role_id = excluded.case_role_id,
         admin_channel_id = excluded.admin_channel_id,
         verification_channel_id = excluded.verification_channel_id,
         admin_notification_role_id = excluded.admin_notification_role_id,
@@ -200,7 +200,7 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
       returning *`,
       [
         update.guildId,
-        nextOptionalId(update.restrictedRoleId, current?.restricted_role_id),
+        nextOptionalId(update.caseRoleId, current?.case_role_id),
         nextOptionalId(update.adminChannelId, current?.admin_channel_id),
         nextOptionalId(update.verificationChannelId, current?.verification_channel_id),
         nextOptionalId(update.adminNotificationRoleId, current?.admin_notification_role_id),

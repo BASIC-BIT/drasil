@@ -72,7 +72,7 @@ export interface IntegrityAuditReport {
   readonly candidateCounts: {
     readonly pendingCases: number;
     readonly recentResolvedCases: number;
-    readonly restrictedMembers: number;
+    readonly caseRoleMembers: number;
     readonly activeRoleQuarantines: number;
     readonly queueItems: number;
   };
@@ -139,26 +139,26 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     });
     const findings: IntegrityAuditFinding[] = [];
     const liveUsers = await this.inspectLiveUsers(guild, this.collectUserIds(candidates, scope));
-    const restrictedMemberIds = this.collectRestrictedMemberIds(candidates.restrictedMembers);
+    const caseRoleMemberIds = this.collectCaseRoleMemberIds(candidates.caseRoleMembers);
     this.addLiveUserFetchFindings(liveUsers, findings);
 
     if (this.includesCaseChecks(scope)) {
       await this.auditPendingCases(
         candidates.pendingVerificationEvents,
         liveUsers,
-        serverConfig.restricted_role_id,
-        restrictedMemberIds,
-        !this.includesRestrictedChecks(scope),
+        serverConfig.case_role_id,
+        caseRoleMemberIds,
+        !this.includesCaseRoleChecks(scope),
         findings
       );
       this.auditResolvedCases(candidates.recentResolvedVerificationEvents, liveUsers, findings);
     }
 
-    if (this.includesRestrictedChecks(scope)) {
-      this.auditRestrictedMembers(
-        candidates.restrictedMembers,
+    if (this.includesCaseRoleChecks(scope)) {
+      this.auditCaseRoleMembers(
+        candidates.caseRoleMembers,
         liveUsers,
-        serverConfig.restricted_role_id,
+        serverConfig.case_role_id,
         findings
       );
       this.auditRoleQuarantines(candidates.activeRoleQuarantineSnapshots, liveUsers, findings);
@@ -182,7 +182,7 @@ export class IntegrityAuditService implements IIntegrityAuditService {
       candidateCounts: {
         pendingCases: candidates.pendingVerificationEvents.length,
         recentResolvedCases: candidates.recentResolvedVerificationEvents.length,
-        restrictedMembers: candidates.restrictedMembers.length,
+        caseRoleMembers: candidates.caseRoleMembers.length,
         activeRoleQuarantines: candidates.activeRoleQuarantineSnapshots.length,
         queueItems: candidates.moderationQueueItems.length,
       },
@@ -193,9 +193,9 @@ export class IntegrityAuditService implements IIntegrityAuditService {
   private async auditPendingCases(
     cases: IntegrityAuditVerificationEvent[],
     liveUsers: Map<string, LiveUserState>,
-    restrictedRoleId: string | null,
-    restrictedMemberIds: ReadonlySet<string>,
-    includeRestrictedRoleFindings: boolean,
+    caseRoleId: string | null,
+    caseRoleMemberIds: ReadonlySet<string>,
+    includeCaseRoleFindings: boolean,
     findings: IntegrityAuditFinding[]
   ): Promise<void> {
     for (const verificationEvent of cases) {
@@ -224,18 +224,18 @@ export class IntegrityAuditService implements IIntegrityAuditService {
       }
 
       if (
-        includeRestrictedRoleFindings &&
-        restrictedRoleId &&
-        restrictedMemberIds.has(verificationEvent.user_id) &&
+        includeCaseRoleFindings &&
+        caseRoleId &&
+        caseRoleMemberIds.has(verificationEvent.user_id) &&
         liveUser?.member.status === 'found' &&
-        !liveUser.member.value.roles.cache.has(restrictedRoleId)
+        !liveUser.member.value.roles.cache.has(caseRoleId)
       ) {
         findings.push(
           this.buildCaseFinding(
             'warning',
-            'pending_case_restricted_role_missing',
+            'pending_case_role_missing',
             verificationEvent,
-            'Pending case member does not currently have the configured restricted role.'
+            'Pending case member does not currently have the configured case role.'
           )
         );
       }
@@ -297,14 +297,14 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     }
   }
 
-  private auditRestrictedMembers(
+  private auditCaseRoleMembers(
     members: ServerMember[],
     liveUsers: Map<string, LiveUserState>,
-    restrictedRoleId: string | null,
+    caseRoleId: string | null,
     findings: IntegrityAuditFinding[]
   ): void {
     for (const member of members) {
-      if (!this.shouldAuditRestrictedMember(member)) {
+      if (!this.shouldAuditCaseRoleMember(member)) {
         continue;
       }
 
@@ -313,25 +313,25 @@ export class IntegrityAuditService implements IIntegrityAuditService {
       if (liveUser?.member.status === 'missing') {
         findings.push({
           severity: 'warning',
-          code: 'restricted_member_missing',
+          code: 'case_role_member_missing',
           subject: `member ${member.user_id}`,
           detail:
-            'Database marks this member restricted, but Discord does not show guild membership.',
+            'Database marks this member as having the case role, but Discord does not show guild membership.',
           userId: member.user_id,
         });
       }
 
       if (
-        restrictedRoleId &&
+        caseRoleId &&
         liveUser?.member.status === 'found' &&
-        !liveUser.member.value.roles.cache.has(restrictedRoleId)
+        !liveUser.member.value.roles.cache.has(caseRoleId)
       ) {
         findings.push({
           severity: 'warning',
-          code: 'restricted_member_role_missing',
+          code: 'case_role_member_role_missing',
           subject: `member ${member.user_id}`,
           detail:
-            'Database marks this member restricted, but the configured restricted role is absent.',
+            'Database marks this member as having the case role, but the configured case role is absent.',
           userId: member.user_id,
         });
       }
@@ -339,9 +339,9 @@ export class IntegrityAuditService implements IIntegrityAuditService {
       if (member.verification_status !== VerificationStatus.PENDING) {
         findings.push({
           severity: 'warning',
-          code: 'restricted_member_resolved_status',
+          code: 'case_role_member_resolved_status',
           subject: `member ${member.user_id}`,
-          detail: `Database marks this member restricted while verification_status is ${member.verification_status ?? 'unset'}.`,
+          detail: `Database marks this member as having the case role while verification_status is ${member.verification_status ?? 'unset'}.`,
           userId: member.user_id,
         });
       }
@@ -544,9 +544,9 @@ export class IntegrityAuditService implements IIntegrityAuditService {
         userIds.add(verificationEvent.user_id);
       }
     }
-    if (this.includesRestrictedChecks(scope)) {
-      for (const member of candidates.restrictedMembers) {
-        if (!this.shouldAuditRestrictedMember(member)) {
+    if (this.includesCaseRoleChecks(scope)) {
+      for (const member of candidates.caseRoleMembers) {
+        if (!this.shouldAuditCaseRoleMember(member)) {
           continue;
         }
         userIds.add(member.user_id);
@@ -558,10 +558,10 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     return userIds;
   }
 
-  private collectRestrictedMemberIds(members: ServerMember[]): Set<string> {
+  private collectCaseRoleMemberIds(members: ServerMember[]): Set<string> {
     const userIds = new Set<string>();
     for (const member of members) {
-      if (member.is_restricted && this.shouldAuditRestrictedMember(member)) {
+      if (member.case_role_active && this.shouldAuditCaseRoleMember(member)) {
         userIds.add(member.user_id);
       }
     }
@@ -743,7 +743,7 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     return ADMIN_ACTION_EXEMPT_RESOLUTION_SOURCES.has(source);
   }
 
-  private shouldAuditRestrictedMember(member: ServerMember): boolean {
+  private shouldAuditCaseRoleMember(member: ServerMember): boolean {
     return member.verification_status !== VerificationStatus.BANNED;
   }
 
@@ -751,8 +751,8 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     return scope === 'all' || scope === 'cases';
   }
 
-  private includesRestrictedChecks(scope: IntegrityAuditScope): boolean {
-    return scope === 'all' || scope === 'restricted';
+  private includesCaseRoleChecks(scope: IntegrityAuditScope): boolean {
+    return scope === 'all' || scope === 'case_role';
   }
 
   private includesQueueChecks(scope: IntegrityAuditScope): boolean {

@@ -21,6 +21,7 @@ import { NotificationPresentationBuilder } from '../services/NotificationPresent
 import { type MessageReportAttachment } from '../services/SecurityActionService';
 import { ReportSubmissionService } from '../services/ReportSubmissionService';
 import { IThreadManager } from '../services/ThreadManager';
+import { formatDiscordUserIdentity } from '../utils/discordUserIdentity';
 import {
   REPORT_MESSAGE_REASON_FIELD_ID,
   USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH,
@@ -568,14 +569,7 @@ export class ReportInteractionHandler {
   }
 
   private formatReportTargetLabel(member: GuildMember): string {
-    const displayName = this.readOptionalString((member as { displayName?: unknown }).displayName);
-    const username = this.readOptionalString((member.user as { username?: unknown }).username);
-    const label = [displayName, username].find((name) => Boolean(name));
-    return `<@${member.id}> (${label ?? 'unknown user'}) (${member.id})`;
-  }
-
-  private readOptionalString(value: unknown): string | null {
-    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+    return formatDiscordUserIdentity(member);
   }
 
   private async fetchReportMessage(

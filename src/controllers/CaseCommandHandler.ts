@@ -7,11 +7,7 @@ import {
   Role,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
-import {
-  AdminCaseAction,
-  ISecurityActionService,
-  RoleIntakeProgress,
-} from '../services/SecurityActionService';
+import { ISecurityActionService, RoleIntakeProgress } from '../services/SecurityActionService';
 import { requestSlashCommandConfirmation } from '../utils/slashCommandConfirmations';
 
 type ReplyGuildInstallRequired = (interaction: ChatInputCommandInteraction) => Promise<void>;
@@ -65,8 +61,7 @@ export class CaseCommandHandler {
 
     const subcommand = interaction.options.getSubcommand(true);
     if (subcommand === 'open') {
-      const restrict = interaction.options.getBoolean('restrict') ?? true;
-      await this.handleCaseUserCommand(interaction, guild, restrict ? 'restrict' : 'open_case');
+      await this.handleCaseUserCommand(interaction, guild);
       return;
     }
 
@@ -93,8 +88,7 @@ export class CaseCommandHandler {
 
   private async handleCaseUserCommand(
     interaction: ChatInputCommandInteraction,
-    guild: Guild,
-    action: AdminCaseAction
+    guild: Guild
   ): Promise<void> {
     const targetUser = interaction.options.getUser('user', true);
     const reason = interaction.options.getString('reason')?.trim() || undefined;
@@ -108,12 +102,9 @@ export class CaseCommandHandler {
     }
 
     await requestSlashCommandConfirmation(interaction, {
-      message:
-        action === 'restrict'
-          ? `Open a case for ${targetUser.tag} and restrict them pending review?`
-          : `Open an unrestricted case for ${targetUser.tag}?`,
-      confirmLabel: action === 'restrict' ? 'Open And Restrict' : 'Open Case',
-      confirmStyle: action === 'restrict' ? ButtonStyle.Danger : ButtonStyle.Primary,
+      message: `Open a case for ${targetUser.tag} and apply the case role?`,
+      confirmLabel: 'Open Case',
+      confirmStyle: ButtonStyle.Primary,
       execute: async (buttonInteraction) => {
         await buttonInteraction.update({
           content: `Opening case for ${targetUser.tag}...`,
@@ -124,19 +115,16 @@ export class CaseCommandHandler {
             targetMember,
             interaction.user,
             {
-              action,
+              action: 'open_case',
               reason,
             }
           );
           if (!result.opened) {
             throw new Error('Case flow returned false');
           }
-          const content =
-            action === 'restrict'
-              ? result.restricted
-                ? `Opened a case for ${targetUser.tag} and restricted them pending review.`
-                : `Opened a case for ${targetUser.tag}, but I could not apply the restricted role. Check bot permissions and role hierarchy.`
-              : `Opened an unrestricted case for ${targetUser.tag}.`;
+          const content = result.caseRoleActive
+            ? `Opened a case for ${targetUser.tag} and applied the case role.`
+            : `Opened a case for ${targetUser.tag}, but I could not apply the case role. Check bot permissions and role hierarchy.`;
           await buttonInteraction.editReply({
             content,
             allowedMentions: { parse: [] },
@@ -248,11 +236,11 @@ export class CaseCommandHandler {
     }
 
     const serverConfig = await this.configService.getServerConfig(guild.id);
-    if (!serverConfig.restricted_role_id) {
+    if (!serverConfig.case_role_id) {
       return null;
     }
 
-    return await guild.roles.fetch(serverConfig.restricted_role_id).catch(() => null);
+    return await guild.roles.fetch(serverConfig.case_role_id).catch(() => null);
   }
 
   private async handleCaseRoleIntakeCommand(
@@ -263,22 +251,20 @@ export class CaseCommandHandler {
     if (!role) {
       await interaction.reply({
         content:
-          'No role was provided and this server does not have a configured restricted role. Provide `role` or run setup first.',
+          'No role was provided and this server does not have a configured case role. Provide `role` or run setup first.',
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
-    const rawAction = interaction.options.getString('action') ?? 'open_case';
-    const action: AdminCaseAction =
-      rawAction === 'open_case' || rawAction === 'restrict' ? rawAction : 'open_case';
+    const action = 'open_case' as const;
     const execute = interaction.options.getBoolean('execute') ?? false;
     const limit = interaction.options.getInteger('limit') ?? undefined;
     const reason = interaction.options.getString('reason')?.trim() || undefined;
 
     if (execute) {
       await requestSlashCommandConfirmation(interaction, {
-        message: `Execute role intake for ${role.name}? This will ${action === 'restrict' ? 'open cases and restrict eligible members' : 'open cases for eligible members'}${limit ? `, up to ${limit} members` : ''}.`,
+        message: `Execute role intake for ${role.name}? This will open cases and apply the case role to eligible members${limit ? `, up to ${limit} members` : ''}.`,
         confirmLabel: 'Execute Intake',
         confirmStyle: ButtonStyle.Danger,
         execute: async (buttonInteraction) => {
@@ -317,7 +303,7 @@ export class CaseCommandHandler {
     role: Role,
     moderator: ChatInputCommandInteraction['user'],
     reason: string | undefined,
-    action: AdminCaseAction,
+    action: 'open_case',
     execute: boolean,
     limit: number | undefined
   ): Promise<void> {
@@ -367,7 +353,7 @@ export class CaseCommandHandler {
     batchId: string;
     roleId: string;
     roleName: string;
-    action: AdminCaseAction;
+    action: string;
     execute: boolean;
     totalMembers: number;
     eligibleMembers: number;

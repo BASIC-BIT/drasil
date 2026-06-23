@@ -46,7 +46,6 @@ import {
   DEFAULT_REPORT_AI_MAX_IMAGE_BYTES,
   DEFAULT_REPORT_AI_MAX_IMAGES,
   DEFAULT_REPORT_AI_OPEN_CASE_THRESHOLD,
-  DEFAULT_REPORT_AI_RESTRICT_THRESHOLD,
   DEFAULT_REPORT_AI_TRIAGE_ENABLED,
   REPORT_AI_ANALYZE_IMAGES_SETTING_KEY,
   REPORT_AI_ANALYZE_TEXT_SETTING_KEY,
@@ -54,14 +53,13 @@ import {
   REPORT_AI_MAX_IMAGE_BYTES_SETTING_KEY,
   REPORT_AI_MAX_IMAGES_SETTING_KEY,
   REPORT_AI_OPEN_CASE_THRESHOLD_SETTING_KEY,
-  REPORT_AI_RESTRICT_THRESHOLD_SETTING_KEY,
   REPORT_AI_TRIAGE_ENABLED_SETTING_KEY,
 } from '../utils/reportAiSettings';
 import {
-  RESTRICTED_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY,
-  RESTRICTED_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY,
-  RESTRICTED_LOCKDOWN_ENABLED_SETTING_KEY,
-} from '../utils/restrictedLockdownSettings';
+  CASE_ROLE_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY,
+  CASE_ROLE_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY,
+  CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY,
+} from '../utils/caseRoleLockdownSettings';
 import {
   DEFAULT_ROLE_QUARANTINE_MODE,
   ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY,
@@ -197,11 +195,11 @@ export interface IConfigService {
   getVerificationChannel(guildId: string): Promise<TextChannel | undefined>;
 
   /**
-   * Get the restricted role for a server
+   * Get the case role for a server
    * @param guildId The Discord guild ID
-   * @returns The restricted role
+   * @returns The case role
    */
-  getRestrictedRole(guildId: string): Promise<Role | null>;
+  getCaseRole(guildId: string): Promise<Role | null>;
 }
 
 /**
@@ -318,12 +316,11 @@ export class ConfigService implements IConfigService {
       [REPORT_AI_ANALYZE_IMAGES_SETTING_KEY]: true,
       [REPORT_AI_MAX_ACTION_SETTING_KEY]: 'hints',
       [REPORT_AI_OPEN_CASE_THRESHOLD_SETTING_KEY]: DEFAULT_REPORT_AI_OPEN_CASE_THRESHOLD,
-      [REPORT_AI_RESTRICT_THRESHOLD_SETTING_KEY]: DEFAULT_REPORT_AI_RESTRICT_THRESHOLD,
       [REPORT_AI_MAX_IMAGES_SETTING_KEY]: DEFAULT_REPORT_AI_MAX_IMAGES,
       [REPORT_AI_MAX_IMAGE_BYTES_SETTING_KEY]: DEFAULT_REPORT_AI_MAX_IMAGE_BYTES,
-      [RESTRICTED_LOCKDOWN_ENABLED_SETTING_KEY]: false,
-      [RESTRICTED_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY]: [],
-      [RESTRICTED_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY]: [],
+      [CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY]: false,
+      [CASE_ROLE_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY]: [],
+      [CASE_ROLE_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY]: [],
       [ROLE_QUARANTINE_MODE_SETTING_KEY]: DEFAULT_ROLE_QUARANTINE_MODE,
       [ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY]: [],
       [ROLE_GATE_ENABLED_SETTING_KEY]: DEFAULT_ROLE_GATE_ENABLED,
@@ -335,7 +332,7 @@ export class ConfigService implements IConfigService {
 
     return {
       guild_id: guildId,
-      restricted_role_id: null,
+      case_role_id: null,
       admin_channel_id: null,
       verification_channel_id: null,
       admin_notification_role_id: null,
@@ -496,14 +493,14 @@ export class ConfigService implements IConfigService {
     return channel as TextChannel;
   }
 
-  public async getRestrictedRole(guildId: string): Promise<Role | null> {
+  public async getCaseRole(guildId: string): Promise<Role | null> {
     const server = await this.getServerConfig(guildId);
-    if (!server.restricted_role_id) {
+    if (!server.case_role_id) {
       return null;
     }
 
     const guild = await this.discordClient.guilds.fetch(guildId);
-    const role = await guild.roles.fetch(server.restricted_role_id);
+    const role = await guild.roles.fetch(server.case_role_id);
     return role;
   }
 
@@ -530,7 +527,7 @@ export class ConfigService implements IConfigService {
         const defaultConfig = this.createDefaultConfig(guildId);
         const configForDb = {
           guild_id: defaultConfig.guild_id,
-          restricted_role_id: defaultConfig.restricted_role_id,
+          case_role_id: defaultConfig.case_role_id,
           admin_channel_id: defaultConfig.admin_channel_id,
           verification_channel_id: defaultConfig.verification_channel_id,
           admin_notification_role_id: defaultConfig.admin_notification_role_id,

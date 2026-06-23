@@ -98,8 +98,8 @@ describe('RoleIntakeProcessor (unit)', () => {
     };
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
-      restrictionAttempted: false,
-      restricted: false,
+      caseRoleAttempted: true,
+      caseRoleActive: true,
     });
     const processor = new RoleIntakeProcessor(verificationEventRepository, openAdminCase);
 
@@ -108,7 +108,7 @@ describe('RoleIntakeProcessor (unit)', () => {
       moderator,
       action: 'open_case',
       execute: true,
-      reason: 'restricted role import',
+      reason: 'case role import',
       delayMs: 0,
     });
 
@@ -116,7 +116,7 @@ describe('RoleIntakeProcessor (unit)', () => {
     expect(result.failed).toBe(0);
     expect(openAdminCase).toHaveBeenCalledWith(member, moderator, {
       action: 'open_case',
-      reason: 'restricted role import',
+      reason: 'case role import',
       metadata: {
         type: 'admin_role_intake',
         bulk_intake: true,
@@ -127,7 +127,7 @@ describe('RoleIntakeProcessor (unit)', () => {
     });
   });
 
-  it('restricts active cases during role intake when restrict is requested', async () => {
+  it('skips active cases during role intake', async () => {
     const guildId = 'guild-role-intake-restrict-active';
     const member = buildMember(guildId, 'user-role-intake-active');
     const role = buildRole(guildId, [member]);
@@ -139,26 +139,22 @@ describe('RoleIntakeProcessor (unit)', () => {
     };
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
-      restrictionAttempted: true,
-      restricted: true,
+      caseRoleAttempted: true,
+      caseRoleActive: true,
     });
     const processor = new RoleIntakeProcessor(verificationEventRepository, openAdminCase);
 
     const result = await processor.intakeRoleMembers({
       role,
       moderator,
-      action: 'restrict',
+      action: 'open_case',
       execute: true,
       delayMs: 0,
     });
 
-    expect(result.opened).toBe(1);
-    expect(result.skippedActiveCases).toBe(0);
-    expect(openAdminCase).toHaveBeenCalledWith(
-      member,
-      moderator,
-      expect.objectContaining({ action: 'restrict' })
-    );
+    expect(result.opened).toBe(0);
+    expect(result.skippedActiveCases).toBe(1);
+    expect(openAdminCase).not.toHaveBeenCalled();
   });
 
   it('records a failure and continues when one role intake member times out', async () => {
@@ -176,8 +172,8 @@ describe('RoleIntakeProcessor (unit)', () => {
 
       return Promise.resolve({
         opened: true,
-        restrictionAttempted: false,
-        restricted: false,
+        caseRoleAttempted: true,
+        caseRoleActive: true,
       });
     });
     const onProgress = jest.fn();

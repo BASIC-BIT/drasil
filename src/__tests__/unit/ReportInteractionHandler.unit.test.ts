@@ -692,7 +692,7 @@ describe('ReportInteractionHandler (unit)', () => {
       submittedById: 'reporter-1',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Submitted report for <@user-1> (test-user) (user-1).',
+      content: 'Submitted report for <@user-1> (ID: `user-1`; Discord username: `test-user`).',
     });
   });
 

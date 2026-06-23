@@ -20,16 +20,15 @@ detections, and cases, see `docs/moderation-flow.md`.
    - `off`: skip automatic detection entirely.
    - `record_only`: persist suspicious detections only.
    - `notify_only`: persist suspicious detections and send/update an admin alert.
-   - `restrict`: restrict the user, create a review case, create a thread, and
-     notify admins.
+   - `restrict`: open a case by applying the configured case role, creating a
+     user-facing thread, and notifying admins.
 5. `SecurityActionService` handles case-based modes:
    - Ensures `server`, `user`, and `server_member` records exist.
    - Ensures a `detection_event` record exists (creates one if needed).
    - If an active case exists, links the detection event to that case and
      updates the admin notification.
-   - Otherwise creates a `verification_event` case (PENDING), optionally
-     restricts the user, creates a verification thread, and upserts the admin
-     notification.
+   - Otherwise creates a `verification_event` case (PENDING), applies the case
+     role, creates a verification thread, and upserts the admin notification.
 
 ## Recent message context
 
@@ -90,8 +89,8 @@ if one is set.
 Admin-opened cases and bulk role intake are explicit moderator/server workflows,
 not GPT detections.
 
-- `/case open` creates `detection_type = ADMIN_CASE` events. It restricts by
-  default; pass `restrict:false` to open an unrestricted case.
+- `/case open` creates `detection_type = ADMIN_CASE` events and applies the
+  configured case role before opening the user-facing case thread.
 - `/case intake-role` creates `detection_type = ROLE_INTAKE` events with source
   role ID/name and batch metadata.
 - Admin-facing reasons render Discord mentions for the moderator and, for role
@@ -168,8 +167,8 @@ case-review workflow by default.
 3. If the reported user already has an active case in the server, Drasil links
    the report to that case and updates the case notification.
 4. Otherwise Drasil posts or updates an observed alert with moderator action
-   buttons. No verification event or thread is created until a moderator opens a
-   case or restricts the user.
+   buttons. No verification event, case role, or thread is created until a
+   moderator opens a case.
 
 See `docs/report-ux-journeys.md` for the product-level user journeys and the
 recommended future direction for report-only cases.
@@ -193,7 +192,7 @@ recommended future direction for report-only cases.
    report. `No` returns the intake to evidence collection.
 7. Confirmed intake submissions create a normal `USER_REPORT` detection event.
    The default `report_intake_confirmed_response_mode` is `observed_alert`, which
-   matches legacy reports. Servers can opt into `open_case` or `restrict`, but
+   matches legacy reports. Servers can opt into `open_case` or `kick`, but
    escalation only happens when report AI recommendations and configured thresholds
    allow it. There is no auto-ban path.
 
@@ -202,7 +201,7 @@ recommended future direction for report-only cases.
 1. `InteractionHandler` or `CommandHandler` calls `UserModerationService`.
 2. Verify:
    - Update the case to VERIFIED with `resolved_by` and `resolved_at`.
-   - Remove restricted role and update `server_member`.
+   - Remove the case role and update `server_member`.
    - Apply role-gate cleanup when configured.
    - Resolve the verification thread and update the admin notification.
    - Record the admin action.
@@ -216,14 +215,14 @@ recommended future direction for report-only cases.
 
 1. `InteractionHandler` calls `SecurityActionService.reopenVerification`.
 2. The event is set back to PENDING, the thread is reopened, the user is
-   re-restricted, and the notification is updated.
+   case role is reapplied, and the notification is updated.
 
 ## Failure handling (current)
 
 We fail fast and let errors bubble up. There is no retry or compensation layer
 yet. The most likely future hardening points are:
 
-- Restricted role assignment/removal
+- Case role assignment/removal
 - Thread creation/reopen/resolve
 - Notification upsert/logging
 - Discord ban action

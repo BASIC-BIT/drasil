@@ -87,14 +87,6 @@ export class ReportAiAnalyzer {
       return 'manual_review';
     }
 
-    if (action === 'restrict') {
-      if (settings.maxAction === 'restrict' && confidence >= settings.restrictThreshold) {
-        return 'restrict';
-      }
-
-      return confidence >= settings.openCaseThreshold ? 'open_case' : 'manual_review';
-    }
-
     return confidence >= settings.openCaseThreshold ? 'open_case' : 'manual_review';
   }
 }

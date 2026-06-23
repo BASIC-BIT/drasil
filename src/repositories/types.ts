@@ -8,7 +8,7 @@ import { Prisma } from '../db/prisma';
  */
 export interface Server {
   guild_id: string; // Discord guild/server ID (primary key)
-  restricted_role_id: string | null; // ID of role used for restricted users
+  case_role_id: string | null; // ID of role applied while a user has an active case
   admin_channel_id: string | null; // ID of admin notification channel
   verification_channel_id: string | null; // ID of verification channel
   admin_notification_role_id: string | null; // ID of role to ping for notifications
@@ -64,21 +64,23 @@ export interface ServerSettings {
   report_ai_triage_enabled?: boolean;
   report_ai_analyze_text?: boolean;
   report_ai_analyze_images?: boolean;
-  report_ai_max_action?: 'off' | 'hints' | 'open_case' | 'restrict';
+  report_ai_max_action?: 'off' | 'hints' | 'open_case';
   report_ai_open_case_threshold?: number;
-  report_ai_restrict_threshold?: number;
   report_ai_max_images?: number;
   report_ai_max_image_bytes?: number;
   report_intake_agent_enabled?: boolean;
   report_intake_agent_debounce_ms?: number;
   report_intake_agent_min_interval_ms?: number;
-  report_intake_confirmed_response_mode?: 'observed_alert' | 'open_case' | 'restrict' | 'kick';
+  report_intake_confirmed_response_mode?: 'observed_alert' | 'open_case' | 'kick';
+  manual_intake_enabled?: boolean;
+  manual_intake_role_id?: string | null;
+  manual_intake_grace_period_seconds?: number;
   report_instructions_channel_id?: string | null;
   report_instructions_message_id?: string | null;
-  restricted_lockdown_enabled?: boolean;
-  restricted_lockdown_allowed_channel_ids?: string[];
-  restricted_lockdown_allowed_category_ids?: string[];
-  role_quarantine_mode?: 'off' | 'audit_only' | 'automatic';
+  case_role_lockdown_enabled?: boolean;
+  case_role_lockdown_allowed_channel_ids?: string[];
+  case_role_lockdown_allowed_category_ids?: string[];
+  role_quarantine_mode?: 'off' | 'on' | 'audit_only';
   role_quarantine_exempt_role_ids?: string[];
   role_gate_enabled?: boolean;
   honeypot_role_id?: string | null;
@@ -122,14 +124,14 @@ export interface ServerMember {
   user_id: string; // Discord user ID (primary key with server_id)
   join_date: Date | null; // When the user joined the server (Use Date type)
   reputation_score?: number; // Server-specific reputation score (-1.0 to 1.0)
-  is_restricted?: boolean; // Whether user is currently restricted
+  case_role_active?: boolean; // Whether the user currently has the case role
   last_verified_at: string | null; // Last time user was verified
   last_message_at: string | null; // Last time user sent a message
   message_count?: number; // Total message count in server
   verification_status?: VerificationStatus; // Add missing status field (use enum from below)
   last_status_change: Date | null; // When the status was last changed (Use Date type)
   // Remove fields not present in the database schema
-  // restriction_reason: string | null;
+  // case_role_reason: string | null;
   // moderator_id: string | null;
   created_by: string | null; // Discord ID of who created the record
   updated_by: string | null; // Discord ID of who last updated the record

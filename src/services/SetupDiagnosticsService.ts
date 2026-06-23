@@ -5,6 +5,7 @@ import { Server } from '../repositories/types';
 import { TYPES } from '../di/symbols';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
+import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
 
 export type SetupDiagnosticSeverity = 'error' | 'warning';
@@ -24,8 +25,8 @@ export interface SetupDiagnosticReport {
 }
 
 export interface SetupCandidate {
-  readonly restrictedRoleId?: string | null;
-  readonly willCreateRestrictedRole?: boolean;
+  readonly caseRoleId?: string | null;
+  readonly willCreateCaseRole?: boolean;
   readonly adminChannelId: string | null;
   readonly verificationChannelId?: string | null;
   readonly willCreateVerificationChannel?: boolean;
@@ -122,7 +123,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
 
     this.checkGuildPermissions(botMember, issues);
-    await this.checkRestrictedRole(guild, botMember, serverConfig, issues);
+    await this.checkCaseRole(guild, botMember, serverConfig, issues);
     await this.checkConfiguredTextChannel(
       guild,
       botMember,
@@ -169,6 +170,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
 
     await this.checkCaseResponderRoles(guild, serverConfig, issues);
+    await this.checkManualIntakeRole(guild, serverConfig, issues);
     await this.checkRoleGateRoles(guild, botMember, serverConfig, issues);
 
     return this.toReport(guild.id, issues);
@@ -191,7 +193,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
 
     this.checkGuildPermissions(botMember, issues);
-    await this.checkRestrictedRoleCandidate(guild, botMember, candidate, issues);
+    await this.checkCaseRoleCandidate(guild, botMember, candidate, issues);
     await this.checkConfiguredTextChannel(
       guild,
       botMember,
@@ -231,7 +233,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       issues.push({
         severity: 'error',
         code: 'guild-manage-roles',
-        message: 'Drasil is missing Manage Roles, so it cannot apply the restricted role.',
+        message: 'Drasil is missing Manage Roles, so it cannot apply the case role.',
       });
     }
 
@@ -270,83 +272,113 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
   }
 
-  private async checkRestrictedRole(
+  private async checkCaseRole(
     guild: Guild,
     botMember: GuildMember,
     serverConfig: Server,
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
-    await this.checkRestrictedRoleId(guild, botMember, serverConfig.restricted_role_id, issues);
+    await this.checkCaseRoleId(guild, botMember, serverConfig.case_role_id, issues);
   }
 
-  private async checkRestrictedRoleCandidate(
+  private async checkCaseRoleCandidate(
     guild: Guild,
     botMember: GuildMember,
     candidate: SetupCandidate,
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
-    if (candidate.restrictedRoleId) {
-      await this.checkRestrictedRoleId(guild, botMember, candidate.restrictedRoleId, issues);
+    if (candidate.caseRoleId) {
+      await this.checkCaseRoleId(guild, botMember, candidate.caseRoleId, issues);
       return;
     }
 
-    if (candidate.willCreateRestrictedRole) {
+    if (candidate.willCreateCaseRole) {
       return;
     }
 
     issues.push({
       severity: 'error',
-      code: 'restricted-role-missing',
-      message: 'Restricted role is not configured.',
+      code: 'case-role-missing',
+      message: 'Case role is not configured.',
     });
   }
 
-  private async checkRestrictedRoleId(
+  private async checkCaseRoleId(
     guild: Guild,
     botMember: GuildMember,
-    restrictedRoleId: string | null | undefined,
+    caseRoleId: string | null | undefined,
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
-    if (!restrictedRoleId) {
+    if (!caseRoleId) {
       issues.push({
         severity: 'error',
-        code: 'restricted-role-missing',
-        message: 'Restricted role is not configured.',
+        code: 'case-role-missing',
+        message: 'Case role is not configured.',
       });
       return;
     }
 
-    const restrictedRole = await guild.roles.fetch(restrictedRoleId).catch(() => null);
-    if (!restrictedRole) {
+    const caseRole = await guild.roles.fetch(caseRoleId).catch(() => null);
+    if (!caseRole) {
       issues.push({
         severity: 'error',
-        code: 'restricted-role-not-found',
-        message: `Restricted role ${restrictedRoleId} no longer exists.`,
+        code: 'case-role-not-found',
+        message: `Case role ${caseRoleId} no longer exists.`,
       });
       return;
     }
 
-    if (restrictedRole.id === guild.id) {
+    if (caseRole.id === guild.id) {
       issues.push({
         severity: 'error',
-        code: 'restricted-role-everyone',
-        message: 'Restricted role cannot be @everyone.',
+        code: 'case-role-everyone',
+        message: 'Case role cannot be @everyone.',
       });
     }
 
-    if (restrictedRole.managed) {
+    if (caseRole.managed) {
       issues.push({
         severity: 'error',
-        code: 'restricted-role-managed',
-        message: `Restricted role <@&${restrictedRole.id}> is managed by an integration and cannot be assigned by Drasil.`,
+        code: 'case-role-managed',
+        message: `Case role <@&${caseRole.id}> is managed by an integration and cannot be assigned by Drasil.`,
       });
     }
 
-    if (botMember.roles.highest.comparePositionTo(restrictedRole) <= 0) {
+    if (botMember.roles.highest.comparePositionTo(caseRole) <= 0) {
       issues.push({
         severity: 'error',
-        code: 'restricted-role-hierarchy',
-        message: `Move the Drasil role above the selected restricted role <@&${restrictedRole.id}>.`,
+        code: 'case-role-hierarchy',
+        message: `Move the Drasil role above the selected case role <@&${caseRole.id}>.`,
+      });
+    }
+  }
+
+  private async checkManualIntakeRole(
+    guild: Guild,
+    serverConfig: Server,
+    issues: SetupDiagnosticIssue[]
+  ): Promise<void> {
+    const settings = getManualIntakeSettings(serverConfig.settings);
+    if (!settings.enabled || !settings.roleId) {
+      return;
+    }
+
+    if (settings.roleId === serverConfig.case_role_id) {
+      issues.push({
+        severity: 'warning',
+        code: 'manual-intake-role-is-case-role',
+        message:
+          'Manual intake trigger role matches the case role. Use a separate non-case role such as @Pending Investigation.',
+      });
+      return;
+    }
+
+    const role = await guild.roles.fetch(settings.roleId).catch(() => null);
+    if (!role) {
+      issues.push({
+        severity: 'warning',
+        code: 'manual-intake-role-not-found',
+        message: `Manual intake trigger role ${settings.roleId} no longer exists.`,
       });
     }
   }

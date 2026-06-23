@@ -4,7 +4,7 @@ This note evaluates Drasil's report UX after adding server-installed and user-in
 
 ## Product Boundary
 
-Reports are human-submitted signals, not proof. A report can open moderator review, but it should not automatically restrict or ban a user unless a moderator or a separate configured detector takes that action.
+Reports are human-submitted signals, not proof. A report can open moderator review, but it should not automatically open a case, apply the case role, kick, or ban a user unless a moderator or a separate configured detector takes that action.
 
 External reports from DMs or group DMs are even weaker signals because they cross server trust boundaries. They must remain opt-in per server and review-only.
 
@@ -14,16 +14,16 @@ Reporter:
 The user who submits `/report`, `Report User`, or `Report Message`. They need fast submission, clear confirmation, and confidence that the report reached the right place.
 
 Reported user:
-The user being reported or flagged. They should not be notified for a report-only review. If moderators restrict or ban them through the case flow, they need a visible path to respond when the action is reversible.
+The user being reported or flagged. They should not be notified for a report-only review. If moderators open a case, Drasil applies the case role and gives them a visible path to respond. If moderators ban or kick directly from an alert, the action is final enough that no user-facing case thread is created first.
 
 Moderator:
-The person triaging reports and detections. They need enough context to decide whether to ignore, watch, restrict, verify, or ban. They also need low-noise action controls.
+The person triaging reports and detections. They need enough context to decide whether to ignore, watch, open a case, verify, kick, or ban. They also need low-noise action controls.
 
 Server admin:
 The person configuring Drasil. They need safe defaults, clear opt-in boundaries, and predictable server-specific behavior.
 
 Bot operator:
-The maintainer watching deployments, logs, permissions, and Discord API failures. They need failure modes that do not leave users restricted without a visible path.
+The maintainer watching deployments, logs, permissions, and Discord API failures. They need failure modes that do not leave users with the case role but no visible path.
 
 ## Current Journeys
 
@@ -33,8 +33,8 @@ The maintainer watching deployments, logs, permissions, and Discord API failures
 2. Drasil creates a `USER_REPORT` detection event for that server.
 3. If the reported user already has an active case, Drasil links the report to that case and updates the case notification.
 4. Otherwise Drasil posts or updates a moderator-facing observed alert with action buttons.
-5. Reported user is not added, mentioned, restricted, or notified.
-6. Moderators decide whether to dismiss, mark false positive, open a case, restrict, ban, or inspect history.
+5. Reported user is not added, mentioned, assigned the case role, or notified.
+6. Moderators decide whether to dismiss, mark false positive, open a case, kick, ban, or inspect history.
 
 Current UX result:
 Good for privacy and low clutter. Reports start as triage alerts instead of creating a thread for every report.
@@ -68,7 +68,7 @@ Fast when reasons are optional. Awkward but honest when reasons are required.
 2. Drasil opens a modal for the reason.
 3. Drasil creates a server-local `USER_REPORT` detection event.
 4. If there is no active case for the reported user, Drasil posts or updates a moderator-facing observed alert.
-5. Reported user is not added, mentioned, restricted, or notified.
+5. Reported user is not added, mentioned, assigned the case role, or notified.
 
 Current UX result:
 The reporter gets a familiar Discord-native report flow. Moderators get preserved message context without automatic thread creation.
@@ -98,7 +98,7 @@ Good low-commitment signal for moderators. It avoids case clutter but may be eas
 2. Drasil identifies opted-in servers where the reported user is known.
 3. Each opted-in server gets the same moderator-facing observed alert as `notify_only`.
 4. No case thread is created by default.
-5. No automatic restriction is applied.
+5. No automatic case role is applied.
 
 Current UX result:
 Currently equivalent to `notify_only`; retained as a separate mode for compatibility and future UX polish. External `open_case` does not create a case thread yet.
@@ -106,13 +106,12 @@ Currently equivalent to `notify_only`; retained as a separate mode for compatibi
 ### Moderator Escalates A Report Case
 
 1. Moderator reviews the report alert or existing case.
-2. Moderator opens a case, restricts, lifts restriction, or bans the reported user.
-3. If the moderator opens a case without restriction, Drasil creates a normal user-visible case thread and leaves the user unrestricted.
-4. If the moderator restricts, Drasil creates or reuses the normal user-visible case thread before applying the restriction.
-5. If the moderator bans directly from an alert, Drasil bans and logs the action without creating a user-visible verification thread.
+2. Moderator opens a case, kicks, or bans the reported user.
+3. If the moderator opens a case, Drasil applies the case role and creates a normal user-visible case thread.
+4. If the moderator bans or kicks directly from an alert, Drasil logs the action without creating a user-visible verification thread.
 
 Current UX result:
-This is the critical safety invariant. Report-only stays quiet until a moderator opens a case or restricts; opening a case creates the same visible case surface whether or not the user is restricted.
+This is the critical safety invariant. Report-only stays quiet until a moderator opens a case; opening a case always applies the case role and creates the same visible case surface.
 
 ## Previous Implementation Tradeoff
 
@@ -141,11 +140,10 @@ Report-only intake starts as an observed alert instead of immediately opening a 
 1. Report creates a `USER_REPORT` detection event.
 2. Drasil posts or updates a moderator-facing observed alert embed with report context and action buttons.
 3. No verification event or thread is created yet.
-4. Moderator can use the existing observed alert actions: `Open Case`, `Restrict`, `Ban`, `Dismiss...`, and `History`.
+4. Moderator can use the existing observed alert actions: `Open Case`, `Kick`, `Ban`, `Dismiss...`, and `History`.
 5. `Dismiss...` keeps the existing flow: `Dismiss Alert`, `False Positive`, and undo.
-6. `Restrict` creates or reuses a case, restricts the user, and creates a user-visible verification thread.
-7. `Ban` bans and logs the action without creating a user-visible thread.
-8. `Open Case` is the deliberate path for moderators who want a normal case without immediately restricting the user.
+6. `Open Case` creates or reuses a case, applies the case role, and creates a user-visible verification thread.
+7. `Kick` or `Ban` logs the action without creating a user-visible thread.
 
 Benefits:
 
@@ -157,7 +155,7 @@ Benefits:
 Costs:
 
 - Report submissions would no longer immediately create a pending case, so any code or docs that assume user reports always create cases must be updated.
-- `Open Case` needs a clear product meaning for reports: it creates a normal case and user-visible thread without applying restriction.
+- `Open Case` needs a clear product meaning for reports: it creates a normal case, applies the case role, and opens a user-visible thread.
 - Legacy report review threads remain as a safety fallback for existing cases, not the default workspace for new cases.
 
 ## Recommendation
@@ -167,14 +165,12 @@ Keep report-only intake on the existing observed alert UX. Do not introduce a ne
 Target behavior:
 
 - Report submission: moderator-facing observed alert embed with action buttons, no case/thread by default.
-- Moderator opens case: create a normal user-visible case thread without restricting the user.
-- Moderator restricts: create or reuse the normal case thread and apply the restricted role.
-- Moderator lifts restriction: keep the case open and remove the restricted role.
-- Moderator bans: ban and log the action, with no user-visible verification thread.
+- Moderator opens case: apply the case role and create a normal user-visible case thread.
+- Moderator kicks or bans: log the action, with no user-visible verification thread.
 - External `notify_only`: observed alert with action buttons, no case thread.
 - External `open_case`: currently the same observed-alert behavior as `notify_only`, retained for compatibility and future UX polish.
 
-The key product rule should be: report triage needs context and buttons; a case means a user-visible case surface; restriction is a reversible state on an open case, not a separate hidden case type.
+The key product rule should be: report triage needs context and buttons; a case means the configured case role plus a user-visible case surface; there is no separate unrestricted case type.
 
 ## Open Questions
 
@@ -182,12 +178,11 @@ The key product rule should be: report triage needs context and buttons; a case 
 - If the reporter is an admin in one or more servers that receive an external report, should the confirmation name those servers?
 - Should repeated reports update one embed, append a summary, or create separate case entries?
 - Should legacy moderator-only review threads be migrated or removed once no active cases use them?
-- Should `Open Case` be relabeled for report alerts, or is the existing label clear enough?
+- Should `Open Case` be relabeled for report alerts, or is the existing label clear enough now that opening a case applies the case role?
 
 ## Follow-Up Work
 
 1. Consider whether `Open Case` should be relabeled for report alerts.
 2. Decide whether admin reporters should see which servers received an external report.
 3. Preserve the current thread-type upgrade behavior as a safety fallback for existing cases.
-4. Decide the parent-channel permission strategy for unrestricted user-visible case threads.
-5. Update manual QA to cover reporter confirmation, moderator alert actions, dismissal/false-positive undo, open case, restrict, lift restriction, and ban.
+4. Update manual QA to cover reporter confirmation, moderator alert actions, dismissal/false-positive undo, open case, kick, and ban.

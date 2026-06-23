@@ -190,7 +190,7 @@ export class ThreadManager implements IThreadManager {
       : ['- No reason provided.'];
     const contentLines = [
       `Review-only report opened for ${member.user.tag} (${member.id}).`,
-      'No automatic restriction was applied. Do not add the reported user unless moderators decide to engage them.',
+      'No case was opened automatically. Do not add the reported user unless moderators decide to engage them.',
       '',
       'Report details:',
       ...reasonLines,
@@ -529,7 +529,7 @@ export class ThreadManager implements IThreadManager {
     const originalError = this.getErrorMessage(error);
     if (canViewParentChannel === false) {
       return new Error(
-        `Discord denied adding ${member.id} to the private verification thread because the user cannot currently view parent channel ${parentId}. Private thread membership requires parent View Channel; check restricted-role/channel overwrites. Original Discord error: ${originalError}`
+        `Discord denied adding ${member.id} to the private verification thread because the user cannot currently view parent channel ${parentId}. Private thread membership requires parent View Channel; check case-role/channel overwrites. Original Discord error: ${originalError}`
       );
     }
 

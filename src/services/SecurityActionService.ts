@@ -218,7 +218,7 @@ export interface ISecurityActionService {
   ): Promise<DetectionEvent | null>;
 
   /**
-   * Reopens a verification event, and re-restricts the user (or unbans them?)
+   * Reopens a verification event and reapplies the case role.
    * @param verificationEvent The verification event to reopen
    * @returns Whether the thread was successfully reopened
    */
@@ -243,7 +243,7 @@ export interface ConfirmedReportIntakeContext {
   attachments?: MessageReportAttachment[];
 }
 
-export type AdminCaseAction = 'open_case' | 'restrict';
+export type AdminCaseAction = 'open_case';
 
 export interface AdminCaseOptions {
   reason?: string;
@@ -253,8 +253,8 @@ export interface AdminCaseOptions {
 
 export interface AdminCaseResult {
   opened: boolean;
-  restrictionAttempted: boolean;
-  restricted: boolean;
+  caseRoleAttempted: boolean;
+  caseRoleActive: boolean;
 }
 
 export interface ActiveCaseRepairResult extends VerificationThreadRepairResult {
@@ -986,24 +986,27 @@ export class SecurityActionService implements ISecurityActionService {
     }
   }
 
-  private async tryRestrictUser(
+  private async tryApplyCaseRole(
     member: GuildMember,
     verificationEvent: VerificationEvent,
     moderator?: User
   ): Promise<VerificationEvent> {
     try {
-      const restricted = moderator
-        ? await this.userModerationService.restrictUser(member, moderator)
-        : await this.userModerationService.restrictUser(member);
-      if (!restricted) {
-        throw new Error(`Failed to restrict user ${member.user.tag}`);
+      const applied = moderator
+        ? await this.userModerationService.applyCaseRole(member, moderator)
+        : await this.userModerationService.applyCaseRole(member);
+      if (!applied) {
+        throw new Error(`Failed to apply case role to ${member.user.tag}`);
       }
       return (
         (await this.verificationEventRepository.findById(verificationEvent.id)) ?? verificationEvent
       );
     } catch (error) {
-      console.error(`Failed to restrict user ${member.user.tag}; continuing case flow:`, error);
-      return this.recordVerificationActionFailure(verificationEvent, 'restrict', error);
+      console.error(
+        `Failed to apply case role to ${member.user.tag}; continuing case flow:`,
+        error
+      );
+      return this.recordVerificationActionFailure(verificationEvent, 'case_role', error);
     }
   }
 
@@ -1155,7 +1158,6 @@ export class SecurityActionService implements ISecurityActionService {
       member,
       detectionResult,
       undefined,
-      route === 'restrict',
       false,
       true
     );
@@ -1165,11 +1167,11 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   private resolveConfirmedReportIntakeRoute(
-    configuredMode: 'observed_alert' | 'open_case' | 'restrict' | 'kick',
+    configuredMode: 'observed_alert' | 'open_case' | 'kick',
     reportAiSettings: ReturnType<typeof getReportAiSettings>,
     detectionSettings: ReturnType<typeof getDetectionResponseSettings>,
     reportAiAnalysis?: ReportAIAnalysis
-  ): 'observed_alert' | 'open_case' | 'restrict' | 'kick' {
+  ): 'observed_alert' | 'open_case' | 'kick' {
     if (configuredMode === 'observed_alert') {
       return 'observed_alert';
     }
@@ -1182,8 +1184,8 @@ export class SecurityActionService implements ISecurityActionService {
     if (configuredMode === 'kick') {
       if (
         detectionSettings.reportIntakeAutoKickEnabled &&
-        reportAiSettings.maxAction === 'restrict' &&
-        reportAiAnalysis.recommendedAction === 'restrict' &&
+        reportAiSettings.maxAction === 'open_case' &&
+        reportAiAnalysis.recommendedAction === 'open_case' &&
         reportAiAnalysis.confidence * 100 >= detectionSettings.autoKickMinConfidenceThreshold
       ) {
         return 'kick';
@@ -1194,18 +1196,8 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     if (
-      configuredMode === 'restrict' &&
-      reportAiSettings.maxAction === 'restrict' &&
-      reportAiAnalysis.recommendedAction === 'restrict' &&
-      reportAiAnalysis.confidence >= reportAiSettings.restrictThreshold
-    ) {
-      return 'restrict';
-    }
-
-    if (
-      (reportAiSettings.maxAction === 'open_case' || reportAiSettings.maxAction === 'restrict') &&
-      (reportAiAnalysis.recommendedAction === 'open_case' ||
-        reportAiAnalysis.recommendedAction === 'restrict') &&
+      reportAiSettings.maxAction === 'open_case' &&
+      reportAiAnalysis.recommendedAction === 'open_case' &&
       reportAiAnalysis.confidence >= reportAiSettings.openCaseThreshold
     ) {
       return 'open_case';
@@ -1217,7 +1209,7 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   private warnConfirmedReportIntakeFallback(
-    configuredMode: 'open_case' | 'restrict' | 'kick',
+    configuredMode: 'open_case' | 'kick',
     maxAction: string
   ): void {
     console.warn(
@@ -1294,7 +1286,6 @@ export class SecurityActionService implements ISecurityActionService {
       member,
       detectionResult,
       undefined,
-      false,
       shouldUseReviewThread,
       false,
       undefined,
@@ -1584,7 +1575,6 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     detectionResult: DetectionResult,
     sourceMessage?: Message,
-    restrictUser = true,
     useReportReviewThread?: boolean,
     entitiesAlreadyEnsured = false,
     moderator?: User,
@@ -1632,6 +1622,17 @@ export class SecurityActionService implements ISecurityActionService {
           `Failed to link detection event ${detectionEventId} to verification event ${activeVerificationEvent.id}`
         );
       }
+      const serverMember = await this.serverMemberRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
+      if (serverMember?.case_role_active !== true) {
+        notificationVerificationEvent = await this.tryApplyCaseRole(
+          member,
+          notificationVerificationEvent,
+          moderator
+        );
+      }
       if (
         !shouldUseReviewThread &&
         (!notificationVerificationEvent.thread_id ||
@@ -1644,19 +1645,6 @@ export class SecurityActionService implements ISecurityActionService {
           false,
           sourceMessage
         );
-      }
-      if (restrictUser) {
-        const serverMember = await this.serverMemberRepository.findByServerAndUser(
-          member.guild.id,
-          member.id
-        );
-        if (serverMember?.is_restricted !== true) {
-          notificationVerificationEvent = await this.tryRestrictUser(
-            member,
-            notificationVerificationEvent,
-            moderator
-          );
-        }
       }
       notificationVerificationEvent = await this.upsertNotificationAndEnsurePrivateEvidenceThread(
         member,
@@ -1678,7 +1666,7 @@ export class SecurityActionService implements ISecurityActionService {
         detectionResult,
         notificationVerificationEvent,
         {
-          restrict_user: restrictUser,
+          restrict_user: true,
           report_review_thread: shouldUseReviewThread,
           active_case_existed: true,
         }
@@ -1717,15 +1705,7 @@ export class SecurityActionService implements ISecurityActionService {
       );
     }
 
-    if (restrictUser) {
-      newVerificationEvent = await this.tryRestrictUser(member, newVerificationEvent, moderator);
-    } else {
-      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-        is_restricted: false,
-        verification_status: VerificationStatus.PENDING,
-        last_status_change: new Date(),
-      });
-    }
+    newVerificationEvent = await this.tryApplyCaseRole(member, newVerificationEvent, moderator);
 
     newVerificationEvent = await this.tryCreateCaseThread(
       member,
@@ -1755,7 +1735,7 @@ export class SecurityActionService implements ISecurityActionService {
       detectionResult,
       newVerificationEvent,
       {
-        restrict_user: restrictUser,
+        restrict_user: true,
         report_review_thread: shouldUseReviewThread,
         active_case_existed: false,
       }
@@ -1829,11 +1809,11 @@ export class SecurityActionService implements ISecurityActionService {
     sourceMessage?: Message
   ): Promise<boolean> {
     try {
-      console.log(`Opening case without restriction for: ${member.user.tag} (${member.id})`);
+      console.log(`Opening case for: ${member.user.tag} (${member.id})`);
       console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-      return await this.handleSuspiciousMember(member, detectionResult, sourceMessage, false);
+      return await this.handleSuspiciousMember(member, detectionResult, sourceMessage);
     } catch (error) {
-      console.error(`Failed to open case without restriction for ${member.user.tag}:`, error);
+      console.error(`Failed to open case for ${member.user.tag}:`, error);
       throw error;
     }
   }
@@ -1843,11 +1823,11 @@ export class SecurityActionService implements ISecurityActionService {
     detectionResult: DetectionResult
   ): Promise<boolean> {
     try {
-      console.log(`Opening join case without restriction for: ${member.user.tag} (${member.id})`);
+      console.log(`Opening join case for: ${member.user.tag} (${member.id})`);
       console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-      return await this.handleSuspiciousMember(member, detectionResult, undefined, false);
+      return await this.handleSuspiciousMember(member, detectionResult);
     } catch (error) {
-      console.error(`Failed to open join case without restriction for ${member.user.tag}:`, error);
+      console.error(`Failed to open join case for ${member.user.tag}:`, error);
       throw error;
     }
   }
@@ -1913,14 +1893,7 @@ export class SecurityActionService implements ISecurityActionService {
       return true;
     }
 
-    return await this.handleSuspiciousMember(
-      member,
-      detectionResult,
-      undefined,
-      true,
-      undefined,
-      true
-    );
+    return await this.handleSuspiciousMember(member, detectionResult, undefined, undefined, true);
   }
 
   public async openAdminCase(
@@ -1936,21 +1909,32 @@ export class SecurityActionService implements ISecurityActionService {
         member.joinedAt?.toISOString()
       );
 
-      const restrictUser = options.action === 'restrict';
       const normalizedReason = options.reason?.trim() || undefined;
-      const isRoleIntake = options.metadata?.type === 'admin_role_intake';
+      const isManualRoleIntake = options.metadata?.type === 'manual_role_intake';
+      const isRoleIntake = options.metadata?.type === 'admin_role_intake' || isManualRoleIntake;
       const sourceRoleId =
         typeof options.metadata?.sourceRoleId === 'string' ? options.metadata.sourceRoleId : null;
+      const assignedById =
+        typeof options.metadata?.assignedById === 'string' ? options.metadata.assignedById : null;
+      const assignedByText = assignedById ? `<@${assignedById}>` : 'an unknown moderator';
       const reasonSuffix = normalizedReason ? ` Reason: ${normalizedReason}` : '';
       const reasonText = isRoleIntake
-        ? sourceRoleId
-          ? `Role intake from <@&${sourceRoleId}> started by <@${moderator.id}>.${reasonSuffix}`
-          : `Role intake started by <@${moderator.id}>.${reasonSuffix}`
+        ? isManualRoleIntake
+          ? sourceRoleId
+            ? `Manual intake role <@&${sourceRoleId}> assigned by ${assignedByText}.${reasonSuffix}`
+            : `Manual intake role assigned by ${assignedByText}.${reasonSuffix}`
+          : sourceRoleId
+            ? `Role intake from <@&${sourceRoleId}> started by <@${moderator.id}>.${reasonSuffix}`
+            : `Role intake started by <@${moderator.id}>.${reasonSuffix}`
         : `Admin case opened by <@${moderator.id}>.${reasonSuffix}`;
       const triggerContent = isRoleIntake
-        ? sourceRoleId
-          ? `Role intake from <@&${sourceRoleId}> by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`
-          : `Role intake by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`
+        ? isManualRoleIntake
+          ? sourceRoleId
+            ? `Manual intake role <@&${sourceRoleId}> assigned by ${assignedByText}${normalizedReason ? `: ${normalizedReason}` : ''}`
+            : `Manual intake role assigned by ${assignedByText}${normalizedReason ? `: ${normalizedReason}` : ''}`
+          : sourceRoleId
+            ? `Role intake from <@&${sourceRoleId}> by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`
+            : `Role intake by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`
         : `Opened by <@${moderator.id}>${normalizedReason ? `: ${normalizedReason}` : ''}`;
       const detectionType = isRoleIntake ? DetectionType.ROLE_INTAKE : DetectionType.ADMIN_CASE;
       const detectionEvent = await this.detectionEventsRepository.create({
@@ -1985,7 +1969,6 @@ export class SecurityActionService implements ISecurityActionService {
         member,
         detectionResult,
         undefined,
-        restrictUser,
         undefined,
         true,
         moderator
@@ -1993,7 +1976,7 @@ export class SecurityActionService implements ISecurityActionService {
       if (handled) {
         this.captureMemberAnalytics(
           member,
-          restrictUser ? 'admin case opened with restriction' : 'admin case opened',
+          'admin case opened',
           {
             has_reason: Boolean(normalizedReason),
             bulk_intake: options.metadata?.bulk_intake === true,
@@ -2004,13 +1987,14 @@ export class SecurityActionService implements ISecurityActionService {
           }
         );
       }
-      const serverMember = restrictUser
-        ? await this.serverMemberRepository.findByServerAndUser(member.guild.id, member.id)
-        : null;
+      const serverMember = await this.serverMemberRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
       return {
         opened: handled,
-        restrictionAttempted: restrictUser,
-        restricted: serverMember?.is_restricted === true,
+        caseRoleAttempted: true,
+        caseRoleActive: serverMember?.case_role_active === true,
       };
     } catch (error) {
       console.error(`Failed to open admin case for ${member.user.tag}:`, error);
@@ -2050,13 +2034,7 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     let repairCase = activeCase;
-    const serverMember = await this.serverMemberRepository.findByServerAndUser(
-      member.guild.id,
-      member.id
-    );
-    if (serverMember?.is_restricted === true) {
-      repairCase = await this.tryRestrictUser(member, activeCase);
-    }
+    repairCase = await this.tryApplyCaseRole(member, activeCase);
 
     let threadRepair: VerificationThreadRepairResult;
     try {
@@ -2207,22 +2185,13 @@ export class SecurityActionService implements ISecurityActionService {
       throw new Error(`No active verification case found for ${member.user.tag}.`);
     }
 
-    const serverMember = await this.serverMemberRepository.findByServerAndUser(
-      member.guild.id,
-      member.id
-    );
-    if (serverMember?.is_restricted === true) {
-      return true;
-    }
-
-    await this.ensureUserFacingThreadForRestriction(member, activeCase);
-    const restricted = await this.userModerationService.restrictUser(member, moderator);
-    this.requireModerationSuccess(restricted, 'restrict', member);
+    const caseWithRole = await this.tryApplyCaseRole(member, activeCase, moderator);
+    await this.ensureUserFacingThreadForCaseRole(member, caseWithRole);
 
     return true;
   }
 
-  private async ensureUserFacingThreadForRestriction(
+  private async ensureUserFacingThreadForCaseRole(
     member: GuildMember,
     activeCase: VerificationEvent
   ): Promise<VerificationEvent> {
@@ -2242,7 +2211,7 @@ export class SecurityActionService implements ISecurityActionService {
       return await this.clearResolvedVerificationActionFailures(activeCase, ['thread']);
     } catch (error) {
       console.error(
-        `Failed to ensure user-facing case thread before restricting ${member.user.tag}; continuing restriction:`,
+        `Failed to ensure user-facing case thread for ${member.user.tag}; continuing case-role flow:`,
         error
       );
       return this.recordVerificationActionFailure(activeCase, 'thread', error);
@@ -2298,7 +2267,6 @@ export class SecurityActionService implements ISecurityActionService {
         member,
         detectionResult,
         undefined,
-        true,
         undefined,
         true,
         moderator
@@ -2643,72 +2611,7 @@ export class SecurityActionService implements ISecurityActionService {
     detectionEventId: string,
     moderator: User
   ): Promise<boolean> {
-    const detectionEvent = await this.getObservedDetectionForMember(member, detectionEventId);
-    if (this.hasObservedAction(detectionEvent)) {
-      return false;
-    }
-    const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
-      detectionEvent,
-      moderator,
-      AdminActionType.RESTRICT
-    );
-    if (!claimedDetectionEvent) {
-      return false;
-    }
-    let actionApplied = false;
-    try {
-      const verificationEvent = await this.ensureObservedCase(member, detectionEvent, false);
-      const restricted = await this.userModerationService.restrictUser(member);
-      this.requireModerationSuccess(restricted, 'restrict', member);
-      actionApplied = true;
-      await this.recordObservedAction({
-        serverId: member.guild.id,
-        userId: member.id,
-        moderator,
-        detectionEvent: claimedDetectionEvent,
-        verificationEvent,
-        actionType: AdminActionType.RESTRICT,
-      });
-      if (this.isObservedNotificationAdopted(verificationEvent, detectionEvent)) {
-        await this.notificationManager.logActionToMessage(
-          verificationEvent,
-          AdminActionType.RESTRICT,
-          moderator
-        );
-      } else {
-        await this.notificationManager.markObservedDetectionActionTaken(
-          detectionEvent.id,
-          'restricted this user',
-          moderator,
-          AdminActionType.RESTRICT
-        );
-      }
-      await this.runModerationQueueTask(
-        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
-        (moderationQueueService) =>
-          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
-      );
-      this.captureMemberAnalytics(
-        member,
-        'observed detection action completed',
-        { action_type: AdminActionType.RESTRICT },
-        {
-          moderatorId: moderator.id,
-          detectionEventId: detectionEvent.id,
-          verificationEventId: verificationEvent.id,
-        }
-      );
-      return true;
-    } catch (error) {
-      if (!actionApplied) {
-        await this.releaseDetectionMetadataForObservedAction(
-          detectionEvent,
-          moderator,
-          AdminActionType.RESTRICT
-        );
-      }
-      throw error;
-    }
+    return this.openObservedDetectionCase(member, detectionEventId, moderator);
   }
 
   public async banObservedDetection(
@@ -3264,8 +3167,8 @@ export class SecurityActionService implements ISecurityActionService {
         member.joinedAt?.toISOString()
       );
 
+      await this.userModerationService.applyCaseRole(member, moderator);
       await this.threadManager.reopenVerificationThread(verificationEvent);
-      await this.userModerationService.restrictUser(member);
       await this.notificationManager.logActionToMessage(
         verificationEvent,
         AdminActionType.REOPEN,

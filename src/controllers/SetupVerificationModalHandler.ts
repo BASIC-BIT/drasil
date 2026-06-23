@@ -56,7 +56,7 @@ export class SetupVerificationModalHandler {
       return;
     }
 
-    const restrictedRoleInput = interaction.fields
+    const caseRoleInput = interaction.fields
       .getTextInputValue(SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID)
       .trim();
     const adminChannelInput = interaction.fields
@@ -66,11 +66,10 @@ export class SetupVerificationModalHandler {
       .getTextInputValue(SETUP_VERIFICATION_CHANNEL_FIELD_ID)
       .trim();
 
-    const restrictedRoleId = parseRoleId(restrictedRoleInput);
-    if (!restrictedRoleId) {
+    const caseRoleId = parseRoleId(caseRoleInput);
+    if (!caseRoleId) {
       await interaction.reply({
-        content:
-          'Please provide a valid restricted role ID or role mention (for example `<@&123...>`).',
+        content: 'Please provide a valid case role ID or role mention (for example `<@&123...>`).',
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -120,10 +119,10 @@ export class SetupVerificationModalHandler {
         return;
       }
 
-      const restrictedRole = await guild.roles.fetch(restrictedRoleId);
-      if (!restrictedRole) {
+      const caseRole = await guild.roles.fetch(caseRoleId);
+      if (!caseRole) {
         await interaction.reply({
-          content: `Could not find restricted role <@&${restrictedRoleId}> in this server.`,
+          content: `Could not find case role <@&${caseRoleId}> in this server.`,
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -152,7 +151,7 @@ export class SetupVerificationModalHandler {
       const setupResult = await this.setupWorkflowService.completeSetup({
         guild,
         guildId: interaction.guildId,
-        restrictedRole: restrictedRole as Role,
+        caseRole: caseRole as Role,
         adminChannelId,
         initialVerificationChannelId: providedVerificationChannelId,
         candidateVerificationChannelId: providedVerificationChannelId,
@@ -203,7 +202,7 @@ export class SetupVerificationModalHandler {
       await interaction.reply({
         content:
           'Setup complete.\n' +
-          `Restricted role: <@&${setupResult.restrictedRoleId}>\n` +
+          `Case role: <@&${setupResult.caseRoleId}>\n` +
           `Admin channel: <#${adminChannelId}>\n` +
           `${verificationChannelMessage}`,
         flags: MessageFlags.Ephemeral,

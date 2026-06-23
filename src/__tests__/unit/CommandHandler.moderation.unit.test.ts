@@ -28,7 +28,7 @@ describe('CommandHandler moderation commands (unit)', () => {
       candidateCounts: {
         pendingCases: 1,
         recentResolvedCases: 1,
-        restrictedMembers: 0,
+        caseRoleMembers: 0,
         activeRoleQuarantines: 0,
         queueItems: 0,
       },

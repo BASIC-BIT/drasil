@@ -39,7 +39,7 @@ export interface IntegrityAuditCandidateQuery {
 export interface IntegrityAuditCandidates {
   readonly pendingVerificationEvents: IntegrityAuditVerificationEvent[];
   readonly recentResolvedVerificationEvents: IntegrityAuditVerificationEvent[];
-  readonly restrictedMembers: ServerMember[];
+  readonly caseRoleMembers: ServerMember[];
   readonly activeRoleQuarantineSnapshots: RoleQuarantineSnapshot[];
   readonly moderationQueueItems: IntegrityAuditModerationQueueItem[];
 }
@@ -69,7 +69,7 @@ export class IntegrityAuditRepository implements IIntegrityAuditRepository {
       const [
         pendingVerificationEvents,
         recentResolvedVerificationEvents,
-        restrictedMembers,
+        caseRoleMembers,
         activeRoleQuarantineSnapshots,
         moderationQueueItems,
       ] = await Promise.all([
@@ -106,7 +106,7 @@ export class IntegrityAuditRepository implements IIntegrityAuditRepository {
         this.prisma.server_members.findMany({
           where: {
             server_id: query.serverId,
-            is_restricted: true,
+            case_role_active: true,
             verification_status: { not: VerificationStatus.BANNED as verification_status },
             ...userFilter,
           },
@@ -145,7 +145,7 @@ export class IntegrityAuditRepository implements IIntegrityAuditRepository {
         pendingVerificationEvents: pendingVerificationEvents as IntegrityAuditVerificationEvent[],
         recentResolvedVerificationEvents:
           recentResolvedVerificationEvents as IntegrityAuditVerificationEvent[],
-        restrictedMembers: restrictedMembers as ServerMember[],
+        caseRoleMembers: caseRoleMembers as ServerMember[],
         activeRoleQuarantineSnapshots: activeRoleQuarantineSnapshots as RoleQuarantineSnapshot[],
         moderationQueueItems: (moderationQueueItems as ModerationQueueItemWithVerification[]).map(
           (item) => ({

@@ -36,7 +36,7 @@ describe('CommandHandler setup commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      restricted_role_id: 'role-1',
+      case_role_id: 'role-1',
       admin_channel_id: 'channel-1',
       verification_channel_id: 'channel-2',
     });
@@ -47,7 +47,7 @@ describe('CommandHandler setup commands (unit)', () => {
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
+        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
       allowedMentions: { parse: [] },
     });
   });
@@ -93,13 +93,13 @@ describe('CommandHandler setup commands (unit)', () => {
       expect.any(Function)
     );
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      restricted_role_id: 'role-1',
+      case_role_id: 'role-1',
       admin_channel_id: 'channel-1',
       verification_channel_id: 'created-channel-1',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nCreated verification channel: <#created-channel-1>',
+        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nCreated verification channel: <#created-channel-1>',
       allowedMentions: { parse: [] },
     });
   });
@@ -154,8 +154,8 @@ describe('CommandHandler setup commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(setupDiagnosticsService.validateSetupCandidate).toHaveBeenCalledWith(guild, {
-      restrictedRoleId: 'role-1',
-      willCreateRestrictedRole: false,
+      caseRoleId: 'role-1',
+      willCreateCaseRole: false,
       adminChannelId: 'channel-1',
       verificationChannelId: 'configured-channel-1',
       willCreateVerificationChannel: false,
@@ -266,7 +266,7 @@ describe('CommandHandler setup commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      restricted_role_id: 'role-1',
+      case_role_id: 'role-1',
       admin_channel_id: 'channel-1',
       verification_channel_id: 'created-channel-1',
     });
@@ -326,7 +326,7 @@ describe('CommandHandler setup commands (unit)', () => {
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nRestricted role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
+        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
       allowedMentions: { parse: [] },
     });
   });
@@ -338,8 +338,8 @@ describe('CommandHandler setup commands (unit)', () => {
       issues: [
         {
           severity: 'error',
-          code: 'restricted-role-hierarchy',
-          message: "Drasil's highest role must be above restricted role <@&role-1>.",
+          code: 'case-role-hierarchy',
+          message: "Drasil's highest role must be above case role <@&role-1>.",
         },
       ],
       errorCount: 1,
@@ -471,7 +471,7 @@ describe('CommandHandler setup commands (unit)', () => {
     );
   });
 
-  it('handles /config setup with an existing restricted role and channels', async () => {
+  it('handles /config setup with an existing case role and channels', async () => {
     const validateSetupCandidate = jest.fn().mockResolvedValue({
       guildId: 'guild-1',
       checkedAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -489,7 +489,7 @@ describe('CommandHandler setup commands (unit)', () => {
       id: 'verification-channel-1',
       type: ChannelType.GuildText,
     } as any;
-    const restrictedRole = { id: 'role-1' } as any;
+    const caseRole = { id: 'role-1' } as any;
     const guild = {
       id: 'guild-1',
       members: {
@@ -519,7 +519,7 @@ describe('CommandHandler setup commands (unit)', () => {
           }
           return null;
         }),
-        getRole: jest.fn().mockReturnValue(restrictedRole),
+        getRole: jest.fn().mockReturnValue(caseRole),
         getString: jest.fn().mockReturnValue(null),
       },
       reply: jest.fn().mockResolvedValue(undefined),
@@ -531,8 +531,8 @@ describe('CommandHandler setup commands (unit)', () => {
 
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(setupDiagnosticsService.validateSetupCandidate).toHaveBeenCalledWith(guild, {
-      restrictedRoleId: 'role-1',
-      willCreateRestrictedRole: false,
+      caseRoleId: 'role-1',
+      willCreateCaseRole: false,
       adminChannelId: 'admin-channel-1',
       verificationChannelId: 'verification-channel-1',
       willCreateVerificationChannel: false,
@@ -541,7 +541,7 @@ describe('CommandHandler setup commands (unit)', () => {
     expect(guild.roles.create).not.toHaveBeenCalled();
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      restricted_role_id: 'role-1',
+      case_role_id: 'role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'verification-channel-1',
     });
@@ -570,7 +570,7 @@ describe('CommandHandler setup commands (unit)', () => {
       getServerConfig,
     });
     const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
-    const restrictedRole = { id: 'role-1' } as any;
+    const caseRole = { id: 'role-1' } as any;
     const guild = {
       id: 'guild-1',
       members: {
@@ -598,7 +598,7 @@ describe('CommandHandler setup commands (unit)', () => {
         getSubcommandGroup: jest.fn().mockReturnValue(null),
         getSubcommand: jest.fn().mockReturnValue('setup'),
         getChannel: jest.fn((name: string) => (name === 'admin-channel' ? adminChannel : null)),
-        getRole: jest.fn().mockReturnValue(restrictedRole),
+        getRole: jest.fn().mockReturnValue(caseRole),
         getString: jest.fn().mockReturnValue(null),
       },
       reply: jest.fn().mockResolvedValue(undefined),
@@ -609,8 +609,8 @@ describe('CommandHandler setup commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(setupDiagnosticsService.validateSetupCandidate).toHaveBeenCalledWith(guild, {
-      restrictedRoleId: 'role-1',
-      willCreateRestrictedRole: false,
+      caseRoleId: 'role-1',
+      willCreateCaseRole: false,
       adminChannelId: 'admin-channel-1',
       verificationChannelId: 'configured-channel-1',
       willCreateVerificationChannel: false,
@@ -629,7 +629,7 @@ describe('CommandHandler setup commands (unit)', () => {
     );
   });
 
-  it('handles /config setup by creating the default restricted role and verification channel', async () => {
+  it('handles /config setup by creating the default case role and verification channel', async () => {
     const setupVerificationChannel = jest.fn().mockResolvedValue('created-channel-1');
     const validateSetupCandidate = jest.fn().mockResolvedValue({
       guildId: 'guild-1',
@@ -678,7 +678,7 @@ describe('CommandHandler setup commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(guild.roles.create).toHaveBeenCalledWith({
-      name: 'Drasil Restricted',
+      name: 'Drasil Case',
       permissions: [],
       reason: 'Drasil setup requested by Admin',
     });
@@ -689,12 +689,12 @@ describe('CommandHandler setup commands (unit)', () => {
       expect.any(Function)
     );
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      restricted_role_id: 'created-role-1',
+      case_role_id: 'created-role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: expect.stringContaining('Created restricted role: <@&created-role-1>'),
+      content: expect.stringContaining('Created case role: <@&created-role-1>'),
       allowedMentions: { parse: [] },
     });
     expect(interaction.editReply.mock.calls[0][0].content).toContain(
@@ -702,7 +702,7 @@ describe('CommandHandler setup commands (unit)', () => {
     );
   });
 
-  it('reuses an existing default restricted role when no role is configured', async () => {
+  it('reuses an existing default case role when no role is configured', async () => {
     const setupVerificationChannel = jest.fn().mockResolvedValue('created-channel-1');
     const validateSetupCandidate = jest.fn().mockResolvedValue({
       guildId: 'guild-1',
@@ -713,7 +713,7 @@ describe('CommandHandler setup commands (unit)', () => {
     });
     const updateServerConfig = jest.fn().mockResolvedValue({});
     const getServerConfig = jest.fn().mockResolvedValue({
-      restricted_role_id: 'missing-role-1',
+      case_role_id: 'missing-role-1',
       verification_channel_id: null,
       settings: {},
     });
@@ -724,7 +724,7 @@ describe('CommandHandler setup commands (unit)', () => {
       getServerConfig,
     });
     const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
-    const defaultRole = { id: 'default-role-1', name: 'Drasil Restricted' } as any;
+    const defaultRole = { id: 'default-role-1', name: 'Drasil Case' } as any;
     const guild = {
       id: 'guild-1',
       members: {
@@ -764,8 +764,8 @@ describe('CommandHandler setup commands (unit)', () => {
     expect(guild.roles.fetch).toHaveBeenCalledWith('missing-role-1');
     expect(guild.roles.create).not.toHaveBeenCalled();
     expect(setupDiagnosticsService.validateSetupCandidate).toHaveBeenCalledWith(guild, {
-      restrictedRoleId: 'default-role-1',
-      willCreateRestrictedRole: false,
+      caseRoleId: 'default-role-1',
+      willCreateCaseRole: false,
       adminChannelId: 'admin-channel-1',
       verificationChannelId: null,
       willCreateVerificationChannel: true,
@@ -778,18 +778,18 @@ describe('CommandHandler setup commands (unit)', () => {
       expect.any(Function)
     );
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      restricted_role_id: 'default-role-1',
+      case_role_id: 'default-role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: expect.stringContaining('Restricted role: <@&default-role-1>'),
+      content: expect.stringContaining('Case role: <@&default-role-1>'),
       allowedMentions: { parse: [] },
     });
-    expect(interaction.editReply.mock.calls[0][0].content).not.toContain('Created restricted role');
+    expect(interaction.editReply.mock.calls[0][0].content).not.toContain('Created case role');
   });
 
-  it('honors restricted-role-name over a differently named configured role', async () => {
+  it('honors case-role-name over a differently named configured role', async () => {
     const setupVerificationChannel = jest.fn().mockResolvedValue('created-channel-1');
     const validateSetupCandidate = jest.fn().mockResolvedValue({
       guildId: 'guild-1',
@@ -800,7 +800,7 @@ describe('CommandHandler setup commands (unit)', () => {
     });
     const updateServerConfig = jest.fn().mockResolvedValue({});
     const getServerConfig = jest.fn().mockResolvedValue({
-      restricted_role_id: 'old-role-1',
+      case_role_id: 'old-role-1',
       verification_channel_id: null,
       settings: {},
     });
@@ -811,8 +811,8 @@ describe('CommandHandler setup commands (unit)', () => {
       getServerConfig,
     });
     const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
-    const configuredRole = { id: 'old-role-1', name: 'Old Restricted' } as any;
-    const namedRole = { id: 'named-role-1', name: 'New Restricted' } as any;
+    const configuredRole = { id: 'old-role-1', name: 'Old Case' } as any;
+    const namedRole = { id: 'named-role-1', name: 'New Case' } as any;
     const guild = {
       id: 'guild-1',
       members: {
@@ -843,9 +843,7 @@ describe('CommandHandler setup commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('setup'),
         getChannel: jest.fn((name: string) => (name === 'admin-channel' ? adminChannel : null)),
         getRole: jest.fn().mockReturnValue(null),
-        getString: jest.fn((name: string) =>
-          name === 'restricted-role-name' ? 'New Restricted' : null
-        ),
+        getString: jest.fn((name: string) => (name === 'case-role-name' ? 'New Case' : null)),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -857,21 +855,19 @@ describe('CommandHandler setup commands (unit)', () => {
     expect(guild.roles.fetch).toHaveBeenCalledWith('old-role-1');
     expect(guild.roles.create).not.toHaveBeenCalled();
     expect(setupDiagnosticsService.validateSetupCandidate).toHaveBeenCalledWith(guild, {
-      restrictedRoleId: 'named-role-1',
-      willCreateRestrictedRole: false,
+      caseRoleId: 'named-role-1',
+      willCreateCaseRole: false,
       adminChannelId: 'admin-channel-1',
       verificationChannelId: null,
       willCreateVerificationChannel: true,
       reportInstructionsChannelId: null,
     });
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      restricted_role_id: 'named-role-1',
+      case_role_id: 'named-role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
     });
-    expect(interaction.editReply.mock.calls[0][0].content).toContain(
-      'Restricted role: <@&named-role-1>'
-    );
+    expect(interaction.editReply.mock.calls[0][0].content).toContain('Case role: <@&named-role-1>');
     expect(interaction.editReply.mock.calls[0][0].content).not.toContain('<@&old-role-1>');
   });
 
@@ -889,7 +885,7 @@ describe('CommandHandler setup commands (unit)', () => {
       updateServerConfig,
     });
     const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
-    const restrictedRole = { id: 'role-1' } as any;
+    const caseRole = { id: 'role-1' } as any;
     const guild = {
       id: 'guild-1',
       members: {
@@ -924,7 +920,7 @@ describe('CommandHandler setup commands (unit)', () => {
         getSubcommandGroup: jest.fn().mockReturnValue(null),
         getSubcommand: jest.fn().mockReturnValue('setup'),
         getChannel: jest.fn((name: string) => (name === 'admin-channel' ? adminChannel : null)),
-        getRole: jest.fn().mockReturnValue(restrictedRole),
+        getRole: jest.fn().mockReturnValue(caseRole),
         getString: jest.fn().mockReturnValue(null),
       },
       reply: jest.fn().mockResolvedValue(undefined),
@@ -943,7 +939,7 @@ describe('CommandHandler setup commands (unit)', () => {
     });
   });
 
-  it('rolls back a created restricted role when verification channel setup fails', async () => {
+  it('rolls back a created case role when verification channel setup fails', async () => {
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const setupVerificationChannel = jest.fn().mockResolvedValue(null);
     const validateSetupCandidate = jest.fn().mockResolvedValue({
@@ -1000,7 +996,7 @@ describe('CommandHandler setup commands (unit)', () => {
       'Rolling back Drasil setup after verification channel setup failed'
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: expect.stringContaining('newly created restricted role was removed'),
+      content: expect.stringContaining('newly created case role was removed'),
       allowedMentions: { parse: [] },
     });
     consoleError.mockRestore();
@@ -1075,7 +1071,7 @@ describe('CommandHandler setup commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      restricted_role_id: 'created-role-1',
+      case_role_id: 'created-role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
     });
@@ -1093,7 +1089,7 @@ describe('CommandHandler setup commands (unit)', () => {
       'newly created verification channel was removed'
     );
     expect(interaction.editReply.mock.calls[0][0].content).toContain(
-      'newly created restricted role was removed'
+      'newly created case role was removed'
     );
     consoleError.mockRestore();
   });
@@ -1197,7 +1193,7 @@ describe('CommandHandler setup commands (unit)', () => {
       'The newly created verification channel was removed.'
     );
     expect(interaction.editReply.mock.calls[0][0].content).toContain(
-      'The newly created restricted role was removed.'
+      'The newly created case role was removed.'
     );
   });
 
@@ -1229,7 +1225,7 @@ describe('CommandHandler setup commands (unit)', () => {
       type: ChannelType.GuildText,
       send: jest.fn().mockRejectedValue(new Error('missing embed links')),
     } as any;
-    const restrictedRole = { id: 'role-1' } as any;
+    const caseRole = { id: 'role-1' } as any;
     const guild = {
       id: 'guild-1',
       members: {
@@ -1262,7 +1258,7 @@ describe('CommandHandler setup commands (unit)', () => {
           }
           return null;
         }),
-        getRole: jest.fn().mockReturnValue(restrictedRole),
+        getRole: jest.fn().mockReturnValue(caseRole),
         getString: jest.fn().mockReturnValue(null),
       },
       reply: jest.fn().mockResolvedValue(undefined),
@@ -1273,7 +1269,7 @@ describe('CommandHandler setup commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      restricted_role_id: 'role-1',
+      case_role_id: 'role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'verification-channel-1',
     });
@@ -1309,7 +1305,7 @@ describe('CommandHandler setup commands (unit)', () => {
       updateServerConfig,
     });
     const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
-    const restrictedRole = { id: 'role-1' } as any;
+    const caseRole = { id: 'role-1' } as any;
     const guild = {
       id: 'guild-1',
       members: {
@@ -1331,7 +1327,7 @@ describe('CommandHandler setup commands (unit)', () => {
         getSubcommandGroup: jest.fn().mockReturnValue(null),
         getSubcommand: jest.fn().mockReturnValue('setup'),
         getChannel: jest.fn((name: string) => (name === 'admin-channel' ? adminChannel : null)),
-        getRole: jest.fn().mockReturnValue(restrictedRole),
+        getRole: jest.fn().mockReturnValue(caseRole),
         getString: jest.fn().mockReturnValue(null),
       },
       reply: jest.fn().mockResolvedValue(undefined),
@@ -1361,7 +1357,7 @@ describe('CommandHandler setup commands (unit)', () => {
       updateServerConfig,
     });
     const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
-    const restrictedRole = { id: 'role-1' } as any;
+    const caseRole = { id: 'role-1' } as any;
     const guild = {
       id: 'guild-1',
       members: {
@@ -1383,7 +1379,7 @@ describe('CommandHandler setup commands (unit)', () => {
         getSubcommandGroup: jest.fn().mockReturnValue(null),
         getSubcommand: jest.fn().mockReturnValue('setup'),
         getChannel: jest.fn((name: string) => (name === 'admin-channel' ? adminChannel : null)),
-        getRole: jest.fn().mockReturnValue(restrictedRole),
+        getRole: jest.fn().mockReturnValue(caseRole),
         getString: jest.fn().mockReturnValue(null),
       },
       reply: jest.fn().mockResolvedValue(undefined),
@@ -1411,8 +1407,8 @@ describe('CommandHandler setup commands (unit)', () => {
       issues: [
         {
           severity: 'error',
-          code: 'restricted-role-missing',
-          message: 'Restricted role is not configured.',
+          code: 'case-role-missing',
+          message: 'Case role is not configured.',
         },
         {
           severity: 'warning',
@@ -1453,7 +1449,7 @@ describe('CommandHandler setup commands (unit)', () => {
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(setupDiagnosticsService.validateGuildSetup).toHaveBeenCalledWith(guild);
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: expect.stringContaining('[ERROR] Restricted role is not configured.'),
+      content: expect.stringContaining('[ERROR] Case role is not configured.'),
       allowedMentions: { parse: [] },
     });
     expect(interaction.editReply.mock.calls[0][0].content).toContain(

@@ -112,7 +112,7 @@ Lint strategy:
 - Config subcommand slice implemented: `/config` detection, report, analytics, verification, heuristic, case-staff, and case-review handlers moved to `src/controllers/ConfigSubcommandHandler.ts`.
 - Report instructions slice implemented: report button message upsert/recreate logic moved to `src/controllers/ReportInstructionsManager.ts`.
 - Setup slice implemented: `/setupverification`, `/config setup`, `/config validate`, and shared setup diagnostics/rollback helpers moved to `src/controllers/SetupCommandHandler.ts`; `CommandHandler.ts` dropped to 1,455 lines.
-- Case command slice implemented: `/case` open, restrict, repair, and intake-role handlers moved to `src/controllers/CaseCommandHandler.ts`.
+- Case command slice implemented: `/case` open, repair, and intake-role handlers moved to `src/controllers/CaseCommandHandler.ts`.
 - Reporting slice implemented: `/report`, report context-menu handlers, `/setupreportbutton`, and user-install reporting env checks moved to `src/controllers/ReportCommandHandler.ts` and `src/utils/userInstallReporting.ts`.
 - Moderation slice implemented: `/ban`, `/flaguser`, and `/audit` handlers moved to `src/controllers/ModerationCommandHandler.ts`.
 - Lockdown slice implemented: `/config lockdown` view, disable, allow-list, audit, apply, and lockdown report formatting moved to `src/controllers/LockdownConfigCommandHandler.ts`.
@@ -129,7 +129,7 @@ Lint strategy:
 - Setup workflow service slice implemented: candidate validation, verification-channel creation/sync, config save, analytics capture, and rollback cleanup moved to `src/services/SetupWorkflowService.ts`; setup command and modal controllers now keep Discord input/reply formatting while sharing workflow mechanics.
 - Report submission service slice implemented: report permission/settings checks and user/message report submission calls moved to `src/services/ReportSubmissionService.ts`, with Discord member/user resolution isolated in `src/services/DiscordUserResolver.ts`.
 - Security report-detection slice implemented: user-report and message-report detection event construction, report attachment metadata serialization, and report AI metadata attachment moved to `src/services/ReportDetectionBuilder.ts`.
-- Observed action correctness fix implemented: observed restrict/ban paths now treat `UserModerationService` boolean `false` returns as failed moderation actions instead of recording success.
+- Observed action correctness fix implemented: observed open-case/kick/ban paths now treat `UserModerationService` boolean `false` returns as failed moderation actions instead of recording success.
 - `SecurityActionService.ts` is now 2,039 lines and `SecurityActionService.unit.test.ts` is now 2,604 lines after adding observed false-return regression coverage.
 - Current largest-file follow-ups after this pass: `SecurityActionService.unit.test.ts`, `SecurityActionService.ts`, `NotificationManager.ts`, `InteractionHandler.ts`, and `CommandHandler.setup.unit.test.ts`.
 

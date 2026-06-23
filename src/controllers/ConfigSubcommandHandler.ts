@@ -81,6 +81,12 @@ import {
   getModerationQueueSettings,
   MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY,
 } from '../utils/moderationQueueSettings';
+import {
+  getManualIntakeSettings,
+  MANUAL_INTAKE_ENABLED_SETTING_KEY,
+  MANUAL_INTAKE_GRACE_PERIOD_SECONDS_SETTING_KEY,
+  MANUAL_INTAKE_ROLE_ID_SETTING_KEY,
+} from '../utils/manualIntakeSettings';
 import { IModerationQueueService } from '../services/ModerationQueueService';
 import {
   decodeExpectedTopicsInput,
@@ -173,6 +179,19 @@ export class ConfigSubcommandHandler {
     return [`Confirmed report intake response: \`${settings.confirmedResponseMode}\``].join('\n');
   }
 
+  private formatManualIntakeSettings(
+    guildId: string,
+    settings: ReturnType<typeof getManualIntakeSettings>
+  ): string {
+    return [
+      `Status: \`${settings.enabled ? 'enabled' : 'disabled'}\``,
+      `Trigger role: ${settings.roleId ? `<@&${settings.roleId}>` : '`none`'}`,
+      `Grace period: \`${settings.gracePeriodSeconds} seconds\``,
+      'Action: `open moderation case and apply case role`',
+      `Guild ID: \`${guildId}\``,
+    ].join('\n');
+  }
+
   private formatUserReportSettings(
     guildId: string,
     settings: ReturnType<typeof getUserReportSettings>
@@ -232,7 +251,7 @@ export class ConfigSubcommandHandler {
     return [
       `Mode: \`${settings.mode}\``,
       `Exempt roles: ${settings.exemptRoleIds.length ? settings.exemptRoleIds.map((roleId) => `<@&${roleId}>`).join(', ') : '`none`'}`,
-      'Automatic mode removes all removable non-exempt roles during future restrictions and restores them additively when restrictions are lifted.',
+      'On mode removes all removable non-exempt roles while applying the case role and restores them additively when the case resolves.',
       'Privileged, managed, bot-managed, and above-Drasil roles are always skipped.',
       `Guild ID: \`${guildId}\``,
     ].join('\n');
@@ -549,7 +568,6 @@ export class ConfigSubcommandHandler {
       `Analyze images: \`${settings.analyzeImages ? 'yes' : 'no'}\``,
       `Max recommended action: \`${settings.maxAction}\``,
       `Open-case threshold: \`${Math.round(settings.openCaseThreshold * 100)}%\``,
-      `Restrict threshold: \`${Math.round(settings.restrictThreshold * 100)}%\``,
       `Max images: \`${settings.maxImages}\``,
       `Max image size: \`${Math.round(settings.maxImageBytes / (1024 * 1024))} MB\``,
     ].join('\n');
@@ -622,6 +640,134 @@ export class ConfigSubcommandHandler {
       `Max recommended action: \`${settings.maxAction}\``,
       `Restrict threshold: \`${Math.round(settings.restrictThreshold * 100)}%\``,
     ].join('\n');
+  }
+
+  public async handleManualIntakeConfigCommand(
+    interaction: ChatInputCommandInteraction,
+    guildId: string
+  ): Promise<void> {
+    const subcommand = interaction.options.getSubcommand(true);
+
+    try {
+      switch (subcommand) {
+        case 'view': {
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const settings = getManualIntakeSettings(serverConfig.settings);
+          await interaction.reply({
+            content:
+              'Current manual intake settings:\n\n' +
+              this.formatManualIntakeSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-role': {
+          const role = interaction.options.getRole('role', true);
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          if (role.id === serverConfig.case_role_id) {
+            await interaction.reply({
+              content:
+                'Manual intake needs a separate trigger role. Do not use the configured case role as the intake trigger.',
+              flags: MessageFlags.Ephemeral,
+              allowedMentions: { parse: [] },
+            });
+            return;
+          }
+
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [MANUAL_INTAKE_ROLE_ID_SETTING_KEY]: role.id,
+            [MANUAL_INTAKE_ENABLED_SETTING_KEY]: true,
+          });
+          const settings = getManualIntakeSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `Set manual intake trigger role to <@&${role.id}> and enabled manual intake.\n\n` +
+              this.formatManualIntakeSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'clear-role': {
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [MANUAL_INTAKE_ROLE_ID_SETTING_KEY]: null,
+            [MANUAL_INTAKE_ENABLED_SETTING_KEY]: false,
+          });
+          const settings = getManualIntakeSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Cleared the manual intake trigger role and disabled manual intake.\n\n' +
+              this.formatManualIntakeSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'enable':
+        case 'disable': {
+          const enabled = subcommand === 'enable';
+          const serverConfig = await this.configService.getServerConfig(guildId);
+          const currentSettings = getManualIntakeSettings(serverConfig.settings);
+          if (enabled && !currentSettings.roleId) {
+            await interaction.reply({
+              content: 'Set a manual intake trigger role before enabling manual intake.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [MANUAL_INTAKE_ENABLED_SETTING_KEY]: enabled,
+          });
+          const settings = getManualIntakeSettings(updated.settings);
+          await interaction.reply({
+            content:
+              `${enabled ? 'Enabled' : 'Disabled'} manual intake.\n\n` +
+              this.formatManualIntakeSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'set-grace-period': {
+          const seconds = interaction.options.getInteger('seconds', true);
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [MANUAL_INTAKE_GRACE_PERIOD_SECONDS_SETTING_KEY]: seconds,
+          });
+          const settings = getManualIntakeSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated manual intake grace period.\n\n' +
+              this.formatManualIntakeSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        default:
+          await interaction.reply({
+            content: 'Unsupported /config manual-intake subcommand.',
+            flags: MessageFlags.Ephemeral,
+          });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorResponse = {
+        content: `Failed to process manual intake settings: ${errorMessage}`,
+        flags: MessageFlags.Ephemeral,
+      } as const;
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(errorResponse);
+      } else {
+        await interaction.reply(errorResponse);
+      }
+    }
   }
 
   public async handleDetectionConfigCommand(

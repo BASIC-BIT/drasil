@@ -5,7 +5,7 @@ export const INTEGRITY_AUDIT_DEFAULT_LIMIT = 50;
 export const INTEGRITY_AUDIT_MIN_LIMIT = 1;
 export const INTEGRITY_AUDIT_MAX_LIMIT = 250;
 
-export const INTEGRITY_AUDIT_SCOPES = ['all', 'cases', 'restricted', 'queue'] as const;
+export const INTEGRITY_AUDIT_SCOPES = ['all', 'cases', 'case_role', 'queue'] as const;
 
 export type IntegrityAuditScope = (typeof INTEGRITY_AUDIT_SCOPES)[number];
 

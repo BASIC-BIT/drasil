@@ -106,6 +106,7 @@ describeIntegration('SecurityActionService (integration)', () => {
       }),
     };
     userModerationService = {
+      applyCaseRole: jest.fn().mockResolvedValue(true),
       restrictUser: jest.fn().mockResolvedValue(true),
       liftRestriction: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
@@ -160,7 +161,7 @@ describeIntegration('SecurityActionService (integration)', () => {
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
     expect(verificationEvents[0].notification_message_id).toBe('notif-1');
 
-    expect(userModerationService.restrictUser).toHaveBeenCalledWith(member);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });

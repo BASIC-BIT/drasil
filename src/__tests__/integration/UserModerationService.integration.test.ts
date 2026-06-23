@@ -59,8 +59,8 @@ describeIntegration('UserModerationService (integration)', () => {
       serverRepository
     );
     roleManager = {
-      assignRestrictedRole: jest.fn().mockResolvedValue(true),
-      removeRestrictedRole: jest.fn().mockResolvedValue(true),
+      assignCaseRole: jest.fn().mockResolvedValue(true),
+      removeCaseRole: jest.fn().mockResolvedValue(true),
     };
     notificationManager = {
       upsertSuspiciousUserNotification: jest.fn().mockResolvedValue({} as any),
@@ -141,13 +141,13 @@ describeIntegration('UserModerationService (integration)', () => {
       where: { server_id_user_id: { server_id: guildId, user_id: userId } },
     });
     expect(serverMember?.verification_status).toBe(VerificationStatus.VERIFIED);
-    expect(serverMember?.is_restricted).toBe(false);
+    expect(serverMember?.case_role_active).toBe(false);
 
     const adminActions = await prisma.admin_actions.findMany();
     expect(adminActions).toHaveLength(1);
     expect(adminActions[0].action_type).toBe(AdminActionType.VERIFY);
 
-    expect(roleManager.removeRestrictedRole).toHaveBeenCalled();
+    expect(roleManager.removeCaseRole).toHaveBeenCalled();
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       VerificationStatus.VERIFIED,
@@ -205,7 +205,7 @@ describeIntegration('UserModerationService (integration)', () => {
       where: { server_id_user_id: { server_id: guildId, user_id: userId } },
     });
     expect(serverMember?.verification_status).toBe(VerificationStatus.BANNED);
-    expect(serverMember?.is_restricted).toBe(true);
+    expect(serverMember?.case_role_active).toBe(false);
 
     const adminActions = await prisma.admin_actions.findMany();
     expect(adminActions).toHaveLength(1);

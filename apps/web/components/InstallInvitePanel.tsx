@@ -14,7 +14,7 @@ export function InstallInvitePanel({ guildId }: InstallInvitePanelProps) {
       <div className="section-heading compact-heading">
         <h2>Install Drasil</h2>
         <p className="muted">
-          Invite Drasil with the standard permission set for setup diagnostics, restricted roles,
+          Invite Drasil with the standard permission set for setup diagnostics, case roles,
           evidence threads, reports, and moderator ban actions.
         </p>
       </div>

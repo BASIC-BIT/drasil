@@ -263,12 +263,12 @@ export class InteractionHandler implements IInteractionHandler {
           ) {
             await this.replyPermissionDenied(
               interaction,
-              'You need moderation permissions to restrict a user.'
+              'You need moderation permissions to repair a case.'
             );
             return;
           }
           await this.showLegacyAdminActionConfirmation(interaction, {
-            action: 'restrict_user',
+            action: 'repair',
             surface: 'case',
             userId: targetUserId,
           });
@@ -440,17 +440,19 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    if (parsed.action === 'cancel') {
+    const normalizedParsed = this.normalizeLegacyAdminAction(parsed);
+
+    if (normalizedParsed.action === 'cancel') {
       await interaction.update({ content: 'Cancelled.', components: [] });
       return;
     }
 
-    if (parsed.action === 'menu') {
-      await this.showAdminActionsMenu(interaction, guildId, parsed);
+    if (normalizedParsed.action === 'menu') {
+      await this.showAdminActionsMenu(interaction, guildId, normalizedParsed);
       return;
     }
 
-    if (parsed.action === 'history') {
+    if (normalizedParsed.action === 'history') {
       if (!(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))) {
         await this.replyPermissionDenied(
           interaction,
@@ -458,25 +460,28 @@ export class InteractionHandler implements IInteractionHandler {
         );
         return;
       }
-      if (parsed.surface === 'observed') {
-        await this.notificationManager.handleHistoryButtonClick(interaction, parsed.userId);
+      if (normalizedParsed.surface === 'observed') {
+        await this.notificationManager.handleHistoryButtonClick(
+          interaction,
+          normalizedParsed.userId
+        );
       } else {
-        await this.handleHistoryButton(interaction, guildId, parsed.userId);
+        await this.handleHistoryButton(interaction, guildId, normalizedParsed.userId);
       }
       return;
     }
 
-    if (parsed.action === 'ban' || parsed.action === 'observed_ban') {
-      await this.handleAdminActionBan(interaction, guildId, parsed);
+    if (normalizedParsed.action === 'ban' || normalizedParsed.action === 'observed_ban') {
+      await this.handleAdminActionBan(interaction, guildId, normalizedParsed);
       return;
     }
 
-    if (parsed.action.startsWith('confirm_')) {
-      await this.executeConfirmedAdminAction(interaction, guildId, parsed);
+    if (normalizedParsed.action.startsWith('confirm_')) {
+      await this.executeConfirmedAdminAction(interaction, guildId, normalizedParsed);
       return;
     }
 
-    const confirmation = this.getAdminActionConfirmation(parsed);
+    const confirmation = this.getAdminActionConfirmation(normalizedParsed);
     if (!confirmation) {
       await interaction.reply({
         content: 'Unknown admin action.',
@@ -485,7 +490,26 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    await this.showAdminActionConfirmation(interaction, parsed, confirmation);
+    await this.showAdminActionConfirmation(interaction, normalizedParsed, confirmation);
+  }
+
+  private normalizeLegacyAdminAction(parsed: ParsedAdminActionCustomId): ParsedAdminActionCustomId {
+    switch (parsed.action) {
+      case 'restrict_user':
+        return { ...parsed, action: 'repair' };
+      case 'lift_restriction':
+        return { ...parsed, action: 'close_no_action' };
+      case 'confirm_restrict_user':
+        return { ...parsed, action: 'confirm_repair' };
+      case 'confirm_lift_restriction':
+        return { ...parsed, action: 'confirm_close_no_action' };
+      case 'observed_restrict':
+        return { ...parsed, action: 'observed_open' };
+      case 'confirm_observed_restrict':
+        return { ...parsed, action: 'confirm_observed_open' };
+      default:
+        return parsed;
+    }
   }
 
   private async showAdminActionsMenu(
@@ -544,9 +568,6 @@ export class InteractionHandler implements IInteractionHandler {
       hasKickMembersPermission &&
       !memberLeft &&
       (await this.canUseModeratorKickAction(guildId, 'case'));
-    const restrictionState =
-      activeCase && !memberLeft ? await this.getCaseRestrictionState(guildId, parsed.userId) : null;
-
     const actionButtons: ButtonBuilder[] = [];
     if (hasModerationPermission) {
       actionButtons.push(
@@ -576,16 +597,6 @@ export class InteractionHandler implements IInteractionHandler {
           );
         }
       } else if (hasModerationPermission) {
-        actionButtons.push(
-          restrictionState === true
-            ? this.adminActionButton(
-                parsed,
-                'lift_restriction',
-                'Lift Restriction',
-                ButtonStyle.Secondary
-              )
-            : this.adminActionButton(parsed, 'restrict_user', 'Restrict User', ButtonStyle.Danger)
-        );
         actionButtons.push(
           this.adminActionButton(parsed, 'verify', 'Verify User', ButtonStyle.Success),
           ...(canKick
@@ -636,7 +647,7 @@ export class InteractionHandler implements IInteractionHandler {
       details.push(
         memberLeft
           ? 'Membership: left or removed. Use Ban by ID if moderation should continue, or Close No Action if no action is needed.'
-          : `Restriction: ${this.formatCaseRestrictionState(restrictionState)}.`
+          : 'Case role: applied while this case is open.'
       );
     }
     const latestCaseLinks = latestCase
@@ -700,7 +711,6 @@ export class InteractionHandler implements IInteractionHandler {
     if (permissions.hasModerationPermission) {
       actionButtons.push(
         this.adminActionButton(parsed, 'observed_open', 'Open Case', ButtonStyle.Primary),
-        this.adminActionButton(parsed, 'observed_restrict', 'Restrict', ButtonStyle.Danger),
         this.adminActionButton(parsed, 'observed_dismiss', 'Dismiss Alert', ButtonStyle.Secondary),
         this.adminActionButton(
           parsed,
@@ -720,7 +730,7 @@ export class InteractionHandler implements IInteractionHandler {
     if (canBan) {
       if (permissions.hasModerationPermission) {
         actionButtons.splice(
-          2,
+          1,
           0,
           this.adminActionButton(parsed, 'observed_ban', 'Ban...', ButtonStyle.Danger)
         );
@@ -733,7 +743,7 @@ export class InteractionHandler implements IInteractionHandler {
     if (canKick) {
       if (permissions.hasModerationPermission) {
         actionButtons.splice(
-          canBan ? 3 : 2,
+          canBan ? 2 : 1,
           0,
           this.adminActionButton(parsed, 'observed_kick', 'Kick', ButtonStyle.Danger)
         );
@@ -1018,28 +1028,6 @@ export class InteractionHandler implements IInteractionHandler {
     return server?.admin_channel_id ?? null;
   }
 
-  private async getCaseRestrictionState(guildId: string, userId: string): Promise<boolean | null> {
-    if (!this.serverMemberRepository) {
-      return null;
-    }
-
-    const serverMember = await this.serverMemberRepository
-      .findByServerAndUser(guildId, userId)
-      .catch(() => null);
-    return serverMember?.is_restricted ?? null;
-  }
-
-  private formatCaseRestrictionState(restricted: boolean | null): string {
-    if (restricted === true) {
-      return 'restricted';
-    }
-    if (restricted === false) {
-      return 'unrestricted';
-    }
-
-    return 'unknown';
-  }
-
   private formatVerificationCaseLinks(
     guildId: string,
     event: VerificationEvent,
@@ -1130,25 +1118,13 @@ export class InteractionHandler implements IInteractionHandler {
       case 'verify':
         return {
           label: 'Confirm Verify',
-          message: `Verify ${target} and remove verification restrictions?`,
+          message: `Verify ${target} and remove the case role?`,
           style: ButtonStyle.Success,
-        };
-      case 'restrict_user':
-        return {
-          label: 'Confirm Restrict',
-          message: `Restrict ${target} while keeping their case pending?`,
-          style: ButtonStyle.Danger,
-        };
-      case 'lift_restriction':
-        return {
-          label: 'Confirm Lift',
-          message: `Lift verification restrictions for ${target} while keeping their case pending?`,
-          style: ButtonStyle.Secondary,
         };
       case 'close_no_action':
         return {
           label: 'Confirm Close',
-          message: `Close pending verification cases for ${target} without verifying or banning them? If Drasil has them marked restricted, the restricted role will be removed.`,
+          message: `Close pending verification cases for ${target} without verifying or banning them? The case role will be removed.`,
           style: ButtonStyle.Secondary,
         };
       case 'thread':
@@ -1178,7 +1154,7 @@ export class InteractionHandler implements IInteractionHandler {
       case 'reopen':
         return {
           label: 'Confirm Reopen',
-          message: `Reopen verification for ${target} and restrict them again?`,
+          message: `Reopen verification for ${target} and apply the case role again?`,
           style: ButtonStyle.Primary,
         };
       case 'observed_open':
@@ -1186,12 +1162,6 @@ export class InteractionHandler implements IInteractionHandler {
           label: 'Confirm Open Case',
           message: `Open a verification case for observed alert on ${target}?`,
           style: ButtonStyle.Primary,
-        };
-      case 'observed_restrict':
-        return {
-          label: 'Confirm Restrict',
-          message: `Restrict ${target} and open a verification case from this observed alert?`,
-          style: ButtonStyle.Danger,
         };
       case 'observed_kick':
         return {
@@ -1349,30 +1319,6 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    if (action === 'restrict_user') {
-      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
-        await this.replyPermissionDenied(
-          interaction,
-          'You need moderation permissions to restrict a user.'
-        );
-        return;
-      }
-      await this.handleRestrictUserButton(interaction, guildId, parsed.userId);
-      return;
-    }
-
-    if (action === 'lift_restriction') {
-      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
-        await this.replyPermissionDenied(
-          interaction,
-          'You need moderation permissions to lift a restriction.'
-        );
-        return;
-      }
-      await this.handleLiftRestrictionButton(interaction, guildId, parsed.userId);
-      return;
-    }
-
     if (action === 'close_no_action') {
       if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
         await this.replyPermissionDenied(
@@ -1499,12 +1445,7 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       case 'observed_restrict':
         await interaction.deferUpdate();
-        await this.restrictObservedUser(
-          interaction,
-          guildId,
-          parsed.userId,
-          parsed.detectionEventId
-        );
+        await this.openObservedCase(interaction, guildId, parsed.userId, parsed.detectionEventId);
         return;
       case 'observed_dismiss':
       case 'observed_false_positive':
@@ -1560,68 +1501,6 @@ export class InteractionHandler implements IInteractionHandler {
       const message = error instanceof Error && error.message ? error.message : 'Unknown error';
       await interaction.followUp({
         content: `An error occurred while repairing the active case: ${message}`,
-        flags: MessageFlags.Ephemeral,
-      });
-    }
-  }
-
-  private async handleRestrictUserButton(
-    interaction: ButtonInteraction,
-    guildId: string,
-    userId: string
-  ): Promise<void> {
-    await interaction.deferUpdate();
-
-    try {
-      const guild = await this.client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId).catch(() => null);
-      if (!member) {
-        throw new Error('Could not find member in guild');
-      }
-
-      await this.securityActionService.restrictActiveCase(member, interaction.user);
-      await this.refreshActiveCaseNotification(guildId, userId);
-
-      await interaction.followUp({
-        content: `Restricted <@${userId}> while keeping the case open.`,
-        flags: MessageFlags.Ephemeral,
-        allowedMentions: { parse: [] },
-      });
-    } catch (error) {
-      console.error('Error restricting user from case action:', error);
-      await interaction.followUp({
-        content: 'An error occurred while restricting the user.',
-        flags: MessageFlags.Ephemeral,
-      });
-    }
-  }
-
-  private async handleLiftRestrictionButton(
-    interaction: ButtonInteraction,
-    guildId: string,
-    userId: string
-  ): Promise<void> {
-    await interaction.deferUpdate();
-
-    try {
-      const guild = await this.client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId).catch(() => null);
-      if (!member) {
-        throw new Error('Could not find member in guild');
-      }
-
-      await this.userModerationService.liftRestriction(member, interaction.user);
-      await this.refreshActiveCaseNotification(guildId, userId);
-
-      await interaction.followUp({
-        content: `Lifted restrictions for <@${userId}> while keeping the case open.`,
-        flags: MessageFlags.Ephemeral,
-        allowedMentions: { parse: [] },
-      });
-    } catch (error) {
-      console.error('Error lifting restriction from case action:', error);
-      await interaction.followUp({
-        content: 'An error occurred while lifting the restriction.',
         flags: MessageFlags.Ephemeral,
       });
     }
@@ -1754,7 +1633,7 @@ export class InteractionHandler implements IInteractionHandler {
       console.error('Error closing case with no action:', error);
       await interaction.followUp({
         content:
-          'Could not close the case with no action. If the user is restricted, confirm Drasil can remove the restricted role and try again.',
+          'Could not close the case with no action. If the user has the case role, confirm Drasil can remove it and try again.',
         flags: MessageFlags.Ephemeral,
       });
     }
@@ -1964,7 +1843,7 @@ export class InteractionHandler implements IInteractionHandler {
       await this.securityActionService.reopenVerification(verificationEvent, interaction.user);
 
       await interaction.followUp({
-        content: `Verification for <@${userId}> has been reopened. The user has been restricted again.`,
+        content: `Verification for <@${userId}> has been reopened. The case role has been reapplied.`,
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
@@ -2228,12 +2107,12 @@ export class InteractionHandler implements IInteractionHandler {
         if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
             interaction,
-            'You need moderation permissions to restrict a user.'
+            'You need moderation permissions to open a case.'
           );
           return;
         }
         await this.showLegacyAdminActionConfirmation(interaction, {
-          action: 'observed_restrict',
+          action: 'observed_open',
           surface: 'observed',
           userId: parsed.userId,
           detectionEventId: parsed.detectionEventId,
@@ -2364,26 +2243,6 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.followUp({
       content: opened
         ? `Opened a verification case for <@${userId}>.`
-        : `This observed alert for <@${userId}> was already actioned.`,
-      flags: MessageFlags.Ephemeral,
-    });
-  }
-
-  private async restrictObservedUser(
-    interaction: ButtonInteraction,
-    guildId: string,
-    userId: string,
-    detectionEventId: string
-  ): Promise<void> {
-    const member = await this.getObservedTargetMember(guildId, userId);
-    const restricted = await this.securityActionService.restrictObservedDetection(
-      member,
-      detectionEventId,
-      interaction.user
-    );
-    await interaction.followUp({
-      content: restricted
-        ? `Restricted <@${userId}> and opened a verification case.`
         : `This observed alert for <@${userId}> was already actioned.`,
       flags: MessageFlags.Ephemeral,
     });

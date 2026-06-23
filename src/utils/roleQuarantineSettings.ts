@@ -3,8 +3,9 @@ import { ServerSettings } from '../repositories/types';
 export const ROLE_QUARANTINE_MODE_SETTING_KEY = 'role_quarantine_mode';
 export const ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY = 'role_quarantine_exempt_role_ids';
 
-export const ROLE_QUARANTINE_MODES = ['off', 'audit_only', 'automatic'] as const;
-export type RoleQuarantineMode = (typeof ROLE_QUARANTINE_MODES)[number];
+export const ROLE_QUARANTINE_MODES = ['off', 'on'] as const;
+export type ConfigurableRoleQuarantineMode = (typeof ROLE_QUARANTINE_MODES)[number];
+export type RoleQuarantineMode = ConfigurableRoleQuarantineMode | 'audit_only';
 
 export const DEFAULT_ROLE_QUARANTINE_MODE: RoleQuarantineMode = 'off';
 
@@ -15,8 +16,8 @@ export interface RoleQuarantineSettings {
 
 const DISCORD_ID_PATTERN = /^\d{17,20}$/;
 
-export function isRoleQuarantineMode(value: string): value is RoleQuarantineMode {
-  return ROLE_QUARANTINE_MODES.includes(value as RoleQuarantineMode);
+export function isRoleQuarantineMode(value: string): value is ConfigurableRoleQuarantineMode {
+  return ROLE_QUARANTINE_MODES.includes(value as ConfigurableRoleQuarantineMode);
 }
 
 export function normalizeRoleQuarantineRoleIds(value: unknown): string[] {
@@ -46,16 +47,23 @@ export function normalizeRoleQuarantineRoleIds(value: unknown): string[] {
 export function getRoleQuarantineSettings(
   settings: ServerSettings | undefined
 ): RoleQuarantineSettings {
-  const modeValue = settings?.[ROLE_QUARANTINE_MODE_SETTING_KEY];
-  const mode =
-    typeof modeValue === 'string' && isRoleQuarantineMode(modeValue)
-      ? modeValue
-      : DEFAULT_ROLE_QUARANTINE_MODE;
-
   return {
-    mode,
+    mode: readRoleQuarantineMode(settings?.[ROLE_QUARANTINE_MODE_SETTING_KEY]),
     exemptRoleIds: normalizeRoleQuarantineRoleIds(
       settings?.[ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY]
     ),
   };
+}
+
+function readRoleQuarantineMode(value: unknown): RoleQuarantineMode {
+  if (value === 'automatic') {
+    return 'on';
+  }
+  if (value === 'audit_only') {
+    return 'audit_only';
+  }
+
+  return typeof value === 'string' && isRoleQuarantineMode(value)
+    ? value
+    : DEFAULT_ROLE_QUARANTINE_MODE;
 }

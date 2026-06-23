@@ -16,57 +16,57 @@ import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { ServerSettings } from '../repositories/types';
 import {
-  getRestrictedLockdownSettings,
-  RESTRICTED_LOCKDOWN_ENABLED_SETTING_KEY,
-} from '../utils/restrictedLockdownSettings';
+  getCaseRoleLockdownSettings,
+  CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY,
+} from '../utils/caseRoleLockdownSettings';
 
-export type RestrictedLockdownSeverity = 'error' | 'warning';
-export type RestrictedLockdownActionScope = 'category' | 'channel';
+export type CaseRoleLockdownSeverity = 'error' | 'warning';
+export type CaseRoleLockdownActionScope = 'category' | 'channel';
 
-export interface RestrictedLockdownIssue {
-  readonly severity: RestrictedLockdownSeverity;
+export interface CaseRoleLockdownIssue {
+  readonly severity: CaseRoleLockdownSeverity;
   readonly code: string;
   readonly message: string;
 }
 
-export interface RestrictedLockdownPlannedAction {
-  readonly scope: RestrictedLockdownActionScope;
+export interface CaseRoleLockdownPlannedAction {
+  readonly scope: CaseRoleLockdownActionScope;
   readonly channelId: string;
   readonly channelName: string;
 }
 
-export interface RestrictedLockdownApplyFailure extends RestrictedLockdownPlannedAction {
+export interface CaseRoleLockdownApplyFailure extends CaseRoleLockdownPlannedAction {
   readonly message: string;
 }
 
-export interface RestrictedLockdownApplyOptions {
+export interface CaseRoleLockdownApplyOptions {
   readonly unsyncAllowedChannels?: boolean;
 }
 
-export interface RestrictedLockdownReport {
+export interface CaseRoleLockdownReport {
   readonly guildId: string;
   readonly checkedAt: Date;
   readonly enabled: boolean;
   readonly allowedChannelIds: readonly string[];
   readonly allowedCategoryIds: readonly string[];
   readonly autoAllowedChannelIds: readonly string[];
-  readonly issues: readonly RestrictedLockdownIssue[];
-  readonly plannedActions: readonly RestrictedLockdownPlannedAction[];
-  readonly appliedActions: readonly RestrictedLockdownPlannedAction[];
-  readonly failedActions: readonly RestrictedLockdownApplyFailure[];
-  readonly syncedAllowedChannels: readonly RestrictedLockdownPlannedAction[];
-  readonly unsyncedAllowedChannels: readonly RestrictedLockdownPlannedAction[];
+  readonly issues: readonly CaseRoleLockdownIssue[];
+  readonly plannedActions: readonly CaseRoleLockdownPlannedAction[];
+  readonly appliedActions: readonly CaseRoleLockdownPlannedAction[];
+  readonly failedActions: readonly CaseRoleLockdownApplyFailure[];
+  readonly syncedAllowedChannels: readonly CaseRoleLockdownPlannedAction[];
+  readonly unsyncedAllowedChannels: readonly CaseRoleLockdownPlannedAction[];
   readonly errorCount: number;
   readonly warningCount: number;
 }
 
-export interface IRestrictedRoleLockdownService {
-  auditGuild(guild: Guild): Promise<RestrictedLockdownReport>;
+export interface ICaseRoleLockdownService {
+  auditGuild(guild: Guild): Promise<CaseRoleLockdownReport>;
   applyGuild(
     guild: Guild,
     actorId: string,
-    options?: RestrictedLockdownApplyOptions
-  ): Promise<RestrictedLockdownReport>;
+    options?: CaseRoleLockdownApplyOptions
+  ): Promise<CaseRoleLockdownReport>;
 }
 
 interface LockdownPermission {
@@ -120,20 +120,20 @@ const HIGH_RISK_RESTRICTED_ROLE_PERMISSIONS: readonly PermissionLabel[] = [
 ];
 
 @injectable()
-export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownService {
+export class CaseRoleLockdownService implements ICaseRoleLockdownService {
   constructor(@inject(TYPES.ConfigService) private readonly configService: IConfigService) {}
 
-  public async auditGuild(guild: Guild): Promise<RestrictedLockdownReport> {
+  public async auditGuild(guild: Guild): Promise<CaseRoleLockdownReport> {
     return this.buildReport(guild, false);
   }
 
   public async applyGuild(
     guild: Guild,
     actorId: string,
-    options: RestrictedLockdownApplyOptions = {}
-  ): Promise<RestrictedLockdownReport> {
+    options: CaseRoleLockdownApplyOptions = {}
+  ): Promise<CaseRoleLockdownReport> {
     let report = await this.buildReport(guild, false);
-    let unsyncedAllowedChannels: RestrictedLockdownPlannedAction[] = [];
+    let unsyncedAllowedChannels: CaseRoleLockdownPlannedAction[] = [];
 
     if (report.errorCount > 0) {
       const onlySyncedAllowedChannelErrors =
@@ -180,17 +180,17 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     if (report.plannedActions.length === 0) {
       if (!report.enabled) {
         await this.configService.updateServerSettings(guild.id, {
-          [RESTRICTED_LOCKDOWN_ENABLED_SETTING_KEY]: true,
+          [CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY]: true,
         });
       }
       return { ...report, enabled: true, unsyncedAllowedChannels };
     }
 
     const serverConfig = await this.configService.getServerConfig(guild.id);
-    if (!serverConfig.restricted_role_id) {
+    if (!serverConfig.case_role_id) {
       const failedActions = report.plannedActions.map((action) => ({
         ...action,
-        message: 'Restricted role is no longer configured.',
+        message: 'Case role is no longer configured.',
       }));
       return this.toReport({
         guildId: report.guildId,
@@ -210,8 +210,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
     const channels = await this.fetchLockdownChannels(guild);
     const channelById = new Map(channels.map((channel) => [channel.id, channel]));
-    const appliedActions: RestrictedLockdownPlannedAction[] = [];
-    const failedActions: RestrictedLockdownApplyFailure[] = [];
+    const appliedActions: CaseRoleLockdownPlannedAction[] = [];
+    const failedActions: CaseRoleLockdownApplyFailure[] = [];
 
     for (const action of report.plannedActions) {
       const channel = channelById.get(action.channelId);
@@ -222,10 +222,10 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
       try {
         await channel.permissionOverwrites.edit(
-          serverConfig.restricted_role_id,
+          serverConfig.case_role_id,
           LOCKDOWN_PERMISSION_OPTIONS,
           {
-            reason: `Drasil restricted-role lockdown applied by ${actorId}`,
+            reason: `Drasil case-role lockdown applied by ${actorId}`,
           }
         );
         appliedActions.push(action);
@@ -239,7 +239,7 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
     if (appliedActions.length > 0) {
       await this.configService.updateServerSettings(guild.id, {
-        [RESTRICTED_LOCKDOWN_ENABLED_SETTING_KEY]: true,
+        [CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY]: true,
       });
     }
 
@@ -268,24 +268,24 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     guild: Guild,
     skipSetupChecks: boolean,
     recentlyUnsyncedAllowedChannelIds: ReadonlySet<string> = new Set()
-  ): Promise<RestrictedLockdownReport> {
+  ): Promise<CaseRoleLockdownReport> {
     const serverConfig = await this.configService.getServerConfig(guild.id);
-    const settings = getRestrictedLockdownSettings(serverConfig.settings);
+    const settings = getCaseRoleLockdownSettings(serverConfig.settings);
     const autoAllowedChannelIds = this.getAutoAllowedChannelIds(serverConfig.settings, [
       serverConfig.verification_channel_id,
     ]);
-    const issues: RestrictedLockdownIssue[] = [];
-    const plannedActions: RestrictedLockdownPlannedAction[] = [];
-    const syncedAllowedChannels: RestrictedLockdownPlannedAction[] = [];
+    const issues: CaseRoleLockdownIssue[] = [];
+    const plannedActions: CaseRoleLockdownPlannedAction[] = [];
+    const syncedAllowedChannels: CaseRoleLockdownPlannedAction[] = [];
     const botMember = await this.getBotMember(guild);
-    const restrictedRole = await this.getRestrictedRole(guild, serverConfig.restricted_role_id);
+    const caseRole = await this.getCaseRole(guild, serverConfig.case_role_id);
 
     if (!skipSetupChecks) {
       this.checkBotPermissions(botMember, issues);
-      this.checkRestrictedRole(restrictedRole, botMember, issues);
+      this.checkCaseRole(caseRole, botMember, issues);
     }
 
-    if (!restrictedRole) {
+    if (!caseRole) {
       return this.toReport({
         guildId: guild.id,
         checkedAt: new Date(),
@@ -309,7 +309,7 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     const allowedCategoryIds = new Set(settings.allowedCategoryIds);
 
     this.checkConfiguredAllowList(channels, allowedChannelIds, allowedCategoryIds, issues);
-    this.checkRestrictedRoleGlobalPermissions(restrictedRole, issues);
+    this.checkCaseRoleGlobalPermissions(caseRole, issues);
 
     for (const category of categories) {
       if (allowedCategoryIds.has(category.id)) {
@@ -317,12 +317,12 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
       }
 
       deniedCategoryIds.add(category.id);
-      this.checkConflictingRoleAllows(guild, botMember, category, restrictedRole.id, issues);
-      if (!this.hasRestrictedLockdownDeny(category, restrictedRole.id)) {
+      this.checkConflictingRoleAllows(guild, botMember, category, caseRole.id, issues);
+      if (!this.hasCaseRoleLockdownDeny(category, caseRole.id)) {
         issues.push({
           severity: 'warning',
           code: 'lockdown-category-missing-deny',
-          message: `Category ${this.formatChannel(category)} is missing restricted-role lockdown denies.`,
+          message: `Category ${this.formatChannel(category)} is missing case-role lockdown denies.`,
         });
         plannedActions.push(this.toPlannedAction(category, 'category'));
       }
@@ -359,12 +359,12 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
         continue;
       }
 
-      this.checkConflictingRoleAllows(guild, botMember, channel, restrictedRole.id, issues);
-      if (!this.hasRestrictedLockdownDeny(channel, restrictedRole.id)) {
+      this.checkConflictingRoleAllows(guild, botMember, channel, caseRole.id, issues);
+      if (!this.hasCaseRoleLockdownDeny(channel, caseRole.id)) {
         issues.push({
           severity: 'warning',
           code: 'lockdown-channel-missing-deny',
-          message: `Unsynced channel ${this.formatChannel(channel)} is missing restricted-role lockdown denies.`,
+          message: `Unsynced channel ${this.formatChannel(channel)} is missing case-role lockdown denies.`,
         });
         plannedActions.push(this.toPlannedAction(channel, 'channel'));
       }
@@ -390,7 +390,7 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     return guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
   }
 
-  private async getRestrictedRole(guild: Guild, roleId: string | null): Promise<Role | null> {
+  private async getCaseRole(guild: Guild, roleId: string | null): Promise<Role | null> {
     if (!roleId) {
       return null;
     }
@@ -400,7 +400,7 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
   private checkBotPermissions(
     botMember: GuildMember | null,
-    issues: RestrictedLockdownIssue[]
+    issues: CaseRoleLockdownIssue[]
   ): void {
     if (!botMember) {
       issues.push({
@@ -423,48 +423,45 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
       issues.push({
         severity: 'error',
         code: 'lockdown-bot-manage-roles',
-        message: 'Drasil is missing Manage Roles, so it cannot safely manage the restricted role.',
+        message: 'Drasil is missing Manage Roles, so it cannot safely manage the case role.',
       });
     }
   }
 
-  private checkRestrictedRole(
-    restrictedRole: Role | null,
+  private checkCaseRole(
+    caseRole: Role | null,
     botMember: GuildMember | null,
-    issues: RestrictedLockdownIssue[]
+    issues: CaseRoleLockdownIssue[]
   ): void {
-    if (!restrictedRole) {
+    if (!caseRole) {
       issues.push({
         severity: 'error',
-        code: 'lockdown-restricted-role-missing',
-        message: 'Restricted role is not configured or no longer exists.',
+        code: 'lockdown-case-role-missing',
+        message: 'Case role is not configured or no longer exists.',
       });
       return;
     }
 
-    if (restrictedRole.managed) {
+    if (caseRole.managed) {
       issues.push({
         severity: 'error',
-        code: 'lockdown-restricted-role-managed',
-        message: `Restricted role <@&${restrictedRole.id}> is managed by an integration and cannot be assigned by Drasil.`,
+        code: 'lockdown-case-role-managed',
+        message: `Case role <@&${caseRole.id}> is managed by an integration and cannot be assigned by Drasil.`,
       });
     }
 
-    if (botMember && botMember.roles.highest.comparePositionTo(restrictedRole) <= 0) {
+    if (botMember && botMember.roles.highest.comparePositionTo(caseRole) <= 0) {
       issues.push({
         severity: 'error',
-        code: 'lockdown-restricted-role-hierarchy',
-        message: `Move the Drasil role above restricted role <@&${restrictedRole.id}> so Drasil can assign and remove it.`,
+        code: 'lockdown-case-role-hierarchy',
+        message: `Move the Drasil role above case role <@&${caseRole.id}> so Drasil can assign and remove it.`,
       });
     }
   }
 
-  private checkRestrictedRoleGlobalPermissions(
-    restrictedRole: Role,
-    issues: RestrictedLockdownIssue[]
-  ): void {
+  private checkCaseRoleGlobalPermissions(caseRole: Role, issues: CaseRoleLockdownIssue[]): void {
     const riskyPermissions = HIGH_RISK_RESTRICTED_ROLE_PERMISSIONS.filter((permission) =>
-      restrictedRole.permissions.has(permission.flag)
+      caseRole.permissions.has(permission.flag)
     );
     if (riskyPermissions.length === 0) {
       return;
@@ -472,8 +469,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
     issues.push({
       severity: 'warning',
-      code: 'lockdown-restricted-role-global-permissions',
-      message: `Restricted role <@&${restrictedRole.id}> has global permissions that can weaken quarantine: ${riskyPermissions.map((permission) => permission.label).join(', ')}. Prefer an empty role and channel overwrites.`,
+      code: 'lockdown-case-role-global-permissions',
+      message: `Case role <@&${caseRole.id}> has global permissions that can weaken quarantine: ${riskyPermissions.map((permission) => permission.label).join(', ')}. Prefer an empty role and channel overwrites.`,
     });
   }
 
@@ -481,7 +478,7 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     channels: readonly LockdownChannel[],
     allowedChannelIds: ReadonlySet<string>,
     allowedCategoryIds: ReadonlySet<string>,
-    issues: RestrictedLockdownIssue[]
+    issues: CaseRoleLockdownIssue[]
   ): void {
     const channelIds = new Set(channels.map((channel) => channel.id));
     for (const channelId of allowedChannelIds) {
@@ -519,14 +516,11 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     guild: Guild,
     botMember: GuildMember | null,
     channel: LockdownChannel,
-    restrictedRoleId: string,
-    issues: RestrictedLockdownIssue[]
+    caseRoleId: string,
+    issues: CaseRoleLockdownIssue[]
   ): void {
     for (const overwrite of channel.permissionOverwrites.cache.values()) {
-      if (
-        overwrite.id === restrictedRoleId ||
-        !overwrite.allow.has(PermissionFlagsBits.ViewChannel)
-      ) {
+      if (overwrite.id === caseRoleId || !overwrite.allow.has(PermissionFlagsBits.ViewChannel)) {
         continue;
       }
 
@@ -540,7 +534,7 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
       issues.push({
         severity: 'warning',
         code: 'lockdown-conflicting-view-allow',
-        message: `${this.formatChannel(channel)} has an explicit View Channel allow for <${mentionPrefix}${overwrite.id}>. ${affectedSubject} may still see it despite the restricted-role deny.`,
+        message: `${this.formatChannel(channel)} has an explicit View Channel allow for <${mentionPrefix}${overwrite.id}>. ${affectedSubject} may still see it despite the case-role deny.`,
       });
     }
   }
@@ -568,8 +562,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     return role?.managed === true || typeof botRoleId === 'string';
   }
 
-  private hasRestrictedLockdownDeny(channel: LockdownChannel, restrictedRoleId: string): boolean {
-    const overwrite = channel.permissionOverwrites.cache.get(restrictedRoleId);
+  private hasCaseRoleLockdownDeny(channel: LockdownChannel, caseRoleId: string): boolean {
+    const overwrite = channel.permissionOverwrites.cache.get(caseRoleId);
     return LOCKDOWN_PERMISSIONS.every((permission) => overwrite?.deny.has(permission.flag));
   }
 
@@ -582,28 +576,28 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
   private async unsyncAllowedChannelsUnderDeniedCategories(
     guild: Guild,
-    syncedAllowedChannels: readonly RestrictedLockdownPlannedAction[],
+    syncedAllowedChannels: readonly CaseRoleLockdownPlannedAction[],
     actorId: string
   ): Promise<{
-    unsyncedActions: RestrictedLockdownPlannedAction[];
-    failedActions: RestrictedLockdownApplyFailure[];
+    unsyncedActions: CaseRoleLockdownPlannedAction[];
+    failedActions: CaseRoleLockdownApplyFailure[];
   }> {
     const serverConfig = await this.configService.getServerConfig(guild.id);
-    const restrictedRole = await this.getRestrictedRole(guild, serverConfig.restricted_role_id);
-    if (!restrictedRole) {
+    const caseRole = await this.getCaseRole(guild, serverConfig.case_role_id);
+    if (!caseRole) {
       return {
         unsyncedActions: [],
         failedActions: syncedAllowedChannels.map((action) => ({
           ...action,
-          message: 'Restricted role is no longer configured.',
+          message: 'Case role is no longer configured.',
         })),
       };
     }
 
     const channels = await this.fetchLockdownChannels(guild);
     const channelById = new Map(channels.map((channel) => [channel.id, channel]));
-    const unsyncedActions: RestrictedLockdownPlannedAction[] = [];
-    const failedActions: RestrictedLockdownApplyFailure[] = [];
+    const unsyncedActions: CaseRoleLockdownPlannedAction[] = [];
+    const failedActions: CaseRoleLockdownApplyFailure[] = [];
 
     for (const action of syncedAllowedChannels) {
       const channel = channelById.get(action.channelId);
@@ -618,8 +612,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
       try {
         await channel.permissionOverwrites.set(
-          this.buildUnsyncedAllowedChannelOverwrites(parent, restrictedRole.id),
-          `Drasil restricted-role lockdown unsynced allowed channel by ${actorId}`
+          this.buildUnsyncedAllowedChannelOverwrites(parent, caseRole.id),
+          `Drasil case-role lockdown unsynced allowed channel by ${actorId}`
         );
         unsyncedActions.push(action);
       } catch (error) {
@@ -635,12 +629,12 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
   private buildUnsyncedAllowedChannelOverwrites(
     parent: LockdownChannel,
-    restrictedRoleId: string
+    caseRoleId: string
   ): OverwriteResolvable[] {
     const copiedParentOverwrites: OverwriteResolvable[] = [
       ...parent.permissionOverwrites.cache.values(),
     ]
-      .filter((overwrite) => overwrite.id !== restrictedRoleId)
+      .filter((overwrite) => overwrite.id !== caseRoleId)
       .map((overwrite) => ({
         id: overwrite.id,
         type: overwrite.type,
@@ -648,7 +642,7 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
         deny: overwrite.deny.bitfield,
       }));
 
-    const restrictedRoleOptions = LOCKDOWN_PERMISSIONS.reduce<PermissionOverwriteOptions>(
+    const caseRoleOptions = LOCKDOWN_PERMISSIONS.reduce<PermissionOverwriteOptions>(
       (options, permission) => {
         options[permission.option] = true;
         return options;
@@ -659,9 +653,9 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     return [
       ...copiedParentOverwrites,
       {
-        id: restrictedRoleId,
+        id: caseRoleId,
         type: OverwriteType.Role,
-        ...restrictedRoleOptions,
+        ...caseRoleOptions,
       },
     ];
   }
@@ -683,8 +677,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
 
   private toPlannedAction(
     channel: LockdownChannel,
-    scope: RestrictedLockdownActionScope
-  ): RestrictedLockdownPlannedAction {
+    scope: CaseRoleLockdownActionScope
+  ): CaseRoleLockdownPlannedAction {
     return {
       scope,
       channelId: channel.id,
@@ -712,8 +706,8 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
   }
 
   private applyFailuresToIssues(
-    failures: readonly RestrictedLockdownApplyFailure[]
-  ): RestrictedLockdownIssue[] {
+    failures: readonly CaseRoleLockdownApplyFailure[]
+  ): CaseRoleLockdownIssue[] {
     return failures.map((failure) => ({
       severity: 'error',
       code: 'lockdown-apply-failed',
@@ -732,13 +726,13 @@ export class RestrictedRoleLockdownService implements IRestrictedRoleLockdownSer
     readonly allowedChannelIds: readonly string[];
     readonly allowedCategoryIds: readonly string[];
     readonly autoAllowedChannelIds: readonly string[];
-    readonly issues: readonly RestrictedLockdownIssue[];
-    readonly plannedActions: readonly RestrictedLockdownPlannedAction[];
-    readonly appliedActions: readonly RestrictedLockdownPlannedAction[];
-    readonly failedActions: readonly RestrictedLockdownApplyFailure[];
-    readonly syncedAllowedChannels: readonly RestrictedLockdownPlannedAction[];
-    readonly unsyncedAllowedChannels: readonly RestrictedLockdownPlannedAction[];
-  }): RestrictedLockdownReport {
+    readonly issues: readonly CaseRoleLockdownIssue[];
+    readonly plannedActions: readonly CaseRoleLockdownPlannedAction[];
+    readonly appliedActions: readonly CaseRoleLockdownPlannedAction[];
+    readonly failedActions: readonly CaseRoleLockdownApplyFailure[];
+    readonly syncedAllowedChannels: readonly CaseRoleLockdownPlannedAction[];
+    readonly unsyncedAllowedChannels: readonly CaseRoleLockdownPlannedAction[];
+  }): CaseRoleLockdownReport {
     return {
       ...input,
       errorCount: input.issues.filter((issue) => issue.severity === 'error').length,

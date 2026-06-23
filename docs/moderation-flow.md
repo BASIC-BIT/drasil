@@ -55,7 +55,7 @@ flowchart LR
 
     ResponseMode -->|"record_only"| RecordedOnly["Terminal: detection recorded only"]
     ResponseMode -->|"notify_only or below threshold"| ObservedAlert["Observed alert"]
-    ResponseMode -->|"restrict above threshold"| RequestRestricted["Case request: restricted"]
+    ResponseMode -->|"restrict above threshold"| RequestCase["Open case"]
 
     DirectReport --> UserReport["USER_REPORT detection"]
     SubmitIntakeReport --> UserReport
@@ -63,23 +63,21 @@ flowchart LR
     ActiveCase -->|"Yes"| LinkEvidence["Link report evidence to active case"]
     ActiveCase -->|"No"| ObservedAlert
 
-    AdminFlag --> RequestRestricted
-    ModeratorCase --> ModeratorRestrict{"restrict option? default yes"}
-    ModeratorRestrict -->|"true / omitted"| RequestRestricted
-    ModeratorRestrict -->|"false"| RequestUnrestricted["Case request: unrestricted"]
+    AdminFlag --> RequestCase
+    ModeratorCase --> RequestCase
   end
 
   subgraph Observed["Observed Alert Actions"]
     direction TB
     ObservedAlert --> ObservedMenu["Observed admin menu"]
     ObservedMenu --> OpenObserved{"Confirm open case?"}
-    ObservedMenu --> RestrictObserved{"Confirm restrict?"}
+    ObservedMenu --> KickObserved["Kick reason modal"]
     ObservedMenu --> DismissObserved{"Confirm dismiss?"}
     ObservedMenu --> FalsePositiveObserved{"Confirm false positive?"}
     ObservedMenu --> BanObserved["Ban reason modal"]
 
-    OpenObserved -->|"Yes"| RequestUnrestricted
-    RestrictObserved -->|"Yes"| RequestRestricted
+    OpenObserved -->|"Yes"| RequestCase
+    KickObserved --> Kicked
     DismissObserved -->|"Yes"| AlertDismissed["Terminal: alert dismissed"]
     FalsePositiveObserved -->|"Yes"| FalsePositive["Terminal: false positive recorded"]
     BanObserved --> Banned
@@ -88,37 +86,26 @@ flowchart LR
   subgraph Case["Case Lifecycle"]
     direction TB
 
-    subgraph CaseState["Case State"]
-      direction LR
-      UnrestrictedCase["Unrestricted case"]
-      RestrictedCase["Restricted case"]
-    end
-
-    RequestUnrestricted --> UnrestrictedCase
-    RequestRestricted --> RestrictedCase
-
-    RestrictedCase --> ApplyRestriction["Apply restricted role"]
-    ApplyRestriction --> CaseThread["Open user-facing case thread immediately"]
-    UnrestrictedCase --> CaseThread
+    RequestCase --> ActiveCaseState["Active case"]
+    ActiveCaseState --> ApplyCaseRole["Apply case role"]
+    ApplyCaseRole --> CaseThread["Open user-facing case thread immediately"]
 
     CaseThread --> EvidenceThread["Create or link admin evidence thread"]
     LinkEvidence --> EvidenceThread
     EvidenceThread --> CaseNotification["Create or update case notification"]
     CaseNotification --> CaseMenu["Case admin menu"]
 
-    CaseMenu --> RestrictUser{"Confirm restrict user?"}
-    CaseMenu --> LiftRestriction{"Confirm lift restriction?"}
     CaseMenu --> VerifyUser{"Confirm verify?"}
     CaseMenu --> CloseNoAction{"Confirm close no action?"}
+    CaseMenu --> KickUser["Kick reason modal"]
     CaseMenu --> BanUser["Ban reason modal"]
     CaseMenu --> RepairCase{"Confirm repair / reopen / sync?"}
 
-    RestrictUser -->|"Yes"| RestrictedCase
-    LiftRestriction -->|"Yes"| UnrestrictedCase
     VerifyUser -->|"Yes"| RoleGateVerify["Apply role-gate cleanup"]
     CloseNoAction -->|"Yes"| RoleGateClose["Apply role-gate cleanup"]
     RoleGateVerify --> Verified
     RoleGateClose --> ClosedNoAction
+    KickUser --> Kicked
     BanUser --> Banned
     RepairCase -->|"Yes"| CaseMenu
   end
@@ -127,19 +114,21 @@ flowchart LR
     direction TB
     Verified["Terminal: verified"]
     ClosedNoAction["Terminal: closed no action"]
+    Kicked["Terminal: kicked"]
     Banned["Terminal: banned"]
     Resolve["Archive / lock threads and close linked reports"]
     CaseResolved["Terminal: case resolved"]
 
     Verified --> Resolve
     ClosedNoAction --> Resolve
+    Kicked --> Resolve
     Banned --> Resolve
     Resolve --> CaseResolved
   end
 
   class NewMessage,NewJoin,RoleUpdate,ReportButton,DirectReport,ModeratorCase,AdminFlag start
-  class ExistingThread,IntakeClosed,NoModeration,RecordedOnly,AlertDismissed,FalsePositive,Verified,ClosedNoAction,Banned,CaseResolved terminal
-  class ExistingIntake,CandidateFound,TargetRejected,HoneypotAssigned,Suspicious,ResponseMode,ActiveCase,ModeratorRestrict,OpenObserved,RestrictObserved,DismissObserved,FalsePositiveObserved,RestrictUser,LiftRestriction,VerifyUser,CloseNoAction,RepairCase decision
-  class CreateIntake,AddReporter,CollectEvidence,ExtractTargets,NeedMore,AskTargetConfirm,TargetConfirmed,SubmitIntakeReport,Detection,UserReport,ObservedAlert,ObservedMenu,RequestRestricted,RequestUnrestricted,ApplyRestriction,CaseThread,EvidenceThread,CaseNotification,CaseMenu,RoleGateVerify,RoleGateClose,Resolve,BanObserved,BanUser,LinkEvidence action
-  class UnrestrictedCase,RestrictedCase state
+  class ExistingThread,IntakeClosed,NoModeration,RecordedOnly,AlertDismissed,FalsePositive,Verified,ClosedNoAction,Kicked,Banned,CaseResolved terminal
+  class ExistingIntake,CandidateFound,TargetRejected,HoneypotAssigned,Suspicious,ResponseMode,ActiveCase,OpenObserved,DismissObserved,FalsePositiveObserved,VerifyUser,CloseNoAction,RepairCase decision
+  class CreateIntake,AddReporter,CollectEvidence,ExtractTargets,NeedMore,AskTargetConfirm,TargetConfirmed,SubmitIntakeReport,Detection,UserReport,ObservedAlert,ObservedMenu,RequestCase,ApplyCaseRole,CaseThread,EvidenceThread,CaseNotification,CaseMenu,RoleGateVerify,RoleGateClose,Resolve,KickObserved,BanObserved,KickUser,BanUser,LinkEvidence action
+  class ActiveCaseState state
 ```

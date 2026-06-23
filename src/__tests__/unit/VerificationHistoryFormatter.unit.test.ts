@@ -96,7 +96,7 @@ describe('VerificationHistoryFormatter (unit)', () => {
     const output = VerificationHistoryFormatter.formatForDiscord([event], 'user-1');
 
     expect(output).toContain('Verification case opened by <@admin-1>');
-    expect(output).toContain('Restricted by <@admin-1>');
+    expect(output).toContain('Case role applied by <@admin-1>');
     expect(output).toContain('Dismissed by <@admin-1>');
     expect(output).toContain('Marked false positive by <@admin-1>');
     expect(output).not.toContain('Status changed');

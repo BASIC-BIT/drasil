@@ -101,8 +101,8 @@ describe('UserModerationService (unit)', () => {
       userRepository
     );
     roleManager = {
-      assignRestrictedRole: jest.fn().mockResolvedValue(true),
-      removeRestrictedRole: jest.fn().mockResolvedValue(true),
+      assignCaseRole: jest.fn().mockResolvedValue(true),
+      removeCaseRole: jest.fn().mockResolvedValue(true),
     };
     notificationManager = {
       upsertSuspiciousUserNotification: jest.fn().mockResolvedValue({} as any),
@@ -176,9 +176,9 @@ describe('UserModerationService (unit)', () => {
 
     const updatedEvent = await verificationEventRepository.findById(verificationEvent.id);
     expect(updatedEvent?.status).toBe(VerificationStatus.PENDING);
-    expect(roleManager.assignRestrictedRole).toHaveBeenCalledWith(member);
+    expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
     const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
-    expect(serverMember?.is_restricted).toBe(true);
+    expect(serverMember?.case_role_active).toBe(true);
     expect(serverMember?.verification_status).toBe(VerificationStatus.PENDING);
 
     const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
@@ -197,7 +197,7 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
-  it('applies role quarantine before assigning the restricted role', async () => {
+  it('applies role quarantine before assigning the case role', async () => {
     const guildId = 'guild-role-quarantine-restrict';
     const userId = 'user-role-quarantine-restrict';
     const moderator = { id: 'mod-role-quarantine' } as User;
@@ -205,7 +205,7 @@ describe('UserModerationService (unit)', () => {
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
       quarantineMember: jest.fn().mockResolvedValue({
         status: 'quarantined',
-        mode: 'automatic',
+        mode: 'on',
         snapshotId: 'role-quarantine-1',
         originalRoleIds: ['role-1'],
         plannedRoleIds: ['role-1'],
@@ -264,7 +264,7 @@ describe('UserModerationService (unit)', () => {
       moderator
     );
     expect(roleQuarantineService.quarantineMember.mock.invocationCallOrder[0]).toBeLessThan(
-      roleManager.assignRestrictedRole.mock.invocationCallOrder[0]
+      roleManager.assignCaseRole.mock.invocationCallOrder[0]
     );
     const updatedEvent = await verificationEventRepository.findById(verificationEvent.id);
     expect(updatedEvent?.metadata).toEqual(
@@ -282,16 +282,16 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
-  it('restores quarantined roles when restricted role assignment fails', async () => {
+  it('restores quarantined roles when case role assignment fails', async () => {
     const guildId = 'guild-role-quarantine-restrict-fails';
     const userId = 'user-role-quarantine-restrict-fails';
     const moderator = { id: 'mod-role-quarantine' } as User;
     const member = buildMember(guildId, userId);
-    roleManager.assignRestrictedRole.mockResolvedValueOnce(false);
+    roleManager.assignCaseRole.mockResolvedValueOnce(false);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
       quarantineMember: jest.fn().mockResolvedValue({
         status: 'quarantined',
-        mode: 'automatic',
+        mode: 'on',
         snapshotId: 'role-quarantine-1',
         originalRoleIds: ['role-1'],
         plannedRoleIds: ['role-1'],
@@ -344,23 +344,23 @@ describe('UserModerationService (unit)', () => {
     );
 
     await expect(service.restrictUser(member, moderator)).rejects.toThrow(
-      'Failed to assign restricted role'
+      'Failed to assign case role'
     );
     expect(roleQuarantineService.restoreMemberRoles).toHaveBeenCalledWith(member, moderator);
     const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
-    expect(serverMember?.is_restricted).not.toBe(true);
+    expect(serverMember?.case_role_active).not.toBe(true);
   });
 
-  it('does not restore already-active role quarantine when restricted role assignment fails', async () => {
+  it('does not restore already-active role quarantine when case role assignment fails', async () => {
     const guildId = 'guild-role-quarantine-already-active-fails';
     const userId = 'user-role-quarantine-already-active-fails';
     const moderator = { id: 'mod-role-quarantine' } as User;
     const member = buildMember(guildId, userId);
-    roleManager.assignRestrictedRole.mockResolvedValueOnce(false);
+    roleManager.assignCaseRole.mockResolvedValueOnce(false);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
       quarantineMember: jest.fn().mockResolvedValue({
         status: 'already_active',
-        mode: 'automatic',
+        mode: 'on',
         snapshotId: 'role-quarantine-existing',
         originalRoleIds: ['role-1'],
         plannedRoleIds: ['role-1'],
@@ -413,11 +413,11 @@ describe('UserModerationService (unit)', () => {
     );
 
     await expect(service.restrictUser(member, moderator)).rejects.toThrow(
-      'Failed to assign restricted role'
+      'Failed to assign case role'
     );
     expect(roleQuarantineService.restoreMemberRoles).not.toHaveBeenCalled();
     const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
-    expect(serverMember?.is_restricted).not.toBe(true);
+    expect(serverMember?.case_role_active).not.toBe(true);
   });
 
   it('lifts a restriction without resolving the pending case', async () => {
@@ -429,7 +429,7 @@ describe('UserModerationService (unit)', () => {
     await serverRepository.getOrCreateServer(guildId);
     await userRepository.getOrCreateUser(userId, 'test-user');
     await serverMemberRepository.upsertMember(guildId, userId, {
-      is_restricted: true,
+      case_role_active: true,
       verification_status: VerificationStatus.PENDING,
     });
     const detectionEvent = await detectionEventsRepository.create({
@@ -465,9 +465,9 @@ describe('UserModerationService (unit)', () => {
 
     const updatedEvent = await verificationEventRepository.findById(verificationEvent.id);
     expect(updatedEvent?.status).toBe(VerificationStatus.PENDING);
-    expect(roleManager.removeRestrictedRole).toHaveBeenCalledWith(member);
+    expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member);
     const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
-    expect(serverMember?.is_restricted).toBe(false);
+    expect(serverMember?.case_role_active).toBe(false);
     expect(serverMember?.verification_status).toBe(VerificationStatus.PENDING);
 
     const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
@@ -495,7 +495,7 @@ describe('UserModerationService (unit)', () => {
     await serverRepository.getOrCreateServer(guildId);
     await userRepository.getOrCreateUser(userId, 'test-user');
     await serverMemberRepository.upsertMember(guildId, userId, {
-      is_restricted: false,
+      case_role_active: false,
       verification_status: VerificationStatus.PENDING,
     });
     const detectionEvent = await detectionEventsRepository.create({
@@ -526,13 +526,13 @@ describe('UserModerationService (unit)', () => {
 
     await service.liftRestriction(member, moderator);
 
-    expect(roleManager.removeRestrictedRole).not.toHaveBeenCalled();
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
     const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
     expect(adminActions).toEqual([]);
     expect(notificationManager.logActionToMessage).not.toHaveBeenCalled();
   });
 
-  it('does not lift a pending case without a restricted member record', async () => {
+  it('does not close a pending case without a case-role member record', async () => {
     const guildId = 'guild-lift-untracked';
     const userId = 'user-lift-untracked';
     const moderator = { id: 'mod-lift-untracked' } as User;
@@ -568,7 +568,7 @@ describe('UserModerationService (unit)', () => {
 
     await service.liftRestriction(member, moderator);
 
-    expect(roleManager.removeRestrictedRole).not.toHaveBeenCalled();
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
     const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
     expect(adminActions).toEqual([]);
     expect(notificationManager.logActionToMessage).not.toHaveBeenCalled();
@@ -618,7 +618,7 @@ describe('UserModerationService (unit)', () => {
 
     const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
     expect(serverMember?.verification_status).toBe(VerificationStatus.VERIFIED);
-    expect(serverMember?.is_restricted).toBe(false);
+    expect(serverMember?.case_role_active).toBe(false);
 
     const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
     expect(adminActions).toHaveLength(1);
@@ -636,7 +636,7 @@ describe('UserModerationService (unit)', () => {
       })
     );
 
-    expect(roleManager.removeRestrictedRole).toHaveBeenCalled();
+    expect(roleManager.removeCaseRole).toHaveBeenCalled();
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       VerificationStatus.VERIFIED,
@@ -670,7 +670,7 @@ describe('UserModerationService (unit)', () => {
     await serverRepository.getOrCreateServer(guildId);
     await userRepository.getOrCreateUser(userId, 'test-user');
     await serverMemberRepository.upsertMember(guildId, userId, {
-      is_restricted: true,
+      case_role_active: true,
       verification_status: VerificationStatus.PENDING,
     });
     const detectionEvent = await detectionEventsRepository.create({
@@ -704,7 +704,7 @@ describe('UserModerationService (unit)', () => {
     await service.verifyUser(member, moderator);
 
     expect(roleQuarantineService.restoreMemberRoles).toHaveBeenCalledWith(member, moderator);
-    expect(roleManager.removeRestrictedRole.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(roleManager.removeCaseRole.mock.invocationCallOrder[0]).toBeLessThan(
       roleQuarantineService.restoreMemberRoles.mock.invocationCallOrder[0]
     );
     const updatedEvent = await verificationEventRepository.findById(verificationEvent.id);
@@ -789,7 +789,7 @@ describe('UserModerationService (unit)', () => {
     await serverRepository.getOrCreateServer(guildId);
     await userRepository.getOrCreateUser(userId, 'test-user');
     await serverMemberRepository.upsertMember(guildId, userId, {
-      is_restricted: true,
+      case_role_active: true,
       verification_status: VerificationStatus.PENDING,
     });
 
@@ -840,7 +840,7 @@ describe('UserModerationService (unit)', () => {
 
     const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
     expect(serverMember?.verification_status).toBe(VerificationStatus.CLOSED_NO_ACTION);
-    expect(serverMember?.is_restricted).toBe(false);
+    expect(serverMember?.case_role_active).toBe(false);
 
     const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
     expect(adminActions).toHaveLength(1);
@@ -864,11 +864,11 @@ describe('UserModerationService (unit)', () => {
       })
     );
 
-    expect(roleManager.removeRestrictedRole).toHaveBeenCalledWith(member);
+    expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member);
     expect(updateVerificationEvent.mock.invocationCallOrder[0]).toBeLessThan(
-      roleManager.removeRestrictedRole.mock.invocationCallOrder[0]
+      roleManager.removeCaseRole.mock.invocationCallOrder[0]
     );
-    expect(roleManager.removeRestrictedRole.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(roleManager.removeCaseRole.mock.invocationCallOrder[0]).toBeLessThan(
       upsertServerMember.mock.invocationCallOrder[0]
     );
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
@@ -884,7 +884,7 @@ describe('UserModerationService (unit)', () => {
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
   });
 
-  it('retries no-action restricted role cleanup after case events are already closed', async () => {
+  it('retries no-action case role cleanup after case events are already closed', async () => {
     const guildId = 'guild-close-retry';
     const userId = 'user-close-retry';
     const moderator = { id: 'mod-close-retry' } as User;
@@ -894,7 +894,7 @@ describe('UserModerationService (unit)', () => {
     await serverRepository.getOrCreateServer(guildId);
     await userRepository.getOrCreateUser(userId, 'test-user');
     await serverMemberRepository.upsertMember(guildId, userId, {
-      is_restricted: true,
+      case_role_active: true,
       verification_status: VerificationStatus.PENDING,
     });
 
@@ -927,13 +927,13 @@ describe('UserModerationService (unit)', () => {
     const closedCount = await service.closeCaseNoAction(guild, userId, moderator);
 
     expect(closedCount).toBe(0);
-    expect(roleManager.removeRestrictedRole).toHaveBeenCalledWith(member);
+    expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member);
     expect(await verificationEventRepository.findById(verificationEvent.id)).toEqual(
       expect.objectContaining({ status: VerificationStatus.CLOSED_NO_ACTION })
     );
     expect(await serverMemberRepository.findByServerAndUser(guildId, userId)).toEqual(
       expect.objectContaining({
-        is_restricted: false,
+        case_role_active: false,
         verification_status: VerificationStatus.CLOSED_NO_ACTION,
         last_status_change: expect.any(Date),
       })
@@ -959,7 +959,7 @@ describe('UserModerationService (unit)', () => {
     await serverRepository.getOrCreateServer(guildId);
     await userRepository.getOrCreateUser(userId, 'test-user');
     await serverMemberRepository.upsertMember(guildId, userId, {
-      is_restricted: true,
+      case_role_active: true,
       verification_status: VerificationStatus.PENDING,
     });
     const detectionEvent = await detectionEventsRepository.create({
@@ -993,7 +993,7 @@ describe('UserModerationService (unit)', () => {
     const closedCount = await service.closeCaseNoAction(guild, userId, moderator);
 
     expect(closedCount).toBe(1);
-    expect(roleManager.removeRestrictedRole).not.toHaveBeenCalled();
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
     expect(roleQuarantineService.restoreMemberRoles).not.toHaveBeenCalled();
     expect(roleQuarantineService.abandonActiveSnapshot).toHaveBeenCalledWith(
       guildId,
@@ -1023,7 +1023,7 @@ describe('UserModerationService (unit)', () => {
     await serverRepository.getOrCreateServer(guildId);
     await userRepository.getOrCreateUser(userId, 'test-user');
     await serverMemberRepository.upsertMember(guildId, userId, {
-      is_restricted: true,
+      case_role_active: true,
       verification_status: VerificationStatus.CLOSED_NO_ACTION,
     });
     const detectionEvent = await detectionEventsRepository.create({
@@ -1057,7 +1057,7 @@ describe('UserModerationService (unit)', () => {
     const closedCount = await service.closeCaseNoAction(guild, userId, moderator);
 
     expect(closedCount).toBe(0);
-    expect(roleManager.removeRestrictedRole).not.toHaveBeenCalled();
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
     expect(roleQuarantineService.restoreMemberRoles).not.toHaveBeenCalled();
     expect(roleQuarantineService.abandonActiveSnapshot).toHaveBeenCalledWith(
       guildId,
@@ -1122,7 +1122,7 @@ describe('UserModerationService (unit)', () => {
 
     const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
     expect(serverMember?.verification_status).toBe(VerificationStatus.BANNED);
-    expect(serverMember?.is_restricted).toBe(true);
+    expect(serverMember?.case_role_active).toBe(false);
 
     const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
     expect(adminActions).toHaveLength(1);
@@ -1273,7 +1273,7 @@ describe('UserModerationService (unit)', () => {
     );
     const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
     expect(serverMember?.verification_status).toBe(VerificationStatus.KICKED);
-    expect(serverMember?.is_restricted).toBe(false);
+    expect(serverMember?.case_role_active).toBe(false);
     const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
     expect(adminActions).toHaveLength(1);
     expect(adminActions[0]).toEqual(
@@ -1410,7 +1410,7 @@ describe('UserModerationService (unit)', () => {
     );
     const serverMember = await serverMemberRepository.findByServerAndUser(guildId, userId);
     expect(serverMember?.verification_status).toBe(VerificationStatus.BANNED);
-    expect(serverMember?.is_restricted).toBe(true);
+    expect(serverMember?.case_role_active).toBe(false);
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledTimes(2);
     const adminActions = await adminActionRepository.findByUserAndServer(userId, guildId);
     expect(adminActions).toHaveLength(2);
