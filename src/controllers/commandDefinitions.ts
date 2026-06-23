@@ -1275,10 +1275,13 @@ function compactCommandNodeDescriptions(node: CompactableCommandNode): void {
 }
 
 function humanizeCommandName(name: string): string {
-  const words = name.split('-').join(' ');
-  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+  const words = name.split('-');
+  words[0] = words[0] === 'ai' ? 'AI' : `${words[0].charAt(0).toUpperCase()}${words[0].slice(1)}`;
+  return words.join(' ');
 }
 
+// Conservative by design: this counts every serialized string, including metadata
+// Discord does not measure, and the compacted /config budget keeps headroom for that.
 export function getApplicationCommandTextSize(
   command: RESTPostAPIApplicationCommandsJSONBody
 ): number {
