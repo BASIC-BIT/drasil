@@ -119,6 +119,11 @@ const HIGH_RISK_RESTRICTED_ROLE_PERMISSIONS: readonly PermissionLabel[] = [
   ...LOCKDOWN_PERMISSIONS,
 ];
 
+const LOCKDOWN_POSTING_PERMISSIONS: readonly PermissionLabel[] = [
+  { flag: PermissionFlagsBits.SendMessages, label: 'Send Messages' },
+  { flag: PermissionFlagsBits.SendMessagesInThreads, label: 'Send Messages in Threads' },
+];
+
 @injectable()
 export class CaseRoleLockdownService implements ICaseRoleLockdownService {
   constructor(@inject(TYPES.ConfigService) private readonly configService: IConfigService) {}
@@ -520,7 +525,7 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
     issues: CaseRoleLockdownIssue[]
   ): void {
     for (const overwrite of channel.permissionOverwrites.cache.values()) {
-      if (overwrite.id === caseRoleId || !overwrite.allow.has(PermissionFlagsBits.ViewChannel)) {
+      if (overwrite.id === caseRoleId) {
         continue;
       }
 
@@ -531,11 +536,26 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
 
       const mentionPrefix = isMemberOverwrite ? '@' : '@&';
       const affectedSubject = isMemberOverwrite ? 'That user' : 'Users with that role';
-      issues.push({
-        severity: 'warning',
-        code: 'lockdown-conflicting-view-allow',
-        message: `${this.formatChannel(channel)} has an explicit View Channel allow for <${mentionPrefix}${overwrite.id}>. ${affectedSubject} may still see it despite the case-role deny.`,
-      });
+      const postingAllow = LOCKDOWN_POSTING_PERMISSIONS.find((permission) =>
+        overwrite.allow.has(permission.flag)
+      );
+
+      if (postingAllow) {
+        issues.push({
+          severity: 'warning',
+          code: 'lockdown-conflicting-send-allow',
+          message: `${this.formatChannel(channel)} has an explicit ${postingAllow.label} allow for <${mentionPrefix}${overwrite.id}>. ${affectedSubject} may still post there despite the case-role deny; remove the channel/category allow or quarantine conflicting roles for active cases.`,
+        });
+        continue;
+      }
+
+      if (overwrite.allow.has(PermissionFlagsBits.ViewChannel)) {
+        issues.push({
+          severity: 'warning',
+          code: 'lockdown-conflicting-view-allow',
+          message: `${this.formatChannel(channel)} has an explicit View Channel allow for <${mentionPrefix}${overwrite.id}>. ${affectedSubject} may still see it despite the case-role deny, but no explicit posting allow was detected.`,
+        });
+      }
     }
   }
 

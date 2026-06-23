@@ -257,7 +257,6 @@ describe('InteractionHandler (unit)', () => {
         promptSent: true,
         promptAlreadyPresent: false,
       }),
-      restrictActiveCase: jest.fn().mockResolvedValue(true),
       intakeRoleMembers: jest.fn().mockResolvedValue({} as any),
       handleUserReport: jest.fn().mockResolvedValue(true),
       handleConfirmedReportIntake: jest.fn().mockResolvedValue(true),
