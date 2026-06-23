@@ -40,6 +40,15 @@ export interface BuildApplicationCommandsOptions {
   userInstallReportingEnabled: boolean;
 }
 
+export const DISCORD_APPLICATION_COMMAND_TEXT_LIMIT = 8000;
+const COMPACT_CONFIG_COMMAND_TEXT_BUDGET = 7600;
+
+interface CompactableCommandNode {
+  name?: string;
+  description?: string;
+  options?: CompactableCommandNode[];
+}
+
 const baseApplicationCommandBuilders = [
   new SlashCommandBuilder()
     .setName('ban')
@@ -1231,5 +1240,69 @@ export function buildApplicationCommands({
     ? [...baseApplicationCommandBuilders, buildReportMessageContextCommand()]
     : baseApplicationCommandBuilders;
 
-  return commandBuilders.map((command) => command.toJSON());
+  return commandBuilders.map((command) => compactConfigCommandDescriptions(command.toJSON()));
+}
+
+function compactConfigCommandDescriptions(
+  command: RESTPostAPIApplicationCommandsJSONBody
+): RESTPostAPIApplicationCommandsJSONBody {
+  if (command.name !== 'config') {
+    return command;
+  }
+
+  // Discord caps the total text in one application command at 8000 characters.
+  // /config is dense, so keep its discoverability through names and compact descriptions.
+  compactCommandNodeDescriptions(command);
+
+  const textSize = getApplicationCommandTextSize(command);
+  if (textSize > COMPACT_CONFIG_COMMAND_TEXT_BUDGET) {
+    throw new Error(
+      `/config command text size ${textSize} exceeds budget ${COMPACT_CONFIG_COMMAND_TEXT_BUDGET}`
+    );
+  }
+
+  return command;
+}
+
+function compactCommandNodeDescriptions(node: CompactableCommandNode): void {
+  if (node.name && node.description) {
+    node.description = humanizeCommandName(node.name);
+  }
+
+  for (const option of node.options ?? []) {
+    compactCommandNodeDescriptions(option);
+  }
+}
+
+function humanizeCommandName(name: string): string {
+  const words = name.split('-').join(' ');
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+export function getApplicationCommandTextSize(
+  command: RESTPostAPIApplicationCommandsJSONBody
+): number {
+  let textSize = 0;
+  const collectTextSize = (value: unknown): void => {
+    if (typeof value === 'string') {
+      textSize += value.length;
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        collectTextSize(item);
+      }
+      return;
+    }
+
+    if (value && typeof value === 'object') {
+      for (const item of Object.values(value)) {
+        collectTextSize(item);
+      }
+    }
+  };
+
+  collectTextSize(command);
+  return textSize;
 }

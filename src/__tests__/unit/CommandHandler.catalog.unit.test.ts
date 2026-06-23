@@ -5,6 +5,10 @@ import {
   InteractionContextType,
   PermissionFlagsBits,
 } from 'discord.js';
+import {
+  DISCORD_APPLICATION_COMMAND_TEXT_LIMIT,
+  getApplicationCommandTextSize,
+} from '../../controllers/commandDefinitions';
 import { USER_REPORT_REASON_MAX_LENGTH } from '../../utils/userReportSettings';
 import { buildHandler, restoreUserInstallReportingEnvAfterEach } from './commandHandlerTestHarness';
 
@@ -40,6 +44,18 @@ describe('CommandHandler command catalog (unit)', () => {
       expect(command.integration_types).toEqual([ApplicationIntegrationType.GuildInstall]);
       expect(command.contexts).toEqual([InteractionContextType.Guild]);
     }
+  });
+
+  it('keeps each application command under Discord text size limits', () => {
+    process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED = 'true';
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+
+    const oversizedCommands = commands
+      .map((command) => ({ name: command.name, textSize: getApplicationCommandTextSize(command) }))
+      .filter((command) => command.textSize > DISCORD_APPLICATION_COMMAND_TEXT_LIMIT);
+
+    expect(oversizedCommands).toEqual([]);
   });
 
   it('registers /report without default moderation permissions', () => {
