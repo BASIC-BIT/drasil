@@ -74,7 +74,8 @@ High-signal manual and automated test ideas live in `docs/test-cases.md`.
 - Run `/config setup` to configure the case role and channels.
 - Run `/config validate` after permission or channel changes.
 - Update other config as needed (spam thresholds, OpenAI prompts).
-- Let the bot automatically classify new users or run the `/verify` command for manual overrides.
+- Let the bot automatically classify new users, or use admin case buttons and commands for manual
+  moderation overrides.
 
 ## Setup
 
@@ -105,6 +106,17 @@ The bot automatically registers the following slash commands during startup:
 - `/config setup` - Configure required Drasil channels and case role
 - `/config validate` - Check setup, permissions, channels, and role hierarchy
 - `/config set key:<key> value:<value>` - Configure low-level server settings
+- `/config lockdown`, `/config role-quarantine`, `/config role-gate`, `/config detection`,
+  `/config case-staff`, `/config reports`, `/config analytics`, and `/config verification` - Manage
+  advanced moderation and setup policy
+- `/ban` - Ban a user with an optional reason
+- `/report` - Submit a user report for moderation intake
+- `/flaguser` - Manually flag a user for review
+- `/case` - Refresh, repair, and inspect active case notifications
+- `/audit` - Run moderation integrity audits
+- `/close-report` - Close legacy moderator-only report review threads
+- `/setupverification` - Legacy direct verification setup
+- `/setupreportbutton` - Legacy direct report-button setup
 
 Slash commands are automatically registered when the bot starts up. There's no need for manual registration.
 
