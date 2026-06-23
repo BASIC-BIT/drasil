@@ -644,6 +644,20 @@ export class EventHandler implements IEventHandler {
     this.manualIntakeTimers.delete(key);
   }
 
+  private cancelManualIntakeForMember(guildId: string, userId: string): void {
+    for (const key of this.manualIntakeTimers.keys()) {
+      if (!key.startsWith(`${guildId}:${userId}:`)) {
+        continue;
+      }
+
+      const timer = this.manualIntakeTimers.get(key);
+      if (timer) {
+        clearTimeout(timer);
+      }
+      this.manualIntakeTimers.delete(key);
+    }
+  }
+
   private buildManualIntakeKey(guildId: string, userId: string, roleId: string): string {
     return `${guildId}:${userId}:${roleId}`;
   }
@@ -809,6 +823,8 @@ export class EventHandler implements IEventHandler {
   }
 
   private async handleGuildMemberRemove(member: GuildMember | PartialGuildMember): Promise<void> {
+    this.cancelManualIntakeForMember(member.guild.id, member.id);
+
     if (!this.userModerationService) {
       return;
     }

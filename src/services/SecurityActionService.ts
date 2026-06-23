@@ -128,8 +128,6 @@ export interface ISecurityActionService {
 
   repairActiveCase(member: GuildMember): Promise<ActiveCaseRepairResult>;
 
-  restrictActiveCase(member: GuildMember, moderator: User): Promise<boolean>;
-
   intakeRoleMembers(options: RoleIntakeOptions): Promise<RoleIntakeResult>;
 
   /**
@@ -2174,21 +2172,6 @@ export class SecurityActionService implements ISecurityActionService {
         notificationChannelId: verificationEvent.notification_channel_id,
       };
     }
-  }
-
-  public async restrictActiveCase(member: GuildMember, moderator: User): Promise<boolean> {
-    const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
-      member.id,
-      member.guild.id
-    );
-    if (!activeCase) {
-      throw new Error(`No active verification case found for ${member.user.tag}.`);
-    }
-
-    const caseWithRole = await this.tryApplyCaseRole(member, activeCase, moderator);
-    await this.ensureUserFacingThreadForCaseRole(member, caseWithRole);
-
-    return true;
   }
 
   private async ensureUserFacingThreadForCaseRole(
