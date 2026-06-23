@@ -410,9 +410,49 @@ describe('CaseRoleLockdownService (unit)', () => {
     expect(report.issues.map((issue) => issue.message)).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          'explicit View Channel allow for <@user-1>. That user may still see it'
+          'explicit View Channel allow for <@user-1>. That user may still see it despite the case-role deny, but no explicit posting allow was detected.'
         ),
       ])
+    );
+  });
+
+  it('reports posting-bypass warnings when another role can send despite case-role denies', async () => {
+    const humanRoleOverwrite = createOverwrite({
+      id: 'human-role-1',
+      type: OverwriteType.Role,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+    });
+    const category = createChannel({
+      id: 'category-1',
+      name: 'public',
+      type: ChannelType.GuildCategory,
+      caseRoleOverwrite: createOverwrite({ deny: lockdownDenyPermissions }),
+      extraOverwrites: [humanRoleOverwrite],
+    });
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+    });
+    const guild = createGuild([category, verificationChannel]);
+    guild.roles.cache = new Map([['human-role-1', { id: 'human-role-1', managed: false }]]);
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const report = await service.auditGuild(guild);
+
+    expect(report.plannedActions).toEqual([]);
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'lockdown-conflicting-send-allow',
+          message: expect.stringContaining(
+            'explicit Send Messages allow for <@&human-role-1>. Users with that role may still post there despite the case-role deny'
+          ),
+        }),
+      ])
+    );
+    expect(report.issues).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'lockdown-conflicting-view-allow' })])
     );
   });
 
@@ -460,7 +500,7 @@ describe('CaseRoleLockdownService (unit)', () => {
     expect(messages).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          'explicit View Channel allow for <@&human-role-1>. Users with that role may still see it'
+          'explicit View Channel allow for <@&human-role-1>. Users with that role may still see it despite the case-role deny, but no explicit posting allow was detected.'
         ),
       ])
     );
