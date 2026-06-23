@@ -456,6 +456,45 @@ describe('CaseRoleLockdownService (unit)', () => {
     );
   });
 
+  it('reports posting-bypass warnings when another role can send in threads', async () => {
+    const humanRoleOverwrite = createOverwrite({
+      id: 'human-role-1',
+      type: OverwriteType.Role,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessagesInThreads],
+    });
+    const forumChannel = createChannel({
+      id: 'forum-channel-1',
+      name: 'introductions',
+      type: ChannelType.GuildForum,
+      caseRoleOverwrite: createOverwrite({ deny: lockdownDenyPermissions }),
+      extraOverwrites: [humanRoleOverwrite],
+    });
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+    });
+    const guild = createGuild([forumChannel, verificationChannel]);
+    guild.roles.cache = new Map([['human-role-1', { id: 'human-role-1', managed: false }]]);
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const report = await service.auditGuild(guild);
+
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'lockdown-conflicting-send-allow',
+          message: expect.stringContaining(
+            'explicit Send Messages in Threads allow for <@&human-role-1>. Users with that role may still post there despite the case-role deny'
+          ),
+        }),
+      ])
+    );
+    expect(report.issues).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'lockdown-conflicting-view-allow' })])
+    );
+  });
+
   it('suppresses noisy allow warnings for everyone and managed bot roles', async () => {
     const everyoneOverwrite = createOverwrite({
       id: 'everyone-role',
