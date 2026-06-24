@@ -1837,11 +1837,13 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     try {
+      const server = await this.serverRepository.findByGuildId(verificationEvent.server_id);
       await this.messageDeletionService.preserveAndDeleteSourceMessage({
         detectionEventId: detectionResult.detectionEventId,
         sourceMessage,
         evidenceThreadId: verificationEvent.private_evidence_thread_id,
         action: detectionResult.messageAction,
+        settings: server?.settings,
       });
     } catch (error) {
       console.warn(

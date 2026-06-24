@@ -21,6 +21,7 @@ export const MESSAGE_DELETION_WATCHLIST_CUSTOM_TERMS_SETTING_KEY =
 
 const URL_PATTERN = /https?:\/\/\S+|www\.\S+/i;
 const VIDEO_FILENAME_PATTERN = /\.(?:mp4|mov|m4v|webm)(?:[?#].*)?$/i;
+const DOMAIN_TERM_PATTERN = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 const CODE_DEFINED_VIDEO_LINK_INDICATOR_TERM = String.fromCharCode(
   119,
   105,
@@ -175,6 +176,19 @@ function hasLinkOrVideo(input: MessageWatchlistInput): boolean {
   );
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function termMatchesContent(normalizedContent: string, term: string): boolean {
+  const escapedTerm = escapeRegExp(term);
+  const pattern = DOMAIN_TERM_PATTERN.test(term)
+    ? new RegExp(`(?:^|[^a-z0-9.-])(?:[a-z0-9-]+\\.)*${escapedTerm}(?=$|[^a-z0-9.-])`)
+    : new RegExp(`(?:^|[^a-z0-9])${escapedTerm}(?=$|[^a-z0-9])`);
+
+  return pattern.test(normalizedContent);
+}
+
 export function findMessageWatchlistMatch(
   input: MessageWatchlistInput,
   settings: MessageDeletionSettings
@@ -189,7 +203,7 @@ export function findMessageWatchlistMatch(
       continue;
     }
 
-    const matchedTerm = entry.terms.find((term) => normalizedContent.includes(term));
+    const matchedTerm = entry.terms.find((term) => termMatchesContent(normalizedContent, term));
     if (matchedTerm) {
       return { entry, matchedTerm: entry.matchLabel };
     }

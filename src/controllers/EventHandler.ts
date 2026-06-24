@@ -358,6 +358,8 @@ export class EventHandler implements IEventHandler {
         );
       }
 
+      // Source deletion never applies to staff/admin posters; the general exemption
+      // setting only controls ordinary automatic detections.
       if (watchlistMatch && hasExemptPermissions) {
         await this.securityActionService.observeSuspiciousMessage(
           message.member,

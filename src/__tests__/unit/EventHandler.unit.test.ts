@@ -1043,6 +1043,43 @@ describe('EventHandler (unit)', () => {
     );
   });
 
+  it('routes staff watchlist matches to review even when moderator exemptions are disabled', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          automatic_detection_exempt_moderators: false,
+          detection_response_mode: 'restrict',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+    };
+    const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
+    const message = buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers)) as any;
+    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
+
+    await (handler as any).handleMessage(message);
+
+    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
+    expect(securityActionService.observeSuspiciousMessage).toHaveBeenCalledWith(
+      message.member,
+      expect.objectContaining({
+        messageAction: expect.objectContaining({ kind: 'review_only' }),
+      }),
+      message
+    );
+  });
+
   it('skips automatic detection for Discord system messages', async () => {
     const detectionOrchestrator = {
       detectMessage: jest.fn(),

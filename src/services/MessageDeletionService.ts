@@ -12,6 +12,7 @@ import {
   selectEligibleReportImageAttachments,
   type ReportAttachmentMetadata,
 } from '../utils/reportAiSettings';
+import type { ServerSettings } from '../repositories/types';
 
 const DISCORD_MESSAGE_CONTENT_LIMIT = 2000;
 const CODE_BLOCK_CLOSING_MARKER = '\n```';
@@ -26,6 +27,7 @@ export interface SourceMessageDeletionInput {
   readonly sourceMessage: Message;
   readonly evidenceThreadId: string | null | undefined;
   readonly action: DetectionMessageAction;
+  readonly settings?: ServerSettings;
 }
 
 export interface SourceMessageDeletionResult {
@@ -184,7 +186,7 @@ export class MessageDeletionService implements IMessageDeletionService {
     const attachments = messageAttachmentsToReportMetadata(input.sourceMessage);
     const eligibleImages = selectEligibleReportImageAttachments(
       attachments,
-      getReportAiSettings({})
+      getReportAiSettings(input.settings)
     );
     const imageFiles = await buildSpoilerImageAttachmentFileResult(eligibleImages, {
       logger: console,

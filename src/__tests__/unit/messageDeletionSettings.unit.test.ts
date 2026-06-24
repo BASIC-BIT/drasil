@@ -54,6 +54,24 @@ describe('messageDeletionSettings (unit)', () => {
     );
   });
 
+  it('matches custom domain terms by exact host or subdomain boundary', () => {
+    const settings = getMessageDeletionSettings({
+      message_deletion_watchlist_disabled_default_ids: [CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID],
+      message_deletion_watchlist_custom_terms: ['baddomain.test'],
+    });
+
+    expect(
+      findMessageWatchlistMatch({ content: 'visit https://login.baddomain.test/path' }, settings)
+        ?.matchedTerm
+    ).toBe('baddomain.test');
+    expect(
+      findMessageWatchlistMatch({ content: 'visit https://notbaddomain.test' }, settings)
+    ).toBe(null);
+    expect(
+      findMessageWatchlistMatch({ content: 'visit https://baddomain.test.evil.example' }, settings)
+    ).toBe(null);
+  });
+
   it('builds stable custom entry IDs from normalized terms', () => {
     const initialSettings = getMessageDeletionSettings({
       message_deletion_watchlist_disabled_default_ids: [CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID],

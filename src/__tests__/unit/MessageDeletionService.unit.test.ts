@@ -185,4 +185,49 @@ describe('MessageDeletionService (unit)', () => {
     expect(((sendPayload.content as string).match(/```/g) ?? []).length % 2).toBe(0);
     expect(sourceMessage.delete).toHaveBeenCalledTimes(1);
   });
+
+  it('uses server report image limits when preserving source evidence', async () => {
+    const repository = new InMemoryDetectionEventsRepository();
+    const detection = await createDetection(repository);
+    const evidenceThread = {
+      send: jest.fn().mockResolvedValue({ id: 'evidence-message-4' } as Message),
+    };
+    const client = {
+      channels: {
+        fetch: jest.fn().mockResolvedValue(evidenceThread),
+      },
+    } as unknown as Client;
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => new ArrayBuffer(0),
+    } as Response);
+    const sourceMessage = buildMessage({
+      attachments: {
+        map: jest.fn((callback) =>
+          [
+            {
+              id: 'image-1',
+              name: 'proof.png',
+              url: 'https://example.test/proof.png',
+              contentType: 'image/png',
+              size: 100,
+            },
+          ].map(callback)
+        ),
+      },
+    });
+    const service = new MessageDeletionService(client, repository);
+
+    await service.preserveAndDeleteSourceMessage({
+      detectionEventId: detection.id,
+      sourceMessage,
+      evidenceThreadId: 'thread-1',
+      action,
+      settings: { report_ai_max_images: 0 },
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(evidenceThread.send.mock.calls[0][0].files).toBeUndefined();
+    fetchSpy.mockRestore();
+  });
 });
