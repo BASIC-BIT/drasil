@@ -13,6 +13,9 @@ import {
   type ReportAttachmentMetadata,
 } from '../utils/reportAiSettings';
 
+const DISCORD_MESSAGE_CONTENT_LIMIT = 2000;
+const EVIDENCE_TRUNCATION_NOTICE = '\n\n[Evidence text truncated to fit Discord message limits.]';
+
 interface EvidenceThreadLike {
   send(options: MessageCreateOptions): Promise<Message>;
 }
@@ -186,27 +189,40 @@ export class MessageDeletionService implements IMessageDeletionService {
         })
       : ['- none'];
 
-    return [
-      'Source message preserved before configured deletion.',
-      '',
-      `Policy source: ${input.action.source}`,
-      `Watchlist entry: ${input.action.watchlistEntryLabel} (${input.action.watchlistEntryId})`,
-      `Matched term: ${input.action.matchedTerm}`,
-      `Message ID: ${input.sourceMessage.id}`,
-      `Channel ID: ${input.sourceMessage.channelId}`,
-      `Author: ${input.sourceMessage.author.tag} (${input.sourceMessage.author.id})`,
-      `Created: ${new Date(input.sourceMessage.createdTimestamp).toISOString()}`,
-      '',
-      'Message content:',
-      '```text',
-      this.formatCodeBlockText(input.sourceMessage.content || '[no text content]'),
-      '```',
-      '',
-      'Attachments:',
-      ...attachmentLines,
-      '',
-      'Spoilered image copies are attached when Discord still exposes eligible image data.',
-    ].join('\n');
+    return this.truncateEvidenceMessage(
+      [
+        'Source message preserved before configured deletion.',
+        '',
+        `Policy source: ${input.action.source}`,
+        `Watchlist entry: ${input.action.watchlistEntryLabel} (${input.action.watchlistEntryId})`,
+        `Matched term: ${input.action.matchedTerm}`,
+        `Message ID: ${input.sourceMessage.id}`,
+        `Channel ID: ${input.sourceMessage.channelId}`,
+        `Author: ${input.sourceMessage.author.tag} (${input.sourceMessage.author.id})`,
+        `Created: ${new Date(input.sourceMessage.createdTimestamp).toISOString()}`,
+        '',
+        'Message content:',
+        '```text',
+        this.formatCodeBlockText(input.sourceMessage.content || '[no text content]'),
+        '```',
+        '',
+        'Attachments:',
+        ...attachmentLines,
+        '',
+        'Spoilered image copies are attached when Discord still exposes eligible image data.',
+      ].join('\n')
+    );
+  }
+
+  private truncateEvidenceMessage(content: string): string {
+    if (content.length <= DISCORD_MESSAGE_CONTENT_LIMIT) {
+      return content;
+    }
+
+    return `${content.slice(
+      0,
+      DISCORD_MESSAGE_CONTENT_LIMIT - EVIDENCE_TRUNCATION_NOTICE.length
+    )}${EVIDENCE_TRUNCATION_NOTICE}`;
   }
 
   private formatCodeBlockText(content: string): string {

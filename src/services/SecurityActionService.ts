@@ -165,6 +165,12 @@ export interface ISecurityActionService {
     sourceMessage?: Message
   ): Promise<boolean>;
 
+  recordSuspiciousMessage(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<string>;
+
   restrictObservedDetection(
     member: GuildMember,
     detectionEventId: string,
@@ -1133,6 +1139,20 @@ export class SecurityActionService implements ISecurityActionService {
         moderationQueueService.upsertObservedAlertMirrorById(detectionEventId)
     );
     return true;
+  }
+
+  public async recordSuspiciousMessage(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<string> {
+    await this.ensureEntitiesExist(
+      member.guild.id,
+      member.id,
+      member.user.username,
+      member.joinedAt?.toISOString()
+    );
+    return this.ensureDetectionEventId(member, detectionResult, sourceMessage);
   }
 
   private async ensureObservedEvidenceThread(

@@ -118,4 +118,31 @@ describe('MessageDeletionService (unit)', () => {
       },
     });
   });
+
+  it('caps preserved evidence content to Discord message limits', async () => {
+    const repository = new InMemoryDetectionEventsRepository();
+    const detection = await createDetection(repository);
+    const evidenceThread = {
+      send: jest.fn().mockResolvedValue({ id: 'evidence-message-3' } as Message),
+    };
+    const client = {
+      channels: {
+        fetch: jest.fn().mockResolvedValue(evidenceThread),
+      },
+    } as unknown as Client;
+    const sourceMessage = buildMessage({ content: `https://scam.example ${'x'.repeat(5000)}` });
+    const service = new MessageDeletionService(client, repository);
+
+    await service.preserveAndDeleteSourceMessage({
+      detectionEventId: detection.id,
+      sourceMessage,
+      evidenceThreadId: 'thread-1',
+      action,
+    });
+
+    const sendPayload = evidenceThread.send.mock.calls[0][0];
+    expect(sendPayload.content).toHaveLength(2000);
+    expect(sendPayload.content).toContain('Evidence text truncated to fit Discord message limits.');
+    expect(sourceMessage.delete).toHaveBeenCalledTimes(1);
+  });
 });

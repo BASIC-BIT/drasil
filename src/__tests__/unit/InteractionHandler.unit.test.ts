@@ -237,6 +237,7 @@ describe('InteractionHandler (unit)', () => {
       handleSuspiciousJoin: jest.fn().mockResolvedValue(true),
       handleHoneypotRoleAssignment: jest.fn().mockResolvedValue(true),
       observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
       openCaseForSuspiciousMessage: jest.fn().mockResolvedValue(true),
       openCaseForSuspiciousJoin: jest.fn().mockResolvedValue(true),
       handleManualFlag: jest.fn().mockResolvedValue(true),

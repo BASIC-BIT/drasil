@@ -11,8 +11,33 @@ export const userReportExternalResponseModeSchema = z.enum(['off', 'notify_only'
 export const analyticsConsentLevelSchema = z.enum(['off', 'anonymous', 'full']);
 export const reportAiMaxActionSchema = z.enum(['off', 'hints', 'open_case', 'restrict']);
 export const caseResponderRoutingModeSchema = z.enum(['off', 'ping_only', 'ping_and_add_members']);
+export const MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS = 25;
+export const MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH = 120;
+export const WICKEDPROXY_WATCHLIST_ENTRY_ID = 'wickedproxy-video-link';
+
+export interface MessageDeletionDefaultWatchlistEntry {
+  readonly id: string;
+  readonly label: string;
+  readonly detail: string;
+  readonly terms: readonly string[];
+  readonly requiresLinkOrVideo: boolean;
+}
+
+export const MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES: readonly MessageDeletionDefaultWatchlistEntry[] =
+  [
+    {
+      id: WICKEDPROXY_WATCHLIST_ENTRY_ID,
+      label: 'WickedProxy video/link campaign',
+      detail: 'Matches wickedproxy indicators only when the message also contains a link or video.',
+      terms: ['wickedproxy'],
+      requiresLinkOrVideo: true,
+    },
+  ];
+
 export const messageDeletionWatchlistDefaultIdsSchema = z.array(z.string()).max(10);
-export const messageDeletionWatchlistCustomTermsSchema = z.array(z.string().trim().min(1)).max(25);
+export const messageDeletionWatchlistCustomTermsSchema = z
+  .array(z.string().trim().min(1).max(MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH))
+  .max(MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS);
 
 export const serverSettingsSchema = z
   .object({

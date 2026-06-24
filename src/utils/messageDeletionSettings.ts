@@ -1,5 +1,13 @@
+import { createHash } from 'crypto';
+import {
+  MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH,
+  MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES as SHARED_MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES,
+  MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS,
+} from '../../packages/contracts/src/setup';
 import type { ServerSettings } from '../repositories/types';
 import type { ReportAttachmentMetadata } from './reportAiSettings';
+
+export { WICKEDPROXY_WATCHLIST_ENTRY_ID } from '../../packages/contracts/src/setup';
 
 export const MESSAGE_DELETION_ENABLED_SETTING_KEY = 'message_deletion_enabled';
 export const MESSAGE_DELETION_SOURCE_MESSAGE_ENABLED_SETTING_KEY =
@@ -10,12 +18,8 @@ export const MESSAGE_DELETION_WATCHLIST_DISABLED_DEFAULT_IDS_SETTING_KEY =
 export const MESSAGE_DELETION_WATCHLIST_CUSTOM_TERMS_SETTING_KEY =
   'message_deletion_watchlist_custom_terms';
 
-export const WICKEDPROXY_WATCHLIST_ENTRY_ID = 'wickedproxy-video-link';
-
 const URL_PATTERN = /https?:\/\/\S+|www\.\S+/i;
 const VIDEO_FILENAME_PATTERN = /\.(?:mp4|mov|m4v|webm)(?:[?#].*)?$/i;
-const MAX_CUSTOM_WATCHLIST_TERMS = 25;
-const MAX_CUSTOM_WATCHLIST_TERM_LENGTH = 120;
 
 export interface MessageWatchlistEntry {
   readonly id: string;
@@ -44,12 +48,12 @@ export interface MessageWatchlistInput {
 }
 
 export const DEFAULT_MESSAGE_WATCHLIST_ENTRIES: readonly MessageWatchlistEntry[] = [
-  {
-    id: WICKEDPROXY_WATCHLIST_ENTRY_ID,
-    label: 'WickedProxy video/link campaign',
-    terms: ['wickedproxy'],
-    requiresLinkOrVideo: true,
-  },
+  ...SHARED_MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES.map((entry) => ({
+    id: entry.id,
+    label: entry.label,
+    terms: entry.terms,
+    requiresLinkOrVideo: entry.requiresLinkOrVideo,
+  })),
 ];
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
@@ -62,7 +66,7 @@ function normalizeTerm(value: unknown): string | null {
   }
 
   const term = value.replace(/\s+/g, ' ').trim().toLowerCase();
-  if (!term || term.length > MAX_CUSTOM_WATCHLIST_TERM_LENGTH) {
+  if (!term || term.length > MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH) {
     return null;
   }
 
@@ -93,8 +97,8 @@ function readStringArray(value: unknown, maxItems: number): string[] {
 }
 
 function buildCustomWatchlistEntries(terms: readonly string[]): MessageWatchlistEntry[] {
-  return terms.map((term, index) => ({
-    id: `custom-${index + 1}`,
+  return terms.map((term) => ({
+    id: `custom-${createHash('sha256').update(term).digest('hex').slice(0, 12)}`,
     label: `Custom watchlist term: ${term}`,
     terms: [term],
     requiresLinkOrVideo: true,
@@ -111,7 +115,7 @@ export function getMessageDeletionSettings(
   const disabledDefaults = new Set(disabledDefaultWatchlistEntryIds);
   const customWatchlistTerms = readStringArray(
     settings?.[MESSAGE_DELETION_WATCHLIST_CUSTOM_TERMS_SETTING_KEY],
-    MAX_CUSTOM_WATCHLIST_TERMS
+    MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS
   );
 
   return {

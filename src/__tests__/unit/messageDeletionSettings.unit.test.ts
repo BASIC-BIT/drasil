@@ -45,6 +45,20 @@ describe('messageDeletionSettings (unit)', () => {
     );
   });
 
+  it('builds stable custom entry IDs from normalized terms', () => {
+    const initialSettings = getMessageDeletionSettings({
+      message_deletion_watchlist_disabled_default_ids: [WICKEDPROXY_WATCHLIST_ENTRY_ID],
+      message_deletion_watchlist_custom_terms: ['first.example', 'stable.example'],
+    });
+    const updatedSettings = getMessageDeletionSettings({
+      message_deletion_watchlist_disabled_default_ids: [WICKEDPROXY_WATCHLIST_ENTRY_ID],
+      message_deletion_watchlist_custom_terms: ['stable.example'],
+    });
+
+    expect(initialSettings.watchlistEntries[1].id).toBe(updatedSettings.watchlistEntries[0].id);
+    expect(updatedSettings.watchlistEntries[0].id).toMatch(/^custom-[0-9a-f]{12}$/);
+  });
+
   it('does not match when deletion or watchlist policy is disabled', () => {
     expect(
       findMessageWatchlistMatch(

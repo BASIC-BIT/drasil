@@ -2,11 +2,14 @@
 
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { guildSetupUpdateSchema, type DetectionResponseMode } from '@drasil/contracts';
+import {
+  guildSetupUpdateSchema,
+  MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES,
+  MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS,
+  type DetectionResponseMode,
+} from '@drasil/contracts';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
-
-const MESSAGE_DELETION_DEFAULT_WATCHLIST_IDS = ['wickedproxy-video-link'] as const;
 
 function readOptionalFormString(formData: FormData, key: string): string | null | undefined {
   const value = formData.get(key);
@@ -60,12 +63,14 @@ function readWatchlistCustomTerms(formData: FormData): string[] {
       seen.add(line);
       return true;
     })
-    .slice(0, 25);
+    .slice(0, MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS);
 }
 
 function readDisabledDefaultWatchlistIds(formData: FormData): string[] {
   const enabledIds = new Set(formData.getAll('messageDeletionDefaultWatchlistIds'));
-  return MESSAGE_DELETION_DEFAULT_WATCHLIST_IDS.filter((id) => !enabledIds.has(id));
+  return MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES.map((entry) => entry.id).filter(
+    (id) => !enabledIds.has(id)
+  );
 }
 
 export async function saveGuildSetup(guildId: string, formData: FormData): Promise<void> {

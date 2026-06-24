@@ -81,6 +81,7 @@ describe('EventHandler (unit)', () => {
         openCaseForSuspiciousJoin: jest.fn(),
         openAdminCase: jest.fn(),
         observeSuspiciousMessage: jest.fn(),
+        recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
         recordRejoinAfterKickDetection: jest.fn(),
       }) as any,
       { handleTestCommands: jest.fn(), registerCommands: jest.fn() } as any,
@@ -924,6 +925,7 @@ describe('EventHandler (unit)', () => {
     const securityActionService = {
       handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
       observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
     };
     const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
     const message = buildMessage(new PermissionsBitField()) as any;
@@ -950,6 +952,42 @@ describe('EventHandler (unit)', () => {
     expect(securityActionService.observeSuspiciousMessage).not.toHaveBeenCalled();
   });
 
+  it('records non-staff watchlist matches before record-only response routing', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'record_only',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+    };
+    const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.content = 'watch this wickedproxy clip https://example.com/video';
+
+    await (handler as any).handleMessage(message);
+
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
+    expect(securityActionService.recordSuspiciousMessage).toHaveBeenCalledWith(
+      message.member,
+      expect.objectContaining({ triggerSource: DetectionType.PATTERN_MATCH }),
+      message
+    );
+    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
+    expect(securityActionService.observeSuspiciousMessage).not.toHaveBeenCalled();
+  });
+
   it('routes staff watchlist matches to observed review without source-message deletion', async () => {
     const detectionOrchestrator = {
       detectMessage: jest.fn(),
@@ -968,6 +1006,7 @@ describe('EventHandler (unit)', () => {
     const securityActionService = {
       handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
       observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
     };
     const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
     const message = buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers)) as any;

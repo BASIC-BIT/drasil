@@ -517,6 +517,18 @@ export class EventHandler implements IEventHandler {
       });
     }
 
+    const routesWithoutCaseHandling =
+      responseSettings.mode === 'record_only' ||
+      responseSettings.mode === 'notify_only' ||
+      confidencePercent < actionThreshold;
+    if (sourceMessage && !detectionResult.detectionEventId && routesWithoutCaseHandling) {
+      detectionResult.detectionEventId = await this.securityActionService.recordSuspiciousMessage(
+        member,
+        detectionResult,
+        sourceMessage
+      );
+    }
+
     switch (responseSettings.mode) {
       case 'record_only':
         console.log(

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES } from '@drasil/contracts';
 import { saveGuildSetup } from './actions';
 import { AccountControl } from '@/components/AccountControl';
 import { InstallInvitePanel } from '@/components/InstallInvitePanel';
@@ -7,14 +8,6 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 import type { DiscordChannel, DiscordRole } from '@/lib/discordApi';
-
-const MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES = [
-  {
-    id: 'wickedproxy-video-link',
-    label: 'WickedProxy video/link campaign',
-    detail: 'Matches wickedproxy indicators only when the message also contains a link or video.',
-  },
-] as const;
 
 type PageProps = {
   readonly params: Promise<{ readonly guildId: string }>;
@@ -137,11 +130,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
         <div className="form-grid">
           <div className="field">
             <label htmlFor="caseRoleId">Case role</label>
-            <select
-              id="caseRoleId"
-              name="caseRoleId"
-              defaultValue={server?.case_role_id ?? ''}
-            >
+            <select id="caseRoleId" name="caseRoleId" defaultValue={server?.case_role_id ?? ''}>
               <option value="">Choose a role</option>
               {roleOptions(roles, server?.case_role_id)}
             </select>
@@ -311,8 +300,8 @@ export default async function GuildSetupPage({ params }: PageProps) {
           <h2>Message Deletion</h2>
           <p className="muted">
             High-confidence watchlist deletion preserves moderator evidence, then removes the source
-            message when Drasil has Manage Messages. Staff/admin posters are routed for review rather
-            than automatically deleted.
+            message when Drasil has Manage Messages. Staff/admin posters are routed for review
+            rather than automatically deleted.
           </p>
         </div>
         <div className="actions">
