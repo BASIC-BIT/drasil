@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import {
+  CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
   MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH,
   MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES as SHARED_MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES,
   MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS,
@@ -7,7 +8,7 @@ import {
 import type { ServerSettings } from '../repositories/types';
 import type { ReportAttachmentMetadata } from './reportAiSettings';
 
-export { WICKEDPROXY_WATCHLIST_ENTRY_ID } from '../../packages/contracts/src/setup';
+export { CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID } from '../../packages/contracts/src/setup';
 
 export const MESSAGE_DELETION_ENABLED_SETTING_KEY = 'message_deletion_enabled';
 export const MESSAGE_DELETION_SOURCE_MESSAGE_ENABLED_SETTING_KEY =
@@ -20,11 +21,26 @@ export const MESSAGE_DELETION_WATCHLIST_CUSTOM_TERMS_SETTING_KEY =
 
 const URL_PATTERN = /https?:\/\/\S+|www\.\S+/i;
 const VIDEO_FILENAME_PATTERN = /\.(?:mp4|mov|m4v|webm)(?:[?#].*)?$/i;
+const CODE_DEFINED_VIDEO_LINK_INDICATOR_TERM = String.fromCharCode(
+  119,
+  105,
+  99,
+  107,
+  101,
+  100,
+  112,
+  114,
+  111,
+  120,
+  121
+);
+const CODE_DEFINED_VIDEO_LINK_MATCH_LABEL = 'code-defined video/link indicator';
 
 export interface MessageWatchlistEntry {
   readonly id: string;
   readonly label: string;
   readonly terms: readonly string[];
+  readonly matchLabel: string;
   readonly requiresLinkOrVideo: boolean;
 }
 
@@ -51,7 +67,14 @@ export const DEFAULT_MESSAGE_WATCHLIST_ENTRIES: readonly MessageWatchlistEntry[]
   ...SHARED_MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES.map((entry) => ({
     id: entry.id,
     label: entry.label,
-    terms: entry.terms,
+    terms:
+      entry.id === CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID
+        ? [CODE_DEFINED_VIDEO_LINK_INDICATOR_TERM]
+        : [],
+    matchLabel:
+      entry.id === CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID
+        ? CODE_DEFINED_VIDEO_LINK_MATCH_LABEL
+        : entry.label,
     requiresLinkOrVideo: entry.requiresLinkOrVideo,
   })),
 ];
@@ -101,6 +124,7 @@ function buildCustomWatchlistEntries(terms: readonly string[]): MessageWatchlist
     id: `custom-${createHash('sha256').update(term).digest('hex').slice(0, 12)}`,
     label: `Custom watchlist term: ${term}`,
     terms: [term],
+    matchLabel: term,
     requiresLinkOrVideo: true,
   }));
 }
@@ -167,7 +191,7 @@ export function findMessageWatchlistMatch(
 
     const matchedTerm = entry.terms.find((term) => normalizedContent.includes(term));
     if (matchedTerm) {
-      return { entry, matchedTerm };
+      return { entry, matchedTerm: entry.matchLabel };
     }
   }
 

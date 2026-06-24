@@ -177,9 +177,18 @@ Product copy:
   describe concrete facts, checks, suggestions, or confidence in plain product language. Admin-facing
   diagnostics can be more explicit when useful, but should still avoid over-emphasizing the model as
   the actor instead of Drasil's moderation workflow.
+- Do not name specific spam operators or campaigns in code identifiers, public PR/release copy, UX
+  labels, or persisted detection metadata. Use neutral labels such as "known video/link spam
+  campaign"; if exact indicators are needed for matching, keep them internal and avoid persisting
+  them as evidence text or metadata values.
 - Model-assisted admin diagnostics should be concise by contract. Do not render long model prose and
   then clip it with ellipses; tighten the model prompt/schema, select the highest-signal fields, or
   omit optional detail instead of showing truncated analysis text.
+- Promotion note: current source is PR #166 review feedback on scoped message deletion copy; target
+  is repo `AGENTS.md` because avoiding operator/campaign-name amplification applies across Drasil
+  moderation UX, metadata, and public project surfaces. Over-promotion cost is one short product-copy
+  rule; demotion path is moving details to a product-copy doc if examples grow; verification signal
+  is future Drasil diffs using neutral campaign labels and not persisting raw code-defined indicators.
 - Promotion note: current source is user feedback from the report-intake QA session; target is repo
   `AGENTS.md` because this is a broad Drasil copy principle for Discord/web UX. Over-promotion cost
   is a short reminder in every repo session; demotion path is moving examples to a product-copy doc if

@@ -1,37 +1,46 @@
 import {
+  CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
+  DEFAULT_MESSAGE_WATCHLIST_ENTRIES,
   findMessageWatchlistMatch,
   getMessageDeletionSettings,
-  WICKEDPROXY_WATCHLIST_ENTRY_ID,
 } from '../../utils/messageDeletionSettings';
 
 describe('messageDeletionSettings (unit)', () => {
-  it('matches the default wickedproxy watchlist only when link or video evidence exists', () => {
+  const codeDefinedVideoLinkTerm = DEFAULT_MESSAGE_WATCHLIST_ENTRIES[0].terms[0];
+
+  it('matches the code-defined watchlist only when link or video evidence exists', () => {
     const settings = getMessageDeletionSettings({});
 
     expect(
       findMessageWatchlistMatch(
-        { content: 'watch this https://wickedproxy.example/video' },
+        { content: `watch this https://${codeDefinedVideoLinkTerm}.example/video` },
         settings
       )?.entry.id
-    ).toBe(WICKEDPROXY_WATCHLIST_ENTRY_ID);
-    expect(findMessageWatchlistMatch({ content: 'someone mentioned wickedproxy' }, settings)).toBe(
-      null
-    );
+    ).toBe(CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID);
+    expect(
+      findMessageWatchlistMatch(
+        { content: `someone mentioned ${codeDefinedVideoLinkTerm}` },
+        settings
+      )
+    ).toBe(null);
   });
 
   it('allows servers to disable code-defined defaults', () => {
     const settings = getMessageDeletionSettings({
-      message_deletion_watchlist_disabled_default_ids: [WICKEDPROXY_WATCHLIST_ENTRY_ID],
+      message_deletion_watchlist_disabled_default_ids: [CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID],
     });
 
     expect(
-      findMessageWatchlistMatch({ content: 'https://wickedproxy.example/video' }, settings)
+      findMessageWatchlistMatch(
+        { content: `https://${codeDefinedVideoLinkTerm}.example/video` },
+        settings
+      )
     ).toBe(null);
   });
 
   it('normalizes custom terms and applies the same link or video gate', () => {
     const settings = getMessageDeletionSettings({
-      message_deletion_watchlist_disabled_default_ids: [WICKEDPROXY_WATCHLIST_ENTRY_ID],
+      message_deletion_watchlist_disabled_default_ids: [CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID],
       message_deletion_watchlist_custom_terms: ['  BadDomain.test ', 'baddomain.test'],
     });
 
@@ -47,11 +56,11 @@ describe('messageDeletionSettings (unit)', () => {
 
   it('builds stable custom entry IDs from normalized terms', () => {
     const initialSettings = getMessageDeletionSettings({
-      message_deletion_watchlist_disabled_default_ids: [WICKEDPROXY_WATCHLIST_ENTRY_ID],
+      message_deletion_watchlist_disabled_default_ids: [CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID],
       message_deletion_watchlist_custom_terms: ['first.example', 'stable.example'],
     });
     const updatedSettings = getMessageDeletionSettings({
-      message_deletion_watchlist_disabled_default_ids: [WICKEDPROXY_WATCHLIST_ENTRY_ID],
+      message_deletion_watchlist_disabled_default_ids: [CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID],
       message_deletion_watchlist_custom_terms: ['stable.example'],
     });
 
@@ -62,13 +71,13 @@ describe('messageDeletionSettings (unit)', () => {
   it('does not match when deletion or watchlist policy is disabled', () => {
     expect(
       findMessageWatchlistMatch(
-        { content: 'https://wickedproxy.example/video' },
+        { content: `https://${codeDefinedVideoLinkTerm}.example/video` },
         getMessageDeletionSettings({ message_deletion_enabled: false })
       )
     ).toBe(null);
     expect(
       findMessageWatchlistMatch(
-        { content: 'https://wickedproxy.example/video' },
+        { content: `https://${codeDefinedVideoLinkTerm}.example/video` },
         getMessageDeletionSettings({ message_deletion_watchlist_enabled: false })
       )
     ).toBe(null);

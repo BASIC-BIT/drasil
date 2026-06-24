@@ -13,8 +13,15 @@ import {
   ModerationOutcomeSource,
   ModerationOutcomeType,
 } from '../../repositories/types';
+import {
+  CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
+  DEFAULT_MESSAGE_WATCHLIST_ENTRIES,
+} from '../../utils/messageDeletionSettings';
 
 const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
+const CODE_DEFINED_VIDEO_LINK_TERM = DEFAULT_MESSAGE_WATCHLIST_ENTRIES[0].terms[0];
+const CODE_DEFINED_VIDEO_LINK_MATCH_LABEL = DEFAULT_MESSAGE_WATCHLIST_ENTRIES[0].matchLabel;
+const CODE_DEFINED_VIDEO_LINK_MESSAGE = `watch this ${CODE_DEFINED_VIDEO_LINK_TERM} clip https://example.com/video`;
 
 describe('EventHandler (unit)', () => {
   function buildHandler(overrides?: {
@@ -929,7 +936,7 @@ describe('EventHandler (unit)', () => {
     };
     const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
     const message = buildMessage(new PermissionsBitField()) as any;
-    message.content = 'watch this wickedproxy clip https://example.com/video';
+    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
 
     await (handler as any).handleMessage(message);
 
@@ -943,8 +950,8 @@ describe('EventHandler (unit)', () => {
         messageAction: expect.objectContaining({
           kind: 'delete_source_message',
           source: 'watchlist',
-          watchlistEntryId: 'wickedproxy-video-link',
-          matchedTerm: 'wickedproxy',
+          watchlistEntryId: CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
+          matchedTerm: CODE_DEFINED_VIDEO_LINK_MATCH_LABEL,
         }),
       }),
       message
@@ -974,7 +981,7 @@ describe('EventHandler (unit)', () => {
     };
     const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
     const message = buildMessage(new PermissionsBitField()) as any;
-    message.content = 'watch this wickedproxy clip https://example.com/video';
+    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
 
     await (handler as any).handleMessage(message);
 
@@ -1010,7 +1017,7 @@ describe('EventHandler (unit)', () => {
     };
     const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
     const message = buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers)) as any;
-    message.content = 'watch this wickedproxy clip https://example.com/video';
+    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
 
     await (handler as any).handleMessage(message);
 
@@ -1028,8 +1035,8 @@ describe('EventHandler (unit)', () => {
         messageAction: expect.objectContaining({
           kind: 'review_only',
           source: 'watchlist',
-          watchlistEntryId: 'wickedproxy-video-link',
-          matchedTerm: 'wickedproxy',
+          watchlistEntryId: CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
+          matchedTerm: CODE_DEFINED_VIDEO_LINK_MATCH_LABEL,
         }),
       }),
       message

@@ -13,23 +13,22 @@ export const reportAiMaxActionSchema = z.enum(['off', 'hints', 'open_case', 'res
 export const caseResponderRoutingModeSchema = z.enum(['off', 'ping_only', 'ping_and_add_members']);
 export const MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS = 25;
 export const MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH = 120;
-export const WICKEDPROXY_WATCHLIST_ENTRY_ID = 'wickedproxy-video-link';
+export const CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID = 'known-video-link-campaign';
 
 export interface MessageDeletionDefaultWatchlistEntry {
   readonly id: string;
   readonly label: string;
   readonly detail: string;
-  readonly terms: readonly string[];
   readonly requiresLinkOrVideo: boolean;
 }
 
 export const MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES: readonly MessageDeletionDefaultWatchlistEntry[] =
   [
     {
-      id: WICKEDPROXY_WATCHLIST_ENTRY_ID,
-      label: 'WickedProxy video/link campaign',
-      detail: 'Matches wickedproxy indicators only when the message also contains a link or video.',
-      terms: ['wickedproxy'],
+      id: CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
+      label: 'Known video/link spam campaign',
+      detail:
+        'Matches a code-defined indicator only when the message also contains a link or video.',
       requiresLinkOrVideo: true,
     },
   ];
