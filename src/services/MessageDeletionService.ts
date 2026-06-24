@@ -87,7 +87,26 @@ export class MessageDeletionService implements IMessageDeletionService {
       };
     }
 
-    const evidenceMessage = await this.preserveEvidence(input, evidenceThread);
+    let evidenceMessage: Message;
+    try {
+      evidenceMessage = await this.preserveEvidence(input, evidenceThread);
+    } catch (error) {
+      const failureReason = this.formatFailureReason(error);
+      await this.mergeDeletionMetadata(input.detectionEventId, {
+        ...metadataBase,
+        attempted: true,
+        deleted: false,
+        evidence_preserved: false,
+        failure_reason: failureReason,
+      });
+      return {
+        attempted: true,
+        deleted: false,
+        evidencePreserved: false,
+        reason: failureReason,
+      };
+    }
+
     if (!input.sourceMessage.deletable) {
       await this.mergeDeletionMetadata(input.detectionEventId, {
         ...metadataBase,
@@ -117,7 +136,7 @@ export class MessageDeletionService implements IMessageDeletionService {
       });
       return { attempted: true, deleted: true, evidencePreserved: true };
     } catch (error) {
-      const failureReason = error instanceof Error ? error.message : String(error);
+      const failureReason = this.formatFailureReason(error);
       await this.mergeDeletionMetadata(input.detectionEventId, {
         ...metadataBase,
         attempted: true,
@@ -234,6 +253,10 @@ export class MessageDeletionService implements IMessageDeletionService {
 
   private hasUnclosedCodeBlock(content: string): boolean {
     return (content.match(/```/g) ?? []).length % 2 === 1;
+  }
+
+  private formatFailureReason(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   private formatCodeBlockText(content: string): string {

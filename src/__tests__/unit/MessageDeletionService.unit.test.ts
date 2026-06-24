@@ -119,6 +119,45 @@ describe('MessageDeletionService (unit)', () => {
     });
   });
 
+  it('audits and skips deletion when evidence preservation fails', async () => {
+    const repository = new InMemoryDetectionEventsRepository();
+    const detection = await createDetection(repository);
+    const evidenceThread = {
+      send: jest.fn().mockRejectedValue(new Error('missing permissions')),
+    };
+    const client = {
+      channels: {
+        fetch: jest.fn().mockResolvedValue(evidenceThread),
+      },
+    } as unknown as Client;
+    const sourceMessage = buildMessage();
+    const service = new MessageDeletionService(client, repository);
+
+    const result = await service.preserveAndDeleteSourceMessage({
+      detectionEventId: detection.id,
+      sourceMessage,
+      evidenceThreadId: 'thread-1',
+      action,
+    });
+
+    expect(result).toMatchObject({
+      attempted: true,
+      deleted: false,
+      evidencePreserved: false,
+      reason: 'missing permissions',
+    });
+    expect(sourceMessage.delete).not.toHaveBeenCalled();
+    const updated = await repository.findById(detection.id);
+    expect(updated?.metadata).toMatchObject({
+      message_deletion: {
+        attempted: true,
+        deleted: false,
+        evidence_preserved: false,
+        failure_reason: 'missing permissions',
+      },
+    });
+  });
+
   it('caps preserved evidence content to Discord message limits', async () => {
     const repository = new InMemoryDetectionEventsRepository();
     const detection = await createDetection(repository);
