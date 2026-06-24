@@ -22,7 +22,7 @@ interface MessageAttachmentCollectionLike {
 }
 
 interface MessageWithAttachmentsLike {
-  readonly attachments: MessageAttachmentCollectionLike;
+  readonly attachments?: MessageAttachmentCollectionLike;
 }
 
 interface SpoilerImageFileLogger {
@@ -58,8 +58,12 @@ export function selectEligibleMessageReportImageAttachments(
 }
 
 function getMessageAttachments(
-  attachments: MessageAttachmentCollectionLike
+  attachments: MessageAttachmentCollectionLike | undefined
 ): MessageAttachmentLike[] {
+  if (!attachments) {
+    return [];
+  }
+
   if (typeof attachments.map === 'function') {
     return attachments.map((attachment) => attachment);
   }

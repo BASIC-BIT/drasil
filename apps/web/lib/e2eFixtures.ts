@@ -69,6 +69,7 @@ export function fixtureGuildResources(): DiscordGuildResources {
       DISCORD_PERMISSIONS.ManageChannels |
       DISCORD_PERMISSIONS.ViewChannel |
       DISCORD_PERMISSIONS.SendMessages |
+      DISCORD_PERMISSIONS.ManageMessages |
       DISCORD_PERMISSIONS.EmbedLinks |
       DISCORD_PERMISSIONS.ReadMessageHistory |
       DISCORD_PERMISSIONS.ManageThreads |

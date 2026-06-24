@@ -253,6 +253,15 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       });
     }
 
+    if (!botMember.permissions.has(PermissionFlagsBits.ManageMessages)) {
+      issues.push({
+        severity: 'warning',
+        code: 'guild-manage-messages',
+        message:
+          'Drasil is missing Manage Messages, so configured message deletion will fail where channel permissions do not grant it.',
+      });
+    }
+
     if (!botMember.permissions.has(PermissionFlagsBits.ViewAuditLog)) {
       issues.push({
         severity: 'warning',

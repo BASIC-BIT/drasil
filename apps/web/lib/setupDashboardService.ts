@@ -164,6 +164,22 @@ function buildChecklist(args: BuildChecklistArgs) {
         )
   );
 
+  checklist.push(
+    hasPermission(guildPermissions, DISCORD_PERMISSIONS.ManageMessages)
+      ? item(
+          'manage-messages',
+          'Manage messages permission',
+          'ok',
+          'Configured source-message deletion can run where channel permissions allow it.'
+        )
+      : item(
+          'manage-messages',
+          'Manage messages permission',
+          'warning',
+          'Message deletion will fail until Drasil has Manage Messages in the source channel.'
+        )
+  );
+
   const caseRole = findRole(resources.roles, server?.case_role_id);
   const highestBotRolePosition = Math.max(
     -1,

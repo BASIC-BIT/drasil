@@ -62,6 +62,7 @@ import { ReportAiAnalyzer } from './ReportAiAnalyzer';
 import { ReportDetectionBuilder } from './ReportDetectionBuilder';
 import { RoleIntakeProcessor } from './RoleIntakeProcessor';
 import { IModerationQueueService } from './ModerationQueueService';
+import type { IMessageDeletionService } from './MessageDeletionService';
 
 const DELAYED_THREAD_REPAIR_DELAY_MS = 70_000;
 const AUTO_KICK_DEFAULT_REASON =
@@ -156,6 +157,12 @@ export interface ISecurityActionService {
     member: GuildMember,
     detectionEventId: string,
     moderator: User
+  ): Promise<boolean>;
+
+  observeSuspiciousMessage(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
   ): Promise<boolean>;
 
   restrictObservedDetection(
@@ -334,6 +341,7 @@ export class SecurityActionService implements ISecurityActionService {
   private gptService?: IGPTService;
   private productAnalyticsService: IProductAnalyticsService;
   private moderationQueueService?: IModerationQueueService;
+  private messageDeletionService?: IMessageDeletionService;
   private reportAiAnalyzer: ReportAiAnalyzer;
   private reportDetectionBuilder: ReportDetectionBuilder;
   private roleIntakeProcessor: RoleIntakeProcessor;
@@ -357,7 +365,10 @@ export class SecurityActionService implements ISecurityActionService {
     productAnalyticsService?: IProductAnalyticsService,
     @inject(TYPES.ModerationQueueService)
     @optional()
-    moderationQueueService?: IModerationQueueService
+    moderationQueueService?: IModerationQueueService,
+    @inject(TYPES.MessageDeletionService)
+    @optional()
+    messageDeletionService?: IMessageDeletionService
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -372,6 +383,7 @@ export class SecurityActionService implements ISecurityActionService {
     this.gptService = gptService;
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.moderationQueueService = moderationQueueService;
+    this.messageDeletionService = messageDeletionService;
     this.reportAiAnalyzer = new ReportAiAnalyzer(this.serverRepository, this.gptService);
     this.reportDetectionBuilder = new ReportDetectionBuilder(
       this.detectionEventsRepository,
@@ -1085,6 +1097,44 @@ export class SecurityActionService implements ISecurityActionService {
     );
   }
 
+  public async observeSuspiciousMessage(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<boolean> {
+    await this.ensureEntitiesExist(
+      member.guild.id,
+      member.id,
+      member.user.username,
+      member.joinedAt?.toISOString()
+    );
+    const detectionEventId = await this.ensureDetectionEventId(
+      member,
+      detectionResult,
+      sourceMessage
+    );
+    const notificationMessage = await this.notificationManager.upsertObservedDetectionNotification(
+      member,
+      detectionResult,
+      sourceMessage
+    );
+    if (!notificationMessage) {
+      throw new Error('Failed to send or update observed suspicious message notification');
+    }
+    await this.ensureObservedEvidenceThread(
+      member,
+      detectionResult,
+      notificationMessage,
+      sourceMessage
+    );
+    await this.runModerationQueueTask(
+      `mirror observed alert ${detectionEventId} to the live moderation queue`,
+      (moderationQueueService) =>
+        moderationQueueService.upsertObservedAlertMirrorById(detectionEventId)
+    );
+    return true;
+  }
+
   private async ensureObservedEvidenceThread(
     member: GuildMember,
     detectionResult: DetectionResult,
@@ -1650,6 +1700,11 @@ export class SecurityActionService implements ISecurityActionService {
         notificationVerificationEvent,
         sourceMessage
       );
+      await this.maybeDeleteSourceMessage(
+        detectionResult,
+        notificationVerificationEvent,
+        sourceMessage
+      );
       if (!shouldUseReviewThread) {
         this.scheduleDelayedThreadRepair(
           member,
@@ -1719,6 +1774,7 @@ export class SecurityActionService implements ISecurityActionService {
       newVerificationEvent,
       sourceMessage
     );
+    await this.maybeDeleteSourceMessage(detectionResult, newVerificationEvent, sourceMessage);
     if (!shouldUseReviewThread) {
       this.scheduleDelayedThreadRepair(
         member,
@@ -1744,6 +1800,35 @@ export class SecurityActionService implements ISecurityActionService {
     );
 
     return true;
+  }
+
+  private async maybeDeleteSourceMessage(
+    detectionResult: DetectionResult,
+    verificationEvent: VerificationEvent,
+    sourceMessage?: Message
+  ): Promise<void> {
+    if (
+      !this.messageDeletionService ||
+      !sourceMessage ||
+      !detectionResult.detectionEventId ||
+      detectionResult.messageAction?.kind !== 'delete_source_message'
+    ) {
+      return;
+    }
+
+    try {
+      await this.messageDeletionService.preserveAndDeleteSourceMessage({
+        detectionEventId: detectionResult.detectionEventId,
+        sourceMessage,
+        evidenceThreadId: verificationEvent.private_evidence_thread_id,
+        action: detectionResult.messageAction,
+      });
+    } catch (error) {
+      console.warn(
+        `Failed to preserve/delete source message ${sourceMessage.id} for detection ${detectionResult.detectionEventId}:`,
+        error
+      );
+    }
   }
 
   /**

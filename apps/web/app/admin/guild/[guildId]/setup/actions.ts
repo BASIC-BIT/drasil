@@ -6,6 +6,8 @@ import { guildSetupUpdateSchema, type DetectionResponseMode } from '@drasil/cont
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 
+const MESSAGE_DELETION_DEFAULT_WATCHLIST_IDS = ['wickedproxy-video-link'] as const;
+
 function readOptionalFormString(formData: FormData, key: string): string | null | undefined {
   const value = formData.get(key);
   if (value === null) {
@@ -41,6 +43,31 @@ function readOptionalFormValue(formData: FormData, key: string): string | undefi
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+function readWatchlistCustomTerms(formData: FormData): string[] {
+  const value = formData.get('messageDeletionWatchlistCustomTerms');
+  if (typeof value !== 'string') {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim().toLowerCase())
+    .filter((line) => {
+      if (!line || seen.has(line)) {
+        return false;
+      }
+      seen.add(line);
+      return true;
+    })
+    .slice(0, 25);
+}
+
+function readDisabledDefaultWatchlistIds(formData: FormData): string[] {
+  const enabledIds = new Set(formData.getAll('messageDeletionDefaultWatchlistIds'));
+  return MESSAGE_DELETION_DEFAULT_WATCHLIST_IDS.filter((id) => !enabledIds.has(id));
+}
+
 export async function saveGuildSetup(guildId: string, formData: FormData): Promise<void> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
@@ -72,6 +99,12 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
     analyticsConsentLevel: readOptionalFormValue(formData, 'analyticsConsentLevel'),
     reportAiTriageEnabled: formData.get('reportAiTriageEnabled') === 'on',
     reportAiMaxAction: readOptionalFormValue(formData, 'reportAiMaxAction'),
+    messageDeletionEnabled: formData.get('messageDeletionEnabled') === 'on',
+    messageDeletionSourceMessageEnabled:
+      formData.get('messageDeletionSourceMessageEnabled') === 'on',
+    messageDeletionWatchlistEnabled: formData.get('messageDeletionWatchlistEnabled') === 'on',
+    messageDeletionWatchlistDisabledDefaultIds: readDisabledDefaultWatchlistIds(formData),
+    messageDeletionWatchlistCustomTerms: readWatchlistCustomTerms(formData),
   });
 
   await service.updateGuildSetup(update);

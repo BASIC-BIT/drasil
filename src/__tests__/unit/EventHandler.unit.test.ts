@@ -80,6 +80,7 @@ describe('EventHandler (unit)', () => {
         openCaseForSuspiciousMessage: jest.fn(),
         openCaseForSuspiciousJoin: jest.fn(),
         openAdminCase: jest.fn(),
+        observeSuspiciousMessage: jest.fn(),
         recordRejoinAfterKickDetection: jest.fn(),
       }) as any,
       { handleTestCommands: jest.fn(), registerCommands: jest.fn() } as any,
@@ -809,11 +810,20 @@ describe('EventHandler (unit)', () => {
       detectNewJoin: jest.fn(),
     };
     const configService = {
-      initialize: jest.fn(),
+      initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn().mockReturnValue({
-        settings: { automatic_detection_exempt_moderators: true },
+        settings: {
+          automatic_detection_exempt_moderators: true,
+          detection_response_mode: 'notify_only',
+        },
       }),
-      getServerConfig: jest.fn(),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          automatic_detection_exempt_moderators: true,
+          detection_response_mode: 'notify_only',
+          min_confidence_threshold: 70,
+        },
+      }),
     };
     const handler = buildHandler({ detectionOrchestrator, configService });
 
@@ -821,7 +831,7 @@ describe('EventHandler (unit)', () => {
       buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers))
     );
 
-    expect(configService.initialize).not.toHaveBeenCalled();
+    expect(configService.initialize).toHaveBeenCalled();
     expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
   });
 
@@ -893,6 +903,97 @@ describe('EventHandler (unit)', () => {
         userId: 'user-1',
         username: 'test-user',
       })
+    );
+  });
+
+  it('routes non-staff watchlist matches to restricted source-message deletion handling', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'restrict',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+    };
+    const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.content = 'watch this wickedproxy clip https://example.com/video';
+
+    await (handler as any).handleMessage(message);
+
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
+    expect(securityActionService.handleSuspiciousMessage).toHaveBeenCalledWith(
+      message.member,
+      expect.objectContaining({
+        label: 'SUSPICIOUS',
+        confidence: 1,
+        triggerSource: DetectionType.PATTERN_MATCH,
+        messageAction: expect.objectContaining({
+          kind: 'delete_source_message',
+          source: 'watchlist',
+          watchlistEntryId: 'wickedproxy-video-link',
+          matchedTerm: 'wickedproxy',
+        }),
+      }),
+      message
+    );
+    expect(securityActionService.observeSuspiciousMessage).not.toHaveBeenCalled();
+  });
+
+  it('routes staff watchlist matches to observed review without source-message deletion', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'restrict',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+    };
+    const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
+    const message = buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers)) as any;
+    message.content = 'watch this wickedproxy clip https://example.com/video';
+
+    await (handler as any).handleMessage(message);
+
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
+    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
+    expect(securityActionService.observeSuspiciousMessage).toHaveBeenCalledWith(
+      message.member,
+      expect.objectContaining({
+        label: 'SUSPICIOUS',
+        confidence: 1,
+        triggerSource: DetectionType.PATTERN_MATCH,
+        reasons: expect.arrayContaining([
+          'Poster has moderation or administration permissions; automatic deletion and restriction skipped.',
+        ]),
+        messageAction: expect.objectContaining({
+          kind: 'review_only',
+          source: 'watchlist',
+          watchlistEntryId: 'wickedproxy-video-link',
+          matchedTerm: 'wickedproxy',
+        }),
+      }),
+      message
     );
   });
 
