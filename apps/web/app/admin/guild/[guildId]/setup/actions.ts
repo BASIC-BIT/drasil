@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import {
+  MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH,
   guildSetupUpdateSchema,
   MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES,
   MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS,
@@ -57,7 +58,11 @@ function readWatchlistCustomTerms(formData: FormData): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim().toLowerCase())
     .filter((line) => {
-      if (!line || seen.has(line)) {
+      if (
+        !line ||
+        line.length > MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH ||
+        seen.has(line)
+      ) {
         return false;
       }
       seen.add(line);

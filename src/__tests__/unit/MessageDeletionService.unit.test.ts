@@ -143,6 +143,7 @@ describe('MessageDeletionService (unit)', () => {
     const sendPayload = evidenceThread.send.mock.calls[0][0];
     expect(sendPayload.content).toHaveLength(2000);
     expect(sendPayload.content).toContain('Evidence text truncated to fit Discord message limits.');
+    expect(((sendPayload.content as string).match(/```/g) ?? []).length % 2).toBe(0);
     expect(sourceMessage.delete).toHaveBeenCalledTimes(1);
   });
 });

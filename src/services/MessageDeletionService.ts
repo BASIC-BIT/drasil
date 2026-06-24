@@ -14,6 +14,7 @@ import {
 } from '../utils/reportAiSettings';
 
 const DISCORD_MESSAGE_CONTENT_LIMIT = 2000;
+const CODE_BLOCK_CLOSING_MARKER = '\n```';
 const EVIDENCE_TRUNCATION_NOTICE = '\n\n[Evidence text truncated to fit Discord message limits.]';
 
 interface EvidenceThreadLike {
@@ -219,10 +220,20 @@ export class MessageDeletionService implements IMessageDeletionService {
       return content;
     }
 
-    return `${content.slice(
-      0,
-      DISCORD_MESSAGE_CONTENT_LIMIT - EVIDENCE_TRUNCATION_NOTICE.length
-    )}${EVIDENCE_TRUNCATION_NOTICE}`;
+    const maxContentLength = DISCORD_MESSAGE_CONTENT_LIMIT - EVIDENCE_TRUNCATION_NOTICE.length;
+    let truncatedContent = content.slice(0, maxContentLength);
+    if (this.hasUnclosedCodeBlock(truncatedContent)) {
+      truncatedContent = `${truncatedContent.slice(
+        0,
+        maxContentLength - CODE_BLOCK_CLOSING_MARKER.length
+      )}${CODE_BLOCK_CLOSING_MARKER}`;
+    }
+
+    return `${truncatedContent}${EVIDENCE_TRUNCATION_NOTICE}`;
+  }
+
+  private hasUnclosedCodeBlock(content: string): boolean {
+    return (content.match(/```/g) ?? []).length % 2 === 1;
   }
 
   private formatCodeBlockText(content: string): string {
