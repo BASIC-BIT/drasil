@@ -54,6 +54,11 @@ interface BuildChecklistArgs {
   readonly resourcesError: string | null;
 }
 
+interface GuildPermissionChecklistArgs {
+  readonly checklist: SetupChecklistItem[];
+  readonly guildPermissions: bigint;
+}
+
 const TEXT_CHANNEL_TYPES = new Set([0, 5, 15]);
 
 const item = (
@@ -101,6 +106,48 @@ function hasRequiredChannelPermissions(args: ChannelPermissionCheckArgs) {
   return args.required.every((permission) => hasPermission(channelPermissions, permission));
 }
 
+function addGuildPermissionChecklistItems(args: GuildPermissionChecklistArgs) {
+  const { checklist, guildPermissions } = args;
+
+  checklist.push(
+    hasPermission(guildPermissions, DISCORD_PERMISSIONS.ManageRoles)
+      ? item('manage-roles', 'Manage roles permission', 'ok', 'Drasil can assign the case role.')
+      : item('manage-roles', 'Manage roles permission', 'error', 'Drasil is missing Manage Roles.')
+  );
+
+  checklist.push(
+    hasPermission(guildPermissions, DISCORD_PERMISSIONS.BanMembers)
+      ? item(
+          'ban-members',
+          'Ban members permission',
+          'ok',
+          'Moderator ban actions can be executed.'
+        )
+      : item(
+          'ban-members',
+          'Ban members permission',
+          'warning',
+          'Ban actions will fail until Drasil has Ban Members.'
+        )
+  );
+
+  checklist.push(
+    hasPermission(guildPermissions, DISCORD_PERMISSIONS.ManageMessages)
+      ? item(
+          'manage-messages',
+          'Manage messages permission',
+          'ok',
+          'Configured source-message deletion can run where channel permissions allow it.'
+        )
+      : item(
+          'manage-messages',
+          'Manage messages permission',
+          'warning',
+          'Message deletion will fail until Drasil has Manage Messages in the source channel.'
+        )
+  );
+}
+
 function buildChecklist(args: BuildChecklistArgs) {
   const checklist: SetupChecklistItem[] = [];
   const { guild, server, resources } = args;
@@ -142,43 +189,7 @@ function buildChecklist(args: BuildChecklistArgs) {
     memberRoleIds: botRoleIds,
   });
 
-  checklist.push(
-    hasPermission(guildPermissions, DISCORD_PERMISSIONS.ManageRoles)
-      ? item('manage-roles', 'Manage roles permission', 'ok', 'Drasil can assign the case role.')
-      : item('manage-roles', 'Manage roles permission', 'error', 'Drasil is missing Manage Roles.')
-  );
-
-  checklist.push(
-    hasPermission(guildPermissions, DISCORD_PERMISSIONS.BanMembers)
-      ? item(
-          'ban-members',
-          'Ban members permission',
-          'ok',
-          'Moderator ban actions can be executed.'
-        )
-      : item(
-          'ban-members',
-          'Ban members permission',
-          'warning',
-          'Ban actions will fail until Drasil has Ban Members.'
-        )
-  );
-
-  checklist.push(
-    hasPermission(guildPermissions, DISCORD_PERMISSIONS.ManageMessages)
-      ? item(
-          'manage-messages',
-          'Manage messages permission',
-          'ok',
-          'Configured source-message deletion can run where channel permissions allow it.'
-        )
-      : item(
-          'manage-messages',
-          'Manage messages permission',
-          'warning',
-          'Message deletion will fail until Drasil has Manage Messages in the source channel.'
-        )
-  );
+  addGuildPermissionChecklistItems({ checklist, guildPermissions });
 
   const caseRole = findRole(resources.roles, server?.case_role_id);
   const highestBotRolePosition = Math.max(
