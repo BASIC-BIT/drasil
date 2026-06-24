@@ -328,6 +328,11 @@ export class EventHandler implements IEventHandler {
       const gptMessageCheckCount = this.getGptMessageCheckCount(serverConfig.settings);
       const forceGpt =
         gptMessageCheckCount !== null && recentMessages.length < gptMessageCheckCount;
+      const actionThreshold =
+        serverConfig.settings.min_confidence_threshold ??
+        globalConfig.getSettings().defaultServerSettings.minConfidenceThreshold;
+      const watchlistMatchOpensCase =
+        responseSettings.mode === 'restrict' && 100 >= actionThreshold;
 
       // Get user profile data for detection context
       const profileData = this.extractUserProfileData(message.member, {
@@ -340,7 +345,9 @@ export class EventHandler implements IEventHandler {
         ? this.createWatchlistDetectionResult(
             content,
             watchlistMatch,
-            messageDeletionSettings.sourceMessageDeletionEnabled && !hasExemptPermissions
+            messageDeletionSettings.sourceMessageDeletionEnabled &&
+              !hasExemptPermissions &&
+              watchlistMatchOpensCase
           )
         : forceGpt
           ? await this.detectionOrchestrator.detectMessage(serverId, userId, content, profileData, {
@@ -382,8 +389,7 @@ export class EventHandler implements IEventHandler {
         message.member,
         detectionResult,
         responseSettings,
-        serverConfig.settings.min_confidence_threshold ??
-          globalConfig.getSettings().defaultServerSettings.minConfidenceThreshold,
+        actionThreshold,
         message
       );
     } catch (error) {

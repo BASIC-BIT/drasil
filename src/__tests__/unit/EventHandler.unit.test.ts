@@ -988,9 +988,60 @@ describe('EventHandler (unit)', () => {
     expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
     expect(securityActionService.recordSuspiciousMessage).toHaveBeenCalledWith(
       message.member,
-      expect.objectContaining({ triggerSource: DetectionType.PATTERN_MATCH }),
+      expect.objectContaining({
+        triggerSource: DetectionType.PATTERN_MATCH,
+        messageAction: expect.objectContaining({ kind: 'review_only' }),
+      }),
       message
     );
+    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
+    expect(securityActionService.observeSuspiciousMessage).not.toHaveBeenCalled();
+  });
+
+  it('notifies non-staff watchlist matches without deletion intent in notify-only mode', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'notify_only',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const notificationManager = {
+      upsertObservedDetectionNotification: jest.fn().mockResolvedValue(null),
+      setupVerificationChannel: jest.fn(),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+    };
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      notificationManager,
+      securityActionService,
+    });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
+
+    await (handler as any).handleMessage(message);
+
+    expect(securityActionService.recordSuspiciousMessage).toHaveBeenCalledWith(
+      message.member,
+      expect.objectContaining({
+        triggerSource: DetectionType.PATTERN_MATCH,
+        messageAction: expect.objectContaining({ kind: 'review_only' }),
+      }),
+      message
+    );
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalled();
     expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
     expect(securityActionService.observeSuspiciousMessage).not.toHaveBeenCalled();
   });
