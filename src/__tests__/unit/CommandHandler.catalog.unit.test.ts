@@ -182,6 +182,7 @@ describe('CommandHandler command catalog (unit)', () => {
     );
     expect(auditCommand.options.map((option: any) => option.name)).toEqual([
       'integrity',
+      'close-resolved-threads',
       'ignore-detection',
       'restore-detection',
     ]);

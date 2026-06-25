@@ -13,6 +13,10 @@ export interface IVerificationEventRepository {
   findActiveByUserAndServer(userId: string, serverId: string): Promise<VerificationEvent | null>;
   findByDetectionEvent(detectionEventId: string): Promise<VerificationEvent[]>;
   findPendingByServer(serverId: string): Promise<VerificationEvent[]>;
+  findResolvedWithThreadsByServer(
+    serverId: string,
+    options?: { days?: number | null; limit?: number | null; userId?: string | null }
+  ): Promise<VerificationEvent[]>;
   createFromDetection(
     detectionEventId: string | null,
     serverId: string, // Explicitly require server/user IDs
@@ -143,6 +147,38 @@ export class VerificationEventRepository implements IVerificationEventRepository
       return events as VerificationEvent[];
     } catch (error) {
       this.handleError(error, 'findPendingByServer');
+    }
+  }
+
+  async findResolvedWithThreadsByServer(
+    serverId: string,
+    options: { days?: number | null; limit?: number | null; userId?: string | null } = {}
+  ): Promise<VerificationEvent[]> {
+    try {
+      const days = Math.max(1, Math.min(options.days ?? 30, 365));
+      const limit = Math.max(1, Math.min(options.limit ?? 100, 500));
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const events = await this.prisma.verification_events.findMany({
+        where: {
+          server_id: serverId,
+          ...(options.userId ? { user_id: options.userId } : {}),
+          status: {
+            in: [
+              VerificationStatus.VERIFIED,
+              VerificationStatus.BANNED,
+              VerificationStatus.KICKED,
+              VerificationStatus.CLOSED_NO_ACTION,
+            ],
+          },
+          updated_at: { gte: since },
+          OR: [{ thread_id: { not: null } }, { private_evidence_thread_id: { not: null } }],
+        },
+        orderBy: { updated_at: 'desc' },
+        take: limit,
+      });
+      return events as VerificationEvent[];
+    } catch (error) {
+      this.handleError(error, 'findResolvedWithThreadsByServer');
     }
   }
 

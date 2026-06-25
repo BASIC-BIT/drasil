@@ -31,6 +31,7 @@ export const TYPES = {
   RoleQuarantineService: Symbol.for('RoleQuarantineService'),
   IntegrityAuditService: Symbol.for('IntegrityAuditService'),
   RoleGateService: Symbol.for('RoleGateService'),
+  CaseThreadClosureSweepService: Symbol.for('CaseThreadClosureSweepService'),
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),

@@ -44,6 +44,7 @@ import { isUserInstallReportingEnabled } from '../utils/userInstallReporting';
 import { IReportIntakeService } from '../services/ReportIntakeService';
 import { IModerationQueueService } from '../services/ModerationQueueService';
 import { IIntegrityAuditService } from '../services/IntegrityAuditService';
+import { ICaseThreadClosureSweepService } from '../services/CaseThreadClosureSweepService';
 import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
 import { buildAdminGuildSetupUrl } from '../utils/publicWebLinks';
 import 'reflect-metadata';
@@ -127,7 +128,10 @@ export class CommandHandler implements ICommandHandler {
     moderationQueueService?: IModerationQueueService,
     @inject(TYPES.IntegrityAuditService)
     @optional()
-    integrityAuditService?: IIntegrityAuditService
+    integrityAuditService?: IIntegrityAuditService,
+    @inject(TYPES.CaseThreadClosureSweepService)
+    @optional()
+    caseThreadClosureSweepService?: ICaseThreadClosureSweepService
   ) {
     this.client = client;
     this.configService = configService;
@@ -162,7 +166,8 @@ export class CommandHandler implements ICommandHandler {
       userModerationService,
       securityActionService,
       (interaction) => this.replyGuildInstallRequired(interaction),
-      integrityAuditService
+      integrityAuditService,
+      caseThreadClosureSweepService
     );
     this.reportCommandHandler = new ReportCommandHandler(
       reportSubmissionService,

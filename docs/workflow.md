@@ -93,6 +93,10 @@ not GPT detections.
   configured case role before opening the user-facing case thread.
 - `/case intake-role` creates `detection_type = ROLE_INTAKE` events with source
   role ID/name and batch metadata.
+- Role-triggered manual intake consumes the configured trigger role after opening
+  or updating a case. Role quarantine treats that trigger role as policy-managed,
+  so it is not captured/restored and cannot loop a resolved verify or no-action
+  case back into a fresh role-add case.
 - Admin-facing reasons render Discord mentions for the moderator and, for role
   intake, the source role. Embed allowed-mentions remain disabled so these fields
   render clearly without causing extra pings.
@@ -139,6 +143,11 @@ The user-facing verification thread, when present, remains separate in the
 verification/quarantine channel and is linked prominently in the admin embed's
 `Case Threads` field.
 
+When a case evidence thread is created, Drasil also posts a bounded evidence
+snapshot with profile asset metadata, exact image hashes when fetchable, concise
+profile-image descriptions, stored message context, and recent detection history.
+This snapshot is moderator evidence only and does not make automatic decisions.
+
 ## Case review reminders
 
 `CaseReviewReminderService` runs every 15 minutes and uses a daily, opinionated
@@ -153,11 +162,18 @@ case-review workflow by default.
   verification thread. They ping the target user, not admins.
 - User reminders use fixed copy: `Ticket reminder: {elapsed} elapsed. {user_mention} See above.`
 - User reminders run every 24 hours until the very-stale day threshold or until the
-  target user responds. Target replies are also mirrored to admin evidence and the
-  live moderation queue when configured.
+  target user responds. The first target-user reply is mirrored to admin evidence
+  and sends a one-time admin-log notification so staff can respond quickly.
 - User reminders do not post inside the one-hour admin review window after a stale
   digest. If a reminder would collide with that window, it is moved to the end of
   the window and the digest shows the same next-reminder timestamp.
+
+## Manual resolved-thread sweep
+
+`/audit close-resolved-threads` is a manual repair command for Discord threads
+that stayed open after a resolved case. It dry-runs by default and only archives
+and locks resolved case/evidence threads when `execute: true` is explicitly used.
+It does not post duplicate resolution messages.
 
 ## User report
 

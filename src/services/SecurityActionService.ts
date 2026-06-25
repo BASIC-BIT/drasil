@@ -1,4 +1,5 @@
 import { injectable, inject, optional } from 'inversify';
+import { createHash } from 'crypto';
 import {
   GuildMember,
   Guild,
@@ -8,16 +9,19 @@ import {
   APIUser,
   InteractionContextType,
   Role,
+  ThreadChannel,
 } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import { INotificationManager } from './NotificationManager';
 import { DetectionResult } from './DetectionOrchestrator';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
+import { IMessageContextRepository } from '../repositories/MessageContextRepository';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import {
   AdminActionType,
   DetectionEvent,
   DetectionType,
+  MessageContext,
   ModerationOutcome,
   VerificationEvent,
   VerificationStatus,
@@ -34,7 +38,7 @@ import {
 import { IUserModerationService } from './UserModerationService';
 import { IAdminActionService } from './AdminActionService';
 import { getUserReportSettings } from '../utils/userReportSettings';
-import type { IGPTService, ReportAIAnalysis } from './GPTService';
+import type { IGPTService, ProfileImageDescription, ReportAIAnalysis } from './GPTService';
 import { getReportAiSettings, ReportAttachmentMetadata } from '../utils/reportAiSettings';
 import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
 import {
@@ -64,8 +68,28 @@ import { RoleIntakeProcessor } from './RoleIntakeProcessor';
 import { IModerationQueueService } from './ModerationQueueService';
 
 const DELAYED_THREAD_REPAIR_DELAY_MS = 70_000;
+const PROFILE_IMAGE_HASH_MAX_BYTES = 3 * 1024 * 1024;
+const PROFILE_IMAGE_HASH_TIMEOUT_MS = 5000;
+const EVIDENCE_BUNDLE_MESSAGE_LIMIT = 1900;
+const EVIDENCE_BUNDLE_RECENT_MESSAGE_LIMIT = 10;
+const EVIDENCE_BUNDLE_DETECTION_HISTORY_LIMIT = 8;
 const AUTO_KICK_DEFAULT_REASON =
   'Suspected compromised account: high-confidence scam activity detected by Drasil.';
+
+interface ProfileAssetSnapshot {
+  avatar_url?: string;
+  avatar_hash?: string;
+  avatar_byte_sha256?: string;
+  avatar_is_default?: boolean;
+  avatar_decoration_url?: string;
+  guild_avatar_url?: string;
+  guild_avatar_hash?: string;
+  banner_url?: string;
+  banner_hash?: string;
+  banner_byte_sha256?: string;
+  accent_color?: string;
+  captured_at: string;
+}
 /**
  * Interface for the SecurityActionService
  */
@@ -332,6 +356,7 @@ export class SecurityActionService implements ISecurityActionService {
   private userModerationService: IUserModerationService; // Keep for reopenVerification for now
   private client: Client;
   private gptService?: IGPTService;
+  private messageContextRepository?: IMessageContextRepository;
   private productAnalyticsService: IProductAnalyticsService;
   private moderationQueueService?: IModerationQueueService;
   private reportAiAnalyzer: ReportAiAnalyzer;
@@ -357,7 +382,10 @@ export class SecurityActionService implements ISecurityActionService {
     productAnalyticsService?: IProductAnalyticsService,
     @inject(TYPES.ModerationQueueService)
     @optional()
-    moderationQueueService?: IModerationQueueService
+    moderationQueueService?: IModerationQueueService,
+    @inject(TYPES.MessageContextRepository)
+    @optional()
+    messageContextRepository?: IMessageContextRepository
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -370,6 +398,7 @@ export class SecurityActionService implements ISecurityActionService {
     this.userModerationService = userModerationService; // Keep for reopenVerification
     this.client = client;
     this.gptService = gptService;
+    this.messageContextRepository = messageContextRepository;
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.moderationQueueService = moderationQueueService;
     this.reportAiAnalyzer = new ReportAiAnalyzer(this.serverRepository, this.gptService);
@@ -771,7 +800,7 @@ export class SecurityActionService implements ISecurityActionService {
       if (!thread) {
         throw new Error(`Failed to create admin evidence thread for ${member.user.tag}`);
       }
-      return verificationEvent;
+      return await this.sendCaseEvidenceBundle(thread, member, verificationEvent, detectionResult);
     } catch (error) {
       console.error(
         `Failed to create admin evidence thread for ${member.user.tag}; continuing case flow:`,
@@ -783,6 +812,326 @@ export class SecurityActionService implements ISecurityActionService {
         error
       );
     }
+  }
+
+  private async sendCaseEvidenceBundle(
+    thread: ThreadChannel,
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult
+  ): Promise<VerificationEvent> {
+    try {
+      const [profileAssets, detectionEvents, recentMessages] = await Promise.all([
+        this.buildProfileAssetSnapshot(member),
+        this.detectionEventsRepository.findByServerAndUser(member.guild.id, member.id),
+        this.loadRecentMessageContext(member.guild.id, member.id),
+      ]);
+      const profileImageDescription = await this.describeProfileImages(member, profileAssets);
+      const metadata = {
+        ...this.metadataToRecord(verificationEvent.metadata),
+        profile_assets: profileAssets,
+        ...(profileImageDescription
+          ? {
+              profile_image_description:
+                this.serializeProfileImageDescription(profileImageDescription),
+            }
+          : {}),
+        evidence_bundle: {
+          posted_at: new Date().toISOString(),
+          recent_message_count: recentMessages.length,
+          detection_history_count: detectionEvents.length,
+        },
+      } as unknown as VerificationEvent['metadata'];
+      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
+        metadata,
+      });
+      const bundle = this.formatCaseEvidenceBundle(
+        member,
+        verificationEvent,
+        detectionResult,
+        profileAssets,
+        profileImageDescription,
+        detectionEvents,
+        recentMessages
+      );
+      await thread.send({
+        content: bundle,
+        allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+      });
+
+      return updatedEvent ?? { ...verificationEvent, metadata };
+    } catch (error) {
+      console.warn(
+        `Failed to post evidence bundle for verification event ${verificationEvent.id}; continuing case flow:`,
+        error
+      );
+      return verificationEvent;
+    }
+  }
+
+  private async loadRecentMessageContext(
+    serverId: string,
+    userId: string
+  ): Promise<MessageContext[]> {
+    if (!this.messageContextRepository) {
+      return [];
+    }
+
+    try {
+      return await this.messageContextRepository.findRecentByServerAndUser(
+        serverId,
+        userId,
+        EVIDENCE_BUNDLE_RECENT_MESSAGE_LIMIT
+      );
+    } catch (error) {
+      console.warn(`Failed to load message context for evidence bundle user ${userId}:`, error);
+      return [];
+    }
+  }
+
+  private async buildProfileAssetSnapshot(member: GuildMember): Promise<ProfileAssetSnapshot> {
+    const user = await member.client.users
+      .fetch(member.id, { force: true })
+      .catch(() => member.user);
+    const avatarUrl = this.callImageUrl(user, 'displayAvatarURL', { size: 256 });
+    const guildAvatarUrl = this.callImageUrl(member, 'avatarURL', { size: 256 });
+    const bannerUrl =
+      this.callImageUrl(user, 'bannerURL', { size: 512 }) ??
+      this.callImageUrl(member, 'bannerURL', { size: 512 });
+    const avatarDecorationUrl =
+      this.callImageUrl(member, 'avatarDecorationURL', { size: 256 }) ??
+      this.callImageUrl(user, 'avatarDecorationURL', { size: 256 });
+    const snapshot: ProfileAssetSnapshot = {
+      captured_at: new Date().toISOString(),
+      avatar_is_default: !this.readString((user as { avatar?: unknown }).avatar),
+    };
+
+    if (avatarUrl) {
+      snapshot.avatar_url = avatarUrl;
+      snapshot.avatar_byte_sha256 = await this.hashRemoteImage(avatarUrl);
+    }
+    const avatarHash = this.readString((user as { avatar?: unknown }).avatar);
+    if (avatarHash) {
+      snapshot.avatar_hash = avatarHash;
+    }
+    if (guildAvatarUrl) {
+      snapshot.guild_avatar_url = guildAvatarUrl;
+    }
+    const guildAvatarHash = this.readString((member as { avatar?: unknown }).avatar);
+    if (guildAvatarHash) {
+      snapshot.guild_avatar_hash = guildAvatarHash;
+    }
+    if (avatarDecorationUrl) {
+      snapshot.avatar_decoration_url = avatarDecorationUrl;
+    }
+    if (bannerUrl) {
+      snapshot.banner_url = bannerUrl;
+      snapshot.banner_byte_sha256 = await this.hashRemoteImage(bannerUrl);
+    }
+    const bannerHash = this.readString((user as { banner?: unknown }).banner);
+    if (bannerHash) {
+      snapshot.banner_hash = bannerHash;
+    }
+    const hexAccentColor = this.readString((user as { hexAccentColor?: unknown }).hexAccentColor);
+    if (hexAccentColor) {
+      snapshot.accent_color = hexAccentColor;
+    }
+
+    return snapshot;
+  }
+
+  private async describeProfileImages(
+    member: GuildMember,
+    profileAssets: ProfileAssetSnapshot
+  ): Promise<ProfileImageDescription | null> {
+    if (
+      !this.gptService ||
+      typeof this.gptService.describeProfileImages !== 'function' ||
+      (!profileAssets.avatar_url && !profileAssets.banner_url)
+    ) {
+      return null;
+    }
+
+    return await this.gptService.describeProfileImages({
+      username: member.user.username,
+      displayName: member.displayName,
+      avatarUrl: profileAssets.avatar_url,
+      bannerUrl: profileAssets.banner_url,
+      avatarIsDefault: profileAssets.avatar_is_default,
+    });
+  }
+
+  private serializeProfileImageDescription(
+    description: ProfileImageDescription
+  ): Record<string, unknown> {
+    return {
+      summary: description.summary,
+      avatar_description: description.avatarDescription,
+      banner_description: description.bannerDescription,
+      risk_notes: description.riskNotes,
+      analyzed_image_count: description.analyzedImageCount,
+      model: description.model,
+      prompt_version: description.promptVersion,
+      is_fallback: description.isFallback,
+    };
+  }
+
+  private formatCaseEvidenceBundle(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    detectionResult: DetectionResult,
+    profileAssets: ProfileAssetSnapshot,
+    profileImageDescription: ProfileImageDescription | null,
+    detectionEvents: DetectionEvent[],
+    recentMessages: MessageContext[]
+  ): string {
+    const lines = [
+      'Case evidence snapshot',
+      `User: <@${member.id}> (${member.id})`,
+      `Case: ${verificationEvent.id}`,
+      `Trigger: ${this.formatDetectionTypeLabel(detectionResult.triggerSource)} (${detectionResult.confidence.toFixed(2)})`,
+      detectionResult.reasons.length > 0
+        ? `Reasons: ${detectionResult.reasons.slice(0, 3).join('; ')}`
+        : null,
+      '',
+      'Profile assets:',
+      `- Avatar: ${profileAssets.avatar_is_default ? 'default' : 'custom'}${profileAssets.avatar_hash ? `; hash ${profileAssets.avatar_hash}` : ''}`,
+      profileAssets.avatar_byte_sha256
+        ? `- Avatar SHA-256: ${profileAssets.avatar_byte_sha256}`
+        : null,
+      profileAssets.banner_hash ? `- Banner hash: ${profileAssets.banner_hash}` : null,
+      profileAssets.banner_byte_sha256
+        ? `- Banner SHA-256: ${profileAssets.banner_byte_sha256}`
+        : null,
+      profileAssets.avatar_decoration_url ? '- Avatar decoration: present' : null,
+      profileAssets.accent_color ? `- Accent color: ${profileAssets.accent_color}` : null,
+      profileAssets.avatar_url ? `- Avatar URL: ${profileAssets.avatar_url}` : null,
+      profileAssets.banner_url ? `- Banner URL: ${profileAssets.banner_url}` : null,
+      '',
+      ...this.formatProfileImageDescription(profileImageDescription),
+      '',
+      ...this.formatRecentMessages(recentMessages, member.guild.id),
+      '',
+      ...this.formatEvidenceDetectionHistory(detectionEvents, member.guild.id),
+    ].filter((line): line is string => line !== null);
+
+    return this.enforceEvidenceBundleLimit(lines.join('\n'));
+  }
+
+  private formatProfileImageDescription(description: ProfileImageDescription | null): string[] {
+    if (!description) {
+      return ['Profile image description: unavailable.'];
+    }
+
+    const lines = [`Profile image description: ${description.summary}`];
+    if (description.avatarDescription) {
+      lines.push(`- Avatar: ${description.avatarDescription}`);
+    }
+    if (description.bannerDescription) {
+      lines.push(`- Banner: ${description.bannerDescription}`);
+    }
+    if (description.riskNotes.length > 0) {
+      lines.push(`- Visual notes: ${description.riskNotes.join('; ')}`);
+    }
+    return lines;
+  }
+
+  private formatRecentMessages(messages: MessageContext[], guildId: string): string[] {
+    if (messages.length === 0) {
+      return ['Stored message context: none available.'];
+    }
+
+    return [
+      `Stored message context (${messages.length} recent):`,
+      ...messages.slice(-EVIDENCE_BUNDLE_RECENT_MESSAGE_LIMIT).map((message) => {
+        const link = message.channel_id
+          ? `https://discord.com/channels/${guildId}/${message.channel_id}/${message.message_id}`
+          : null;
+        const preview = this.truncateEvidenceText(message.content_preview, 180);
+        return `- ${message.created_at.toISOString()}: ${preview}${link ? ` (${link})` : ''}`;
+      }),
+    ];
+  }
+
+  private formatEvidenceDetectionHistory(events: DetectionEvent[], guildId: string): string[] {
+    if (events.length === 0) {
+      return ['Detection history: none recorded.'];
+    }
+
+    const sortedEvents = [...events].sort(
+      (left, right) => new Date(right.detected_at).getTime() - new Date(left.detected_at).getTime()
+    );
+    const lines = [
+      `Detection history (${sortedEvents.length} total, ${Math.min(sortedEvents.length, EVIDENCE_BUNDLE_DETECTION_HISTORY_LIMIT)} shown):`,
+      ...sortedEvents.slice(0, EVIDENCE_BUNDLE_DETECTION_HISTORY_LIMIT).map((event) => {
+        const link =
+          event.channel_id && event.message_id
+            ? ` https://discord.com/channels/${guildId}/${event.channel_id}/${event.message_id}`
+            : '';
+        return `- ${new Date(event.detected_at).toISOString()}: ${this.formatDetectionTypeLabel(event.detection_type)} (${event.confidence.toFixed(2)})${link}`;
+      }),
+    ];
+    return lines;
+  }
+
+  private async hashRemoteImage(url: string): Promise<string | undefined> {
+    try {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(PROFILE_IMAGE_HASH_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        return undefined;
+      }
+      const contentLength = Number(response.headers.get('content-length') ?? '0');
+      if (contentLength > PROFILE_IMAGE_HASH_MAX_BYTES) {
+        return undefined;
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.length > PROFILE_IMAGE_HASH_MAX_BYTES) {
+        return undefined;
+      }
+      return createHash('sha256').update(buffer).digest('hex');
+    } catch {
+      return undefined;
+    }
+  }
+
+  private callImageUrl(
+    source: unknown,
+    methodName: string,
+    options: { size: number }
+  ): string | undefined {
+    const method = (source as Record<string, unknown>)[methodName];
+    if (typeof method !== 'function') {
+      return undefined;
+    }
+
+    const value = (method as (options?: { size: number }) => string | null | undefined).call(
+      source,
+      options
+    );
+    return typeof value === 'string' && value ? value : undefined;
+  }
+
+  private readString(value: unknown): string | undefined {
+    return typeof value === 'string' && value ? value : undefined;
+  }
+
+  private truncateEvidenceText(value: string, maxLength: number): string {
+    const normalized = value.replace(/\s+/g, ' ').trim();
+    return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 3)}...`;
+  }
+
+  private enforceEvidenceBundleLimit(content: string): string {
+    if (content.length <= EVIDENCE_BUNDLE_MESSAGE_LIMIT) {
+      return content;
+    }
+
+    return `${content.slice(0, EVIDENCE_BUNDLE_MESSAGE_LIMIT - 58)}\n[Evidence snapshot truncated to fit Discord message limits.]`;
+  }
+
+  private formatDetectionTypeLabel(type: DetectionType): string {
+    return type.replace(/_/g, ' ');
   }
 
   private async ensurePrivateEvidenceThread(

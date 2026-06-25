@@ -7,6 +7,10 @@ import {
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import {
+  CaseThreadClosureSweepReport,
+  ICaseThreadClosureSweepService,
+} from '../services/CaseThreadClosureSweepService';
+import {
   IIntegrityAuditService,
   IntegrityAuditFinding,
   IntegrityAuditReport,
@@ -26,7 +30,8 @@ export class ModerationCommandHandler {
     private readonly userModerationService: IUserModerationService,
     private readonly securityActionService: ISecurityActionService,
     private readonly replyGuildInstallRequired: ReplyGuildInstallRequired,
-    private readonly integrityAuditService?: IIntegrityAuditService
+    private readonly integrityAuditService?: IIntegrityAuditService,
+    private readonly caseThreadClosureSweepService?: ICaseThreadClosureSweepService
   ) {}
 
   public async handleBanCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -131,6 +136,11 @@ export class ModerationCommandHandler {
     const subcommand = interaction.options.getSubcommand(true);
     if (subcommand === 'integrity') {
       await this.handleIntegrityAuditCommand(interaction, guild);
+      return;
+    }
+
+    if (subcommand === 'close-resolved-threads') {
+      await this.handleCloseResolvedThreadsCommand(interaction, guild);
       return;
     }
 
@@ -288,6 +298,54 @@ export class ModerationCommandHandler {
     }
   }
 
+  private async handleCloseResolvedThreadsCommand(
+    interaction: ChatInputCommandInteraction,
+    guild: Guild
+  ): Promise<void> {
+    const caseThreadClosureSweepService = this.caseThreadClosureSweepService;
+    if (!caseThreadClosureSweepService) {
+      await interaction.reply({
+        content: 'Resolved-thread sweep is not available in this runtime.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const execute = interaction.options.getBoolean('execute') === true;
+    const days = interaction.options.getInteger('days') ?? 30;
+    const limit = interaction.options.getInteger('limit') ?? 100;
+    const userId = interaction.options.getUser('user')?.id ?? null;
+    const runSweep = async (): Promise<CaseThreadClosureSweepReport> =>
+      caseThreadClosureSweepService.sweepResolvedCaseThreads({
+        serverId: guild.id,
+        execute,
+        days,
+        limit,
+        userId,
+      });
+
+    if (!execute) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const report = await runSweep();
+      await interaction.editReply({ content: this.formatThreadClosureSweepReport(report) });
+      return;
+    }
+
+    await requestSlashCommandConfirmation(interaction, {
+      message: `Close resolved case threads that are still open? This will inspect up to ${limit} resolved case(s) from the last ${days} day(s).`,
+      confirmLabel: 'Close Threads',
+      confirmStyle: ButtonStyle.Danger,
+      execute: async (buttonInteraction) => {
+        await buttonInteraction.update({
+          content: 'Closing resolved case threads...',
+          components: [],
+        });
+        const report = await runSweep();
+        await buttonInteraction.editReply({ content: this.formatThreadClosureSweepReport(report) });
+      },
+    });
+  }
+
   private formatIntegrityAuditReport(report: IntegrityAuditReport): string {
     const severityCounts = this.countFindingsBySeverity(report.findings);
     const lines = [
@@ -318,6 +376,58 @@ export class ModerationCommandHandler {
 
   private formatIntegrityFinding(finding: IntegrityAuditFinding): string {
     return `- [${finding.severity}] ${finding.code}: ${finding.subject} - ${finding.detail}`;
+  }
+
+  private formatThreadClosureSweepReport(report: CaseThreadClosureSweepReport): string {
+    const lines = [
+      report.execute
+        ? 'Resolved case thread sweep complete.'
+        : 'Resolved case thread sweep dry-run complete. No repair actions were applied.',
+      `Lookback: ${report.days} days; limit: ${report.limit}.`,
+      `Checked: ${report.checkedCases} case(s), ${report.checkedThreads} thread(s).`,
+      report.execute
+        ? `Closed: ${report.closedThreads}; already closed: ${report.alreadyClosedThreads}; missing: ${report.missingThreads}; failed: ${report.failedThreads}.`
+        : `Would close: ${report.wouldCloseThreads}; already closed: ${report.alreadyClosedThreads}; missing: ${report.missingThreads}; failed: ${report.failedThreads}.`,
+    ];
+
+    const notableCases = report.cases
+      .filter((caseResult) =>
+        caseResult.threadResults.some(
+          (threadResult) => threadResult.wouldClose || threadResult.missing || threadResult.error
+        )
+      )
+      .slice(0, 8);
+
+    if (notableCases.length > 0) {
+      lines.push('', 'Notable cases:');
+      for (const caseResult of notableCases) {
+        const threadSummary = caseResult.threadResults
+          .map((threadResult) => {
+            if (threadResult.error) {
+              return `${threadResult.threadKind} failed`;
+            }
+            if (threadResult.missing) {
+              return `${threadResult.threadKind} missing`;
+            }
+            if (threadResult.closed) {
+              return `${threadResult.threadKind} closed`;
+            }
+            if (threadResult.wouldClose) {
+              return `${threadResult.threadKind} would close`;
+            }
+            return `${threadResult.threadKind} already closed`;
+          })
+          .join(', ');
+        lines.push(
+          `- ${caseResult.verificationEventId} for <@${caseResult.userId}>: ${threadSummary}`
+        );
+      }
+    }
+
+    const response = lines.join('\n');
+    return response.length <= AUDIT_INTEGRITY_RESPONSE_MAX_LENGTH
+      ? response
+      : `${response.slice(0, AUDIT_INTEGRITY_RESPONSE_MAX_LENGTH - 3)}...`;
   }
 
   private countFindingsBySeverity(

@@ -1063,6 +1063,36 @@ const baseApplicationCommandBuilders = [
     )
     .addSubcommand((subcommand) =>
       subcommand
+        .setName('close-resolved-threads')
+        .setDescription('Dry-run or close resolved case threads that Discord still shows as open')
+        .addBooleanOption((option) =>
+          option
+            .setName('execute')
+            .setDescription('Actually close threads; defaults to false for dry-run')
+            .setRequired(false)
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName('days')
+            .setDescription('Resolved-case lookback window, up to 365 days')
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(365)
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName('limit')
+            .setDescription('Maximum resolved cases to inspect, up to 500')
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(500)
+        )
+        .addUserOption((option) =>
+          option.setName('user').setDescription('Limit sweep to one user').setRequired(false)
+        )
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
         .setName('ignore-detection')
         .setDescription('Exclude a detection event from future suspicion accounting')
         .addStringOption((option) =>

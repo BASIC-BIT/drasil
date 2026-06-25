@@ -64,6 +64,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn(),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -88,6 +89,10 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     expect(
       notificationManager.mirrorVerificationThreadMessageToEvidenceThread
     ).toHaveBeenCalledWith(expect.objectContaining({ id: verificationEvent.id }), message);
+    expect(notificationManager.notifyVerificationThreadUserResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      message
+    );
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
   });
 
@@ -118,6 +123,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn(),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
+      notifyVerificationThreadUserResponse: jest.fn(),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -143,6 +149,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     expect(
       notificationManager.mirrorVerificationThreadMessageToEvidenceThread
     ).toHaveBeenCalledWith(expect.objectContaining({ id: verificationEvent.id }), message);
+    expect(notificationManager.notifyVerificationThreadUserResponse).not.toHaveBeenCalled();
     expect(updateSpy).not.toHaveBeenCalled();
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
   });
@@ -157,6 +164,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       {
         updateVerificationThreadAnalysis: jest.fn(),
         mirrorVerificationThreadMessageToEvidenceThread: jest.fn(),
+        notifyVerificationThreadUserResponse: jest.fn(),
       } as any,
       verificationRepo,
       { findById: jest.fn() } as any
@@ -194,6 +202,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn(),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn(),
+      notifyVerificationThreadUserResponse: jest.fn(),
     } as any;
     const configService = {
       getServerConfig: jest.fn(),
@@ -262,6 +271,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -377,6 +387,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -469,6 +480,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -529,6 +541,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn(),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -585,6 +598,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(false),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -666,6 +680,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     const notificationManager = {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({

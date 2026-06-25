@@ -44,6 +44,21 @@ export interface VerificationThreadRepairResult {
   promptAlreadyPresent: boolean;
 }
 
+export interface ResolvedThreadClosureResult {
+  threadId: string;
+  threadKind: 'case' | 'private_evidence';
+  wouldClose: boolean;
+  closed: boolean;
+  alreadyClosed: boolean;
+  missing: boolean;
+  error: string | null;
+}
+
+export interface ResolvedCaseThreadClosureResult {
+  closedAny: boolean;
+  results: ResolvedThreadClosureResult[];
+}
+
 interface UserSnapshotMetadata {
   id?: string;
   tag?: string;
@@ -114,6 +129,11 @@ export interface IThreadManager {
     resolution: VerificationStatus,
     resolvedBy: string
   ): Promise<boolean>;
+
+  closeResolvedVerificationThreads(
+    verificationEvent: VerificationEvent,
+    options?: { execute?: boolean }
+  ): Promise<ResolvedCaseThreadClosureResult>;
 
   /**
    * Reopens a verification thread
@@ -1177,14 +1197,14 @@ export class ThreadManager implements IThreadManager {
     resolution: VerificationStatus,
     resolvedBy: string
   ): Promise<boolean> {
-    try {
-      let resolvedMainThread = false;
+    let resolvedMainThread = false;
 
-      if (verificationEvent.thread_id) {
-        const thread = await this.fetchStoredThread(verificationEvent);
+    if (verificationEvent.thread_id) {
+      const thread = await this.fetchStoredThread(verificationEvent);
 
-        if (thread) {
-          if (this.shouldSendResolutionMessage(resolution)) {
+      if (thread) {
+        if (this.shouldSendResolutionMessage(resolution)) {
+          try {
             await thread.send({
               content: this.buildVerificationResolutionMessage(
                 verificationEvent,
@@ -1193,24 +1213,138 @@ export class ThreadManager implements IThreadManager {
               ),
               allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
             });
+          } catch (error) {
+            console.warn(
+              `Failed to post final resolution message for thread ${verificationEvent.thread_id}; closing anyway:`,
+              error
+            );
           }
+        }
 
+        try {
           await this.setThreadArchiveAndLockState(thread, true, true);
           resolvedMainThread = true;
+        } catch (error) {
+          console.warn(
+            `Failed to close verification thread ${verificationEvent.thread_id}:`,
+            error
+          );
         }
       }
+    }
 
-      const resolvedPrivateEvidenceThread = await this.setPrivateEvidenceThreadState(
-        verificationEvent,
-        true,
-        true,
-        verificationEvent.thread_id
+    const resolvedPrivateEvidenceThread = await this.setPrivateEvidenceThreadState(
+      verificationEvent,
+      true,
+      true,
+      verificationEvent.thread_id
+    );
+
+    return resolvedMainThread || resolvedPrivateEvidenceThread;
+  }
+
+  public async closeResolvedVerificationThreads(
+    verificationEvent: VerificationEvent,
+    options: { execute?: boolean } = {}
+  ): Promise<ResolvedCaseThreadClosureResult> {
+    const results: ResolvedThreadClosureResult[] = [];
+    const execute = options.execute === true;
+
+    if (verificationEvent.thread_id) {
+      results.push(
+        await this.closeThreadById(
+          verificationEvent.server_id,
+          verificationEvent.thread_id,
+          'case',
+          execute
+        )
       );
+    }
 
-      return resolvedMainThread || resolvedPrivateEvidenceThread;
+    if (
+      verificationEvent.private_evidence_thread_id &&
+      verificationEvent.private_evidence_thread_id !== verificationEvent.thread_id
+    ) {
+      results.push(
+        await this.closeThreadById(
+          verificationEvent.server_id,
+          verificationEvent.private_evidence_thread_id,
+          'private_evidence',
+          execute
+        )
+      );
+    }
+
+    return {
+      closedAny: results.some((result) => result.closed),
+      results,
+    };
+  }
+
+  private async closeThreadById(
+    serverId: string,
+    threadId: string,
+    threadKind: ResolvedThreadClosureResult['threadKind'],
+    execute: boolean
+  ): Promise<ResolvedThreadClosureResult> {
+    const baseResult = {
+      threadId,
+      threadKind,
+    };
+
+    const thread = await this.fetchThreadById(threadId, serverId);
+    if (!thread) {
+      return {
+        ...baseResult,
+        wouldClose: false,
+        closed: false,
+        alreadyClosed: false,
+        missing: true,
+        error: null,
+      };
+    }
+
+    if (thread.archived && thread.locked) {
+      return {
+        ...baseResult,
+        wouldClose: false,
+        closed: false,
+        alreadyClosed: true,
+        missing: false,
+        error: null,
+      };
+    }
+
+    if (!execute) {
+      return {
+        ...baseResult,
+        wouldClose: true,
+        closed: false,
+        alreadyClosed: false,
+        missing: false,
+        error: null,
+      };
+    }
+
+    try {
+      await this.setThreadArchiveAndLockState(thread, true, true);
+      return {
+        ...baseResult,
+        wouldClose: true,
+        closed: true,
+        alreadyClosed: false,
+        missing: false,
+        error: null,
+      };
     } catch (error) {
-      console.error('Failed to resolve verification thread:', error);
-      return false;
+      return {
+        ...baseResult,
+        wouldClose: true,
+        closed: false,
+        alreadyClosed: false,
+        missing: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 

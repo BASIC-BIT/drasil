@@ -121,6 +121,11 @@ export interface INotificationManager {
     message: Message
   ): Promise<boolean>;
 
+  notifyVerificationThreadUserResponse(
+    verificationEvent: VerificationEvent,
+    message: Message
+  ): Promise<boolean>;
+
   upsertObservedDetectionNotification(
     member: GuildMember,
     detectionResult: DetectionResult,
@@ -518,6 +523,43 @@ export class NotificationManager implements INotificationManager {
     } catch (error) {
       console.warn(
         `Failed to mirror verification thread message ${message.id} to private evidence thread ${verificationEvent.private_evidence_thread_id}:`,
+        error
+      );
+      return false;
+    }
+  }
+
+  public async notifyVerificationThreadUserResponse(
+    verificationEvent: VerificationEvent,
+    message: Message
+  ): Promise<boolean> {
+    try {
+      const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
+      const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
+      if (!adminChannel) {
+        return false;
+      }
+
+      const notificationRoleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
+      const lines = [
+        `${this.presentationBuilder.formatRoleMentions(notificationRoleIds)} Support-check reply needs review.`.trim(),
+        `User: <@${verificationEvent.user_id}> (\`${verificationEvent.user_id}\`)`,
+        `Case: \`${verificationEvent.id}\``,
+        `Support thread: <#${message.channelId}>`,
+        verificationEvent.private_evidence_thread_id
+          ? `Evidence thread: <#${verificationEvent.private_evidence_thread_id}>`
+          : null,
+        `Message: ${message.url}`,
+      ].filter((line): line is string => Boolean(line));
+
+      await adminChannel.send({
+        content: lines.join('\n'),
+        allowedMentions: this.presentationBuilder.createAdminAllowedMentions(notificationRoleIds),
+      });
+      return true;
+    } catch (error) {
+      console.warn(
+        `Failed to notify admins about support-check reply for verification event ${verificationEvent.id}:`,
         error
       );
       return false;
