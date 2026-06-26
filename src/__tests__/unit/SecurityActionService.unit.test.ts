@@ -495,6 +495,94 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it('captures the visible server avatar for case evidence and skips invalid image lengths', async () => {
+    const guildId = 'guild-avatar-evidence';
+    const userId = 'user-avatar-evidence';
+    const member = buildMember(guildId, userId);
+    const message = buildMessage(guildId, 'channel-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: message.content,
+    };
+    const arrayBuffer = jest.fn().mockResolvedValue(new Uint8Array([1, 2, 3, 4]).buffer);
+    const evidenceThread = {
+      id: 'evidence-avatar',
+      url: 'https://discord.com/channels/evidence-avatar',
+      send: jest.fn().mockResolvedValue({ id: 'evidence-message-avatar' }),
+    };
+    const fetchedUser = {
+      ...member.user,
+      avatar: 'global-avatar-hash',
+      displayAvatarURL: jest.fn(() => 'https://cdn.discordapp.com/global-avatar.png'),
+    };
+    (member as unknown as { avatar: string }).avatar = 'guild-avatar-hash';
+    (member as unknown as { avatarURL: jest.Mock }).avatarURL = jest.fn(
+      () => 'https://cdn.discordapp.com/server-avatar.png'
+    );
+    (member as unknown as { displayAvatarURL: jest.Mock }).displayAvatarURL = jest.fn(
+      () => 'https://cdn.discordapp.com/visible-avatar.png'
+    );
+    (member.client.users.fetch as jest.Mock).mockResolvedValue(fetchedUser);
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: jest.fn().mockReturnValue('invalid-length') },
+      arrayBuffer,
+    } as unknown as Response);
+    threadManager.createPrivateEvidenceThread.mockResolvedValueOnce(evidenceThread as any);
+
+    await expect(
+      buildService().handleSuspiciousMessage(member, detectionResult, message)
+    ).resolves.toBe(true);
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].metadata).toEqual(
+      expect.objectContaining({
+        profile_assets: expect.objectContaining({
+          avatar_url: 'https://cdn.discordapp.com/visible-avatar.png',
+          avatar_hash: 'global-avatar-hash',
+          avatar_is_default: false,
+          guild_avatar_url: 'https://cdn.discordapp.com/server-avatar.png',
+          guild_avatar_hash: 'guild-avatar-hash',
+        }),
+      })
+    );
+    expect(
+      (verificationEvents[0].metadata as any).profile_assets.avatar_byte_sha256
+    ).toBeUndefined();
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://cdn.discordapp.com/visible-avatar.png',
+      expect.any(Object)
+    );
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(gptService.describeProfileImages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        avatarUrl: 'https://cdn.discordapp.com/visible-avatar.png',
+        avatarIsDefault: false,
+      })
+    );
+    expect(evidenceThread.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining(
+          '- Avatar URL: https://cdn.discordapp.com/visible-avatar.png'
+        ),
+      })
+    );
+    expect(evidenceThread.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining(
+          '- Server avatar URL: https://cdn.discordapp.com/server-avatar.png'
+        ),
+      })
+    );
+  });
+
   it('continues case notification when automatic restriction fails', async () => {
     const guildId = 'guild-restrict-fails';
     const userId = 'user-restrict-fails';

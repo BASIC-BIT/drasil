@@ -893,7 +893,11 @@ export class SecurityActionService implements ISecurityActionService {
     const user = await member.client.users
       .fetch(member.id, { force: true })
       .catch(() => member.user);
-    const avatarUrl = this.callImageUrl(user, 'displayAvatarURL', { size: 256 });
+    const avatarHash = this.readString((user as { avatar?: unknown }).avatar);
+    const guildAvatarHash = this.readString((member as { avatar?: unknown }).avatar);
+    const avatarUrl =
+      this.callImageUrl(member, 'displayAvatarURL', { size: 256 }) ??
+      this.callImageUrl(user, 'displayAvatarURL', { size: 256 });
     const guildAvatarUrl = this.callImageUrl(member, 'avatarURL', { size: 256 });
     const bannerUrl =
       this.callImageUrl(user, 'bannerURL', { size: 512 }) ??
@@ -903,21 +907,19 @@ export class SecurityActionService implements ISecurityActionService {
       this.callImageUrl(user, 'avatarDecorationURL', { size: 256 });
     const snapshot: ProfileAssetSnapshot = {
       captured_at: new Date().toISOString(),
-      avatar_is_default: !this.readString((user as { avatar?: unknown }).avatar),
+      avatar_is_default: !avatarHash && !guildAvatarHash,
     };
 
     if (avatarUrl) {
       snapshot.avatar_url = avatarUrl;
       snapshot.avatar_byte_sha256 = await this.hashRemoteImage(avatarUrl);
     }
-    const avatarHash = this.readString((user as { avatar?: unknown }).avatar);
     if (avatarHash) {
       snapshot.avatar_hash = avatarHash;
     }
     if (guildAvatarUrl) {
       snapshot.guild_avatar_url = guildAvatarUrl;
     }
-    const guildAvatarHash = this.readString((member as { avatar?: unknown }).avatar);
     if (guildAvatarHash) {
       snapshot.guild_avatar_hash = guildAvatarHash;
     }
@@ -985,6 +987,7 @@ export class SecurityActionService implements ISecurityActionService {
     detectionEvents: DetectionEvent[],
     recentMessages: MessageContext[]
   ): string {
+    const visibleAvatarHash = profileAssets.guild_avatar_hash ?? profileAssets.avatar_hash;
     const lines = [
       'Case evidence snapshot',
       `User: <@${member.id}> (${member.id})`,
@@ -995,7 +998,7 @@ export class SecurityActionService implements ISecurityActionService {
         : null,
       '',
       'Profile assets:',
-      `- Avatar: ${profileAssets.avatar_is_default ? 'default' : 'custom'}${profileAssets.avatar_hash ? `; hash ${profileAssets.avatar_hash}` : ''}`,
+      `- Avatar: ${profileAssets.avatar_is_default ? 'default' : 'custom'}${visibleAvatarHash ? `; hash ${visibleAvatarHash}` : ''}`,
       profileAssets.avatar_byte_sha256
         ? `- Avatar SHA-256: ${profileAssets.avatar_byte_sha256}`
         : null,
@@ -1006,6 +1009,9 @@ export class SecurityActionService implements ISecurityActionService {
       profileAssets.avatar_decoration_url ? '- Avatar decoration: present' : null,
       profileAssets.accent_color ? `- Accent color: ${profileAssets.accent_color}` : null,
       profileAssets.avatar_url ? `- Avatar URL: ${profileAssets.avatar_url}` : null,
+      profileAssets.guild_avatar_url && profileAssets.guild_avatar_url !== profileAssets.avatar_url
+        ? `- Server avatar URL: ${profileAssets.guild_avatar_url}`
+        : null,
       profileAssets.banner_url ? `- Banner URL: ${profileAssets.banner_url}` : null,
       '',
       ...this.formatProfileImageDescription(profileImageDescription),
@@ -1082,8 +1088,14 @@ export class SecurityActionService implements ISecurityActionService {
       if (!response.ok) {
         return undefined;
       }
-      const contentLength = Number(response.headers.get('content-length') ?? '0');
-      if (contentLength > PROFILE_IMAGE_HASH_MAX_BYTES) {
+      const rawContentLength = response.headers.get('content-length');
+      const contentLength = rawContentLength !== null ? Number(rawContentLength) : null;
+      if (
+        contentLength !== null &&
+        (!Number.isFinite(contentLength) ||
+          contentLength < 0 ||
+          contentLength > PROFILE_IMAGE_HASH_MAX_BYTES)
+      ) {
         return undefined;
       }
       const buffer = Buffer.from(await response.arrayBuffer());

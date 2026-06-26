@@ -154,6 +154,67 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
   });
 
+  it('does not send the first-response admin ping when support reminder metadata fails to persist', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      private_evidence_thread_id: 'evidence-thread-1',
+    });
+
+    const gptService = {
+      analyzeVerificationThreadResponses: jest.fn(),
+    } as any;
+    const notificationManager = {
+      updateVerificationThreadAnalysis: jest.fn(),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
+      notifyVerificationThreadUserResponse: jest.fn(),
+    } as any;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          verification_ai_thread_analysis_enabled: false,
+          verification_ai_thread_analysis_message_limit: 3,
+        },
+      }),
+    } as any;
+    const service = new VerificationThreadAnalysisService(
+      configService,
+      gptService,
+      notificationManager,
+      verificationRepo,
+      detectionRepo
+    );
+    const updateSpy = jest
+      .spyOn(verificationRepo, 'update')
+      .mockRejectedValueOnce(new Error('db down'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const { message } = buildMessage({ id: 'msg-2' });
+      const handled = await service.handleThreadMessage(message as any);
+
+      expect(handled).toBe(true);
+      expect(
+        notificationManager.mirrorVerificationThreadMessageToEvidenceThread
+      ).toHaveBeenCalledWith(expect.objectContaining({ id: verificationEvent.id }), message);
+      expect(notificationManager.notifyVerificationThreadUserResponse).not.toHaveBeenCalled();
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        `[VerificationThreadAnalysis] Failed to persist support-thread response metadata for verification event ${verificationEvent.id}`,
+        expect.any(Error)
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('ignores non-verification threads before hitting the repository', async () => {
     const verificationRepo = {
       findByThreadId: jest.fn(),
@@ -662,10 +723,19 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       resolved_by: null,
       notes: null,
     } as any;
+    const supportThreadReminderMetadata = {
+      support_thread_reminder: {
+        reminderCount: 0,
+        userRespondedAt: '2026-06-03T12:00:00.000Z',
+      },
+    };
     const verificationRepo = {
       findByThreadId: jest.fn().mockResolvedValue(verificationEvent),
       findById: jest.fn().mockResolvedValue(verificationEvent),
-      update: jest.fn().mockRejectedValue(new Error('db down')),
+      update: jest
+        .fn()
+        .mockResolvedValueOnce({ ...verificationEvent, metadata: supportThreadReminderMetadata })
+        .mockRejectedValueOnce(new Error('db down')),
     } as any;
     const detectionRepo = {
       findById: jest.fn().mockResolvedValue({ reasons: ['Recent suspicious activity'] }),
@@ -709,8 +779,12 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       });
 
       await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+      expect(notificationManager.notifyVerificationThreadUserResponse).toHaveBeenCalledWith(
+        expect.objectContaining({ id: verificationEvent.id }),
+        message
+      );
       expect(notificationManager.updateVerificationThreadAnalysis).toHaveBeenCalled();
-      expect(verificationRepo.update).toHaveBeenCalled();
+      expect(verificationRepo.update).toHaveBeenCalledTimes(2);
       expect(warnSpy).toHaveBeenCalledWith(
         '[VerificationThreadAnalysis] Failed to persist metadata for verification event verification-1',
         expect.any(Error)

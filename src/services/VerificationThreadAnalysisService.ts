@@ -202,7 +202,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
         `[VerificationThreadAnalysis] Failed to persist support-thread response metadata for verification event ${verificationEvent.id}`,
         error
       );
-      return { verificationEvent: { ...verificationEvent, metadata }, firstResponse: true };
+      return { verificationEvent: { ...verificationEvent, metadata }, firstResponse: false };
     }
   }
 
