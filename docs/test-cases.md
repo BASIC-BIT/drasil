@@ -64,6 +64,8 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
   - Ignores disabled role gate, missing honeypot roles, bots, and unchanged role sets.
 - `RoleQuarantineService`
   - Does not restore a configured honeypot role because role gate owns that role.
+  - Removes newly gained removable roles while a case is active, including roles gained through onboarding or Channels & Roles.
+  - Does not restore roles that were gained and removed after restriction started.
 
 ## Role gate
 

@@ -1,9 +1,10 @@
-import { GuildMember, PermissionFlagsBits, Role, User } from 'discord.js';
-import { inject, injectable } from 'inversify';
+import { GuildMember, PartialGuildMember, PermissionFlagsBits, Role, User } from 'discord.js';
+import { inject, injectable, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { Prisma } from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { IRoleQuarantineSnapshotRepository } from '../repositories/RoleQuarantineSnapshotRepository';
+import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import {
   RoleQuarantineRoleDetail,
   RoleQuarantineSnapshot,
@@ -17,6 +18,11 @@ import { getRoleQuarantineSettings, RoleQuarantineMode } from '../utils/roleQuar
 export type RoleQuarantineApplyStatus = 'off' | 'audit_only' | 'already_active' | 'quarantined';
 export type RoleQuarantineRestoreStatus = 'no_active_snapshot' | 'partially_restored' | 'restored';
 export type RoleQuarantineAbandonStatus = 'no_active_snapshot' | 'abandoned';
+export type RoleQuarantineActiveCaseUpdateStatus =
+  | 'off'
+  | 'audit_only'
+  | 'no_new_roles'
+  | 'enforced';
 
 export interface RoleQuarantineApplyResult {
   readonly status: RoleQuarantineApplyStatus;
@@ -43,12 +49,39 @@ export interface RoleQuarantineAbandonResult {
   readonly snapshotId: string | null;
 }
 
+export interface RoleQuarantineActiveCaseUpdateResult {
+  readonly status: RoleQuarantineActiveCaseUpdateStatus;
+  readonly mode: RoleQuarantineMode;
+  readonly snapshotId: string | null;
+  readonly addedRoleIds: readonly string[];
+  readonly plannedRoleIds: readonly string[];
+  readonly removedRoleIds: readonly string[];
+  readonly skippedRoles: readonly RoleQuarantineRoleDetail[];
+  readonly failedRemovals: readonly RoleQuarantineRoleDetail[];
+}
+
+interface ActiveCaseRoleUpdateMetadata {
+  readonly at: string;
+  readonly verification_event_id: string;
+  readonly mode: RoleQuarantineMode;
+  readonly added_role_ids: readonly string[];
+  readonly planned_role_ids: readonly string[];
+  readonly removed_role_ids: readonly string[];
+  readonly skipped_roles: readonly RoleQuarantineRoleDetail[];
+  readonly failed_removals: readonly RoleQuarantineRoleDetail[];
+}
+
 export interface IRoleQuarantineService {
   quarantineMember(
     member: GuildMember,
     verificationEvent: VerificationEvent,
     moderator?: User
   ): Promise<RoleQuarantineApplyResult>;
+  enforceActiveCaseRoleUpdate(
+    oldMember: GuildMember | PartialGuildMember,
+    newMember: GuildMember,
+    verificationEvent: VerificationEvent
+  ): Promise<RoleQuarantineActiveCaseUpdateResult>;
   restoreMemberRoles(member: GuildMember, moderator?: User): Promise<RoleQuarantineRestoreResult>;
   abandonActiveSnapshot(
     serverId: string,
@@ -75,7 +108,10 @@ export class RoleQuarantineService implements IRoleQuarantineService {
   public constructor(
     @inject(TYPES.ConfigService) private readonly configService: IConfigService,
     @inject(TYPES.RoleQuarantineSnapshotRepository)
-    private readonly snapshotRepository: IRoleQuarantineSnapshotRepository
+    private readonly snapshotRepository: IRoleQuarantineSnapshotRepository,
+    @inject(TYPES.VerificationEventRepository)
+    @optional()
+    private readonly verificationEventRepository?: IVerificationEventRepository
   ) {}
 
   public async quarantineMember(
@@ -285,6 +321,82 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     };
   }
 
+  public async enforceActiveCaseRoleUpdate(
+    oldMember: GuildMember | PartialGuildMember,
+    newMember: GuildMember,
+    verificationEvent: VerificationEvent
+  ): Promise<RoleQuarantineActiveCaseUpdateResult> {
+    const serverConfig = await this.configService.getServerConfig(newMember.guild.id);
+    const settings = getRoleQuarantineSettings(serverConfig.settings);
+    const addedRoles = this.getAddedRoles(oldMember, newMember, serverConfig.case_role_id);
+    const addedRoleIds = addedRoles.map((role) => role.id);
+
+    if (settings.mode === 'off') {
+      return this.activeCaseUpdateResult(settings.mode, 'off', null, addedRoleIds);
+    }
+
+    if (addedRoles.length === 0) {
+      return this.activeCaseUpdateResult(settings.mode, 'no_new_roles', null, addedRoleIds);
+    }
+
+    const activeSnapshot = await this.snapshotRepository.findActiveByServerAndUser(
+      newMember.guild.id,
+      newMember.id
+    );
+    const classifiedRoles = await this.classifyRoles(
+      newMember,
+      addedRoles,
+      new Set(settings.exemptRoleIds)
+    );
+    const removableRoles = classifiedRoles
+      .filter((classifiedRole) => classifiedRole.skipReason === undefined)
+      .map((classifiedRole) => classifiedRole.role);
+    const skippedRoles = classifiedRoles
+      .filter((classifiedRole) => classifiedRole.skipReason !== undefined)
+      .map((classifiedRole) =>
+        this.toRoleDetail(classifiedRole.role, classifiedRole.skipReason ?? 'skipped')
+      );
+    const plannedRoleIds = removableRoles.map((role) => role.id);
+    const removedRoleIds: string[] = [];
+    const failedRemovals: RoleQuarantineRoleDetail[] = [];
+
+    if (settings.mode === 'on') {
+      for (const role of removableRoles) {
+        try {
+          await newMember.roles.remove(
+            role,
+            `Drasil active-case role quarantine for case ${verificationEvent.id}`
+          );
+          removedRoleIds.push(role.id);
+        } catch (error) {
+          failedRemovals.push(this.toRoleDetail(role, this.formatError(error)));
+        }
+      }
+    }
+
+    await this.recordActiveCaseRoleUpdate(activeSnapshot, verificationEvent, {
+      at: new Date().toISOString(),
+      verification_event_id: verificationEvent.id,
+      mode: settings.mode,
+      added_role_ids: addedRoleIds,
+      planned_role_ids: plannedRoleIds,
+      removed_role_ids: removedRoleIds,
+      skipped_roles: skippedRoles,
+      failed_removals: failedRemovals,
+    });
+
+    return this.activeCaseUpdateResult(
+      settings.mode,
+      settings.mode === 'audit_only' ? 'audit_only' : 'enforced',
+      activeSnapshot?.id ?? null,
+      addedRoleIds,
+      plannedRoleIds,
+      removedRoleIds,
+      skippedRoles,
+      failedRemovals
+    );
+  }
+
   public async abandonActiveSnapshot(
     serverId: string,
     userId: string,
@@ -314,8 +426,16 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     caseRoleId: string | null,
     exemptRoleIds: ReadonlySet<string>
   ): Promise<ClassifiedRole[]> {
+    return this.classifyRoles(member, this.getMemberRoles(member, caseRoleId), exemptRoleIds);
+  }
+
+  private async classifyRoles(
+    member: GuildMember,
+    roles: readonly Role[],
+    exemptRoleIds: ReadonlySet<string>
+  ): Promise<ClassifiedRole[]> {
     const botMember = await this.getBotMember(member);
-    return this.getMemberRoles(member, caseRoleId).map((role) => ({
+    return roles.map((role) => ({
       role,
       skipReason: this.getQuarantineSkipReason(member, role, botMember, exemptRoleIds),
     }));
@@ -328,6 +448,19 @@ export class RoleQuarantineService implements IRoleQuarantineService {
   private getMemberRoles(member: GuildMember, caseRoleId: string | null): Role[] {
     return [...member.roles.cache.values()].filter(
       (role) => role.id !== member.guild.id && role.id !== caseRoleId
+    );
+  }
+
+  private getAddedRoles(
+    oldMember: GuildMember | PartialGuildMember,
+    newMember: GuildMember,
+    caseRoleId: string | null
+  ): Role[] {
+    return [...newMember.roles.cache.values()].filter(
+      (role) =>
+        role.id !== newMember.guild.id &&
+        role.id !== caseRoleId &&
+        !oldMember.roles.cache.has(role.id)
     );
   }
 
@@ -442,6 +575,89 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       removedRoleIds: snapshot.removed_role_ids,
       skippedRoles: this.readRoleDetails(snapshot.skipped_roles),
       failedRemovals: this.readRoleDetails(snapshot.failed_removals),
+    };
+  }
+
+  private activeCaseUpdateResult(
+    mode: RoleQuarantineMode,
+    status: RoleQuarantineActiveCaseUpdateStatus,
+    snapshotId: string | null,
+    addedRoleIds: readonly string[],
+    plannedRoleIds: readonly string[] = [],
+    removedRoleIds: readonly string[] = [],
+    skippedRoles: readonly RoleQuarantineRoleDetail[] = [],
+    failedRemovals: readonly RoleQuarantineRoleDetail[] = []
+  ): RoleQuarantineActiveCaseUpdateResult {
+    return {
+      status,
+      mode,
+      snapshotId,
+      addedRoleIds,
+      plannedRoleIds,
+      removedRoleIds,
+      skippedRoles,
+      failedRemovals,
+    };
+  }
+
+  private async recordActiveCaseRoleUpdate(
+    snapshot: RoleQuarantineSnapshot | null,
+    verificationEvent: VerificationEvent,
+    entry: ActiveCaseRoleUpdateMetadata
+  ): Promise<void> {
+    const activeCaseUpdatesKey = 'active_case_role_updates';
+
+    if (snapshot) {
+      const snapshotMetadata = this.appendMetadataEntry(
+        snapshot.metadata,
+        activeCaseUpdatesKey,
+        entry
+      );
+      try {
+        await this.snapshotRepository.update(snapshot.id, {
+          metadata: snapshotMetadata as unknown as Prisma.JsonValue,
+        });
+      } catch (error) {
+        console.warn(`Failed to record active-case role update on snapshot ${snapshot.id}:`, error);
+      }
+    }
+
+    if (!this.verificationEventRepository) {
+      return;
+    }
+
+    const verificationMetadata = this.appendMetadataEntry(
+      verificationEvent.metadata,
+      activeCaseUpdatesKey,
+      entry
+    );
+    try {
+      await this.verificationEventRepository.update(
+        verificationEvent.id,
+        {
+          metadata: verificationMetadata as VerificationEvent['metadata'],
+        },
+        { touchUpdatedAt: false }
+      );
+    } catch (error) {
+      console.warn(
+        `Failed to record active-case role update on verification event ${verificationEvent.id}:`,
+        error
+      );
+    }
+  }
+
+  private appendMetadataEntry(
+    metadata: unknown,
+    key: string,
+    entry: ActiveCaseRoleUpdateMetadata
+  ): Record<string, unknown> {
+    const record = this.metadataToRecord(metadata);
+    const existing = record[key];
+    const entries = Array.isArray(existing) ? existing : [];
+    return {
+      ...record,
+      [key]: [...entries, entry],
     };
   }
 

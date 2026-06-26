@@ -64,6 +64,8 @@ import { ModerationOutcomeSource } from '../services/ModerationOutcomeService';
 import { IModerationQueueService } from '../services/ModerationQueueService';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
+import { IRoleQuarantineService } from '../services/RoleQuarantineService';
+import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -123,6 +125,8 @@ export class EventHandler implements IEventHandler {
   private messageContextRepository?: IMessageContextRepository;
   private userModerationService?: IUserModerationService;
   private moderationQueueService?: IModerationQueueService;
+  private roleQuarantineService?: IRoleQuarantineService;
+  private verificationEventRepository?: IVerificationEventRepository;
   private serverConfigWarmups: Set<string> = new Set();
   private manualIntakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private configInitializePromise: Promise<void> | null = null;
@@ -161,7 +165,13 @@ export class EventHandler implements IEventHandler {
     userModerationService?: IUserModerationService,
     @inject(TYPES.ModerationQueueService)
     @optional()
-    moderationQueueService?: IModerationQueueService
+    moderationQueueService?: IModerationQueueService,
+    @inject(TYPES.RoleQuarantineService)
+    @optional()
+    roleQuarantineService?: IRoleQuarantineService,
+    @inject(TYPES.VerificationEventRepository)
+    @optional()
+    verificationEventRepository?: IVerificationEventRepository
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -179,6 +189,8 @@ export class EventHandler implements IEventHandler {
     this.messageContextRepository = messageContextRepository;
     this.userModerationService = userModerationService;
     this.moderationQueueService = moderationQueueService;
+    this.roleQuarantineService = roleQuarantineService;
+    this.verificationEventRepository = verificationEventRepository;
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -644,6 +656,8 @@ export class EventHandler implements IEventHandler {
       await this.ensureConfigInitialized();
       const serverConfig = await this.configService.getServerConfig(newMember.guild.id);
 
+      await this.enforceActiveCaseRoleQuarantine(oldMember, newMember, serverConfig);
+
       const manualSettings = getManualIntakeSettings(serverConfig.settings);
       if (manualSettings.enabled && manualSettings.roleId) {
         if (manualSettings.roleId === serverConfig.case_role_id) {
@@ -689,6 +703,49 @@ export class EventHandler implements IEventHandler {
       });
     } catch (error) {
       console.error(`Error handling member role update for ${newMember.id}:`, error);
+    }
+  }
+
+  private async enforceActiveCaseRoleQuarantine(
+    oldMember: GuildMember | PartialGuildMember,
+    newMember: GuildMember,
+    serverConfig: Server
+  ): Promise<void> {
+    if (!this.roleQuarantineService || !this.verificationEventRepository) {
+      return;
+    }
+
+    if (!serverConfig.case_role_id || !this.memberHasRole(newMember, serverConfig.case_role_id)) {
+      return;
+    }
+
+    const gainedRole = [...newMember.roles.cache.values()].some(
+      (role) =>
+        role.id !== newMember.guild.id &&
+        role.id !== serverConfig.case_role_id &&
+        !oldMember.roles.cache.has(role.id)
+    );
+    if (!gainedRole) {
+      return;
+    }
+
+    const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
+      newMember.id,
+      newMember.guild.id
+    );
+    if (!verificationEvent) {
+      return;
+    }
+
+    const result = await this.roleQuarantineService.enforceActiveCaseRoleUpdate(
+      oldMember,
+      newMember,
+      verificationEvent
+    );
+    if (result.removedRoleIds.length > 0 || result.failedRemovals.length > 0) {
+      console.log(
+        `Active-case role quarantine processed ${result.addedRoleIds.length} role(s) for ${newMember.user.tag}: removed ${result.removedRoleIds.length}, failed ${result.failedRemovals.length}.`
+      );
     }
   }
 

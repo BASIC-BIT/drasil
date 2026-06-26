@@ -120,6 +120,13 @@ Role gate cleanup is shown in the existing verify/close confirmation copy. It is
 not a second follow-up prompt. When role quarantine restores roles, configured
 honeypot roles are treated as policy-managed and are not restored.
 
+When role quarantine is on, Drasil also enforces it while a case is active. If a
+pending-case member gains a removable non-exempt role through onboarding,
+Channels & Roles, or another assignment, Drasil removes that newly gained role
+and records the active-case role update. These roles are not added to the
+pre-restriction restore snapshot, so they are not restored when the case
+resolves.
+
 ## Case threads and admin evidence
 
 Case notifications are posted in the configured admin channel. Drasil then starts

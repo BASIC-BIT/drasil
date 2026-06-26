@@ -217,6 +217,7 @@ describe('UserModerationService (unit)', () => {
         skippedRoles: [],
         failedRemovals: [],
       }),
+      enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn().mockResolvedValue({
         status: 'no_active_snapshot',
         snapshotId: null,
@@ -303,6 +304,7 @@ describe('UserModerationService (unit)', () => {
         skippedRoles: [],
         failedRemovals: [],
       }),
+      enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn().mockResolvedValue({
         status: 'restored',
         snapshotId: 'role-quarantine-1',
@@ -372,6 +374,7 @@ describe('UserModerationService (unit)', () => {
         skippedRoles: [],
         failedRemovals: [],
       }),
+      enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn().mockResolvedValue({
         status: 'restored',
         snapshotId: 'role-quarantine-existing',
@@ -657,6 +660,7 @@ describe('UserModerationService (unit)', () => {
     const member = buildMember(guildId, userId);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
       quarantineMember: jest.fn(),
+      enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn().mockResolvedValue({
         status: 'restored',
         snapshotId: 'role-quarantine-1',
@@ -953,6 +957,7 @@ describe('UserModerationService (unit)', () => {
     const guild = buildGuildWithoutMember(guildId);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
       quarantineMember: jest.fn(),
+      enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn(),
       abandonActiveSnapshot: jest.fn().mockResolvedValue({
         status: 'abandoned',
@@ -1017,6 +1022,7 @@ describe('UserModerationService (unit)', () => {
     const guild = buildGuildWithoutMember(guildId);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
       quarantineMember: jest.fn(),
+      enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn(),
       abandonActiveSnapshot: jest.fn().mockResolvedValue({
         status: 'abandoned',
@@ -1078,6 +1084,7 @@ describe('UserModerationService (unit)', () => {
     const member = buildMember(guildId, userId);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
       quarantineMember: jest.fn(),
+      enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn(),
       abandonActiveSnapshot: jest.fn().mockResolvedValue({
         status: 'abandoned',
