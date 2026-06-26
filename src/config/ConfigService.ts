@@ -74,10 +74,18 @@ import {
   ROLE_GATE_ENABLED_SETTING_KEY,
 } from '../utils/roleGateSettings';
 import { MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY } from '../utils/moderationQueueSettings';
+import {
+  MESSAGE_DELETION_ENABLED_SETTING_KEY,
+  MESSAGE_DELETION_SOURCE_MESSAGE_ENABLED_SETTING_KEY,
+  MESSAGE_DELETION_WATCHLIST_CUSTOM_TERMS_SETTING_KEY,
+  MESSAGE_DELETION_WATCHLIST_DISABLED_DEFAULT_IDS_SETTING_KEY,
+  MESSAGE_DELETION_WATCHLIST_ENABLED_SETTING_KEY,
+} from '../utils/messageDeletionSettings';
 
 const MAX_HEURISTIC_MESSAGE_THRESHOLD = 100;
 const MAX_HEURISTIC_TIMEFRAME_SECONDS = 600;
 const MAX_HEURISTIC_KEYWORDS = 200;
+const SERVER_CONFIG_CACHE_TTL_MS = 30_000;
 
 export interface HeuristicSettings {
   readonly messageThreshold: number;
@@ -210,6 +218,7 @@ export interface IConfigService {
 export class ConfigService implements IConfigService {
   private readonly serverRepository: IServerRepository;
   private readonly serverCache: Map<string, Server> = new Map();
+  private readonly serverCacheLoadedAt: Map<string, number> = new Map();
   private readonly heuristicSettingsCache: Map<string, HeuristicSettings> = new Map();
   private readonly defaultHeuristicSettings: HeuristicSettings;
   private readonly discordClient: Client;
@@ -280,7 +289,13 @@ export class ConfigService implements IConfigService {
 
   private cacheServerConfig(server: Server): void {
     this.serverCache.set(server.guild_id, server);
+    this.serverCacheLoadedAt.set(server.guild_id, Date.now());
     this.heuristicSettingsCache.set(server.guild_id, this.computeHeuristicSettings(server));
+  }
+
+  private isServerConfigCacheFresh(guildId: string): boolean {
+    const loadedAt = this.serverCacheLoadedAt.get(guildId);
+    return loadedAt !== undefined && Date.now() - loadedAt < SERVER_CONFIG_CACHE_TTL_MS;
   }
 
   private createDefaultConfig(guildId: string): Server {
@@ -328,6 +343,11 @@ export class ConfigService implements IConfigService {
       [MEMBER_ACCESS_ROLE_ID_SETTING_KEY]: null,
       [HONEYPOT_ROLE_RESPONSE_MODE_SETTING_KEY]: DEFAULT_HONEYPOT_ROLE_RESPONSE_MODE,
       [MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY]: null,
+      [MESSAGE_DELETION_ENABLED_SETTING_KEY]: true,
+      [MESSAGE_DELETION_SOURCE_MESSAGE_ENABLED_SETTING_KEY]: true,
+      [MESSAGE_DELETION_WATCHLIST_ENABLED_SETTING_KEY]: true,
+      [MESSAGE_DELETION_WATCHLIST_DISABLED_DEFAULT_IDS_SETTING_KEY]: [],
+      [MESSAGE_DELETION_WATCHLIST_CUSTOM_TERMS_SETTING_KEY]: [],
     };
 
     return {
@@ -512,7 +532,7 @@ export class ConfigService implements IConfigService {
    */
   async getServerConfig(guildId: string): Promise<Server> {
     const cachedServer = this.serverCache.get(guildId);
-    if (cachedServer) {
+    if (cachedServer && this.isServerConfigCacheFresh(guildId)) {
       return cachedServer;
     }
 
@@ -550,6 +570,9 @@ export class ConfigService implements IConfigService {
         return defaultConfig;
       } catch (error) {
         console.error(`Failed to get server configuration for guild ${guildId}:`, error);
+        if (cachedServer) {
+          return cachedServer;
+        }
       }
     }
 
@@ -611,6 +634,7 @@ export class ConfigService implements IConfigService {
    */
   clearCache(): void {
     this.serverCache.clear();
+    this.serverCacheLoadedAt.clear();
     this.heuristicSettingsCache.clear();
   }
 }

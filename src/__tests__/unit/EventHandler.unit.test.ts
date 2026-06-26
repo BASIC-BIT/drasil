@@ -13,8 +13,15 @@ import {
   ModerationOutcomeSource,
   ModerationOutcomeType,
 } from '../../repositories/types';
+import {
+  CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
+  DEFAULT_MESSAGE_WATCHLIST_ENTRIES,
+} from '../../utils/messageDeletionSettings';
 
 const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
+const CODE_DEFINED_VIDEO_LINK_TERM = DEFAULT_MESSAGE_WATCHLIST_ENTRIES[0].terms[0];
+const CODE_DEFINED_VIDEO_LINK_MATCH_LABEL = DEFAULT_MESSAGE_WATCHLIST_ENTRIES[0].matchLabel;
+const CODE_DEFINED_VIDEO_LINK_MESSAGE = `watch this ${CODE_DEFINED_VIDEO_LINK_TERM} clip https://example.com/video`;
 
 describe('EventHandler (unit)', () => {
   function buildHandler(overrides?: {
@@ -80,6 +87,8 @@ describe('EventHandler (unit)', () => {
         openCaseForSuspiciousMessage: jest.fn(),
         openCaseForSuspiciousJoin: jest.fn(),
         openAdminCase: jest.fn(),
+        observeSuspiciousMessage: jest.fn(),
+        recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
         recordRejoinAfterKickDetection: jest.fn(),
       }) as any,
       { handleTestCommands: jest.fn(), registerCommands: jest.fn() } as any,
@@ -809,11 +818,20 @@ describe('EventHandler (unit)', () => {
       detectNewJoin: jest.fn(),
     };
     const configService = {
-      initialize: jest.fn(),
+      initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn().mockReturnValue({
-        settings: { automatic_detection_exempt_moderators: true },
+        settings: {
+          automatic_detection_exempt_moderators: true,
+          detection_response_mode: 'notify_only',
+        },
       }),
-      getServerConfig: jest.fn(),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          automatic_detection_exempt_moderators: true,
+          detection_response_mode: 'notify_only',
+          min_confidence_threshold: 70,
+        },
+      }),
     };
     const handler = buildHandler({ detectionOrchestrator, configService });
 
@@ -821,7 +839,7 @@ describe('EventHandler (unit)', () => {
       buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers))
     );
 
-    expect(configService.initialize).not.toHaveBeenCalled();
+    expect(configService.initialize).toHaveBeenCalled();
     expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
   });
 
@@ -893,6 +911,223 @@ describe('EventHandler (unit)', () => {
         userId: 'user-1',
         username: 'test-user',
       })
+    );
+  });
+
+  it('routes non-staff watchlist matches to restricted source-message deletion handling', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'restrict',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+    };
+    const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
+
+    await (handler as any).handleMessage(message);
+
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
+    expect(securityActionService.handleSuspiciousMessage).toHaveBeenCalledWith(
+      message.member,
+      expect.objectContaining({
+        label: 'SUSPICIOUS',
+        confidence: 1,
+        triggerSource: DetectionType.PATTERN_MATCH,
+        messageAction: expect.objectContaining({
+          kind: 'delete_source_message',
+          source: 'watchlist',
+          watchlistEntryId: CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
+          matchedTerm: CODE_DEFINED_VIDEO_LINK_MATCH_LABEL,
+        }),
+      }),
+      message
+    );
+    expect(securityActionService.observeSuspiciousMessage).not.toHaveBeenCalled();
+  });
+
+  it('records non-staff watchlist matches before record-only response routing', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'record_only',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+    };
+    const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
+
+    await (handler as any).handleMessage(message);
+
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
+    expect(securityActionService.recordSuspiciousMessage).toHaveBeenCalledWith(
+      message.member,
+      expect.objectContaining({
+        triggerSource: DetectionType.PATTERN_MATCH,
+        messageAction: expect.objectContaining({ kind: 'review_only' }),
+      }),
+      message
+    );
+    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
+    expect(securityActionService.observeSuspiciousMessage).not.toHaveBeenCalled();
+  });
+
+  it('notifies non-staff watchlist matches without deletion intent in notify-only mode', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'notify_only',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const notificationManager = {
+      upsertObservedDetectionNotification: jest.fn().mockResolvedValue(null),
+      setupVerificationChannel: jest.fn(),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+    };
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      notificationManager,
+      securityActionService,
+    });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
+
+    await (handler as any).handleMessage(message);
+
+    expect(securityActionService.recordSuspiciousMessage).toHaveBeenCalledWith(
+      message.member,
+      expect.objectContaining({
+        triggerSource: DetectionType.PATTERN_MATCH,
+        messageAction: expect.objectContaining({ kind: 'review_only' }),
+      }),
+      message
+    );
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalled();
+    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
+    expect(securityActionService.observeSuspiciousMessage).not.toHaveBeenCalled();
+  });
+
+  it('routes staff watchlist matches to observed review without source-message deletion', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'restrict',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+    };
+    const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
+    const message = buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers)) as any;
+    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
+
+    await (handler as any).handleMessage(message);
+
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
+    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
+    expect(securityActionService.observeSuspiciousMessage).toHaveBeenCalledWith(
+      message.member,
+      expect.objectContaining({
+        label: 'SUSPICIOUS',
+        confidence: 1,
+        triggerSource: DetectionType.PATTERN_MATCH,
+        reasons: expect.arrayContaining([
+          'Poster has moderation or administration permissions; automatic deletion and restriction skipped.',
+        ]),
+        messageAction: expect.objectContaining({
+          kind: 'review_only',
+          source: 'watchlist',
+          watchlistEntryId: CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
+          matchedTerm: CODE_DEFINED_VIDEO_LINK_MATCH_LABEL,
+        }),
+      }),
+      message
+    );
+  });
+
+  it('routes staff watchlist matches to review even when moderator exemptions are disabled', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          automatic_detection_exempt_moderators: false,
+          detection_response_mode: 'restrict',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+    };
+    const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
+    const message = buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers)) as any;
+    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
+
+    await (handler as any).handleMessage(message);
+
+    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
+    expect(securityActionService.observeSuspiciousMessage).toHaveBeenCalledWith(
+      message.member,
+      expect.objectContaining({
+        messageAction: expect.objectContaining({ kind: 'review_only' }),
+      }),
+      message
     );
   });
 

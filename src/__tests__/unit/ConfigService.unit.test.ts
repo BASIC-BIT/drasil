@@ -37,6 +37,7 @@ describe('ConfigService (unit)', () => {
   });
 
   afterEach(() => {
+    jest.restoreAllMocks();
     restoreEnv('DATABASE_URL', originalDatabaseUrl);
   });
 
@@ -228,6 +229,33 @@ describe('ConfigService (unit)', () => {
     expect(updated.settings.auto_restrict).toBe(true);
     expect(updated.settings.min_confidence_threshold).toBe(80);
     expect(updated.heuristic_message_threshold).toBe(2);
+  });
+
+  it('refreshes stale cached server configs so web-updated settings propagate', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const discordClient = buildClient();
+    const service = new ConfigService(serverRepository, discordClient);
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+
+    await serverRepository.upsertByGuildId('guild-web-settings', {
+      settings: { detection_response_mode: 'notify_only' },
+    });
+
+    const initial = await service.getServerConfig('guild-web-settings');
+    expect(initial.settings.detection_response_mode).toBe('notify_only');
+
+    await serverRepository.updateSettings('guild-web-settings', {
+      detection_response_mode: 'restrict',
+    });
+    expect(
+      (await service.getServerConfig('guild-web-settings')).settings.detection_response_mode
+    ).toBe('notify_only');
+
+    nowSpy.mockReturnValue(32_000);
+    expect(
+      (await service.getServerConfig('guild-web-settings')).settings.detection_response_mode
+    ).toBe('restrict');
   });
 
   it('does not persist per-event detection overrides in default server settings', async () => {

@@ -34,7 +34,7 @@ import {
 } from '../services/ProductAnalyticsService';
 import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { REPORT_INTAKE_THREAD_NAME_PREFIX } from '../services/ThreadManager';
-import { Server, ServerSettings } from '../repositories/types';
+import { DetectionType, Server, ServerSettings } from '../repositories/types';
 import {
   ISetupDiagnosticsService,
   SetupDiagnosticReport,
@@ -43,6 +43,12 @@ import { IReportIntakeService } from '../services/ReportIntakeService';
 import { IReportIntakeAgentService } from '../services/ReportIntakeAgentService';
 import { ICaseReviewReminderService } from '../services/CaseReviewReminderService';
 import { isDiscordUnknownBanError } from '../utils/discordErrors';
+import { messageAttachmentsToReportMetadata } from '../utils/reportAttachments';
+import {
+  findMessageWatchlistMatch,
+  getMessageDeletionSettings,
+  type MessageWatchlistMatch,
+} from '../utils/messageDeletionSettings';
 import {
   IMessageContextRepository,
   MESSAGE_CONTEXT_PREVIEW_MAX_LENGTH,
@@ -275,10 +281,6 @@ export class EventHandler implements IEventHandler {
     const userId = message.author.id;
     const serverId = message.guild.id;
     const content = message.content;
-    if (this.isAutomaticDetectionExemptByCachedSettings(message.member)) {
-      this.rememberRecentMessage(message);
-      return;
-    }
 
     try {
       // Ensure the config cache init attempt has completed before processing messages.
@@ -306,9 +308,18 @@ export class EventHandler implements IEventHandler {
         );
         return;
       }
+
+      const messageDeletionSettings = getMessageDeletionSettings(serverConfig.settings);
+      const messageAttachments = messageAttachmentsToReportMetadata(message);
+      const watchlistMatch = findMessageWatchlistMatch(
+        { content, attachments: messageAttachments },
+        messageDeletionSettings
+      );
+      const hasExemptPermissions = this.hasAutomaticDetectionExemptPermissions(message.member);
       if (
         responseSettings.automaticDetectionExemptModerators &&
-        this.hasAutomaticDetectionExemptPermissions(message.member)
+        hasExemptPermissions &&
+        !watchlistMatch
       ) {
         return;
       }
@@ -317,6 +328,11 @@ export class EventHandler implements IEventHandler {
       const gptMessageCheckCount = this.getGptMessageCheckCount(serverConfig.settings);
       const forceGpt =
         gptMessageCheckCount !== null && recentMessages.length < gptMessageCheckCount;
+      const actionThreshold =
+        serverConfig.settings.min_confidence_threshold ??
+        globalConfig.getSettings().defaultServerSettings.minConfidenceThreshold;
+      const watchlistMatchOpensCase =
+        responseSettings.mode === 'restrict' && 100 >= actionThreshold;
 
       // Get user profile data for detection context
       const profileData = this.extractUserProfileData(message.member, {
@@ -324,14 +340,22 @@ export class EventHandler implements IEventHandler {
         channelContext: this.getCachedChannelContext(message),
       });
 
-      // Use the detection orchestrator to analyze the message
-      const detectionResult = forceGpt
-        ? await this.detectionOrchestrator.detectMessage(serverId, userId, content, profileData, {
-            forceGpt: true,
-          })
-        : await this.detectionOrchestrator.detectMessage(serverId, userId, content, profileData);
+      // Use the detection orchestrator unless a high-confidence watchlist entry matched.
+      const detectionResult = watchlistMatch
+        ? this.createWatchlistDetectionResult(
+            content,
+            watchlistMatch,
+            messageDeletionSettings.sourceMessageDeletionEnabled &&
+              !hasExemptPermissions &&
+              watchlistMatchOpensCase
+          )
+        : forceGpt
+          ? await this.detectionOrchestrator.detectMessage(serverId, userId, content, profileData, {
+              forceGpt: true,
+            })
+          : await this.detectionOrchestrator.detectMessage(serverId, userId, content, profileData);
 
-      if (forceGpt) {
+      if (forceGpt && !watchlistMatch) {
         this.captureForcedGptMessageAnalytics(
           message.member,
           detectionResult,
@@ -341,12 +365,31 @@ export class EventHandler implements IEventHandler {
         );
       }
 
+      // Source deletion never applies to staff/admin posters; the general exemption
+      // setting only controls ordinary automatic detections.
+      if (watchlistMatch && hasExemptPermissions) {
+        await this.securityActionService.observeSuspiciousMessage(
+          message.member,
+          {
+            ...detectionResult,
+            reasons: [
+              ...detectionResult.reasons,
+              'Poster has moderation or administration permissions; automatic deletion and restriction skipped.',
+            ],
+            messageAction: detectionResult.messageAction
+              ? { ...detectionResult.messageAction, kind: 'review_only' }
+              : undefined,
+          },
+          message
+        );
+        return;
+      }
+
       await this.handleAutomaticDetection(
         message.member,
         detectionResult,
         responseSettings,
-        serverConfig.settings.min_confidence_threshold ??
-          globalConfig.getSettings().defaultServerSettings.minConfidenceThreshold,
+        actionThreshold,
         message
       );
     } catch (error) {
@@ -362,6 +405,30 @@ export class EventHandler implements IEventHandler {
     } finally {
       this.rememberRecentMessage(message);
     }
+  }
+
+  private createWatchlistDetectionResult(
+    content: string,
+    match: MessageWatchlistMatch,
+    deleteSourceMessage: boolean
+  ): DetectionResult {
+    return {
+      label: 'SUSPICIOUS',
+      confidence: 1,
+      reasons: [
+        `Matched high-confidence message watchlist: ${match.entry.label}`,
+        `Matched watchlist term: ${match.matchedTerm}`,
+      ],
+      triggerSource: DetectionType.PATTERN_MATCH,
+      triggerContent: content,
+      messageAction: {
+        kind: deleteSourceMessage ? 'delete_source_message' : 'review_only',
+        source: 'watchlist',
+        watchlistEntryId: match.entry.id,
+        watchlistEntryLabel: match.entry.label,
+        matchedTerm: match.matchedTerm,
+      },
+    };
   }
 
   private isLikelyReportIntakeThread(message: Message): boolean {
@@ -456,6 +523,18 @@ export class EventHandler implements IEventHandler {
       void this.maybeSendDetectionSetupWarning(member.guild).catch((error) => {
         console.warn(`Failed to process setup warning for guild ${member.guild.id}:`, error);
       });
+    }
+
+    const routesWithoutCaseHandling =
+      responseSettings.mode === 'record_only' ||
+      responseSettings.mode === 'notify_only' ||
+      confidencePercent < actionThreshold;
+    if (sourceMessage && !detectionResult.detectionEventId && routesWithoutCaseHandling) {
+      detectionResult.detectionEventId = await this.securityActionService.recordSuspiciousMessage(
+        member,
+        detectionResult,
+        sourceMessage
+      );
     }
 
     switch (responseSettings.mode) {
@@ -558,7 +637,7 @@ export class EventHandler implements IEventHandler {
     newMember: GuildMember
   ): Promise<void> {
     try {
-      if (oldMember.partial || newMember.partial || newMember.user.bot) {
+      if (oldMember.partial || newMember.user.bot) {
         return;
       }
 

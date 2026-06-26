@@ -104,6 +104,10 @@ import { IRoleQuarantineService, RoleQuarantineService } from '../services/RoleQ
 import { IIntegrityAuditService, IntegrityAuditService } from '../services/IntegrityAuditService';
 import { IRoleGateService, RoleGateService } from '../services/RoleGateService';
 import {
+  IMessageDeletionService,
+  MessageDeletionService,
+} from '../services/MessageDeletionService';
+import {
   CaseThreadClosureSweepService,
   ICaseThreadClosureSweepService,
 } from '../services/CaseThreadClosureSweepService';
@@ -326,6 +330,11 @@ function configureServices(container: Container): void {
     .inSingletonScope();
 
   container.bind<IRoleGateService>(TYPES.RoleGateService).to(RoleGateService).inSingletonScope();
+
+  container
+    .bind<IMessageDeletionService>(TYPES.MessageDeletionService)
+    .to(MessageDeletionService)
+    .inSingletonScope();
 
   container
     .bind<ICaseThreadClosureSweepService>(TYPES.CaseThreadClosureSweepService)

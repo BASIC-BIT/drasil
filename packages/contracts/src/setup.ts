@@ -11,6 +11,32 @@ export const userReportExternalResponseModeSchema = z.enum(['off', 'notify_only'
 export const analyticsConsentLevelSchema = z.enum(['off', 'anonymous', 'full']);
 export const reportAiMaxActionSchema = z.enum(['off', 'hints', 'open_case', 'restrict']);
 export const caseResponderRoutingModeSchema = z.enum(['off', 'ping_only', 'ping_and_add_members']);
+export const MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS = 25;
+export const MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH = 120;
+export const CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID = 'known-video-link-campaign';
+
+export interface MessageDeletionDefaultWatchlistEntry {
+  readonly id: string;
+  readonly label: string;
+  readonly detail: string;
+  readonly requiresLinkOrVideo: boolean;
+}
+
+export const MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES: readonly MessageDeletionDefaultWatchlistEntry[] =
+  [
+    {
+      id: CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
+      label: 'Known video/link spam campaign',
+      detail:
+        'Matches a code-defined indicator only when the message also contains a link or video.',
+      requiresLinkOrVideo: true,
+    },
+  ];
+
+export const messageDeletionWatchlistDefaultIdsSchema = z.array(z.string()).max(10);
+export const messageDeletionWatchlistCustomTermsSchema = z
+  .array(z.string().trim().min(1).max(MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH))
+  .max(MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS);
 
 export const serverSettingsSchema = z
   .object({
@@ -49,6 +75,12 @@ export const serverSettingsSchema = z
     report_ai_max_image_bytes: z.number().int().min(1).optional(),
     report_instructions_channel_id: z.string().nullable().optional(),
     report_instructions_message_id: z.string().nullable().optional(),
+    message_deletion_enabled: z.boolean().optional(),
+    message_deletion_source_message_enabled: z.boolean().optional(),
+    message_deletion_watchlist_enabled: z.boolean().optional(),
+    message_deletion_watchlist_disabled_default_ids:
+      messageDeletionWatchlistDefaultIdsSchema.optional(),
+    message_deletion_watchlist_custom_terms: messageDeletionWatchlistCustomTermsSchema.optional(),
   })
   .passthrough();
 
@@ -106,6 +138,11 @@ export const guildSetupUpdateSchema = z.object({
   reportAiMaxAction: reportAiMaxActionSchema.optional(),
   caseResponderRoleIds: z.array(z.string()).optional(),
   caseResponderRoutingMode: caseResponderRoutingModeSchema.optional(),
+  messageDeletionEnabled: z.boolean().optional(),
+  messageDeletionSourceMessageEnabled: z.boolean().optional(),
+  messageDeletionWatchlistEnabled: z.boolean().optional(),
+  messageDeletionWatchlistDisabledDefaultIds: messageDeletionWatchlistDefaultIdsSchema.optional(),
+  messageDeletionWatchlistCustomTerms: messageDeletionWatchlistCustomTermsSchema.optional(),
 });
 
 export type DetectionResponseMode = z.infer<typeof detectionResponseModeSchema>;
