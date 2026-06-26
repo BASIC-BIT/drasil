@@ -6,6 +6,7 @@ export const DISCORD_PERMISSIONS = {
   ViewAuditLog: 1n << 7n,
   ViewChannel: 1n << 10n,
   SendMessages: 1n << 11n,
+  ManageMessages: 1n << 13n,
   EmbedLinks: 1n << 14n,
   ReadMessageHistory: 1n << 16n,
   MentionEveryone: 1n << 17n,

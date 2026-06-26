@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES } from '@drasil/contracts';
 import { saveGuildSetup } from './actions';
 import { AccountControl } from '@/components/AccountControl';
 import { InstallInvitePanel } from '@/components/InstallInvitePanel';
@@ -67,6 +68,10 @@ export default async function GuildSetupPage({ params }: PageProps) {
     server?.settings.report_ai_max_action === 'restrict'
       ? 'open_case'
       : (server?.settings.report_ai_max_action ?? 'hints');
+  const disabledWatchlistDefaultIds = new Set(
+    server?.settings.message_deletion_watchlist_disabled_default_ids ?? []
+  );
+  const customWatchlistTerms = server?.settings.message_deletion_watchlist_custom_terms ?? [];
 
   return (
     <main className="shell stack">
@@ -125,11 +130,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
         <div className="form-grid">
           <div className="field">
             <label htmlFor="caseRoleId">Case role</label>
-            <select
-              id="caseRoleId"
-              name="caseRoleId"
-              defaultValue={server?.case_role_id ?? ''}
-            >
+            <select id="caseRoleId" name="caseRoleId" defaultValue={server?.case_role_id ?? ''}>
               <option value="">Choose a role</option>
               {roleOptions(roles, server?.case_role_id)}
             </select>
@@ -293,6 +294,75 @@ export default async function GuildSetupPage({ params }: PageProps) {
             />{' '}
             Enable report AI triage
           </label>
+        </div>
+
+        <div>
+          <h2>Message Deletion</h2>
+          <p className="muted">
+            High-confidence watchlist deletion preserves moderator evidence, then removes the source
+            message when Drasil has Manage Messages. Staff/admin posters are routed for review
+            rather than automatically deleted.
+          </p>
+        </div>
+        <div className="actions">
+          <label>
+            <input
+              defaultChecked={server?.settings.message_deletion_enabled ?? true}
+              name="messageDeletionEnabled"
+              type="checkbox"
+            />{' '}
+            Enable message deletion policy
+          </label>
+          <label>
+            <input
+              defaultChecked={server?.settings.message_deletion_source_message_enabled ?? true}
+              name="messageDeletionSourceMessageEnabled"
+              type="checkbox"
+            />{' '}
+            Delete matched source messages
+          </label>
+          <label>
+            <input
+              defaultChecked={server?.settings.message_deletion_watchlist_enabled ?? true}
+              name="messageDeletionWatchlistEnabled"
+              type="checkbox"
+            />{' '}
+            Enable high-confidence watchlist
+          </label>
+        </div>
+        <div className="form-grid">
+          <div className="field">
+            <label>Code-defined watchlist defaults</label>
+            <div className="stack compact-heading">
+              {MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES.map((entry) => (
+                <label key={entry.id}>
+                  <input
+                    defaultChecked={!disabledWatchlistDefaultIds.has(entry.id)}
+                    name="messageDeletionDefaultWatchlistIds"
+                    type="checkbox"
+                    value={entry.id}
+                  />{' '}
+                  {entry.label}
+                  <span className="muted"> {entry.detail}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="field">
+            <label htmlFor="messageDeletionWatchlistCustomTerms">
+              Custom high-confidence watchlist terms
+            </label>
+            <textarea
+              defaultValue={customWatchlistTerms.join('\n')}
+              id="messageDeletionWatchlistCustomTerms"
+              name="messageDeletionWatchlistCustomTerms"
+              placeholder="one exact campaign/domain term per line"
+              rows={4}
+            />
+            <p className="muted">
+              Custom terms also require a link or video before automatic deletion is considered.
+            </p>
+          </div>
         </div>
         <div className="actions">
           <button className="button" type="submit">

@@ -93,8 +93,8 @@
     "typescript-eslint": "^8.28.0"
   },
   "dependencies": {
-    "@arizeai/openinference-instrumentation-openai": "^2.1.0",
-    "@arizeai/phoenix-otel": "^0.3.4",
+    "@arizeai/openinference-instrumentation-openai": "^4.1.4",
+    "@arizeai/phoenix-otel": "^1.0.2",
     "@opentelemetry/api": "^1.9.0",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
@@ -110,6 +110,19 @@
     "zod": "^3.25.76"
   },
   "overrides": {
-    "@hono/node-server": "1.19.13"
+    "@hono/node-server": "1.19.13",
+    "@opentelemetry/core": "2.8.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "0.219.0",
+    "@opentelemetry/otlp-exporter-base": "0.219.0",
+    "@opentelemetry/otlp-transformer": "0.219.0",
+    "@opentelemetry/propagator-b3": "2.8.0",
+    "@opentelemetry/propagator-jaeger": "2.8.0",
+    "@opentelemetry/resources": "2.8.0",
+    "@opentelemetry/sdk-logs": "0.219.0",
+    "@opentelemetry/sdk-metrics": "2.8.0",
+    "@opentelemetry/sdk-trace-base": "2.8.0",
+    "@opentelemetry/sdk-trace-node": "2.8.0",
+    "js-yaml": "4.2.0",
+    "undici": "6.27.0"
   }
 }

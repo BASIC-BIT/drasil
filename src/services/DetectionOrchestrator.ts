@@ -30,11 +30,20 @@ export interface DetectionResult {
   reasons: string[];
   triggerSource: DetectionType;
   triggerContent: string;
+  messageAction?: DetectionMessageAction;
   profileData?: UserProfileData;
   detectionEventId?: string;
   gptAnalysis?: GPTProfileAnalysis;
   gptTriggerReasons?: DetectionGptTriggerReason[];
   reportAiAnalysis?: ReportAIAnalysis;
+}
+
+export interface DetectionMessageAction {
+  readonly kind: 'delete_source_message' | 'review_only';
+  readonly source: 'watchlist';
+  readonly watchlistEntryId: string;
+  readonly watchlistEntryLabel: string;
+  readonly matchedTerm: string;
 }
 
 export type DetectionGptTriggerReason =

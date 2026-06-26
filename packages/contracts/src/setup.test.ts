@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { guildSetupUpdateSchema, setupDashboardSchema } from './setup';
+import {
+  guildSetupUpdateSchema,
+  MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH,
+  setupDashboardSchema,
+} from './setup';
 
 describe('setup contracts', () => {
   it('accepts dashboard payloads with nullable server config', () => {
@@ -61,5 +65,16 @@ describe('setup contracts', () => {
       join_detection_response_mode: 'notify_only',
       user_report_external_response_mode: 'open_case',
     });
+  });
+
+  it('rejects custom message deletion watchlist terms over the bot matching limit', () => {
+    const parsed = guildSetupUpdateSchema.safeParse({
+      guildId: '123',
+      messageDeletionWatchlistCustomTerms: [
+        'x'.repeat(MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH + 1),
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
   });
 });

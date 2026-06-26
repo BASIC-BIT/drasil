@@ -92,6 +92,11 @@ export interface ServerSettings {
   case_review_very_stale_days?: number;
   case_review_digest_last_sent_at?: string | null;
   moderation_queue_channel_id?: string | null;
+  message_deletion_enabled?: boolean;
+  message_deletion_source_message_enabled?: boolean;
+  message_deletion_watchlist_enabled?: boolean;
+  message_deletion_watchlist_disabled_default_ids?: string[];
+  message_deletion_watchlist_custom_terms?: string[];
   setup_nudge_last_attempt_at?: string | null;
   setup_nudge_last_recipient_id?: string | null;
   setup_nudge_last_result?: 'sent' | 'dm_failed' | 'no_recipient' | null;

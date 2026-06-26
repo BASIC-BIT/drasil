@@ -145,6 +145,12 @@ function buildSettingsPatch(update: GuildSetupUpdate): Record<string, unknown> {
       report_ai_max_action: update.reportAiMaxAction,
       case_responder_role_ids: update.caseResponderRoleIds,
       case_responder_routing_mode: update.caseResponderRoutingMode,
+      message_deletion_enabled: update.messageDeletionEnabled,
+      message_deletion_source_message_enabled: update.messageDeletionSourceMessageEnabled,
+      message_deletion_watchlist_enabled: update.messageDeletionWatchlistEnabled,
+      message_deletion_watchlist_disabled_default_ids:
+        update.messageDeletionWatchlistDisabledDefaultIds,
+      message_deletion_watchlist_custom_terms: update.messageDeletionWatchlistCustomTerms,
     }).filter((entry) => entry[1] !== undefined)
   );
 }
