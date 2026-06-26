@@ -49,6 +49,12 @@ new detection event, links it to the existing `verification_event`, and updates
 the existing admin notification instead of opening a duplicate case. If the
 previous case is resolved, a later report or flag opens a new pending case.
 
+Role-triggered manual intake is intentionally reusable: if staff reassign the
+manual intake trigger role after a case is resolved, Drasil should open a new
+case. During the original case, the trigger role is consumed by manual intake
+cleanup and excluded from role-quarantine snapshots/restores so verify and
+close-no-action resolutions do not recreate the trigger role and loop the case.
+
 ## Role-Gate Resolution Cleanup
 
 When role gate is enabled, verify and close-no-action confirmations include the

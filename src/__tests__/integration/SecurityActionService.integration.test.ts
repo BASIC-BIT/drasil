@@ -72,6 +72,7 @@ describeIntegration('SecurityActionService (integration)', () => {
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest
         .fn()
         .mockResolvedValue({ id: 'observe-1' } as Message),
@@ -88,6 +89,7 @@ describeIntegration('SecurityActionService (integration)', () => {
       createPrivateEvidenceThread: jest.fn().mockResolvedValue({
         id: 'evidence-1',
         url: 'https://discord.com/channels/evidence-1',
+        send: jest.fn().mockResolvedValue({ id: 'evidence-message-1' }),
       } as any),
       createObservedEvidenceThread: jest.fn().mockResolvedValue({
         id: 'observed-evidence-1',
@@ -96,6 +98,9 @@ describeIntegration('SecurityActionService (integration)', () => {
       createReportIntakeThread: jest.fn().mockResolvedValue({} as any),
       activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
+      closeResolvedVerificationThreads: jest
+        .fn()
+        .mockResolvedValue({ closedAny: false, results: [] }),
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
       repairVerificationThread: jest.fn().mockResolvedValue({
         threadId: 'thread-1',

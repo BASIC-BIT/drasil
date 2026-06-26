@@ -1016,6 +1016,77 @@ describe('ThreadManager (unit)', () => {
     );
   });
 
+  it('closes verification threads even when the final resolution message fails', async () => {
+    const evidenceThread = buildThread('evidence-thread-1');
+    thread.send.mockRejectedValueOnce(new Error('thread archived'));
+    (channel.threads.fetch as jest.Mock).mockImplementation((threadId: string) =>
+      Promise.resolve(threadId === 'evidence-thread-1' ? evidenceThread : thread)
+    );
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+
+    const result = await manager.resolveVerificationThread(
+      buildVerificationEvent({
+        thread_id: 'thread-1',
+        private_evidence_thread_id: 'evidence-thread-1',
+        status: VerificationStatus.CLOSED_NO_ACTION,
+      }),
+      VerificationStatus.CLOSED_NO_ACTION,
+      'admin-1'
+    );
+
+    expect(result).toBe(true);
+    expect(thread.setLocked).toHaveBeenCalledWith(true);
+    expect(thread.setArchived).toHaveBeenCalledWith(true);
+    expect(evidenceThread.setLocked).toHaveBeenCalledWith(true);
+    expect(evidenceThread.setArchived).toHaveBeenCalledWith(true);
+  });
+
+  it('dry-runs and executes resolved thread closure without posting duplicate messages', async () => {
+    const evidenceThread = buildThread('evidence-thread-1');
+    (channel.threads.fetch as jest.Mock).mockImplementation((threadId: string) =>
+      Promise.resolve(threadId === 'evidence-thread-1' ? evidenceThread : thread)
+    );
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    const event = buildVerificationEvent({
+      thread_id: 'thread-1',
+      private_evidence_thread_id: 'evidence-thread-1',
+      status: VerificationStatus.VERIFIED,
+    });
+
+    const dryRun = await manager.closeResolvedVerificationThreads(event);
+
+    expect(dryRun.closedAny).toBe(false);
+    expect(dryRun.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ threadId: 'thread-1', wouldClose: true, closed: false }),
+        expect.objectContaining({ threadId: 'evidence-thread-1', wouldClose: true, closed: false }),
+      ])
+    );
+    expect(thread.send).not.toHaveBeenCalled();
+    expect(thread.setArchived).not.toHaveBeenCalled();
+
+    const executed = await manager.closeResolvedVerificationThreads(event, { execute: true });
+
+    expect(executed.closedAny).toBe(true);
+    expect(thread.send).not.toHaveBeenCalled();
+    expect(thread.setLocked).toHaveBeenCalledWith(true);
+    expect(evidenceThread.setLocked).toHaveBeenCalledWith(true);
+  });
+
   it('reopens verification thread when available', async () => {
     const evidenceThread = buildThread('evidence-thread-1');
     (channel.threads.fetch as jest.Mock).mockImplementation((threadId: string) =>

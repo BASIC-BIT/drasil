@@ -500,6 +500,27 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       .map((event) => ({ ...event }));
   }
 
+  async findResolvedWithThreadsByServer(
+    serverId: string,
+    options: { days?: number | null; limit?: number | null; userId?: string | null } = {}
+  ): Promise<VerificationEvent[]> {
+    const days = Math.max(1, Math.min(options.days ?? 30, 365));
+    const limit = Math.max(1, Math.min(options.limit ?? 100, 500));
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    return this.events
+      .filter(
+        (event) =>
+          event.server_id === serverId &&
+          (!options.userId || event.user_id === options.userId) &&
+          event.status !== VerificationStatus.PENDING &&
+          event.updated_at >= since &&
+          Boolean(event.thread_id || event.private_evidence_thread_id)
+      )
+      .sort((a, b) => b.updated_at.getTime() - a.updated_at.getTime())
+      .slice(0, limit)
+      .map((event) => ({ ...event }));
+  }
+
   async createFromDetection(
     detectionEventId: string | null,
     serverId: string,
