@@ -107,6 +107,10 @@ import {
   IMessageDeletionService,
   MessageDeletionService,
 } from '../services/MessageDeletionService';
+import {
+  CaseThreadClosureSweepService,
+  ICaseThreadClosureSweepService,
+} from '../services/CaseThreadClosureSweepService';
 // Initialize container
 const container = new Container();
 
@@ -330,6 +334,11 @@ function configureServices(container: Container): void {
   container
     .bind<IMessageDeletionService>(TYPES.MessageDeletionService)
     .to(MessageDeletionService)
+    .inSingletonScope();
+
+  container
+    .bind<ICaseThreadClosureSweepService>(TYPES.CaseThreadClosureSweepService)
+    .to(CaseThreadClosureSweepService)
     .inSingletonScope();
 }
 

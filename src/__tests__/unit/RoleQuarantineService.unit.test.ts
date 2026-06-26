@@ -158,6 +158,64 @@ describe('RoleQuarantineService (unit)', () => {
     expect(snapshot?.removed_role_ids).toEqual(['safe-role']);
   });
 
+  it('does not quarantine the configured manual intake trigger role', async () => {
+    const manualRole = createRole({ id: '100000000000000010', name: 'Manual Intake' });
+    const communityRole = createRole({ id: 'community-role', name: 'Community' });
+    const member = createMember([manualRole, communityRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const service = new RoleQuarantineService(
+      createConfigService({
+        role_quarantine_mode: 'on',
+        manual_intake_enabled: true,
+        manual_intake_role_id: manualRole.id,
+      }),
+      snapshots
+    );
+
+    const result = await service.quarantineMember(member, createVerificationEvent());
+
+    expect(result.removedRoleIds).toEqual(['community-role']);
+    expect(result.plannedRoleIds).toEqual(['community-role']);
+    expect(result.skippedRoles).toEqual(
+      expect.arrayContaining([expect.objectContaining({ role_id: manualRole.id })])
+    );
+    expect(member.roles.cache.has(manualRole.id)).toBe(true);
+    expect(member.roles.cache.has(communityRole.id)).toBe(false);
+  });
+
+  it('does not restore a manual intake trigger role from an older active quarantine snapshot', async () => {
+    const manualRole = createRole({ id: '100000000000000010', name: 'Manual Intake' });
+    const communityRole = createRole({ id: 'community-role', name: 'Community' });
+    const member = createMember([], [manualRole, communityRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'verification-1',
+      mode: 'on',
+      originalRoleIds: [manualRole.id, communityRole.id],
+      plannedRoleIds: [manualRole.id, communityRole.id],
+      removedRoleIds: [manualRole.id, communityRole.id],
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({
+        role_quarantine_mode: 'on',
+        manual_intake_enabled: true,
+        manual_intake_role_id: manualRole.id,
+      }),
+      snapshots
+    );
+
+    const result = await service.restoreMemberRoles(member);
+
+    expect(result.restoredRoleIds).toEqual(['community-role']);
+    expect(result.skippedRoles).toEqual(
+      expect.arrayContaining([expect.objectContaining({ role_id: manualRole.id })])
+    );
+    expect(member.roles.cache.has(manualRole.id)).toBe(false);
+    expect(member.roles.cache.has(communityRole.id)).toBe(true);
+  });
+
   it('records planned restore role ids before Discord removals are finalized', async () => {
     const safeRole = createRole({ id: 'safe-role' });
     const member = createMember([safeRole]);
