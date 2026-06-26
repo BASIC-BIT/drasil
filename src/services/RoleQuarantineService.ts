@@ -11,6 +11,7 @@ import {
   RoleQuarantineSnapshotStatus,
   VerificationEvent,
 } from '../repositories/types';
+import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { getRoleQuarantineSettings, RoleQuarantineMode } from '../utils/roleQuarantineSettings';
 
@@ -143,10 +144,16 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       return this.resultFromActiveSnapshot(activeSnapshot, settings.mode, originalRoleIds);
     }
 
+    const manualIntakeSettings = getManualIntakeSettings(serverConfig.settings);
+    const policyManagedRoleIds = new Set(settings.exemptRoleIds);
+    if (manualIntakeSettings.enabled && manualIntakeSettings.roleId) {
+      policyManagedRoleIds.add(manualIntakeSettings.roleId);
+    }
+
     const classifiedRoles = await this.classifyMemberRoles(
       member,
       serverConfig.case_role_id,
-      new Set(settings.exemptRoleIds)
+      policyManagedRoleIds
     );
     const removableRoles = classifiedRoles
       .filter((classifiedRole) => classifiedRole.skipReason === undefined)
@@ -235,9 +242,13 @@ export class RoleQuarantineService implements IRoleQuarantineService {
 
     const serverConfig = await this.configService.getServerConfig(member.guild.id);
     const roleGateSettings = getRoleGateSettings(serverConfig.settings);
+    const manualIntakeSettings = getManualIntakeSettings(serverConfig.settings);
     const policyManagedRestoreSkips = new Set<string>();
     if (roleGateSettings.enabled && roleGateSettings.honeypotRoleId) {
       policyManagedRestoreSkips.add(roleGateSettings.honeypotRoleId);
+    }
+    if (manualIntakeSettings.enabled && manualIntakeSettings.roleId) {
+      policyManagedRestoreSkips.add(manualIntakeSettings.roleId);
     }
 
     const botMember = await this.getBotMember(member);

@@ -281,6 +281,7 @@ describe('InteractionHandler (unit)', () => {
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue(null),
       markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
@@ -305,6 +306,7 @@ describe('InteractionHandler (unit)', () => {
       findByUserAndServer: jest.fn(),
       findByDetectionEvent: jest.fn(),
       findPendingByServer: jest.fn(),
+      findResolvedWithThreadsByServer: jest.fn(),
       createFromDetection: jest.fn(),
       getVerificationHistory: jest.fn(),
       findById: jest.fn(),
@@ -331,6 +333,9 @@ describe('InteractionHandler (unit)', () => {
       } as any),
       activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn(),
+      closeResolvedVerificationThreads: jest
+        .fn()
+        .mockResolvedValue({ closedAny: false, results: [] }),
       reopenVerificationThread: jest.fn(),
       repairVerificationThread: jest.fn().mockResolvedValue({
         threadId: 'thread-1',

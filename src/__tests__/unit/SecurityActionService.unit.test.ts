@@ -30,22 +30,30 @@ import {
 } from '../../utils/verificationActionFailures';
 import type { IModerationQueueService } from '../../services/ModerationQueueService';
 
-const buildMember = (guildId: string, userId: string): GuildMember =>
-  ({
+const buildMember = (guildId: string, userId: string): GuildMember => {
+  const user = {
+    id: userId,
+    username: 'test-user',
+    globalName: 'Test Global',
+    tag: 'test-user#0001',
+    displayAvatarURL: () => 'https://cdn.discordapp.com/embed/avatars/5.png',
+  } as User;
+
+  return {
     id: userId,
     joinedAt: new Date(),
     displayName: 'Test Display',
     nickname: 'Test Nick',
     displayAvatarURL: () => 'https://cdn.discordapp.com/embed/avatars/4.png',
+    client: {
+      users: {
+        fetch: jest.fn().mockResolvedValue(user),
+      },
+    },
     guild: { id: guildId } as Guild,
-    user: {
-      id: userId,
-      username: 'test-user',
-      globalName: 'Test Global',
-      tag: 'test-user#0001',
-      displayAvatarURL: () => 'https://cdn.discordapp.com/embed/avatars/5.png',
-    } as User,
-  }) as unknown as GuildMember;
+    user,
+  } as unknown as GuildMember;
+};
 
 const buildMessage = (guildId: string, channelId: string): Message =>
   ({
@@ -65,9 +73,15 @@ describe('SecurityActionService (unit)', () => {
   let threadManager: jest.Mocked<IThreadManager>;
   let userModerationService: jest.Mocked<IUserModerationService>;
   let adminActionService: jest.Mocked<IAdminActionService>;
-  let gptService: { analyzeReportEvidence: jest.Mock };
+  let gptService: { analyzeReportEvidence: jest.Mock; describeProfileImages: jest.Mock };
+  let fetchSpy: jest.SpiedFunction<typeof fetch>;
 
   beforeEach(() => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      headers: { get: jest.fn().mockReturnValue('4') },
+      arrayBuffer: jest.fn().mockResolvedValue(new Uint8Array([1, 2, 3, 4]).buffer),
+    } as unknown as Response);
     detectionEventsRepository = new InMemoryDetectionEventsRepository();
     serverMemberRepository = new InMemoryServerMemberRepository();
     verificationEventRepository = new InMemoryVerificationEventRepository();
@@ -81,6 +95,7 @@ describe('SecurityActionService (unit)', () => {
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest
         .fn()
         .mockResolvedValue({ id: 'observe-1' } as Message),
@@ -97,6 +112,7 @@ describe('SecurityActionService (unit)', () => {
       createPrivateEvidenceThread: jest.fn().mockResolvedValue({
         id: 'evidence-1',
         url: 'https://discord.com/channels/evidence-1',
+        send: jest.fn().mockResolvedValue({ id: 'evidence-message-1' }),
       } as any),
       createObservedEvidenceThread: jest.fn().mockResolvedValue({
         id: 'observed-evidence-1',
@@ -105,6 +121,9 @@ describe('SecurityActionService (unit)', () => {
       createReportIntakeThread: jest.fn().mockResolvedValue({} as any),
       activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
+      closeResolvedVerificationThreads: jest
+        .fn()
+        .mockResolvedValue({ closedAny: false, results: [] }),
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
       repairVerificationThread: jest.fn().mockResolvedValue({
         threadId: 'thread-1',
@@ -160,7 +179,20 @@ describe('SecurityActionService (unit)', () => {
         promptVersion: 'report-triage-v1',
         isFallback: false,
       }),
+      describeProfileImages: jest.fn().mockResolvedValue({
+        avatarDescription: null,
+        bannerDescription: null,
+        riskNotes: [],
+        analyzedImageCount: 0,
+        model: 'gpt-5.4-mini',
+        promptVersion: 'profile-image-triage-v1',
+        isFallback: false,
+      }),
     };
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
   });
 
   const buildService = (client: Client = {} as Client): SecurityActionService =>
@@ -297,7 +329,7 @@ describe('SecurityActionService (unit)', () => {
 
     expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
-    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
   });
 
   it('auto-kicks high-confidence message detections only when message policy allows it', async () => {
@@ -463,6 +495,94 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it('captures the visible server avatar for case evidence and skips invalid image lengths', async () => {
+    const guildId = 'guild-avatar-evidence';
+    const userId = 'user-avatar-evidence';
+    const member = buildMember(guildId, userId);
+    const message = buildMessage(guildId, 'channel-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: message.content,
+    };
+    const arrayBuffer = jest.fn().mockResolvedValue(new Uint8Array([1, 2, 3, 4]).buffer);
+    const evidenceThread = {
+      id: 'evidence-avatar',
+      url: 'https://discord.com/channels/evidence-avatar',
+      send: jest.fn().mockResolvedValue({ id: 'evidence-message-avatar' }),
+    };
+    const fetchedUser = {
+      ...member.user,
+      avatar: 'global-avatar-hash',
+      displayAvatarURL: jest.fn(() => 'https://cdn.discordapp.com/global-avatar.png'),
+    };
+    (member as unknown as { avatar: string }).avatar = 'guild-avatar-hash';
+    (member as unknown as { avatarURL: jest.Mock }).avatarURL = jest.fn(
+      () => 'https://cdn.discordapp.com/server-avatar.png'
+    );
+    (member as unknown as { displayAvatarURL: jest.Mock }).displayAvatarURL = jest.fn(
+      () => 'https://cdn.discordapp.com/visible-avatar.png'
+    );
+    (member.client.users.fetch as jest.Mock).mockResolvedValue(fetchedUser);
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: jest.fn().mockReturnValue('invalid-length') },
+      arrayBuffer,
+    } as unknown as Response);
+    threadManager.createPrivateEvidenceThread.mockResolvedValueOnce(evidenceThread as any);
+
+    await expect(
+      buildService().handleSuspiciousMessage(member, detectionResult, message)
+    ).resolves.toBe(true);
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    expect(verificationEvents).toHaveLength(1);
+    expect(verificationEvents[0].metadata).toEqual(
+      expect.objectContaining({
+        profile_assets: expect.objectContaining({
+          avatar_url: 'https://cdn.discordapp.com/visible-avatar.png',
+          avatar_hash: 'global-avatar-hash',
+          avatar_is_default: false,
+          guild_avatar_url: 'https://cdn.discordapp.com/server-avatar.png',
+          guild_avatar_hash: 'guild-avatar-hash',
+        }),
+      })
+    );
+    expect(
+      (verificationEvents[0].metadata as any).profile_assets.avatar_byte_sha256
+    ).toBeUndefined();
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://cdn.discordapp.com/visible-avatar.png',
+      expect.any(Object)
+    );
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(gptService.describeProfileImages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        avatarUrl: 'https://cdn.discordapp.com/visible-avatar.png',
+        avatarIsDefault: false,
+      })
+    );
+    expect(evidenceThread.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining(
+          '- Avatar URL: https://cdn.discordapp.com/visible-avatar.png'
+        ),
+      })
+    );
+    expect(evidenceThread.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining(
+          '- Server avatar URL: https://cdn.discordapp.com/server-avatar.png'
+        ),
+      })
+    );
+  });
+
   it('continues case notification when automatic restriction fails', async () => {
     const guildId = 'guild-restrict-fails';
     const userId = 'user-restrict-fails';
@@ -493,7 +613,7 @@ describe('SecurityActionService (unit)', () => {
 
     expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
-    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
 
     const notifiedVerificationEvent =
       notificationManager.upsertSuspiciousUserNotification.mock.calls[0][2];
@@ -532,7 +652,7 @@ describe('SecurityActionService (unit)', () => {
     }
 
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
-    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
 
     const notifiedVerificationEvent =
       notificationManager.upsertSuspiciousUserNotification.mock.calls[0][2];
@@ -566,7 +686,7 @@ describe('SecurityActionService (unit)', () => {
     }
 
     expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
-    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
 
     const notifiedVerificationEvent =
       notificationManager.upsertSuspiciousUserNotification.mock.calls[0][2];
@@ -598,7 +718,7 @@ describe('SecurityActionService (unit)', () => {
       ).resolves.toBe(true);
 
       expect(threadManager.repairVerificationThread).not.toHaveBeenCalled();
-      expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+      expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
 
       await jest.advanceTimersByTimeAsync(69_999);
       expect(threadManager.repairVerificationThread).not.toHaveBeenCalled();
@@ -609,9 +729,11 @@ describe('SecurityActionService (unit)', () => {
         member,
         expect.objectContaining({ server_id: guildId, user_id: userId })
       );
-      expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
+      expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(4);
       const refreshedVerificationEvent =
-        notificationManager.upsertSuspiciousUserNotification.mock.calls[1][2];
+        notificationManager.upsertSuspiciousUserNotification.mock.calls[
+          notificationManager.upsertSuspiciousUserNotification.mock.calls.length - 1
+        ][2];
       expect(getVerificationActionFailures(refreshedVerificationEvent.metadata)).toEqual([]);
     } finally {
       consoleErrorSpy.mockRestore();
@@ -680,7 +802,7 @@ describe('SecurityActionService (unit)', () => {
 
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(userModerationService.applyCaseRole).not.toHaveBeenCalled();
-    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
   });
 
   it('opens a case and applies the case role when requested by detection policy', async () => {
@@ -718,7 +840,7 @@ describe('SecurityActionService (unit)', () => {
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
     expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
-    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
   });
 
   it('opens an admin case and applies the case role', async () => {
@@ -808,7 +930,7 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.applyCaseRole.mock.invocationCallOrder[0]).toBeLessThan(
       threadManager.createVerificationThread.mock.invocationCallOrder[0]
     );
-    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
   });
 
   it('repairs an active restricted case thread and reapplies the case role', async () => {
@@ -2231,7 +2353,7 @@ describe('SecurityActionService (unit)', () => {
       expect.objectContaining({ id: moderatorId })
     );
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
-    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
   });
 
   it('restricts the user when auto-detection follows an existing review-only pending case', async () => {
@@ -2279,7 +2401,7 @@ describe('SecurityActionService (unit)', () => {
     expect(verificationEvents[0].status).toBe(VerificationStatus.PENDING);
     expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
-    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
   });
 
   it('posts an observed alert when a user report follows a resolved case', async () => {

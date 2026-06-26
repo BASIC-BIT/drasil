@@ -1,4 +1,4 @@
-import { injectable, inject, optional } from 'inversify';
+import { injectable, inject } from 'inversify';
 import type { Message } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import type { IConfigService } from '../config/ConfigService';
@@ -11,7 +11,6 @@ import {
   getVerificationThreadAnalysisSettings,
   VERIFICATION_THREAD_ANALYSIS_FETCH_LIMIT,
 } from '../utils/verificationThreadAnalysisSettings';
-import { IModerationQueueService } from './ModerationQueueService';
 import {
   getSupportThreadReminderState,
   markSupportThreadReminderUserResponded,
@@ -49,10 +48,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     @inject(TYPES.VerificationEventRepository)
     private verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.DetectionEventsRepository)
-    private detectionEventsRepository: IDetectionEventsRepository,
-    @inject(TYPES.ModerationQueueService)
-    @optional()
-    private moderationQueueService?: IModerationQueueService
+    private detectionEventsRepository: IDetectionEventsRepository
   ) {}
 
   public async handleThreadMessage(message: Message): Promise<boolean> {
@@ -91,20 +87,19 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       return;
     }
 
-    verificationEvent = await this.markSupportThreadReminderResponded(verificationEvent, message);
+    const responseState = await this.markSupportThreadReminderResponded(verificationEvent, message);
+    verificationEvent = responseState.verificationEvent;
 
     await this.notificationManager.mirrorVerificationThreadMessageToEvidenceThread(
       verificationEvent,
       message
     );
-    await this.moderationQueueService
-      ?.recordSupportThreadAttention(verificationEvent, message)
-      .catch((error) => {
-        console.warn(
-          `[VerificationThreadAnalysis] Failed to queue support-thread attention for verification event ${verificationEvent.id}`,
-          error
-        );
-      });
+    if (responseState.firstResponse) {
+      await this.notificationManager.notifyVerificationThreadUserResponse(
+        verificationEvent,
+        message
+      );
+    }
 
     const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
     const settings = getVerificationThreadAnalysisSettings(serverConfig.settings);
@@ -185,9 +180,9 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
   private async markSupportThreadReminderResponded(
     verificationEvent: VerificationEvent,
     message: Message
-  ): Promise<VerificationEvent> {
+  ): Promise<{ verificationEvent: VerificationEvent; firstResponse: boolean }> {
     if (getSupportThreadReminderState(verificationEvent.metadata).userRespondedAt) {
-      return verificationEvent;
+      return { verificationEvent, firstResponse: false };
     }
 
     const metadata = markSupportThreadReminderUserResponded(
@@ -198,13 +193,16 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
         metadata,
       });
-      return updatedEvent ?? { ...verificationEvent, metadata };
+      return {
+        verificationEvent: updatedEvent ?? { ...verificationEvent, metadata },
+        firstResponse: true,
+      };
     } catch (error) {
       console.warn(
         `[VerificationThreadAnalysis] Failed to persist support-thread response metadata for verification event ${verificationEvent.id}`,
         error
       );
-      return { ...verificationEvent, metadata };
+      return { verificationEvent: { ...verificationEvent, metadata }, firstResponse: false };
     }
   }
 

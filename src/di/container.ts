@@ -103,6 +103,10 @@ import {
 import { IRoleQuarantineService, RoleQuarantineService } from '../services/RoleQuarantineService';
 import { IIntegrityAuditService, IntegrityAuditService } from '../services/IntegrityAuditService';
 import { IRoleGateService, RoleGateService } from '../services/RoleGateService';
+import {
+  CaseThreadClosureSweepService,
+  ICaseThreadClosureSweepService,
+} from '../services/CaseThreadClosureSweepService';
 // Initialize container
 const container = new Container();
 
@@ -322,6 +326,11 @@ function configureServices(container: Container): void {
     .inSingletonScope();
 
   container.bind<IRoleGateService>(TYPES.RoleGateService).to(RoleGateService).inSingletonScope();
+
+  container
+    .bind<ICaseThreadClosureSweepService>(TYPES.CaseThreadClosureSweepService)
+    .to(CaseThreadClosureSweepService)
+    .inSingletonScope();
 }
 
 export { container };

@@ -70,6 +70,7 @@ describeIntegration('UserModerationService (integration)', () => {
       updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue({} as any),
       markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
@@ -82,6 +83,9 @@ describeIntegration('UserModerationService (integration)', () => {
       createReportIntakeThread: jest.fn().mockResolvedValue({} as any),
       activateReportIntakeThread: jest.fn().mockResolvedValue(true),
       resolveVerificationThread: jest.fn().mockResolvedValue(true),
+      closeResolvedVerificationThreads: jest
+        .fn()
+        .mockResolvedValue({ closedAny: false, results: [] }),
       reopenVerificationThread: jest.fn().mockResolvedValue(true),
       repairVerificationThread: jest.fn().mockResolvedValue({
         threadId: 'thread-1',
