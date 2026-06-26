@@ -610,6 +610,7 @@ describe('EventHandler (unit)', () => {
 
   it('enforces active-case role quarantine before role-gate handling', async () => {
     const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const caseRole = { id: 'case-role', name: 'Case' };
     const honeypotRole = { id: '111111111111111111', name: 'Robot' };
     const activeCase = {
       id: 'verification-1',
@@ -622,12 +623,17 @@ describe('EventHandler (unit)', () => {
       id: 'user-1',
       partial: false,
       user: { id: 'user-1', bot: false, username: 'test-user', tag: 'test-user#0001' },
-      roles: { cache: new Map() },
+      roles: { cache: new Map([[caseRole.id, caseRole]]) },
       guild: { id: 'guild-1' },
     };
     const newMember = {
       ...oldMember,
-      roles: { cache: new Map([[honeypotRole.id, honeypotRole]]) },
+      roles: {
+        cache: new Map([
+          [caseRole.id, caseRole],
+          [honeypotRole.id, honeypotRole],
+        ]),
+      },
       guild: {
         id: 'guild-1',
         roles: {
@@ -641,7 +647,7 @@ describe('EventHandler (unit)', () => {
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
-        case_role_id: 'case-role',
+        case_role_id: caseRole.id,
         settings: {
           role_gate_enabled: true,
           honeypot_role_id: honeypotRole.id,
@@ -695,6 +701,54 @@ describe('EventHandler (unit)', () => {
     expect(
       roleQuarantineService.enforceActiveCaseRoleUpdate.mock.invocationCallOrder[0]
     ).toBeLessThan(securityActionService.handleHoneypotRoleAssignment.mock.invocationCallOrder[0]);
+  });
+
+  it('does not enforce active-case role quarantine after restrictions are lifted', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const gainedRole = { id: '111111111111111111', name: 'Member' };
+    const oldMember = {
+      id: 'user-1',
+      partial: false,
+      user: { id: 'user-1', bot: false, username: 'test-user', tag: 'test-user#0001' },
+      roles: { cache: new Map() },
+      guild: { id: 'guild-1' },
+    };
+    const newMember = {
+      ...oldMember,
+      roles: { cache: new Map([[gainedRole.id, gainedRole]]) },
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'case-role',
+        settings: {},
+      }),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const roleQuarantineService = {
+      enforceActiveCaseRoleUpdate: jest.fn(),
+    };
+    const verificationEventRepository = {
+      findActiveByUserAndServer: jest.fn(),
+    };
+    const handler = buildHandler({
+      client,
+      configService,
+      roleQuarantineService,
+      verificationEventRepository,
+    });
+    await handler.setupEventHandlers();
+    const updateHandler = client.on.mock.calls.find(
+      ([event]) => event === Events.GuildMemberUpdate
+    )?.[1];
+
+    await updateHandler?.(oldMember as any, newMember as any);
+
+    expect(verificationEventRepository.findActiveByUserAndServer).not.toHaveBeenCalled();
+    expect(roleQuarantineService.enforceActiveCaseRoleUpdate).not.toHaveBeenCalled();
   });
 
   it('delegates observed Discord bans with native audit-log source attribution', async () => {

@@ -577,7 +577,7 @@ export class EventHandler implements IEventHandler {
       await this.ensureConfigInitialized();
       const serverConfig = await this.configService.getServerConfig(newMember.guild.id);
 
-      await this.enforceActiveCaseRoleQuarantine(oldMember, newMember);
+      await this.enforceActiveCaseRoleQuarantine(oldMember, newMember, serverConfig);
 
       const manualSettings = getManualIntakeSettings(serverConfig.settings);
       if (manualSettings.enabled && manualSettings.roleId) {
@@ -629,14 +629,22 @@ export class EventHandler implements IEventHandler {
 
   private async enforceActiveCaseRoleQuarantine(
     oldMember: GuildMember | PartialGuildMember,
-    newMember: GuildMember
+    newMember: GuildMember,
+    serverConfig: Server
   ): Promise<void> {
     if (!this.roleQuarantineService || !this.verificationEventRepository) {
       return;
     }
 
+    if (!serverConfig.case_role_id || !this.memberHasRole(newMember, serverConfig.case_role_id)) {
+      return;
+    }
+
     const gainedRole = [...newMember.roles.cache.values()].some(
-      (role) => role.id !== newMember.guild.id && !oldMember.roles.cache.has(role.id)
+      (role) =>
+        role.id !== newMember.guild.id &&
+        role.id !== serverConfig.case_role_id &&
+        !oldMember.roles.cache.has(role.id)
     );
     if (!gainedRole) {
       return;
