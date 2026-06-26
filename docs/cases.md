@@ -57,6 +57,15 @@ honeypot role if the member currently has it or if role quarantine already
 removed it, and adds the configured member access role when present. This is part
 of the same confirmed case action, not a separate follow-up button.
 
+## Active-Case Role Quarantine
+
+When role quarantine is enabled and a pending-case member gains a new removable
+non-exempt role, Drasil removes that role immediately. This closes the Discord
+onboarding/Channels & Roles bypass where a restricted member could self-assign a
+member role after the original quarantine snapshot was taken. Roles gained during
+the active case are recorded as active-case role updates and are not restored
+when the case resolves.
+
 ## Schema Decision
 
 Use `verification_events` as the local case model for now. A separate `cases`

@@ -12,6 +12,7 @@ import {
   DetectionType,
   ModerationOutcomeSource,
   ModerationOutcomeType,
+  VerificationStatus,
 } from '../../repositories/types';
 
 const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
@@ -29,6 +30,9 @@ describe('EventHandler (unit)', () => {
     messageContextRepository?: Record<string, jest.Mock>;
     userModerationService?: Record<string, jest.Mock>;
     productAnalyticsService?: Record<string, jest.Mock>;
+    moderationQueueService?: Record<string, jest.Mock>;
+    roleQuarantineService?: Record<string, jest.Mock>;
+    verificationEventRepository?: Record<string, jest.Mock>;
   }): EventHandler {
     const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
     const detectionOrchestrator = overrides?.detectionOrchestrator ?? {
@@ -91,7 +95,10 @@ describe('EventHandler (unit)', () => {
       overrides?.reportIntakeAgentService as any,
       undefined,
       overrides?.messageContextRepository as any,
-      overrides?.userModerationService as any
+      overrides?.userModerationService as any,
+      overrides?.moderationQueueService as any,
+      overrides?.roleQuarantineService as any,
+      overrides?.verificationEventRepository as any
     );
   }
 
@@ -599,6 +606,95 @@ describe('EventHandler (unit)', () => {
       roleName: honeypotRole.name,
       responseMode: 'restrict',
     });
+  });
+
+  it('enforces active-case role quarantine before role-gate handling', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const honeypotRole = { id: '111111111111111111', name: 'Robot' };
+    const activeCase = {
+      id: 'verification-1',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      status: VerificationStatus.PENDING,
+      metadata: {},
+    };
+    const oldMember = {
+      id: 'user-1',
+      partial: false,
+      user: { id: 'user-1', bot: false, username: 'test-user', tag: 'test-user#0001' },
+      roles: { cache: new Map() },
+      guild: { id: 'guild-1' },
+    };
+    const newMember = {
+      ...oldMember,
+      roles: { cache: new Map([[honeypotRole.id, honeypotRole]]) },
+      guild: {
+        id: 'guild-1',
+        roles: {
+          cache: new Map([[honeypotRole.id, honeypotRole]]),
+          fetch: jest.fn().mockResolvedValue(honeypotRole),
+        },
+      },
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'case-role',
+        settings: {
+          role_gate_enabled: true,
+          honeypot_role_id: honeypotRole.id,
+          honeypot_role_response_mode: 'restrict',
+        },
+      }),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn(),
+      handleSuspiciousJoin: jest.fn(),
+      handleHoneypotRoleAssignment: jest.fn().mockResolvedValue(true),
+      openCaseForSuspiciousMessage: jest.fn(),
+      openCaseForSuspiciousJoin: jest.fn(),
+      recordRejoinAfterKickDetection: jest.fn(),
+    };
+    const roleQuarantineService = {
+      enforceActiveCaseRoleUpdate: jest.fn().mockResolvedValue({
+        addedRoleIds: [honeypotRole.id],
+        removedRoleIds: [honeypotRole.id],
+        failedRemovals: [],
+      }),
+    };
+    const verificationEventRepository = {
+      findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),
+    };
+    const handler = buildHandler({
+      client,
+      configService,
+      securityActionService,
+      roleQuarantineService,
+      verificationEventRepository,
+    });
+    await handler.setupEventHandlers();
+    const updateHandler = client.on.mock.calls.find(
+      ([event]) => event === Events.GuildMemberUpdate
+    )?.[1];
+
+    await updateHandler?.(oldMember as any, newMember as any);
+
+    expect(verificationEventRepository.findActiveByUserAndServer).toHaveBeenCalledWith(
+      'user-1',
+      'guild-1'
+    );
+    expect(roleQuarantineService.enforceActiveCaseRoleUpdate).toHaveBeenCalledWith(
+      oldMember,
+      newMember,
+      activeCase
+    );
+    expect(
+      roleQuarantineService.enforceActiveCaseRoleUpdate.mock.invocationCallOrder[0]
+    ).toBeLessThan(securityActionService.handleHoneypotRoleAssignment.mock.invocationCallOrder[0]);
   });
 
   it('delegates observed Discord bans with native audit-log source attribution', async () => {
