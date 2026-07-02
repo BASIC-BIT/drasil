@@ -132,6 +132,7 @@ function buildService(input: {
   } as unknown as jest.Mocked<IServerMemberRepository>;
   const moderationQueueService = {
     upsertPendingScreeningMember: jest.fn().mockResolvedValue(undefined),
+    upsertPendingScreeningMembers: jest.fn().mockResolvedValue(undefined),
     deletePendingScreeningMember: jest.fn().mockResolvedValue(undefined),
   } as unknown as jest.Mocked<IModerationQueueService>;
   const configService = {
@@ -205,8 +206,9 @@ describe('CaseReviewReminderService (unit)', () => {
 
     await service.runOnce(now);
 
-    expect(moderationQueueService.upsertPendingScreeningMember).toHaveBeenCalledWith(
-      member,
+    expect(moderationQueueService.upsertPendingScreeningMembers).toHaveBeenCalledWith(
+      'guild-1',
+      [member],
       7,
       now
     );
@@ -244,8 +246,9 @@ describe('CaseReviewReminderService (unit)', () => {
 
     await service.runOnce(now);
 
-    expect(moderationQueueService.upsertPendingScreeningMember).toHaveBeenCalledWith(
-      member,
+    expect(moderationQueueService.upsertPendingScreeningMembers).toHaveBeenCalledWith(
+      'guild-1',
+      [member],
       7,
       now
     );

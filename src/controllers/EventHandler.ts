@@ -782,8 +782,8 @@ export class EventHandler implements IEventHandler {
     console.log(
       `Member ${newMember.user.tag} (${newMember.id}) cleared Discord membership screening; running join detection and case repair.`
     );
-    await this.runJoinDetectionForMember(newMember, serverConfig);
     await this.deletePendingScreeningQueueItem(newMember.guild.id, newMember.id);
+    await this.runJoinDetectionForMember(newMember, serverConfig);
 
     const repair = await this.securityActionService.repairActiveCase(newMember);
     if (repair.repaired || repair.verificationEventId) {
@@ -1025,9 +1025,9 @@ export class EventHandler implements IEventHandler {
 
   private async handleGuildMemberRemove(member: GuildMember | PartialGuildMember): Promise<void> {
     this.cancelManualIntakeForMember(member.guild.id, member.id);
-    await this.deletePendingScreeningQueueItem(member.guild.id, member.id);
 
     if (!this.userModerationService) {
+      await this.deletePendingScreeningQueueItem(member.guild.id, member.id);
       return;
     }
 

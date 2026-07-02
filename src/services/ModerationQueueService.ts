@@ -61,6 +61,12 @@ export interface IModerationQueueService {
     thresholdDays: number,
     now?: Date
   ): Promise<void>;
+  upsertPendingScreeningMembers(
+    serverId: string,
+    members: ServerMember[],
+    thresholdDays: number,
+    now?: Date
+  ): Promise<void>;
   deletePendingScreeningMember(serverId: string, userId: string): Promise<void>;
   recordSupportThreadAttention(
     verificationEvent: VerificationEvent,
@@ -244,12 +250,57 @@ export class ModerationQueueService implements IModerationQueueService {
       return;
     }
 
+    await this.upsertPendingScreeningMemberInQueue(member, thresholdDays, now, queueChannel);
+  }
+
+  public async upsertPendingScreeningMembers(
+    serverId: string,
+    members: ServerMember[],
+    thresholdDays: number,
+    now: Date = new Date()
+  ): Promise<void> {
+    if (members.length === 0) {
+      return;
+    }
+
+    const serverConfig = await this.configService.getServerConfig(serverId);
+    const queueChannel = await this.getQueueChannel(serverConfig.settings);
+    if (!queueChannel) {
+      return;
+    }
+
+    for (const member of members) {
+      if (member.server_id !== serverId) {
+        continue;
+      }
+
+      if (!member.discord_member_pending || !member.discord_member_pending_since) {
+        await this.deletePendingScreeningMember(member.server_id, member.user_id);
+        continue;
+      }
+
+      await this.upsertPendingScreeningMemberInQueue(member, thresholdDays, now, queueChannel);
+    }
+  }
+
+  private async upsertPendingScreeningMemberInQueue(
+    member: ServerMember,
+    thresholdDays: number,
+    now: Date,
+    queueChannel: QueueTextChannel
+  ): Promise<void> {
+    const pendingSince = member.discord_member_pending_since;
+    if (!pendingSince) {
+      await this.deletePendingScreeningMember(member.server_id, member.user_id);
+      return;
+    }
+
     const item = await this.moderationQueueRepository.upsert({
       serverId: member.server_id,
       userId: member.user_id,
       itemType: ModerationQueueItemType.PENDING_SCREENING_MEMBER,
       metadata: this.toJson({
-        pending_since: member.discord_member_pending_since.toISOString(),
+        pending_since: pendingSince.toISOString(),
         threshold_days: thresholdDays,
         last_checked_at: now.toISOString(),
       }),

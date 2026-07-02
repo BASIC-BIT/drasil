@@ -169,16 +169,19 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     );
 
     if (this.moderationQueueService) {
-      for (const member of longPendingMembers) {
-        await this.moderationQueueService
-          .upsertPendingScreeningMember(member, settings.longPendingDays, now)
-          .catch((error) => {
-            console.warn(
-              `Failed to mirror long-pending screening member ${member.user_id} to the moderation queue:`,
-              error
-            );
-          });
-      }
+      await this.moderationQueueService
+        .upsertPendingScreeningMembers(
+          server.guild_id,
+          longPendingMembers,
+          settings.longPendingDays,
+          now
+        )
+        .catch((error) => {
+          console.warn(
+            `Failed to mirror long-pending screening members for guild ${server.guild_id} to the moderation queue:`,
+            error
+          );
+        });
     }
 
     const digestMembers =
@@ -204,11 +207,18 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       return;
     }
 
-    await this.serverMemberRepository.markDiscordMemberPendingDigestSent(
-      server.guild_id,
-      digestMembers.map((member) => member.user_id),
-      now
-    );
+    await this.serverMemberRepository
+      .markDiscordMemberPendingDigestSent(
+        server.guild_id,
+        digestMembers.map((member) => member.user_id),
+        now
+      )
+      .catch((error) => {
+        console.warn(
+          `Failed to mark pending screening digest as sent for guild ${server.guild_id}:`,
+          error
+        );
+      });
   }
 
   private async sendPendingScreeningDigest(
