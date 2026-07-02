@@ -229,6 +229,30 @@ export class UserModerationService implements IUserModerationService {
     }
   }
 
+  private async clearDiscordPendingScreeningState(
+    serverId: string,
+    userId: string,
+    observedAt: Date
+  ): Promise<void> {
+    await this.serverMemberRepository
+      .updateDiscordMemberPendingState(serverId, userId, false, observedAt)
+      .catch((error) => {
+        console.warn(
+          `Failed to clear Discord pending-screening state for ${userId} in guild ${serverId}:`,
+          error
+        );
+      });
+
+    await this.moderationQueueService
+      ?.deletePendingScreeningMember(serverId, userId)
+      .catch((error) => {
+        console.warn(
+          `Failed to delete pending-screening queue item for ${userId} in guild ${serverId}:`,
+          error
+        );
+      });
+  }
+
   private async refreshCaseNotification(verificationEvent: VerificationEvent): Promise<void> {
     if (!verificationEvent.notification_message_id) {
       return;
@@ -1777,6 +1801,9 @@ export class UserModerationService implements IUserModerationService {
         return 0;
       }
 
+      const resolvedAt = options.occurredAt ?? new Date();
+      await this.clearDiscordPendingScreeningState(guild.id, user.id, resolvedAt);
+
       const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
         user.id,
         guild.id
@@ -1794,7 +1821,6 @@ export class UserModerationService implements IUserModerationService {
         return 0;
       }
 
-      const resolvedAt = options.occurredAt ?? new Date();
       const notes = options.reason?.trim()
         ? `Observed Discord ban: ${options.reason.trim()}`
         : 'Observed Discord ban.';
@@ -1900,8 +1926,10 @@ export class UserModerationService implements IUserModerationService {
         return 0;
       }
 
-      const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
       const resolvedAt = options.occurredAt ?? new Date();
+      await this.clearDiscordPendingScreeningState(member.guild.id, member.id, resolvedAt);
+
+      const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
       const notes = options.reason?.trim()
         ? `Observed Discord kick: ${options.reason.trim()}`
         : 'Observed Discord kick.';
@@ -2019,6 +2047,7 @@ export class UserModerationService implements IUserModerationService {
         (event) => event.status === VerificationStatus.PENDING
       );
       const occurredAt = new Date();
+      await this.clearDiscordPendingScreeningState(member.guild.id, member.id, occurredAt);
       const outcomeMetadata = this.buildOutcomeMetadata(
         {
           source_detail: 'guildMemberRemove',

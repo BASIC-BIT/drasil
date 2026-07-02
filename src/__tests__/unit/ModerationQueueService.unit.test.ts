@@ -10,6 +10,7 @@ import {
   ModerationQueueItem,
   ModerationQueueItemType,
   Server,
+  ServerMember,
   VerificationEvent,
   VerificationStatus,
 } from '../../repositories/types';
@@ -89,6 +90,20 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
         (item) =>
           item.item_type === ModerationQueueItemType.OBSERVED_ALERT_MIRROR &&
           item.detection_event_id === detectionEventId
+      ) ?? null
+    );
+  }
+
+  async findByPendingScreeningMember(
+    serverId: string,
+    userId: string
+  ): Promise<ModerationQueueItem | null> {
+    return this.clone(
+      this.items.find(
+        (item) =>
+          item.item_type === ModerationQueueItemType.PENDING_SCREENING_MEMBER &&
+          item.server_id === serverId &&
+          item.user_id === userId
       ) ?? null
     );
   }
@@ -201,6 +216,18 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
     );
   }
 
+  async deleteByPendingScreeningMember(
+    serverId: string,
+    userId: string
+  ): Promise<ModerationQueueItem[]> {
+    return this.deleteMatching(
+      (item) =>
+        item.item_type === ModerationQueueItemType.PENDING_SCREENING_MEMBER &&
+        item.server_id === serverId &&
+        item.user_id === userId
+    );
+  }
+
   async deleteByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]> {
     return this.deleteMatching((item) => item.report_intake_id === reportIntakeId);
   }
@@ -216,6 +243,10 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
       (data.itemType === ModerationQueueItemType.OBSERVED_ALERT_MIRROR &&
         item.item_type === data.itemType &&
         item.detection_event_id === data.detectionEventId) ||
+      (data.itemType === ModerationQueueItemType.PENDING_SCREENING_MEMBER &&
+        item.item_type === data.itemType &&
+        item.server_id === data.serverId &&
+        item.user_id === data.userId) ||
       ((data.itemType === ModerationQueueItemType.SUPPORT_THREAD_ATTENTION ||
         data.itemType === ModerationQueueItemType.REPORT_THREAD_ATTENTION) &&
         item.item_type === data.itemType &&
@@ -288,6 +319,26 @@ const buildDetectionEvent = (): DetectionEvent => ({
     observed_notification_channel_id: 'admin-channel',
     observed_notification_message_id: 'observed-message',
   },
+});
+
+const buildPendingScreeningMember = (): ServerMember => ({
+  server_id: 'guild-1',
+  user_id: 'user-pending-screening',
+  join_date: new Date('2026-06-01T10:00:00Z'),
+  reputation_score: 0,
+  case_role_active: false,
+  last_verified_at: null,
+  last_message_at: null,
+  message_count: 0,
+  verification_status: VerificationStatus.PENDING,
+  last_status_change: null,
+  discord_member_pending: true,
+  discord_member_pending_since: new Date('2026-06-01T10:00:00Z'),
+  discord_member_pending_cleared_at: null,
+  discord_member_pending_last_checked_at: new Date('2026-06-08T10:00:00Z'),
+  discord_member_pending_digest_sent_at: null,
+  created_by: null,
+  updated_by: null,
 });
 
 const buildService = (
@@ -405,6 +456,30 @@ describe('ModerationQueueService', () => {
       item_type: ModerationQueueItemType.CASE_MIRROR,
       verification_event_id: 'case-1',
     });
+  });
+
+  it('keeps long-pending screening members queued until screening clears', async () => {
+    const { channel, queueRepository, service } = buildService();
+    const member = buildPendingScreeningMember();
+
+    await service.upsertPendingScreeningMember(member, 7, new Date('2026-06-09T10:00:00Z'));
+
+    expect(channel.send).toHaveBeenCalledTimes(1);
+    expect(queueRepository.items).toHaveLength(1);
+    expect(queueRepository.items[0]).toMatchObject({
+      item_type: ModerationQueueItemType.PENDING_SCREENING_MEMBER,
+      server_id: member.server_id,
+      user_id: member.user_id,
+    });
+    expect(queueRepository.items[0].metadata).toMatchObject({
+      threshold_days: 7,
+      pending_since: member.discord_member_pending_since?.toISOString(),
+    });
+
+    await service.deletePendingScreeningMember(member.server_id, member.user_id);
+
+    expect(channel.sentMessages[0].delete).toHaveBeenCalledTimes(1);
+    expect(queueRepository.items).toHaveLength(0);
   });
 
   it('debounces support-thread attention until acknowledgement deletes the reminder only', async () => {

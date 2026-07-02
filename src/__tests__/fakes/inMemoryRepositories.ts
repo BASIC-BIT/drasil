@@ -1039,6 +1039,22 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
       verification_status:
         data.verification_status ?? existing?.verification_status ?? VerificationStatus.PENDING,
       last_status_change: data.last_status_change ?? existing?.last_status_change ?? null,
+      discord_member_pending:
+        data.discord_member_pending ?? existing?.discord_member_pending ?? false,
+      discord_member_pending_since:
+        data.discord_member_pending_since ?? existing?.discord_member_pending_since ?? null,
+      discord_member_pending_cleared_at:
+        data.discord_member_pending_cleared_at ??
+        existing?.discord_member_pending_cleared_at ??
+        null,
+      discord_member_pending_last_checked_at:
+        data.discord_member_pending_last_checked_at ??
+        existing?.discord_member_pending_last_checked_at ??
+        null,
+      discord_member_pending_digest_sent_at:
+        data.discord_member_pending_digest_sent_at ??
+        existing?.discord_member_pending_digest_sent_at ??
+        null,
       created_by: data.created_by ?? existing?.created_by ?? null,
       updated_by: data.updated_by ?? existing?.updated_by ?? null,
     };
@@ -1079,6 +1095,59 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
     };
     this.members.set(this.key(serverId, userId), updated);
     return { ...updated };
+  }
+
+  async findLongPendingDiscordMembers(
+    serverId: string,
+    pendingSinceBefore: Date,
+    limit = 100
+  ): Promise<ServerMember[]> {
+    return Array.from(this.members.values())
+      .filter(
+        (member) =>
+          member.server_id === serverId &&
+          member.discord_member_pending &&
+          member.discord_member_pending_since !== null &&
+          member.discord_member_pending_since.getTime() <= pendingSinceBefore.getTime()
+      )
+      .sort(
+        (left, right) =>
+          (left.discord_member_pending_since?.getTime() ?? 0) -
+          (right.discord_member_pending_since?.getTime() ?? 0)
+      )
+      .slice(0, limit)
+      .map((member) => ({ ...member }));
+  }
+
+  async findLongPendingDiscordMembersNeedingDigest(
+    serverId: string,
+    pendingSinceBefore: Date,
+    limit = 25
+  ): Promise<ServerMember[]> {
+    return (await this.findLongPendingDiscordMembers(serverId, pendingSinceBefore, limit)).filter(
+      (member) => member.discord_member_pending_digest_sent_at === null
+    );
+  }
+
+  async markDiscordMemberPendingDigestSent(
+    serverId: string,
+    userIds: string[],
+    sentAt: Date = new Date()
+  ): Promise<number> {
+    const userIdSet = new Set(userIds);
+    let updatedCount = 0;
+    for (const [key, member] of this.members.entries()) {
+      if (member.server_id !== serverId || !userIdSet.has(member.user_id)) {
+        continue;
+      }
+      this.members.set(key, {
+        ...member,
+        discord_member_pending_digest_sent_at: sentAt,
+        discord_member_pending_last_checked_at: sentAt,
+      });
+      updatedCount += 1;
+    }
+    return updatedCount;
   }
 
   async updateCaseRoleStatus(
@@ -1136,7 +1205,46 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
       case_role_active: false,
       reputation_score: 0,
       verification_status: VerificationStatus.PENDING,
+      discord_member_pending: false,
     });
+  }
+
+  async updateDiscordMemberPendingState(
+    serverId: string,
+    userId: string,
+    pending: boolean,
+    observedAt: Date = new Date()
+  ): Promise<{
+    member: ServerMember;
+    wasPending: boolean;
+    isPending: boolean;
+    pendingChanged: boolean;
+  } | null> {
+    const existing = this.members.get(this.key(serverId, userId));
+    if (!existing) {
+      return null;
+    }
+
+    const wasPending = existing.discord_member_pending === true;
+    const updated: ServerMember = {
+      ...existing,
+      discord_member_pending: pending,
+      discord_member_pending_since: pending
+        ? (existing.discord_member_pending_since ?? observedAt)
+        : null,
+      discord_member_pending_cleared_at:
+        !pending && wasPending ? observedAt : existing.discord_member_pending_cleared_at,
+      discord_member_pending_last_checked_at: observedAt,
+      discord_member_pending_digest_sent_at:
+        pending && !wasPending ? null : existing.discord_member_pending_digest_sent_at,
+    };
+    this.members.set(this.key(serverId, userId), updated);
+    return {
+      member: { ...updated },
+      wasPending,
+      isPending: pending,
+      pendingChanged: wasPending !== pending,
+    };
   }
 }
 

@@ -4,6 +4,13 @@ import { ServerMember, VerificationStatus } from './types'; // Import Verificati
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository'; // Keep using RepositoryError
 
+export interface DiscordMemberPendingStateUpdate {
+  member: ServerMember;
+  wasPending: boolean;
+  isPending: boolean;
+  pendingChanged: boolean;
+}
+
 /**
  * Interface for the ServerMemberRepository (Remains the same)
  */
@@ -17,6 +24,21 @@ export interface IServerMemberRepository {
   findByServer(serverId: string): Promise<ServerMember[]>;
   findByUser(userId: string): Promise<ServerMember[]>;
   findCaseRoleActiveMembers(serverId: string): Promise<ServerMember[]>;
+  findLongPendingDiscordMembers(
+    serverId: string,
+    pendingSinceBefore: Date,
+    limit?: number
+  ): Promise<ServerMember[]>;
+  findLongPendingDiscordMembersNeedingDigest(
+    serverId: string,
+    pendingSinceBefore: Date,
+    limit?: number
+  ): Promise<ServerMember[]>;
+  markDiscordMemberPendingDigestSent(
+    serverId: string,
+    userIds: string[],
+    sentAt?: Date
+  ): Promise<number>;
   updateReputationScore(
     serverId: string,
     userId: string,
@@ -32,6 +54,12 @@ export interface IServerMemberRepository {
   ): Promise<ServerMember | null>;
   incrementMessageCount(serverId: string, userId: string): Promise<ServerMember | null>;
   getOrCreateMember(serverId: string, userId: string, joinDate?: Date): Promise<ServerMember>; // Use Date for joinDate
+  updateDiscordMemberPendingState(
+    serverId: string,
+    userId: string,
+    pending: boolean,
+    observedAt?: Date
+  ): Promise<DiscordMemberPendingStateUpdate | null>;
 }
 
 /**
@@ -99,6 +127,11 @@ export class ServerMemberRepository implements IServerMemberRepository {
         message_count: data.message_count,
         verification_status: data.verification_status,
         last_status_change: data.last_status_change,
+        discord_member_pending: data.discord_member_pending,
+        discord_member_pending_since: data.discord_member_pending_since,
+        discord_member_pending_cleared_at: data.discord_member_pending_cleared_at,
+        discord_member_pending_last_checked_at: data.discord_member_pending_last_checked_at,
+        discord_member_pending_digest_sent_at: data.discord_member_pending_digest_sent_at,
         created_by: data.created_by,
         updated_by: data.updated_by,
       };
@@ -172,6 +205,76 @@ export class ServerMemberRepository implements IServerMemberRepository {
       return members as ServerMember[];
     } catch (error) {
       this.handleError(error, 'findCaseRoleActiveMembers');
+    }
+  }
+
+  async findLongPendingDiscordMembers(
+    serverId: string,
+    pendingSinceBefore: Date,
+    limit = 100
+  ): Promise<ServerMember[]> {
+    try {
+      const members = await this.prisma.server_members.findMany({
+        where: {
+          server_id: serverId,
+          discord_member_pending: true,
+          discord_member_pending_since: { lte: pendingSinceBefore },
+        },
+        orderBy: { discord_member_pending_since: 'asc' },
+        take: limit,
+      });
+      return members as ServerMember[];
+    } catch (error) {
+      this.handleError(error, 'findLongPendingDiscordMembers');
+    }
+  }
+
+  async findLongPendingDiscordMembersNeedingDigest(
+    serverId: string,
+    pendingSinceBefore: Date,
+    limit = 25
+  ): Promise<ServerMember[]> {
+    try {
+      const members = await this.prisma.server_members.findMany({
+        where: {
+          server_id: serverId,
+          discord_member_pending: true,
+          discord_member_pending_since: { lte: pendingSinceBefore },
+          discord_member_pending_digest_sent_at: null,
+        },
+        orderBy: { discord_member_pending_since: 'asc' },
+        take: limit,
+      });
+      return members as ServerMember[];
+    } catch (error) {
+      this.handleError(error, 'findLongPendingDiscordMembersNeedingDigest');
+    }
+  }
+
+  async markDiscordMemberPendingDigestSent(
+    serverId: string,
+    userIds: string[],
+    sentAt: Date = new Date()
+  ): Promise<number> {
+    if (userIds.length === 0) {
+      return 0;
+    }
+
+    try {
+      const result = await this.prisma.server_members.updateMany({
+        where: {
+          server_id: serverId,
+          user_id: { in: userIds },
+          discord_member_pending: true,
+        },
+        data: {
+          discord_member_pending_digest_sent_at: sentAt,
+          discord_member_pending_last_checked_at: sentAt,
+        },
+      });
+      return result.count;
+    } catch (error) {
+      this.handleError(error, 'markDiscordMemberPendingDigestSent');
     }
   }
 
@@ -304,7 +407,58 @@ export class ServerMemberRepository implements IServerMemberRepository {
       case_role_active: false,
       reputation_score: 0, // Default neutral score (matches schema default)
       verification_status: VerificationStatus.PENDING, // Use enum member
+      discord_member_pending: false,
     });
     // Errors from findByServerAndUser or upsertMember are already handled internally
+  }
+
+  async updateDiscordMemberPendingState(
+    serverId: string,
+    userId: string,
+    pending: boolean,
+    observedAt: Date = new Date()
+  ): Promise<DiscordMemberPendingStateUpdate | null> {
+    try {
+      const existing = await this.findByServerAndUser(serverId, userId);
+      if (!existing) {
+        return null;
+      }
+
+      const wasPending = existing.discord_member_pending === true;
+      const updatedMember = await this.prisma.server_members.update({
+        where: {
+          server_id_user_id: {
+            server_id: serverId,
+            user_id: userId,
+          },
+        },
+        data: {
+          discord_member_pending: pending,
+          discord_member_pending_since: pending
+            ? (existing.discord_member_pending_since ?? observedAt)
+            : null,
+          discord_member_pending_cleared_at:
+            !pending && wasPending ? observedAt : existing.discord_member_pending_cleared_at,
+          discord_member_pending_last_checked_at: observedAt,
+          discord_member_pending_digest_sent_at:
+            pending && !wasPending ? null : existing.discord_member_pending_digest_sent_at,
+        },
+      });
+
+      return {
+        member: updatedMember as ServerMember,
+        wasPending,
+        isPending: pending,
+        pendingChanged: wasPending !== pending,
+      };
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        console.warn(
+          `Attempted to update Discord pending state for non-existent member: Server ${serverId}, User ${userId}`
+        );
+        return null;
+      }
+      this.handleError(error, 'updateDiscordMemberPendingState');
+    }
   }
 }

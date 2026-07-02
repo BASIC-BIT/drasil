@@ -53,7 +53,7 @@ Avoid sharing `node_modules/` between worktrees.
 
 ## Safe `.env` handling
 
-`.env` is gitignored. For Drasil Dev, hydrate it from AWS Secrets Manager after dependencies are installed:
+`.env` is gitignored. For local development, hydrate it from AWS Secrets Manager after dependencies are installed:
 
 ```bash
 npm run dev:env

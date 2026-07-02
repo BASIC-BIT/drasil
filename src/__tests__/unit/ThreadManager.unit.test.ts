@@ -21,10 +21,16 @@ import {
 } from '../../utils/verificationPromptTemplate';
 import { parseAdminActionCustomId } from '../../utils/adminActionCustomIds';
 
-const buildMember = (guildId: string, userId: string, guildName = 'Test Guild'): GuildMember =>
+const buildMember = (
+  guildId: string,
+  userId: string,
+  guildName = 'Test Guild',
+  pending = false
+): GuildMember =>
   ({
     id: userId,
     joinedAt: new Date(),
+    pending,
     guild: { id: guildId, name: guildName } as Guild,
     user: {
       id: userId,
@@ -184,6 +190,32 @@ describe('ThreadManager (unit)', () => {
     });
   });
 
+  it('does not create a verification thread while the member is pending screening', async () => {
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+
+    const member = buildMember('guild-1', 'user-1', 'Test Guild', true);
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    await expect(manager.createVerificationThread(member, event)).rejects.toThrow(
+      'membership screening/onboarding'
+    );
+    expect(channel.threads.create).not.toHaveBeenCalled();
+    const storedEvent = await verificationEventRepository.findById(event.id);
+    expect(storedEvent?.thread_id).toBeNull();
+  });
+
   it('retries adding the flagged user before sending the verification prompt', async () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     (thread.members.add as jest.Mock)
@@ -290,6 +322,44 @@ describe('ThreadManager (unit)', () => {
       await expect(manager.createVerificationThread(member, event)).rejects.toThrow(
         'not that the bot lost access'
       );
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('explains pending screening when the refreshed member is still pending', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    (thread.members.add as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('Missing Access'), { code: 50001 })
+    );
+    const manager = new ThreadManager(
+      {} as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    (manager as any).wait = jest.fn().mockResolvedValue(undefined);
+    const member = buildMember('guild-1', 'user-1');
+    const pendingMember = buildMember('guild-1', 'user-1', 'Test Guild', true);
+    const fetch = jest.fn().mockResolvedValue(pendingMember);
+    (member as any).fetch = fetch;
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+
+    try {
+      await expect(manager.createVerificationThread(member, event)).rejects.toThrow(
+        'membership screening/onboarding'
+      );
+      expect(fetch).toHaveBeenCalledWith(true);
+      expect(thread.members.add).toHaveBeenCalledTimes(1);
     } finally {
       errorSpy.mockRestore();
       warnSpy.mockRestore();

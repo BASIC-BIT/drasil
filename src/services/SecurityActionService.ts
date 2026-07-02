@@ -16,7 +16,10 @@ import { INotificationManager } from './NotificationManager';
 import { DetectionResult } from './DetectionOrchestrator';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { IMessageContextRepository } from '../repositories/MessageContextRepository';
-import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
+import {
+  DiscordMemberPendingStateUpdate,
+  IServerMemberRepository,
+} from '../repositories/ServerMemberRepository';
 import {
   AdminActionType,
   DetectionEvent,
@@ -152,6 +155,11 @@ export interface ISecurityActionService {
   ): Promise<CaseNotificationRefreshResult>;
 
   repairActiveCase(member: GuildMember): Promise<ActiveCaseRepairResult>;
+
+  recordDiscordPendingMemberState(
+    member: GuildMember,
+    pending: boolean
+  ): Promise<DiscordMemberPendingStateUpdate | null>;
 
   intakeRoleMembers(options: RoleIntakeOptions): Promise<RoleIntakeResult>;
 
@@ -473,6 +481,24 @@ export class SecurityActionService implements ISecurityActionService {
       console.error('Failed to ensure entities exist:', error);
       throw error;
     }
+  }
+
+  public async recordDiscordPendingMemberState(
+    member: GuildMember,
+    pending: boolean
+  ): Promise<DiscordMemberPendingStateUpdate | null> {
+    await this.ensureEntitiesExist(
+      member.guild.id,
+      member.id,
+      member.user.username,
+      member.joinedAt?.toISOString()
+    );
+
+    return this.serverMemberRepository.updateDiscordMemberPendingState(
+      member.guild.id,
+      member.id,
+      pending
+    );
   }
 
   /**

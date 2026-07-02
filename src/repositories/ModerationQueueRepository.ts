@@ -8,6 +8,10 @@ export interface IModerationQueueRepository {
   findById(id: string): Promise<ModerationQueueItem | null>;
   findByCase(verificationEventId: string): Promise<ModerationQueueItem | null>;
   findByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem | null>;
+  findByPendingScreeningMember(
+    serverId: string,
+    userId: string
+  ): Promise<ModerationQueueItem | null>;
   findAttentionByThread(
     itemType: ModerationQueueItemType,
     sourceThreadId: string
@@ -26,6 +30,7 @@ export interface IModerationQueueRepository {
   deleteById(id: string): Promise<ModerationQueueItem | null>;
   deleteByCase(verificationEventId: string): Promise<ModerationQueueItem[]>;
   deleteByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem[]>;
+  deleteByPendingScreeningMember(serverId: string, userId: string): Promise<ModerationQueueItem[]>;
   deleteByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]>;
 }
 
@@ -82,6 +87,24 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
       return item as ModerationQueueItem | null;
     } catch (error) {
       this.handleError(error, 'findModerationQueueItemByObservedAlert');
+    }
+  }
+
+  async findByPendingScreeningMember(
+    serverId: string,
+    userId: string
+  ): Promise<ModerationQueueItem | null> {
+    try {
+      const item = await this.prisma.moderation_queue_items.findFirst({
+        where: {
+          server_id: serverId,
+          user_id: userId,
+          item_type: ModerationQueueItemType.PENDING_SCREENING_MEMBER as moderation_queue_item_type,
+        },
+      });
+      return item as ModerationQueueItem | null;
+    } catch (error) {
+      this.handleError(error, 'findModerationQueueItemByPendingScreeningMember');
     }
   }
 
@@ -200,6 +223,17 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
     });
   }
 
+  async deleteByPendingScreeningMember(
+    serverId: string,
+    userId: string
+  ): Promise<ModerationQueueItem[]> {
+    return this.deleteMany({
+      server_id: serverId,
+      user_id: userId,
+      item_type: ModerationQueueItemType.PENDING_SCREENING_MEMBER as moderation_queue_item_type,
+    });
+  }
+
   async deleteByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]> {
     return this.deleteMany({ report_intake_id: reportIntakeId });
   }
@@ -230,6 +264,9 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
     }
     if (data.itemType === ModerationQueueItemType.OBSERVED_ALERT_MIRROR && data.detectionEventId) {
       return this.findByObservedAlert(data.detectionEventId);
+    }
+    if (data.itemType === ModerationQueueItemType.PENDING_SCREENING_MEMBER) {
+      return this.findByPendingScreeningMember(data.serverId, data.userId);
     }
     if (
       (data.itemType === ModerationQueueItemType.SUPPORT_THREAD_ATTENTION ||
