@@ -20,6 +20,7 @@ import {
   ModerationQueueItem,
   ModerationQueueItemType,
   ReportIntake,
+  ServerMember,
   VerificationEvent,
   VerificationStatus,
 } from '../repositories/types';
@@ -55,6 +56,12 @@ export interface IModerationQueueService {
   upsertObservedAlertMirror(detectionEvent: DetectionEvent): Promise<void>;
   upsertObservedAlertMirrorById(detectionEventId: string): Promise<void>;
   deleteObservedAlertMirror(detectionEventId: string): Promise<void>;
+  upsertPendingScreeningMember(
+    member: ServerMember,
+    thresholdDays: number,
+    now?: Date
+  ): Promise<void>;
+  deletePendingScreeningMember(serverId: string, userId: string): Promise<void>;
   recordSupportThreadAttention(
     verificationEvent: VerificationEvent,
     message: Message
@@ -218,6 +225,55 @@ export class ModerationQueueService implements IModerationQueueService {
 
   public async deleteObservedAlertMirror(detectionEventId: string): Promise<void> {
     const items = await this.moderationQueueRepository.deleteByObservedAlert(detectionEventId);
+    await Promise.all(items.map((item) => this.deleteQueueMessage(item)));
+  }
+
+  public async upsertPendingScreeningMember(
+    member: ServerMember,
+    thresholdDays: number,
+    now: Date = new Date()
+  ): Promise<void> {
+    if (!member.discord_member_pending || !member.discord_member_pending_since) {
+      await this.deletePendingScreeningMember(member.server_id, member.user_id);
+      return;
+    }
+
+    const serverConfig = await this.configService.getServerConfig(member.server_id);
+    const queueChannel = await this.getQueueChannel(serverConfig.settings);
+    if (!queueChannel) {
+      return;
+    }
+
+    const item = await this.moderationQueueRepository.upsert({
+      serverId: member.server_id,
+      userId: member.user_id,
+      itemType: ModerationQueueItemType.PENDING_SCREENING_MEMBER,
+      metadata: this.toJson({
+        pending_since: member.discord_member_pending_since.toISOString(),
+        threshold_days: thresholdDays,
+        last_checked_at: now.toISOString(),
+      }),
+    });
+
+    const message = await this.sendOrEditQueueMessage(
+      item,
+      queueChannel,
+      this.buildPendingScreeningPayload(member, thresholdDays, now)
+    );
+    if (message) {
+      await this.moderationQueueRepository.updateDiscordMessage(
+        item.id,
+        message.channelId,
+        message.id
+      );
+    }
+  }
+
+  public async deletePendingScreeningMember(serverId: string, userId: string): Promise<void> {
+    const items = await this.moderationQueueRepository.deleteByPendingScreeningMember(
+      serverId,
+      userId
+    );
     await Promise.all(items.map((item) => this.deleteQueueMessage(item)));
   }
 
@@ -546,6 +602,59 @@ export class ModerationQueueService implements IModerationQueueService {
             .setURL(input.message.url)
         ),
       ],
+    };
+  }
+
+  private buildPendingScreeningPayload(
+    member: ServerMember,
+    thresholdDays: number,
+    now: Date
+  ): QueueMessagePayload {
+    const pendingSince = member.discord_member_pending_since;
+    const pendingDays = pendingSince
+      ? Math.floor((now.getTime() - pendingSince.getTime()) / (24 * 60 * 60 * 1000))
+      : null;
+    const embed = new EmbedBuilder()
+      .setColor(0xffc107)
+      .setTitle('Long-Pending Discord Screening')
+      .setDescription(
+        `<@${member.user_id}> has been pending Discord membership screening/onboarding longer than the configured threshold.`
+      )
+      .addFields(
+        {
+          name: 'User',
+          value: `<@${member.user_id}> (\`${member.user_id}\`)`,
+          inline: false,
+        },
+        {
+          name: 'Pending Since',
+          value: this.formatTimestamp(pendingSince),
+          inline: true,
+        },
+        {
+          name: 'Age',
+          value:
+            pendingDays === null ? 'Unknown' : `${pendingDays} day${pendingDays === 1 ? '' : 's'}`,
+          inline: true,
+        },
+        {
+          name: 'Threshold',
+          value: `${thresholdDays} day${thresholdDays === 1 ? '' : 's'}`,
+          inline: true,
+        },
+        {
+          name: 'Recommended Action',
+          value:
+            'Review Discord membership screening/onboarding state. This item remains until screening clears or the member leaves.',
+          inline: false,
+        }
+      )
+      .setTimestamp(now);
+
+    return {
+      allowedMentions: { parse: [] },
+      embeds: [embed],
+      components: [],
     };
   }
 

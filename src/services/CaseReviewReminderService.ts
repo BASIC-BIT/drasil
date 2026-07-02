@@ -1,10 +1,11 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, Client, ThreadChannel } from 'discord.js';
-import { inject, injectable } from 'inversify';
+import { inject, injectable, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { IServerRepository } from '../repositories/ServerRepository';
+import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
-import { Server, VerificationEvent, VerificationStatus } from '../repositories/types';
+import { Server, ServerMember, VerificationEvent, VerificationStatus } from '../repositories/types';
 import { CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID } from '../utils/caseReviewDigestCustomIds';
 import {
   CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY,
@@ -19,6 +20,8 @@ import {
 } from '../utils/caseReviewReminderSchedule';
 import { markSupportThreadReminderSent } from '../utils/supportThreadReminderState';
 import { buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
+import { getPendingScreeningSettings } from '../utils/pendingScreeningSettings';
+import { IModerationQueueService } from './ModerationQueueService';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 import { REPORT_REVIEW_THREAD_TYPE, VERIFICATION_THREAD_TYPE_METADATA_KEY } from './ThreadManager';
 
@@ -26,6 +29,8 @@ const CASE_REVIEW_REMINDER_INTERVAL_MS = 15 * 60 * 1000;
 const CASE_REVIEW_REMINDER_MAX_VISIBLE_CASES = 10;
 const CASE_REVIEW_DIGEST_MESSAGE_MAX_LENGTH = 1900;
 const CASE_REVIEW_DIGEST_CONTINUED_HEADING = 'Case review reminder continued';
+const PENDING_SCREENING_DIGEST_MAX_MEMBERS = 25;
+const PENDING_SCREENING_QUEUE_SYNC_MAX_MEMBERS = 100;
 
 export interface ICaseReviewReminderService {
   start(): void;
@@ -44,7 +49,13 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     @inject(TYPES.VerificationEventRepository)
     private readonly verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.ConfigService) private readonly configService: IConfigService,
-    @inject(TYPES.DiscordClient) private readonly client: Client
+    @inject(TYPES.DiscordClient) private readonly client: Client,
+    @inject(TYPES.ServerMemberRepository)
+    @optional()
+    private readonly serverMemberRepository?: IServerMemberRepository,
+    @inject(TYPES.ModerationQueueService)
+    @optional()
+    private readonly moderationQueueService?: IModerationQueueService
   ) {}
 
   public start(): void {
@@ -89,6 +100,8 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
   }
 
   private async processServer(server: Server, now: Date): Promise<void> {
+    await this.processLongPendingScreeningMembers(server, now);
+
     const settings = getCaseReviewReminderSettings(server.settings);
     if (!settings.enabled) {
       return;
@@ -136,6 +149,131 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       now,
       adminDigestSentAt ?? lastAdminDigestAt
     );
+  }
+
+  private async processLongPendingScreeningMembers(server: Server, now: Date): Promise<void> {
+    if (!this.serverMemberRepository) {
+      return;
+    }
+
+    const settings = getPendingScreeningSettings(server.settings);
+    if (!settings.enabled) {
+      return;
+    }
+
+    const thresholdAt = new Date(now.getTime() - settings.longPendingDays * 24 * 60 * 60 * 1000);
+    const longPendingMembers = await this.serverMemberRepository.findLongPendingDiscordMembers(
+      server.guild_id,
+      thresholdAt,
+      PENDING_SCREENING_QUEUE_SYNC_MAX_MEMBERS
+    );
+
+    if (this.moderationQueueService) {
+      for (const member of longPendingMembers) {
+        await this.moderationQueueService
+          .upsertPendingScreeningMember(member, settings.longPendingDays, now)
+          .catch((error) => {
+            console.warn(
+              `Failed to mirror long-pending screening member ${member.user_id} to the moderation queue:`,
+              error
+            );
+          });
+      }
+    }
+
+    const digestMembers =
+      await this.serverMemberRepository.findLongPendingDiscordMembersNeedingDigest(
+        server.guild_id,
+        thresholdAt,
+        PENDING_SCREENING_DIGEST_MAX_MEMBERS
+      );
+    if (digestMembers.length === 0) {
+      return;
+    }
+
+    const sent = await this.sendPendingScreeningDigest(
+      server,
+      digestMembers,
+      settings.longPendingDays,
+      now
+    ).catch((error) => {
+      console.warn(`Failed to send pending screening digest for guild ${server.guild_id}:`, error);
+      return false;
+    });
+    if (!sent) {
+      return;
+    }
+
+    await this.serverMemberRepository.markDiscordMemberPendingDigestSent(
+      server.guild_id,
+      digestMembers.map((member) => member.user_id),
+      now
+    );
+  }
+
+  private async sendPendingScreeningDigest(
+    server: Server,
+    members: ServerMember[],
+    thresholdDays: number,
+    now: Date
+  ): Promise<boolean> {
+    const channel = await this.configService.getAdminChannel(server.guild_id);
+    if (!channel) {
+      return false;
+    }
+
+    const roleIds = this.presentationBuilder.getCaseNotificationRoleIds(server);
+    const messages = this.splitDigestLines(
+      this.buildPendingScreeningDigestLines(
+        members,
+        thresholdDays,
+        now,
+        this.presentationBuilder.formatRoleMentions(roleIds)
+      )
+    );
+
+    for (let index = 0; index < messages.length; index += 1) {
+      await channel.send({
+        content: messages[index],
+        allowedMentions: this.presentationBuilder.createAdminAllowedMentions(
+          index === 0 ? roleIds : []
+        ),
+      });
+    }
+
+    return messages.length > 0;
+  }
+
+  private buildPendingScreeningDigestLines(
+    members: ServerMember[],
+    thresholdDays: number,
+    now: Date,
+    roleMentions = ''
+  ): string[] {
+    const heading = roleMentions
+      ? `Membership screening reminder ${roleMentions}`
+      : 'Membership screening reminder';
+    const lines = [
+      heading,
+      `${members.length} member${members.length === 1 ? '' : 's'} crossed the ${thresholdDays}-day Discord membership screening/onboarding threshold. This digest is sent once per pending episode; moderation queue items remain until screening clears or the member leaves.`,
+      '',
+    ];
+
+    for (const member of members) {
+      lines.push(this.formatPendingScreeningDigestLine(member, now));
+    }
+
+    return lines;
+  }
+
+  private formatPendingScreeningDigestLine(member: ServerMember, now: Date): string {
+    const pendingSince = member.discord_member_pending_since;
+    const pendingDays = pendingSince
+      ? Math.floor((now.getTime() - pendingSince.getTime()) / (24 * 60 * 60 * 1000))
+      : null;
+    const sinceText = pendingSince ? this.formatTimestamp(pendingSince) : 'unknown start time';
+    const ageText = pendingDays === null ? 'unknown age' : `${pendingDays}d`;
+    return `- <@${member.user_id}> (\`${member.user_id}\`) pending since ${sinceText}; age ${ageText}.`;
   }
 
   private shouldSendDigest(lastSentAt: Date | null, now: Date, repeatHours: number): boolean {

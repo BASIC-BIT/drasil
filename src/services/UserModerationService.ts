@@ -2019,6 +2019,20 @@ export class UserModerationService implements IUserModerationService {
         (event) => event.status === VerificationStatus.PENDING
       );
       const occurredAt = new Date();
+      await this.serverMemberRepository.updateDiscordMemberPendingState(
+        member.guild.id,
+        member.id,
+        false,
+        occurredAt
+      );
+      await this.moderationQueueService
+        ?.deletePendingScreeningMember(member.guild.id, member.id)
+        .catch((error) => {
+          console.warn(
+            `Failed to delete pending-screening queue item for ${member.id} in guild ${member.guild.id}:`,
+            error
+          );
+        });
       const outcomeMetadata = this.buildOutcomeMetadata(
         {
           source_detail: 'guildMemberRemove',

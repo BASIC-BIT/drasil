@@ -505,6 +505,19 @@ export class ThreadManager implements IThreadManager {
     );
   }
 
+  private isPendingGuildMember(member: GuildMember): boolean {
+    return (member as { pending?: boolean }).pending === true;
+  }
+
+  private buildPendingMemberThreadAddError(member: GuildMember, error?: unknown): Error {
+    const originalError = error ? ` Original Discord error: ${this.getErrorMessage(error)}` : '';
+    return new Error(
+      `Discord denied adding ${member.id} to the private verification thread because the user is still pending Discord membership screening/onboarding for this server. ` +
+        'Pending members cannot be added to private threads even when the case role and parent-channel permissions look correct. ' +
+        `Have the user complete server screening/onboarding, then run case repair; until then, use moderator-only case actions.${originalError}`
+    );
+  }
+
   private getThreadParentId(thread: ThreadChannel): string | null {
     return (thread as { parentId?: string | null }).parentId ?? null;
   }
@@ -543,6 +556,10 @@ export class ThreadManager implements IThreadManager {
   ): Error {
     if (!this.isMissingAccessError(error)) {
       return error instanceof Error ? error : new Error(this.getErrorMessage(error));
+    }
+
+    if (this.isPendingGuildMember(member)) {
+      return this.buildPendingMemberThreadAddError(member, error);
     }
 
     const parentId = parentChannel?.id ?? this.getThreadParentId(thread) ?? 'unknown';
@@ -612,6 +629,10 @@ export class ThreadManager implements IThreadManager {
     let latestParentChannel = parentChannel ?? this.getThreadParentChannel(thread);
     let latestCanViewParent = this.canMemberViewParentChannel(latestMember, latestParentChannel);
 
+    if (this.isPendingGuildMember(latestMember)) {
+      throw this.buildPendingMemberThreadAddError(latestMember);
+    }
+
     try {
       await thread.members.add(member.id);
       return;
@@ -629,8 +650,12 @@ export class ThreadManager implements IThreadManager {
       latestParentChannel = await this.refreshParentChannel(latestParentChannel);
       latestCanViewParent = this.canMemberViewParentChannel(latestMember, latestParentChannel);
 
+      if (this.isPendingGuildMember(latestMember)) {
+        throw this.buildPendingMemberThreadAddError(latestMember, lastError);
+      }
+
       try {
-        await thread.members.add(member.id);
+        await thread.members.add(latestMember.id);
         return;
       } catch (error) {
         lastError = error;
@@ -751,6 +776,10 @@ export class ThreadManager implements IThreadManager {
     if (!channel) {
       console.error('No verification or admin channel ID configured');
       return null;
+    }
+
+    if (this.isPendingGuildMember(member)) {
+      throw this.buildPendingMemberThreadAddError(member);
     }
 
     let setupStage = 'prepare verification thread records';

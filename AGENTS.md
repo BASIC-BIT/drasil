@@ -169,6 +169,11 @@ Operating principles:
 - Verify claims with code or repo files; avoid guessing.
 - Never add secrets/credentials to git.
 - Public posts: if the agent drafts text that will be posted on a public forum (GitHub issues/PRs, release notes, etc.), prefix the content with "[AGENT]" so it's clear it was written by automation.
+- Public posts, docs, code identifiers, and release/PR/issue text must not name private Discord
+  servers, guilds, communities, customers, or production environments. Use generic labels such as
+  "a production Discord server", "a controlled production server", or "an owner-managed rollout
+  environment". Before writing or editing public prose, consult `AGENTS.local.md` when present for
+  local-only private names that must be obfuscated.
 
 Product copy:
 
@@ -194,6 +199,12 @@ Product copy:
   is a short reminder in every repo session; demotion path is moving examples to a product-copy doc if
   this grows; verification signal is future Drasil user-facing copy avoiding raw "AI" labels such as
   "AI-extracted display name" while keeping admin diagnostics appropriately toned.
+- Promotion note: current source is public GitHub issue scrub on 2026-06-27; target is repo
+  `AGENTS.md` plus gitignored `AGENTS.local.md` because private server names should never leak into
+  Drasil public issues, PRs, docs, release notes, or identifiers. Over-promotion cost is one short
+  public-prose privacy reminder; demotion path is moving examples into local-only guidance if noisy;
+  verification signal is future public prose using generic server/environment labels and checking
+  `AGENTS.local.md` for private-name denylist entries.
 
 Clean code:
 
