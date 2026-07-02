@@ -1099,6 +1099,111 @@ describe('EventHandler (unit)', () => {
     );
   });
 
+  it.each([
+    ['message deletion is disabled', { message_deletion_enabled: false }],
+    ['message watchlist is disabled', { message_deletion_watchlist_enabled: false }],
+  ])('does not load global watchlist rows when %s', async (_label, settings) => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: GLOBAL_WATCHLIST_MESSAGE,
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'notify_only',
+          min_confidence_threshold: 70,
+          ...settings,
+        },
+      }),
+    };
+    const globalMessageWatchlistRepository = buildGlobalWatchlistRepository();
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      globalMessageWatchlistRepository,
+    });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.content = GLOBAL_WATCHLIST_MESSAGE;
+
+    await (handler as any).handleMessage(message);
+
+    expect(globalMessageWatchlistRepository.findEnabled).not.toHaveBeenCalled();
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      GLOBAL_WATCHLIST_MESSAGE,
+      expect.any(Object)
+    );
+  });
+
+  it('retries global watchlist loading after an initial database failure', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const detectionOrchestrator = {
+        detectMessage: jest.fn().mockResolvedValue({
+          label: 'OK',
+          confidence: 0,
+          reasons: [],
+          triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+          triggerContent: GLOBAL_WATCHLIST_MESSAGE,
+        }),
+        detectNewJoin: jest.fn(),
+      };
+      const configService = {
+        initialize: jest.fn().mockResolvedValue(undefined),
+        getCachedServerConfig: jest.fn().mockReturnValue({}),
+        getServerConfig: jest.fn().mockResolvedValue({
+          settings: {
+            detection_response_mode: 'restrict',
+            min_confidence_threshold: 70,
+          },
+        }),
+      };
+      const securityActionService = {
+        handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+        observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+        recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+      };
+      const globalMessageWatchlistRepository = {
+        findEnabled: jest
+          .fn()
+          .mockRejectedValueOnce(new Error('DB down'))
+          .mockResolvedValueOnce([GLOBAL_WATCHLIST_ENTRY]),
+      };
+      const handler = buildHandler({
+        detectionOrchestrator,
+        configService,
+        securityActionService,
+        globalMessageWatchlistRepository,
+      });
+      const firstMessage = buildMessage(new PermissionsBitField()) as any;
+      firstMessage.content = GLOBAL_WATCHLIST_MESSAGE;
+      const secondMessage = buildMessage(new PermissionsBitField()) as any;
+      secondMessage.content = GLOBAL_WATCHLIST_MESSAGE;
+
+      await (handler as any).handleMessage(firstMessage);
+      await (handler as any).handleMessage(secondMessage);
+
+      expect(globalMessageWatchlistRepository.findEnabled).toHaveBeenCalledTimes(2);
+      expect(detectionOrchestrator.detectMessage).toHaveBeenCalledTimes(1);
+      expect(securityActionService.handleSuspiciousMessage).toHaveBeenCalledWith(
+        secondMessage.member,
+        expect.objectContaining({ triggerSource: DetectionType.PATTERN_MATCH }),
+        secondMessage
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('routes non-staff watchlist matches to restricted source-message deletion handling', async () => {
     const detectionOrchestrator = {
       detectMessage: jest.fn(),

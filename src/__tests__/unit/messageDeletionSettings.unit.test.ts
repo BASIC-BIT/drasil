@@ -48,6 +48,26 @@ describe('messageDeletionSettings (unit)', () => {
     );
   });
 
+  it('keeps disabled global IDs that no longer map to enabled entries', () => {
+    const settings = getMessageDeletionSettings(
+      {
+        message_deletion_watchlist_disabled_default_ids: [
+          'old-global-entry',
+          'global-video-link-entry',
+        ],
+      },
+      [globalWatchlistEntry]
+    );
+
+    expect(settings.disabledDefaultWatchlistEntryIds).toEqual([
+      'old-global-entry',
+      'global-video-link-entry',
+    ]);
+    expect(findMessageWatchlistMatch({ content: 'visit https://riskydomain.test' }, settings)).toBe(
+      null
+    );
+  });
+
   it('normalizes custom terms and applies the same link or video gate', () => {
     const settings = getMessageDeletionSettings({
       message_deletion_watchlist_custom_terms: ['  BadDomain.test ', 'baddomain.test'],

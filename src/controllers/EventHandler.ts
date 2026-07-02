@@ -141,6 +141,10 @@ export class EventHandler implements IEventHandler {
   private lastMessageContextPruneAt = 0;
   private globalMessageWatchlistCache: readonly GlobalMessageWatchlistEntry[] = [];
   private globalMessageWatchlistLoadedAt = 0;
+  private globalMessageWatchlistHasLoaded = false;
+  private globalMessageWatchlistLoadPromise: Promise<
+    readonly GlobalMessageWatchlistEntry[]
+  > | null = null;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -335,11 +339,16 @@ export class EventHandler implements IEventHandler {
         return;
       }
 
-      const globalMessageWatchlistEntries = await this.getGlobalMessageWatchlistEntries();
-      const messageDeletionSettings = getMessageDeletionSettings(
-        serverConfig.settings,
-        globalMessageWatchlistEntries
-      );
+      let messageDeletionSettings = getMessageDeletionSettings(serverConfig.settings);
+      if (messageDeletionSettings.enabled && messageDeletionSettings.watchlistEnabled) {
+        const globalMessageWatchlistEntries = await this.getGlobalMessageWatchlistEntries();
+        if (globalMessageWatchlistEntries.length > 0) {
+          messageDeletionSettings = getMessageDeletionSettings(
+            serverConfig.settings,
+            globalMessageWatchlistEntries
+          );
+        }
+      }
       const messageAttachments = messageAttachmentsToReportMetadata(message);
       const watchlistMatch = findMessageWatchlistMatch(
         { content, attachments: messageAttachments },
@@ -449,15 +458,31 @@ export class EventHandler implements IEventHandler {
       return this.globalMessageWatchlistCache;
     }
 
+    this.globalMessageWatchlistLoadPromise ??= this.refreshGlobalMessageWatchlistEntries();
+    return this.globalMessageWatchlistLoadPromise;
+  }
+
+  private async refreshGlobalMessageWatchlistEntries(): Promise<
+    readonly GlobalMessageWatchlistEntry[]
+  > {
+    if (!this.globalMessageWatchlistRepository) {
+      return [];
+    }
+
     try {
       const entries = await this.globalMessageWatchlistRepository.findEnabled();
       this.globalMessageWatchlistCache = entries;
-      this.globalMessageWatchlistLoadedAt = now;
+      this.globalMessageWatchlistLoadedAt = Date.now();
+      this.globalMessageWatchlistHasLoaded = true;
       return entries;
     } catch (error) {
-      this.globalMessageWatchlistLoadedAt = now;
+      if (this.globalMessageWatchlistHasLoaded) {
+        this.globalMessageWatchlistLoadedAt = Date.now();
+      }
       console.warn('Failed to load global message watchlist entries; using stale cache.', error);
       return this.globalMessageWatchlistCache;
+    } finally {
+      this.globalMessageWatchlistLoadPromise = null;
     }
   }
 

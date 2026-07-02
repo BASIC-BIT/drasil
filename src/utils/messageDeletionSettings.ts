@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import {
   MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS,
   MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH,
+  MESSAGE_DELETION_MAX_DISABLED_DEFAULT_IDS,
 } from '../../packages/contracts/src/setup';
 import type { ServerSettings } from '../repositories/types';
 import type { ReportAttachmentMetadata } from './reportAiSettings';
@@ -169,7 +170,7 @@ export function getMessageDeletionSettings(
   const globalEntries = buildGlobalWatchlistEntries(globalWatchlistEntries);
   const disabledDefaultWatchlistEntryIds = readIdArray(
     settings?.[MESSAGE_DELETION_WATCHLIST_DISABLED_DEFAULT_IDS_SETTING_KEY],
-    globalEntries.length
+    MESSAGE_DELETION_MAX_DISABLED_DEFAULT_IDS
   );
   const disabledDefaults = new Set(disabledDefaultWatchlistEntryIds);
   const customWatchlistTerms = readStringArray(

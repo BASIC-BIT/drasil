@@ -9,6 +9,7 @@ CREATE TABLE "public"."global_message_watchlist_entries" (
   "created_by" text,
   "updated_by" text,
   CONSTRAINT "global_message_watchlist_entries_id_not_blank" CHECK (length(btrim("id")) > 0),
+  CONSTRAINT "global_message_watchlist_entries_id_canonical" CHECK ("id" = lower(btrim("id"))),
   CONSTRAINT "global_message_watchlist_entries_label_not_blank" CHECK (length(btrim("label")) > 0),
   CONSTRAINT "global_message_watchlist_entries_term_not_blank" CHECK (length(btrim("term")) > 0),
   CONSTRAINT "global_message_watchlist_entries_term_length" CHECK (length(btrim("term")) <= 120)
