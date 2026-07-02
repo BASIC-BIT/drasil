@@ -1,14 +1,10 @@
 import { createHash } from 'crypto';
 import {
-  CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
-  MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH,
-  MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES as SHARED_MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES,
   MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS,
+  MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH,
 } from '../../packages/contracts/src/setup';
 import type { ServerSettings } from '../repositories/types';
 import type { ReportAttachmentMetadata } from './reportAiSettings';
-
-export { CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID } from '../../packages/contracts/src/setup';
 
 export const MESSAGE_DELETION_ENABLED_SETTING_KEY = 'message_deletion_enabled';
 export const MESSAGE_DELETION_SOURCE_MESSAGE_ENABLED_SETTING_KEY =
@@ -22,20 +18,13 @@ export const MESSAGE_DELETION_WATCHLIST_CUSTOM_TERMS_SETTING_KEY =
 const URL_PATTERN = /https?:\/\/\S+|www\.\S+/i;
 const VIDEO_FILENAME_PATTERN = /\.(?:mp4|mov|m4v|webm)(?:[?#].*)?$/i;
 const DOMAIN_TERM_PATTERN = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
-const CODE_DEFINED_VIDEO_LINK_INDICATOR_TERM = String.fromCharCode(
-  119,
-  105,
-  99,
-  107,
-  101,
-  100,
-  112,
-  114,
-  111,
-  120,
-  121
-);
-const CODE_DEFINED_VIDEO_LINK_MATCH_LABEL = 'code-defined video/link indicator';
+
+export interface GlobalMessageWatchlistEntryInput {
+  readonly id: string;
+  readonly label: string;
+  readonly term: string;
+  readonly requiresLinkOrVideo: boolean;
+}
 
 export interface MessageWatchlistEntry {
   readonly id: string;
@@ -64,24 +53,17 @@ export interface MessageWatchlistInput {
   readonly attachments?: readonly ReportAttachmentMetadata[];
 }
 
-export const DEFAULT_MESSAGE_WATCHLIST_ENTRIES: readonly MessageWatchlistEntry[] = [
-  ...SHARED_MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES.map((entry) => ({
-    id: entry.id,
-    label: entry.label,
-    terms:
-      entry.id === CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID
-        ? [CODE_DEFINED_VIDEO_LINK_INDICATOR_TERM]
-        : [],
-    matchLabel:
-      entry.id === CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID
-        ? CODE_DEFINED_VIDEO_LINK_MATCH_LABEL
-        : entry.label,
-    requiresLinkOrVideo: entry.requiresLinkOrVideo,
-  })),
-];
-
 function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
+}
+
+function normalizeId(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const id = value.trim().toLowerCase();
+  return id ? id : null;
 }
 
 function normalizeTerm(value: unknown): string | null {
@@ -98,7 +80,7 @@ function normalizeTerm(value: unknown): string | null {
 }
 
 function readStringArray(value: unknown, maxItems: number): string[] {
-  if (!Array.isArray(value)) {
+  if (!Array.isArray(value) || maxItems <= 0) {
     return [];
   }
 
@@ -120,6 +102,56 @@ function readStringArray(value: unknown, maxItems: number): string[] {
   return values;
 }
 
+function readIdArray(value: unknown, maxItems: number): string[] {
+  if (!Array.isArray(value) || maxItems <= 0) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const item of value) {
+    const normalized = normalizeId(item);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    values.push(normalized);
+    if (values.length >= maxItems) {
+      break;
+    }
+  }
+
+  return values;
+}
+
+function buildGlobalWatchlistEntries(
+  entries: readonly GlobalMessageWatchlistEntryInput[]
+): MessageWatchlistEntry[] {
+  const seen = new Set<string>();
+  const normalizedEntries: MessageWatchlistEntry[] = [];
+
+  for (const entry of entries) {
+    const id = normalizeId(entry.id);
+    const term = normalizeTerm(entry.term);
+    const label = entry.label.trim();
+    if (!id || !term || !label || seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    normalizedEntries.push({
+      id,
+      label,
+      terms: [term],
+      matchLabel: label,
+      requiresLinkOrVideo: entry.requiresLinkOrVideo,
+    });
+  }
+
+  return normalizedEntries;
+}
+
 function buildCustomWatchlistEntries(terms: readonly string[]): MessageWatchlistEntry[] {
   return terms.map((term) => ({
     id: `custom-${createHash('sha256').update(term).digest('hex').slice(0, 12)}`,
@@ -131,11 +163,13 @@ function buildCustomWatchlistEntries(terms: readonly string[]): MessageWatchlist
 }
 
 export function getMessageDeletionSettings(
-  settings: ServerSettings | undefined
+  settings: ServerSettings | undefined,
+  globalWatchlistEntries: readonly GlobalMessageWatchlistEntryInput[] = []
 ): MessageDeletionSettings {
-  const disabledDefaultWatchlistEntryIds = readStringArray(
+  const globalEntries = buildGlobalWatchlistEntries(globalWatchlistEntries);
+  const disabledDefaultWatchlistEntryIds = readIdArray(
     settings?.[MESSAGE_DELETION_WATCHLIST_DISABLED_DEFAULT_IDS_SETTING_KEY],
-    DEFAULT_MESSAGE_WATCHLIST_ENTRIES.length
+    globalEntries.length
   );
   const disabledDefaults = new Set(disabledDefaultWatchlistEntryIds);
   const customWatchlistTerms = readStringArray(
@@ -153,7 +187,7 @@ export function getMessageDeletionSettings(
     disabledDefaultWatchlistEntryIds,
     customWatchlistTerms,
     watchlistEntries: [
-      ...DEFAULT_MESSAGE_WATCHLIST_ENTRIES.filter((entry) => !disabledDefaults.has(entry.id)),
+      ...globalEntries.filter((entry) => !disabledDefaults.has(entry.id)),
       ...buildCustomWatchlistEntries(customWatchlistTerms),
     ],
   };

@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES } from '@drasil/contracts';
 import { saveGuildSetup } from './actions';
 import { AccountControl } from '@/components/AccountControl';
 import { InstallInvitePanel } from '@/components/InstallInvitePanel';
@@ -68,9 +67,6 @@ export default async function GuildSetupPage({ params }: PageProps) {
     server?.settings.report_ai_max_action === 'restrict'
       ? 'open_case'
       : (server?.settings.report_ai_max_action ?? 'hints');
-  const disabledWatchlistDefaultIds = new Set(
-    server?.settings.message_deletion_watchlist_disabled_default_ids ?? []
-  );
   const customWatchlistTerms = server?.settings.message_deletion_watchlist_custom_terms ?? [];
 
   return (
@@ -332,23 +328,6 @@ export default async function GuildSetupPage({ params }: PageProps) {
         </div>
         <div className="form-grid">
           <div className="field">
-            <label>Code-defined watchlist defaults</label>
-            <div className="stack compact-heading">
-              {MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES.map((entry) => (
-                <label key={entry.id}>
-                  <input
-                    defaultChecked={!disabledWatchlistDefaultIds.has(entry.id)}
-                    name="messageDeletionDefaultWatchlistIds"
-                    type="checkbox"
-                    value={entry.id}
-                  />{' '}
-                  {entry.label}
-                  <span className="muted"> {entry.detail}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="field">
             <label htmlFor="messageDeletionWatchlistCustomTerms">
               Custom high-confidence watchlist terms
             </label>
@@ -360,7 +339,8 @@ export default async function GuildSetupPage({ params }: PageProps) {
               rows={4}
             />
             <p className="muted">
-              Custom terms also require a link or video before automatic deletion is considered.
+              Custom terms require a link or video before automatic deletion is considered. Global
+              watchlist terms are managed centrally in the database, not in bot source code.
             </p>
           </div>
         </div>

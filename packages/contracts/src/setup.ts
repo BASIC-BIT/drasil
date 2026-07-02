@@ -13,7 +13,6 @@ export const reportAiMaxActionSchema = z.enum(['off', 'hints', 'open_case', 'res
 export const caseResponderRoutingModeSchema = z.enum(['off', 'ping_only', 'ping_and_add_members']);
 export const MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS = 25;
 export const MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH = 120;
-export const CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID = 'known-video-link-campaign';
 
 export interface MessageDeletionDefaultWatchlistEntry {
   readonly id: string;
@@ -23,15 +22,7 @@ export interface MessageDeletionDefaultWatchlistEntry {
 }
 
 export const MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES: readonly MessageDeletionDefaultWatchlistEntry[] =
-  [
-    {
-      id: CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
-      label: 'Known video/link spam campaign',
-      detail:
-        'Matches a code-defined indicator only when the message also contains a link or video.',
-      requiresLinkOrVideo: true,
-    },
-  ];
+  [];
 
 export const messageDeletionWatchlistDefaultIdsSchema = z.array(z.string()).max(10);
 export const messageDeletionWatchlistCustomTermsSchema = z

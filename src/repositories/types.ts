@@ -104,6 +104,13 @@ export interface ServerSettings {
   setup_warning_last_fingerprint?: string | null;
 }
 
+export interface GlobalMessageWatchlistEntry {
+  id: string;
+  label: string;
+  term: string;
+  requiresLinkOrVideo: boolean;
+}
+
 /**
  * User entity across servers
  */
