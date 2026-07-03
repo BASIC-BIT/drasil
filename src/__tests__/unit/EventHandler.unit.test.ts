@@ -1157,7 +1157,9 @@ describe('EventHandler (unit)', () => {
     );
   });
 
-  it('retries global watchlist loading after an initial database failure', async () => {
+  it('briefly backs off after an initial global watchlist database failure', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const detectionOrchestrator = {
@@ -1201,19 +1203,24 @@ describe('EventHandler (unit)', () => {
       firstMessage.content = GLOBAL_WATCHLIST_MESSAGE;
       const secondMessage = buildMessage(new PermissionsBitField()) as any;
       secondMessage.content = GLOBAL_WATCHLIST_MESSAGE;
+      const thirdMessage = buildMessage(new PermissionsBitField()) as any;
+      thirdMessage.content = GLOBAL_WATCHLIST_MESSAGE;
 
       await (handler as any).handleMessage(firstMessage);
       await (handler as any).handleMessage(secondMessage);
+      jest.advanceTimersByTime(5_001);
+      await (handler as any).handleMessage(thirdMessage);
 
       expect(globalMessageWatchlistRepository.findEnabled).toHaveBeenCalledTimes(2);
-      expect(detectionOrchestrator.detectMessage).toHaveBeenCalledTimes(1);
+      expect(detectionOrchestrator.detectMessage).toHaveBeenCalledTimes(2);
       expect(securityActionService.handleSuspiciousMessage).toHaveBeenCalledWith(
-        secondMessage.member,
+        thirdMessage.member,
         expect.objectContaining({ triggerSource: DetectionType.PATTERN_MATCH }),
-        secondMessage
+        thirdMessage
       );
     } finally {
       warnSpy.mockRestore();
+      jest.useRealTimers();
     }
   });
 
