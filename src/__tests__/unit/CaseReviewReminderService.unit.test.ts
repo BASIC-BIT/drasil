@@ -1,9 +1,16 @@
 import type { Client, TextChannel, ThreadChannel } from 'discord.js';
 import type { IConfigService } from '../../config/ConfigService';
 import type { IServerRepository } from '../../repositories/ServerRepository';
+import type { IServerMemberRepository } from '../../repositories/ServerMemberRepository';
 import type { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
-import { Server, VerificationEvent, VerificationStatus } from '../../repositories/types';
+import {
+  Server,
+  ServerMember,
+  VerificationEvent,
+  VerificationStatus,
+} from '../../repositories/types';
 import { CaseReviewReminderService } from '../../services/CaseReviewReminderService';
+import type { IModerationQueueService } from '../../services/ModerationQueueService';
 import { CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY } from '../../utils/caseReviewReminderSettings';
 
 const buildServer = (settings: Server['settings']): Server => ({
@@ -69,15 +76,40 @@ const buildLargePendingCases = (count: number, updatedAt: Date): VerificationEve
     );
   });
 
+const buildPendingScreeningMember = (overrides: Partial<ServerMember> = {}): ServerMember => ({
+  server_id: 'guild-1',
+  user_id: overrides.user_id ?? 'screening-user-1',
+  join_date: new Date('2026-05-25T10:00:00.000Z'),
+  reputation_score: 0,
+  case_role_active: false,
+  last_verified_at: null,
+  last_message_at: null,
+  message_count: 0,
+  verification_status: VerificationStatus.PENDING,
+  last_status_change: null,
+  discord_member_pending: true,
+  discord_member_pending_since:
+    overrides.discord_member_pending_since ?? new Date('2026-05-25T10:00:00.000Z'),
+  discord_member_pending_cleared_at: null,
+  discord_member_pending_last_checked_at: null,
+  discord_member_pending_digest_sent_at: overrides.discord_member_pending_digest_sent_at ?? null,
+  created_by: null,
+  updated_by: null,
+});
+
 function buildService(input: {
   server: Server;
   pendingCases: VerificationEvent[];
+  longPendingScreeningMembers?: ServerMember[];
+  pendingScreeningDigestMembers?: ServerMember[];
   adminSend?: jest.Mock;
   threadSend?: jest.Mock;
 }): {
   service: CaseReviewReminderService;
   configService: jest.Mocked<IConfigService>;
   verificationEventRepository: jest.Mocked<IVerificationEventRepository>;
+  serverMemberRepository: jest.Mocked<IServerMemberRepository>;
+  moderationQueueService: jest.Mocked<IModerationQueueService>;
   client: Client;
 } {
   const adminSend = input.adminSend ?? jest.fn().mockResolvedValue(undefined);
@@ -89,6 +121,20 @@ function buildService(input: {
     findPendingByServer: jest.fn().mockResolvedValue(input.pendingCases),
     update: jest.fn().mockResolvedValue({} as VerificationEvent),
   } as unknown as jest.Mocked<IVerificationEventRepository>;
+  const serverMemberRepository = {
+    findLongPendingDiscordMembers: jest
+      .fn()
+      .mockResolvedValue(input.longPendingScreeningMembers ?? []),
+    findLongPendingDiscordMembersNeedingDigest: jest
+      .fn()
+      .mockResolvedValue(input.pendingScreeningDigestMembers ?? []),
+    markDiscordMemberPendingDigestSent: jest.fn().mockResolvedValue(0),
+  } as unknown as jest.Mocked<IServerMemberRepository>;
+  const moderationQueueService = {
+    upsertPendingScreeningMember: jest.fn().mockResolvedValue(undefined),
+    upsertPendingScreeningMembers: jest.fn().mockResolvedValue(undefined),
+    deletePendingScreeningMember: jest.fn().mockResolvedValue(undefined),
+  } as unknown as jest.Mocked<IModerationQueueService>;
   const configService = {
     getAdminChannel: jest
       .fn()
@@ -108,10 +154,14 @@ function buildService(input: {
       serverRepository,
       verificationEventRepository,
       configService,
-      client
+      client,
+      serverMemberRepository,
+      moderationQueueService
     ),
     configService,
     verificationEventRepository,
+    serverMemberRepository,
+    moderationQueueService,
     client,
   };
 }
@@ -137,6 +187,73 @@ describe('CaseReviewReminderService (unit)', () => {
     } else {
       process.env.NEXT_PUBLIC_APP_URL = originalNextPublicAppUrl;
     }
+  });
+
+  it('sends a one-time admin digest and queue item when a member crosses the screening threshold', async () => {
+    const now = new Date('2026-06-03T12:00:00.000Z');
+    const member = buildPendingScreeningMember({
+      user_id: 'screening-user-1',
+      discord_member_pending_since: new Date('2026-05-25T10:00:00.000Z'),
+    });
+    const adminSend = jest.fn().mockResolvedValue(undefined);
+    const { service, moderationQueueService, serverMemberRepository } = buildService({
+      server: buildServer({ pending_screening_long_pending_days: 7 }),
+      pendingCases: [],
+      longPendingScreeningMembers: [member],
+      pendingScreeningDigestMembers: [member],
+      adminSend,
+    });
+
+    await service.runOnce(now);
+
+    expect(moderationQueueService.upsertPendingScreeningMembers).toHaveBeenCalledWith(
+      'guild-1',
+      [member],
+      7,
+      now
+    );
+    expect(adminSend).toHaveBeenCalledWith({
+      content: expect.stringContaining('Membership screening reminder'),
+      allowedMentions: expect.any(Object),
+    });
+    const content = adminSend.mock.calls[0][0].content;
+    expect(content).toContain(
+      'crossed the 7-day Discord membership screening/onboarding threshold'
+    );
+    expect(content).toContain('sent once per pending episode');
+    expect(content).toContain('screening-user-1');
+    expect(serverMemberRepository.markDiscordMemberPendingDigestSent).toHaveBeenCalledWith(
+      'guild-1',
+      ['screening-user-1'],
+      now
+    );
+  });
+
+  it('keeps already-digested long-pending screening members queued without another digest', async () => {
+    const now = new Date('2026-06-03T12:00:00.000Z');
+    const member = buildPendingScreeningMember({
+      user_id: 'screening-user-2',
+      discord_member_pending_digest_sent_at: new Date('2026-06-02T12:00:00.000Z'),
+    });
+    const adminSend = jest.fn().mockResolvedValue(undefined);
+    const { service, moderationQueueService, serverMemberRepository } = buildService({
+      server: buildServer({ pending_screening_long_pending_days: 7 }),
+      pendingCases: [],
+      longPendingScreeningMembers: [member],
+      pendingScreeningDigestMembers: [],
+      adminSend,
+    });
+
+    await service.runOnce(now);
+
+    expect(moderationQueueService.upsertPendingScreeningMembers).toHaveBeenCalledWith(
+      'guild-1',
+      [member],
+      7,
+      now
+    );
+    expect(adminSend).not.toHaveBeenCalled();
+    expect(serverMemberRepository.markDiscordMemberPendingDigestSent).not.toHaveBeenCalled();
   });
 
   it('sends a grouped all-pending digest with direct admin links and user reminder timing', async () => {

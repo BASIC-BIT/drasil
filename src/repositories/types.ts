@@ -91,6 +91,8 @@ export interface ServerSettings {
   case_review_reminder_repeat_hours?: number;
   case_review_very_stale_days?: number;
   case_review_digest_last_sent_at?: string | null;
+  pending_screening_alerts_enabled?: boolean;
+  pending_screening_long_pending_days?: number;
   moderation_queue_channel_id?: string | null;
   message_deletion_enabled?: boolean;
   message_deletion_source_message_enabled?: boolean;
@@ -142,6 +144,11 @@ export interface ServerMember {
   message_count?: number; // Total message count in server
   verification_status?: VerificationStatus; // Add missing status field (use enum from below)
   last_status_change: Date | null; // When the status was last changed (Use Date type)
+  discord_member_pending: boolean; // Discord membership screening/onboarding pending state
+  discord_member_pending_since: Date | null; // When Discord pending screening was first observed
+  discord_member_pending_cleared_at: Date | null; // Last time Discord pending screening cleared
+  discord_member_pending_last_checked_at: Date | null; // Last time Discord pending state was observed
+  discord_member_pending_digest_sent_at: Date | null; // Last one-time digest notification for this pending episode
   // Remove fields not present in the database schema
   // case_role_reason: string | null;
   // moderator_id: string | null;
@@ -229,6 +236,7 @@ export enum ModerationQueueItemType {
   OBSERVED_ALERT_MIRROR = 'observed_alert_mirror',
   SUPPORT_THREAD_ATTENTION = 'support_thread_attention',
   REPORT_THREAD_ATTENTION = 'report_thread_attention',
+  PENDING_SCREENING_MEMBER = 'pending_screening_member',
 }
 
 export enum RoleQuarantineSnapshotStatus {

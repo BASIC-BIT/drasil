@@ -95,6 +95,16 @@ describe('EventHandler (unit)', () => {
         observeSuspiciousMessage: jest.fn(),
         recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
         recordRejoinAfterKickDetection: jest.fn(),
+        recordDiscordPendingMemberState: jest.fn().mockResolvedValue(null),
+        repairActiveCase: jest.fn().mockResolvedValue({
+          repaired: false,
+          message: 'No active verification case found.',
+          threadId: null,
+          threadCreated: false,
+          userAdded: false,
+          promptSent: false,
+          promptAlreadyPresent: false,
+        }),
       }) as any,
       { handleTestCommands: jest.fn(), registerCommands: jest.fn() } as any,
       { handleButtonInteraction: jest.fn(), handleModalSubmit: jest.fn() } as any,
@@ -115,14 +125,17 @@ describe('EventHandler (unit)', () => {
     );
   }
 
-  function buildMember(permissions: PermissionsBitField): GuildMember {
+  function buildMember(permissions: PermissionsBitField, pending = false): GuildMember {
     return {
       id: 'user-1',
+      partial: false,
+      pending,
       nickname: null,
       joinedAt: new Date('2024-01-01T00:00:00.000Z'),
       guild: { id: 'guild-1' },
       user: {
         id: 'user-1',
+        bot: false,
         tag: 'test-user#0001',
         username: 'test-user',
         discriminator: '0001',
@@ -1979,6 +1992,93 @@ describe('EventHandler (unit)', () => {
     );
   });
 
+  it('records pending screening members and skips join detection until screening clears', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const recordDiscordPendingMemberState = jest.fn().mockResolvedValue({
+      wasPending: false,
+      isPending: true,
+      pendingChanged: true,
+    });
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn(),
+      handleSuspiciousJoin: jest.fn(),
+      handleHoneypotRoleAssignment: jest.fn(),
+      openCaseForSuspiciousMessage: jest.fn(),
+      openCaseForSuspiciousJoin: jest.fn(),
+      openAdminCase: jest.fn(),
+      recordRejoinAfterKickDetection: jest.fn(),
+      recordDiscordPendingMemberState,
+      repairActiveCase: jest.fn(),
+    };
+    const handler = buildHandler({ detectionOrchestrator, securityActionService });
+    const member = buildMember(new PermissionsBitField(), true);
+
+    await (handler as any).handleGuildMemberAdd(member);
+
+    expect(recordDiscordPendingMemberState).toHaveBeenCalledWith(member, true);
+    expect(detectionOrchestrator.detectNewJoin).not.toHaveBeenCalled();
+  });
+
+  it('runs join detection and repairs active cases when pending screening clears', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.NEW_ACCOUNT,
+        triggerContent: 'Server Join',
+      }),
+    };
+    const recordDiscordPendingMemberState = jest.fn().mockResolvedValue({
+      wasPending: true,
+      isPending: false,
+      pendingChanged: true,
+    });
+    const repairActiveCase = jest.fn().mockResolvedValue({
+      repaired: true,
+      message: 'Repaired active verification case.',
+      verificationEventId: 'ver-1',
+      threadId: 'thread-1',
+      threadCreated: false,
+      userAdded: true,
+      promptSent: false,
+      promptAlreadyPresent: true,
+    });
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn(),
+      handleSuspiciousJoin: jest.fn(),
+      handleHoneypotRoleAssignment: jest.fn(),
+      openCaseForSuspiciousMessage: jest.fn(),
+      openCaseForSuspiciousJoin: jest.fn(),
+      openAdminCase: jest.fn(),
+      recordRejoinAfterKickDetection: jest.fn(),
+      recordDiscordPendingMemberState,
+      repairActiveCase,
+    };
+    const handler = buildHandler({ client, detectionOrchestrator, securityActionService });
+    await handler.setupEventHandlers();
+    const updateHandler = client.on.mock.calls.find(
+      ([event]) => event === Events.GuildMemberUpdate
+    )?.[1];
+    const oldMember = buildMember(new PermissionsBitField(), true);
+    const newMember = buildMember(new PermissionsBitField(), false);
+
+    await updateHandler?.(oldMember, newMember);
+
+    expect(recordDiscordPendingMemberState).toHaveBeenCalledWith(newMember, false);
+    expect(detectionOrchestrator.detectNewJoin).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      expect.objectContaining({ serverId: 'guild-1', userId: 'user-1' })
+    );
+    expect(repairActiveCase).toHaveBeenCalledWith(newMember);
+  });
+
   it('routes rejoin-after-kick through join response without normal profile scan', async () => {
     const priorKick = {
       id: 'out-kick-1',
@@ -2012,6 +2112,8 @@ describe('EventHandler (unit)', () => {
       handleSuspiciousJoin: jest.fn().mockResolvedValue(true),
       handleSuspiciousMessage: jest.fn(),
       openCaseForSuspiciousMessage: jest.fn(),
+      recordDiscordPendingMemberState: jest.fn().mockResolvedValue(null),
+      repairActiveCase: jest.fn(),
     };
     const notificationManager = {
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue(null),

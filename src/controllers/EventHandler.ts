@@ -658,6 +658,44 @@ export class EventHandler implements IEventHandler {
     }
   }
 
+  private async runJoinDetectionForMember(
+    member: GuildMember,
+    serverConfig: Server
+  ): Promise<void> {
+    const responseSettings = getDetectionResponseSettings(serverConfig.settings, 'join');
+    if (responseSettings.mode === 'off') {
+      console.log(
+        `Automatic detection is disabled for guild ${member.guild.id}; skipping join scan.`
+      );
+      return;
+    }
+    if (
+      responseSettings.automaticDetectionExemptModerators &&
+      this.hasAutomaticDetectionExemptPermissions(member)
+    ) {
+      return;
+    }
+
+    const actionThreshold =
+      serverConfig.settings.min_confidence_threshold ??
+      globalConfig.getSettings().defaultServerSettings.minConfidenceThreshold;
+    if (await this.handleRejoinAfterKick(member, responseSettings, actionThreshold)) {
+      return;
+    }
+
+    // Extract profile data
+    const profileData = this.extractUserProfileData(member);
+
+    // Run detection on new join
+    const detectionResult = await this.detectionOrchestrator.detectNewJoin(
+      member.guild.id, // Pass serverId
+      member.id, // Pass userId
+      profileData
+    );
+
+    await this.handleAutomaticDetection(member, detectionResult, responseSettings, actionThreshold);
+  }
+
   private async handleGuildMemberAdd(member: GuildMember): Promise<void> {
     try {
       console.log(`New member joined: ${member.user.tag} (${member.id})`);
@@ -669,43 +707,15 @@ export class EventHandler implements IEventHandler {
       await this.ensureConfigInitialized();
 
       const serverConfig = await this.configService.getServerConfig(member.guild.id);
-      const responseSettings = getDetectionResponseSettings(serverConfig.settings, 'join');
-      if (responseSettings.mode === 'off') {
+
+      if (await this.recordDiscordPendingMemberState(member, this.isPendingGuildMember(member))) {
         console.log(
-          `Automatic detection is disabled for guild ${member.guild.id}; skipping join scan.`
+          `Member ${member.user.tag} (${member.id}) is pending Discord membership screening; join detection will run after screening clears.`
         );
         return;
       }
-      if (
-        responseSettings.automaticDetectionExemptModerators &&
-        this.hasAutomaticDetectionExemptPermissions(member)
-      ) {
-        return;
-      }
 
-      const actionThreshold =
-        serverConfig.settings.min_confidence_threshold ??
-        globalConfig.getSettings().defaultServerSettings.minConfidenceThreshold;
-      if (await this.handleRejoinAfterKick(member, responseSettings, actionThreshold)) {
-        return;
-      }
-
-      // Extract profile data
-      const profileData = this.extractUserProfileData(member);
-
-      // Run detection on new join
-      const detectionResult = await this.detectionOrchestrator.detectNewJoin(
-        member.guild.id, // Pass serverId
-        member.id, // Pass userId
-        profileData
-      );
-
-      await this.handleAutomaticDetection(
-        member,
-        detectionResult,
-        responseSettings,
-        actionThreshold
-      );
+      await this.runJoinDetectionForMember(member, serverConfig);
     } catch (error) {
       console.error('Error handling new member:', error);
     }
@@ -724,6 +734,7 @@ export class EventHandler implements IEventHandler {
       const serverConfig = await this.configService.getServerConfig(newMember.guild.id);
 
       await this.enforceActiveCaseRoleQuarantine(oldMember, newMember, serverConfig);
+      await this.handleDiscordPendingStateChange(oldMember, newMember, serverConfig);
 
       const manualSettings = getManualIntakeSettings(serverConfig.settings);
       if (manualSettings.enabled && manualSettings.roleId) {
@@ -814,6 +825,60 @@ export class EventHandler implements IEventHandler {
         `Active-case role quarantine processed ${result.addedRoleIds.length} role(s) for ${newMember.user.tag}: removed ${result.removedRoleIds.length}, failed ${result.failedRemovals.length}.`
       );
     }
+  }
+
+  private async handleDiscordPendingStateChange(
+    oldMember: GuildMember | PartialGuildMember,
+    newMember: GuildMember,
+    serverConfig: Server
+  ): Promise<void> {
+    const wasPending = this.isPendingGuildMember(oldMember);
+    const isPending = this.isPendingGuildMember(newMember);
+    if (wasPending === isPending) {
+      return;
+    }
+
+    await this.recordDiscordPendingMemberState(newMember, isPending);
+    if (isPending) {
+      console.log(
+        `Member ${newMember.user.tag} (${newMember.id}) entered Discord membership screening.`
+      );
+      return;
+    }
+
+    console.log(
+      `Member ${newMember.user.tag} (${newMember.id}) cleared Discord membership screening; running join detection and case repair.`
+    );
+    await this.deletePendingScreeningQueueItem(newMember.guild.id, newMember.id);
+    await this.runJoinDetectionForMember(newMember, serverConfig);
+
+    const repair = await this.securityActionService.repairActiveCase(newMember);
+    if (repair.repaired || repair.verificationEventId) {
+      console.log(repair.message);
+    }
+  }
+
+  private async recordDiscordPendingMemberState(
+    member: GuildMember,
+    pending: boolean
+  ): Promise<boolean> {
+    await this.securityActionService.recordDiscordPendingMemberState(member, pending);
+    return pending;
+  }
+
+  private isPendingGuildMember(member: GuildMember | PartialGuildMember): boolean {
+    return (member as { pending?: boolean }).pending === true;
+  }
+
+  private async deletePendingScreeningQueueItem(serverId: string, userId: string): Promise<void> {
+    await this.moderationQueueService
+      ?.deletePendingScreeningMember(serverId, userId)
+      .catch((error) => {
+        console.warn(
+          `Failed to delete pending-screening queue item for ${userId} in guild ${serverId}:`,
+          error
+        );
+      });
   }
 
   private scheduleManualIntake(
@@ -1029,6 +1094,7 @@ export class EventHandler implements IEventHandler {
     this.cancelManualIntakeForMember(member.guild.id, member.id);
 
     if (!this.userModerationService) {
+      await this.deletePendingScreeningQueueItem(member.guild.id, member.id);
       return;
     }
 

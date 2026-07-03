@@ -250,6 +250,7 @@ describe('InteractionHandler (unit)', () => {
         refreshed: true,
         message: 'Refreshed pending case notification for test-user#0001.',
       }),
+      recordDiscordPendingMemberState: jest.fn().mockResolvedValue(null),
       repairActiveCase: jest.fn().mockResolvedValue({
         repaired: true,
         message: 'Repaired active verification case for test-user#0001.',
