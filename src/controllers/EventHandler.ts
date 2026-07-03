@@ -34,7 +34,12 @@ import {
 } from '../services/ProductAnalyticsService';
 import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { REPORT_INTAKE_THREAD_NAME_PREFIX } from '../services/ThreadManager';
-import { DetectionType, Server, ServerSettings } from '../repositories/types';
+import {
+  DetectionType,
+  type GlobalMessageWatchlistEntry,
+  type Server,
+  type ServerSettings,
+} from '../repositories/types';
 import {
   ISetupDiagnosticsService,
   SetupDiagnosticReport,
@@ -66,9 +71,12 @@ import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { IRoleQuarantineService } from '../services/RoleQuarantineService';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
+import type { IGlobalMessageWatchlistRepository } from '../repositories/GlobalMessageWatchlistRepository';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+const GLOBAL_MESSAGE_WATCHLIST_CACHE_TTL_MS = 30_000;
+const GLOBAL_MESSAGE_WATCHLIST_INITIAL_FAILURE_RETRY_MS = 5_000;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
 const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
@@ -127,10 +135,18 @@ export class EventHandler implements IEventHandler {
   private moderationQueueService?: IModerationQueueService;
   private roleQuarantineService?: IRoleQuarantineService;
   private verificationEventRepository?: IVerificationEventRepository;
+  private globalMessageWatchlistRepository?: IGlobalMessageWatchlistRepository;
   private serverConfigWarmups: Set<string> = new Set();
   private manualIntakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private configInitializePromise: Promise<void> | null = null;
   private lastMessageContextPruneAt = 0;
+  private globalMessageWatchlistCache: readonly GlobalMessageWatchlistEntry[] = [];
+  private globalMessageWatchlistLoadedAt = 0;
+  private globalMessageWatchlistRetryAfter = 0;
+  private globalMessageWatchlistHasLoaded = false;
+  private globalMessageWatchlistLoadPromise: Promise<
+    readonly GlobalMessageWatchlistEntry[]
+  > | null = null;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -171,7 +187,10 @@ export class EventHandler implements IEventHandler {
     roleQuarantineService?: IRoleQuarantineService,
     @inject(TYPES.VerificationEventRepository)
     @optional()
-    verificationEventRepository?: IVerificationEventRepository
+    verificationEventRepository?: IVerificationEventRepository,
+    @inject(TYPES.GlobalMessageWatchlistRepository)
+    @optional()
+    globalMessageWatchlistRepository?: IGlobalMessageWatchlistRepository
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -191,6 +210,7 @@ export class EventHandler implements IEventHandler {
     this.moderationQueueService = moderationQueueService;
     this.roleQuarantineService = roleQuarantineService;
     this.verificationEventRepository = verificationEventRepository;
+    this.globalMessageWatchlistRepository = globalMessageWatchlistRepository;
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -321,7 +341,16 @@ export class EventHandler implements IEventHandler {
         return;
       }
 
-      const messageDeletionSettings = getMessageDeletionSettings(serverConfig.settings);
+      let messageDeletionSettings = getMessageDeletionSettings(serverConfig.settings);
+      if (messageDeletionSettings.enabled && messageDeletionSettings.watchlistEnabled) {
+        const globalMessageWatchlistEntries = await this.getGlobalMessageWatchlistEntries();
+        if (globalMessageWatchlistEntries.length > 0) {
+          messageDeletionSettings = getMessageDeletionSettings(
+            serverConfig.settings,
+            globalMessageWatchlistEntries
+          );
+        }
+      }
       const messageAttachments = messageAttachmentsToReportMetadata(message);
       const watchlistMatch = findMessageWatchlistMatch(
         { content, attachments: messageAttachments },
@@ -416,6 +445,57 @@ export class EventHandler implements IEventHandler {
       }
     } finally {
       this.rememberRecentMessage(message);
+    }
+  }
+
+  private async getGlobalMessageWatchlistEntries(): Promise<
+    readonly GlobalMessageWatchlistEntry[]
+  > {
+    if (!this.globalMessageWatchlistRepository) {
+      return [];
+    }
+
+    const now = Date.now();
+    if (now < this.globalMessageWatchlistRetryAfter) {
+      return this.globalMessageWatchlistCache;
+    }
+
+    if (now - this.globalMessageWatchlistLoadedAt < GLOBAL_MESSAGE_WATCHLIST_CACHE_TTL_MS) {
+      return this.globalMessageWatchlistCache;
+    }
+
+    this.globalMessageWatchlistLoadPromise ??= this.refreshGlobalMessageWatchlistEntries();
+    return this.globalMessageWatchlistLoadPromise;
+  }
+
+  private async refreshGlobalMessageWatchlistEntries(): Promise<
+    readonly GlobalMessageWatchlistEntry[]
+  > {
+    if (!this.globalMessageWatchlistRepository) {
+      return [];
+    }
+
+    try {
+      const entries = await this.globalMessageWatchlistRepository.findEnabled();
+      this.globalMessageWatchlistCache = entries;
+      this.globalMessageWatchlistLoadedAt = Date.now();
+      this.globalMessageWatchlistRetryAfter = 0;
+      this.globalMessageWatchlistHasLoaded = true;
+      return entries;
+    } catch (error) {
+      const failedAt = Date.now();
+      this.globalMessageWatchlistRetryAfter =
+        failedAt +
+        (this.globalMessageWatchlistHasLoaded
+          ? GLOBAL_MESSAGE_WATCHLIST_CACHE_TTL_MS
+          : GLOBAL_MESSAGE_WATCHLIST_INITIAL_FAILURE_RETRY_MS);
+      if (this.globalMessageWatchlistHasLoaded) {
+        this.globalMessageWatchlistLoadedAt = failedAt;
+      }
+      console.warn('Failed to load global message watchlist entries; using stale cache.', error);
+      return this.globalMessageWatchlistCache;
+    } finally {
+      this.globalMessageWatchlistLoadPromise = null;
     }
   }
 

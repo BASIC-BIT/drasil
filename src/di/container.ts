@@ -76,6 +76,10 @@ import {
   IntegrityAuditRepository,
 } from '../repositories/IntegrityAuditRepository';
 import {
+  GlobalMessageWatchlistRepository,
+  IGlobalMessageWatchlistRepository,
+} from '../repositories/GlobalMessageWatchlistRepository';
+import {
   IReportCandidateService,
   ReportCandidateService,
 } from '../services/ReportCandidateService';
@@ -212,6 +216,10 @@ function configureRepositories(container: Container): void {
   container
     .bind<IIntegrityAuditRepository>(TYPES.IntegrityAuditRepository)
     .to(IntegrityAuditRepository)
+    .inSingletonScope();
+  container
+    .bind<IGlobalMessageWatchlistRepository>(TYPES.GlobalMessageWatchlistRepository)
+    .to(GlobalMessageWatchlistRepository)
     .inSingletonScope();
 
   // Add more repository bindings as they're refactored

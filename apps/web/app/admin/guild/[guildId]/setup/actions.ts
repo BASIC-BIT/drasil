@@ -5,7 +5,6 @@ import { revalidatePath } from 'next/cache';
 import {
   MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH,
   guildSetupUpdateSchema,
-  MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES,
   MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS,
   type DetectionResponseMode,
 } from '@drasil/contracts';
@@ -71,13 +70,6 @@ function readWatchlistCustomTerms(formData: FormData): string[] {
     .slice(0, MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS);
 }
 
-function readDisabledDefaultWatchlistIds(formData: FormData): string[] {
-  const enabledIds = new Set(formData.getAll('messageDeletionDefaultWatchlistIds'));
-  return MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES.map((entry) => entry.id).filter(
-    (id) => !enabledIds.has(id)
-  );
-}
-
 export async function saveGuildSetup(guildId: string, formData: FormData): Promise<void> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
@@ -113,7 +105,6 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
     messageDeletionSourceMessageEnabled:
       formData.get('messageDeletionSourceMessageEnabled') === 'on',
     messageDeletionWatchlistEnabled: formData.get('messageDeletionWatchlistEnabled') === 'on',
-    messageDeletionWatchlistDisabledDefaultIds: readDisabledDefaultWatchlistIds(formData),
     messageDeletionWatchlistCustomTerms: readWatchlistCustomTerms(formData),
   });
 

@@ -14,15 +14,15 @@ import {
   ModerationOutcomeType,
   VerificationStatus,
 } from '../../repositories/types';
-import {
-  CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
-  DEFAULT_MESSAGE_WATCHLIST_ENTRIES,
-} from '../../utils/messageDeletionSettings';
 
 const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
-const CODE_DEFINED_VIDEO_LINK_TERM = DEFAULT_MESSAGE_WATCHLIST_ENTRIES[0].terms[0];
-const CODE_DEFINED_VIDEO_LINK_MATCH_LABEL = DEFAULT_MESSAGE_WATCHLIST_ENTRIES[0].matchLabel;
-const CODE_DEFINED_VIDEO_LINK_MESSAGE = `watch this ${CODE_DEFINED_VIDEO_LINK_TERM} clip https://example.com/video`;
+const GLOBAL_WATCHLIST_ENTRY = {
+  id: 'global-video-link-entry',
+  label: 'Global video/link watchlist entry',
+  term: 'riskydomain.test',
+  requiresLinkOrVideo: true,
+};
+const GLOBAL_WATCHLIST_MESSAGE = `watch this ${GLOBAL_WATCHLIST_ENTRY.term} clip https://example.com/video`;
 
 describe('EventHandler (unit)', () => {
   function buildHandler(overrides?: {
@@ -40,6 +40,7 @@ describe('EventHandler (unit)', () => {
     moderationQueueService?: Record<string, jest.Mock>;
     roleQuarantineService?: Record<string, jest.Mock>;
     verificationEventRepository?: Record<string, jest.Mock>;
+    globalMessageWatchlistRepository?: Record<string, jest.Mock>;
   }): EventHandler {
     const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
     const detectionOrchestrator = overrides?.detectionOrchestrator ?? {
@@ -117,7 +118,10 @@ describe('EventHandler (unit)', () => {
       overrides?.userModerationService as any,
       overrides?.moderationQueueService as any,
       overrides?.roleQuarantineService as any,
-      overrides?.verificationEventRepository as any
+      overrides?.verificationEventRepository as any,
+      (overrides?.globalMessageWatchlistRepository ?? {
+        findEnabled: jest.fn().mockResolvedValue([]),
+      }) as any
     );
   }
 
@@ -139,6 +143,12 @@ describe('EventHandler (unit)', () => {
       },
       permissions,
     } as unknown as GuildMember;
+  }
+
+  function buildGlobalWatchlistRepository(): Record<string, jest.Mock> {
+    return {
+      findEnabled: jest.fn().mockResolvedValue([GLOBAL_WATCHLIST_ENTRY]),
+    };
   }
 
   function buildMessage(permissions: PermissionsBitField): Message {
@@ -1077,6 +1087,143 @@ describe('EventHandler (unit)', () => {
     );
   });
 
+  it('uses normal detection when no global watchlist rows are loaded', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: GLOBAL_WATCHLIST_MESSAGE,
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const handler = buildHandler({ detectionOrchestrator });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.content = GLOBAL_WATCHLIST_MESSAGE;
+
+    await (handler as any).handleMessage(message);
+
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      GLOBAL_WATCHLIST_MESSAGE,
+      expect.any(Object)
+    );
+  });
+
+  it.each([
+    ['message deletion is disabled', { message_deletion_enabled: false }],
+    ['message watchlist is disabled', { message_deletion_watchlist_enabled: false }],
+  ])('does not load global watchlist rows when %s', async (_label, settings) => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: GLOBAL_WATCHLIST_MESSAGE,
+      }),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          detection_response_mode: 'notify_only',
+          min_confidence_threshold: 70,
+          ...settings,
+        },
+      }),
+    };
+    const globalMessageWatchlistRepository = buildGlobalWatchlistRepository();
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      globalMessageWatchlistRepository,
+    });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.content = GLOBAL_WATCHLIST_MESSAGE;
+
+    await (handler as any).handleMessage(message);
+
+    expect(globalMessageWatchlistRepository.findEnabled).not.toHaveBeenCalled();
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      GLOBAL_WATCHLIST_MESSAGE,
+      expect.any(Object)
+    );
+  });
+
+  it('briefly backs off after an initial global watchlist database failure', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const detectionOrchestrator = {
+        detectMessage: jest.fn().mockResolvedValue({
+          label: 'OK',
+          confidence: 0,
+          reasons: [],
+          triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+          triggerContent: GLOBAL_WATCHLIST_MESSAGE,
+        }),
+        detectNewJoin: jest.fn(),
+      };
+      const configService = {
+        initialize: jest.fn().mockResolvedValue(undefined),
+        getCachedServerConfig: jest.fn().mockReturnValue({}),
+        getServerConfig: jest.fn().mockResolvedValue({
+          settings: {
+            detection_response_mode: 'restrict',
+            min_confidence_threshold: 70,
+          },
+        }),
+      };
+      const securityActionService = {
+        handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+        observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+        recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+      };
+      const globalMessageWatchlistRepository = {
+        findEnabled: jest
+          .fn()
+          .mockRejectedValueOnce(new Error('DB down'))
+          .mockResolvedValueOnce([GLOBAL_WATCHLIST_ENTRY]),
+      };
+      const handler = buildHandler({
+        detectionOrchestrator,
+        configService,
+        securityActionService,
+        globalMessageWatchlistRepository,
+      });
+      const firstMessage = buildMessage(new PermissionsBitField()) as any;
+      firstMessage.content = GLOBAL_WATCHLIST_MESSAGE;
+      const secondMessage = buildMessage(new PermissionsBitField()) as any;
+      secondMessage.content = GLOBAL_WATCHLIST_MESSAGE;
+      const thirdMessage = buildMessage(new PermissionsBitField()) as any;
+      thirdMessage.content = GLOBAL_WATCHLIST_MESSAGE;
+
+      await (handler as any).handleMessage(firstMessage);
+      await (handler as any).handleMessage(secondMessage);
+      jest.advanceTimersByTime(5_001);
+      await (handler as any).handleMessage(thirdMessage);
+
+      expect(globalMessageWatchlistRepository.findEnabled).toHaveBeenCalledTimes(2);
+      expect(detectionOrchestrator.detectMessage).toHaveBeenCalledTimes(2);
+      expect(securityActionService.handleSuspiciousMessage).toHaveBeenCalledWith(
+        thirdMessage.member,
+        expect.objectContaining({ triggerSource: DetectionType.PATTERN_MATCH }),
+        thirdMessage
+      );
+    } finally {
+      warnSpy.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
   it('routes non-staff watchlist matches to restricted source-message deletion handling', async () => {
     const detectionOrchestrator = {
       detectMessage: jest.fn(),
@@ -1097,9 +1244,14 @@ describe('EventHandler (unit)', () => {
       observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
       recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
     };
-    const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      securityActionService,
+      globalMessageWatchlistRepository: buildGlobalWatchlistRepository(),
+    });
     const message = buildMessage(new PermissionsBitField()) as any;
-    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
+    message.content = GLOBAL_WATCHLIST_MESSAGE;
 
     await (handler as any).handleMessage(message);
 
@@ -1113,8 +1265,8 @@ describe('EventHandler (unit)', () => {
         messageAction: expect.objectContaining({
           kind: 'delete_source_message',
           source: 'watchlist',
-          watchlistEntryId: CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
-          matchedTerm: CODE_DEFINED_VIDEO_LINK_MATCH_LABEL,
+          watchlistEntryId: GLOBAL_WATCHLIST_ENTRY.id,
+          matchedTerm: GLOBAL_WATCHLIST_ENTRY.label,
         }),
       }),
       message
@@ -1142,9 +1294,14 @@ describe('EventHandler (unit)', () => {
       observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
       recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
     };
-    const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      securityActionService,
+      globalMessageWatchlistRepository: buildGlobalWatchlistRepository(),
+    });
     const message = buildMessage(new PermissionsBitField()) as any;
-    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
+    message.content = GLOBAL_WATCHLIST_MESSAGE;
 
     await (handler as any).handleMessage(message);
 
@@ -1190,9 +1347,10 @@ describe('EventHandler (unit)', () => {
       configService,
       notificationManager,
       securityActionService,
+      globalMessageWatchlistRepository: buildGlobalWatchlistRepository(),
     });
     const message = buildMessage(new PermissionsBitField()) as any;
-    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
+    message.content = GLOBAL_WATCHLIST_MESSAGE;
 
     await (handler as any).handleMessage(message);
 
@@ -1229,9 +1387,14 @@ describe('EventHandler (unit)', () => {
       observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
       recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
     };
-    const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      securityActionService,
+      globalMessageWatchlistRepository: buildGlobalWatchlistRepository(),
+    });
     const message = buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers)) as any;
-    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
+    message.content = GLOBAL_WATCHLIST_MESSAGE;
 
     await (handler as any).handleMessage(message);
 
@@ -1249,8 +1412,8 @@ describe('EventHandler (unit)', () => {
         messageAction: expect.objectContaining({
           kind: 'review_only',
           source: 'watchlist',
-          watchlistEntryId: CODE_DEFINED_VIDEO_LINK_WATCHLIST_ENTRY_ID,
-          matchedTerm: CODE_DEFINED_VIDEO_LINK_MATCH_LABEL,
+          watchlistEntryId: GLOBAL_WATCHLIST_ENTRY.id,
+          matchedTerm: GLOBAL_WATCHLIST_ENTRY.label,
         }),
       }),
       message
@@ -1278,9 +1441,14 @@ describe('EventHandler (unit)', () => {
       observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
       recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
     };
-    const handler = buildHandler({ detectionOrchestrator, configService, securityActionService });
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      securityActionService,
+      globalMessageWatchlistRepository: buildGlobalWatchlistRepository(),
+    });
     const message = buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers)) as any;
-    message.content = CODE_DEFINED_VIDEO_LINK_MESSAGE;
+    message.content = GLOBAL_WATCHLIST_MESSAGE;
 
     await (handler as any).handleMessage(message);
 

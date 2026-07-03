@@ -45,7 +45,7 @@ Primary flow (see `docs/workflow.md`):
 ## Data Model
 
 - Tables: `servers`, `users`, `server_members`, `detection_events`,
-  `verification_events`, `admin_actions`.
+  `verification_events`, `admin_actions`, `global_message_watchlist_entries`.
 - Enums: `detection_type` (includes `user_report`), `verification_status`,
   `admin_action_type`.
 - Source of truth: `prisma/schema.prisma`.
@@ -186,6 +186,9 @@ Product copy:
   labels, or persisted detection metadata. Use neutral labels such as "known video/link spam
   campaign"; if exact indicators are needed for matching, keep them internal and avoid persisting
   them as evidence text or metadata values.
+- Do not hardcode threat-intel indicators, watched terms, domains, operator handles, or campaign
+  fingerprints in source code. Globally watched terms belong in operator-managed data/config such as
+  a database table; source code should define only matching mechanics, validation, and neutral labels.
 - Model-assisted admin diagnostics should be concise by contract. Do not render long model prose and
   then clip it with ellipses; tighten the model prompt/schema, select the highest-signal fields, or
   omit optional detail instead of showing truncated analysis text.
@@ -193,7 +196,13 @@ Product copy:
   is repo `AGENTS.md` because avoiding operator/campaign-name amplification applies across Drasil
   moderation UX, metadata, and public project surfaces. Over-promotion cost is one short product-copy
   rule; demotion path is moving details to a product-copy doc if examples grow; verification signal
-  is future Drasil diffs using neutral campaign labels and not persisting raw code-defined indicators.
+  is future Drasil diffs using neutral campaign labels and not persisting raw source-defined indicators.
+- Promotion note: current source is user correction after PR #166 shipped a hardcoded watchlist
+  indicator; target is repo `AGENTS.md` because the data/code boundary applies across Drasil
+  moderation matching, deletion, evidence, and admin UX. Over-promotion cost is one short reminder in
+  every repo session; demotion path is moving examples to a threat-intel data-management doc if this
+  grows; verification signal is future Drasil diffs putting globally watched indicators in
+  operator-managed storage rather than source literals.
 - Promotion note: current source is user feedback from the report-intake QA session; target is repo
   `AGENTS.md` because this is a broad Drasil copy principle for Discord/web UX. Over-promotion cost
   is a short reminder in every repo session; demotion path is moving examples to a product-copy doc if

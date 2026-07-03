@@ -47,6 +47,7 @@ export const TYPES = {
   ModerationQueueRepository: Symbol.for('ModerationQueueRepository'),
   RoleQuarantineSnapshotRepository: Symbol.for('RoleQuarantineSnapshotRepository'),
   IntegrityAuditRepository: Symbol.for('IntegrityAuditRepository'),
+  GlobalMessageWatchlistRepository: Symbol.for('GlobalMessageWatchlistRepository'),
 
   // External dependencies
   DiscordClient: Symbol.for('DiscordClient'),

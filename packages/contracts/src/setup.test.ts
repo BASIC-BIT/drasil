@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   guildSetupUpdateSchema,
   MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH,
+  MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES,
   setupDashboardSchema,
 } from './setup';
 
@@ -76,5 +77,9 @@ describe('setup contracts', () => {
     });
 
     expect(parsed.success).toBe(false);
+  });
+
+  it('does not ship default global watchlist entries in source code', () => {
+    expect(MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES).toEqual([]);
   });
 });
