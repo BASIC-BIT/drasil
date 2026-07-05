@@ -65,8 +65,9 @@ coverage/
 supabase/.temp/
 supabase/.env
 
-# OpenCode
+# Local agent tool state
 .opencode/state/
+.playwright-mcp/
 
 # Local intelligence repository data
 data/intel/cases/**

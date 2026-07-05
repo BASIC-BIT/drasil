@@ -12,7 +12,8 @@ Persistence uses Postgres (often Supabase) via Prisma. Orchestration is direct (
 - Always-on rules: `AGENTS.md`
 - Local-only (paths/preferences): `AGENTS.local.md` (gitignored)
 - Canonical reference docs: `docs/` (prefer linking over duplicating)
-- Progressive disclosure playbooks: `.opencode/skills/*` (keep short; point to canonical docs)
+- Progressive disclosure playbooks: `.opencode/skills/*` with Codex wrappers in
+  `.codex/skills/*` (keep short; point to canonical docs)
 
 ## Stack
 
@@ -159,6 +160,7 @@ Practical workflow tips:
 - `npm run check` local quality gate (lint:fix, build, tests)
 - `npm run check:full` full gate (format:check, check, integration tests)
 - `npm run check:ci` CI gate (format:check, lint, build, tests, integration tests)
+- `npm run agent:check` verify OpenCode/Codex skill wrapper and MCP doc parity
 
 ## Engineering Guidelines
 
@@ -248,7 +250,12 @@ Jest:
 
 This repo keeps always-on guidance in `AGENTS.md`.
 
-Use Skills for deeper workflows/playbooks. Skills live under `.opencode/skills/<name>/SKILL.md`.
+Use Skills for deeper workflows/playbooks. OpenCode source skills live under
+`.opencode/skills/<name>/SKILL.md`; Codex wrappers live under
+`.codex/skills/<name>/SKILL.md`. Keep the wrappers thin and put detailed changes in the
+OpenCode source skill.
+
+Codex-specific notes: `docs/dev/codex.md`.
 
 Common skills in this repo:
 

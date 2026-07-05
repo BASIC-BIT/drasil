@@ -59,6 +59,22 @@ const configs = [
       'prettier/prettier': 'warn',
     },
   },
+  // Config for ESM Node.js scripts in scripts/ directory
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+      sourceType: 'module',
+    },
+    plugins: {
+      prettier,
+    },
+    rules: {
+      'prettier/prettier': 'warn',
+    },
+  },
   // Base config for all TypeScript files
   {
     files: ['**/*.ts'],

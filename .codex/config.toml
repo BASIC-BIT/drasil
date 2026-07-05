@@ -1,0 +1,6 @@
+# Drasil currently has no project-scoped MCP servers to mirror from OpenCode.
+#
+# Keep repo-specific MCP servers here when Drasil adds a committed OpenCode
+# MCP inventory. Generic Codex MCPs such as Playwright, GitHub, Context7, or
+# Node REPL should stay in global/plugin config unless they become
+# Drasil-specific.
