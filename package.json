@@ -42,6 +42,7 @@
     "contracts:test": "npm --workspace packages/contracts run test",
     "contracts:test:coverage": "npm --workspace packages/contracts run test:coverage",
     "code:metrics": "bash scripts/check-metrics.sh",
+    "agent:check": "node scripts/check-agent-tooling.mjs",
     "format": "prettier --write \"**/*.{ts,js,json,md,mjs}\"",
     "format:check": "prettier --check \"**/*.{ts,js,json,md,mjs}\"",
     "check": "npm run lint:fix && npm run build && npm test",
