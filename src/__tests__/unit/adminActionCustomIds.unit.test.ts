@@ -2,6 +2,11 @@ import {
   buildAdminActionCustomId,
   parseAdminActionCustomId,
 } from '../../utils/adminActionCustomIds';
+import {
+  buildReportIntakeAdminActionsCustomId,
+  buildReportIntakeAdminConfirmCloseCustomId,
+  parseReportIntakeAdminActionCustomId,
+} from '../../utils/reportIntakeAdminActions';
 
 describe('adminActionCustomIds (unit)', () => {
   it('keeps observed confirmation IDs under Discord custom_id limits', () => {
@@ -41,6 +46,24 @@ describe('adminActionCustomIds (unit)', () => {
       surface: 'observed',
       userId,
       detectionEventId,
+    });
+  });
+
+  it('keeps report intake admin action IDs under Discord custom_id limits', () => {
+    const intakeId = '12345678-1234-1234-1234-123456789012';
+
+    const menuCustomId = buildReportIntakeAdminActionsCustomId(intakeId);
+    const confirmCloseCustomId = buildReportIntakeAdminConfirmCloseCustomId(intakeId);
+
+    expect(menuCustomId.length).toBeLessThanOrEqual(100);
+    expect(confirmCloseCustomId.length).toBeLessThanOrEqual(100);
+    expect(parseReportIntakeAdminActionCustomId(menuCustomId)).toEqual({
+      action: 'menu',
+      intakeId,
+    });
+    expect(parseReportIntakeAdminActionCustomId(confirmCloseCustomId)).toEqual({
+      action: 'confirm_close',
+      intakeId,
     });
   });
 });
