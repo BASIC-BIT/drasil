@@ -363,7 +363,7 @@ describe('CommandHandler command catalog (unit)', () => {
 
     expect(caseCommand).toBeDefined();
     expect(caseCommand.default_member_permissions).toBe(
-      PermissionFlagsBits.Administrator.toString()
+      PermissionFlagsBits.ModerateMembers.toString()
     );
     expect(caseCommand.options.map((option: any) => option.name)).toEqual([
       'open',

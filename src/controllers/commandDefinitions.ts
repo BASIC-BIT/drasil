@@ -1245,7 +1245,7 @@ const baseApplicationCommandBuilders = [
     )
     .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
     .setContexts(InteractionContextType.Guild)
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
   new SlashCommandBuilder()
     .setName('close-report')
     .setDescription('Close the current report intake thread without submitting a report')
