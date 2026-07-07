@@ -1,6 +1,12 @@
 import { MessageFlags } from 'discord.js';
 import { buildHandler } from './commandHandlerTestHarness';
 import { handleSlashCommandConfirmationButton } from '../../utils/slashCommandConfirmations';
+import { OPEN_CASE_CONTEXT_COMMAND_NAME } from '../../controllers/commandDefinitions';
+import {
+  OPEN_CASE_CONTEXT_REASON_FIELD_ID,
+  buildOpenCaseContextModalCustomId,
+  buildOpenCaseMessageContextModalCustomId,
+} from '../../controllers/CaseCommandHandler';
 
 const confirmLastSlashCommand = async (interaction: any): Promise<any> => {
   const reply = interaction.reply.mock.calls.at(-1)?.[0];
@@ -20,6 +26,118 @@ const confirmLastSlashCommand = async (interaction: any): Promise<any> => {
 };
 
 describe('CommandHandler case commands (unit)', () => {
+  it('shows a reason modal from the Open Case user context command', async () => {
+    const { handler, securityActionService } = buildHandler();
+    const invoker = { id: 'admin-1' } as any;
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const targetMember = { id: targetUser.id } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue(targetMember),
+      },
+    } as any;
+    const interaction = {
+      commandName: OPEN_CASE_CONTEXT_COMMAND_NAME,
+      user: invoker,
+      targetUser,
+      guild,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      reply: jest.fn().mockResolvedValue(undefined),
+      showModal: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleUserContextMenuCommand(interaction);
+
+    expect(guild.members.fetch).toHaveBeenCalledWith(targetUser.id);
+    expect(securityActionService.openAdminCase).not.toHaveBeenCalled();
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+
+    const modalJson = interaction.showModal.mock.calls[0][0].toJSON();
+    expect(modalJson.custom_id).toBe(buildOpenCaseContextModalCustomId(targetUser.id));
+    expect(modalJson.title).toBe('Open Case');
+    expect(modalJson.components[0].components[0]).toMatchObject({
+      custom_id: OPEN_CASE_CONTEXT_REASON_FIELD_ID,
+      required: false,
+      max_length: 500,
+    });
+  });
+
+  it('shows a reason modal from the Open Case message context command', async () => {
+    const { handler, securityActionService } = buildHandler();
+    const invoker = { id: 'admin-1' } as any;
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const targetMember = { id: targetUser.id } as any;
+    const targetMessage = {
+      id: 'message-1',
+      channelId: 'channel-1',
+      author: targetUser,
+    } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue(targetMember),
+      },
+    } as any;
+    const interaction = {
+      commandName: OPEN_CASE_CONTEXT_COMMAND_NAME,
+      user: invoker,
+      targetMessage,
+      guild,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      reply: jest.fn().mockResolvedValue(undefined),
+      showModal: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleMessageContextMenuCommand(interaction);
+
+    expect(guild.members.fetch).toHaveBeenCalledWith(targetUser.id);
+    expect(securityActionService.openAdminCase).not.toHaveBeenCalled();
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+
+    const modalJson = interaction.showModal.mock.calls[0][0].toJSON();
+    expect(modalJson.custom_id).toBe(
+      buildOpenCaseMessageContextModalCustomId(
+        targetUser.id,
+        targetMessage.channelId,
+        targetMessage.id
+      )
+    );
+    expect(modalJson.title).toBe('Open Case from Message');
+    expect(modalJson.components[0].components[0]).toMatchObject({
+      custom_id: OPEN_CASE_CONTEXT_REASON_FIELD_ID,
+      required: false,
+      max_length: 500,
+    });
+  });
+
+  it('rejects the Open Case user context command without Moderate Members permission', async () => {
+    const { handler, securityActionService } = buildHandler();
+    const interaction = {
+      commandName: OPEN_CASE_CONTEXT_COMMAND_NAME,
+      user: { id: 'member-1' },
+      targetUser: { id: 'user-2', tag: 'target#0001' },
+      guild: {
+        id: 'guild-1',
+        members: {
+          fetch: jest.fn(),
+        },
+      },
+      memberPermissions: { has: jest.fn().mockReturnValue(false) },
+      reply: jest.fn().mockResolvedValue(undefined),
+      showModal: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleUserContextMenuCommand(interaction);
+
+    expect(securityActionService.openAdminCase).not.toHaveBeenCalled();
+    expect(interaction.showModal).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'You need Moderate Members permission to open a case.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('opens an admin case and applies the case role via /case open', async () => {
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
@@ -75,6 +193,46 @@ describe('CommandHandler case commands (unit)', () => {
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Opened a case for target#0001 and applied the case role.',
       allowedMentions: { parse: [] },
+    });
+  });
+
+  it('rejects /case open without a reason when case reasons are required', async () => {
+    const openAdminCase = jest.fn().mockResolvedValue({
+      opened: true,
+      caseRoleAttempted: true,
+      caseRoleActive: true,
+    });
+    const getServerConfig = jest.fn().mockResolvedValue({
+      settings: { admin_case_open_requires_reason: true },
+    });
+    const { handler, securityActionService } = buildHandler({ openAdminCase, getServerConfig });
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn(),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'case',
+      user: { id: 'case-mod-1' },
+      guild,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      options: {
+        getSubcommand: jest.fn().mockReturnValue('open'),
+        getUser: jest.fn().mockReturnValue(targetUser),
+        getString: jest.fn().mockReturnValue(null),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(securityActionService.openAdminCase).not.toHaveBeenCalled();
+    expect(guild.members.fetch).not.toHaveBeenCalledWith(targetUser.id);
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'A case reason is required.',
+      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -495,7 +653,7 @@ describe('CommandHandler case commands (unit)', () => {
     });
   });
 
-  it('denies /case commands for non-admin members', async () => {
+  it('denies /case open for members without Moderate Members permission', async () => {
     const openAdminCase = jest.fn().mockResolvedValue({
       opened: true,
       caseRoleAttempted: false,
@@ -524,7 +682,7 @@ describe('CommandHandler case commands (unit)', () => {
 
     expect(securityActionService.openAdminCase).not.toHaveBeenCalled();
     expect(interaction.reply).toHaveBeenCalledWith({
-      content: 'You need administrator permissions to use this command.',
+      content: 'You need Moderate Members permission to open a case.',
       flags: MessageFlags.Ephemeral,
     });
   });

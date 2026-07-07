@@ -11,8 +11,13 @@ export const OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES_SETTING_KEY =
   'observed_detection_notification_window_minutes';
 export const AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY =
   'automatic_detection_exempt_moderators';
+export const ADMIN_CASE_OPEN_REQUIRES_REASON_SETTING_KEY = 'admin_case_open_requires_reason';
 export const OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY =
   'observed_action_ban_requires_reason';
+export const MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY =
+  'moderator_ban_action_requires_reason';
+export const MODERATOR_KICK_ACTION_REQUIRES_REASON_SETTING_KEY =
+  'moderator_kick_action_requires_reason';
 export const MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY = 'moderator_ban_action_enabled';
 export const MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY = 'moderator_kick_action_enabled';
 export const OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY = 'observed_action_kick_enabled';
@@ -30,6 +35,9 @@ export type DetectionResponseEvent = 'message' | 'join';
 export const DEFAULT_DETECTION_RESPONSE_MODE: DetectionResponseMode = 'restrict';
 export const DEFAULT_MODERATOR_BAN_ACTION_ENABLED = true;
 export const DEFAULT_MODERATOR_KICK_ACTION_ENABLED = true;
+export const DEFAULT_ADMIN_CASE_OPEN_REQUIRES_REASON = false;
+export const DEFAULT_MODERATOR_BAN_ACTION_REQUIRES_REASON = false;
+export const DEFAULT_MODERATOR_KICK_ACTION_REQUIRES_REASON = false;
 export const DEFAULT_OBSERVED_ACTION_KICK_ENABLED = false;
 export const DEFAULT_MESSAGE_DETECTION_AUTO_KICK_ENABLED = false;
 export const DEFAULT_JOIN_DETECTION_AUTO_KICK_ENABLED = false;
@@ -47,7 +55,10 @@ export interface DetectionResponseSettings {
   observedMinConfidenceThreshold: number;
   observedNotificationWindowMinutes: number;
   automaticDetectionExemptModerators: boolean;
+  adminCaseOpenRequiresReason: boolean;
   observedActionBanRequiresReason: boolean;
+  moderatorBanActionRequiresReason: boolean;
+  moderatorKickActionRequiresReason: boolean;
   moderatorBanActionEnabled: boolean;
   moderatorKickActionEnabled: boolean;
   observedActionKickEnabled: boolean;
@@ -113,6 +124,11 @@ export function getDetectionResponseSettings(
     typeof settings[OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY] === 'string'
       ? settings[OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY].trim()
       : undefined;
+  const moderatorBanActionRequiresReason =
+    settings[MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY] ??
+    (settings[OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY] === true
+      ? true
+      : DEFAULT_MODERATOR_BAN_ACTION_REQUIRES_REASON);
 
   return {
     mode,
@@ -134,8 +150,14 @@ export function getDetectionResponseSettings(
     ),
     automaticDetectionExemptModerators:
       settings[AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY] !== false,
-    observedActionBanRequiresReason:
-      settings[OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY] === true,
+    adminCaseOpenRequiresReason:
+      settings[ADMIN_CASE_OPEN_REQUIRES_REASON_SETTING_KEY] ??
+      DEFAULT_ADMIN_CASE_OPEN_REQUIRES_REASON,
+    observedActionBanRequiresReason: moderatorBanActionRequiresReason,
+    moderatorBanActionRequiresReason,
+    moderatorKickActionRequiresReason:
+      settings[MODERATOR_KICK_ACTION_REQUIRES_REASON_SETTING_KEY] ??
+      DEFAULT_MODERATOR_KICK_ACTION_REQUIRES_REASON,
     moderatorBanActionEnabled:
       settings[MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY] ?? DEFAULT_MODERATOR_BAN_ACTION_ENABLED,
     moderatorKickActionEnabled:

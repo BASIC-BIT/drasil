@@ -47,7 +47,10 @@ export interface ServerSettings {
   observed_detection_min_confidence_threshold?: number;
   observed_detection_notification_window_minutes?: number;
   automatic_detection_exempt_moderators?: boolean;
+  admin_case_open_requires_reason?: boolean;
   observed_action_ban_requires_reason?: boolean;
+  moderator_ban_action_requires_reason?: boolean;
+  moderator_kick_action_requires_reason?: boolean;
   moderator_ban_action_enabled?: boolean;
   moderator_kick_action_enabled?: boolean;
   observed_action_kick_enabled?: boolean;

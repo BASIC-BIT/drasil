@@ -6,6 +6,7 @@ import {
   Client,
   Guild,
   GuildMember,
+  Message,
   MessageFlags,
   ModalSubmitInteraction,
   PermissionFlagsBits,
@@ -42,6 +43,11 @@ import {
   buildCaseReviewDigestSelectCustomId,
   CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID,
 } from '../../utils/caseReviewDigestCustomIds';
+import {
+  OPEN_CASE_CONTEXT_REASON_FIELD_ID,
+  buildOpenCaseContextModalCustomId,
+  buildOpenCaseMessageContextModalCustomId,
+} from '../../controllers/CaseCommandHandler';
 
 const buildMember = (guildId: string, userId: string, displayName = 'test-user'): GuildMember =>
   ({
@@ -389,6 +395,168 @@ describe('InteractionHandler (unit)', () => {
       settings: { [OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY]: true },
     });
   };
+
+  it('opens a case from the native Open Case modal reason', async () => {
+    securityActionService.openAdminCase.mockResolvedValueOnce({
+      opened: true,
+      caseRoleAttempted: true,
+      caseRoleActive: true,
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = {
+      customId: buildOpenCaseContextModalCustomId('user-2'),
+      guildId: 'guild-1',
+      user: { id: 'admin-1' },
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      fields: {
+        getTextInputValue: jest.fn(() => 'manual review'),
+      },
+      deferred: false,
+      replied: false,
+      deferReply: jest.fn().mockImplementation(async () => {
+        interaction.deferred = true;
+      }),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(interaction.fields.getTextInputValue).toHaveBeenCalledWith(
+      OPEN_CASE_CONTEXT_REASON_FIELD_ID
+    );
+    expect(securityActionService.openAdminCase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-2' }),
+      interaction.user,
+      {
+        action: 'open_case',
+        reason: 'manual review',
+      }
+    );
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Opened a case for test-user#0001 and applied the case role.',
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('opens a case from the native Open Case message modal with source metadata', async () => {
+    securityActionService.openAdminCase.mockResolvedValueOnce({
+      opened: true,
+      caseRoleAttempted: true,
+      caseRoleActive: true,
+    });
+    const sourceMessage = {
+      id: 'message-1',
+      channelId: 'channel-1',
+      url: 'https://discord.com/channels/guild-1/channel-1/message-1',
+    } as Message;
+    const sourceFetch = jest.fn().mockResolvedValue(sourceMessage);
+    Object.assign(client, {
+      channels: {
+        fetch: jest.fn().mockResolvedValue({
+          messages: {
+            fetch: sourceFetch,
+          },
+        }),
+      },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = {
+      customId: buildOpenCaseMessageContextModalCustomId('user-2', 'channel-1', 'message-1'),
+      guildId: 'guild-1',
+      user: { id: 'admin-1' },
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      fields: {
+        getTextInputValue: jest.fn(() => 'message review'),
+      },
+      deferred: false,
+      replied: false,
+      deferReply: jest.fn().mockImplementation(async () => {
+        interaction.deferred = true;
+      }),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect((client as any).channels.fetch).toHaveBeenCalledWith('channel-1');
+    expect(sourceFetch).toHaveBeenCalledWith('message-1');
+    expect(securityActionService.openAdminCase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-2' }),
+      interaction.user,
+      {
+        action: 'open_case',
+        reason: 'message review',
+        metadata: {
+          source: 'message_context_case',
+          source_channel_id: 'channel-1',
+          source_message_id: 'message-1',
+        },
+        sourceMessage,
+      }
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Opened a case for test-user#0001 and applied the case role.',
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('rejects native Open Case modal submits without administrator permission', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = {
+      customId: buildOpenCaseContextModalCustomId('user-2'),
+      guildId: 'guild-1',
+      user: { id: 'member-1' },
+      memberPermissions: { has: jest.fn().mockReturnValue(false) },
+      fields: {
+        getTextInputValue: jest.fn(),
+      },
+      deferred: false,
+      replied: false,
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(interaction.fields.getTextInputValue).not.toHaveBeenCalled();
+    expect(securityActionService.openAdminCase).not.toHaveBeenCalled();
+    expect(interaction.deferReply).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'You need Moderate Members permission to open a case.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
 
   it('handles verify button by calling UserModerationService', async () => {
     const handler = new InteractionHandler(
@@ -988,7 +1156,7 @@ describe('InteractionHandler (unit)', () => {
     expect(interaction.showModal).toHaveBeenCalledTimes(1);
     const modal = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
     expect(modal.toJSON().custom_id).toBe('verification:ban_modal:user-1');
-    expect(JSON.stringify(modal.toJSON())).toContain('Final notes (optional)');
+    expect(JSON.stringify(modal.toJSON())).toContain('Ban reason (optional)');
   });
 
   it('shows sync existing ban to a Ban Members moderator when a pending case user is already banned', async () => {
@@ -1557,7 +1725,7 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
-  it('handles observed kick button for present members', async () => {
+  it('shows an observed kick reason modal for present members', async () => {
     enableObservedKickActions();
     const handler = new InteractionHandler(
       client,
@@ -1580,20 +1748,13 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(securityActionService.kickObservedDetection).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'user-1' }),
-      'det-1',
-      interaction.user,
-      'Kicked from observed suspicious notification'
-    );
-    expect(interaction.followUp).toHaveBeenCalledWith({
-      content: 'Kicked <@user-1> from the observed alert.',
-      allowedMentions: { parse: [] },
-      flags: MessageFlags.Ephemeral,
-    });
+    expect(securityActionService.kickObservedDetection).not.toHaveBeenCalled();
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+    const modal = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
+    expect(modal.toJSON().custom_id).toBe('observed:kick_modal:user-1:det-1');
   });
 
-  it('reports observed kick failures after deferred confirmation', async () => {
+  it('reports observed kick failures after modal submission', async () => {
     enableObservedKickActions();
     securityActionService.kickObservedDetection.mockRejectedValueOnce(
       new Error('Discord rejected')
@@ -1608,25 +1769,30 @@ describe('InteractionHandler (unit)', () => {
       threadManager,
       adminActionRepository
     );
-    const interaction = buildInteraction(
-      'admin_actions:confirm_observed_kick:observed:user-1:det-1',
-      'guild-1',
-      {
-        id: 'admin-1',
-      } as User
-    );
+    const interaction = {
+      customId: 'observed:kick_modal:user-1:det-1',
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn(() => 'observed kick reason'),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
     grantInteractionPermissions(interaction);
 
-    await handler.handleButtonInteraction(interaction);
+    await handler.handleModalSubmit(interaction);
 
-    expect(interaction.deferUpdate).toHaveBeenCalled();
-    expect(interaction.followUp).toHaveBeenCalledWith({
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'An error occurred while kicking the user.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 
-  it('handles case kick button by default', async () => {
+  it('shows a case kick reason modal by default', async () => {
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -1644,15 +1810,156 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleButtonInteraction(interaction);
 
+    expect(userModerationService.kickUser).not.toHaveBeenCalled();
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+    const modal = (interaction.showModal as jest.Mock).mock.calls[0][0] as any;
+    expect(modal.toJSON().custom_id).toBe('verification:kick_modal:user-1');
+  });
+
+  it('submits case kick modal with the default reason when blank', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = {
+      customId: 'verification:kick_modal:user-1',
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn(() => '   '),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+    grantInteractionPermissions(interaction);
+
+    await handler.handleModalSubmit(interaction);
+
     expect(userModerationService.kickUser).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-1' }),
       'Kicked by moderator during verification',
       interaction.user
     );
-    expect(interaction.followUp).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Kicked <@user-1> and resolved pending verification cases as kicked.',
       allowedMentions: { parse: [] },
-      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('submits observed kick modal with the provided reason', async () => {
+    enableObservedKickActions();
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = {
+      customId: 'observed:kick_modal:user-1:det-1',
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn(() => 'observed kick reason'),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+    grantInteractionPermissions(interaction);
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.kickObservedDetection).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'det-1',
+      interaction.user,
+      'observed kick reason'
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Kicked <@user-1> from the observed alert.',
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it('executes native ban action only after the second confirmation modal', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const reasonInteraction = {
+      customId: 'moderation_action_reason:ban:user-1',
+      guildId: 'guild-1',
+      user: { id: 'ban-mod-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn(() => 'native ban reason'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+    grantOnlyBanMembersPermission(reasonInteraction);
+
+    await handler.handleModalSubmit(reasonInteraction);
+
+    expect(userModerationService.banUser).not.toHaveBeenCalled();
+    const reply = (reasonInteraction.reply as jest.Mock).mock.calls[0][0];
+    const confirmButton = reply.components[0].components[0];
+    const confirmButtonInteraction = buildInteraction(confirmButton.toJSON().custom_id, 'guild-1', {
+      id: 'ban-mod-1',
+    } as User);
+    grantOnlyBanMembersPermission(confirmButtonInteraction);
+
+    await handler.handleButtonInteraction(confirmButtonInteraction);
+
+    expect(confirmButtonInteraction.showModal).toHaveBeenCalledTimes(1);
+    const confirmationModal = (confirmButtonInteraction.showModal as jest.Mock).mock.calls[0][0];
+    const confirmationModalId = confirmationModal.toJSON().custom_id;
+    const confirmationInteraction = {
+      customId: confirmationModalId,
+      guildId: 'guild-1',
+      user: { id: 'ban-mod-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn(() => 'BAN'),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+    grantOnlyBanMembersPermission(confirmationInteraction);
+
+    await handler.handleModalSubmit(confirmationInteraction);
+
+    expect(userModerationService.banUser).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'native ban reason',
+      confirmationInteraction.user
+    );
+    expect(confirmationInteraction.editReply).toHaveBeenCalledWith({
+      content: 'Banned <@user-1> from this server.',
+      allowedMentions: { parse: [] },
     });
   });
 

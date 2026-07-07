@@ -295,6 +295,7 @@ export interface AdminCaseOptions {
   reason?: string;
   action: AdminCaseAction;
   metadata?: Record<string, unknown>;
+  sourceMessage?: Message;
 }
 
 export interface AdminCaseResult {
@@ -739,6 +740,113 @@ export class SecurityActionService implements ISecurityActionService {
       console.warn(`Failed to refresh user snapshot for case ${verificationEvent.id}:`, error);
       return verificationEvent;
     }
+  }
+
+  private getAdminCaseSourceMetadata(
+    metadata: Record<string, unknown> | undefined
+  ): VerificationEvent['metadata'] | null {
+    const sourceChannelId =
+      typeof metadata?.source_channel_id === 'string' ? metadata.source_channel_id : null;
+    const sourceMessageId =
+      typeof metadata?.source_message_id === 'string' ? metadata.source_message_id : null;
+    if (!sourceChannelId || !sourceMessageId) {
+      return null;
+    }
+
+    return {
+      source_channel_id: sourceChannelId,
+      source_message_id: sourceMessageId,
+      source_messages: [
+        {
+          source_channel_id: sourceChannelId,
+          source_message_id: sourceMessageId,
+          ...(typeof metadata?.source === 'string' ? { source: metadata.source } : {}),
+        },
+      ],
+      ...(typeof metadata?.source === 'string' ? { source: metadata.source } : {}),
+    } as VerificationEvent['metadata'];
+  }
+
+  private mergeSourceMessages(
+    existingMetadata: Record<string, unknown>,
+    sourceMetadata: Record<string, unknown>
+  ): Array<Record<string, string>> | undefined {
+    const sourceChannelId =
+      typeof sourceMetadata.source_channel_id === 'string'
+        ? sourceMetadata.source_channel_id
+        : null;
+    const sourceMessageId =
+      typeof sourceMetadata.source_message_id === 'string'
+        ? sourceMetadata.source_message_id
+        : null;
+    if (!sourceChannelId || !sourceMessageId) {
+      return undefined;
+    }
+
+    const existingSourceMessages = Array.isArray(existingMetadata.source_messages)
+      ? existingMetadata.source_messages.filter(
+          (entry): entry is Record<string, string> =>
+            typeof entry === 'object' &&
+            entry !== null &&
+            typeof (entry as Record<string, unknown>).source_channel_id === 'string' &&
+            typeof (entry as Record<string, unknown>).source_message_id === 'string'
+        )
+      : [];
+    const nextEntry = {
+      source_channel_id: sourceChannelId,
+      source_message_id: sourceMessageId,
+      ...(typeof sourceMetadata.source === 'string' ? { source: sourceMetadata.source } : {}),
+    };
+    const alreadyPresent = existingSourceMessages.some(
+      (entry) =>
+        entry.source_channel_id === nextEntry.source_channel_id &&
+        entry.source_message_id === nextEntry.source_message_id
+    );
+
+    return alreadyPresent ? existingSourceMessages : [...existingSourceMessages, nextEntry];
+  }
+
+  private async mergeActiveCaseMetadata(
+    member: GuildMember,
+    metadata: VerificationEvent['metadata'] | null
+  ): Promise<void> {
+    if (!metadata) {
+      return;
+    }
+
+    try {
+      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+      if (!activeCase) {
+        return;
+      }
+
+      await this.verificationEventRepository.update(
+        activeCase.id,
+        {
+          metadata: this.mergeVerificationMetadata(activeCase.metadata, metadata),
+        },
+        { touchUpdatedAt: false }
+      );
+    } catch (error) {
+      console.warn(`Failed to persist source metadata for case on ${member.user.tag}:`, error);
+    }
+  }
+
+  private mergeVerificationMetadata(
+    existing: VerificationEvent['metadata'],
+    next: VerificationEvent['metadata']
+  ): VerificationEvent['metadata'] {
+    const existingRecord = this.metadataToRecord(existing);
+    const nextRecord = this.metadataToRecord(next);
+    const sourceMessages = this.mergeSourceMessages(existingRecord, nextRecord);
+    return {
+      ...existingRecord,
+      ...nextRecord,
+      ...(sourceMessages ? { source_messages: sourceMessages } : {}),
+    } as VerificationEvent['metadata'];
   }
 
   private async adoptObservedNotificationForCase(
@@ -2609,6 +2717,7 @@ export class SecurityActionService implements ISecurityActionService {
         typeof options.metadata?.sourceRoleId === 'string' ? options.metadata.sourceRoleId : null;
       const assignedById =
         typeof options.metadata?.assignedById === 'string' ? options.metadata.assignedById : null;
+      const sourceMetadata = this.getAdminCaseSourceMetadata(options.metadata);
       const assignedByText = assignedById ? `<@${assignedById}>` : 'an unknown moderator';
       const reasonSuffix = normalizedReason ? ` Reason: ${normalizedReason}` : '';
       const reasonText = isRoleIntake
@@ -2661,12 +2770,13 @@ export class SecurityActionService implements ISecurityActionService {
       const handled = await this.handleSuspiciousMember(
         member,
         detectionResult,
-        undefined,
+        options.sourceMessage,
         undefined,
         true,
         moderator
       );
       if (handled) {
+        await this.mergeActiveCaseMetadata(member, sourceMetadata);
         this.captureMemberAnalytics(
           member,
           'admin case opened',

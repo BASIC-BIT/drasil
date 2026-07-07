@@ -1,16 +1,79 @@
 import {
+  ActionRowBuilder,
   ButtonStyle,
   ChatInputCommandInteraction,
   Guild,
+  MessageContextMenuCommandInteraction,
   MessageFlags,
+  ModalBuilder,
   PermissionFlagsBits,
   Role,
+  TextInputBuilder,
+  TextInputStyle,
+  UserContextMenuCommandInteraction,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { ISecurityActionService, RoleIntakeProgress } from '../services/SecurityActionService';
+import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { requestSlashCommandConfirmation } from '../utils/slashCommandConfirmations';
 
-type ReplyGuildInstallRequired = (interaction: ChatInputCommandInteraction) => Promise<void>;
+export const OPEN_CASE_CONTEXT_MODAL_PREFIX = 'case_open_context';
+export const OPEN_CASE_MESSAGE_CONTEXT_MODAL_PREFIX = 'case_open_message_context';
+export const OPEN_CASE_CONTEXT_REASON_FIELD_ID = 'case_open_reason';
+
+type CaseCommandInteraction =
+  | ChatInputCommandInteraction
+  | UserContextMenuCommandInteraction
+  | MessageContextMenuCommandInteraction;
+type ReplyGuildInstallRequired = (interaction: CaseCommandInteraction) => Promise<void>;
+
+export interface OpenCaseMessageContextModalData {
+  targetUserId: string;
+  sourceChannelId: string;
+  sourceMessageId: string;
+}
+
+export function buildOpenCaseContextModalCustomId(targetUserId: string): string {
+  return `${OPEN_CASE_CONTEXT_MODAL_PREFIX}:${targetUserId}`;
+}
+
+export function buildOpenCaseMessageContextModalCustomId(
+  targetUserId: string,
+  sourceChannelId: string,
+  sourceMessageId: string
+): string {
+  return [
+    OPEN_CASE_MESSAGE_CONTEXT_MODAL_PREFIX,
+    targetUserId,
+    sourceChannelId,
+    sourceMessageId,
+  ].join(':');
+}
+
+export function parseOpenCaseContextModalCustomId(customId: string): string | null {
+  const prefix = `${OPEN_CASE_CONTEXT_MODAL_PREFIX}:`;
+  if (!customId.startsWith(prefix)) {
+    return null;
+  }
+
+  return customId.slice(prefix.length) || null;
+}
+
+export function parseOpenCaseMessageContextModalCustomId(
+  customId: string
+): OpenCaseMessageContextModalData | null {
+  const [prefix, targetUserId, sourceChannelId, sourceMessageId] = customId.split(':');
+  if (
+    prefix !== OPEN_CASE_MESSAGE_CONTEXT_MODAL_PREFIX ||
+    !targetUserId ||
+    !sourceChannelId ||
+    !sourceMessageId
+  ) {
+    return null;
+  }
+
+  return { targetUserId, sourceChannelId, sourceMessageId };
+}
 
 export class CaseCommandHandler {
   public constructor(
@@ -20,7 +83,7 @@ export class CaseCommandHandler {
   ) {}
 
   private async requireAdministrator(
-    interaction: ChatInputCommandInteraction,
+    interaction: CaseCommandInteraction,
     guild: Guild
   ): Promise<boolean> {
     const memberPermissions = interaction.memberPermissions;
@@ -48,6 +111,153 @@ export class CaseCommandHandler {
     return true;
   }
 
+  private async requireCaseOpenPermission(
+    interaction: CaseCommandInteraction,
+    guild: Guild
+  ): Promise<boolean> {
+    const memberPermissions = interaction.memberPermissions;
+    if (
+      memberPermissions?.has(PermissionFlagsBits.Administrator) ||
+      memberPermissions?.has(PermissionFlagsBits.ModerateMembers)
+    ) {
+      return true;
+    }
+
+    if (
+      memberPermissions &&
+      !memberPermissions.has(PermissionFlagsBits.ModerateMembers) &&
+      !memberPermissions.has(PermissionFlagsBits.Administrator)
+    ) {
+      await interaction.reply({
+        content: 'You need Moderate Members permission to open a case.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return false;
+    }
+
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    if (
+      !member ||
+      (!member.permissions.has(PermissionFlagsBits.Administrator) &&
+        !member.permissions.has(PermissionFlagsBits.ModerateMembers))
+    ) {
+      await interaction.reply({
+        content: 'You need Moderate Members permission to open a case.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  private async getCaseOpenReasonRequired(guildId: string): Promise<boolean> {
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    return getDetectionResponseSettings(serverConfig.settings).adminCaseOpenRequiresReason;
+  }
+
+  public async handleOpenCaseUserContextCommand(
+    interaction: UserContextMenuCommandInteraction
+  ): Promise<void> {
+    const guild = interaction.guild;
+    if (!guild) {
+      await this.replyGuildInstallRequired(interaction);
+      return;
+    }
+
+    if (!(await this.requireCaseOpenPermission(interaction, guild))) {
+      return;
+    }
+
+    const targetUser = interaction.targetUser;
+    if (targetUser.id === interaction.user.id) {
+      await interaction.reply({
+        content: 'You cannot open a case for yourself.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+    if (!targetMember) {
+      await interaction.reply({
+        content: `Could not find user ${targetUser.tag} in this server.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await this.showOpenCaseReasonModal(
+      interaction,
+      buildOpenCaseContextModalCustomId(targetUser.id),
+      'Open Case',
+      await this.getCaseOpenReasonRequired(guild.id)
+    );
+  }
+
+  public async handleOpenCaseMessageContextCommand(
+    interaction: MessageContextMenuCommandInteraction
+  ): Promise<void> {
+    const guild = interaction.guild;
+    if (!guild) {
+      await this.replyGuildInstallRequired(interaction);
+      return;
+    }
+
+    if (!(await this.requireCaseOpenPermission(interaction, guild))) {
+      return;
+    }
+
+    const targetMessage = interaction.targetMessage;
+    const targetUser = targetMessage.author;
+    if (targetUser.id === interaction.user.id) {
+      await interaction.reply({
+        content: 'You cannot open a case for yourself.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+    if (!targetMember) {
+      await interaction.reply({
+        content: `Could not find user ${targetUser.tag} in this server.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await this.showOpenCaseReasonModal(
+      interaction,
+      buildOpenCaseMessageContextModalCustomId(
+        targetUser.id,
+        targetMessage.channelId,
+        targetMessage.id
+      ),
+      'Open Case from Message',
+      await this.getCaseOpenReasonRequired(guild.id)
+    );
+  }
+
+  private async showOpenCaseReasonModal(
+    interaction: UserContextMenuCommandInteraction | MessageContextMenuCommandInteraction,
+    customId: string,
+    title: string,
+    reasonRequired: boolean
+  ): Promise<void> {
+    const modal = new ModalBuilder().setCustomId(customId).setTitle(title);
+    const reasonInput = new TextInputBuilder()
+      .setCustomId(OPEN_CASE_CONTEXT_REASON_FIELD_ID)
+      .setLabel(reasonRequired ? 'Reason' : 'Reason (optional)')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(reasonRequired)
+      .setMaxLength(500)
+      .setPlaceholder('Why should moderators review this user?');
+
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
+    await interaction.showModal(modal);
+  }
+
   public async handleCaseCommand(interaction: ChatInputCommandInteraction): Promise<void> {
     const guild = interaction.guild;
     if (!guild) {
@@ -55,13 +265,16 @@ export class CaseCommandHandler {
       return;
     }
 
-    if (!(await this.requireAdministrator(interaction, guild))) {
+    const subcommand = interaction.options.getSubcommand(true);
+    if (subcommand === 'open') {
+      if (!(await this.requireCaseOpenPermission(interaction, guild))) {
+        return;
+      }
+      await this.handleCaseUserCommand(interaction, guild);
       return;
     }
 
-    const subcommand = interaction.options.getSubcommand(true);
-    if (subcommand === 'open') {
-      await this.handleCaseUserCommand(interaction, guild);
+    if (!(await this.requireAdministrator(interaction, guild))) {
       return;
     }
 
@@ -92,6 +305,14 @@ export class CaseCommandHandler {
   ): Promise<void> {
     const targetUser = interaction.options.getUser('user', true);
     const reason = interaction.options.getString('reason')?.trim() || undefined;
+    if ((await this.getCaseOpenReasonRequired(guild.id)) && !reason) {
+      await interaction.reply({
+        content: 'A case reason is required.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
     const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
     if (!targetMember) {
       await interaction.reply({
@@ -261,6 +482,14 @@ export class CaseCommandHandler {
     const execute = interaction.options.getBoolean('execute') ?? false;
     const limit = interaction.options.getInteger('limit') ?? undefined;
     const reason = interaction.options.getString('reason')?.trim() || undefined;
+
+    if (execute && (await this.getCaseOpenReasonRequired(guild.id)) && !reason) {
+      await interaction.reply({
+        content: 'A case reason is required before executing role intake.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
 
     if (execute) {
       await requestSlashCommandConfirmation(interaction, {
