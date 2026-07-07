@@ -1266,6 +1266,96 @@ describe('SecurityActionService (unit)', () => {
     });
   });
 
+  it('stores admin case source message metadata on the active case', async () => {
+    const guildId = 'guild-admin-message-source';
+    const userId = 'user-admin-message-source';
+    const moderator = { id: 'admin-message-source' } as User;
+    const member = buildMember(guildId, userId);
+    const sourceMessage = buildMessage(guildId, 'source-channel-1');
+
+    await buildService().openAdminCase(member, moderator, {
+      action: 'open_case',
+      reason: 'message evidence',
+      metadata: {
+        source: 'message_context_case',
+        source_channel_id: sourceMessage.channelId,
+        source_message_id: sourceMessage.id,
+      },
+      sourceMessage,
+    });
+
+    const activeCase = await verificationEventRepository.findActiveByUserAndServer(userId, guildId);
+    expect(activeCase?.metadata).toMatchObject({
+      source: 'message_context_case',
+      source_channel_id: 'source-channel-1',
+      source_message_id: 'message-1',
+      source_messages: [
+        {
+          source: 'message_context_case',
+          source_channel_id: 'source-channel-1',
+          source_message_id: 'message-1',
+        },
+      ],
+    });
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledWith(
+      member,
+      expect.any(Object),
+      expect.any(Object),
+      sourceMessage
+    );
+  });
+
+  it('appends additional admin case source messages to an active case', async () => {
+    const guildId = 'guild-admin-message-source-append';
+    const userId = 'user-admin-message-source-append';
+    const moderator = { id: 'admin-message-source' } as User;
+    const member = buildMember(guildId, userId);
+    const sourceMessageOne = buildMessage(guildId, 'source-channel-1');
+    const sourceMessageTwo = {
+      ...buildMessage(guildId, 'source-channel-2'),
+      id: 'message-2',
+      url: `https://discord.com/channels/${guildId}/source-channel-2/message-2`,
+    } as Message;
+    const service = buildService();
+
+    await service.openAdminCase(member, moderator, {
+      action: 'open_case',
+      metadata: {
+        source: 'message_context_case',
+        source_channel_id: sourceMessageOne.channelId,
+        source_message_id: sourceMessageOne.id,
+      },
+      sourceMessage: sourceMessageOne,
+    });
+    await service.openAdminCase(member, moderator, {
+      action: 'open_case',
+      metadata: {
+        source: 'message_context_case',
+        source_channel_id: sourceMessageTwo.channelId,
+        source_message_id: sourceMessageTwo.id,
+      },
+      sourceMessage: sourceMessageTwo,
+    });
+
+    const activeCase = await verificationEventRepository.findActiveByUserAndServer(userId, guildId);
+    expect(activeCase?.metadata).toMatchObject({
+      source_channel_id: 'source-channel-2',
+      source_message_id: 'message-2',
+      source_messages: [
+        {
+          source: 'message_context_case',
+          source_channel_id: 'source-channel-1',
+          source_message_id: 'message-1',
+        },
+        {
+          source: 'message_context_case',
+          source_channel_id: 'source-channel-2',
+          source_message_id: 'message-2',
+        },
+      ],
+    });
+  });
+
   it('posts an observed alert for user report without opening a case', async () => {
     const guildId = 'guild-3';
     const userId = 'user-3';

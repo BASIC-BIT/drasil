@@ -35,6 +35,9 @@ import {
 
 export const REPORT_USER_CONTEXT_COMMAND_NAME = 'Report User';
 export const REPORT_MESSAGE_CONTEXT_COMMAND_NAME = 'Report Message';
+export const OPEN_CASE_CONTEXT_COMMAND_NAME = 'Open Case';
+export const BAN_USER_CONTEXT_COMMAND_NAME = 'Ban User';
+export const KICK_USER_CONTEXT_COMMAND_NAME = 'Kick User';
 
 export interface BuildApplicationCommandsOptions {
   userInstallReportingEnabled: boolean;
@@ -515,13 +518,33 @@ const baseApplicationCommandBuilders = [
         )
         .addSubcommand((subcommand) =>
           subcommand
+            .setName('case-reason-require')
+            .setDescription('Require a reason when staff open a case')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('case-reason-optional')
+            .setDescription('Allow staff to open cases without a reason')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
             .setName('ban-reason-require')
-            .setDescription('Require a reason when banning from observed notifications')
+            .setDescription('Require a reason for staff ban actions')
         )
         .addSubcommand((subcommand) =>
           subcommand
             .setName('ban-reason-optional')
-            .setDescription('Allow the default reason when banning from observed notifications')
+            .setDescription('Allow the default reason for staff ban actions')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('kick-reason-require')
+            .setDescription('Require a reason for staff kick actions')
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName('kick-reason-optional')
+            .setDescription('Allow the default reason for staff kick actions')
         )
         .addSubcommand((subcommand) =>
           subcommand
@@ -1141,7 +1164,7 @@ const baseApplicationCommandBuilders = [
     )
     .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
     .setContexts(InteractionContextType.Guild)
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
   new SlashCommandBuilder()
     .setName('case')
     .setDescription('Open moderation cases or bulk-intake case-role users')
@@ -1222,7 +1245,7 @@ const baseApplicationCommandBuilders = [
     )
     .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
     .setContexts(InteractionContextType.Guild)
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
   new SlashCommandBuilder()
     .setName('close-report')
     .setDescription('Close the current report intake thread without submitting a report')
@@ -1246,6 +1269,42 @@ const baseApplicationCommandBuilders = [
     .setType(ApplicationCommandType.User)
     .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
     .setContexts(InteractionContextType.Guild),
+  new ContextMenuCommandBuilder()
+    .setName(OPEN_CASE_CONTEXT_COMMAND_NAME)
+    .setType(ApplicationCommandType.User)
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .setContexts(InteractionContextType.Guild)
+    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+  new ContextMenuCommandBuilder()
+    .setName(OPEN_CASE_CONTEXT_COMMAND_NAME)
+    .setType(ApplicationCommandType.Message)
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .setContexts(InteractionContextType.Guild)
+    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+  new ContextMenuCommandBuilder()
+    .setName(BAN_USER_CONTEXT_COMMAND_NAME)
+    .setType(ApplicationCommandType.User)
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .setContexts(InteractionContextType.Guild)
+    .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+  new ContextMenuCommandBuilder()
+    .setName(BAN_USER_CONTEXT_COMMAND_NAME)
+    .setType(ApplicationCommandType.Message)
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .setContexts(InteractionContextType.Guild)
+    .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+  new ContextMenuCommandBuilder()
+    .setName(KICK_USER_CONTEXT_COMMAND_NAME)
+    .setType(ApplicationCommandType.User)
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .setContexts(InteractionContextType.Guild)
+    .setDefaultMemberPermissions(PermissionFlagsBits.KickMembers),
+  new ContextMenuCommandBuilder()
+    .setName(KICK_USER_CONTEXT_COMMAND_NAME)
+    .setType(ApplicationCommandType.Message)
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .setContexts(InteractionContextType.Guild)
+    .setDefaultMemberPermissions(PermissionFlagsBits.KickMembers),
 ];
 
 function buildReportMessageContextCommand(): ContextMenuCommandBuilder {
