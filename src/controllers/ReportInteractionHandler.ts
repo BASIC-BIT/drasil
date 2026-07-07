@@ -35,6 +35,7 @@ import {
 import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
 import { messageAttachmentsToReportMetadata } from '../utils/reportAttachments';
 import {
+  buildReportIntakeAdminActionsCustomId,
   buildReportIntakeAdminCancelCustomId,
   buildReportIntakeAdminCloseCustomId,
   buildReportIntakeAdminConfirmCloseCustomId,
@@ -162,7 +163,7 @@ export class ReportInteractionHandler {
         content: `Opened a private report thread: ${thread.url}\nAdd what happened there.`,
       });
 
-      await this.notifyReportIntakeThreadOpened(guildId, reporter, thread);
+      await this.notifyReportIntakeThreadOpened(guildId, reporter, thread, intake.id);
     } catch (error) {
       console.error('Error opening report intake thread:', error);
       if (thread && !intakeActivated) {
@@ -631,7 +632,12 @@ export class ReportInteractionHandler {
     }
 
     const currentChannelId = interaction.channelId;
-    if (intake.thread_id && currentChannelId && currentChannelId !== intake.thread_id) {
+    if (
+      intake.thread_id &&
+      currentChannelId &&
+      currentChannelId !== intake.thread_id &&
+      !(await this.isReportIntakeAdminNotificationChannel(guildId, currentChannelId))
+    ) {
       await this.respondToReportIntakeAdminInteraction(
         interaction,
         { content: 'This report action does not match the current thread.', components: [] },
@@ -737,6 +743,10 @@ export class ReportInteractionHandler {
       return;
     }
 
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferUpdate();
+    }
+
     const result = await this.reportIntakeService.closeIntakeForThread({
       threadId: context.intake.thread_id,
       closedById: interaction.user.id,
@@ -837,6 +847,17 @@ export class ReportInteractionHandler {
     return isThread ? (channel as unknown as ReportIntakeThreadChannel) : null;
   }
 
+  private async isReportIntakeAdminNotificationChannel(
+    guildId: string,
+    channelId: string
+  ): Promise<boolean> {
+    const adminChannel = await this.configService.getAdminChannel(guildId).catch((error) => {
+      console.warn(`Failed to resolve admin channel for report intake admin action:`, error);
+      return null;
+    });
+    return adminChannel?.id === channelId;
+  }
+
   private buildExistingReportIntakeMessage(guildId: string, threadId: string | null): string {
     if (threadId) {
       return `You already have an open report thread: https://discord.com/channels/${guildId}/${threadId}\nPlease continue there, or use /close-report in that thread if it was opened by mistake.`;
@@ -869,7 +890,8 @@ export class ReportInteractionHandler {
   private async notifyReportIntakeThreadOpened(
     guildId: string,
     reporter: GuildMember,
-    thread: ThreadChannel
+    thread: ThreadChannel,
+    reportIntakeId: string
   ): Promise<void> {
     try {
       const adminChannel = await this.configService.getAdminChannel(guildId);
@@ -879,6 +901,14 @@ export class ReportInteractionHandler {
       await adminChannel?.send({
         ...(content ? { content } : {}),
         embeds: [this.presentationBuilder.createReportIntakeStartedEmbed(reporter, thread)],
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(buildReportIntakeAdminActionsCustomId(reportIntakeId))
+              .setLabel('Admin Actions')
+              .setStyle(ButtonStyle.Primary)
+          ),
+        ],
         allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
       });
     } catch (error) {

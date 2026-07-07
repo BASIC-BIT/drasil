@@ -53,6 +53,9 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
     user,
     deferred: false,
     replied: false,
+    deferUpdate: jest.fn().mockImplementation(async () => {
+      interaction.deferred = true;
+    }),
     deferReply: jest.fn().mockImplementation(async () => {
       interaction.deferred = true;
     }),
@@ -503,13 +506,21 @@ describe('ReportInteractionHandler (unit)', () => {
       content:
         'Opened a private report thread: https://discord.com/channels/report-thread-1\nAdd what happened there.',
     });
-    expect(adminChannel.send).toHaveBeenCalledWith({
-      embeds: [
-        expect.objectContaining({
-          data: expect.objectContaining({ title: 'Report Intake Started' }),
-        }),
-      ],
-      allowedMentions: { parse: [], roles: [], users: [], repliedUser: false },
+    expect(adminChannel.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        embeds: [
+          expect.objectContaining({
+            data: expect.objectContaining({ title: 'Report Intake Started' }),
+          }),
+        ],
+        allowedMentions: { parse: [], roles: [], users: [], repliedUser: false },
+      })
+    );
+    const adminMessage = (adminChannel.send as jest.Mock).mock.calls[0][0];
+    const adminButton = adminMessage.components[0].toJSON().components[0];
+    expect(adminButton).toMatchObject({
+      custom_id: buildReportIntakeAdminActionsCustomId('intake-1'),
+      label: 'Admin Actions',
     });
     expect(interaction.showModal).not.toHaveBeenCalled();
   });
@@ -751,6 +762,50 @@ describe('ReportInteractionHandler (unit)', () => {
     );
   });
 
+  it('shows the report intake admin menu from the admin notification button', async () => {
+    const staffMember = {
+      ...buildMember('guild-1', 'staff-1'),
+      permissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ModerateMembers),
+      },
+    } as unknown as GuildMember;
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(staffMember) },
+    });
+    const reportThread = {
+      id: 'report-thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    (client as any).channels = {
+      fetch: jest.fn().mockResolvedValue(reportThread),
+    };
+    configService.getAdminChannel.mockResolvedValue({ id: 'admin-channel-1' } as any);
+    const reportIntakeService = createReportIntakeService();
+    reportIntakeService.findIntakeById.mockResolvedValue(buildReportIntake());
+    const handler = createHandler(reportIntakeService);
+    const interaction = buildInteraction(
+      buildReportIntakeAdminActionsCustomId('intake-1'),
+      'guild-1',
+      {
+        id: 'staff-1',
+      } as User
+    );
+    (interaction as any).channel = { id: 'admin-channel-1', type: ChannelType.GuildText };
+    (interaction as any).channelId = 'admin-channel-1';
+
+    await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
+
+    expect((client as any).channels.fetch).toHaveBeenCalledWith('report-thread-1');
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flags: MessageFlags.Ephemeral,
+        content: expect.stringContaining('Admin actions for report intake `intake-1`.'),
+      })
+    );
+  });
+
   it('closes a report intake from the admin action confirmation', async () => {
     const staffMember = {
       ...buildMember('guild-1', 'staff-1'),
@@ -787,16 +842,21 @@ describe('ReportInteractionHandler (unit)', () => {
 
     await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
 
+    expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+    expect((interaction.deferUpdate as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      reportIntakeService.closeIntakeForThread.mock.invocationCallOrder[0]
+    );
     expect(reportIntakeService.closeIntakeForThread).toHaveBeenCalledWith({
       threadId: 'report-thread-1',
       closedById: 'staff-1',
       closedByStaff: true,
     });
-    expect(interaction.update).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Report intake closed.',
       components: [],
       allowedMentions: { parse: [] },
     });
+    expect(interaction.update).not.toHaveBeenCalled();
     expect(thread.send).toHaveBeenCalledWith({
       content: 'Report intake closed. No report has been filed.',
       allowedMentions: { parse: [] },
