@@ -26,6 +26,10 @@ For **User Install**, include this scope:
 
 User-installed apps do not need server permissions. They are visible only to the installing user and can expose commands in DMs, group DMs, and mutual servers depending on each command's `contexts`.
 
+## Mention Permissions
+
+Drasil pings configured admin/report roles when sending moderation notifications. Whether those pings notify depends on the bot's `Mention Everyone` permission, whether the target roles are mentionable, and the install-link permission bitfield set here in the Developer Portal. See `docs/deploy/discord-mention-permissions.md` for the full configuration and verification runbook.
+
 ## Reporting Commands
 
 Drasil registers these report entry points:
