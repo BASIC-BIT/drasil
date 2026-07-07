@@ -1,7 +1,11 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
   ButtonInteraction,
+  ButtonStyle,
   ChannelType,
   Client,
+  Guild,
   GuildMember,
   InteractionContextType,
   MessageFlags,
@@ -22,6 +26,7 @@ import { NotificationPresentationBuilder } from '../services/NotificationPresent
 import { type MessageReportAttachment } from '../services/SecurityActionService';
 import { ReportSubmissionService } from '../services/ReportSubmissionService';
 import { IThreadManager } from '../services/ThreadManager';
+import { ReportIntake } from '../repositories/types';
 import { formatDiscordUserIdentity } from '../utils/discordUserIdentity';
 import {
   REPORT_MESSAGE_REASON_FIELD_ID,
@@ -29,12 +34,29 @@ import {
 } from '../utils/userReportSettings';
 import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
 import { messageAttachmentsToReportMetadata } from '../utils/reportAttachments';
+import {
+  buildReportIntakeAdminCancelCustomId,
+  buildReportIntakeAdminCloseCustomId,
+  buildReportIntakeAdminConfirmCloseCustomId,
+  isReportIntakeAdminActionCustomId,
+  parseReportIntakeAdminActionCustomId,
+} from '../utils/reportIntakeAdminActions';
 
 export const REPORT_USER_INITIATE_CUSTOM_ID = 'report_user_initiate';
 export const REPORT_USER_TYPED_MODAL_ID = 'report_user_modal_submit';
 
 const REPORT_USER_TARGET_FIELD_ID = 'report_target_user_input';
 const REPORT_USER_REASON_FIELD_ID = 'report_reason';
+
+type ReportIntakeThreadChannel = Pick<ThreadChannel, 'id' | 'send'> &
+  Partial<Pick<ThreadChannel, 'archived' | 'setArchived'>>;
+
+interface ReportIntakeAdminContext {
+  intake: ReportIntake;
+  thread: ReportIntakeThreadChannel | null;
+}
+
+type ReportIntakeAdminResponseMode = 'reply' | 'update';
 
 export class ReportInteractionHandler {
   private readonly userResolver: DiscordUserResolver;
@@ -116,7 +138,11 @@ export class ReportInteractionHandler {
         channelId: interaction.channel.id,
       });
 
-      const activated = await this.threadManager.activateReportIntakeThread(thread, reporter);
+      const activated = await this.threadManager.activateReportIntakeThread(
+        thread,
+        reporter,
+        intake.id
+      );
       if (!activated) {
         await this.reportIntakeService.markOpenFailed({
           intakeId: intake.id,
@@ -313,6 +339,72 @@ export class ReportInteractionHandler {
     }
   }
 
+  public isReportIntakeAdminActionCustomId(customId: string): boolean {
+    return isReportIntakeAdminActionCustomId(customId);
+  }
+
+  public async handleReportIntakeAdminAction(
+    interaction: ButtonInteraction,
+    customId: string
+  ): Promise<void> {
+    const parsed = parseReportIntakeAdminActionCustomId(customId);
+    const responseMode: ReportIntakeAdminResponseMode =
+      parsed?.action === 'menu' || !parsed ? 'reply' : 'update';
+
+    try {
+      if (!parsed) {
+        await this.respondToReportIntakeAdminInteraction(
+          interaction,
+          { content: 'Unknown report admin action.', components: [] },
+          responseMode
+        );
+        return;
+      }
+
+      if (parsed.action === 'cancel') {
+        await this.respondToReportIntakeAdminInteraction(
+          interaction,
+          { content: 'Cancelled.', components: [] },
+          'update'
+        );
+        return;
+      }
+
+      const context = await this.resolveReportIntakeAdminContext(
+        interaction,
+        parsed.intakeId,
+        responseMode
+      );
+      if (!context) {
+        return;
+      }
+
+      if (parsed.action === 'menu') {
+        await this.showReportIntakeAdminMenu(interaction, context);
+        return;
+      }
+
+      if (parsed.action === 'close') {
+        await this.showReportIntakeCloseConfirmation(interaction, context.intake);
+        return;
+      }
+
+      await this.closeReportIntakeFromAdminAction(interaction, context);
+    } catch (error) {
+      console.error('Error handling report intake admin action:', error);
+      await this.respondToReportIntakeAdminInteraction(
+        interaction,
+        {
+          content: 'An error occurred while processing this report admin action.',
+          components: [],
+        },
+        responseMode
+      ).catch((replyError) => {
+        console.warn('Failed to respond to report intake admin action error:', replyError);
+      });
+    }
+  }
+
   public async handleReportMessageModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
     const [, messageId, channelId, targetUserId, guildIdRaw, contextRaw] =
       interaction.customId.split(':');
@@ -504,6 +596,247 @@ export class ReportInteractionHandler {
     }
   }
 
+  private async resolveReportIntakeAdminContext(
+    interaction: ButtonInteraction,
+    intakeId: string,
+    responseMode: ReportIntakeAdminResponseMode
+  ): Promise<ReportIntakeAdminContext | null> {
+    if (!this.reportIntakeService) {
+      await this.respondToReportIntakeAdminInteraction(
+        interaction,
+        { content: 'Report intake tracking is not available.', components: [] },
+        responseMode
+      );
+      return null;
+    }
+
+    const guildId = interaction.guildId;
+    if (!guildId) {
+      await this.respondToReportIntakeAdminInteraction(
+        interaction,
+        { content: 'Report admin actions can only be used in a server.', components: [] },
+        responseMode
+      );
+      return null;
+    }
+
+    const intake = await this.reportIntakeService.findIntakeById(intakeId);
+    if (!intake || intake.server_id !== guildId) {
+      await this.respondToReportIntakeAdminInteraction(
+        interaction,
+        { content: 'This report intake could not be found.', components: [] },
+        responseMode
+      );
+      return null;
+    }
+
+    const currentChannelId = interaction.channelId;
+    if (intake.thread_id && currentChannelId && currentChannelId !== intake.thread_id) {
+      await this.respondToReportIntakeAdminInteraction(
+        interaction,
+        { content: 'This report action does not match the current thread.', components: [] },
+        responseMode
+      );
+      return null;
+    }
+
+    const guild = (interaction.guild as Guild | null) ?? (await this.client.guilds.fetch(guildId));
+    const canModerate = await canModerateReportIntake(
+      guild,
+      interaction.user.id,
+      this.configService
+    );
+    if (!canModerate) {
+      await this.respondToReportIntakeAdminInteraction(
+        interaction,
+        { content: 'You need moderation permissions to use report admin actions.', components: [] },
+        responseMode
+      );
+      return null;
+    }
+
+    const currentThread = this.getThreadChannel(interaction.channel);
+    const thread =
+      currentThread && (!intake.thread_id || currentThread.id === intake.thread_id)
+        ? currentThread
+        : await this.fetchReportIntakeThread(intake.thread_id);
+
+    return { intake, thread };
+  }
+
+  private async showReportIntakeAdminMenu(
+    interaction: ButtonInteraction,
+    context: ReportIntakeAdminContext
+  ): Promise<void> {
+    await this.respondToReportIntakeAdminInteraction(
+      interaction,
+      {
+        content: this.buildReportIntakeAdminMenuMessage(context.intake),
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(buildReportIntakeAdminCloseCustomId(context.intake.id))
+              .setLabel('Close Report')
+              .setStyle(ButtonStyle.Secondary)
+              .setDisabled(!context.intake.thread_id)
+          ),
+        ],
+      },
+      'reply'
+    );
+  }
+
+  private async showReportIntakeCloseConfirmation(
+    interaction: ButtonInteraction,
+    intake: ReportIntake
+  ): Promise<void> {
+    await this.respondToReportIntakeAdminInteraction(
+      interaction,
+      {
+        content:
+          'Close this report intake thread? The reporter will see the closeout message and the thread will be archived.',
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(buildReportIntakeAdminConfirmCloseCustomId(intake.id))
+              .setLabel('Confirm Close Report')
+              .setStyle(ButtonStyle.Danger),
+            new ButtonBuilder()
+              .setCustomId(buildReportIntakeAdminCancelCustomId(intake.id))
+              .setLabel('Cancel')
+              .setStyle(ButtonStyle.Secondary)
+          ),
+        ],
+      },
+      'update'
+    );
+  }
+
+  private async closeReportIntakeFromAdminAction(
+    interaction: ButtonInteraction,
+    context: ReportIntakeAdminContext
+  ): Promise<void> {
+    if (!this.reportIntakeService || !context.intake.thread_id) {
+      await this.respondToReportIntakeAdminInteraction(
+        interaction,
+        { content: 'This report intake cannot be closed from this button.', components: [] },
+        'update'
+      );
+      return;
+    }
+
+    if (!context.thread) {
+      await this.respondToReportIntakeAdminInteraction(
+        interaction,
+        {
+          content: 'Could not load this report thread, so the report was not closed.',
+          components: [],
+        },
+        'update'
+      );
+      return;
+    }
+
+    const result = await this.reportIntakeService.closeIntakeForThread({
+      threadId: context.intake.thread_id,
+      closedById: interaction.user.id,
+      closedByStaff: true,
+    });
+
+    if (!result.closed) {
+      await this.respondToReportIntakeAdminInteraction(
+        interaction,
+        { content: result.message, components: [] },
+        'update'
+      );
+      return;
+    }
+
+    await this.respondToReportIntakeAdminInteraction(
+      interaction,
+      { content: 'Report intake closed.', components: [] },
+      'update'
+    );
+
+    await context.thread
+      .send({
+        content: result.message,
+        allowedMentions: { parse: [] },
+      })
+      .catch((error) => {
+        console.warn(
+          `Failed to post report intake closeout message in thread ${context.thread?.id}:`,
+          error
+        );
+      });
+
+    if (result.shouldArchiveThread) {
+      await this.archiveReportIntakeThread(context.thread, 'Report intake closed');
+    }
+  }
+
+  private buildReportIntakeAdminMenuMessage(intake: ReportIntake): string {
+    const targetLine = intake.confirmed_target_user_id
+      ? `Target: <@${intake.confirmed_target_user_id}>`
+      : 'Target: not confirmed yet.';
+
+    return [
+      `Admin actions for report intake \`${intake.id}\`.`,
+      `Reporter: <@${intake.reporter_id}>`,
+      targetLine,
+      `Status: ${intake.status}`,
+    ].join('\n');
+  }
+
+  private async respondToReportIntakeAdminInteraction(
+    interaction: ButtonInteraction,
+    response: { content: string; components?: ActionRowBuilder<ButtonBuilder>[] },
+    mode: ReportIntakeAdminResponseMode
+  ): Promise<void> {
+    const responseWithMentions = {
+      ...response,
+      allowedMentions: { parse: [] },
+    };
+
+    if (mode === 'update') {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(responseWithMentions);
+        return;
+      }
+
+      await interaction.update(responseWithMentions);
+      return;
+    }
+
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(responseWithMentions);
+      return;
+    }
+
+    await interaction.reply({
+      ...responseWithMentions,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  private async fetchReportIntakeThread(
+    threadId: string | null
+  ): Promise<ReportIntakeThreadChannel | null> {
+    if (!threadId) {
+      return null;
+    }
+
+    const channels = (this.client as { channels?: Client['channels'] }).channels;
+    const channel = await channels?.fetch(threadId).catch(() => null);
+    const isThread = Boolean(
+      channel &&
+      'isThread' in channel &&
+      typeof channel.isThread === 'function' &&
+      channel.isThread()
+    );
+    return isThread ? (channel as unknown as ReportIntakeThreadChannel) : null;
+  }
+
   private buildExistingReportIntakeMessage(guildId: string, threadId: string | null): string {
     if (threadId) {
       return `You already have an open report thread: https://discord.com/channels/${guildId}/${threadId}\nPlease continue there, or use /close-report in that thread if it was opened by mistake.`;
@@ -573,20 +906,14 @@ export class ReportInteractionHandler {
 
   private getThreadChannel(
     channel: ButtonInteraction['channel']
-  ):
-    | (Pick<ThreadChannel, 'id' | 'send'> &
-        Partial<Pick<ThreadChannel, 'archived' | 'setArchived'>>)
-    | null {
+  ): ReportIntakeThreadChannel | null {
     const isThread = Boolean(
       channel &&
       'isThread' in channel &&
       typeof channel.isThread === 'function' &&
       channel.isThread()
     );
-    return isThread
-      ? (channel as unknown as Pick<ThreadChannel, 'id' | 'send'> &
-          Partial<Pick<ThreadChannel, 'archived' | 'setArchived'>>)
-      : null;
+    return isThread ? (channel as unknown as ReportIntakeThreadChannel) : null;
   }
 
   private formatReportTargetLabel(member: GuildMember): string {

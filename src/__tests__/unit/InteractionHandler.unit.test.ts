@@ -24,6 +24,7 @@ import { IAdminActionRepository } from '../../repositories/AdminActionRepository
 import {
   AdminActionType,
   DetectionType,
+  ReportIntakeStatus,
   VerificationEvent,
   VerificationStatus,
 } from '../../repositories/types';
@@ -48,6 +49,7 @@ import {
   buildOpenCaseContextModalCustomId,
   buildOpenCaseMessageContextModalCustomId,
 } from '../../controllers/CaseCommandHandler';
+import { buildReportIntakeAdminActionsCustomId } from '../../utils/reportIntakeAdminActions';
 
 const buildMember = (guildId: string, userId: string, displayName = 'test-user'): GuildMember =>
   ({
@@ -556,6 +558,73 @@ describe('InteractionHandler (unit)', () => {
       content: 'You need Moderate Members permission to open a case.',
       flags: MessageFlags.Ephemeral,
     });
+  });
+
+  it('routes report intake admin action buttons to the report handler', async () => {
+    const staffMember = {
+      ...buildMember('guild-1', 'staff-1'),
+      permissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ModerateMembers),
+      },
+    } as unknown as GuildMember;
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(staffMember) },
+    });
+    const reportIntakeService = {
+      findIntakeById: jest.fn().mockResolvedValue({
+        id: 'intake-1',
+        server_id: 'guild-1',
+        reporter_id: 'reporter-1',
+        thread_id: 'report-thread-1',
+        status: ReportIntakeStatus.COLLECTING_EVIDENCE,
+        summary: null,
+        confirmed_target_user_id: null,
+        created_at: null,
+        updated_at: null,
+        closed_at: null,
+        metadata: null,
+      }),
+    };
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      reportIntakeService as any
+    );
+    const interaction = buildInteraction(
+      buildReportIntakeAdminActionsCustomId('intake-1'),
+      'guild-1',
+      {
+        id: 'staff-1',
+      } as User
+    );
+    (interaction as any).channel = {
+      id: 'report-thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    (interaction as any).channelId = 'report-thread-1';
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      reportIntakeService.findIntakeById.mock.invocationCallOrder[0]
+    );
+    expect(reportIntakeService.findIntakeById).toHaveBeenCalledWith('intake-1');
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Admin actions for report intake `intake-1`.'),
+      })
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 
   it('handles verify button by calling UserModerationService', async () => {

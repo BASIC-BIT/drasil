@@ -242,6 +242,11 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
+      if (this.reportInteractionHandler.isReportIntakeAdminActionCustomId(customId)) {
+        await this.reportInteractionHandler.handleReportIntakeAdminAction(interaction, customId);
+        return;
+      }
+
       if (isSlashCommandConfirmationCustomId(customId)) {
         await handleSlashCommandConfirmationButton(interaction);
         return;

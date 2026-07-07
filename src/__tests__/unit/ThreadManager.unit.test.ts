@@ -20,6 +20,7 @@ import {
   renderVerificationPromptTemplate,
 } from '../../utils/verificationPromptTemplate';
 import { parseAdminActionCustomId } from '../../utils/adminActionCustomIds';
+import { parseReportIntakeAdminActionCustomId } from '../../utils/reportIntakeAdminActions';
 
 const buildMember = (
   guildId: string,
@@ -819,18 +820,26 @@ describe('ThreadManager (unit)', () => {
     );
     const reporter = buildMember('guild-1', 'reporter-1');
 
-    const activated = await manager.activateReportIntakeThread(thread, reporter);
+    const activated = await manager.activateReportIntakeThread(thread, reporter, 'intake-1');
 
     expect(activated).toBe(true);
     expect(thread.members.add).toHaveBeenCalledWith('reporter-1');
     expect(thread.send).toHaveBeenCalledWith({
       content: expect.stringContaining('Add what happened here.'),
+      components: expect.any(Array),
       allowedMentions: {
         parse: [],
         users: ['reporter-1'],
         roles: [],
         repliedUser: false,
       },
+    });
+    const message = (thread.send as jest.Mock).mock.calls[0][0];
+    const button = message.components[0].toJSON().components[0];
+    expect(button.label).toBe('Admin Actions');
+    expect(parseReportIntakeAdminActionCustomId(button.custom_id)).toEqual({
+      action: 'menu',
+      intakeId: 'intake-1',
     });
   });
 
