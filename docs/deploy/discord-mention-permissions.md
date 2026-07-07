@@ -28,7 +28,7 @@ For a server where Drasil is already present, changing the portal bitfield alone
 
 ## Recommended configuration (do this)
 
-Pick whichever of the two is acceptable to the org. Option A is the least-privilege path and is preferred.
+Pick whichever of the two is acceptable to the org. Option A is the least-privilege path for Drasil's own permissions and is preferred **when the target role is safe to expose to member mentions** (see the tradeoff under Option A); otherwise use Option B to keep the role non-public-pingable.
 
 ### Option A - Make the pinged roles mentionable (least privilege)
 
@@ -37,7 +37,9 @@ For each role Drasil is configured to ping (admin notification role, case respon
 1. Discord server > **Server Settings > Roles > _role_**.
 2. Enable **Allow anyone to @mention this role**.
 
-This lets Drasil ping those specific roles without granting the broad `Mention Everyone` permission, and it cannot be used to ping `@everyone`/`@here`. Drasil's `allowed_mentions` still restricts pings to the exact configured role IDs, so making a role mentionable does not let arbitrary members abuse it any more than normal.
+This lets Drasil ping those specific roles without granting the broad `Mention Everyone` permission, and it cannot be used to ping `@everyone`/`@here`.
+
+**Tradeoff to weigh first.** "Allow anyone to @mention this role" is a server-wide property of the role, not a Drasil-scoped grant. It lets **any** member who can post in a channel ping that role — Drasil's `allowed_mentions` only constrains Drasil's own messages, so it does nothing to stop members from `@`-ing a now-mentionable admin/report role themselves. For roles that live in channels where regular members can send messages (or roles you do not want publicly pingable at all), this can expose moderator/admin roles to member-driven pings or spam. Prefer Option A only for roles that are already safe to expose to member mentions (or whose channels are locked down so members cannot post). If a role must stay non-public-pingable, use the channel-scoped bot permission in **Option B** instead and leave the role unmentionable.
 
 ### Option B - Grant `Mention Everyone` to Drasil (broader)
 
@@ -57,8 +59,8 @@ Update the Developer Portal install-link bitfield as described in [Where the Dev
 
 After configuring, verify without spamming a live channel:
 
-1. Run `/config validate` (or the setup diagnostics command) in the server. Drasil surfaces a `admin-notification-role-mention` warning when it detects it may be unable to ping the configured role. A clean run means step 1/2 pass for the admin notification role and case responder roles.
-2. Trigger a low-noise notification path in a staging or admin-only channel (for example a test case that pings the responder role) and confirm the role members receive the ping, not just see plain text.
+1. Run `/config validate` (or the setup diagnostics command) in the server. Drasil surfaces an `admin-notification-role-mention` warning when it detects it may be unable to ping the configured role. **Scope caveat:** this check only covers the **admin notification role** in the configured **admin channel** (`SetupDiagnosticsService.checkAdminNotificationRole`). It does **not** verify mention permissions for **case responder roles** — `checkCaseResponderRoles` only checks that those roles still exist and are within the thread member cap, never `role.mentionable` or `Mention Everyone` — and it does not check any channel other than the admin channel. So a clean validate confirms steps 1/2 for the admin notification role only; it does **not** prove that responder or report-routing pings will land. Treat the live-ping test below as the authoritative check for those.
+2. Trigger a low-noise notification path in a staging or admin-only channel (for example a test case that pings the responder role) and confirm the role members receive the ping, not just see plain text. This is the only step that verifies case responder and report-routing pings, since validate does not cover them.
 3. If the role still does not ping: re-check that the target channel's overwrites do not _deny_ `Mention Everyone` for the Drasil role, and that the role is either mentionable (Option A) or Drasil holds `Mention Everyone` in that channel (Option B). Channel-level denies override role-level allows.
 
 ## Notes and caveats
