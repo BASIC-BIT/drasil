@@ -26,6 +26,8 @@ import {
   DetectionType,
   MessageContext,
   ModerationOutcome,
+  ReportIntake,
+  ReportIntakeStatus,
   VerificationEvent,
   VerificationStatus,
 } from '../repositories/types';
@@ -70,6 +72,7 @@ import { ReportDetectionBuilder } from './ReportDetectionBuilder';
 import { RoleIntakeProcessor } from './RoleIntakeProcessor';
 import { IModerationQueueService } from './ModerationQueueService';
 import type { IMessageDeletionService } from './MessageDeletionService';
+import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
 
 const DELAYED_THREAD_REPAIR_DELAY_MS = 70_000;
 const PROFILE_IMAGE_HASH_MAX_BYTES = 3 * 1024 * 1024;
@@ -381,6 +384,7 @@ export class SecurityActionService implements ISecurityActionService {
   private productAnalyticsService: IProductAnalyticsService;
   private moderationQueueService?: IModerationQueueService;
   private messageDeletionService?: IMessageDeletionService;
+  private reportIntakeRepository?: IReportIntakeRepository;
   private reportAiAnalyzer: ReportAiAnalyzer;
   private reportDetectionBuilder: ReportDetectionBuilder;
   private roleIntakeProcessor: RoleIntakeProcessor;
@@ -410,7 +414,10 @@ export class SecurityActionService implements ISecurityActionService {
     messageContextRepository?: IMessageContextRepository,
     @inject(TYPES.MessageDeletionService)
     @optional()
-    messageDeletionService?: IMessageDeletionService
+    messageDeletionService?: IMessageDeletionService,
+    @inject(TYPES.ReportIntakeRepository)
+    @optional()
+    reportIntakeRepository?: IReportIntakeRepository
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -427,6 +434,7 @@ export class SecurityActionService implements ISecurityActionService {
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.moderationQueueService = moderationQueueService;
     this.messageDeletionService = messageDeletionService;
+    this.reportIntakeRepository = reportIntakeRepository;
     this.reportAiAnalyzer = new ReportAiAnalyzer(this.serverRepository, this.gptService);
     this.reportDetectionBuilder = new ReportDetectionBuilder(
       this.detectionEventsRepository,
@@ -1881,6 +1889,112 @@ export class SecurityActionService implements ISecurityActionService {
     });
   }
 
+  private async closeLinkedReportIntakeForObservedAction(
+    detectionEvent: DetectionEvent,
+    moderator: User,
+    status:
+      | ReportIntakeStatus.ACTIONED
+      | ReportIntakeStatus.DISMISSED
+      | ReportIntakeStatus.FALSE_POSITIVE,
+    reason: string
+  ): Promise<void> {
+    if (!this.reportIntakeRepository) {
+      return;
+    }
+
+    const metadata = this.metadataToRecord(detectionEvent.metadata);
+    const reportIntakeId = this.readString(metadata.reportIntakeId);
+    if (!reportIntakeId) {
+      return;
+    }
+
+    try {
+      const intake = await this.reportIntakeRepository.findById(reportIntakeId);
+      if (!intake) {
+        return;
+      }
+
+      const now = new Date();
+      const nextStatus = this.shouldPreserveReportIntakeStatus(intake.status)
+        ? intake.status
+        : status;
+      const updated = await this.reportIntakeRepository.update(intake.id, {
+        status: nextStatus,
+        closedAt: intake.closed_at ?? now,
+        metadata: {
+          ...this.metadataToRecord(intake.metadata),
+          observed_action_closed_by: moderator.id,
+          observed_action_closed_at: now.toISOString(),
+          observed_action_close_reason: reason,
+        },
+      });
+
+      await this.moderationQueueService?.deleteReportThreadAttention(intake.id).catch((error) => {
+        console.warn(
+          `[ReportIntake] Failed to clear report-thread attention for intake ${intake.id}`,
+          error
+        );
+      });
+      await this.closeReportIntakeThreadAfterReview(updated ?? intake, nextStatus);
+    } catch (error) {
+      console.warn(
+        `[ReportIntake] Failed to close linked report intake ${reportIntakeId} after observed action ${detectionEvent.id}:`,
+        error
+      );
+    }
+  }
+
+  private shouldPreserveReportIntakeStatus(status: ReportIntakeStatus): boolean {
+    return (
+      status === ReportIntakeStatus.CLOSED_BY_REPORTER || status === ReportIntakeStatus.EXPIRED
+    );
+  }
+
+  private async closeReportIntakeThreadAfterReview(
+    intake: ReportIntake,
+    status: ReportIntakeStatus
+  ): Promise<void> {
+    if (!intake.thread_id) {
+      return;
+    }
+
+    const channel = await this.client.channels.fetch(intake.thread_id).catch(() => null);
+    if (
+      !channel ||
+      !('isThread' in channel) ||
+      typeof channel.isThread !== 'function' ||
+      !channel.isThread()
+    ) {
+      return;
+    }
+
+    const thread = channel as ThreadChannel;
+    if (thread.archived) {
+      return;
+    }
+
+    await thread
+      .send({
+        content: this.buildReportIntakeReviewCloseoutMessage(status),
+        allowedMentions: { parse: [] },
+      })
+      .catch((error) => {
+        console.warn(`Failed to post report intake closeout in thread ${thread.id}:`, error);
+      });
+
+    await thread.setArchived(true, 'Report intake reviewed').catch((error) => {
+      console.warn(`Failed to archive report intake thread ${thread.id}:`, error);
+    });
+  }
+
+  private buildReportIntakeReviewCloseoutMessage(status: ReportIntakeStatus): string {
+    if (status === ReportIntakeStatus.DISMISSED) {
+      return 'Report reviewed. Moderators closed this report without additional action, so this intake thread is now closed.';
+    }
+
+    return 'Report reviewed. Moderators have completed this intake, so this thread is now closed.';
+  }
+
   private captureMemberAnalytics(
     member: GuildMember,
     event: string,
@@ -3060,6 +3174,12 @@ export class SecurityActionService implements ISecurityActionService {
         (moderationQueueService) =>
           moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
       );
+      await this.closeLinkedReportIntakeForObservedAction(
+        claimedDetectionEvent,
+        moderator,
+        ReportIntakeStatus.ACTIONED,
+        'observed_open_case'
+      );
       this.captureMemberAnalytics(
         member,
         'observed detection action completed',
@@ -3156,6 +3276,12 @@ export class SecurityActionService implements ISecurityActionService {
         (moderationQueueService) =>
           moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
       );
+      await this.closeLinkedReportIntakeForObservedAction(
+        claimedDetectionEvent,
+        moderator,
+        ReportIntakeStatus.ACTIONED,
+        'observed_ban'
+      );
       this.captureMemberAnalytics(
         member,
         'observed detection action completed',
@@ -3249,6 +3375,12 @@ export class SecurityActionService implements ISecurityActionService {
         (moderationQueueService) =>
           moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
       );
+      await this.closeLinkedReportIntakeForObservedAction(
+        claimedDetectionEvent,
+        moderator,
+        ReportIntakeStatus.ACTIONED,
+        'observed_kick'
+      );
       this.captureMemberAnalytics(
         member,
         'observed detection action completed',
@@ -3341,6 +3473,12 @@ export class SecurityActionService implements ISecurityActionService {
         (moderationQueueService) =>
           moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
       );
+      await this.closeLinkedReportIntakeForObservedAction(
+        claimedDetectionEvent,
+        moderator,
+        ReportIntakeStatus.ACTIONED,
+        'observed_ban'
+      );
       void this.productAnalyticsService.captureUserEvent(
         guild.id,
         userId,
@@ -3410,6 +3548,16 @@ export class SecurityActionService implements ISecurityActionService {
         `delete observed alert ${detectionEvent.id} from the live moderation queue`,
         (moderationQueueService) =>
           moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
+      );
+      await this.closeLinkedReportIntakeForObservedAction(
+        claimedDetectionEvent,
+        moderator,
+        actionType === AdminActionType.FALSE_POSITIVE
+          ? ReportIntakeStatus.FALSE_POSITIVE
+          : ReportIntakeStatus.DISMISSED,
+        actionType === AdminActionType.FALSE_POSITIVE
+          ? 'observed_false_positive'
+          : 'observed_dismiss'
       );
       void this.productAnalyticsService.captureUserEvent(
         guildId,

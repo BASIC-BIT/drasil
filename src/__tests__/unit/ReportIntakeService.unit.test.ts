@@ -383,6 +383,7 @@ describe('ReportIntakeService', () => {
       message: 'That report intake is no longer accepting target confirmations.',
     });
     expect(confirmationEvidence).toHaveLength(1);
+    expect((await reportIntakeRepository.findById(intake.id))?.closed_at).toBeInstanceOf(Date);
     expect(moderationQueueService.deleteReportThreadAttention).toHaveBeenCalledWith(intake.id);
   });
 
@@ -777,12 +778,47 @@ describe('ReportIntakeService', () => {
     expect(result).toEqual({
       closed: true,
       message: 'Report intake closed. No report has been filed.',
+      shouldArchiveThread: true,
     });
     expect(stored?.status).toBe(ReportIntakeStatus.CLOSED_BY_REPORTER);
     expect(stored?.metadata).toMatchObject({
       closed_by: 'staff-1',
       closed_reason: 'staff_request',
       closed_by_staff: true,
+    });
+    expect(moderationQueueService.deleteReportThreadAttention).toHaveBeenCalledWith(intake.id);
+  });
+
+  it('archives submitted intake threads by slash command with closeout copy', async () => {
+    const { service, reportIntakeRepository, moderationQueueService } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.markSubmitted({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      submittedById: 'reporter-1',
+    });
+
+    const result = await service.closeIntakeForThread({
+      threadId: 'thread-1',
+      closedById: 'reporter-1',
+    });
+
+    const stored = await reportIntakeRepository.findById(intake.id);
+    expect(result).toEqual({
+      closed: true,
+      message:
+        'Report submitted. Moderators have been notified, so this intake thread is now closed.',
+      shouldArchiveThread: true,
+    });
+    expect(stored?.status).toBe(ReportIntakeStatus.SUBMITTED);
+    expect(stored?.metadata).toMatchObject({
+      thread_closed_by: 'reporter-1',
+      thread_closed_reason: 'submitted_thread_close',
     });
     expect(moderationQueueService.deleteReportThreadAttention).toHaveBeenCalledWith(intake.id);
   });

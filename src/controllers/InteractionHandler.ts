@@ -18,11 +18,17 @@ import * as dotenv from 'dotenv';
 import { injectable, inject, optional } from 'inversify';
 import { INotificationManager } from '../services/NotificationManager';
 import { TYPES } from '../di/symbols';
-import { AdminActionType, VerificationStatus, type VerificationEvent } from '../repositories/types';
+import {
+  AdminActionType,
+  DetectionType,
+  VerificationStatus,
+  type VerificationEvent,
+} from '../repositories/types';
 import { VerificationHistoryFormatter } from '../utils/VerificationHistoryFormatter';
 import 'reflect-metadata';
 import { IUserModerationService } from '../services/UserModerationService';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
+import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import { IThreadManager } from '../services/ThreadManager';
 import { IAdminActionRepository } from '../repositories/AdminActionRepository';
@@ -113,6 +119,7 @@ export class InteractionHandler implements IInteractionHandler {
   private setupVerificationModalHandler: SetupVerificationModalHandler;
   private moderationQueueService?: IModerationQueueService;
   private roleGateService?: IRoleGateService;
+  private detectionEventsRepository?: IDetectionEventsRepository;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -141,7 +148,10 @@ export class InteractionHandler implements IInteractionHandler {
     moderationQueueService?: IModerationQueueService,
     @inject(TYPES.RoleGateService)
     @optional()
-    roleGateService?: IRoleGateService
+    roleGateService?: IRoleGateService,
+    @inject(TYPES.DetectionEventsRepository)
+    @optional()
+    detectionEventsRepository?: IDetectionEventsRepository
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -154,6 +164,7 @@ export class InteractionHandler implements IInteractionHandler {
     this.adminActionRepository = adminActionRepository;
     this.moderationQueueService = moderationQueueService;
     this.roleGateService = roleGateService;
+    this.detectionEventsRepository = detectionEventsRepository;
     const reportSubmissionService = new ReportSubmissionService(
       this.configService,
       this.securityActionService
@@ -708,10 +719,14 @@ export class InteractionHandler implements IInteractionHandler {
       permissions.hasKickMembersPermission &&
       (await this.canUseModeratorKickAction(guildId, 'observed'));
     const actionButtons: ButtonBuilder[] = [];
+    const observedActionKind = await this.getObservedActionKind(guildId, parsed);
+    const closeAction =
+      observedActionKind === 'report' ? 'observed_close_report' : 'observed_dismiss';
+    const closeLabel = observedActionKind === 'report' ? 'Close Report' : 'Dismiss Alert';
     if (permissions.hasModerationPermission) {
       actionButtons.push(
         this.adminActionButton(parsed, 'observed_open', 'Open Case', ButtonStyle.Primary),
-        this.adminActionButton(parsed, 'observed_dismiss', 'Dismiss Alert', ButtonStyle.Secondary),
+        this.adminActionButton(parsed, closeAction, closeLabel, ButtonStyle.Secondary),
         this.adminActionButton(
           parsed,
           'observed_false_positive',
@@ -771,6 +786,28 @@ export class InteractionHandler implements IInteractionHandler {
       components: this.createButtonRows(buttons),
       flags: MessageFlags.Ephemeral,
     });
+  }
+
+  private async getObservedActionKind(
+    guildId: string,
+    parsed: ParsedAdminActionCustomId
+  ): Promise<'alert' | 'report'> {
+    if (!parsed.detectionEventId || !this.detectionEventsRepository) {
+      return 'alert';
+    }
+
+    const detectionEvent = await this.detectionEventsRepository
+      .findById(parsed.detectionEventId)
+      .catch(() => null);
+    if (
+      detectionEvent?.server_id !== guildId ||
+      detectionEvent.user_id !== parsed.userId ||
+      detectionEvent.detection_type !== DetectionType.USER_REPORT
+    ) {
+      return 'alert';
+    }
+
+    return 'report';
   }
 
   private async handleCaseReviewDigestButtonInteraction(
@@ -1169,6 +1206,12 @@ export class InteractionHandler implements IInteractionHandler {
           message: `Kick ${target} from this server for this observed alert? If they rejoin, Drasil will use the prior kick as review context.`,
           style: ButtonStyle.Danger,
         };
+      case 'observed_close_report':
+        return {
+          label: 'Confirm Close Report',
+          message: `Close this report for ${target} without additional moderation action?`,
+          style: ButtonStyle.Secondary,
+        };
       case 'observed_dismiss':
         return {
           label: 'Confirm Dismiss',
@@ -1447,6 +1490,7 @@ export class InteractionHandler implements IInteractionHandler {
         await interaction.deferUpdate();
         await this.openObservedCase(interaction, guildId, parsed.userId, parsed.detectionEventId);
         return;
+      case 'observed_close_report':
       case 'observed_dismiss':
       case 'observed_false_positive':
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -1457,7 +1501,8 @@ export class InteractionHandler implements IInteractionHandler {
           parsed.detectionEventId,
           action === 'observed_false_positive'
             ? AdminActionType.FALSE_POSITIVE
-            : AdminActionType.DISMISS
+            : AdminActionType.DISMISS,
+          action === 'observed_close_report' ? 'report' : 'alert'
         );
         return;
       case 'observed_undo_dismiss':
@@ -2394,7 +2439,8 @@ export class InteractionHandler implements IInteractionHandler {
     guildId: string,
     userId: string,
     detectionEventId: string,
-    actionType: AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE
+    actionType: AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE,
+    kind: 'alert' | 'report' = 'alert'
   ): Promise<void> {
     const dismissed = await this.securityActionService.dismissObservedDetection(
       guildId,
@@ -2408,7 +2454,9 @@ export class InteractionHandler implements IInteractionHandler {
         ? `This observed alert for <@${userId}> was already actioned.`
         : actionType === AdminActionType.FALSE_POSITIVE
           ? `Marked the detection for <@${userId}> as a false positive.`
-          : `Dismissed the observed alert for <@${userId}>.`,
+          : kind === 'report'
+            ? `Closed the report for <@${userId}>.`
+            : `Dismissed the observed alert for <@${userId}>.`,
       components: [],
     });
   }

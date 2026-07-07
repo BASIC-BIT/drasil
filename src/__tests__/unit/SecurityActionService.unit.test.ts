@@ -6,6 +6,7 @@ import {
   DetectionType,
   ModerationOutcomeSource,
   ModerationOutcomeType,
+  ReportIntakeStatus,
   VerificationStatus,
 } from '../../repositories/types';
 import {
@@ -14,6 +15,7 @@ import {
   InMemoryVerificationEventRepository,
   InMemoryUserRepository,
   InMemoryServerRepository,
+  InMemoryReportIntakeRepository,
 } from '../fakes/inMemoryRepositories';
 import { INotificationManager } from '../../services/NotificationManager';
 import {
@@ -3461,6 +3463,73 @@ describe('SecurityActionService (unit)', () => {
         notes: 'Confirmed scam',
       })
     );
+  });
+
+  it('marks linked report intakes actioned and archives the source thread after an observed ban', async () => {
+    const guildId = 'guild-observed-report-ban-intake';
+    const userId = 'user-observed-report-ban-intake';
+    const moderator = { id: 'admin-observed' } as User;
+    const member = buildMember(guildId, userId);
+    const reportIntakeRepository = new InMemoryReportIntakeRepository();
+    const intake = await reportIntakeRepository.create({
+      serverId: guildId,
+      reporterId: 'reporter-observed',
+      threadId: 'report-thread-1',
+      status: ReportIntakeStatus.SUBMITTED,
+    });
+    const reportThread = {
+      id: 'report-thread-1',
+      archived: false,
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+      setArchived: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new SecurityActionService(
+      notificationManager,
+      detectionEventsRepository,
+      serverMemberRepository,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      adminActionService,
+      threadManager,
+      userModerationService,
+      {
+        channels: {
+          fetch: jest.fn().mockResolvedValue(reportThread),
+        },
+      } as unknown as Client,
+      gptService as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      reportIntakeRepository
+    );
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1.0,
+      reasons: ['Reported by user reporter-observed. Reason: suspicious DM'],
+      detected_at: new Date(),
+      metadata: { reportIntakeId: intake.id },
+    });
+
+    await service.banObservedDetection(member, detectionEvent.id, moderator, 'Confirmed scam');
+
+    const stored = await reportIntakeRepository.findById(intake.id);
+    expect(stored?.status).toBe(ReportIntakeStatus.ACTIONED);
+    expect(stored?.metadata).toMatchObject({
+      observed_action_closed_by: moderator.id,
+      observed_action_close_reason: 'observed_ban',
+    });
+    expect(reportThread.send).toHaveBeenCalledWith({
+      content:
+        'Report reviewed. Moderators have completed this intake, so this thread is now closed.',
+      allowedMentions: { parse: [] },
+    });
+    expect(reportThread.setArchived).toHaveBeenCalledWith(true, 'Report intake reviewed');
   });
 
   it('does not upgrade an existing report review thread when banning a user report', async () => {

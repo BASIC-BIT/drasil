@@ -25,6 +25,7 @@ const OPEN_INTAKE_STATUSES: ReportIntakeStatus[] = [
 export interface IReportIntakeRepository {
   create(data: ReportIntakeCreate): Promise<ReportIntake>;
   findById(id: string): Promise<ReportIntake | null>;
+  findByThreadId(threadId: string): Promise<ReportIntake | null>;
   findOpenByThreadId(threadId: string): Promise<ReportIntake | null>;
   findOpenByReporterAndServer(serverId: string, reporterId: string): Promise<ReportIntake | null>;
   confirmTargetIfUnset(
@@ -80,6 +81,17 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
       return intake as ReportIntake | null;
     } catch (error) {
       this.handleError(error, 'findReportIntakeById');
+    }
+  }
+
+  async findByThreadId(threadId: string): Promise<ReportIntake | null> {
+    try {
+      const intake = await this.prisma.report_intakes.findUnique({
+        where: { thread_id: threadId },
+      });
+      return intake as ReportIntake | null;
+    } catch (error) {
+      this.handleError(error, 'findReportIntakeByThreadId');
     }
   }
 

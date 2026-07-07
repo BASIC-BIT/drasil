@@ -341,7 +341,7 @@ export class CommandHandler implements ICommandHandler {
       });
     }
 
-    if (result.closed) {
+    if (result.closed && result.shouldArchiveThread) {
       await this.archiveReportIntakeThread(thread);
     }
   }

@@ -661,6 +661,14 @@ describe('ReportInteractionHandler (unit)', () => {
     const interaction = buildInteraction('report_intake_confirm:intake-1:user-1', 'guild-1', {
       id: 'reporter-1',
     } as User);
+    const thread = {
+      id: 'thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+      archived: false,
+      setArchived: jest.fn().mockResolvedValue(undefined),
+    };
+    (interaction as any).channel = thread;
 
     await handler.handleReportIntakeConfirm(interaction, interaction.customId);
 
@@ -694,6 +702,12 @@ describe('ReportInteractionHandler (unit)', () => {
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Submitted report for <@user-1> (ID: `user-1`; Discord username: `test-user`).',
     });
+    expect(thread.send).toHaveBeenCalledWith({
+      content:
+        'Report submitted. Moderators have been notified, so this intake thread is now closed.\nTarget: <@user-1> (ID: `user-1`; Discord username: `test-user`)',
+      allowedMentions: { parse: [] },
+    });
+    expect(thread.setArchived).toHaveBeenCalledWith(true, 'Report intake submitted');
   });
 
   it('allows configured case responders to confirm an intake for the original reporter', async () => {

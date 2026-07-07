@@ -18,7 +18,12 @@ import { IRoleGateService } from '../../services/RoleGateService';
 import { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import { IThreadManager } from '../../services/ThreadManager';
 import { IAdminActionRepository } from '../../repositories/AdminActionRepository';
-import { AdminActionType, VerificationEvent, VerificationStatus } from '../../repositories/types';
+import {
+  AdminActionType,
+  DetectionType,
+  VerificationEvent,
+  VerificationStatus,
+} from '../../repositories/types';
 import { IConfigService } from '../../config/ConfigService';
 import {
   SETUP_VERIFICATION_ADMIN_CHANNEL_FIELD_ID,
@@ -881,6 +886,49 @@ describe('InteractionHandler (unit)', () => {
     expect(response.content).not.toContain('Mutating actions require a confirmation step');
   });
 
+  it('labels report-sourced observed admin actions as Close Report', async () => {
+    const detectionEventsRepository = {
+      findById: jest.fn().mockResolvedValue({
+        id: 'det-1',
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        detection_type: DetectionType.USER_REPORT,
+      }),
+    };
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      detectionEventsRepository as any
+    );
+    const interaction = buildInteraction('admin_actions:m:o:user-1:det-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    const response = (interaction.reply as jest.Mock).mock.calls[0][0] as any;
+    const buttons = response.components.flatMap(
+      (row: { toJSON(): { components: any[] } }) => row.toJSON().components
+    );
+    expect(buttons.map((button: { label?: string }) => button.label)).toContain('Close Report');
+    expect(buttons.map((button: { label?: string }) => button.label)).not.toContain(
+      'Dismiss Alert'
+    );
+  });
+
   it('rejects digest-selected cases without a user id', async () => {
     const selectedCase = {
       ...buildVerificationEvent('ver-selected', 'user-selected'),
@@ -1730,6 +1778,41 @@ describe('InteractionHandler (unit)', () => {
       components: [],
     });
     expect(interaction.followUp).not.toHaveBeenCalled();
+  });
+
+  it('handles observed close report confirmation as an observed dismissal', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_observed_close_report:observed:user-1:det-1',
+      'guild-1',
+      {
+        id: 'admin-1',
+      } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(securityActionService.dismissObservedDetection).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'det-1',
+      interaction.user,
+      AdminActionType.DISMISS
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Closed the report for <@user-1>.',
+      components: [],
+    });
   });
 
   it('acknowledges observed dismiss menu before fetching permissions', async () => {

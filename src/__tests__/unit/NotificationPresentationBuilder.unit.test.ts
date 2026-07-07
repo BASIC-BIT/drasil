@@ -293,11 +293,17 @@ describe('NotificationPresentationBuilder (unit)', () => {
       verificationEventId: 'ver-1',
     });
     const observedRows = builder.createObservedActionRows('user-1', 'det-1', 'guild-1');
+    const observedReportRows = builder.createObservedActionRows('user-1', 'det-1', 'guild-1', {
+      kind: 'report',
+    });
 
     const caseButtons = caseRows.flatMap(
       (row) => row.toJSON().components as Array<{ label?: string; url?: string }>
     );
     const observedButtons = observedRows.flatMap(
+      (row) => row.toJSON().components as Array<{ label?: string; url?: string }>
+    );
+    const observedReportButtons = observedReportRows.flatMap(
       (row) => row.toJSON().components as Array<{ label?: string; url?: string }>
     );
 
@@ -315,6 +321,13 @@ describe('NotificationPresentationBuilder (unit)', () => {
       'Open Case',
       'Ban...',
       'Dismiss',
+      'Other Actions',
+      'Web Queue',
+    ]);
+    expect(observedReportButtons.map((button) => button.label)).toEqual([
+      'Open Case',
+      'Ban...',
+      'Close Report',
       'Other Actions',
       'Web Queue',
     ]);
