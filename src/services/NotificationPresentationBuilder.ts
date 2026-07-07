@@ -482,7 +482,7 @@ export class NotificationPresentationBuilder {
 
     buttons.push(
       this.createCustomButton(
-        `observed:dismiss:${userId}:${detectionEventId}`,
+        `observed:${options.kind === 'report' ? 'close_report' : 'dismiss'}:${userId}:${detectionEventId}`,
         options.kind === 'report' ? 'Close Report' : 'Dismiss',
         ButtonStyle.Secondary
       ),

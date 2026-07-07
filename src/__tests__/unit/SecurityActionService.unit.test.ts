@@ -3039,6 +3039,94 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it('undoes a report closeout by restoring the linked report intake', async () => {
+    const guildId = 'guild-observed-report-undo';
+    const userId = 'user-observed-report-undo';
+    const moderator = { id: 'admin-observed' } as User;
+    const reportIntakeRepository = new InMemoryReportIntakeRepository();
+    const intake = await reportIntakeRepository.create({
+      serverId: guildId,
+      reporterId: 'reporter-observed',
+      threadId: 'report-thread-undo',
+      status: ReportIntakeStatus.DISMISSED,
+    });
+    await reportIntakeRepository.update(intake.id, {
+      closedAt: new Date('2026-07-01T12:00:00.000Z'),
+      metadata: {
+        observed_action_closed_by: 'previous-admin',
+        observed_action_closed_at: '2026-07-01T12:00:00.000Z',
+        observed_action_close_reason: 'observed_dismiss',
+      },
+    });
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1.0,
+      reasons: ['Reported by user reporter-observed. Reason: suspicious DM'],
+      detected_at: new Date(),
+      metadata: {
+        reportIntakeId: intake.id,
+        observed_action: AdminActionType.DISMISS,
+        observed_action_by: 'previous-admin',
+        observed_action_at: new Date().toISOString(),
+      },
+    });
+    const reportThread = {
+      id: 'report-thread-undo',
+      archived: true,
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+      setArchived: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new SecurityActionService(
+      notificationManager,
+      detectionEventsRepository,
+      serverMemberRepository,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      adminActionService,
+      threadManager,
+      userModerationService,
+      {
+        channels: {
+          fetch: jest.fn().mockResolvedValue(reportThread),
+        },
+      } as unknown as Client,
+      gptService as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      reportIntakeRepository
+    );
+
+    const undoneAction = await service.undoObservedDetectionAction(
+      guildId,
+      userId,
+      detectionEvent.id,
+      moderator
+    );
+
+    expect(undoneAction).toBe(AdminActionType.DISMISS);
+    const stored = await reportIntakeRepository.findById(intake.id);
+    expect(stored?.status).toBe(ReportIntakeStatus.SUBMITTED);
+    expect(stored?.closed_at).toBeNull();
+    expect(stored?.metadata).toMatchObject({
+      observed_action_reopened_by: moderator.id,
+      observed_action_reopen_reason: 'observed_dismiss_undo',
+    });
+    const metadata = stored?.metadata as Record<string, unknown>;
+    expect(metadata.observed_action_closed_by).toBeUndefined();
+    expect(metadata.observed_action_close_reason).toBeUndefined();
+    expect(reportThread.setArchived).toHaveBeenCalledWith(false, 'Report intake reopened');
+    expect(reportThread.send).toHaveBeenCalledWith({
+      content: 'Report reopened. Moderators restored this intake for review.',
+      allowedMentions: { parse: [] },
+    });
+  });
+
   it('restores observed dismissal metadata if undo audit recording fails', async () => {
     const guildId = 'guild-observed-undo-fails';
     const userId = 'user-observed-undo-fails';

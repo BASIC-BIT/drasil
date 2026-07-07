@@ -1950,6 +1950,93 @@ export class SecurityActionService implements ISecurityActionService {
     );
   }
 
+  private async restoreLinkedReportIntakeForObservedUndo(
+    detectionEvent: DetectionEvent,
+    moderator: User,
+    observedAction: AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE
+  ): Promise<void> {
+    if (!this.reportIntakeRepository) {
+      return;
+    }
+
+    const metadata = this.metadataToRecord(detectionEvent.metadata);
+    const reportIntakeId = this.readString(metadata.reportIntakeId);
+    if (!reportIntakeId) {
+      return;
+    }
+
+    try {
+      const intake = await this.reportIntakeRepository.findById(reportIntakeId);
+      if (!intake || !this.isObservedCloseoutReportIntakeStatus(intake.status)) {
+        return;
+      }
+
+      const now = new Date();
+      const intakeMetadata = this.metadataToRecord(intake.metadata);
+      delete intakeMetadata.observed_action_closed_by;
+      delete intakeMetadata.observed_action_closed_at;
+      delete intakeMetadata.observed_action_close_reason;
+      const updated = await this.reportIntakeRepository.update(intake.id, {
+        status: ReportIntakeStatus.SUBMITTED,
+        closedAt: null,
+        metadata: {
+          ...intakeMetadata,
+          observed_action_reopened_by: moderator.id,
+          observed_action_reopened_at: now.toISOString(),
+          observed_action_reopen_reason:
+            observedAction === AdminActionType.FALSE_POSITIVE
+              ? 'observed_false_positive_undo'
+              : 'observed_dismiss_undo',
+        },
+      });
+
+      await this.reopenReportIntakeThreadAfterObservedUndo(updated ?? intake);
+    } catch (error) {
+      console.warn(
+        `[ReportIntake] Failed to restore linked report intake ${reportIntakeId} after observed undo ${detectionEvent.id}:`,
+        error
+      );
+    }
+  }
+
+  private isObservedCloseoutReportIntakeStatus(status: ReportIntakeStatus): boolean {
+    return status === ReportIntakeStatus.DISMISSED || status === ReportIntakeStatus.FALSE_POSITIVE;
+  }
+
+  private async reopenReportIntakeThreadAfterObservedUndo(intake: ReportIntake): Promise<void> {
+    const channels = this.client.channels as { fetch?: Client['channels']['fetch'] } | undefined;
+    if (!intake.thread_id || typeof channels?.fetch !== 'function') {
+      return;
+    }
+
+    const channel = await channels.fetch(intake.thread_id).catch(() => null);
+    if (
+      !channel ||
+      !('isThread' in channel) ||
+      typeof channel.isThread !== 'function' ||
+      !channel.isThread()
+    ) {
+      return;
+    }
+
+    const thread = channel as ThreadChannel;
+    if (thread.archived && typeof thread.setArchived === 'function') {
+      await thread.setArchived(false, 'Report intake reopened');
+    }
+
+    await thread
+      .send({
+        content: 'Report reopened. Moderators restored this intake for review.',
+        allowedMentions: { parse: [] },
+      })
+      .catch((error) => {
+        console.warn(
+          `[ReportIntake] Failed to post report reopen message for thread ${intake.thread_id}:`,
+          error
+        );
+      });
+  }
+
   private async closeReportIntakeThreadAfterReview(
     intake: ReportIntake,
     status: ReportIntakeStatus
@@ -3631,6 +3718,11 @@ export class SecurityActionService implements ISecurityActionService {
         `restore observed alert ${restoredDetectionEvent.id} to the live moderation queue`,
         (moderationQueueService) =>
           moderationQueueService.upsertObservedAlertMirror(restoredDetectionEvent)
+      );
+      await this.restoreLinkedReportIntakeForObservedUndo(
+        restoredDetectionEvent,
+        moderator,
+        observedAction
       );
       void this.productAnalyticsService.captureUserEvent(
         guildId,

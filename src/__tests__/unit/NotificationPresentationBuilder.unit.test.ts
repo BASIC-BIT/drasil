@@ -301,10 +301,20 @@ describe('NotificationPresentationBuilder (unit)', () => {
       (row) => row.toJSON().components as Array<{ label?: string; url?: string }>
     );
     const observedButtons = observedRows.flatMap(
-      (row) => row.toJSON().components as Array<{ label?: string; url?: string }>
+      (row) =>
+        row.toJSON().components as Array<{
+          label?: string;
+          custom_id?: string;
+          url?: string;
+        }>
     );
     const observedReportButtons = observedReportRows.flatMap(
-      (row) => row.toJSON().components as Array<{ label?: string; url?: string }>
+      (row) =>
+        row.toJSON().components as Array<{
+          label?: string;
+          custom_id?: string;
+          url?: string;
+        }>
     );
 
     expect(caseButtons.map((button) => button.label)).toEqual([
@@ -331,6 +341,8 @@ describe('NotificationPresentationBuilder (unit)', () => {
       'Other Actions',
       'Web Queue',
     ]);
+    expect(observedButtons[2].custom_id).toBe('observed:dismiss:user-1:det-1');
+    expect(observedReportButtons[2].custom_id).toBe('observed:close_report:user-1:det-1');
     expect(observedButtons[4]).toMatchObject({
       url: 'https://drasilbot.com/admin/guild/guild-1/cases',
     });

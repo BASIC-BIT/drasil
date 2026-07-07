@@ -2218,19 +2218,26 @@ export class InteractionHandler implements IInteractionHandler {
         });
         return;
 
+      case 'close_report':
       case 'dismiss':
       case 'false_positive':
         if (!(await hasModerationPermission())) {
           await this.replyPermissionDenied(
             interaction,
-            'You need moderation permissions to dismiss an alert.',
+            parsed.action === 'close_report'
+              ? 'You need moderation permissions to close a report.'
+              : 'You need moderation permissions to dismiss an alert.',
             { clearComponents: true }
           );
           return;
         }
         await this.showLegacyAdminActionConfirmation(interaction, {
           action:
-            parsed.action === 'false_positive' ? 'observed_false_positive' : 'observed_dismiss',
+            parsed.action === 'false_positive'
+              ? 'observed_false_positive'
+              : parsed.action === 'close_report'
+                ? 'observed_close_report'
+                : 'observed_dismiss',
           surface: 'observed',
           userId: parsed.userId,
           detectionEventId: parsed.detectionEventId,

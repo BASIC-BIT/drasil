@@ -1,4 +1,6 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
   ButtonInteraction,
   ChannelType,
   Client,
@@ -1813,6 +1815,41 @@ describe('InteractionHandler (unit)', () => {
       content: 'Closed the report for <@user-1>.',
       components: [],
     });
+  });
+
+  it('confirms the direct observed close report button as a report closeout', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('observed:close_report:user-1:det-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'Close this report for <@user-1> without additional moderation action?',
+        flags: MessageFlags.Ephemeral,
+      })
+    );
+    const components = (interaction.reply as jest.Mock).mock.calls[0][0].components;
+    const buttons = components.flatMap(
+      (row: ActionRowBuilder<ButtonBuilder>) => row.toJSON().components
+    ) as Array<{ custom_id?: string; label?: string }>;
+    expect(buttons[0]).toMatchObject({
+      custom_id: 'admin_actions:cocr:o:user-1:det-1',
+      label: 'Confirm Close Report',
+    });
+    expect(securityActionService.dismissObservedDetection).not.toHaveBeenCalled();
   });
 
   it('acknowledges observed dismiss menu before fetching permissions', async () => {
