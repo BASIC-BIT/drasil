@@ -37,6 +37,7 @@ interface AdminActionRowOptions {
 }
 
 type CaseMembershipState = 'in_server' | 'left_or_removed';
+type ObservedActionKind = 'alert' | 'report';
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds?: unknown;
@@ -435,7 +436,10 @@ export class NotificationPresentationBuilder {
     userId: string,
     detectionEventId: string,
     guildId?: string,
-    options: Pick<AdminActionRowOptions, 'includeBanAction'> & { actioned?: boolean } = {}
+    options: Pick<AdminActionRowOptions, 'includeBanAction'> & {
+      actioned?: boolean;
+      kind?: ObservedActionKind;
+    } = {}
   ): ActionRowBuilder<ButtonBuilder>[] {
     if (options.actioned) {
       const buttons = [
@@ -478,8 +482,8 @@ export class NotificationPresentationBuilder {
 
     buttons.push(
       this.createCustomButton(
-        `observed:dismiss:${userId}:${detectionEventId}`,
-        'Dismiss',
+        `observed:${options.kind === 'report' ? 'close_report' : 'dismiss'}:${userId}:${detectionEventId}`,
+        options.kind === 'report' ? 'Close Report' : 'Dismiss',
         ButtonStyle.Secondary
       ),
       this.createCustomButton(

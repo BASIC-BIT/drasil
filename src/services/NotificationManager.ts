@@ -23,6 +23,7 @@ import { DetectionResult } from './DetectionOrchestrator';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import {
   DetectionEvent,
+  DetectionType,
   VerificationStatus,
   AdminActionType,
   VerificationEvent,
@@ -294,7 +295,11 @@ export class NotificationManager implements INotificationManager {
             member.id,
             actionDetectionEventId,
             member.guild.id,
-            { includeBanAction: responseSettings.moderatorBanActionEnabled }
+            {
+              includeBanAction: responseSettings.moderatorBanActionEnabled,
+              kind:
+                detectionResult.triggerSource === DetectionType.USER_REPORT ? 'report' : 'alert',
+            }
           )
         : [];
 
@@ -403,7 +408,11 @@ export class NotificationManager implements INotificationManager {
         detectionEvent.user_id,
         detectionEvent.id,
         detectionEvent.server_id,
-        { includeBanAction: responseSettings.moderatorBanActionEnabled, actioned: true }
+        {
+          includeBanAction: responseSettings.moderatorBanActionEnabled,
+          actioned: true,
+          kind: this.getObservedActionKind(detectionEvent),
+        }
       );
 
       await message.edit({
@@ -462,7 +471,10 @@ export class NotificationManager implements INotificationManager {
         detectionEvent.user_id,
         detectionEvent.id,
         detectionEvent.server_id,
-        { includeBanAction: responseSettings.moderatorBanActionEnabled }
+        {
+          includeBanAction: responseSettings.moderatorBanActionEnabled,
+          kind: this.getObservedActionKind(detectionEvent),
+        }
       );
       if (!message.embeds.length) {
         await message.edit({ allowedMentions: { parse: [] }, components });
@@ -640,6 +652,10 @@ export class NotificationManager implements INotificationManager {
     }
 
     return { ...metadata } as Record<string, unknown>;
+  }
+
+  private getObservedActionKind(detectionEvent: DetectionEvent): 'alert' | 'report' {
+    return detectionEvent.detection_type === DetectionType.USER_REPORT ? 'report' : 'alert';
   }
 
   private findRecentObservedDetectionNotification(

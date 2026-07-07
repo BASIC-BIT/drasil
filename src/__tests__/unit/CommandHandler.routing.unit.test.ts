@@ -53,6 +53,7 @@ describe('CommandHandler routing (unit)', () => {
       closeIntakeForThread: jest.fn().mockResolvedValue({
         closed: true,
         message: 'Report intake closed. No report has been filed.',
+        shouldArchiveThread: true,
       }),
     };
     const thread = {
