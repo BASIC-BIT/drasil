@@ -713,15 +713,19 @@ describe('ReportInteractionHandler (unit)', () => {
 
     await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
 
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      reportIntakeService.findIntakeById.mock.invocationCallOrder[0]
+    );
     expect(reportIntakeService.findIntakeById).toHaveBeenCalledWith('intake-1');
-    expect(interaction.reply).toHaveBeenCalledWith(
+    expect(interaction.editReply).toHaveBeenCalledWith(
       expect.objectContaining({
-        flags: MessageFlags.Ephemeral,
         content: expect.stringContaining('Reporter: <@reporter-1>'),
         allowedMentions: { parse: [] },
       })
     );
-    const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
+    expect(interaction.reply).not.toHaveBeenCalled();
+    const reply = (interaction.editReply as jest.Mock).mock.calls[0][0];
     const button = reply.components[0].toJSON().components[0];
     expect(button).toMatchObject({
       custom_id: buildReportIntakeAdminCloseCustomId('intake-1'),
@@ -754,12 +758,16 @@ describe('ReportInteractionHandler (unit)', () => {
 
     await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
 
-    expect(interaction.reply).toHaveBeenCalledWith(
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      reportIntakeService.findIntakeById.mock.invocationCallOrder[0]
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith(
       expect.objectContaining({
-        flags: MessageFlags.Ephemeral,
         content: 'You need moderation permissions to use report admin actions.',
       })
     );
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 
   it('shows the report intake admin menu from the admin notification button', async () => {
@@ -797,13 +805,17 @@ describe('ReportInteractionHandler (unit)', () => {
 
     await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
 
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      reportIntakeService.findIntakeById.mock.invocationCallOrder[0]
+    );
     expect((client as any).channels.fetch).toHaveBeenCalledWith('report-thread-1');
-    expect(interaction.reply).toHaveBeenCalledWith(
+    expect(interaction.editReply).toHaveBeenCalledWith(
       expect.objectContaining({
-        flags: MessageFlags.Ephemeral,
         content: expect.stringContaining('Admin actions for report intake `intake-1`.'),
       })
     );
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 
   it('closes a report intake from the admin action confirmation', async () => {
@@ -843,6 +855,9 @@ describe('ReportInteractionHandler (unit)', () => {
     await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
 
     expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+    expect((interaction.deferUpdate as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      reportIntakeService.findIntakeById.mock.invocationCallOrder[0]
+    );
     expect((interaction.deferUpdate as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
       reportIntakeService.closeIntakeForThread.mock.invocationCallOrder[0]
     );

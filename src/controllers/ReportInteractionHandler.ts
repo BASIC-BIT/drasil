@@ -371,6 +371,8 @@ export class ReportInteractionHandler {
         return;
       }
 
+      await this.deferReportIntakeAdminInteraction(interaction, responseMode);
+
       const context = await this.resolveReportIntakeAdminContext(
         interaction,
         parsed.intakeId,
@@ -827,6 +829,22 @@ export class ReportInteractionHandler {
       ...responseWithMentions,
       flags: MessageFlags.Ephemeral,
     });
+  }
+
+  private async deferReportIntakeAdminInteraction(
+    interaction: ButtonInteraction,
+    mode: ReportIntakeAdminResponseMode
+  ): Promise<void> {
+    if (interaction.deferred || interaction.replied) {
+      return;
+    }
+
+    if (mode === 'reply') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deferUpdate();
   }
 
   private async fetchReportIntakeThread(
