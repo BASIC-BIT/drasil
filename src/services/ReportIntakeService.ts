@@ -17,9 +17,22 @@ import { IModerationQueueService } from './ModerationQueueService';
 const REPORT_INTAKE_CLOSE_COMMANDS = new Set(['close report', 'cancel report', 'close intake']);
 const REPORT_INTAKE_REASON_TEXT_MAX_LENGTH = 1000;
 const REPORT_INTAKE_MAX_CONFIRMATION_BUTTONS = 5;
+const REPORT_INTAKE_CANCELLED_MESSAGE = 'Report intake closed. No report has been filed.';
+export const REPORT_INTAKE_SUBMITTED_CLOSEOUT_MESSAGE =
+  'Report submitted. Moderators have been notified, so this intake thread is now closed.';
+const REPORT_INTAKE_REVIEWED_CLOSEOUT_MESSAGE =
+  'Report reviewed. Moderators have completed this intake, so this thread is now closed.';
+const REPORT_INTAKE_ALREADY_CLOSED_MESSAGE =
+  'This report intake is already closed. Archiving the thread now.';
 
 export const REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX = 'report_intake_confirm';
 export const REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX = 'report_intake_reject';
+
+export interface ReportIntakeCloseResult {
+  closed: boolean;
+  message: string;
+  shouldArchiveThread?: boolean;
+}
 
 interface MessageSendChannel {
   send(options: {
@@ -71,7 +84,7 @@ export interface IReportIntakeService {
     threadId: string;
     closedById: string;
     closedByStaff?: boolean;
-  }): Promise<{ closed: boolean; message: string }>;
+  }): Promise<ReportIntakeCloseResult>;
   recordAgentAnalysis(input: {
     intakeId: string;
     message: Message;
@@ -383,13 +396,16 @@ export class ReportIntakeService implements IReportIntakeService {
       return;
     }
 
+    const submittedAt = new Date();
     await this.reportIntakeRepository.update(input.intakeId, {
       status: ReportIntakeStatus.SUBMITTED,
       confirmedTargetUserId: input.targetUserId,
+      closedAt: submittedAt,
       metadata: {
         ...toRecord(intake.metadata),
         submitted_by: input.submittedById,
-        submitted_at: new Date().toISOString(),
+        submitted_at: submittedAt.toISOString(),
+        closed_reason: 'submitted',
       },
     });
     await this.clearReportThreadAttention(input.intakeId);
@@ -417,10 +433,10 @@ export class ReportIntakeService implements IReportIntakeService {
     threadId: string;
     closedById: string;
     closedByStaff?: boolean;
-  }): Promise<{ closed: boolean; message: string }> {
-    const intake = await this.reportIntakeRepository.findOpenByThreadId(input.threadId);
+  }): Promise<ReportIntakeCloseResult> {
+    const intake = await this.reportIntakeRepository.findByThreadId(input.threadId);
     if (!intake) {
-      return { closed: false, message: 'This thread does not have an open report intake.' };
+      return { closed: false, message: 'This thread does not have a report intake.' };
     }
 
     const closedByReporter = intake.reporter_id === input.closedById;
@@ -431,12 +447,52 @@ export class ReportIntakeService implements IReportIntakeService {
       };
     }
 
-    await this.closeIntake(intake, {
-      closedById: input.closedById,
-      closedByStaff: !closedByReporter && input.closedByStaff === true,
-    });
+    if (this.isOpenIntakeStatus(intake.status)) {
+      await this.closeIntake(intake, {
+        closedById: input.closedById,
+        closedByStaff: !closedByReporter && input.closedByStaff === true,
+      });
 
-    return { closed: true, message: 'Report intake closed. No report has been filed.' };
+      return {
+        closed: true,
+        message: REPORT_INTAKE_CANCELLED_MESSAGE,
+        shouldArchiveThread: true,
+      };
+    }
+
+    if (intake.status === ReportIntakeStatus.SUBMITTED) {
+      await this.recordThreadClose(intake, {
+        closedById: input.closedById,
+        closedByStaff: !closedByReporter && input.closedByStaff === true,
+        reason: 'submitted_thread_close',
+      });
+
+      return {
+        closed: true,
+        message: REPORT_INTAKE_SUBMITTED_CLOSEOUT_MESSAGE,
+        shouldArchiveThread: true,
+      };
+    }
+
+    if (this.isReviewedIntakeStatus(intake.status)) {
+      await this.recordThreadClose(intake, {
+        closedById: input.closedById,
+        closedByStaff: !closedByReporter && input.closedByStaff === true,
+        reason: 'reviewed_thread_close',
+      });
+
+      return {
+        closed: true,
+        message: REPORT_INTAKE_REVIEWED_CLOSEOUT_MESSAGE,
+        shouldArchiveThread: true,
+      };
+    }
+
+    return {
+      closed: true,
+      message: REPORT_INTAKE_ALREADY_CLOSED_MESSAGE,
+      shouldArchiveThread: true,
+    };
   }
 
   private async recordMessageEvidence(intake: ReportIntake, message: Message): Promise<void> {
@@ -511,7 +567,7 @@ export class ReportIntakeService implements IReportIntakeService {
       });
       if (hasMessageSend(message.channel)) {
         await message.channel.send({
-          content: 'Report intake closed. No report has been filed.',
+          content: REPORT_INTAKE_CANCELLED_MESSAGE,
           components: [],
           allowedMentions: { parse: [] },
         });
@@ -770,6 +826,22 @@ export class ReportIntakeService implements IReportIntakeService {
     return REPORT_INTAKE_CLOSE_COMMANDS.has(content.trim().toLowerCase());
   }
 
+  private isOpenIntakeStatus(status: ReportIntakeStatus): boolean {
+    return [
+      ReportIntakeStatus.COLLECTING_EVIDENCE,
+      ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+      ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+    ].includes(status);
+  }
+
+  private isReviewedIntakeStatus(status: ReportIntakeStatus): boolean {
+    return [
+      ReportIntakeStatus.ACTIONED,
+      ReportIntakeStatus.DISMISSED,
+      ReportIntakeStatus.FALSE_POSITIVE,
+    ].includes(status);
+  }
+
   private async closeIntake(
     intake: ReportIntake,
     input: {
@@ -787,6 +859,28 @@ export class ReportIntakeService implements IReportIntakeService {
         closed_by: input.closedById,
         closed_reason: input.closedByStaff ? 'staff_request' : 'reporter_request',
         ...(input.closedByStaff ? { closed_by_staff: true } : {}),
+      },
+    });
+    await this.clearReportThreadAttention(intake.id);
+  }
+
+  private async recordThreadClose(
+    intake: ReportIntake,
+    input: {
+      closedById: string;
+      closedByStaff?: boolean;
+      reason: string;
+    }
+  ): Promise<void> {
+    const now = new Date();
+    await this.reportIntakeRepository.update(intake.id, {
+      closedAt: intake.closed_at ?? now,
+      metadata: {
+        ...toRecord(intake.metadata),
+        thread_closed_by: input.closedById,
+        thread_closed_at: now.toISOString(),
+        thread_closed_reason: input.reason,
+        ...(input.closedByStaff ? { thread_closed_by_staff: true } : {}),
       },
     });
     await this.clearReportThreadAttention(intake.id);

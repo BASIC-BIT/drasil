@@ -16,6 +16,7 @@ import {
   IReportIntakeService,
   REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX,
   REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX,
+  REPORT_INTAKE_SUBMITTED_CLOSEOUT_MESSAGE,
 } from '../services/ReportIntakeService';
 import { NotificationPresentationBuilder } from '../services/NotificationPresentationBuilder';
 import { type MessageReportAttachment } from '../services/SecurityActionService';
@@ -241,9 +242,10 @@ export class ReportInteractionHandler {
       const threadChannel = this.getThreadChannel(interaction.channel);
       if (threadChannel) {
         await threadChannel.send({
-          content: `Report submitted for ${targetLabel}. Moderators have been notified.`,
+          content: `${REPORT_INTAKE_SUBMITTED_CLOSEOUT_MESSAGE}\nTarget: ${targetLabel}`,
           allowedMentions: { parse: [] },
         });
+        await this.archiveReportIntakeThread(threadChannel, 'Report intake submitted');
       }
     } catch (error) {
       console.error('Error confirming report intake target:', error);
@@ -518,6 +520,19 @@ export class ReportInteractionHandler {
     }
   }
 
+  private async archiveReportIntakeThread(
+    thread: Pick<ThreadChannel, 'id'> & Partial<Pick<ThreadChannel, 'archived' | 'setArchived'>>,
+    reason: string
+  ): Promise<void> {
+    try {
+      if (!thread.archived && typeof thread.setArchived === 'function') {
+        await thread.setArchived(true, reason);
+      }
+    } catch (error) {
+      console.warn(`Failed to archive report intake thread ${thread.id}:`, error);
+    }
+  }
+
   private async notifyReportIntakeThreadOpened(
     guildId: string,
     reporter: GuildMember,
@@ -558,14 +573,20 @@ export class ReportInteractionHandler {
 
   private getThreadChannel(
     channel: ButtonInteraction['channel']
-  ): Pick<ThreadChannel, 'send'> | null {
+  ):
+    | (Pick<ThreadChannel, 'id' | 'send'> &
+        Partial<Pick<ThreadChannel, 'archived' | 'setArchived'>>)
+    | null {
     const isThread = Boolean(
       channel &&
       'isThread' in channel &&
       typeof channel.isThread === 'function' &&
       channel.isThread()
     );
-    return isThread ? (channel as unknown as Pick<ThreadChannel, 'send'>) : null;
+    return isThread
+      ? (channel as unknown as Pick<ThreadChannel, 'id' | 'send'> &
+          Partial<Pick<ThreadChannel, 'archived' | 'setArchived'>>)
+      : null;
   }
 
   private formatReportTargetLabel(member: GuildMember): string {

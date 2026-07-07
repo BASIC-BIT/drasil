@@ -17,6 +17,7 @@ import { IServerRepository } from '../repositories/ServerRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import {
   DetectionEvent,
+  DetectionType,
   ModerationQueueItem,
   ModerationQueueItemType,
   ReportIntake,
@@ -606,7 +607,10 @@ export class ModerationQueueService implements IModerationQueueService {
         detectionEvent.user_id,
         detectionEvent.id,
         detectionEvent.server_id ?? undefined,
-        { includeBanAction }
+        {
+          includeBanAction,
+          kind: detectionEvent.detection_type === DetectionType.USER_REPORT ? 'report' : 'alert',
+        }
       ),
     };
   }

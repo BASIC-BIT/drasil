@@ -660,6 +660,11 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     return intake ? { ...intake } : null;
   }
 
+  async findByThreadId(threadId: string): Promise<ReportIntake | null> {
+    const intake = this.intakes.find((item) => item.thread_id === threadId);
+    return intake ? { ...intake } : null;
+  }
+
   async findOpenByThreadId(threadId: string): Promise<ReportIntake | null> {
     const intake = this.intakes.find(
       (item) =>
