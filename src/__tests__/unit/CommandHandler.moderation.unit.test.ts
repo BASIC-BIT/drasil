@@ -2,6 +2,11 @@ import { MessageFlags, PermissionFlagsBits, User } from 'discord.js';
 import { MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY } from '../../utils/detectionResponseSettings';
 import { handleSlashCommandConfirmationButton } from '../../utils/slashCommandConfirmations';
 import { buildHandler } from './commandHandlerTestHarness';
+import {
+  BAN_USER_CONTEXT_COMMAND_NAME,
+  KICK_USER_CONTEXT_COMMAND_NAME,
+} from '../../controllers/commandDefinitions';
+import { MODERATION_ACTION_REASON_FIELD_ID } from '../../utils/moderationActionCustomIds';
 
 const confirmLastSlashCommand = async (interaction: any): Promise<void> => {
   const reply = interaction.reply.mock.calls.at(-1)?.[0];
@@ -255,6 +260,75 @@ describe('CommandHandler moderation commands (unit)', () => {
     expect(userModerationService.banUser).toHaveBeenCalledWith(targetMember, 'reason', invoker);
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: `User ${targetUser.tag} has been banned.`,
+    });
+  });
+
+  it('shows a native Ban User reason modal for Ban Members moderators', async () => {
+    const { handler } = buildHandler();
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const interaction = {
+      commandName: BAN_USER_CONTEXT_COMMAND_NAME,
+      user: { id: 'ban-mod-1' },
+      targetUser,
+      guild: {
+        id: 'guild-1',
+        members: {
+          me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        },
+      },
+      memberPermissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.BanMembers),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      showModal: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleUserContextMenuCommand(interaction);
+
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+    const modalJson = interaction.showModal.mock.calls[0][0].toJSON();
+    expect(modalJson.custom_id).toBe('moderation_action_reason:ban:user-2');
+    expect(modalJson.components[0].components[0]).toMatchObject({
+      custom_id: MODERATION_ACTION_REASON_FIELD_ID,
+      required: false,
+    });
+  });
+
+  it('shows a native Kick User message reason modal for Kick Members moderators', async () => {
+    const { handler } = buildHandler();
+    const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
+    const targetMember = { id: targetUser.id } as any;
+    const targetMessage = {
+      id: 'message-1',
+      channelId: 'channel-1',
+      author: targetUser,
+    } as any;
+    const interaction = {
+      commandName: KICK_USER_CONTEXT_COMMAND_NAME,
+      user: { id: 'kick-mod-1' },
+      targetMessage,
+      guild: {
+        id: 'guild-1',
+        members: {
+          me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+          fetch: jest.fn().mockResolvedValue(targetMember),
+        },
+      },
+      memberPermissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.KickMembers),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      showModal: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleMessageContextMenuCommand(interaction);
+
+    expect(interaction.showModal).toHaveBeenCalledTimes(1);
+    const modalJson = interaction.showModal.mock.calls[0][0].toJSON();
+    expect(modalJson.custom_id).toBe('moderation_action_reason:kick:user-2:channel-1:message-1');
+    expect(modalJson.components[0].components[0]).toMatchObject({
+      custom_id: MODERATION_ACTION_REASON_FIELD_ID,
+      required: false,
     });
   });
 });

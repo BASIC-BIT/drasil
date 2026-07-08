@@ -26,6 +26,7 @@ import {
   getCaseReviewReminderSettings,
 } from '../utils/caseReviewReminderSettings';
 import {
+  ADMIN_CASE_OPEN_REQUIRES_REASON_SETTING_KEY,
   AUTO_KICK_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY,
   AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY,
   DETECTION_RESPONSE_MODE_SETTING_KEY,
@@ -35,7 +36,9 @@ import {
   MESSAGE_DETECTION_AUTO_KICK_ENABLED_SETTING_KEY,
   MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY,
   MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY,
+  MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY,
   MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY,
+  MODERATOR_KICK_ACTION_REQUIRES_REASON_SETTING_KEY,
   OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY,
   OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY,
   OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY,
@@ -163,7 +166,9 @@ export class ConfigSubcommandHandler {
       `Observed notification channel: ${settings.observedNotificationChannelId ? `<#${settings.observedNotificationChannelId}>` : '`admin_channel_id` fallback'}`,
       `Observed notification threshold: \`${settings.observedMinConfidenceThreshold}%\``,
       `Observed notification window: \`${settings.observedNotificationWindowMinutes} minutes\``,
-      `Observed ban reason required: \`${settings.observedActionBanRequiresReason ? 'yes' : 'no'}\``,
+      `Case reason required: \`${settings.adminCaseOpenRequiresReason ? 'yes' : 'no'}\``,
+      `Ban reason required: \`${settings.moderatorBanActionRequiresReason ? 'yes' : 'no'}\``,
+      `Kick reason required: \`${settings.moderatorKickActionRequiresReason ? 'yes' : 'no'}\``,
       `Moderator ban action enabled: \`${settings.moderatorBanActionEnabled ? 'yes' : 'no'}\``,
       `Moderator kick action enabled: \`${settings.moderatorKickActionEnabled ? 'yes' : 'no'}\``,
       `Observed kick action enabled: \`${settings.observedActionKickEnabled ? 'yes' : 'no'}\``,
@@ -948,16 +953,51 @@ export class ConfigSubcommandHandler {
           return;
         }
 
+        case 'case-reason-require':
+        case 'case-reason-optional': {
+          const required = subcommand === 'case-reason-require';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [ADMIN_CASE_OPEN_REQUIRES_REASON_SETTING_KEY]: required,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated staff case-open reason policy.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
         case 'ban-reason-require':
         case 'ban-reason-optional': {
           const required = subcommand === 'ban-reason-require';
           const updated = await this.configService.updateServerSettings(guildId, {
+            [MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY]: required,
             [OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY]: required,
           });
           const settings = getDetectionResponseSettings(updated.settings);
           await interaction.reply({
             content:
-              'Updated observed notification ban reason policy.\n\n' +
+              'Updated staff ban reason policy.\n\n' +
+              this.formatDetectionResponseSettings(guildId, settings),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
+
+        case 'kick-reason-require':
+        case 'kick-reason-optional': {
+          const required = subcommand === 'kick-reason-require';
+          const updated = await this.configService.updateServerSettings(guildId, {
+            [MODERATOR_KICK_ACTION_REQUIRES_REASON_SETTING_KEY]: required,
+          });
+          const settings = getDetectionResponseSettings(updated.settings);
+          await interaction.reply({
+            content:
+              'Updated staff kick reason policy.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
             flags: MessageFlags.Ephemeral,
             allowedMentions: { parse: [] },

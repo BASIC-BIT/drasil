@@ -15,10 +15,16 @@ import {
   ReportInteractionHandler,
 } from '../../controllers/ReportInteractionHandler';
 import { IConfigService } from '../../config/ConfigService';
+import { ReportIntake, ReportIntakeStatus } from '../../repositories/types';
 import { IReportIntakeService } from '../../services/ReportIntakeService';
 import { ReportSubmissionService } from '../../services/ReportSubmissionService';
 import { ISecurityActionService } from '../../services/SecurityActionService';
 import { IThreadManager } from '../../services/ThreadManager';
+import {
+  buildReportIntakeAdminActionsCustomId,
+  buildReportIntakeAdminCloseCustomId,
+  buildReportIntakeAdminConfirmCloseCustomId,
+} from '../../utils/reportIntakeAdminActions';
 import {
   REPORT_MESSAGE_MODAL_PREFIX,
   USER_REPORT_REASON_REQUIRED_SETTING_KEY,
@@ -43,9 +49,13 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
     customId,
     guildId,
     channel: { id: 'channel-1', type: ChannelType.GuildText },
+    channelId: 'channel-1',
     user,
     deferred: false,
     replied: false,
+    deferUpdate: jest.fn().mockImplementation(async () => {
+      interaction.deferred = true;
+    }),
     deferReply: jest.fn().mockImplementation(async () => {
       interaction.deferred = true;
     }),
@@ -54,6 +64,9 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
     }),
     followUp: jest.fn().mockResolvedValue(undefined),
     reply: jest.fn().mockImplementation(async () => {
+      interaction.replied = true;
+    }),
+    update: jest.fn().mockImplementation(async () => {
       interaction.replied = true;
     }),
     showModal: jest.fn().mockResolvedValue(undefined),
@@ -82,9 +95,25 @@ const buildModalInteraction = (
     deferred: false,
   }) as unknown as ModalSubmitInteraction;
 
+const buildReportIntake = (overrides: Partial<ReportIntake> = {}): ReportIntake => ({
+  id: 'intake-1',
+  server_id: 'guild-1',
+  reporter_id: 'reporter-1',
+  thread_id: 'report-thread-1',
+  status: ReportIntakeStatus.COLLECTING_EVIDENCE,
+  summary: null,
+  confirmed_target_user_id: null,
+  created_at: null,
+  updated_at: null,
+  closed_at: null,
+  metadata: null,
+  ...overrides,
+});
+
 const createReportIntakeService = (): jest.Mocked<IReportIntakeService> => ({
-  openIntakeFromThread: jest.fn().mockResolvedValue({} as any),
+  openIntakeFromThread: jest.fn().mockResolvedValue(buildReportIntake()),
   findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),
+  findIntakeById: jest.fn().mockResolvedValue(null),
   handleThreadMessage: jest.fn().mockResolvedValue(false),
   confirmCandidate: jest.fn().mockResolvedValue({ confirmed: false, message: '' }),
   rejectCandidates: jest.fn().mockResolvedValue({ rejected: false, message: '' }),
@@ -470,19 +499,28 @@ describe('ReportInteractionHandler (unit)', () => {
     });
     expect(threadManager.activateReportIntakeThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'report-thread-1' }),
-      reporter
+      reporter,
+      'intake-1'
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Opened a private report thread: https://discord.com/channels/report-thread-1\nAdd what happened there.',
     });
-    expect(adminChannel.send).toHaveBeenCalledWith({
-      embeds: [
-        expect.objectContaining({
-          data: expect.objectContaining({ title: 'Report Intake Started' }),
-        }),
-      ],
-      allowedMentions: { parse: [], roles: [], users: [], repliedUser: false },
+    expect(adminChannel.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        embeds: [
+          expect.objectContaining({
+            data: expect.objectContaining({ title: 'Report Intake Started' }),
+          }),
+        ],
+        allowedMentions: { parse: [], roles: [], users: [], repliedUser: false },
+      })
+    );
+    const adminMessage = (adminChannel.send as jest.Mock).mock.calls[0][0];
+    const adminButton = adminMessage.components[0].toJSON().components[0];
+    expect(adminButton).toMatchObject({
+      custom_id: buildReportIntakeAdminActionsCustomId('intake-1'),
+      label: 'Admin Actions',
     });
     expect(interaction.showModal).not.toHaveBeenCalled();
   });
@@ -629,13 +667,216 @@ describe('ReportInteractionHandler (unit)', () => {
       consoleError.mockRestore();
     }
 
-    expect(threadManager.activateReportIntakeThread).toHaveBeenCalledWith(thread, reporter);
+    expect(threadManager.activateReportIntakeThread).toHaveBeenCalledWith(
+      thread,
+      reporter,
+      'intake-1'
+    );
     expect(thread.delete).not.toHaveBeenCalled();
     expect(reportIntakeService.markOpenFailed).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenLastCalledWith({
       content:
         'Opened a private report thread: https://discord.com/channels/report-thread-1\nAdd what happened there.',
     });
+  });
+
+  it('shows the report intake admin menu to staff from the report thread button', async () => {
+    const staffMember = {
+      ...buildMember('guild-1', 'staff-1'),
+      permissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ModerateMembers),
+      },
+    } as unknown as GuildMember;
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(staffMember) },
+    });
+    const reportIntakeService = createReportIntakeService();
+    reportIntakeService.findIntakeById.mockResolvedValue(
+      buildReportIntake({ confirmed_target_user_id: 'user-1' })
+    );
+    const handler = createHandler(reportIntakeService);
+    const interaction = buildInteraction(
+      buildReportIntakeAdminActionsCustomId('intake-1'),
+      'guild-1',
+      {
+        id: 'staff-1',
+      } as User
+    );
+    const thread = {
+      id: 'report-thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    (interaction as any).channel = thread;
+    (interaction as any).channelId = 'report-thread-1';
+
+    await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      reportIntakeService.findIntakeById.mock.invocationCallOrder[0]
+    );
+    expect(reportIntakeService.findIntakeById).toHaveBeenCalledWith('intake-1');
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Reporter: <@reporter-1>'),
+        allowedMentions: { parse: [] },
+      })
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+    const reply = (interaction.editReply as jest.Mock).mock.calls[0][0];
+    const button = reply.components[0].toJSON().components[0];
+    expect(button).toMatchObject({
+      custom_id: buildReportIntakeAdminCloseCustomId('intake-1'),
+      label: 'Close Report',
+    });
+  });
+
+  it('denies report intake admin actions for non-staff members', async () => {
+    const viewerMember = buildMember('guild-1', 'viewer-1');
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(viewerMember) },
+    });
+    const reportIntakeService = createReportIntakeService();
+    reportIntakeService.findIntakeById.mockResolvedValue(buildReportIntake());
+    const handler = createHandler(reportIntakeService);
+    const interaction = buildInteraction(
+      buildReportIntakeAdminActionsCustomId('intake-1'),
+      'guild-1',
+      {
+        id: 'viewer-1',
+      } as User
+    );
+    (interaction as any).channel = {
+      id: 'report-thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    (interaction as any).channelId = 'report-thread-1';
+
+    await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      reportIntakeService.findIntakeById.mock.invocationCallOrder[0]
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'You need moderation permissions to use report admin actions.',
+      })
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it('shows the report intake admin menu from the admin notification button', async () => {
+    const staffMember = {
+      ...buildMember('guild-1', 'staff-1'),
+      permissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ModerateMembers),
+      },
+    } as unknown as GuildMember;
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(staffMember) },
+    });
+    const reportThread = {
+      id: 'report-thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+    };
+    (client as any).channels = {
+      fetch: jest.fn().mockResolvedValue(reportThread),
+    };
+    configService.getAdminChannel.mockResolvedValue({ id: 'admin-channel-1' } as any);
+    const reportIntakeService = createReportIntakeService();
+    reportIntakeService.findIntakeById.mockResolvedValue(buildReportIntake());
+    const handler = createHandler(reportIntakeService);
+    const interaction = buildInteraction(
+      buildReportIntakeAdminActionsCustomId('intake-1'),
+      'guild-1',
+      {
+        id: 'staff-1',
+      } as User
+    );
+    (interaction as any).channel = { id: 'admin-channel-1', type: ChannelType.GuildText };
+    (interaction as any).channelId = 'admin-channel-1';
+
+    await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      reportIntakeService.findIntakeById.mock.invocationCallOrder[0]
+    );
+    expect((client as any).channels.fetch).toHaveBeenCalledWith('report-thread-1');
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Admin actions for report intake `intake-1`.'),
+      })
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it('closes a report intake from the admin action confirmation', async () => {
+    const staffMember = {
+      ...buildMember('guild-1', 'staff-1'),
+      permissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ModerateMembers),
+      },
+    } as unknown as GuildMember;
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(staffMember) },
+    });
+    const reportIntakeService = createReportIntakeService();
+    reportIntakeService.findIntakeById.mockResolvedValue(buildReportIntake());
+    reportIntakeService.closeIntakeForThread.mockResolvedValue({
+      closed: true,
+      message: 'Report intake closed. No report has been filed.',
+      shouldArchiveThread: true,
+    });
+    const handler = createHandler(reportIntakeService);
+    const interaction = buildInteraction(
+      buildReportIntakeAdminConfirmCloseCustomId('intake-1'),
+      'guild-1',
+      { id: 'staff-1' } as User
+    );
+    const thread = {
+      id: 'report-thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn().mockResolvedValue(undefined),
+      archived: false,
+      setArchived: jest.fn().mockResolvedValue(undefined),
+    };
+    (interaction as any).channel = thread;
+    (interaction as any).channelId = 'report-thread-1';
+
+    await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
+
+    expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+    expect((interaction.deferUpdate as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      reportIntakeService.findIntakeById.mock.invocationCallOrder[0]
+    );
+    expect((interaction.deferUpdate as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      reportIntakeService.closeIntakeForThread.mock.invocationCallOrder[0]
+    );
+    expect(reportIntakeService.closeIntakeForThread).toHaveBeenCalledWith({
+      threadId: 'report-thread-1',
+      closedById: 'staff-1',
+      closedByStaff: true,
+    });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Report intake closed.',
+      components: [],
+      allowedMentions: { parse: [] },
+    });
+    expect(interaction.update).not.toHaveBeenCalled();
+    expect(thread.send).toHaveBeenCalledWith({
+      content: 'Report intake closed. No report has been filed.',
+      allowedMentions: { parse: [] },
+    });
+    expect(thread.setArchived).toHaveBeenCalledWith(true, 'Report intake closed');
   });
 
   it('submits a confirmed report intake target through the user report workflow', async () => {

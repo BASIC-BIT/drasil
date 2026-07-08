@@ -1,9 +1,15 @@
 import {
+  ActionRowBuilder,
   ButtonStyle,
   ChatInputCommandInteraction,
   Guild,
+  MessageContextMenuCommandInteraction,
   MessageFlags,
+  ModalBuilder,
   PermissionFlagsBits,
+  TextInputBuilder,
+  TextInputStyle,
+  UserContextMenuCommandInteraction,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import {
@@ -18,9 +24,20 @@ import {
 import { ISecurityActionService } from '../services/SecurityActionService';
 import { IUserModerationService } from '../services/UserModerationService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
+import {
+  buildModerationActionReasonModalCustomId,
+  MODERATION_ACTION_REASON_FIELD_ID,
+  MODERATOR_ACTION_BAN_DEFAULT_REASON,
+  MODERATOR_ACTION_KICK_DEFAULT_REASON,
+  ModeratorUserAction,
+} from '../utils/moderationActionCustomIds';
 import { requestSlashCommandConfirmation } from '../utils/slashCommandConfirmations';
 
-type ReplyGuildInstallRequired = (interaction: ChatInputCommandInteraction) => Promise<void>;
+type ModerationCommandInteraction =
+  | ChatInputCommandInteraction
+  | UserContextMenuCommandInteraction
+  | MessageContextMenuCommandInteraction;
+type ReplyGuildInstallRequired = (interaction: ModerationCommandInteraction) => Promise<void>;
 
 const AUDIT_INTEGRITY_RESPONSE_MAX_LENGTH = 1900;
 
@@ -44,7 +61,7 @@ export class ModerationCommandHandler {
       return;
     }
 
-    const reason = interaction.options.getString('reason') || 'No reason provided';
+    const providedReason = interaction.options.getString('reason')?.trim() || undefined;
     const guild = interaction.guild;
     if (!guild) {
       await this.replyGuildInstallRequired(interaction);
@@ -76,6 +93,17 @@ export class ModerationCommandHandler {
       return;
     }
 
+    const serverConfig = await this.configService.getServerConfig(guild.id);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    if (settings.moderatorBanActionRequiresReason && !providedReason) {
+      await interaction.reply({
+        content: 'A ban reason is required.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const reason = providedReason ?? 'No reason provided';
     const member = await guild.members.fetch(targetUser.id).catch(() => null);
 
     await requestSlashCommandConfirmation(interaction, {
@@ -106,6 +134,173 @@ export class ModerationCommandHandler {
         }
       },
     });
+  }
+
+  public async handleBanUserContextCommand(
+    interaction: UserContextMenuCommandInteraction
+  ): Promise<void> {
+    await this.handleModerationUserContextCommand(interaction, 'ban');
+  }
+
+  public async handleKickUserContextCommand(
+    interaction: UserContextMenuCommandInteraction
+  ): Promise<void> {
+    await this.handleModerationUserContextCommand(interaction, 'kick');
+  }
+
+  public async handleBanMessageContextCommand(
+    interaction: MessageContextMenuCommandInteraction
+  ): Promise<void> {
+    await this.handleModerationMessageContextCommand(interaction, 'ban');
+  }
+
+  public async handleKickMessageContextCommand(
+    interaction: MessageContextMenuCommandInteraction
+  ): Promise<void> {
+    await this.handleModerationMessageContextCommand(interaction, 'kick');
+  }
+
+  private async handleModerationUserContextCommand(
+    interaction: UserContextMenuCommandInteraction,
+    action: ModeratorUserAction
+  ): Promise<void> {
+    const guild = interaction.guild;
+    if (!guild) {
+      await this.replyGuildInstallRequired(interaction);
+      return;
+    }
+
+    await this.showModerationActionReasonModal(interaction, guild, action, interaction.targetUser);
+  }
+
+  private async handleModerationMessageContextCommand(
+    interaction: MessageContextMenuCommandInteraction,
+    action: ModeratorUserAction
+  ): Promise<void> {
+    const guild = interaction.guild;
+    if (!guild) {
+      await this.replyGuildInstallRequired(interaction);
+      return;
+    }
+
+    await this.showModerationActionReasonModal(
+      interaction,
+      guild,
+      action,
+      interaction.targetMessage.author,
+      interaction.targetMessage.channelId,
+      interaction.targetMessage.id
+    );
+  }
+
+  private async showModerationActionReasonModal(
+    interaction: UserContextMenuCommandInteraction | MessageContextMenuCommandInteraction,
+    guild: Guild,
+    action: ModeratorUserAction,
+    targetUser: UserContextMenuCommandInteraction['targetUser'],
+    sourceChannelId?: string,
+    sourceMessageId?: string
+  ): Promise<void> {
+    if (targetUser.id === interaction.user.id) {
+      await interaction.reply({
+        content: action === 'ban' ? 'You cannot ban yourself.' : 'You cannot kick yourself.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const requiredPermission =
+      action === 'ban' ? PermissionFlagsBits.BanMembers : PermissionFlagsBits.KickMembers;
+    const permissionName = action === 'ban' ? 'Ban Members' : 'Kick Members';
+    const hasPermission = await this.hasGuildPermission(interaction, guild, requiredPermission);
+    if (!hasPermission) {
+      await interaction.reply({
+        content: `You need ${permissionName} permission to ${action} a user.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (action === 'ban') {
+      if (!(await this.canUseModeratorBanAction(guild))) {
+        await interaction.reply({
+          content:
+            'Drasil ban actions are disabled for this server or the bot lacks Ban Members permission.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+    } else {
+      if (!(await this.canUseModeratorKickAction(guild))) {
+        await interaction.reply({
+          content:
+            'Drasil kick actions are disabled for this server or the bot lacks Kick Members permission.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+      if (!targetMember) {
+        await interaction.reply({
+          content: `Could not find user ${targetUser.tag} in this server.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+    }
+
+    const serverConfig = await this.configService.getServerConfig(guild.id);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    const reasonRequired =
+      action === 'ban'
+        ? settings.moderatorBanActionRequiresReason
+        : settings.moderatorKickActionRequiresReason;
+    const defaultReason =
+      action === 'ban' ? MODERATOR_ACTION_BAN_DEFAULT_REASON : MODERATOR_ACTION_KICK_DEFAULT_REASON;
+    const title = action === 'ban' ? 'Ban User' : 'Kick User';
+    const modal = new ModalBuilder()
+      .setCustomId(
+        buildModerationActionReasonModalCustomId(
+          action,
+          targetUser.id,
+          sourceChannelId,
+          sourceMessageId
+        )
+      )
+      .setTitle(title);
+    const reasonInput = new TextInputBuilder()
+      .setCustomId(MODERATION_ACTION_REASON_FIELD_ID)
+      .setLabel(reasonRequired ? `${title} reason` : `${title} reason (optional)`)
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(reasonRequired)
+      .setMaxLength(500)
+      .setPlaceholder(defaultReason);
+
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
+    await interaction.showModal(modal);
+  }
+
+  private async hasGuildPermission(
+    interaction: ModerationCommandInteraction,
+    guild: Guild,
+    permission: bigint
+  ): Promise<boolean> {
+    if (
+      interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ||
+      interaction.memberPermissions?.has(permission)
+    ) {
+      return true;
+    }
+    if (interaction.memberPermissions) {
+      return false;
+    }
+
+    const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+    return (
+      member?.permissions.has(PermissionFlagsBits.Administrator) === true ||
+      member?.permissions.has(permission) === true
+    );
   }
 
   public async handleAuditCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -265,6 +460,21 @@ export class ModerationCommandHandler {
         ? await guild.members.fetchMe().catch(() => null)
         : null);
     return botMember?.permissions.has(PermissionFlagsBits.BanMembers) ?? false;
+  }
+
+  private async canUseModeratorKickAction(guild: Guild): Promise<boolean> {
+    const serverConfig = await this.configService.getServerConfig(guild.id);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    if (!settings.moderatorKickActionEnabled) {
+      return false;
+    }
+
+    const botMember =
+      guild.members.me ??
+      (typeof guild.members.fetchMe === 'function'
+        ? await guild.members.fetchMe().catch(() => null)
+        : null);
+    return botMember?.permissions.has(PermissionFlagsBits.KickMembers) ?? false;
   }
 
   private async handleIntegrityAuditCommand(

@@ -28,7 +28,10 @@ import { ISetupDiagnosticsService } from '../services/SetupDiagnosticsService';
 import { ICaseRoleLockdownService } from '../services/CaseRoleLockdownService';
 import { ReportSubmissionService } from '../services/ReportSubmissionService';
 import {
+  BAN_USER_CONTEXT_COMMAND_NAME,
   buildApplicationCommands,
+  KICK_USER_CONTEXT_COMMAND_NAME,
+  OPEN_CASE_CONTEXT_COMMAND_NAME,
   REPORT_MESSAGE_CONTEXT_COMMAND_NAME,
   REPORT_USER_CONTEXT_COMMAND_NAME,
 } from './commandDefinitions';
@@ -269,29 +272,49 @@ export class CommandHandler implements ICommandHandler {
   public async handleUserContextMenuCommand(
     interaction: UserContextMenuCommandInteraction
   ): Promise<void> {
-    if (interaction.commandName !== REPORT_USER_CONTEXT_COMMAND_NAME) {
-      await interaction.reply({
-        content: `Unknown user command: ${interaction.commandName}`,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
+    switch (interaction.commandName) {
+      case REPORT_USER_CONTEXT_COMMAND_NAME:
+        await this.reportCommandHandler.handleReportUserContextCommand(interaction);
+        return;
+      case OPEN_CASE_CONTEXT_COMMAND_NAME:
+        await this.caseCommandHandler.handleOpenCaseUserContextCommand(interaction);
+        return;
+      case BAN_USER_CONTEXT_COMMAND_NAME:
+        await this.moderationCommandHandler.handleBanUserContextCommand(interaction);
+        return;
+      case KICK_USER_CONTEXT_COMMAND_NAME:
+        await this.moderationCommandHandler.handleKickUserContextCommand(interaction);
+        return;
+      default:
+        await interaction.reply({
+          content: `Unknown user command: ${interaction.commandName}`,
+          flags: MessageFlags.Ephemeral,
+        });
     }
-
-    await this.reportCommandHandler.handleReportUserContextCommand(interaction);
   }
 
   public async handleMessageContextMenuCommand(
     interaction: MessageContextMenuCommandInteraction
   ): Promise<void> {
-    if (interaction.commandName !== REPORT_MESSAGE_CONTEXT_COMMAND_NAME) {
-      await interaction.reply({
-        content: `Unknown message command: ${interaction.commandName}`,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
+    switch (interaction.commandName) {
+      case REPORT_MESSAGE_CONTEXT_COMMAND_NAME:
+        await this.reportCommandHandler.handleReportMessageContextCommand(interaction);
+        return;
+      case OPEN_CASE_CONTEXT_COMMAND_NAME:
+        await this.caseCommandHandler.handleOpenCaseMessageContextCommand(interaction);
+        return;
+      case BAN_USER_CONTEXT_COMMAND_NAME:
+        await this.moderationCommandHandler.handleBanMessageContextCommand(interaction);
+        return;
+      case KICK_USER_CONTEXT_COMMAND_NAME:
+        await this.moderationCommandHandler.handleKickMessageContextCommand(interaction);
+        return;
+      default:
+        await interaction.reply({
+          content: `Unknown message command: ${interaction.commandName}`,
+          flags: MessageFlags.Ephemeral,
+        });
     }
-
-    await this.reportCommandHandler.handleReportMessageContextCommand(interaction);
   }
 
   public async handleTestCommands(message: Message): Promise<void> {
@@ -486,7 +509,10 @@ export class CommandHandler implements ICommandHandler {
   }
 
   private async replyGuildInstallRequired(
-    interaction: ChatInputCommandInteraction | UserContextMenuCommandInteraction
+    interaction:
+      | ChatInputCommandInteraction
+      | UserContextMenuCommandInteraction
+      | MessageContextMenuCommandInteraction
   ): Promise<void> {
     const installLink = this.getGuildInstallLink();
     const setupLink = interaction.guildId ? buildAdminGuildSetupUrl(interaction.guildId) : null;

@@ -13,7 +13,10 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.observedMinConfidenceThreshold).toBe(70);
     expect(settings.observedNotificationWindowMinutes).toBe(60);
     expect(settings.automaticDetectionExemptModerators).toBe(true);
+    expect(settings.adminCaseOpenRequiresReason).toBe(false);
     expect(settings.observedActionBanRequiresReason).toBe(false);
+    expect(settings.moderatorBanActionRequiresReason).toBe(false);
+    expect(settings.moderatorKickActionRequiresReason).toBe(false);
     expect(settings.moderatorBanActionEnabled).toBe(true);
     expect(settings.moderatorKickActionEnabled).toBe(true);
     expect(settings.observedActionKickEnabled).toBe(false);
@@ -31,6 +34,9 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.joinMode).toBe('restrict');
     expect(settings.moderatorBanActionEnabled).toBe(true);
     expect(settings.moderatorKickActionEnabled).toBe(true);
+    expect(settings.adminCaseOpenRequiresReason).toBe(false);
+    expect(settings.moderatorBanActionRequiresReason).toBe(false);
+    expect(settings.moderatorKickActionRequiresReason).toBe(false);
     expect(settings.observedActionKickEnabled).toBe(false);
     expect(settings.messageDetectionAutoKickEnabled).toBe(false);
     expect(settings.joinDetectionAutoKickEnabled).toBe(false);
@@ -128,12 +134,26 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.automaticDetectionExemptModerators).toBe(false);
   });
 
-  it('allows observed notification ban reasons to be required', () => {
+  it('allows staff action reasons to be required', () => {
+    const settings = getDetectionResponseSettings({
+      admin_case_open_requires_reason: true,
+      moderator_ban_action_requires_reason: true,
+      moderator_kick_action_requires_reason: true,
+    });
+
+    expect(settings.adminCaseOpenRequiresReason).toBe(true);
+    expect(settings.observedActionBanRequiresReason).toBe(true);
+    expect(settings.moderatorBanActionRequiresReason).toBe(true);
+    expect(settings.moderatorKickActionRequiresReason).toBe(true);
+  });
+
+  it('maps legacy observed ban reason policy to the shared ban reason policy', () => {
     const settings = getDetectionResponseSettings({
       observed_action_ban_requires_reason: true,
     });
 
     expect(settings.observedActionBanRequiresReason).toBe(true);
+    expect(settings.moderatorBanActionRequiresReason).toBe(true);
   });
 
   it('clamps numeric observe-only notification settings', () => {

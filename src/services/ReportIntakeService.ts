@@ -61,6 +61,7 @@ export interface IReportIntakeService {
     serverId: string;
     reporterId: string;
   }): Promise<ReportIntake | null>;
+  findIntakeById(intakeId: string): Promise<ReportIntake | null>;
   handleThreadMessage(message: Message): Promise<boolean>;
   confirmCandidate(input: {
     intakeId: string;
@@ -150,6 +151,10 @@ export class ReportIntakeService implements IReportIntakeService {
       input.serverId,
       input.reporterId
     );
+  }
+
+  async findIntakeById(intakeId: string): Promise<ReportIntake | null> {
+    return this.reportIntakeRepository.findById(intakeId);
   }
 
   async handleThreadMessage(message: Message): Promise<boolean> {

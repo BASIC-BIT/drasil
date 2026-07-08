@@ -4,6 +4,7 @@ import {
   ButtonBuilder,
   MessageFlags,
   GuildMember,
+  Message,
   PermissionFlagsBits,
   ModalBuilder,
   TextInputBuilder,
@@ -64,6 +65,12 @@ import {
   REPORT_USER_TYPED_MODAL_ID,
   ReportInteractionHandler,
 } from './ReportInteractionHandler';
+import {
+  OPEN_CASE_CONTEXT_REASON_FIELD_ID,
+  OpenCaseMessageContextModalData,
+  parseOpenCaseContextModalCustomId,
+  parseOpenCaseMessageContextModalCustomId,
+} from './CaseCommandHandler';
 import { SetupVerificationModalHandler } from './SetupVerificationModalHandler';
 import { buildAdminCaseDetailUrl, buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
 import {
@@ -75,17 +82,38 @@ import {
   ModerationQueueService,
 } from '../services/ModerationQueueService';
 import { IRoleGateService, RoleGateResolutionResult } from '../services/RoleGateService';
+import {
+  MODERATION_ACTION_REASON_FIELD_ID,
+  MODERATOR_ACTION_BAN_DEFAULT_REASON,
+  MODERATOR_ACTION_KICK_DEFAULT_REASON,
+  ModeratorUserAction,
+  parseModerationActionReasonModalCustomId,
+} from '../utils/moderationActionCustomIds';
 // Load environment variables
 dotenv.config();
 
 const OBSERVED_ACTION_MODAL_REASON_FIELD_ID = 'observed_ban_reason';
+const KICK_ACTION_MODAL_REASON_FIELD_ID = 'kick_action_reason';
 const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notification';
 const OBSERVED_KICK_DEFAULT_REASON = 'Kicked from observed suspicious notification';
 const VERIFICATION_BAN_MODAL_PREFIX = 'verification:ban_modal';
 const VERIFICATION_BAN_NOTES_FIELD_ID = 'verification_ban_notes';
 const VERIFICATION_BAN_DEFAULT_REASON = 'Banned by moderator during verification';
+const VERIFICATION_KICK_MODAL_PREFIX = 'verification:kick_modal';
 const VERIFICATION_KICK_DEFAULT_REASON = 'Kicked by moderator during verification';
+const OBSERVED_KICK_MODAL_PREFIX = 'observed:kick_modal';
+const MODERATION_ACTION_CONFIRMATION_PREFIX = 'moderation_action_confirm';
+const MODERATION_ACTION_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const CASE_REVIEW_DIGEST_PAGE_SIZE = 25;
+
+interface PendingModerationActionConfirmation {
+  readonly action: ModeratorUserAction;
+  readonly targetUserId: string;
+  readonly userId: string;
+  readonly guildId: string;
+  readonly reason: string;
+  readonly createdAt: number;
+}
 /**
  * Interface for the Bot class
  */
@@ -120,6 +148,11 @@ export class InteractionHandler implements IInteractionHandler {
   private moderationQueueService?: IModerationQueueService;
   private roleGateService?: IRoleGateService;
   private detectionEventsRepository?: IDetectionEventsRepository;
+  private moderationActionConfirmationCounter = 0;
+  private readonly pendingModerationActionConfirmations = new Map<
+    string,
+    PendingModerationActionConfirmation
+  >();
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -209,8 +242,18 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
+      if (this.reportInteractionHandler.isReportIntakeAdminActionCustomId(customId)) {
+        await this.reportInteractionHandler.handleReportIntakeAdminAction(interaction, customId);
+        return;
+      }
+
       if (isSlashCommandConfirmationCustomId(customId)) {
         await handleSlashCommandConfirmationButton(interaction);
+        return;
+      }
+
+      if (this.isModerationActionConfirmationCustomId(customId)) {
+        await this.handleModerationActionConfirmationButton(interaction, guildId);
         return;
       }
 
@@ -318,7 +361,7 @@ export class InteractionHandler implements IInteractionHandler {
             });
             return;
           }
-          await this.handleBanButton(interaction, targetUserId);
+          await this.handleBanButton(interaction, guildId, targetUserId);
           break;
         case 'thread':
           if (
@@ -1339,7 +1382,7 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    await this.handleBanButton(interaction, parsed.userId);
+    await this.handleBanButton(interaction, guildId, parsed.userId);
   }
 
   private async executeConfirmedAdminAction(
@@ -1426,7 +1469,7 @@ export class InteractionHandler implements IInteractionHandler {
         });
         return;
       }
-      await this.handleKickButton(interaction, guildId, parsed.userId);
+      await this.showVerificationKickModal(interaction, guildId, parsed.userId);
       return;
     }
 
@@ -1466,8 +1509,12 @@ export class InteractionHandler implements IInteractionHandler {
         });
         return;
       }
-      await interaction.deferUpdate();
-      await this.kickObservedUser(interaction, guildId, parsed.userId, parsed.detectionEventId);
+      await this.showObservedKickModal(
+        interaction,
+        guildId,
+        parsed.userId,
+        parsed.detectionEventId
+      );
       return;
     }
 
@@ -1601,38 +1648,28 @@ export class InteractionHandler implements IInteractionHandler {
     }
   }
 
-  private async handleKickButton(
+  private async showVerificationKickModal(
     interaction: ButtonInteraction,
     guildId: string,
     userId: string
   ): Promise<void> {
-    await interaction.deferUpdate();
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    const modal = new ModalBuilder()
+      .setCustomId(`${VERIFICATION_KICK_MODAL_PREFIX}:${userId}`)
+      .setTitle('Confirm User Kick');
+    const reasonInput = new TextInputBuilder()
+      .setCustomId(KICK_ACTION_MODAL_REASON_FIELD_ID)
+      .setLabel(
+        settings.moderatorKickActionRequiresReason ? 'Kick reason' : 'Kick reason (optional)'
+      )
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(settings.moderatorKickActionRequiresReason)
+      .setMaxLength(500)
+      .setPlaceholder(VERIFICATION_KICK_DEFAULT_REASON);
 
-    try {
-      const guild = await this.client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId).catch(() => null);
-      if (!member) {
-        throw new Error('Could not find member in guild');
-      }
-
-      await this.userModerationService.kickUser(
-        member,
-        VERIFICATION_KICK_DEFAULT_REASON,
-        interaction.user
-      );
-
-      await interaction.followUp({
-        content: `Kicked <@${userId}> and resolved pending verification cases as kicked.`,
-        allowedMentions: { parse: [] },
-        flags: MessageFlags.Ephemeral,
-      });
-    } catch (error) {
-      console.error('Error kicking user from case action:', error);
-      await interaction.followUp({
-        content: 'An error occurred while kicking the user.',
-        flags: MessageFlags.Ephemeral,
-      });
-    }
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
+    await interaction.showModal(modal);
   }
 
   private async handleCloseNoActionButton(
@@ -1734,15 +1771,21 @@ export class InteractionHandler implements IInteractionHandler {
     return lines.length > 0 ? `\n\n${lines.join('\n')}` : '';
   }
 
-  private async handleBanButton(interaction: ButtonInteraction, userId: string): Promise<void> {
+  private async handleBanButton(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<void> {
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
     const modal = new ModalBuilder()
       .setCustomId(`${VERIFICATION_BAN_MODAL_PREFIX}:${userId}`)
       .setTitle('Confirm User Ban');
     const notesInput = new TextInputBuilder()
       .setCustomId(VERIFICATION_BAN_NOTES_FIELD_ID)
-      .setLabel('Final notes (optional)')
+      .setLabel(settings.moderatorBanActionRequiresReason ? 'Ban reason' : 'Ban reason (optional)')
       .setStyle(TextInputStyle.Paragraph)
-      .setRequired(false)
+      .setRequired(settings.moderatorBanActionRequiresReason)
       .setMaxLength(500)
       .setPlaceholder('Submitting this form bans the user. Add notes for the audit log.');
 
@@ -1901,6 +1944,37 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   public async handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+    const moderationActionReason = parseModerationActionReasonModalCustomId(interaction.customId);
+    if (moderationActionReason) {
+      await this.handleModerationActionReasonModalSubmit(interaction, moderationActionReason);
+      return;
+    }
+
+    const moderationActionConfirmationId = this.parseModerationActionConfirmationModalCustomId(
+      interaction.customId
+    );
+    if (moderationActionConfirmationId) {
+      await this.handleModerationActionConfirmationModalSubmit(
+        interaction,
+        moderationActionConfirmationId
+      );
+      return;
+    }
+
+    const openCaseMessageContext = parseOpenCaseMessageContextModalCustomId(interaction.customId);
+    if (openCaseMessageContext) {
+      await this.handleOpenCaseContextModalSubmit(interaction, openCaseMessageContext);
+      return;
+    }
+
+    const openCaseTargetUserId = parseOpenCaseContextModalCustomId(interaction.customId);
+    if (openCaseTargetUserId) {
+      await this.handleOpenCaseContextModalSubmit(interaction, {
+        targetUserId: openCaseTargetUserId,
+      });
+      return;
+    }
+
     switch (interaction.customId) {
       case REPORT_USER_TYPED_MODAL_ID:
         await this.reportInteractionHandler.handleReportUserModalSubmit(interaction);
@@ -1913,6 +1987,10 @@ export class InteractionHandler implements IInteractionHandler {
           await this.handleVerificationBanModalSubmit(interaction);
           return;
         }
+        if (interaction.customId.startsWith(`${VERIFICATION_KICK_MODAL_PREFIX}:`)) {
+          await this.handleVerificationKickModalSubmit(interaction);
+          return;
+        }
         if (interaction.customId.startsWith(`${REPORT_MESSAGE_MODAL_PREFIX}:`)) {
           await this.reportInteractionHandler.handleReportMessageModalSubmit(interaction);
           return;
@@ -1921,10 +1999,482 @@ export class InteractionHandler implements IInteractionHandler {
           await this.handleObservedBanModalSubmit(interaction);
           return;
         }
+        if (interaction.customId.startsWith(`${OBSERVED_KICK_MODAL_PREFIX}:`)) {
+          await this.handleObservedKickModalSubmit(interaction);
+          return;
+        }
         console.log(
           `[InteractionHandler] Ignoring unknown modal submission: ${interaction.customId}`
         );
     }
+  }
+
+  private nextModerationActionConfirmationId(): string {
+    this.moderationActionConfirmationCounter += 1;
+    return `${Date.now().toString(36)}${this.moderationActionConfirmationCounter.toString(36)}`;
+  }
+
+  private buildModerationActionConfirmationCustomId(
+    action: 'confirm' | 'cancel',
+    id: string
+  ): string {
+    return `${MODERATION_ACTION_CONFIRMATION_PREFIX}:${action}:${id}`;
+  }
+
+  private parseModerationActionConfirmationCustomId(
+    customId: string
+  ): { action: 'confirm' | 'cancel'; id: string } | null {
+    const [prefix, action, id] = customId.split(':');
+    if (prefix !== MODERATION_ACTION_CONFIRMATION_PREFIX || !id) {
+      return null;
+    }
+    if (action !== 'confirm' && action !== 'cancel') {
+      return null;
+    }
+
+    return { action, id };
+  }
+
+  private isModerationActionConfirmationCustomId(customId: string): boolean {
+    return this.parseModerationActionConfirmationCustomId(customId) !== null;
+  }
+
+  private buildModerationActionConfirmationModalCustomId(id: string): string {
+    return `${MODERATION_ACTION_CONFIRMATION_PREFIX}:modal:${id}`;
+  }
+
+  private parseModerationActionConfirmationModalCustomId(customId: string): string | null {
+    const [prefix, action, id] = customId.split(':');
+    if (prefix !== MODERATION_ACTION_CONFIRMATION_PREFIX || action !== 'modal' || !id) {
+      return null;
+    }
+
+    return id;
+  }
+
+  private pruneModerationActionConfirmations(now = Date.now()): void {
+    for (const [id, pending] of this.pendingModerationActionConfirmations.entries()) {
+      if (now - pending.createdAt > MODERATION_ACTION_CONFIRMATION_TTL_MS) {
+        this.pendingModerationActionConfirmations.delete(id);
+      }
+    }
+  }
+
+  private getModerationActionLabel(action: ModeratorUserAction): string {
+    return action === 'ban' ? 'Ban User' : 'Kick User';
+  }
+
+  private getModerationActionDefaultReason(action: ModeratorUserAction): string {
+    return action === 'ban'
+      ? MODERATOR_ACTION_BAN_DEFAULT_REASON
+      : MODERATOR_ACTION_KICK_DEFAULT_REASON;
+  }
+
+  private async getModerationActionReasonRequired(
+    guildId: string,
+    action: ModeratorUserAction
+  ): Promise<boolean> {
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    return action === 'ban'
+      ? settings.moderatorBanActionRequiresReason
+      : settings.moderatorKickActionRequiresReason;
+  }
+
+  private async ensureModerationActionAllowed(
+    interaction: ButtonInteraction | ModalSubmitInteraction,
+    guildId: string,
+    action: ModeratorUserAction
+  ): Promise<boolean> {
+    const permission =
+      action === 'ban' ? PermissionFlagsBits.BanMembers : PermissionFlagsBits.KickMembers;
+    const permissionName = action === 'ban' ? 'Ban Members' : 'Kick Members';
+    if (!(await this.hasAnyPermission(interaction, guildId, [permission]))) {
+      await this.replyPermissionDenied(
+        interaction,
+        `You need ${permissionName} permission to ${action} a user.`
+      );
+      return false;
+    }
+
+    const actionEnabled =
+      action === 'ban'
+        ? await this.canUseModeratorBanAction(guildId)
+        : await this.canUseModeratorKickAction(guildId, 'case');
+    if (!actionEnabled) {
+      await interaction.reply({
+        content:
+          action === 'ban'
+            ? 'Drasil ban actions are disabled for this server or the bot lacks Ban Members permission.'
+            : 'Drasil kick actions are disabled for this server or the bot lacks Kick Members permission.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  private async handleModerationActionReasonModalSubmit(
+    interaction: ModalSubmitInteraction,
+    input: {
+      action: ModeratorUserAction;
+      targetUserId: string;
+      sourceChannelId?: string;
+      sourceMessageId?: string;
+    }
+  ): Promise<void> {
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: 'This action can only be performed in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (input.targetUserId === interaction.user.id) {
+      await interaction.reply({
+        content: input.action === 'ban' ? 'You cannot ban yourself.' : 'You cannot kick yourself.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (
+      !(await this.ensureModerationActionAllowed(interaction, interaction.guildId, input.action))
+    ) {
+      return;
+    }
+
+    const providedReason = interaction.fields
+      .getTextInputValue(MODERATION_ACTION_REASON_FIELD_ID)
+      .trim();
+    const reasonRequired = await this.getModerationActionReasonRequired(
+      interaction.guildId,
+      input.action
+    );
+    if (reasonRequired && !providedReason) {
+      await interaction.reply({
+        content:
+          input.action === 'ban' ? 'A ban reason is required.' : 'A kick reason is required.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const reason = providedReason || this.getModerationActionDefaultReason(input.action);
+    const guild = await this.client.guilds.fetch(interaction.guildId);
+    if (input.action === 'kick') {
+      const member = await guild.members.fetch(input.targetUserId).catch(() => null);
+      if (!member) {
+        await interaction.reply({
+          content: `Could not find user <@${input.targetUserId}> in this server.`,
+          allowedMentions: { parse: [] },
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+    }
+
+    this.pruneModerationActionConfirmations();
+    const id = this.nextModerationActionConfirmationId();
+    this.pendingModerationActionConfirmations.set(id, {
+      action: input.action,
+      targetUserId: input.targetUserId,
+      userId: interaction.user.id,
+      guildId: interaction.guildId,
+      reason,
+      createdAt: Date.now(),
+    });
+
+    const label = this.getModerationActionLabel(input.action);
+    await interaction.reply({
+      content: `${label} for <@${input.targetUserId}>? Confirming will apply this action immediately.`,
+      allowedMentions: { parse: [] },
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(this.buildModerationActionConfirmationCustomId('confirm', id))
+            .setLabel(label)
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId(this.buildModerationActionConfirmationCustomId('cancel', id))
+            .setLabel('Cancel')
+            .setStyle(ButtonStyle.Secondary)
+        ),
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  private async handleModerationActionConfirmationButton(
+    interaction: ButtonInteraction,
+    guildId: string
+  ): Promise<void> {
+    const parsed = this.parseModerationActionConfirmationCustomId(interaction.customId);
+    if (!parsed) {
+      await interaction.reply({
+        content: 'Unknown moderation confirmation.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    this.pruneModerationActionConfirmations();
+    const pending = this.pendingModerationActionConfirmations.get(parsed.id);
+    if (!pending) {
+      await interaction.reply({
+        content: 'That confirmation expired. Start the action again if you still want to continue.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (pending.userId !== interaction.user.id || pending.guildId !== guildId) {
+      await interaction.reply({
+        content: 'Only the moderator who started this action can use this confirmation.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (parsed.action === 'cancel') {
+      this.pendingModerationActionConfirmations.delete(parsed.id);
+      await interaction.update({ content: 'Cancelled.', components: [] });
+      return;
+    }
+
+    const confirmationText = pending.action.toUpperCase();
+    const modal = new ModalBuilder()
+      .setCustomId(this.buildModerationActionConfirmationModalCustomId(parsed.id))
+      .setTitle(`Confirm ${this.getModerationActionLabel(pending.action)}`);
+    const input = new TextInputBuilder()
+      .setCustomId('moderation_action_confirmation_text')
+      .setLabel(`Type ${confirmationText} to confirm`)
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(8);
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+    await interaction.showModal(modal);
+  }
+
+  private async handleModerationActionConfirmationModalSubmit(
+    interaction: ModalSubmitInteraction,
+    id: string
+  ): Promise<void> {
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: 'This action can only be performed in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    this.pruneModerationActionConfirmations();
+    const pending = this.pendingModerationActionConfirmations.get(id);
+    if (!pending) {
+      await interaction.reply({
+        content: 'That confirmation expired. Start the action again if you still want to continue.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (pending.userId !== interaction.user.id || pending.guildId !== interaction.guildId) {
+      await interaction.reply({
+        content: 'Only the moderator who started this action can use this confirmation.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const confirmationText = interaction.fields
+      .getTextInputValue('moderation_action_confirmation_text')
+      .trim()
+      .toUpperCase();
+    if (confirmationText !== pending.action.toUpperCase()) {
+      await interaction.reply({
+        content: `Confirmation text did not match. Type ${pending.action.toUpperCase()} to continue.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (
+      !(await this.ensureModerationActionAllowed(interaction, interaction.guildId, pending.action))
+    ) {
+      return;
+    }
+
+    this.pendingModerationActionConfirmations.delete(id);
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      const guild = await this.client.guilds.fetch(interaction.guildId);
+      if (pending.action === 'ban') {
+        const member = await guild.members.fetch(pending.targetUserId).catch(() => null);
+        if (member) {
+          await this.userModerationService.banUser(member, pending.reason, interaction.user);
+        } else {
+          await this.userModerationService.banUserById(
+            guild,
+            pending.targetUserId,
+            pending.reason,
+            interaction.user
+          );
+        }
+        await interaction.editReply({
+          content: `Banned <@${pending.targetUserId}> from this server.`,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      const member = await guild.members.fetch(pending.targetUserId).catch(() => null);
+      if (!member) {
+        await interaction.editReply({
+          content: `Could not find user <@${pending.targetUserId}> in this server.`,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+      await this.userModerationService.kickUser(member, pending.reason, interaction.user);
+      await interaction.editReply({
+        content: `Kicked <@${pending.targetUserId}> from this server.`,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error(`Failed to ${pending.action} user from native action:`, error);
+      await interaction.editReply({
+        content: `Failed to ${pending.action} <@${pending.targetUserId}>. Please try again later.`,
+        allowedMentions: { parse: [] },
+      });
+    }
+  }
+
+  private async handleOpenCaseContextModalSubmit(
+    interaction: ModalSubmitInteraction,
+    input: { targetUserId: string } | OpenCaseMessageContextModalData
+  ): Promise<void> {
+    const { targetUserId } = input;
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: 'This action can only be performed in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (targetUserId === interaction.user.id) {
+      await interaction.reply({
+        content: 'You cannot open a case for yourself.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (
+      !(await this.hasAnyPermission(interaction, interaction.guildId, [
+        PermissionFlagsBits.ModerateMembers,
+      ]))
+    ) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need Moderate Members permission to open a case.'
+      );
+      return;
+    }
+
+    const reason =
+      interaction.fields.getTextInputValue(OPEN_CASE_CONTEXT_REASON_FIELD_ID).trim() || undefined;
+    const serverConfig = await this.configService.getServerConfig(interaction.guildId);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    if (settings.adminCaseOpenRequiresReason && !reason) {
+      await interaction.reply({
+        content: 'A case reason is required.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      const guild = await this.client.guilds.fetch(interaction.guildId);
+      const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
+      if (!targetMember) {
+        await interaction.editReply({
+          content: `Could not find user <@${targetUserId}> in this server.`,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      const sourceMetadata = this.getOpenCaseSourceMetadata(input);
+      const sourceMessage = sourceMetadata
+        ? await this.fetchOpenCaseSourceMessage(
+            sourceMetadata.source_channel_id,
+            sourceMetadata.source_message_id
+          )
+        : undefined;
+      const result = await this.securityActionService.openAdminCase(
+        targetMember,
+        interaction.user,
+        {
+          action: 'open_case',
+          reason,
+          ...(sourceMetadata
+            ? {
+                metadata: sourceMetadata,
+                ...(sourceMessage ? { sourceMessage } : {}),
+              }
+            : {}),
+        }
+      );
+      if (!result.opened) {
+        throw new Error('Case flow returned false');
+      }
+
+      const content = result.caseRoleActive
+        ? `Opened a case for ${targetMember.user.tag} and applied the case role.`
+        : `Opened a case for ${targetMember.user.tag}, but I could not apply the case role. Check bot permissions and role hierarchy.`;
+      await interaction.editReply({
+        content,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Failed to open case from native user action:', error);
+      await interaction.editReply({
+        content: `Failed to open a case for <@${targetUserId}>. Please try again later.`,
+        allowedMentions: { parse: [] },
+      });
+    }
+  }
+
+  private getOpenCaseSourceMetadata(
+    input: { targetUserId: string } | OpenCaseMessageContextModalData
+  ): { source: string; source_channel_id: string; source_message_id: string } | undefined {
+    if (!('sourceChannelId' in input)) {
+      return undefined;
+    }
+
+    return {
+      source: 'message_context_case',
+      source_channel_id: input.sourceChannelId,
+      source_message_id: input.sourceMessageId,
+    };
+  }
+
+  private async fetchOpenCaseSourceMessage(
+    sourceChannelId: string,
+    sourceMessageId: string
+  ): Promise<Message | undefined> {
+    const channel = await this.client.channels.fetch(sourceChannelId).catch(() => null);
+    if (!channel || !('messages' in channel)) {
+      return undefined;
+    }
+
+    return (await channel.messages.fetch(sourceMessageId).catch(() => null)) ?? undefined;
   }
 
   private async handleVerificationBanModalSubmit(
@@ -1968,6 +2518,15 @@ export class InteractionHandler implements IInteractionHandler {
     }
 
     const finalNotes = interaction.fields.getTextInputValue(VERIFICATION_BAN_NOTES_FIELD_ID).trim();
+    const serverConfig = await this.configService.getServerConfig(interaction.guildId);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    if (settings.moderatorBanActionRequiresReason && !finalNotes) {
+      await interaction.reply({
+        content: 'A ban reason is required.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
     const banReason = finalNotes || VERIFICATION_BAN_DEFAULT_REASON;
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -1989,6 +2548,83 @@ export class InteractionHandler implements IInteractionHandler {
       console.error('Error banning user:', error);
       await interaction.editReply({
         content: 'An error occurred while banning the user.',
+      });
+    }
+  }
+
+  private async handleVerificationKickModalSubmit(
+    interaction: ModalSubmitInteraction
+  ): Promise<void> {
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: 'This action can only be performed in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const userId = interaction.customId.slice(`${VERIFICATION_KICK_MODAL_PREFIX}:`.length);
+    if (!userId) {
+      await interaction.reply({
+        content: 'Unknown kick action.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (
+      !(await this.hasAnyPermission(interaction, interaction.guildId, [
+        PermissionFlagsBits.KickMembers,
+      ]))
+    ) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need Kick Members permission to kick a user.'
+      );
+      return;
+    }
+    if (!(await this.canUseModeratorKickAction(interaction.guildId, 'case'))) {
+      await interaction.reply({
+        content:
+          'Drasil case kick actions are disabled for this server or the bot lacks Kick Members permission.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const providedReason = interaction.fields
+      .getTextInputValue(KICK_ACTION_MODAL_REASON_FIELD_ID)
+      .trim();
+    const serverConfig = await this.configService.getServerConfig(interaction.guildId);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    if (settings.moderatorKickActionRequiresReason && !providedReason) {
+      await interaction.reply({
+        content: 'A kick reason is required.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const reason = providedReason || VERIFICATION_KICK_DEFAULT_REASON;
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      const guild = await this.client.guilds.fetch(interaction.guildId);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) {
+        throw new Error('Could not find member in guild');
+      }
+
+      await this.userModerationService.kickUser(member, reason, interaction.user);
+
+      await interaction.editReply({
+        content: `Kicked <@${userId}> and resolved pending verification cases as kicked.`,
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Error kicking user from case action:', error);
+      await interaction.editReply({
+        content: 'An error occurred while kicking the user.',
       });
     }
   }
@@ -2300,32 +2936,102 @@ export class InteractionHandler implements IInteractionHandler {
     });
   }
 
-  private async kickObservedUser(
+  private async showObservedKickModal(
     interaction: ButtonInteraction,
     guildId: string,
     userId: string,
     detectionEventId: string
   ): Promise<void> {
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    const modal = new ModalBuilder()
+      .setCustomId(`${OBSERVED_KICK_MODAL_PREFIX}:${userId}:${detectionEventId}`)
+      .setTitle('Confirm Observed Kick');
+    const reasonInput = new TextInputBuilder()
+      .setCustomId(KICK_ACTION_MODAL_REASON_FIELD_ID)
+      .setLabel(
+        settings.moderatorKickActionRequiresReason ? 'Kick reason' : 'Kick reason (optional)'
+      )
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(settings.moderatorKickActionRequiresReason)
+      .setMaxLength(500)
+      .setPlaceholder(OBSERVED_KICK_DEFAULT_REASON);
+
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
+    await interaction.showModal(modal);
+  }
+
+  private async handleObservedKickModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+    if (!interaction.guildId) {
+      await interaction.reply({
+        content: 'This action can only be performed in a server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const parsed = this.parseObservedActionCustomId(interaction.customId);
+    if (!parsed || parsed.action !== 'kick_modal') {
+      await interaction.reply({
+        content: 'Unknown observed kick action.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    if (
+      !(await this.hasAnyPermission(interaction, interaction.guildId, [
+        PermissionFlagsBits.KickMembers,
+      ]))
+    ) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need Kick Members permission to kick a user.'
+      );
+      return;
+    }
+    if (!(await this.canUseModeratorKickAction(interaction.guildId, 'observed'))) {
+      await interaction.reply({
+        content:
+          'Drasil observed alert kick actions are disabled for this server or the bot lacks Kick Members permission.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const providedReason = interaction.fields
+      .getTextInputValue(KICK_ACTION_MODAL_REASON_FIELD_ID)
+      .trim();
+    const serverConfig = await this.configService.getServerConfig(interaction.guildId);
+    const settings = getDetectionResponseSettings(serverConfig.settings);
+    if (settings.moderatorKickActionRequiresReason && !providedReason) {
+      await interaction.reply({
+        content: 'A kick reason is required.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const reason = providedReason || OBSERVED_KICK_DEFAULT_REASON;
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
     try {
-      const member = await this.getObservedTargetMember(guildId, userId);
+      const member = await this.getObservedTargetMember(interaction.guildId, parsed.userId);
       const kicked = await this.securityActionService.kickObservedDetection(
         member,
-        detectionEventId,
+        parsed.detectionEventId,
         interaction.user,
-        OBSERVED_KICK_DEFAULT_REASON
+        reason
       );
-      await interaction.followUp({
+      await interaction.editReply({
         content: kicked
-          ? `Kicked <@${userId}> from the observed alert.`
-          : `This observed alert for <@${userId}> was already actioned.`,
+          ? `Kicked <@${parsed.userId}> from the observed alert.`
+          : `This observed alert for <@${parsed.userId}> was already actioned.`,
         allowedMentions: { parse: [] },
-        flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
       console.error('Error kicking user from observed alert:', error);
-      await interaction.followUp({
+      await interaction.editReply({
         content: 'An error occurred while kicking the user.',
-        flags: MessageFlags.Ephemeral,
       });
     }
   }
@@ -2343,9 +3049,9 @@ export class InteractionHandler implements IInteractionHandler {
       .setTitle('Confirm Observed Ban');
     const reasonInput = new TextInputBuilder()
       .setCustomId(OBSERVED_ACTION_MODAL_REASON_FIELD_ID)
-      .setLabel(settings.observedActionBanRequiresReason ? 'Ban reason' : 'Ban reason (optional)')
+      .setLabel(settings.moderatorBanActionRequiresReason ? 'Ban reason' : 'Ban reason (optional)')
       .setStyle(TextInputStyle.Paragraph)
-      .setRequired(settings.observedActionBanRequiresReason)
+      .setRequired(settings.moderatorBanActionRequiresReason)
       .setMaxLength(500)
       .setPlaceholder(OBSERVED_BAN_DEFAULT_REASON);
     modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
@@ -2394,7 +3100,7 @@ export class InteractionHandler implements IInteractionHandler {
     const providedReason = interaction.fields
       .getTextInputValue(OBSERVED_ACTION_MODAL_REASON_FIELD_ID)
       .trim();
-    if (settings.observedActionBanRequiresReason && !providedReason) {
+    if (settings.moderatorBanActionRequiresReason && !providedReason) {
       await interaction.reply({
         content: 'A ban reason is required.',
         flags: MessageFlags.Ephemeral,

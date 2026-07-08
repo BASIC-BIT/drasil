@@ -266,6 +266,34 @@ describe('CommandHandler detection config commands (unit)', () => {
 
   it.each([
     [
+      'case-reason-require',
+      'admin_case_open_requires_reason',
+      true,
+      'Case reason required: `yes`',
+      undefined,
+    ],
+    [
+      'case-reason-optional',
+      'admin_case_open_requires_reason',
+      false,
+      'Case reason required: `no`',
+      undefined,
+    ],
+    [
+      'kick-reason-require',
+      'moderator_kick_action_requires_reason',
+      true,
+      'Kick reason required: `yes`',
+      undefined,
+    ],
+    [
+      'kick-reason-optional',
+      'moderator_kick_action_requires_reason',
+      false,
+      'Kick reason required: `no`',
+      undefined,
+    ],
+    [
       'kick-action-enable',
       'moderator_kick_action_enabled',
       true,
@@ -366,6 +394,49 @@ describe('CommandHandler detection config commands (unit)', () => {
 
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       [key]: value,
+    });
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: expect.stringContaining(responseText),
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] },
+    });
+  });
+
+  it.each([
+    ['ban-reason-require', true, 'Ban reason required: `yes`'],
+    ['ban-reason-optional', false, 'Ban reason required: `no`'],
+  ])('handles /config detection %s', async (subcommand, value, responseText) => {
+    const updateServerSettings = jest.fn().mockResolvedValue({
+      settings: {
+        moderator_ban_action_requires_reason: value,
+        observed_action_ban_requires_reason: value,
+      },
+    });
+    const { handler, configService } = buildHandler({ updateServerSettings });
+
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild: {
+        id: 'guild-1',
+        members: {
+          fetch: jest.fn().mockResolvedValue({
+            permissions: { has: jest.fn().mockReturnValue(true) },
+          }),
+        },
+      },
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue('detection'),
+        getSubcommand: jest.fn().mockReturnValue(subcommand),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      moderator_ban_action_requires_reason: value,
+      observed_action_ban_requires_reason: value,
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining(responseText),

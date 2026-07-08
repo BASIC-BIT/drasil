@@ -217,6 +217,53 @@ describe('CommandHandler command catalog (unit)', () => {
     expect(reportUserCommand.contexts).toEqual([InteractionContextType.Guild]);
   });
 
+  it('registers guild-only Open Case user context command for case moderators', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const openCaseCommand = commands.find(
+      (c) => c.name === 'Open Case' && c.type === ApplicationCommandType.User
+    );
+
+    expect(openCaseCommand).toBeDefined();
+    expect(openCaseCommand.type).toBe(ApplicationCommandType.User);
+    expect(openCaseCommand.integration_types).toEqual([ApplicationIntegrationType.GuildInstall]);
+    expect(openCaseCommand.contexts).toEqual([InteractionContextType.Guild]);
+    expect(openCaseCommand.default_member_permissions).toBe(
+      PermissionFlagsBits.ModerateMembers.toString()
+    );
+  });
+
+  it('registers guild-only Open Case message context command for case moderators', () => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const openCaseCommand = commands.find(
+      (c) => c.name === 'Open Case' && c.type === ApplicationCommandType.Message
+    );
+
+    expect(openCaseCommand).toBeDefined();
+    expect(openCaseCommand.integration_types).toEqual([ApplicationIntegrationType.GuildInstall]);
+    expect(openCaseCommand.contexts).toEqual([InteractionContextType.Guild]);
+    expect(openCaseCommand.default_member_permissions).toBe(
+      PermissionFlagsBits.ModerateMembers.toString()
+    );
+  });
+
+  it.each([
+    ['Ban User', ApplicationCommandType.User, PermissionFlagsBits.BanMembers],
+    ['Ban User', ApplicationCommandType.Message, PermissionFlagsBits.BanMembers],
+    ['Kick User', ApplicationCommandType.User, PermissionFlagsBits.KickMembers],
+    ['Kick User', ApplicationCommandType.Message, PermissionFlagsBits.KickMembers],
+  ])('registers guild-only %s context command', (name, type, permission) => {
+    const { handler } = buildHandler();
+    const commands = (handler as any).commands as any[];
+    const command = commands.find((c) => c.name === name && c.type === type);
+
+    expect(command).toBeDefined();
+    expect(command.integration_types).toEqual([ApplicationIntegrationType.GuildInstall]);
+    expect(command.contexts).toEqual([InteractionContextType.Guild]);
+    expect(command.default_member_permissions).toBe(permission.toString());
+  });
+
   it('does not register Report Message context command unless user-install reporting is enabled', () => {
     delete process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED;
 
@@ -316,7 +363,7 @@ describe('CommandHandler command catalog (unit)', () => {
 
     expect(caseCommand).toBeDefined();
     expect(caseCommand.default_member_permissions).toBe(
-      PermissionFlagsBits.Administrator.toString()
+      PermissionFlagsBits.ModerateMembers.toString()
     );
     expect(caseCommand.options.map((option: any) => option.name)).toEqual([
       'open',

@@ -1,5 +1,8 @@
 import { injectable, inject } from 'inversify';
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   Client,
   Guild,
   GuildMember,
@@ -26,6 +29,7 @@ import {
 import { DetectionResult } from './DetectionOrchestrator';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
+import { buildReportIntakeAdminActionsCustomId } from '../utils/reportIntakeAdminActions';
 
 export const VERIFICATION_THREAD_TYPE_METADATA_KEY = 'thread_type';
 export const VERIFICATION_THREAD_TYPE = 'verification';
@@ -115,7 +119,11 @@ export interface IThreadManager {
     reporter: GuildMember
   ): Promise<ThreadChannel | null>;
 
-  activateReportIntakeThread(thread: ThreadChannel, reporter: GuildMember): Promise<boolean>;
+  activateReportIntakeThread(
+    thread: ThreadChannel,
+    reporter: GuildMember,
+    reportIntakeId?: string
+  ): Promise<boolean>;
 
   /**
    * Resolve a verification thread
@@ -1151,15 +1159,28 @@ export class ThreadManager implements IThreadManager {
 
   public async activateReportIntakeThread(
     thread: ThreadChannel,
-    reporter: GuildMember
+    reporter: GuildMember,
+    reportIntakeId?: string
   ): Promise<boolean> {
     try {
       await thread.members.add(reporter.id);
 
       await this.addCaseResponderMembers(reporter.guild, thread, [reporter.id]);
 
+      const components = reportIntakeId
+        ? [
+            new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder()
+                .setCustomId(buildReportIntakeAdminActionsCustomId(reportIntakeId))
+                .setLabel('Admin Actions')
+                .setStyle(ButtonStyle.Primary)
+            ),
+          ]
+        : [];
+
       await thread.send({
         content: this.buildReportIntakeThreadMessage(reporter),
+        ...(components.length ? { components } : {}),
         allowedMentions: {
           parse: [],
           users: [reporter.id],
