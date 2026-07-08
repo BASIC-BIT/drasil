@@ -70,7 +70,6 @@ describe('ConfigService (unit)', () => {
       globalConfig.getSettings().defaultServerSettings.messageThreshold
     );
     expect(config.heuristic_suspicious_keywords.length).toBeGreaterThan(0);
-    expect(config.settings.auto_restrict).toBe(true);
     expect(getDetectionResponseSettings(config.settings).mode).toBe('restrict');
     expect(getDetectionResponseSettings(config.settings).moderatorBanActionEnabled).toBe(true);
     expect(getReportAiSettings(config.settings).enabled).toBe(true);
@@ -217,7 +216,7 @@ describe('ConfigService (unit)', () => {
     await serverRepository.upsertByGuildId('guild-4', {
       settings: {
         min_confidence_threshold: 60,
-        auto_restrict: true,
+        detection_response_mode: 'notify_only',
       },
       heuristic_message_threshold: 2,
     });
@@ -226,7 +225,7 @@ describe('ConfigService (unit)', () => {
       min_confidence_threshold: 80,
     });
 
-    expect(updated.settings.auto_restrict).toBe(true);
+    expect(updated.settings.detection_response_mode).toBe('notify_only');
     expect(updated.settings.min_confidence_threshold).toBe(80);
     expect(updated.heuristic_message_threshold).toBe(2);
   });
@@ -267,7 +266,6 @@ describe('ConfigService (unit)', () => {
     await service.getServerConfig('guild-detection-defaults');
     const updated = await service.updateServerSettings('guild-detection-defaults', {
       detection_response_mode: 'notify_only',
-      auto_restrict: false,
     });
 
     expect(updated.settings.message_detection_response_mode).toBeUndefined();

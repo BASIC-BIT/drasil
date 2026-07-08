@@ -172,7 +172,6 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
     handler: new CommandHandler(
       client,
       {} as any,
-      {} as any,
       notificationManager,
       configService,
       userModerationService,

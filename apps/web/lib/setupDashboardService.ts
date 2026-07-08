@@ -386,10 +386,7 @@ function buildChecklist(args: BuildChecklistArgs) {
         )
   );
 
-  const aiAction =
-    server?.settings.report_ai_max_action === 'restrict'
-      ? 'open_case'
-      : (server?.settings.report_ai_max_action ?? 'hints');
+  const aiAction = server?.settings.report_ai_max_action ?? 'hints';
   checklist.push(
     aiAction === 'open_case'
       ? item(

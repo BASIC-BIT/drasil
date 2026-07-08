@@ -49,6 +49,21 @@ describe('adminActionCustomIds (unit)', () => {
     });
   });
 
+  it('does not map old observed-restrict custom ID codes', () => {
+    expect(parseAdminActionCustomId('admin_actions:or:o:user-1:det-1')).toEqual({
+      action: 'or',
+      surface: 'observed',
+      userId: 'user-1',
+      detectionEventId: 'det-1',
+    });
+    expect(parseAdminActionCustomId('admin_actions:cor:o:user-1:det-1')).toEqual({
+      action: 'cor',
+      surface: 'observed',
+      userId: 'user-1',
+      detectionEventId: 'det-1',
+    });
+  });
+
   it('keeps report intake admin action IDs under Discord custom_id limits', () => {
     const intakeId = '12345678-1234-1234-1234-123456789012';
 
@@ -65,5 +80,16 @@ describe('adminActionCustomIds (unit)', () => {
       action: 'confirm_close',
       intakeId,
     });
+  });
+
+  it('rejects verbose report intake admin action names', () => {
+    const intakeId = '12345678-1234-1234-1234-123456789012';
+
+    expect(
+      parseReportIntakeAdminActionCustomId(`report_intake_admin:close:${intakeId}`)
+    ).toBeNull();
+    expect(
+      parseReportIntakeAdminActionCustomId(`report_intake_admin:confirm_close:${intakeId}`)
+    ).toBeNull();
   });
 });

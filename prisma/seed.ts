@@ -16,7 +16,6 @@ async function main(): Promise<void> {
     // updated_at handled by default/update trigger
     settings: {
       // Prisma handles JSON automatically
-      auto_restrict: false,
       detection_response_mode: 'notify_only',
       automatic_detection_exempt_moderators: true,
       observed_detection_notification_channel_id: '1278730769572958238',

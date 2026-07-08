@@ -116,7 +116,7 @@ Lint strategy:
 - Reporting slice implemented: `/report`, report context-menu handlers, `/setupreportbutton`, and user-install reporting env checks moved to `src/controllers/ReportCommandHandler.ts` and `src/utils/userInstallReporting.ts`.
 - Moderation slice implemented: `/ban`, `/flaguser`, and `/audit` handlers moved to `src/controllers/ModerationCommandHandler.ts`.
 - Lockdown slice implemented: `/config lockdown` view, disable, allow-list, audit, apply, and lockdown report formatting moved to `src/controllers/LockdownConfigCommandHandler.ts`.
-- Legacy test-command slice implemented: `!test` handling and GPT profile simulation moved to `src/controllers/TestCommandHandler.ts`.
+- Legacy `!test` prefix commands were removed after slash-command workflows became the supported command surface.
 - `CommandHandler.ts` is now a 403-line command router/coordinator; the next maintainability targets are the newly extracted domain handlers that still appear in the advisory largest-file report, especially `ConfigSubcommandHandler.ts`, `SetupCommandHandler.ts`, and `commandDefinitions.ts`.
 - Setup remains a complexity ratchet target: the first gate used cyclomatic complexity `50` to avoid noisy failures, and PR #116 ratchets that gate to the documented baseline of `25` after splitting setup permission checks and config setup reply/result handling.
 - Command test split implemented: `src/__tests__/unit/CommandHandler.unit.test.ts` was replaced by domain files plus `src/__tests__/unit/commandHandlerTestHarness.ts`; the largest command-handler test slice is now `CommandHandler.setup.unit.test.ts` at 1,470 lines.

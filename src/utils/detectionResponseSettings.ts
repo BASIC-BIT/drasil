@@ -12,8 +12,6 @@ export const OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES_SETTING_KEY =
 export const AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY =
   'automatic_detection_exempt_moderators';
 export const ADMIN_CASE_OPEN_REQUIRES_REASON_SETTING_KEY = 'admin_case_open_requires_reason';
-export const OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY =
-  'observed_action_ban_requires_reason';
 export const MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY =
   'moderator_ban_action_requires_reason';
 export const MODERATOR_KICK_ACTION_REQUIRES_REASON_SETTING_KEY =
@@ -56,7 +54,6 @@ export interface DetectionResponseSettings {
   observedNotificationWindowMinutes: number;
   automaticDetectionExemptModerators: boolean;
   adminCaseOpenRequiresReason: boolean;
-  observedActionBanRequiresReason: boolean;
   moderatorBanActionRequiresReason: boolean;
   moderatorKickActionRequiresReason: boolean;
   moderatorBanActionEnabled: boolean;
@@ -82,10 +79,6 @@ function readDetectionResponseMode(value: unknown): DetectionResponseMode | unde
     return value;
   }
 
-  if (value === 'open_case') {
-    return 'notify_only';
-  }
-
   return undefined;
 }
 
@@ -107,13 +100,7 @@ export function getDetectionResponseSettings(
   event?: DetectionResponseEvent
 ): DetectionResponseSettings {
   const configuredMode = readDetectionResponseMode(settings[DETECTION_RESPONSE_MODE_SETTING_KEY]);
-  const defaultMode = configuredMode
-    ? configuredMode
-    : settings.auto_restrict === true
-      ? 'restrict'
-      : settings.auto_restrict === false
-        ? 'notify_only'
-        : DEFAULT_DETECTION_RESPONSE_MODE;
+  const defaultMode = configuredMode ?? DEFAULT_DETECTION_RESPONSE_MODE;
   const messageMode =
     readDetectionResponseMode(settings[MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY]) ?? defaultMode;
   const joinMode =
@@ -126,9 +113,7 @@ export function getDetectionResponseSettings(
       : undefined;
   const moderatorBanActionRequiresReason =
     settings[MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY] ??
-    (settings[OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY] === true
-      ? true
-      : DEFAULT_MODERATOR_BAN_ACTION_REQUIRES_REASON);
+    DEFAULT_MODERATOR_BAN_ACTION_REQUIRES_REASON;
 
   return {
     mode,
@@ -153,7 +138,6 @@ export function getDetectionResponseSettings(
     adminCaseOpenRequiresReason:
       settings[ADMIN_CASE_OPEN_REQUIRES_REASON_SETTING_KEY] ??
       DEFAULT_ADMIN_CASE_OPEN_REQUIRES_REASON,
-    observedActionBanRequiresReason: moderatorBanActionRequiresReason,
     moderatorBanActionRequiresReason,
     moderatorKickActionRequiresReason:
       settings[MODERATOR_KICK_ACTION_REQUIRES_REASON_SETTING_KEY] ??

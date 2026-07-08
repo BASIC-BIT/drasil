@@ -37,9 +37,6 @@ These guild settings control whether the reason field is optional or required:
 | `moderator_ban_action_requires_reason`  | Native ban actions, case/observed ban buttons, and `/ban`.                      |
 | `moderator_kick_action_requires_reason` | Native kick actions and case/observed kick buttons.                             |
 
-`observed_action_ban_requires_reason` is preserved as a legacy alias for the
-shared ban reason policy so existing guild settings keep their behavior.
-
 ## Product notes
 
 - Native action command visibility is only a Discord-level hint. Every action

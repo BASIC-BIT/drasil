@@ -137,7 +137,6 @@ describe('CommandHandler verification config commands (unit)', () => {
     const getServerConfig = jest.fn().mockResolvedValue({
       settings: {
         [VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY]: 'custom',
-        auto_restrict: true,
       },
     });
     const updateServerConfig = jest.fn().mockResolvedValue({});
@@ -168,9 +167,7 @@ describe('CommandHandler verification config commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      settings: {
-        auto_restrict: true,
-      },
+      settings: {},
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining('Reset verification prompt template to default'),
@@ -352,7 +349,6 @@ describe('CommandHandler verification config commands (unit)', () => {
         [SERVER_ABOUT_SETTING_KEY]: 'old about',
         [VERIFICATION_CONTEXT_SETTING_KEY]: 'old context',
         [EXPECTED_TOPICS_SETTING_KEY]: ['doom'],
-        auto_restrict: true,
       },
     });
     const updateServerConfig = jest.fn().mockResolvedValue({});
@@ -383,9 +379,7 @@ describe('CommandHandler verification config commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      settings: {
-        auto_restrict: true,
-      },
+      settings: {},
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content: '✅ Reset AI server context to defaults.',

@@ -63,10 +63,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
   const { dashboard, channels, roles } = await service.getDashboard(guildId, token.accessToken);
   const server = dashboard.server;
   const saveAction = saveGuildSetup.bind(null, guildId);
-  const reportAiMaxAction =
-    server?.settings.report_ai_max_action === 'restrict'
-      ? 'open_case'
-      : (server?.settings.report_ai_max_action ?? 'hints');
+  const reportAiMaxAction = server?.settings.report_ai_max_action ?? 'hints';
   const customWatchlistTerms = server?.settings.message_deletion_watchlist_custom_terms ?? [];
 
   return (

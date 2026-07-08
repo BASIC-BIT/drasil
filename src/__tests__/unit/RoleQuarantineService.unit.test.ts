@@ -610,7 +610,7 @@ describe('RoleQuarantineService (unit)', () => {
     });
     const service = new RoleQuarantineService(
       createConfigService({
-        role_quarantine_mode: 'automatic',
+        role_quarantine_mode: 'on',
         role_gate_enabled: true,
         honeypot_role_id: honeypotRole.id,
       }),

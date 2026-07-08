@@ -6,7 +6,6 @@ describe('CommandHandler detection config commands (unit)', () => {
     const updateServerSettings = jest.fn().mockResolvedValue({
       settings: {
         detection_response_mode: 'notify_only',
-        auto_restrict: false,
       },
     });
     const { handler, configService } = buildHandler({ updateServerSettings });
@@ -38,7 +37,6 @@ describe('CommandHandler detection config commands (unit)', () => {
 
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       detection_response_mode: 'notify_only',
-      auto_restrict: false,
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining('Updated automatic detection response policy'),
@@ -409,7 +407,6 @@ describe('CommandHandler detection config commands (unit)', () => {
     const updateServerSettings = jest.fn().mockResolvedValue({
       settings: {
         moderator_ban_action_requires_reason: value,
-        observed_action_ban_requires_reason: value,
       },
     });
     const { handler, configService } = buildHandler({ updateServerSettings });
@@ -436,7 +433,6 @@ describe('CommandHandler detection config commands (unit)', () => {
 
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       moderator_ban_action_requires_reason: value,
-      observed_action_ban_requires_reason: value,
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content: expect.stringContaining(responseText),

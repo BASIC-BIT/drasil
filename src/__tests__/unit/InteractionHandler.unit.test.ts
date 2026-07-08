@@ -37,6 +37,7 @@ import {
 } from '../../constants/setupVerificationWizard';
 import {
   MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY,
+  MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY,
   MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY,
   OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY,
 } from '../../utils/detectionResponseSettings';
@@ -234,8 +235,6 @@ describe('InteractionHandler (unit)', () => {
 
     userModerationService = {
       applyCaseRole: jest.fn().mockResolvedValue(true),
-      restrictUser: jest.fn().mockResolvedValue(true),
-      liftRestriction: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
       kickUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
@@ -1794,6 +1793,31 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('does not open cases from old observed restrict custom ID codes', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('admin_actions:cor:o:user-1:det-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(securityActionService.openObservedDetectionCase).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Unknown admin action.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('shows an observed kick reason modal for present members', async () => {
     enableObservedKickActions();
     const handler = new InteractionHandler(
@@ -2095,7 +2119,7 @@ describe('InteractionHandler (unit)', () => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       settings: {
         [MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY]: true,
-        observed_action_ban_requires_reason: true,
+        [MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY]: true,
       },
     });
     const handler = new InteractionHandler(

@@ -39,7 +39,6 @@ import {
   MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY,
   MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY,
   MODERATOR_KICK_ACTION_REQUIRES_REASON_SETTING_KEY,
-  OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY,
   OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY,
   OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY,
   OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY,
@@ -808,7 +807,6 @@ export class ConfigSubcommandHandler {
 
           const updated = await this.configService.updateServerSettings(guildId, {
             [DETECTION_RESPONSE_MODE_SETTING_KEY]: mode,
-            auto_restrict: mode === 'restrict',
           });
           const settings = getDetectionResponseSettings(updated.settings);
           await interaction.reply({
@@ -975,7 +973,6 @@ export class ConfigSubcommandHandler {
           const required = subcommand === 'ban-reason-require';
           const updated = await this.configService.updateServerSettings(guildId, {
             [MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY]: required,
-            [OBSERVED_ACTION_BAN_REQUIRES_REASON_SETTING_KEY]: required,
           });
           const settings = getDetectionResponseSettings(updated.settings);
           await interaction.reply({

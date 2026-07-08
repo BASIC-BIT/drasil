@@ -56,9 +56,6 @@ export function getRoleQuarantineSettings(
 }
 
 function readRoleQuarantineMode(value: unknown): RoleQuarantineMode {
-  if (value === 'automatic') {
-    return 'on';
-  }
   if (value === 'audit_only') {
     return 'audit_only';
   }

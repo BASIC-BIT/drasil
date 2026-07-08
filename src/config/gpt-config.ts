@@ -63,16 +63,6 @@ export interface GPTServiceConfig {
    * Examples of clearly normal/OK users for few-shot learning (obvious legitimate users)
    */
   clearlyNormalExamples: UserProfileData[];
-
-  /**
-   * @deprecated Use clearlySuspiciousExamples and borderlineSuspiciousExamples instead
-   */
-  suspiciousExamples?: UserProfileData[];
-
-  /**
-   * @deprecated Use clearlyNormalExamples and borderlineNormalExamples instead
-   */
-  normalExamples?: UserProfileData[];
 }
 
 /**
