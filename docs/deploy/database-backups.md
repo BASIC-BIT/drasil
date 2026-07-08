@@ -133,6 +133,16 @@ Drill steps:
 
 Public docs should only record high-level drill outcomes. Keep provider screenshots, project refs, exact backup locations, database URLs, and row-level production evidence private.
 
+### Restore Drill Log
+
+Record the high-level outcome of each drill here so the current RTO evidence is discoverable without opening private notes. Add a new row per drill; do not overwrite history. Keep every field public-safe: no project refs, database URLs, backup locations, or row-level data. Point `Evidence` at the private location that holds the detailed record.
+
+| Date         | Environment             | Restore source      | Outcome                   | Observed restore time | Follow-up gaps | Evidence |
+| ------------ | ----------------------- | ------------------- | ------------------------- | --------------------- | -------------- | -------- |
+| `YYYY-MM-DD` | staging / clone / local | daily / PITR / dump | passed / failed / partial | `~Xh` or `unknown`    | `none` or list | private  |
+
+No production restore drill has been logged yet. Until a row above shows a passed drill, treat `RTO <= 4h` as an unproven target and do not claim a tighter RTO.
+
 ## Production Restore Procedure
 
 Production restore is a destructive operational action and requires explicit approval from the service owner.
