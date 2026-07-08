@@ -68,6 +68,15 @@ describe('setup contracts', () => {
     });
   });
 
+  it('normalizes legacy report AI restrict authority to open_case', () => {
+    const parsed = guildSetupUpdateSchema.parse({
+      guildId: '123',
+      reportAiMaxAction: 'restrict',
+    });
+
+    expect(parsed.reportAiMaxAction).toBe('open_case');
+  });
+
   it('rejects custom message deletion watchlist terms over the bot matching limit', () => {
     const parsed = guildSetupUpdateSchema.safeParse({
       guildId: '123',

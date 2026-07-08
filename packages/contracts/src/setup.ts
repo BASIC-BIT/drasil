@@ -9,7 +9,12 @@ export const detectionResponseModeSchema = z.preprocess(
 
 export const userReportExternalResponseModeSchema = z.enum(['off', 'notify_only', 'open_case']);
 export const analyticsConsentLevelSchema = z.enum(['off', 'anonymous', 'full']);
-export const reportAiMaxActionSchema = z.enum(['off', 'hints', 'open_case', 'restrict']);
+const activeReportAiMaxActionSchema = z.enum(['off', 'hints', 'open_case']);
+
+export const reportAiMaxActionSchema = z.preprocess(
+  (value) => (value === 'restrict' ? 'open_case' : value),
+  activeReportAiMaxActionSchema
+);
 export const caseResponderRoutingModeSchema = z.enum(['off', 'ping_only', 'ping_and_add_members']);
 export const MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS = 25;
 export const MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH = 120;
