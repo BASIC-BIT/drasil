@@ -92,10 +92,6 @@ export function getReportAiSettings(settings: ServerSettings = {}): ReportAiSett
 }
 
 function readReportAiMaxAction(value: unknown): ReportAiMaxAction {
-  if (value === 'restrict') {
-    return 'open_case';
-  }
-
   return isReportAiMaxAction(value) ? value : 'hints';
 }
 

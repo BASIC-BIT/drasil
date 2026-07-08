@@ -112,8 +112,6 @@ describeIntegration('SecurityActionService (integration)', () => {
     };
     userModerationService = {
       applyCaseRole: jest.fn().mockResolvedValue(true),
-      restrictUser: jest.fn().mockResolvedValue(true),
-      liftRestriction: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
       kickUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),

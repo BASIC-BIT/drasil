@@ -1,6 +1,5 @@
 import {
   Client,
-  Message,
   REST,
   Routes,
   ChatInputCommandInteraction,
@@ -14,7 +13,6 @@ import {
 import * as dotenv from 'dotenv';
 import { injectable, inject, optional } from 'inversify';
 import { IHeuristicService } from '../services/HeuristicService';
-import { IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { INotificationManager } from '../services/NotificationManager';
 import { IConfigService } from '../config/ConfigService';
 import { IUserModerationService } from '../services/UserModerationService';
@@ -42,7 +40,6 @@ import { ModerationCommandHandler } from './ModerationCommandHandler';
 import { ReportCommandHandler } from './ReportCommandHandler';
 import { ReportInstructionsManager } from './ReportInstructionsManager';
 import { SetupCommandHandler } from './SetupCommandHandler';
-import { TestCommandHandler } from './TestCommandHandler';
 import { isUserInstallReportingEnabled } from '../utils/userInstallReporting';
 import { IReportIntakeService } from '../services/ReportIntakeService';
 import { IModerationQueueService } from '../services/ModerationQueueService';
@@ -84,12 +81,6 @@ export interface ICommandHandler {
   handleUserContextMenuCommand(interaction: UserContextMenuCommandInteraction): Promise<void>;
 
   handleMessageContextMenuCommand(interaction: MessageContextMenuCommandInteraction): Promise<void>;
-
-  // TODO: Rip this out in favor of a slash command
-  /**
-   * Handle test commands
-   */
-  handleTestCommands(message: Message): Promise<void>;
 }
 
 @injectable()
@@ -102,14 +93,12 @@ export class CommandHandler implements ICommandHandler {
   private moderationCommandHandler: ModerationCommandHandler;
   private reportCommandHandler: ReportCommandHandler;
   private setupCommandHandler: SetupCommandHandler;
-  private testCommandHandler: TestCommandHandler;
   private commands: RESTPostAPIApplicationCommandsJSONBody[];
   private reportIntakeService?: IReportIntakeService;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
     @inject(TYPES.HeuristicService) heuristicService: IHeuristicService,
-    @inject(TYPES.DetectionOrchestrator) detectionOrchestrator: IDetectionOrchestrator,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
     @inject(TYPES.ConfigService) configService: IConfigService,
     @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
@@ -185,7 +174,6 @@ export class CommandHandler implements ICommandHandler {
       reportInstructionsManager,
       (interaction) => this.replyGuildInstallRequired(interaction)
     );
-    this.testCommandHandler = new TestCommandHandler(heuristicService, detectionOrchestrator);
 
     this.commands = buildApplicationCommands({
       userInstallReportingEnabled: isUserInstallReportingEnabled(),
@@ -227,6 +215,13 @@ export class CommandHandler implements ICommandHandler {
     switch (commandName) {
       case 'ban':
         await this.moderationCommandHandler.handleBanCommand(interaction);
+        break;
+
+      case 'ping':
+        await interaction.reply({
+          content: 'Pong!',
+          flags: MessageFlags.Ephemeral,
+        });
         break;
 
       case 'report':
@@ -315,10 +310,6 @@ export class CommandHandler implements ICommandHandler {
           flags: MessageFlags.Ephemeral,
         });
     }
-  }
-
-  public async handleTestCommands(message: Message): Promise<void> {
-    await this.testCommandHandler.handleTestCommands(message);
   }
 
   private async handleCloseReportCommand(interaction: ChatInputCommandInteraction): Promise<void> {

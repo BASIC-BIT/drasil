@@ -17,9 +17,9 @@ describe('reportAiSettings (unit)', () => {
     );
   });
 
-  it('maps legacy restrict max action to open case', () => {
+  it('falls back for old restrict max action values', () => {
     expect(getReportAiSettings({ report_ai_max_action: 'restrict' } as any).maxAction).toBe(
-      'open_case'
+      'hints'
     );
   });
 

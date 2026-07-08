@@ -1,10 +1,10 @@
 import { getReportIntakeSettings } from '../../utils/reportIntakeSettings';
 
 describe('reportIntakeSettings (unit)', () => {
-  it('maps legacy restrict confirmed response mode to open case', () => {
+  it('falls back for old restrict confirmed response mode values', () => {
     expect(
       getReportIntakeSettings({ report_intake_confirmed_response_mode: 'restrict' } as any)
         .confirmedResponseMode
-    ).toBe('open_case');
+    ).toBe('observed_alert');
   });
 });

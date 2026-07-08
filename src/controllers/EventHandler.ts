@@ -293,18 +293,6 @@ export class EventHandler implements IEventHandler {
       }
     }
 
-    // Handle ping command via traditional message (kept for backward compatibility)
-    if (message.content === '!ping') {
-      await message.reply('Pong! Note: Please use slash commands instead (e.g. /ping)');
-      return;
-    }
-
-    // Handle debug/test commands
-    if (message.content.startsWith('!test')) {
-      await this.commandHandler.handleTestCommands(message);
-      return;
-    }
-
     if (message.system) {
       return;
     }

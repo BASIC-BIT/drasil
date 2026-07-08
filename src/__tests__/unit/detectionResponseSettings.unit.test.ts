@@ -4,8 +4,8 @@ import {
 } from '../../utils/detectionResponseSettings';
 
 describe('detectionResponseSettings (unit)', () => {
-  it('defaults to restrict mode for existing auto-restrict configs', () => {
-    const settings = getDetectionResponseSettings({ auto_restrict: true });
+  it('defaults to restrict mode', () => {
+    const settings = getDetectionResponseSettings({});
 
     expect(settings.mode).toBe('restrict');
     expect(settings.messageMode).toBe('restrict');
@@ -14,7 +14,6 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.observedNotificationWindowMinutes).toBe(60);
     expect(settings.automaticDetectionExemptModerators).toBe(true);
     expect(settings.adminCaseOpenRequiresReason).toBe(false);
-    expect(settings.observedActionBanRequiresReason).toBe(false);
     expect(settings.moderatorBanActionRequiresReason).toBe(false);
     expect(settings.moderatorKickActionRequiresReason).toBe(false);
     expect(settings.moderatorBanActionEnabled).toBe(true);
@@ -26,46 +25,22 @@ describe('detectionResponseSettings (unit)', () => {
     expect(settings.autoKickMinConfidenceThreshold).toBe(95);
   });
 
-  it('defaults new configs to restrict with manual case actions enabled', () => {
-    const settings = getDetectionResponseSettings({});
-
-    expect(settings.mode).toBe('restrict');
-    expect(settings.messageMode).toBe('restrict');
-    expect(settings.joinMode).toBe('restrict');
-    expect(settings.moderatorBanActionEnabled).toBe(true);
-    expect(settings.moderatorKickActionEnabled).toBe(true);
-    expect(settings.adminCaseOpenRequiresReason).toBe(false);
-    expect(settings.moderatorBanActionRequiresReason).toBe(false);
-    expect(settings.moderatorKickActionRequiresReason).toBe(false);
-    expect(settings.observedActionKickEnabled).toBe(false);
-    expect(settings.messageDetectionAutoKickEnabled).toBe(false);
-    expect(settings.joinDetectionAutoKickEnabled).toBe(false);
-    expect(settings.reportIntakeAutoKickEnabled).toBe(false);
-  });
-
-  it('maps legacy auto_restrict=false configs to notify_only', () => {
-    const settings = getDetectionResponseSettings({ auto_restrict: false });
-
-    expect(settings.mode).toBe('notify_only');
-  });
-
   it('uses an explicit detection response mode when configured', () => {
     const settings = getDetectionResponseSettings({
-      auto_restrict: true,
       detection_response_mode: 'notify_only',
     });
 
     expect(settings.mode).toBe('notify_only');
   });
 
-  it('maps legacy open_case detection response settings to notify_only', () => {
+  it('falls back for old open_case detection response settings', () => {
     const settings = getDetectionResponseSettings({
       detection_response_mode: 'open_case',
       join_detection_response_mode: 'open_case',
     } as unknown as Parameters<typeof getDetectionResponseSettings>[0]);
 
-    expect(settings.mode).toBe('notify_only');
-    expect(settings.joinMode).toBe('notify_only');
+    expect(settings.mode).toBe('restrict');
+    expect(settings.joinMode).toBe('restrict');
   });
 
   it('uses per-event response mode overrides when configured', () => {
@@ -142,18 +117,8 @@ describe('detectionResponseSettings (unit)', () => {
     });
 
     expect(settings.adminCaseOpenRequiresReason).toBe(true);
-    expect(settings.observedActionBanRequiresReason).toBe(true);
     expect(settings.moderatorBanActionRequiresReason).toBe(true);
     expect(settings.moderatorKickActionRequiresReason).toBe(true);
-  });
-
-  it('maps legacy observed ban reason policy to the shared ban reason policy', () => {
-    const settings = getDetectionResponseSettings({
-      observed_action_ban_requires_reason: true,
-    });
-
-    expect(settings.observedActionBanRequiresReason).toBe(true);
-    expect(settings.moderatorBanActionRequiresReason).toBe(true);
   });
 
   it('clamps numeric observe-only notification settings', () => {

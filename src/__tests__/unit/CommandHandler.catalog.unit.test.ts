@@ -3,6 +3,7 @@ import {
   ApplicationIntegrationType,
   ChannelType,
   InteractionContextType,
+  MessageFlags,
   PermissionFlagsBits,
 } from 'discord.js';
 import {
@@ -29,6 +30,7 @@ describe('CommandHandler command catalog (unit)', () => {
     const commands = (handler as any).commands as any[];
 
     for (const name of [
+      'ping',
       'ban',
       'report',
       'setupverification',
@@ -44,6 +46,21 @@ describe('CommandHandler command catalog (unit)', () => {
       expect(command.integration_types).toEqual([ApplicationIntegrationType.GuildInstall]);
       expect(command.contexts).toEqual([InteractionContextType.Guild]);
     }
+  });
+
+  it('handles /ping', async () => {
+    const { handler } = buildHandler();
+    const interaction = {
+      commandName: 'ping',
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Pong!',
+      flags: MessageFlags.Ephemeral,
+    });
   });
 
   it('keeps each application command under Discord text size limits', () => {

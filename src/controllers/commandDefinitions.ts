@@ -54,6 +54,11 @@ interface CompactableCommandNode {
 
 const baseApplicationCommandBuilders = [
   new SlashCommandBuilder()
+    .setName('ping')
+    .setDescription('Check whether Drasil is responsive')
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .setContexts(InteractionContextType.Guild),
+  new SlashCommandBuilder()
     .setName('ban')
     .setDescription('Ban a user from the server')
     .addUserOption((option) =>

@@ -106,7 +106,7 @@ describe('EventHandler (unit)', () => {
           promptAlreadyPresent: false,
         }),
       }) as any,
-      { handleTestCommands: jest.fn(), registerCommands: jest.fn() } as any,
+      { registerCommands: jest.fn() } as any,
       { handleButtonInteraction: jest.fn(), handleModalSubmit: jest.fn() } as any,
       { handleThreadMessage: jest.fn().mockResolvedValue(false) } as any,
       overrides?.productAnalyticsService as any,
@@ -930,37 +930,6 @@ describe('EventHandler (unit)', () => {
       expect.objectContaining({ code: 50013 })
     );
     consoleWarn.mockRestore();
-  });
-
-  it('delegates legacy test commands to CommandHandler', async () => {
-    const commandHandler = {
-      handleTestCommands: jest.fn().mockResolvedValue(undefined),
-      registerCommands: jest.fn(),
-    };
-    const handler = new EventHandler(
-      { on: jest.fn(), user: { id: 'bot-1' } } as any,
-      { detectMessage: jest.fn(), detectNewJoin: jest.fn() } as any,
-      {
-        upsertObservedDetectionNotification: jest.fn(),
-        setupVerificationChannel: jest.fn(),
-      } as any,
-      {
-        initialize: jest.fn(),
-        getCachedServerConfig: jest.fn().mockReturnValue({}),
-        getServerConfig: jest.fn(),
-      } as any,
-      { handleSuspiciousMessage: jest.fn(), openCaseForSuspiciousMessage: jest.fn() } as any,
-      commandHandler as any,
-      { handleButtonInteraction: jest.fn(), handleModalSubmit: jest.fn() } as any,
-      { handleThreadMessage: jest.fn().mockResolvedValue(false) } as any
-    );
-    const message = buildMessage(new PermissionsBitField()) as any;
-    message.content = '!test spam';
-
-    await (handler as any).handleMessage(message);
-
-    expect(commandHandler.handleTestCommands).toHaveBeenCalledWith(message);
-    expect(message.reply).not.toHaveBeenCalled();
   });
 
   it('schedules report intake agent analysis after intake thread evidence is recorded', async () => {

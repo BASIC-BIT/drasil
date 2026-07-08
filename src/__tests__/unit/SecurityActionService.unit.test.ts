@@ -143,14 +143,6 @@ describe('SecurityActionService (unit)', () => {
         });
         return true;
       }),
-      restrictUser: jest.fn().mockImplementation(async (member: GuildMember) => {
-        await serverMemberRepository.upsertMember(member.guild.id, member.id, {
-          case_role_active: true,
-          verification_status: VerificationStatus.PENDING,
-        });
-        return true;
-      }),
-      liftRestriction: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
       kickUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),

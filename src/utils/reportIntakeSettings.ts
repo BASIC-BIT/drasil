@@ -77,9 +77,5 @@ function readInteger(value: unknown, fallback: number, minimum: number, maximum:
 }
 
 function readConfirmedResponseMode(value: unknown): ReportIntakeConfirmedResponseMode {
-  if (value === 'restrict') {
-    return 'open_case';
-  }
-
   return isReportIntakeConfirmedResponseMode(value) ? value : 'observed_alert';
 }
