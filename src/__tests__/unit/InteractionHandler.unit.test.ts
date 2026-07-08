@@ -1794,6 +1794,31 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('does not open cases from old observed restrict custom ID codes', async () => {
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction('admin_actions:cor:o:user-1:det-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(securityActionService.openObservedDetectionCase).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Unknown admin action.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('shows an observed kick reason modal for present members', async () => {
     enableObservedKickActions();
     const handler = new InteractionHandler(

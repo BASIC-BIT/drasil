@@ -557,10 +557,6 @@ export class InteractionHandler implements IInteractionHandler {
         return { ...parsed, action: 'confirm_repair' };
       case 'confirm_lift_restriction':
         return { ...parsed, action: 'confirm_close_no_action' };
-      case 'observed_restrict':
-        return { ...parsed, action: 'observed_open' };
-      case 'confirm_observed_restrict':
-        return { ...parsed, action: 'confirm_observed_open' };
       default:
         return parsed;
     }
@@ -1530,10 +1526,6 @@ export class InteractionHandler implements IInteractionHandler {
 
     switch (action) {
       case 'observed_open':
-        await interaction.deferUpdate();
-        await this.openObservedCase(interaction, guildId, parsed.userId, parsed.detectionEventId);
-        return;
-      case 'observed_restrict':
         await interaction.deferUpdate();
         await this.openObservedCase(interaction, guildId, parsed.userId, parsed.detectionEventId);
         return;
