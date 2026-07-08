@@ -48,7 +48,7 @@ export function parseReportIntakeAdminActionCustomId(
     return null;
   }
 
-  const action = CODE_TO_ACTION[actionCode] ?? parseLegacyAction(actionCode);
+  const action = CODE_TO_ACTION[actionCode];
   if (!action) {
     return null;
   }
@@ -63,10 +63,6 @@ function buildReportIntakeAdminActionCustomId(
   return assertCustomIdLength(
     [REPORT_INTAKE_ADMIN_ACTION_CUSTOM_ID_PREFIX, ACTION_TO_CODE[action], intakeId].join(':')
   );
-}
-
-function parseLegacyAction(action: string): ReportIntakeAdminAction | null {
-  return action in ACTION_TO_CODE ? (action as ReportIntakeAdminAction) : null;
 }
 
 function assertCustomIdLength(customId: string): string {

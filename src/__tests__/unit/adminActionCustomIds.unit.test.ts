@@ -66,4 +66,15 @@ describe('adminActionCustomIds (unit)', () => {
       intakeId,
     });
   });
+
+  it('rejects verbose report intake admin action names', () => {
+    const intakeId = '12345678-1234-1234-1234-123456789012';
+
+    expect(
+      parseReportIntakeAdminActionCustomId(`report_intake_admin:close:${intakeId}`)
+    ).toBeNull();
+    expect(
+      parseReportIntakeAdminActionCustomId(`report_intake_admin:confirm_close:${intakeId}`)
+    ).toBeNull();
+  });
 });

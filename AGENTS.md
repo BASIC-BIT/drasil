@@ -222,6 +222,9 @@ Clean code:
 - Prefer constants over magic numbers; meaningful names; single responsibility; DRY.
 - Comments explain why, not what.
 - Encapsulate logic; keep structure tidy.
+- Do not keep "legacy" parser aliases, fallback mappings, or compatibility branches for
+  formats that never shipped. If persisted Discord custom IDs, config values, or stored data need
+  backward compatibility, document what shipped and cover the accepted legacy shape with tests.
 
 Web UI direction:
 
