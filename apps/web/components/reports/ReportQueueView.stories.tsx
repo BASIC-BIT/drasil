@@ -3,6 +3,7 @@ import { ReportQueueView } from './ReportQueueView';
 import { fixtureSubmittedReports } from '@/lib/reportFixtures';
 
 const noopCloseReportAction = async (): Promise<void> => {};
+const noopOpenReportCaseAction = async (): Promise<void> => {};
 
 const meta = {
   title: 'Submitted Reports/Report Queue',
@@ -21,7 +22,9 @@ const meta = {
     closedReportCount: 4,
     sessionUsername: 'Fixture Admin',
     reports: fixtureSubmittedReports(),
+    canOpenReportCases: true,
     closeReportAction: noopCloseReportAction,
+    openReportCaseAction: noopOpenReportCaseAction,
   },
 } satisfies Meta<typeof ReportQueueView>;
 

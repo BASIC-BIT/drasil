@@ -172,6 +172,30 @@ async function fetchBotJson<T>(path: string): Promise<T> {
   return readDiscordJson<T>(response);
 }
 
+export async function deleteBotMessage(channelId: string, messageId: string): Promise<boolean> {
+  const botToken = readOptionalEnv('DRASIL_WEB_BOT_TOKEN') ?? readOptionalEnv('DISCORD_TOKEN');
+  if (!botToken) {
+    throw new Error('DRASIL_WEB_BOT_TOKEN or DISCORD_TOKEN is required for bot message deletion.');
+  }
+
+  const response = await fetch(
+    `${discordApiBaseUrl()}/channels/${channelId}/messages/${messageId}`,
+    {
+      method: 'DELETE',
+      headers: { authorization: `Bot ${botToken}` },
+      cache: 'no-store',
+    }
+  );
+  if (response.status === 404) {
+    return false;
+  }
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Discord API request failed with ${response.status}: ${body.slice(0, 200)}`);
+  }
+  return true;
+}
+
 export async function fetchGuildResources(guildId: string): Promise<DiscordGuildResources> {
   if (isWebE2eFixtureMode()) {
     return fixtureGuildResources();

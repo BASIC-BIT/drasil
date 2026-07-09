@@ -1,9 +1,10 @@
 import { Client } from 'discord.js';
 import * as dotenv from 'dotenv';
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import { TYPES } from './di/symbols';
 import 'reflect-metadata';
 import { IEventHandler } from './controllers/EventHandler';
+import { IModerationActionRequestService } from './services/ModerationActionRequestService';
 
 // Load environment variables
 dotenv.config();
@@ -27,13 +28,18 @@ export interface IBot {
 export class Bot implements IBot {
   private client: Client;
   private eventHandler: IEventHandler;
+  private moderationActionRequestService?: IModerationActionRequestService;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
-    @inject(TYPES.EventHandler) eventHandler: IEventHandler
+    @inject(TYPES.EventHandler) eventHandler: IEventHandler,
+    @optional()
+    @inject(TYPES.ModerationActionRequestService)
+    moderationActionRequestService?: IModerationActionRequestService
   ) {
     this.client = client;
     this.eventHandler = eventHandler;
+    this.moderationActionRequestService = moderationActionRequestService;
   }
 
   /**
@@ -47,6 +53,7 @@ export class Bot implements IBot {
     await this.eventHandler.setupEventHandlers();
 
     await this.client.login(token);
+    this.moderationActionRequestService?.start();
     console.log('Bot started and logged in!');
   }
 
@@ -54,6 +61,7 @@ export class Bot implements IBot {
    * Clean up resources and disconnect from Discord
    */
   public async destroy(): Promise<void> {
+    this.moderationActionRequestService?.stop();
     await this.client.destroy();
   }
 }

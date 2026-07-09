@@ -240,6 +240,46 @@ export enum ModerationQueueItemType {
   PENDING_SCREENING_MEMBER = 'pending_screening_member',
 }
 
+export enum ModerationActionRequestType {
+  OPEN_CASE_FROM_OBSERVED_DETECTION = 'open_case_from_observed_detection',
+  OPEN_ADMIN_CASE = 'open_admin_case',
+  MANUAL_FLAG_USER = 'manual_flag_user',
+  SUBMIT_USER_REPORT = 'submit_user_report',
+  START_REPORT_INTAKE = 'start_report_intake',
+  CLOSE_REPORT_INTAKE = 'close_report_intake',
+  DISMISS_OBSERVED_DETECTION = 'dismiss_observed_detection',
+  MARK_OBSERVED_DETECTION_FALSE_POSITIVE = 'mark_observed_detection_false_positive',
+  UNDO_OBSERVED_DETECTION_ACTION = 'undo_observed_detection_action',
+  KICK_OBSERVED_DETECTION = 'kick_observed_detection',
+  BAN_OBSERVED_DETECTION = 'ban_observed_detection',
+  IGNORE_DETECTION_ACCOUNTING = 'ignore_detection_accounting',
+  RESTORE_DETECTION_ACCOUNTING = 'restore_detection_accounting',
+  VERIFY_CASE_USER = 'verify_case_user',
+  CLOSE_CASE_NO_ACTION = 'close_case_no_action',
+  KICK_CASE_USER = 'kick_case_user',
+  BAN_CASE_USER = 'ban_case_user',
+  BAN_CASE_USER_BY_ID = 'ban_case_user_by_id',
+  REPAIR_ACTIVE_CASE = 'repair_active_case',
+  REOPEN_CASE = 'reopen_case',
+  REFRESH_CASE_NOTIFICATION = 'refresh_case_notification',
+  SYNC_MODERATION_QUEUE = 'sync_moderation_queue',
+  CLEAR_MODERATION_QUEUE = 'clear_moderation_queue',
+  CLOSE_RESOLVED_CASE_THREADS = 'close_resolved_case_threads',
+  AUDIT_CASE_ROLE_LOCKDOWN = 'audit_case_role_lockdown',
+  APPLY_CASE_ROLE_LOCKDOWN = 'apply_case_role_lockdown',
+  INTAKE_ROLE_MEMBERS = 'intake_role_members',
+  SYNC_EXISTING_BAN = 'sync_existing_ban',
+  COMPLETE_SETUP_VERIFICATION = 'complete_setup_verification',
+  UPSERT_REPORT_INSTRUCTIONS = 'upsert_report_instructions',
+}
+
+export enum ModerationActionRequestStatus {
+  QUEUED = 'queued',
+  PROCESSING = 'processing',
+  COMPLETED = 'completed',
+  FAILED = 'failed',
+}
+
 export enum RoleQuarantineSnapshotStatus {
   ACTIVE = 'active',
   RESTORED = 'restored',
@@ -378,6 +418,42 @@ export interface ModerationQueueItemUpsert {
   queueMessageId?: string | null;
   lastSourceMessageId?: string | null;
   lastNotifiedAt?: Date | null;
+  metadata?: Prisma.JsonValue | null;
+}
+
+export interface ModerationActionRequest {
+  id: string;
+  server_id: string;
+  action_type: ModerationActionRequestType;
+  status: ModerationActionRequestStatus;
+  actor_id: string;
+  actor_surface: string;
+  target_user_id: string | null;
+  detection_event_id: string | null;
+  report_intake_id: string | null;
+  verification_event_id: string | null;
+  idempotency_key: string;
+  requested_at: Date | null;
+  updated_at: Date | null;
+  started_at: Date | null;
+  completed_at: Date | null;
+  failed_at: Date | null;
+  attempts: number;
+  last_error: string | null;
+  metadata: Prisma.JsonValue | null;
+  result: Prisma.JsonValue | null;
+}
+
+export interface ModerationActionRequestCreate {
+  serverId: string;
+  actionType: ModerationActionRequestType;
+  actorId: string;
+  actorSurface: string;
+  targetUserId?: string | null;
+  detectionEventId?: string | null;
+  reportIntakeId?: string | null;
+  verificationEventId?: string | null;
+  idempotencyKey: string;
   metadata?: Prisma.JsonValue | null;
 }
 

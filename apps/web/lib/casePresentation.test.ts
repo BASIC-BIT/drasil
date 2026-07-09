@@ -14,6 +14,8 @@ import {
 describe('casePresentation', () => {
   it('formats explicit active-case labels', () => {
     expect(formatCaseAction('ban_by_id')).toBe('Ban by ID');
+    expect(formatCaseAction('reopen_case')).toBe('Reopen Case');
+    expect(formatCaseAction('refresh_notification')).toBe('Refresh Notification');
     expect(formatPresenceState('left_or_removed')).toBe('Member Left Server');
     expect(presenceStatusClass('banned')).toBe('status error');
     expect(presenceStatusClass('in_server')).toBe('status info');

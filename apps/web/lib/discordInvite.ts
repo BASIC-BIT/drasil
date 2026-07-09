@@ -6,6 +6,7 @@ export type BotInviteMode = 'standard' | 'administrator';
 const DISCORD_AUTHORIZE_URL = 'https://discord.com/oauth2/authorize';
 
 export const STANDARD_BOT_INVITE_PERMISSIONS =
+  DISCORD_PERMISSIONS.KickMembers |
   DISCORD_PERMISSIONS.BanMembers |
   DISCORD_PERMISSIONS.ManageChannels |
   DISCORD_PERMISSIONS.ManageRoles |

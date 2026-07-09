@@ -19,7 +19,7 @@ import {
   SUPPORT_THREAD_REMINDER_INTERVAL_HOURS,
 } from '../utils/caseReviewReminderSchedule';
 import { markSupportThreadReminderSent } from '../utils/supportThreadReminderState';
-import { buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
+import { buildAdminModerationInboxUrl } from '../utils/publicWebLinks';
 import { getPendingScreeningSettings } from '../utils/pendingScreeningSettings';
 import { IModerationQueueService } from './ModerationQueueService';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
@@ -685,7 +685,7 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
         .setStyle(ButtonStyle.Primary),
     ];
 
-    const webQueueUrl = buildAdminCaseQueueUrl(guildId);
+    const webQueueUrl = buildAdminModerationInboxUrl(guildId);
     if (webQueueUrl) {
       buttons.push(
         new ButtonBuilder().setLabel('Web Queue').setStyle(ButtonStyle.Link).setURL(webQueueUrl)

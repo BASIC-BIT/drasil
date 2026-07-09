@@ -416,7 +416,7 @@ describe('CaseReviewReminderService (unit)', () => {
     }>;
     expect(buttons.map((button) => button.label)).toEqual(['Open Cases', 'Web Queue']);
     expect(buttons[1]).toMatchObject({
-      url: 'https://drasilbot.com/admin/guild/guild-1/cases',
+      url: 'https://drasilbot.com/admin/guild/guild-1/inbox',
     });
   });
 

@@ -1102,6 +1102,8 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('shows observed admin actions with a resolved display label and no confirmation copy', async () => {
+    process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
+    delete process.env.NEXT_PUBLIC_APP_URL;
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -1122,6 +1124,14 @@ describe('InteractionHandler (unit)', () => {
     const response = (interaction.reply as jest.Mock).mock.calls[0][0] as any;
     expect(response.content).toContain('Admin actions for observed alert on test-user (user-1).');
     expect(response.content).not.toContain('Mutating actions require a confirmation step');
+    const buttons = response.components.flatMap(
+      (row: { toJSON(): { components: any[] } }) => row.toJSON().components
+    );
+    expect(
+      buttons.find((button: { label?: string }) => button.label === 'Web Queue')
+    ).toMatchObject({
+      url: 'https://drasilbot.com/admin/guild/guild-1/inbox',
+    });
   });
 
   it('labels report-sourced observed admin actions as Close Report', async () => {

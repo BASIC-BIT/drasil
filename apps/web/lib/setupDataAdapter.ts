@@ -128,23 +128,68 @@ function nextOptionalId(
   return normalized === undefined ? (current ?? null) : normalized;
 }
 
-function buildSettingsPatch(update: GuildSetupUpdate): Record<string, unknown> {
+export function buildSetupSettingsPatch(update: GuildSetupUpdate): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries({
       observed_detection_notification_channel_id: normalizeOptionalId(
         update.observedNotificationChannelId
       ),
+      moderation_queue_channel_id: normalizeOptionalId(update.moderationQueueChannelId),
       report_instructions_channel_id: normalizeOptionalId(update.reportInstructionsChannelId),
       detection_response_mode: update.detectionResponseMode,
       message_detection_response_mode: update.messageDetectionResponseMode,
       join_detection_response_mode: update.joinDetectionResponseMode,
+      observed_detection_min_confidence_threshold: update.observedDetectionMinConfidenceThreshold,
+      observed_detection_notification_window_minutes:
+        update.observedDetectionNotificationWindowMinutes,
+      automatic_detection_exempt_moderators: update.automaticDetectionExemptModerators,
+      admin_case_open_requires_reason: update.adminCaseOpenRequiresReason,
+      moderator_ban_action_requires_reason: update.moderatorBanActionRequiresReason,
+      moderator_kick_action_requires_reason: update.moderatorKickActionRequiresReason,
+      moderator_ban_action_enabled: update.moderatorBanActionEnabled,
+      moderator_kick_action_enabled: update.moderatorKickActionEnabled,
+      observed_action_kick_enabled: update.observedActionKickEnabled,
+      message_detection_auto_kick_enabled: update.messageDetectionAutoKickEnabled,
+      join_detection_auto_kick_enabled: update.joinDetectionAutoKickEnabled,
+      report_intake_auto_kick_enabled: update.reportIntakeAutoKickEnabled,
+      auto_kick_min_confidence_threshold: update.autoKickMinConfidenceThreshold,
+      manual_intake_enabled: update.manualIntakeEnabled,
+      manual_intake_role_id: normalizeOptionalId(update.manualIntakeRoleId),
+      manual_intake_grace_period_seconds: update.manualIntakeGracePeriodSeconds,
+      case_role_lockdown_allowed_channel_ids: update.caseRoleLockdownAllowedChannelIds,
+      case_role_lockdown_allowed_category_ids: update.caseRoleLockdownAllowedCategoryIds,
       user_report_reason_required: update.userReportReasonRequired,
       user_report_external_response_mode: update.userReportExternalResponseMode,
+      report_intake_confirmed_response_mode: update.reportIntakeConfirmedResponseMode,
       analytics_consent_level: update.analyticsConsentLevel,
+      case_review_reminders_enabled: update.caseReviewRemindersEnabled,
+      case_review_reminder_stale_hours: update.caseReviewReminderStaleHours,
+      case_review_reminder_repeat_hours: update.caseReviewReminderRepeatHours,
+      case_review_very_stale_days: update.caseReviewVeryStaleDays,
       report_ai_triage_enabled: update.reportAiTriageEnabled,
+      report_ai_analyze_text: update.reportAiAnalyzeText,
+      report_ai_analyze_images: update.reportAiAnalyzeImages,
       report_ai_max_action: update.reportAiMaxAction,
+      report_ai_open_case_threshold: update.reportAiOpenCaseThreshold,
+      report_ai_max_images: update.reportAiMaxImages,
+      report_ai_max_image_bytes: update.reportAiMaxImageBytes,
+      role_gate_enabled: update.roleGateEnabled,
+      honeypot_role_id: normalizeOptionalId(update.honeypotRoleId),
+      member_access_role_id: normalizeOptionalId(update.memberAccessRoleId),
+      honeypot_role_response_mode: update.honeypotRoleResponseMode,
+      role_quarantine_mode: update.roleQuarantineMode,
+      role_quarantine_exempt_role_ids: update.roleQuarantineExemptRoleIds,
+      verification_ai_thread_analysis_enabled: update.verificationAnalysisEnabled,
+      verification_ai_thread_analysis_message_limit: update.verificationAnalysisMessageLimit,
+      verification_ai_max_action: update.verificationAnalysisMaxAction,
+      verification_ai_restrict_threshold: update.verificationAnalysisRestrictThreshold,
+      verification_prompt_template: update.verificationPromptTemplate,
+      server_about: update.serverAbout,
+      verification_context: update.verificationContext,
+      expected_topics: update.expectedTopics,
       case_responder_role_ids: update.caseResponderRoleIds,
       case_responder_routing_mode: update.caseResponderRoutingMode,
+      case_responder_thread_member_cap: update.caseResponderThreadMemberCap,
       message_deletion_enabled: update.messageDeletionEnabled,
       message_deletion_source_message_enabled: update.messageDeletionSourceMessageEnabled,
       message_deletion_watchlist_enabled: update.messageDeletionWatchlistEnabled,
@@ -152,6 +197,14 @@ function buildSettingsPatch(update: GuildSetupUpdate): Record<string, unknown> {
         update.messageDeletionWatchlistDisabledDefaultIds,
       message_deletion_watchlist_custom_terms: update.messageDeletionWatchlistCustomTerms,
     }).filter((entry) => entry[1] !== undefined)
+  );
+}
+
+function hasHeuristicColumnsPatch(update: GuildSetupUpdate): boolean {
+  return (
+    update.heuristicMessageThreshold !== undefined ||
+    update.heuristicMessageTimeframeSeconds !== undefined ||
+    update.heuristicSuspiciousKeywords !== undefined
   );
 }
 
@@ -181,7 +234,7 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
   public async updateGuildSetup(rawUpdate: GuildSetupUpdate): Promise<SetupServerRecord> {
     const update = guildSetupUpdateSchema.parse(rawUpdate);
     const current = await this.getServer(update.guildId);
-    const settingsPatch = buildSettingsPatch(update);
+    const settingsPatch = buildSetupSettingsPatch(update);
     const updatedBy = update.updatedBy ?? current?.updated_by ?? null;
 
     const result = await getPostgresPool().query(
@@ -214,7 +267,29 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
         updatedBy,
       ]
     );
-    return parseServerRow(result.rows[0] as Record<string, unknown>);
+
+    if (!hasHeuristicColumnsPatch(update)) {
+      return parseServerRow(result.rows[0] as Record<string, unknown>);
+    }
+
+    const heuristicResult = await getPostgresPool().query(
+      `update servers set
+        heuristic_message_threshold = coalesce($2::integer, heuristic_message_threshold),
+        heuristic_message_timeframe_seconds = coalesce($3::integer, heuristic_message_timeframe_seconds),
+        heuristic_suspicious_keywords = coalesce($4::text[], heuristic_suspicious_keywords),
+        updated_by = $5,
+        updated_at = now()
+      where guild_id = $1
+      returning *`,
+      [
+        update.guildId,
+        update.heuristicMessageThreshold ?? null,
+        update.heuristicMessageTimeframeSeconds ?? null,
+        update.heuristicSuspiciousKeywords ?? null,
+        updatedBy,
+      ]
+    );
+    return parseServerRow(heuristicResult.rows[0] as Record<string, unknown>);
   }
 }
 

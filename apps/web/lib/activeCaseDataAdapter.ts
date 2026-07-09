@@ -17,15 +17,52 @@ import {
   fixtureActiveCaseDetail,
   fixtureActiveCaseSummaries,
   fixtureResolvedCaseCount,
+  fixtureResolvedCaseSummariesForHistory,
   isWebE2eFixtureMode,
 } from './e2eFixtures';
 import { discordDesktopUrl, discordMessageUrl } from './discordUrls';
 import { getPostgresPool } from './setupDataAdapter';
+import {
+  queueModerationActionRequest,
+  type ModerationActionRequestActionType,
+} from './moderationActionRequestQueue';
+
+export type WebCaseAction = Extract<
+  CaseAction,
+  | 'verify_user'
+  | 'kick_user'
+  | 'ban_user'
+  | 'ban_by_id'
+  | 'close_no_action'
+  | 'repair_thread'
+  | 'create_thread'
+  | 'sync_existing_ban'
+  | 'refresh_notification'
+  | 'reopen_case'
+>;
+
+export type CaseActionQueueStatus = 'queued' | 'already_handled' | 'case_not_found' | 'not_allowed';
+
+export interface CaseActionQueueResult {
+  readonly action: WebCaseAction;
+  readonly caseId: string;
+  readonly status: CaseActionQueueStatus;
+}
 
 export interface ActiveCaseDataAdapter {
+  canQueueCaseActions(): boolean;
   listActiveCases(guildId: string): Promise<CaseSummary[]>;
+  listResolvedCases(guildId: string, limit?: number): Promise<CaseSummary[]>;
+  listCasesForMember(guildId: string, userId: string, limit?: number): Promise<CaseSummary[]>;
   countResolvedCases(guildId: string): Promise<number>;
   getCaseDetail(guildId: string, caseId: string): Promise<CaseDetail | null>;
+  queueCaseAction(input: {
+    action: WebCaseAction;
+    adminId: string;
+    caseId: string;
+    guildId: string;
+    reason?: string | null;
+  }): Promise<CaseActionQueueResult>;
 }
 
 interface CaseSummaryRow {
@@ -98,12 +135,37 @@ const DEFAULT_STALE_HOURS = 24;
 
 type CaseSurfaceKind = CaseSurfaceLink['kind'];
 
+interface DiscordSurfaceInput {
+  readonly kind: CaseSurfaceKind;
+  readonly label: string;
+  readonly guildId: string;
+  readonly channelId: string;
+  readonly messageId?: string | null;
+}
+
 const ACTIONS_BY_PRESENCE_STATE: Partial<Record<CasePresenceState, CaseAction[]>> = {
   banned: ['view_history', 'sync_existing_ban'],
   kicked: ['view_history'],
   left_or_removed: ['view_history', 'ban_by_id', 'close_no_action'],
   unknown: ['view_history', 'ban_by_id', 'close_no_action'],
 };
+
+const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActionType> = {
+  ban_by_id: 'ban_case_user_by_id',
+  ban_user: 'ban_case_user',
+  close_no_action: 'close_case_no_action',
+  create_thread: 'repair_active_case',
+  kick_user: 'kick_case_user',
+  repair_thread: 'repair_active_case',
+  refresh_notification: 'refresh_case_notification',
+  reopen_case: 'reopen_case',
+  sync_existing_ban: 'sync_existing_ban',
+  verify_user: 'verify_case_user',
+};
+
+function sortCaseSummariesForHistory(cases: readonly CaseSummary[]): CaseSummary[] {
+  return [...cases].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+}
 
 function toIsoString(value: unknown): string {
   if (value instanceof Date) {
@@ -162,13 +224,8 @@ function readNestedRecord(record: Record<string, unknown>, key: string): Record<
   return metadataToRecord(record[key]);
 }
 
-function createDiscordSurface(
-  kind: CaseSurfaceKind,
-  label: string,
-  guildId: string,
-  channelId: string,
-  messageId: string | null = null
-): CaseSurfaceLink {
+function createDiscordSurface(input: DiscordSurfaceInput): CaseSurfaceLink {
+  const { kind, label, guildId, channelId, messageId = null } = input;
   const url = discordMessageUrl(guildId, channelId, messageId);
   const desktopUrl = discordDesktopUrl(guildId, channelId, messageId);
 
@@ -231,6 +288,27 @@ function pushSurface(surfaces: CaseSurfaceLink[], surface: CaseSurfaceLink | nul
   }
 }
 
+function createChannelSurface(
+  kind: CaseSurfaceKind,
+  label: string,
+  guildId: string,
+  channelId: string | null
+): CaseSurfaceLink | null {
+  return channelId ? createDiscordSurface({ kind, label, guildId, channelId }) : null;
+}
+
+function createMessageSurface(
+  kind: CaseSurfaceKind,
+  label: string,
+  guildId: string,
+  channelId: string | null,
+  messageId: string | null
+): CaseSurfaceLink | null {
+  return channelId && messageId
+    ? createDiscordSurface({ kind, label, guildId, channelId, messageId })
+    : null;
+}
+
 function buildSurfaces(row: CaseSummaryRow): CaseSurfaceLink[] {
   const metadata = metadataToRecord(row.metadata);
   const surfaces: CaseSurfaceLink[] = [];
@@ -238,65 +316,50 @@ function buildSurfaces(row: CaseSummaryRow): CaseSurfaceLink[] {
 
   pushSurface(
     surfaces,
-    notificationChannelId && row.notification_message_id
-      ? createDiscordSurface(
-          'admin_notification',
-          'Admin notification',
-          row.server_id,
-          notificationChannelId,
-          row.notification_message_id
-        )
-      : null
+    createMessageSurface(
+      'admin_notification',
+      'Admin notification',
+      row.server_id,
+      notificationChannelId,
+      row.notification_message_id
+    )
   );
   pushSurface(
     surfaces,
-    row.private_evidence_thread_id
-      ? createDiscordSurface(
-          'admin_evidence_thread',
-          'Admin evidence',
-          row.server_id,
-          row.private_evidence_thread_id
-        )
-      : null
+    createChannelSurface(
+      'admin_evidence_thread',
+      'Admin evidence',
+      row.server_id,
+      row.private_evidence_thread_id
+    )
   );
   pushSurface(
     surfaces,
-    row.thread_id
-      ? createDiscordSurface(
-          'verification_thread',
-          'Verification thread',
-          row.server_id,
-          row.thread_id
-        )
-      : null
+    createChannelSurface('verification_thread', 'Verification thread', row.server_id, row.thread_id)
   );
 
   const reportIntakeThreadId = readString(metadata.report_intake_thread_id);
   pushSurface(
     surfaces,
-    reportIntakeThreadId
-      ? createDiscordSurface(
-          'report_intake_thread',
-          'Report intake',
-          row.server_id,
-          reportIntakeThreadId
-        )
-      : null
+    createChannelSurface(
+      'report_intake_thread',
+      'Report intake',
+      row.server_id,
+      reportIntakeThreadId
+    )
   );
 
   const sourceChannelId = readString(metadata.source_channel_id) ?? row.source_channel_id;
   const sourceMessageId = readString(metadata.source_message_id) ?? row.source_message_id;
   pushSurface(
     surfaces,
-    sourceChannelId && sourceMessageId
-      ? createDiscordSurface(
-          'source_message',
-          'Source message',
-          row.server_id,
-          sourceChannelId,
-          sourceMessageId
-        )
-      : null
+    createMessageSurface(
+      'source_message',
+      'Source message',
+      row.server_id,
+      sourceChannelId,
+      sourceMessageId
+    )
   );
 
   return surfaces;
@@ -326,9 +389,15 @@ function resolveAllowedActions(
   row: CaseSummaryRow,
   presenceState: CasePresenceState
 ): CaseAction[] {
+  if (row.status !== 'pending') {
+    const actions: CaseAction[] =
+      presenceState === 'in_server' ? ['view_history', 'reopen_case'] : ['view_history'];
+    return appendRefreshNotificationAction(row, actions);
+  }
+
   const presenceActions = ACTIONS_BY_PRESENCE_STATE[presenceState];
   if (presenceActions) {
-    return [...presenceActions];
+    return appendRefreshNotificationAction(row, presenceActions);
   }
 
   const actions: CaseAction[] = [
@@ -338,12 +407,26 @@ function resolveAllowedActions(
     'ban_user',
     'close_no_action',
   ];
+  if (row.notification_message_id) {
+    actions.push('refresh_notification');
+  }
   if (row.thread_id) {
     actions.push('repair_thread');
   } else {
     actions.push('create_thread');
   }
   return actions;
+}
+
+function appendRefreshNotificationAction(
+  row: CaseSummaryRow,
+  actions: readonly CaseAction[]
+): CaseAction[] {
+  const actionList = [...actions];
+  if (row.notification_message_id && !actionList.includes('refresh_notification')) {
+    actionList.push('refresh_notification');
+  }
+  return actionList;
 }
 
 export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): CaseSummary {
@@ -493,6 +576,10 @@ const SUMMARY_QUERY = `
 `;
 
 export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
+  public canQueueCaseActions(): boolean {
+    return true;
+  }
+
   public async listActiveCases(guildId: string): Promise<CaseSummary[]> {
     const result = await getPostgresPool().query<CaseSummaryRow>(
       `${SUMMARY_QUERY}
@@ -501,6 +588,32 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       [guildId]
     );
     return sortCaseSummariesForQueue(result.rows.map((row) => parseCaseSummaryRow(row)));
+  }
+
+  public async listResolvedCases(guildId: string, limit = 50): Promise<CaseSummary[]> {
+    const result = await getPostgresPool().query<CaseSummaryRow>(
+      `${SUMMARY_QUERY}
+       where ve.server_id = $1 and ve.status <> 'pending' and ve.user_id is not null
+       order by coalesce(ve.resolved_at, ve.updated_at, ve.created_at) desc nulls last
+       limit $2`,
+      [guildId, limit]
+    );
+    return result.rows.map((row) => parseCaseSummaryRow(row));
+  }
+
+  public async listCasesForMember(
+    guildId: string,
+    userId: string,
+    limit = 50
+  ): Promise<CaseSummary[]> {
+    const result = await getPostgresPool().query<CaseSummaryRow>(
+      `${SUMMARY_QUERY}
+       where ve.server_id = $1 and ve.user_id = $2
+       order by coalesce(ve.resolved_at, ve.updated_at, ve.created_at) desc nulls last
+       limit $3`,
+      [guildId, userId, limit]
+    );
+    return result.rows.map((row) => parseCaseSummaryRow(row));
   }
 
   public async countResolvedCases(guildId: string): Promise<number> {
@@ -590,11 +703,64 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       moderationOutcomes: outcomesResult.rows.map(parseModerationOutcomeRow),
     });
   }
+
+  public async queueCaseAction(input: {
+    action: WebCaseAction;
+    adminId: string;
+    caseId: string;
+    guildId: string;
+    reason?: string | null;
+  }): Promise<CaseActionQueueResult> {
+    const detail = await this.getCaseDetail(input.guildId, input.caseId);
+    if (!detail) {
+      return { action: input.action, caseId: input.caseId, status: 'case_not_found' };
+    }
+    if (!detail.allowedActions.includes(input.action)) {
+      return { action: input.action, caseId: input.caseId, status: 'not_allowed' };
+    }
+
+    const queueStatus = await queueModerationActionRequest({
+      actionType: requestTypeByCaseAction[input.action],
+      actorId: input.adminId,
+      actorSurface: 'web',
+      idempotencyKey: `web:case-action:${input.action}:${input.guildId}:${input.caseId}`,
+      metadata: {
+        case_action: input.action,
+        ...(input.reason ? { reason: input.reason } : {}),
+        requested_surface: 'web',
+      },
+      serverId: input.guildId,
+      targetUserId: detail.userId,
+      verificationEventId: detail.id,
+    });
+
+    return {
+      action: input.action,
+      caseId: input.caseId,
+      status: queueStatus === 'completed' ? 'already_handled' : 'queued',
+    };
+  }
 }
 
 export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
+  public canQueueCaseActions(): boolean {
+    return true;
+  }
+
   public async listActiveCases(): Promise<CaseSummary[]> {
     return sortCaseSummariesForQueue(fixtureActiveCaseSummaries());
+  }
+
+  public async listResolvedCases(_guildId: string): Promise<CaseSummary[]> {
+    return sortCaseSummariesForHistory(fixtureResolvedCaseSummariesForHistory());
+  }
+
+  public async listCasesForMember(_guildId: string, userId: string): Promise<CaseSummary[]> {
+    return sortCaseSummariesForHistory(
+      [...fixtureActiveCaseSummaries(), ...fixtureResolvedCaseSummariesForHistory()].filter(
+        (item) => item.userId === userId
+      )
+    );
   }
 
   public async countResolvedCases(): Promise<number> {
@@ -603,6 +769,23 @@ export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
 
   public async getCaseDetail(_guildId: string, caseId: string): Promise<CaseDetail | null> {
     return fixtureActiveCaseDetail(caseId);
+  }
+
+  public async queueCaseAction(input: {
+    action: WebCaseAction;
+    adminId: string;
+    caseId: string;
+    guildId: string;
+    reason?: string | null;
+  }): Promise<CaseActionQueueResult> {
+    const detail = fixtureActiveCaseDetail(input.caseId);
+    if (!detail) {
+      return { action: input.action, caseId: input.caseId, status: 'case_not_found' };
+    }
+    if (!detail.allowedActions.includes(input.action)) {
+      return { action: input.action, caseId: input.caseId, status: 'not_allowed' };
+    }
+    return { action: input.action, caseId: input.caseId, status: 'queued' };
   }
 }
 

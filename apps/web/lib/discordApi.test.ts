@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  deleteBotMessage,
   fetchBotChannelMessages,
   fetchDiscordGuilds,
   type DiscordGuildSummary,
@@ -81,6 +82,27 @@ describe('Discord API helpers', () => {
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('before=101');
     expect(fetchMock.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
+        headers: { authorization: 'Bot bot-token' },
+      })
+    );
+  });
+
+  it('deletes bot messages and treats missing messages as already gone', async () => {
+    vi.stubEnv('DISCORD_API_BASE_URL', 'https://discord.test/api/v10');
+    vi.stubEnv('DRASIL_WEB_BOT_TOKEN', 'bot-token');
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(deleteBotMessage('channel-1', 'message-1')).resolves.toBe(true);
+    await expect(deleteBotMessage('channel-1', 'missing-message')).resolves.toBe(false);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://discord.test/api/v10/channels/channel-1/messages/message-1',
+      expect.objectContaining({
+        method: 'DELETE',
         headers: { authorization: 'Bot bot-token' },
       })
     );

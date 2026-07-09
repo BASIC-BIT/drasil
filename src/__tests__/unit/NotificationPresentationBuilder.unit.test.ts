@@ -344,7 +344,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
     expect(observedButtons[2].custom_id).toBe('observed:dismiss:user-1:det-1');
     expect(observedReportButtons[2].custom_id).toBe('observed:close_report:user-1:det-1');
     expect(observedButtons[4]).toMatchObject({
-      url: 'https://drasilbot.com/admin/guild/guild-1/cases',
+      url: 'https://drasilbot.com/admin/guild/guild-1/inbox',
     });
   });
 

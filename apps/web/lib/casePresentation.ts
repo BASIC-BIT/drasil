@@ -7,6 +7,8 @@ const actionLabels: Record<CaseAction, string> = {
   create_thread: 'Create Thread',
   kick_user: 'Kick User',
   repair_thread: 'Repair Thread',
+  reopen_case: 'Reopen Case',
+  refresh_notification: 'Refresh Notification',
   sync_existing_ban: 'Sync Existing Ban',
   verify_user: 'Verify User',
   view_history: 'View History',

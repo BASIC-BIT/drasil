@@ -25,7 +25,7 @@ const buildCase = (id: string, stale: boolean, updatedAt: string): CaseSummary =
   lastActionType: null,
   lastActionAt: null,
   surfaces: [],
-  allowedActions: ['view_history', 'verify_user'],
+  allowedActions: ['view_history', 'verify_user', 'refresh_notification'],
 });
 
 describe('case contracts', () => {

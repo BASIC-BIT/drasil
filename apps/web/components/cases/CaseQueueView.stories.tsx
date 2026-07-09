@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { CaseQueueView } from './CaseQueueView';
-import { fixtureCaseSummaries } from '@/lib/caseFixtures';
+import { fixtureCaseSummaries, fixtureResolvedCaseSummaries } from '@/lib/caseFixtures';
 
 const meta = {
   title: 'Active Triage/Case Queue',
@@ -16,7 +16,7 @@ const meta = {
   args: {
     guildId: 'guild-1',
     guildName: 'Fixture Guild',
-    resolvedCaseCount: 18,
+    resolvedCaseCount: fixtureResolvedCaseSummaries().length,
     sessionUsername: 'Fixture Admin',
     cases: fixtureCaseSummaries(),
   },

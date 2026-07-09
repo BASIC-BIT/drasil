@@ -15,8 +15,10 @@ export const caseActionSchema = z.enum([
   'ban_user',
   'ban_by_id',
   'sync_existing_ban',
+  'refresh_notification',
   'repair_thread',
   'create_thread',
+  'reopen_case',
   'close_no_action',
 ]);
 
