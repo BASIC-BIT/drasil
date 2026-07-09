@@ -19,6 +19,15 @@ const queueOperationActions = new Set<ModerationQueueOperationAction>([
   'intake_role_members',
 ]);
 
+interface QueueOperationOptions {
+  readonly days: number | null;
+  readonly execute?: boolean;
+  readonly limit: number | null;
+  readonly reason: string | null;
+  readonly roleId: string | null;
+  readonly unsyncAllowedChannels: boolean | null;
+}
+
 function readBoundedInteger(
   formData: FormData | undefined,
   key: string,
@@ -48,6 +57,91 @@ function readTrimmedString(formData: FormData | undefined, key: string): string 
   return value.trim() || null;
 }
 
+function assertChecked(formData: FormData | undefined, key: string, message: string): void {
+  if (formData?.get(key) !== 'on') {
+    throw new Error(message);
+  }
+}
+
+function emptyOperationOptions(): QueueOperationOptions {
+  return {
+    days: null,
+    limit: null,
+    reason: null,
+    roleId: null,
+    unsyncAllowedChannels: null,
+  };
+}
+
+function readResolvedThreadSweepOptions(formData: FormData | undefined): QueueOperationOptions {
+  const execute = formData?.get('execute') === 'true';
+  if (execute) {
+    assertChecked(
+      formData,
+      'confirmCloseResolvedThreads',
+      'Confirm resolved thread closure before queueing it.'
+    );
+  }
+
+  return {
+    ...emptyOperationOptions(),
+    days: readBoundedInteger(formData, 'days', 30, 1, 365),
+    execute,
+    limit: readBoundedInteger(formData, 'limit', 100, 1, 500),
+  };
+}
+
+function readRoleIntakeOptions(formData: FormData | undefined): QueueOperationOptions {
+  const execute = formData?.get('execute') === 'true';
+  const roleId = readTrimmedString(formData, 'roleId');
+  if (!roleId) {
+    throw new Error('Choose a role before queueing role intake.');
+  }
+  if (execute) {
+    assertChecked(
+      formData,
+      'confirmRoleIntake',
+      'Confirm role intake execution before queueing it.'
+    );
+  }
+
+  return {
+    ...emptyOperationOptions(),
+    execute,
+    limit: readBoundedInteger(formData, 'limit', 250, 1, 250),
+    reason: readTrimmedString(formData, 'reason'),
+    roleId,
+  };
+}
+
+function readOperationOptions(
+  action: ModerationQueueOperationAction,
+  formData: FormData | undefined
+): QueueOperationOptions {
+  if (action === 'clear_moderation_queue') {
+    assertChecked(formData, 'confirmClearQueue', 'Confirm queue clearing before queueing it.');
+  }
+  if (action === 'close_resolved_case_threads') {
+    return readResolvedThreadSweepOptions(formData);
+  }
+  if (action === 'apply_case_role_lockdown') {
+    assertChecked(
+      formData,
+      'confirmApplyLockdown',
+      'Confirm case-role lockdown apply before queueing it.'
+    );
+    return {
+      ...emptyOperationOptions(),
+      unsyncAllowedChannels: formData?.get('unsyncAllowedChannels') === 'on',
+    };
+  }
+  if (action === 'intake_role_members') {
+    return readRoleIntakeOptions(formData);
+  }
+
+  return emptyOperationOptions();
+}
+
 function assertAdministrator(guild: { readonly owner: boolean; readonly permissions: string }) {
   if (guild.owner) {
     return;
@@ -71,35 +165,7 @@ export async function queueModerationQueueOperationAction(
     throw new Error(`Unsupported moderation queue operation: ${action}`);
   }
 
-  if (action === 'clear_moderation_queue' && formData?.get('confirmClearQueue') !== 'on') {
-    throw new Error('Confirm queue clearing before queueing it.');
-  }
-
-  const executeResolvedThreadSweep =
-    action === 'close_resolved_case_threads' && formData?.get('execute') === 'true';
-  if (
-    action === 'close_resolved_case_threads' &&
-    executeResolvedThreadSweep &&
-    formData?.get('confirmCloseResolvedThreads') !== 'on'
-  ) {
-    throw new Error('Confirm resolved thread closure before queueing it.');
-  }
-  if (action === 'apply_case_role_lockdown' && formData?.get('confirmApplyLockdown') !== 'on') {
-    throw new Error('Confirm case-role lockdown apply before queueing it.');
-  }
-  const executeRoleIntake = action === 'intake_role_members' && formData?.get('execute') === 'true';
-  const roleIntakeRoleId =
-    action === 'intake_role_members' ? readTrimmedString(formData, 'roleId') : null;
-  if (action === 'intake_role_members' && !roleIntakeRoleId) {
-    throw new Error('Choose a role before queueing role intake.');
-  }
-  if (
-    action === 'intake_role_members' &&
-    executeRoleIntake &&
-    formData?.get('confirmRoleIntake') !== 'on'
-  ) {
-    throw new Error('Confirm role intake execution before queueing it.');
-  }
+  const options = readOperationOptions(action, formData);
 
   const setupService = createSetupDashboardService();
   const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
@@ -108,24 +174,13 @@ export async function queueModerationQueueOperationAction(
   const status = await queueModerationQueueOperation({
     action,
     actorId: session.userId,
-    days:
-      action === 'close_resolved_case_threads'
-        ? readBoundedInteger(formData, 'days', 30, 1, 365)
-        : null,
-    execute: action === 'close_resolved_case_threads' ? executeResolvedThreadSweep : undefined,
+    days: options.days,
+    execute: options.execute,
     guildId,
-    limit:
-      action === 'close_resolved_case_threads'
-        ? readBoundedInteger(formData, 'limit', 100, 1, 500)
-        : action === 'intake_role_members'
-          ? readBoundedInteger(formData, 'limit', 250, 1, 250)
-          : null,
-    reason: action === 'intake_role_members' ? readTrimmedString(formData, 'reason') : null,
-    roleId: roleIntakeRoleId,
-    unsyncAllowedChannels:
-      action === 'apply_case_role_lockdown'
-        ? formData?.get('unsyncAllowedChannels') === 'on'
-        : null,
+    limit: options.limit,
+    reason: options.reason,
+    roleId: options.roleId,
+    unsyncAllowedChannels: options.unsyncAllowedChannels,
   });
 
   revalidatePath(`/admin/guild/${guildId}/operations`);

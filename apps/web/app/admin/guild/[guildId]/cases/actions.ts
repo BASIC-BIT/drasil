@@ -40,15 +40,36 @@ interface DestructiveActionOptions {
   readonly reason: string | null;
 }
 
-function isDestructiveCaseAction(action: WebCaseAction): action is DestructiveCaseAction {
-  return action === 'kick_user' || action === 'ban_user' || action === 'ban_by_id';
+interface DestructiveActionContext {
+  readonly action: DestructiveCaseAction;
+  readonly isBanAction: boolean;
+  readonly permission: bigint;
 }
 
-function destructivePermission(action: WebCaseAction): bigint | null {
+function destructiveActionContext(action: WebCaseAction): DestructiveActionContext | null {
   if (action === 'kick_user') {
-    return DISCORD_PERMISSIONS.KickMembers;
+    return {
+      action,
+      isBanAction: false,
+      permission: DISCORD_PERMISSIONS.KickMembers,
+    };
   }
-  if (action === 'ban_user' || action === 'ban_by_id' || action === 'sync_existing_ban') {
+  if (action === 'ban_user' || action === 'ban_by_id') {
+    return {
+      action,
+      isBanAction: true,
+      permission: DISCORD_PERMISSIONS.BanMembers,
+    };
+  }
+  return null;
+}
+
+function actorPermission(action: WebCaseAction): bigint | null {
+  const destructiveContext = destructiveActionContext(action);
+  if (destructiveContext) {
+    return destructiveContext.permission;
+  }
+  if (action === 'sync_existing_ban') {
     return DISCORD_PERMISSIONS.BanMembers;
   }
   return null;
@@ -68,7 +89,7 @@ function assertActorPermission(
     return;
   }
 
-  const requiredPermission = destructivePermission(action);
+  const requiredPermission = actorPermission(action);
   if (!requiredPermission || guild.owner) {
     return;
   }
@@ -86,6 +107,57 @@ function readFormString(formData: FormData | undefined, key: string): string | n
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function assertDestructiveActionEnabled(
+  settings: Record<string, unknown>,
+  context: DestructiveActionContext
+): void {
+  const enabled = context.isBanAction
+    ? settings.moderator_ban_action_enabled !== false
+    : settings.moderator_kick_action_enabled !== false;
+  if (!enabled) {
+    throw new Error(
+      context.isBanAction
+        ? 'Moderator ban actions are disabled for this server.'
+        : 'Moderator kick actions are disabled for this server.'
+    );
+  }
+}
+
+function readDestructiveReason(
+  formData: FormData | undefined,
+  settings: Record<string, unknown>,
+  context: DestructiveActionContext
+): string | null {
+  const reason = readFormString(formData, 'reason');
+  const requiresReason = context.isBanAction
+    ? settings.moderator_ban_action_requires_reason === true
+    : settings.moderator_kick_action_requires_reason === true;
+  if (requiresReason && !reason) {
+    throw new Error(context.isBanAction ? 'Ban reason is required.' : 'Kick reason is required.');
+  }
+
+  return reason;
+}
+
+async function assertBotCanRunDestructiveAction(
+  guildId: string,
+  context: DestructiveActionContext
+): Promise<void> {
+  const resources = await fetchGuildResources(guildId);
+  const botPermissions = computeGuildPermissions({
+    guildId,
+    memberRoleIds: resources.botMember.roles,
+    roles: resources.roles,
+  });
+  if (!hasPermission(botPermissions, context.permission)) {
+    throw new Error(
+      context.isBanAction
+        ? 'Drasil is missing Ban Members permission.'
+        : 'Drasil is missing Kick Members permission.'
+    );
+  }
+}
+
 async function assertCanQueueCaseAction(
   action: WebCaseAction,
   guild: { readonly id: string; readonly owner: boolean; readonly permissions: string },
@@ -93,7 +165,8 @@ async function assertCanQueueCaseAction(
 ): Promise<DestructiveActionOptions> {
   assertActorPermission(action, guild);
 
-  if (!isDestructiveCaseAction(action)) {
+  const destructiveContext = destructiveActionContext(action);
+  if (!destructiveContext) {
     return { reason: null };
   }
 
@@ -104,40 +177,10 @@ async function assertCanQueueCaseAction(
   const setupAdapter = createSetupDataAdapter();
   const server = await setupAdapter.getServer(guild.id);
   const settings = server?.settings ?? {};
-  const isBanAction = action === 'ban_user' || action === 'ban_by_id';
-  const enabled = isBanAction
-    ? settings.moderator_ban_action_enabled !== false
-    : settings.moderator_kick_action_enabled !== false;
-  if (!enabled) {
-    throw new Error(
-      isBanAction
-        ? 'Moderator ban actions are disabled for this server.'
-        : 'Moderator kick actions are disabled for this server.'
-    );
-  }
+  assertDestructiveActionEnabled(settings, destructiveContext);
 
-  const reason = readFormString(formData, 'reason');
-  const requiresReason = isBanAction
-    ? settings.moderator_ban_action_requires_reason === true
-    : settings.moderator_kick_action_requires_reason === true;
-  if (requiresReason && !reason) {
-    throw new Error(isBanAction ? 'Ban reason is required.' : 'Kick reason is required.');
-  }
-
-  const resources = await fetchGuildResources(guild.id);
-  const botPermissions = computeGuildPermissions({
-    guildId: guild.id,
-    memberRoleIds: resources.botMember.roles,
-    roles: resources.roles,
-  });
-  const requiredBotPermission = destructivePermission(action);
-  if (requiredBotPermission && !hasPermission(botPermissions, requiredBotPermission)) {
-    throw new Error(
-      isBanAction
-        ? 'Drasil is missing Ban Members permission.'
-        : 'Drasil is missing Kick Members permission.'
-    );
-  }
+  const reason = readDestructiveReason(formData, settings, destructiveContext);
+  await assertBotCanRunDestructiveAction(guild.id, destructiveContext);
 
   return { reason };
 }

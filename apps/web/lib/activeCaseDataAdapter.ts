@@ -135,6 +135,14 @@ const DEFAULT_STALE_HOURS = 24;
 
 type CaseSurfaceKind = CaseSurfaceLink['kind'];
 
+interface DiscordSurfaceInput {
+  readonly kind: CaseSurfaceKind;
+  readonly label: string;
+  readonly guildId: string;
+  readonly channelId: string;
+  readonly messageId?: string | null;
+}
+
 const ACTIONS_BY_PRESENCE_STATE: Partial<Record<CasePresenceState, CaseAction[]>> = {
   banned: ['view_history', 'sync_existing_ban'],
   kicked: ['view_history'],
@@ -216,13 +224,8 @@ function readNestedRecord(record: Record<string, unknown>, key: string): Record<
   return metadataToRecord(record[key]);
 }
 
-function createDiscordSurface(
-  kind: CaseSurfaceKind,
-  label: string,
-  guildId: string,
-  channelId: string,
-  messageId: string | null = null
-): CaseSurfaceLink {
+function createDiscordSurface(input: DiscordSurfaceInput): CaseSurfaceLink {
+  const { kind, label, guildId, channelId, messageId = null } = input;
   const url = discordMessageUrl(guildId, channelId, messageId);
   const desktopUrl = discordDesktopUrl(guildId, channelId, messageId);
 
@@ -285,6 +288,27 @@ function pushSurface(surfaces: CaseSurfaceLink[], surface: CaseSurfaceLink | nul
   }
 }
 
+function createChannelSurface(
+  kind: CaseSurfaceKind,
+  label: string,
+  guildId: string,
+  channelId: string | null
+): CaseSurfaceLink | null {
+  return channelId ? createDiscordSurface({ kind, label, guildId, channelId }) : null;
+}
+
+function createMessageSurface(
+  kind: CaseSurfaceKind,
+  label: string,
+  guildId: string,
+  channelId: string | null,
+  messageId: string | null
+): CaseSurfaceLink | null {
+  return channelId && messageId
+    ? createDiscordSurface({ kind, label, guildId, channelId, messageId })
+    : null;
+}
+
 function buildSurfaces(row: CaseSummaryRow): CaseSurfaceLink[] {
   const metadata = metadataToRecord(row.metadata);
   const surfaces: CaseSurfaceLink[] = [];
@@ -292,65 +316,50 @@ function buildSurfaces(row: CaseSummaryRow): CaseSurfaceLink[] {
 
   pushSurface(
     surfaces,
-    notificationChannelId && row.notification_message_id
-      ? createDiscordSurface(
-          'admin_notification',
-          'Admin notification',
-          row.server_id,
-          notificationChannelId,
-          row.notification_message_id
-        )
-      : null
+    createMessageSurface(
+      'admin_notification',
+      'Admin notification',
+      row.server_id,
+      notificationChannelId,
+      row.notification_message_id
+    )
   );
   pushSurface(
     surfaces,
-    row.private_evidence_thread_id
-      ? createDiscordSurface(
-          'admin_evidence_thread',
-          'Admin evidence',
-          row.server_id,
-          row.private_evidence_thread_id
-        )
-      : null
+    createChannelSurface(
+      'admin_evidence_thread',
+      'Admin evidence',
+      row.server_id,
+      row.private_evidence_thread_id
+    )
   );
   pushSurface(
     surfaces,
-    row.thread_id
-      ? createDiscordSurface(
-          'verification_thread',
-          'Verification thread',
-          row.server_id,
-          row.thread_id
-        )
-      : null
+    createChannelSurface('verification_thread', 'Verification thread', row.server_id, row.thread_id)
   );
 
   const reportIntakeThreadId = readString(metadata.report_intake_thread_id);
   pushSurface(
     surfaces,
-    reportIntakeThreadId
-      ? createDiscordSurface(
-          'report_intake_thread',
-          'Report intake',
-          row.server_id,
-          reportIntakeThreadId
-        )
-      : null
+    createChannelSurface(
+      'report_intake_thread',
+      'Report intake',
+      row.server_id,
+      reportIntakeThreadId
+    )
   );
 
   const sourceChannelId = readString(metadata.source_channel_id) ?? row.source_channel_id;
   const sourceMessageId = readString(metadata.source_message_id) ?? row.source_message_id;
   pushSurface(
     surfaces,
-    sourceChannelId && sourceMessageId
-      ? createDiscordSurface(
-          'source_message',
-          'Source message',
-          row.server_id,
-          sourceChannelId,
-          sourceMessageId
-        )
-      : null
+    createMessageSurface(
+      'source_message',
+      'Source message',
+      row.server_id,
+      sourceChannelId,
+      sourceMessageId
+    )
   );
 
   return surfaces;

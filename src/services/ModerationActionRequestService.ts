@@ -56,6 +56,57 @@ export interface IModerationActionRequestService {
 export class ModerationActionRequestService implements IModerationActionRequestService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly presentationBuilder = new NotificationPresentationBuilder();
+  private readonly requestProcessors: Partial<
+    Record<ModerationActionRequestType, (request: ModerationActionRequest) => Promise<void>>
+  > = {
+    [ModerationActionRequestType.OPEN_CASE_FROM_OBSERVED_DETECTION]: (request) =>
+      this.openObservedDetectionCase(request),
+    [ModerationActionRequestType.OPEN_ADMIN_CASE]: (request) => this.openAdminCase(request),
+    [ModerationActionRequestType.MANUAL_FLAG_USER]: (request) => this.manualFlagUser(request),
+    [ModerationActionRequestType.SUBMIT_USER_REPORT]: (request) => this.submitUserReport(request),
+    [ModerationActionRequestType.START_REPORT_INTAKE]: (request) => this.startReportIntake(request),
+    [ModerationActionRequestType.CLOSE_REPORT_INTAKE]: (request) => this.closeReportIntake(request),
+    [ModerationActionRequestType.DISMISS_OBSERVED_DETECTION]: (request) =>
+      this.dismissObservedDetection(request, AdminActionType.DISMISS),
+    [ModerationActionRequestType.MARK_OBSERVED_DETECTION_FALSE_POSITIVE]: (request) =>
+      this.dismissObservedDetection(request, AdminActionType.FALSE_POSITIVE),
+    [ModerationActionRequestType.UNDO_OBSERVED_DETECTION_ACTION]: (request) =>
+      this.undoObservedDetectionAction(request),
+    [ModerationActionRequestType.KICK_OBSERVED_DETECTION]: (request) =>
+      this.kickObservedDetection(request),
+    [ModerationActionRequestType.BAN_OBSERVED_DETECTION]: (request) =>
+      this.banObservedDetection(request),
+    [ModerationActionRequestType.IGNORE_DETECTION_ACCOUNTING]: (request) =>
+      this.ignoreDetectionAccounting(request),
+    [ModerationActionRequestType.RESTORE_DETECTION_ACCOUNTING]: (request) =>
+      this.restoreDetectionAccounting(request),
+    [ModerationActionRequestType.VERIFY_CASE_USER]: (request) => this.verifyCaseUser(request),
+    [ModerationActionRequestType.CLOSE_CASE_NO_ACTION]: (request) =>
+      this.closeCaseNoAction(request),
+    [ModerationActionRequestType.KICK_CASE_USER]: (request) => this.kickCaseUser(request),
+    [ModerationActionRequestType.BAN_CASE_USER]: (request) => this.banCaseUser(request),
+    [ModerationActionRequestType.BAN_CASE_USER_BY_ID]: (request) => this.banCaseUserById(request),
+    [ModerationActionRequestType.REPAIR_ACTIVE_CASE]: (request) => this.repairActiveCase(request),
+    [ModerationActionRequestType.REOPEN_CASE]: (request) => this.reopenCase(request),
+    [ModerationActionRequestType.REFRESH_CASE_NOTIFICATION]: (request) =>
+      this.refreshCaseNotification(request),
+    [ModerationActionRequestType.SYNC_MODERATION_QUEUE]: (request) =>
+      this.syncModerationQueue(request),
+    [ModerationActionRequestType.CLEAR_MODERATION_QUEUE]: (request) =>
+      this.clearModerationQueue(request),
+    [ModerationActionRequestType.CLOSE_RESOLVED_CASE_THREADS]: (request) =>
+      this.closeResolvedCaseThreads(request),
+    [ModerationActionRequestType.AUDIT_CASE_ROLE_LOCKDOWN]: (request) =>
+      this.auditCaseRoleLockdown(request),
+    [ModerationActionRequestType.APPLY_CASE_ROLE_LOCKDOWN]: (request) =>
+      this.applyCaseRoleLockdown(request),
+    [ModerationActionRequestType.INTAKE_ROLE_MEMBERS]: (request) => this.intakeRoleMembers(request),
+    [ModerationActionRequestType.SYNC_EXISTING_BAN]: (request) => this.syncExistingBan(request),
+    [ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION]: (request) =>
+      this.completeSetupVerification(request),
+    [ModerationActionRequestType.UPSERT_REPORT_INSTRUCTIONS]: (request) =>
+      this.upsertReportInstructions(request),
+  };
 
   public constructor(
     @inject(TYPES.ModerationActionRequestRepository)
@@ -127,103 +178,16 @@ export class ModerationActionRequestService implements IModerationActionRequestS
 
   private async processClaimedRequest(request: ModerationActionRequest): Promise<void> {
     try {
-      switch (request.action_type) {
-        case ModerationActionRequestType.OPEN_CASE_FROM_OBSERVED_DETECTION:
-          await this.openObservedDetectionCase(request);
-          return;
-        case ModerationActionRequestType.OPEN_ADMIN_CASE:
-          await this.openAdminCase(request);
-          return;
-        case ModerationActionRequestType.MANUAL_FLAG_USER:
-          await this.manualFlagUser(request);
-          return;
-        case ModerationActionRequestType.SUBMIT_USER_REPORT:
-          await this.submitUserReport(request);
-          return;
-        case ModerationActionRequestType.START_REPORT_INTAKE:
-          await this.startReportIntake(request);
-          return;
-        case ModerationActionRequestType.CLOSE_REPORT_INTAKE:
-          await this.closeReportIntake(request);
-          return;
-        case ModerationActionRequestType.DISMISS_OBSERVED_DETECTION:
-          await this.dismissObservedDetection(request, AdminActionType.DISMISS);
-          return;
-        case ModerationActionRequestType.MARK_OBSERVED_DETECTION_FALSE_POSITIVE:
-          await this.dismissObservedDetection(request, AdminActionType.FALSE_POSITIVE);
-          return;
-        case ModerationActionRequestType.UNDO_OBSERVED_DETECTION_ACTION:
-          await this.undoObservedDetectionAction(request);
-          return;
-        case ModerationActionRequestType.KICK_OBSERVED_DETECTION:
-          await this.kickObservedDetection(request);
-          return;
-        case ModerationActionRequestType.BAN_OBSERVED_DETECTION:
-          await this.banObservedDetection(request);
-          return;
-        case ModerationActionRequestType.IGNORE_DETECTION_ACCOUNTING:
-          await this.ignoreDetectionAccounting(request);
-          return;
-        case ModerationActionRequestType.RESTORE_DETECTION_ACCOUNTING:
-          await this.restoreDetectionAccounting(request);
-          return;
-        case ModerationActionRequestType.VERIFY_CASE_USER:
-          await this.verifyCaseUser(request);
-          return;
-        case ModerationActionRequestType.CLOSE_CASE_NO_ACTION:
-          await this.closeCaseNoAction(request);
-          return;
-        case ModerationActionRequestType.KICK_CASE_USER:
-          await this.kickCaseUser(request);
-          return;
-        case ModerationActionRequestType.BAN_CASE_USER:
-          await this.banCaseUser(request);
-          return;
-        case ModerationActionRequestType.BAN_CASE_USER_BY_ID:
-          await this.banCaseUserById(request);
-          return;
-        case ModerationActionRequestType.REPAIR_ACTIVE_CASE:
-          await this.repairActiveCase(request);
-          return;
-        case ModerationActionRequestType.REOPEN_CASE:
-          await this.reopenCase(request);
-          return;
-        case ModerationActionRequestType.REFRESH_CASE_NOTIFICATION:
-          await this.refreshCaseNotification(request);
-          return;
-        case ModerationActionRequestType.SYNC_MODERATION_QUEUE:
-          await this.syncModerationQueue(request);
-          return;
-        case ModerationActionRequestType.CLEAR_MODERATION_QUEUE:
-          await this.clearModerationQueue(request);
-          return;
-        case ModerationActionRequestType.CLOSE_RESOLVED_CASE_THREADS:
-          await this.closeResolvedCaseThreads(request);
-          return;
-        case ModerationActionRequestType.AUDIT_CASE_ROLE_LOCKDOWN:
-          await this.auditCaseRoleLockdown(request);
-          return;
-        case ModerationActionRequestType.APPLY_CASE_ROLE_LOCKDOWN:
-          await this.applyCaseRoleLockdown(request);
-          return;
-        case ModerationActionRequestType.INTAKE_ROLE_MEMBERS:
-          await this.intakeRoleMembers(request);
-          return;
-        case ModerationActionRequestType.SYNC_EXISTING_BAN:
-          await this.syncExistingBan(request);
-          return;
-        case ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION:
-          await this.completeSetupVerification(request);
-          return;
-        case ModerationActionRequestType.UPSERT_REPORT_INSTRUCTIONS:
-          await this.upsertReportInstructions(request);
-          return;
-        default:
-          await this.repository.fail(
-            request.id,
-            `Unsupported action request: ${request.action_type}`
-          );
+      const processor = this.requestProcessors[request.action_type];
+      if (!processor) {
+        await this.repository.fail(
+          request.id,
+          `Unsupported action request: ${request.action_type}`
+        );
+        return;
       }
+
+      await processor(request);
     } catch (error) {
       await this.repository.fail(request.id, this.errorMessage(error));
     }

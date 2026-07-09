@@ -62,74 +62,103 @@ function readBoolean(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null;
 }
 
-function formatOperationResult(result: Record<string, unknown>): string | null {
-  const actionType = typeof result.action_type === 'string' ? result.action_type : null;
-  if (actionType === 'clear_moderation_queue') {
-    const removedCount = readNumber(result.removed_count);
-    return removedCount === null
-      ? null
-      : `Removed ${removedCount} queue item${removedCount === 1 ? '' : 's'}.`;
-  }
-  if (actionType === 'sync_moderation_queue') {
-    return result.synced === true ? 'Queue sync completed.' : null;
-  }
-  if (actionType === 'close_resolved_case_threads') {
-    const execute = readBoolean(result.execute) ?? false;
-    const wouldClose = readNumber(result.would_close_threads) ?? 0;
-    const closed = readNumber(result.closed_threads) ?? 0;
-    const alreadyClosed = readNumber(result.already_closed_threads) ?? 0;
-    const missing = readNumber(result.missing_threads) ?? 0;
-    const failed = readNumber(result.failed_threads) ?? 0;
-    return execute
-      ? `Closed ${closed}; already closed ${alreadyClosed}; missing ${missing}; failed ${failed}.`
-      : `Dry run found ${wouldClose} closable; already closed ${alreadyClosed}; missing ${missing}; failed ${failed}.`;
-  }
-  if (actionType === 'audit_case_role_lockdown') {
-    const errors = readNumber(result.error_count) ?? 0;
-    const warnings = readNumber(result.warning_count) ?? 0;
-    const plannedWrites = readNumber(result.planned_writes) ?? 0;
-    return `Audit found ${errors} errors, ${warnings} warnings, and ${plannedWrites} planned write${plannedWrites === 1 ? '' : 's'}.`;
-  }
-  if (actionType === 'apply_case_role_lockdown') {
-    const appliedWrites = readNumber(result.applied_writes) ?? 0;
-    const plannedWrites = readNumber(result.planned_writes) ?? 0;
-    const errors = readNumber(result.error_count) ?? 0;
-    const warnings = readNumber(result.warning_count) ?? 0;
-    const unsynced = readNumber(result.unsynced_allowed_channels) ?? 0;
-    return `Applied ${appliedWrites} writes; remaining ${plannedWrites}; unsynced ${unsynced}; errors ${errors}; warnings ${warnings}.`;
-  }
-  if (actionType === 'intake_role_members') {
-    const execute = readBoolean(result.execute) ?? false;
-    const roleName = typeof result.role_name === 'string' ? result.role_name : 'role';
-    const processed = readNumber(result.processed) ?? 0;
-    const eligible = readNumber(result.eligible_members) ?? 0;
-    const opened = readNumber(result.opened) ?? 0;
-    const skippedActive = readNumber(result.skipped_active_cases) ?? 0;
-    const failed = readNumber(result.failed) ?? 0;
-    return execute
-      ? `Executed ${roleName}: opened ${opened}; failed ${failed}; skipped active ${skippedActive}.`
-      : `Dry run ${roleName}: selected ${processed} of ${eligible}; skipped active ${skippedActive}; failed ${failed}.`;
-  }
-  if (actionType === 'upsert_report_instructions') {
-    const action = typeof result.action === 'string' ? result.action : 'updated';
-    const channelId = typeof result.channel_id === 'string' ? result.channel_id : null;
-    return channelId
-      ? `Report instructions ${action} in ${channelId}.`
-      : `Report instructions ${action}.`;
-  }
-  if (actionType === 'complete_setup_verification') {
-    const verificationAction =
-      typeof result.verification_channel_action === 'string'
-        ? result.verification_channel_action
-        : 'configured';
-    const reportError =
-      typeof result.report_instructions_error === 'string'
-        ? '; report instructions need attention'
-        : '';
-    return `Core setup saved; verification channel ${verificationAction}${reportError}.`;
-  }
+interface OperationResultRecord {
+  readonly [key: string]: unknown;
+}
 
-  return null;
+type OperationResultFormatter = (result: OperationResultRecord) => string | null;
+
+function readString(value: unknown) {
+  return typeof value === 'string' ? value : null;
+}
+
+function formatClearModerationQueueResult(result: OperationResultRecord) {
+  const removedCount = readNumber(result.removed_count);
+  return removedCount === null
+    ? null
+    : `Removed ${removedCount} queue item${removedCount === 1 ? '' : 's'}.`;
+}
+
+function formatQueueSyncResult(result: OperationResultRecord) {
+  return result.synced === true ? 'Queue sync completed.' : null;
+}
+
+function formatCloseResolvedThreadsResult(result: OperationResultRecord) {
+  const execute = readBoolean(result.execute) ?? false;
+  const wouldClose = readNumber(result.would_close_threads) ?? 0;
+  const closed = readNumber(result.closed_threads) ?? 0;
+  const alreadyClosed = readNumber(result.already_closed_threads) ?? 0;
+  const missing = readNumber(result.missing_threads) ?? 0;
+  const failed = readNumber(result.failed_threads) ?? 0;
+  return execute
+    ? `Closed ${closed}; already closed ${alreadyClosed}; missing ${missing}; failed ${failed}.`
+    : `Dry run found ${wouldClose} closable; already closed ${alreadyClosed}; missing ${missing}; failed ${failed}.`;
+}
+
+function formatCaseRoleLockdownAuditResult(result: OperationResultRecord) {
+  const errors = readNumber(result.error_count) ?? 0;
+  const warnings = readNumber(result.warning_count) ?? 0;
+  const plannedWrites = readNumber(result.planned_writes) ?? 0;
+  return `Audit found ${errors} errors, ${warnings} warnings, and ${plannedWrites} planned write${plannedWrites === 1 ? '' : 's'}.`;
+}
+
+function formatCaseRoleLockdownApplyResult(result: OperationResultRecord) {
+  const appliedWrites = readNumber(result.applied_writes) ?? 0;
+  const plannedWrites = readNumber(result.planned_writes) ?? 0;
+  const errors = readNumber(result.error_count) ?? 0;
+  const warnings = readNumber(result.warning_count) ?? 0;
+  const unsynced = readNumber(result.unsynced_allowed_channels) ?? 0;
+  return `Applied ${appliedWrites} writes; remaining ${plannedWrites}; unsynced ${unsynced}; errors ${errors}; warnings ${warnings}.`;
+}
+
+function formatRoleIntakeResult(result: OperationResultRecord) {
+  const execute = readBoolean(result.execute) ?? false;
+  const roleName = readString(result.role_name) ?? 'role';
+  const processed = readNumber(result.processed) ?? 0;
+  const eligible = readNumber(result.eligible_members) ?? 0;
+  const opened = readNumber(result.opened) ?? 0;
+  const skippedActive = readNumber(result.skipped_active_cases) ?? 0;
+  const failed = readNumber(result.failed) ?? 0;
+  return execute
+    ? `Executed ${roleName}: opened ${opened}; failed ${failed}; skipped active ${skippedActive}.`
+    : `Dry run ${roleName}: selected ${processed} of ${eligible}; skipped active ${skippedActive}; failed ${failed}.`;
+}
+
+function formatReportInstructionsResult(result: OperationResultRecord) {
+  const action = readString(result.action) ?? 'updated';
+  const channelId = readString(result.channel_id);
+  return channelId
+    ? `Report instructions ${action} in ${channelId}.`
+    : `Report instructions ${action}.`;
+}
+
+function formatSetupVerificationResult(result: OperationResultRecord) {
+  const verificationAction = readString(result.verification_channel_action) ?? 'configured';
+  const reportError = readString(result.report_instructions_error)
+    ? '; report instructions need attention'
+    : '';
+  return `Core setup saved; verification channel ${verificationAction}${reportError}.`;
+}
+
+const operationResultFormatters: Partial<
+  Record<ModerationActionRequestActionType, OperationResultFormatter>
+> = {
+  apply_case_role_lockdown: formatCaseRoleLockdownApplyResult,
+  audit_case_role_lockdown: formatCaseRoleLockdownAuditResult,
+  clear_moderation_queue: formatClearModerationQueueResult,
+  close_resolved_case_threads: formatCloseResolvedThreadsResult,
+  complete_setup_verification: formatSetupVerificationResult,
+  intake_role_members: formatRoleIntakeResult,
+  sync_moderation_queue: formatQueueSyncResult,
+  upsert_report_instructions: formatReportInstructionsResult,
+};
+
+function formatOperationResult(result: OperationResultRecord): string | null {
+  const actionType = typeof result.action_type === 'string' ? result.action_type : null;
+  const formatter = actionType
+    ? operationResultFormatters[actionType as ModerationActionRequestActionType]
+    : undefined;
+  return formatter?.(result) ?? null;
 }
 
 function buildResultSummary(result: unknown): string | null {
@@ -137,7 +166,7 @@ function buildResultSummary(result: unknown): string | null {
     return null;
   }
 
-  return formatOperationResult(result as Record<string, unknown>);
+  return formatOperationResult(result as OperationResultRecord);
 }
 
 export function parseModerationActionRequestRow(

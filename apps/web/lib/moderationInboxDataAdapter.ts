@@ -82,6 +82,35 @@ const reportActionMap: Record<ReportQueueAction, ModerationInboxAction> = {
   open_report_thread: 'open_discord',
 };
 
+const queueTitleByKind: Record<ModerationInboxItemKind, string> = {
+  case: 'Pending moderation case',
+  observed_alert: 'Observed alert pending review',
+  pending_screening: 'Long-pending Discord screening',
+  report_attention: 'Reporter follow-up needs review',
+  submitted_report: 'Submitted report',
+  support_attention: 'Support reply needs review',
+};
+
+const staticQueueActionsByKind: Partial<
+  Record<ModerationInboxItemKind, readonly ModerationInboxAction[]>
+> = {
+  case: ['view_case', 'view_history', 'open_discord'],
+  pending_screening: ['open_discord'],
+  report_attention: ['acknowledge', 'open_discord'],
+  submitted_report: ['view_report'],
+  support_attention: ['acknowledge', 'open_discord'],
+};
+
+const queueStatusLabelByKind: Record<ModerationInboxItemKind, (row: ModerationQueueRow) => string> =
+  {
+    case: (row) => row.case_status ?? 'pending',
+    observed_alert: (row) => row.detection_type ?? 'observed alert',
+    pending_screening: () => 'pending screening',
+    report_attention: () => 'needs attention',
+    submitted_report: (row) => row.report_status ?? 'submitted',
+    support_attention: () => 'needs attention',
+  };
+
 function toIsoString(value: unknown): string {
   if (value instanceof Date) {
     return value.toISOString();
@@ -159,70 +188,37 @@ function subjectFromQueueRow(row: ModerationQueueRow): ModerationInboxItem['subj
 }
 
 function queueTitle(kind: ModerationInboxItemKind): string {
-  switch (kind) {
-    case 'case':
-      return 'Pending moderation case';
-    case 'observed_alert':
-      return 'Observed alert pending review';
-    case 'pending_screening':
-      return 'Long-pending Discord screening';
-    case 'report_attention':
-      return 'Reporter follow-up needs review';
-    case 'support_attention':
-      return 'Support reply needs review';
-    case 'submitted_report':
-      return 'Submitted report';
-  }
+  return queueTitleByKind[kind];
 }
 
 function queueStatusLabel(kind: ModerationInboxItemKind, row: ModerationQueueRow): string {
-  switch (kind) {
-    case 'case':
-      return row.case_status ?? 'pending';
-    case 'observed_alert':
-      return row.detection_type ?? 'observed alert';
-    case 'submitted_report':
-      return row.report_status ?? 'submitted';
-    case 'pending_screening':
-      return 'pending screening';
-    case 'report_attention':
-    case 'support_attention':
-      return 'needs attention';
+  return queueStatusLabelByKind[kind](row);
+}
+
+function observedAlertActions(row: ModerationQueueRow): ModerationInboxAction[] {
+  const settings = metadataToRecord(row.server_settings);
+  const actions: ModerationInboxAction[] = [
+    'open_case',
+    'view_history',
+    'dismiss_no_action',
+    'mark_false_positive',
+  ];
+  if (settings.observed_action_kick_enabled === true) {
+    actions.push('kick_user');
   }
+  if (settings.moderator_ban_action_enabled !== false) {
+    actions.push('ban_user');
+  }
+  actions.push('open_discord');
+  return actions;
 }
 
 function queueAllowedActions(
   kind: ModerationInboxItemKind,
   row: ModerationQueueRow
 ): ModerationInboxAction[] {
-  switch (kind) {
-    case 'case':
-      return ['view_case', 'view_history', 'open_discord'];
-    case 'observed_alert': {
-      const settings = metadataToRecord(row.server_settings);
-      const actions: ModerationInboxAction[] = [
-        'open_case',
-        'view_history',
-        'dismiss_no_action',
-        'mark_false_positive',
-      ];
-      if (settings.observed_action_kick_enabled === true) {
-        actions.push('kick_user');
-      }
-      if (settings.moderator_ban_action_enabled !== false) {
-        actions.push('ban_user');
-      }
-      actions.push('open_discord');
-      return actions;
-    }
-    case 'report_attention':
-    case 'support_attention':
-      return ['acknowledge', 'open_discord'];
-    case 'pending_screening':
-      return ['open_discord'];
-    case 'submitted_report':
-      return ['view_report'];
-  }
+  const staticActions = staticQueueActionsByKind[kind];
+  return staticActions ? [...staticActions] : observedAlertActions(row);
 }
 
 export function caseSummaryToInboxItem(item: CaseSummary): ModerationInboxItem {

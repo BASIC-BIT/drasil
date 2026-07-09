@@ -616,8 +616,10 @@ describe('ModerationActionRequestService', () => {
     };
     const notificationManager = {
       setupVerificationChannel: jest.fn(async (...args: unknown[]) => {
-        const onChannelCreated = args[3] as ((channelId: string) => void) | undefined;
-        onChannelCreated?.('created-verification-channel');
+        const onChannelCreated = args[3];
+        if (typeof onChannelCreated === 'function') {
+          onChannelCreated('created-verification-channel');
+        }
         return 'created-verification-channel';
       }),
     };

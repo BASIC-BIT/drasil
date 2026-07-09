@@ -185,197 +185,163 @@ export function fixtureServerRecord(): SetupServerRecord {
   };
 }
 
+function setIfDefined(target: Record<string, unknown>, key: string, value: unknown): void {
+  if (value !== undefined) {
+    target[key] = value;
+  }
+}
+
+function applyFixtureServerSettingsUpdate(
+  settings: Record<string, unknown>,
+  update: GuildSetupUpdate
+): void {
+  setIfDefined(
+    settings,
+    'observed_detection_notification_channel_id',
+    update.observedNotificationChannelId
+  );
+  setIfDefined(settings, 'report_instructions_channel_id', update.reportInstructionsChannelId);
+  setIfDefined(settings, 'moderation_queue_channel_id', update.moderationQueueChannelId);
+  setIfDefined(settings, 'detection_response_mode', update.detectionResponseMode);
+  setIfDefined(settings, 'message_detection_response_mode', update.messageDetectionResponseMode);
+  setIfDefined(settings, 'join_detection_response_mode', update.joinDetectionResponseMode);
+  setIfDefined(
+    settings,
+    'observed_detection_min_confidence_threshold',
+    update.observedDetectionMinConfidenceThreshold
+  );
+  setIfDefined(
+    settings,
+    'observed_detection_notification_window_minutes',
+    update.observedDetectionNotificationWindowMinutes
+  );
+  setIfDefined(
+    settings,
+    'automatic_detection_exempt_moderators',
+    update.automaticDetectionExemptModerators
+  );
+  setIfDefined(settings, 'admin_case_open_requires_reason', update.adminCaseOpenRequiresReason);
+  setIfDefined(
+    settings,
+    'moderator_ban_action_requires_reason',
+    update.moderatorBanActionRequiresReason
+  );
+  setIfDefined(
+    settings,
+    'moderator_kick_action_requires_reason',
+    update.moderatorKickActionRequiresReason
+  );
+  setIfDefined(settings, 'moderator_ban_action_enabled', update.moderatorBanActionEnabled);
+  setIfDefined(settings, 'moderator_kick_action_enabled', update.moderatorKickActionEnabled);
+  setIfDefined(settings, 'observed_action_kick_enabled', update.observedActionKickEnabled);
+  setIfDefined(
+    settings,
+    'message_detection_auto_kick_enabled',
+    update.messageDetectionAutoKickEnabled
+  );
+  setIfDefined(settings, 'join_detection_auto_kick_enabled', update.joinDetectionAutoKickEnabled);
+  setIfDefined(settings, 'report_intake_auto_kick_enabled', update.reportIntakeAutoKickEnabled);
+  setIfDefined(
+    settings,
+    'auto_kick_min_confidence_threshold',
+    update.autoKickMinConfidenceThreshold
+  );
+  setIfDefined(settings, 'manual_intake_enabled', update.manualIntakeEnabled);
+  setIfDefined(settings, 'manual_intake_role_id', update.manualIntakeRoleId);
+  setIfDefined(
+    settings,
+    'manual_intake_grace_period_seconds',
+    update.manualIntakeGracePeriodSeconds
+  );
+  setIfDefined(
+    settings,
+    'case_role_lockdown_allowed_channel_ids',
+    update.caseRoleLockdownAllowedChannelIds
+  );
+  setIfDefined(
+    settings,
+    'case_role_lockdown_allowed_category_ids',
+    update.caseRoleLockdownAllowedCategoryIds
+  );
+  setIfDefined(settings, 'user_report_reason_required', update.userReportReasonRequired);
+  setIfDefined(
+    settings,
+    'user_report_external_response_mode',
+    update.userReportExternalResponseMode
+  );
+  setIfDefined(
+    settings,
+    'report_intake_confirmed_response_mode',
+    update.reportIntakeConfirmedResponseMode
+  );
+  setIfDefined(settings, 'analytics_consent_level', update.analyticsConsentLevel);
+  setIfDefined(settings, 'case_review_reminders_enabled', update.caseReviewRemindersEnabled);
+  setIfDefined(settings, 'case_review_reminder_stale_hours', update.caseReviewReminderStaleHours);
+  setIfDefined(settings, 'case_review_reminder_repeat_hours', update.caseReviewReminderRepeatHours);
+  setIfDefined(settings, 'case_review_very_stale_days', update.caseReviewVeryStaleDays);
+  setIfDefined(settings, 'report_ai_triage_enabled', update.reportAiTriageEnabled);
+  setIfDefined(settings, 'report_ai_analyze_text', update.reportAiAnalyzeText);
+  setIfDefined(settings, 'report_ai_analyze_images', update.reportAiAnalyzeImages);
+  setIfDefined(settings, 'report_ai_max_action', update.reportAiMaxAction);
+  setIfDefined(settings, 'report_ai_open_case_threshold', update.reportAiOpenCaseThreshold);
+  setIfDefined(settings, 'report_ai_max_images', update.reportAiMaxImages);
+  setIfDefined(settings, 'report_ai_max_image_bytes', update.reportAiMaxImageBytes);
+  setIfDefined(settings, 'role_gate_enabled', update.roleGateEnabled);
+  setIfDefined(settings, 'honeypot_role_id', update.honeypotRoleId);
+  setIfDefined(settings, 'member_access_role_id', update.memberAccessRoleId);
+  setIfDefined(settings, 'honeypot_role_response_mode', update.honeypotRoleResponseMode);
+  setIfDefined(settings, 'role_quarantine_mode', update.roleQuarantineMode);
+  setIfDefined(settings, 'role_quarantine_exempt_role_ids', update.roleQuarantineExemptRoleIds);
+  setIfDefined(
+    settings,
+    'verification_ai_thread_analysis_enabled',
+    update.verificationAnalysisEnabled
+  );
+  setIfDefined(
+    settings,
+    'verification_ai_thread_analysis_message_limit',
+    update.verificationAnalysisMessageLimit
+  );
+  setIfDefined(settings, 'verification_ai_max_action', update.verificationAnalysisMaxAction);
+  setIfDefined(
+    settings,
+    'verification_ai_restrict_threshold',
+    update.verificationAnalysisRestrictThreshold
+  );
+  setIfDefined(settings, 'verification_prompt_template', update.verificationPromptTemplate);
+  setIfDefined(settings, 'server_about', update.serverAbout);
+  setIfDefined(settings, 'verification_context', update.verificationContext);
+  setIfDefined(settings, 'expected_topics', update.expectedTopics);
+  setIfDefined(settings, 'case_responder_role_ids', update.caseResponderRoleIds);
+  setIfDefined(settings, 'case_responder_routing_mode', update.caseResponderRoutingMode);
+  setIfDefined(settings, 'case_responder_thread_member_cap', update.caseResponderThreadMemberCap);
+  setIfDefined(settings, 'message_deletion_enabled', update.messageDeletionEnabled);
+  setIfDefined(
+    settings,
+    'message_deletion_source_message_enabled',
+    update.messageDeletionSourceMessageEnabled
+  );
+  setIfDefined(
+    settings,
+    'message_deletion_watchlist_enabled',
+    update.messageDeletionWatchlistEnabled
+  );
+  setIfDefined(
+    settings,
+    'message_deletion_watchlist_disabled_default_ids',
+    update.messageDeletionWatchlistDisabledDefaultIds
+  );
+  setIfDefined(
+    settings,
+    'message_deletion_watchlist_custom_terms',
+    update.messageDeletionWatchlistCustomTerms
+  );
+}
+
 export function updateFixtureServerRecord(update: GuildSetupUpdate): SetupServerRecord {
   const current = fixtureServerRecord();
-  const settings = {
-    ...current.settings,
-    ...(update.observedNotificationChannelId !== undefined
-      ? { observed_detection_notification_channel_id: update.observedNotificationChannelId }
-      : {}),
-    ...(update.reportInstructionsChannelId !== undefined
-      ? { report_instructions_channel_id: update.reportInstructionsChannelId }
-      : {}),
-    ...(update.moderationQueueChannelId !== undefined
-      ? { moderation_queue_channel_id: update.moderationQueueChannelId }
-      : {}),
-    ...(update.detectionResponseMode !== undefined
-      ? { detection_response_mode: update.detectionResponseMode }
-      : {}),
-    ...(update.messageDetectionResponseMode !== undefined
-      ? { message_detection_response_mode: update.messageDetectionResponseMode }
-      : {}),
-    ...(update.joinDetectionResponseMode !== undefined
-      ? { join_detection_response_mode: update.joinDetectionResponseMode }
-      : {}),
-    ...(update.observedDetectionMinConfidenceThreshold !== undefined
-      ? {
-          observed_detection_min_confidence_threshold:
-            update.observedDetectionMinConfidenceThreshold,
-        }
-      : {}),
-    ...(update.observedDetectionNotificationWindowMinutes !== undefined
-      ? {
-          observed_detection_notification_window_minutes:
-            update.observedDetectionNotificationWindowMinutes,
-        }
-      : {}),
-    ...(update.automaticDetectionExemptModerators !== undefined
-      ? { automatic_detection_exempt_moderators: update.automaticDetectionExemptModerators }
-      : {}),
-    ...(update.adminCaseOpenRequiresReason !== undefined
-      ? { admin_case_open_requires_reason: update.adminCaseOpenRequiresReason }
-      : {}),
-    ...(update.moderatorBanActionRequiresReason !== undefined
-      ? { moderator_ban_action_requires_reason: update.moderatorBanActionRequiresReason }
-      : {}),
-    ...(update.moderatorKickActionRequiresReason !== undefined
-      ? { moderator_kick_action_requires_reason: update.moderatorKickActionRequiresReason }
-      : {}),
-    ...(update.moderatorBanActionEnabled !== undefined
-      ? { moderator_ban_action_enabled: update.moderatorBanActionEnabled }
-      : {}),
-    ...(update.moderatorKickActionEnabled !== undefined
-      ? { moderator_kick_action_enabled: update.moderatorKickActionEnabled }
-      : {}),
-    ...(update.observedActionKickEnabled !== undefined
-      ? { observed_action_kick_enabled: update.observedActionKickEnabled }
-      : {}),
-    ...(update.messageDetectionAutoKickEnabled !== undefined
-      ? { message_detection_auto_kick_enabled: update.messageDetectionAutoKickEnabled }
-      : {}),
-    ...(update.joinDetectionAutoKickEnabled !== undefined
-      ? { join_detection_auto_kick_enabled: update.joinDetectionAutoKickEnabled }
-      : {}),
-    ...(update.reportIntakeAutoKickEnabled !== undefined
-      ? { report_intake_auto_kick_enabled: update.reportIntakeAutoKickEnabled }
-      : {}),
-    ...(update.autoKickMinConfidenceThreshold !== undefined
-      ? { auto_kick_min_confidence_threshold: update.autoKickMinConfidenceThreshold }
-      : {}),
-    ...(update.manualIntakeEnabled !== undefined
-      ? { manual_intake_enabled: update.manualIntakeEnabled }
-      : {}),
-    ...(update.manualIntakeRoleId !== undefined
-      ? { manual_intake_role_id: update.manualIntakeRoleId }
-      : {}),
-    ...(update.manualIntakeGracePeriodSeconds !== undefined
-      ? { manual_intake_grace_period_seconds: update.manualIntakeGracePeriodSeconds }
-      : {}),
-    ...(update.caseRoleLockdownAllowedChannelIds !== undefined
-      ? { case_role_lockdown_allowed_channel_ids: update.caseRoleLockdownAllowedChannelIds }
-      : {}),
-    ...(update.caseRoleLockdownAllowedCategoryIds !== undefined
-      ? { case_role_lockdown_allowed_category_ids: update.caseRoleLockdownAllowedCategoryIds }
-      : {}),
-    ...(update.userReportReasonRequired !== undefined
-      ? { user_report_reason_required: update.userReportReasonRequired }
-      : {}),
-    ...(update.userReportExternalResponseMode !== undefined
-      ? { user_report_external_response_mode: update.userReportExternalResponseMode }
-      : {}),
-    ...(update.reportIntakeConfirmedResponseMode !== undefined
-      ? { report_intake_confirmed_response_mode: update.reportIntakeConfirmedResponseMode }
-      : {}),
-    ...(update.analyticsConsentLevel !== undefined
-      ? { analytics_consent_level: update.analyticsConsentLevel }
-      : {}),
-    ...(update.caseReviewRemindersEnabled !== undefined
-      ? { case_review_reminders_enabled: update.caseReviewRemindersEnabled }
-      : {}),
-    ...(update.caseReviewReminderStaleHours !== undefined
-      ? { case_review_reminder_stale_hours: update.caseReviewReminderStaleHours }
-      : {}),
-    ...(update.caseReviewReminderRepeatHours !== undefined
-      ? { case_review_reminder_repeat_hours: update.caseReviewReminderRepeatHours }
-      : {}),
-    ...(update.caseReviewVeryStaleDays !== undefined
-      ? { case_review_very_stale_days: update.caseReviewVeryStaleDays }
-      : {}),
-    ...(update.reportAiTriageEnabled !== undefined
-      ? { report_ai_triage_enabled: update.reportAiTriageEnabled }
-      : {}),
-    ...(update.reportAiAnalyzeText !== undefined
-      ? { report_ai_analyze_text: update.reportAiAnalyzeText }
-      : {}),
-    ...(update.reportAiAnalyzeImages !== undefined
-      ? { report_ai_analyze_images: update.reportAiAnalyzeImages }
-      : {}),
-    ...(update.reportAiMaxAction !== undefined
-      ? { report_ai_max_action: update.reportAiMaxAction }
-      : {}),
-    ...(update.reportAiOpenCaseThreshold !== undefined
-      ? { report_ai_open_case_threshold: update.reportAiOpenCaseThreshold }
-      : {}),
-    ...(update.reportAiMaxImages !== undefined
-      ? { report_ai_max_images: update.reportAiMaxImages }
-      : {}),
-    ...(update.reportAiMaxImageBytes !== undefined
-      ? { report_ai_max_image_bytes: update.reportAiMaxImageBytes }
-      : {}),
-    ...(update.roleGateEnabled !== undefined ? { role_gate_enabled: update.roleGateEnabled } : {}),
-    ...(update.honeypotRoleId !== undefined ? { honeypot_role_id: update.honeypotRoleId } : {}),
-    ...(update.memberAccessRoleId !== undefined
-      ? { member_access_role_id: update.memberAccessRoleId }
-      : {}),
-    ...(update.honeypotRoleResponseMode !== undefined
-      ? { honeypot_role_response_mode: update.honeypotRoleResponseMode }
-      : {}),
-    ...(update.roleQuarantineMode !== undefined
-      ? { role_quarantine_mode: update.roleQuarantineMode }
-      : {}),
-    ...(update.roleQuarantineExemptRoleIds !== undefined
-      ? { role_quarantine_exempt_role_ids: update.roleQuarantineExemptRoleIds }
-      : {}),
-    ...(update.verificationAnalysisEnabled !== undefined
-      ? { verification_ai_thread_analysis_enabled: update.verificationAnalysisEnabled }
-      : {}),
-    ...(update.verificationAnalysisMessageLimit !== undefined
-      ? {
-          verification_ai_thread_analysis_message_limit: update.verificationAnalysisMessageLimit,
-        }
-      : {}),
-    ...(update.verificationAnalysisMaxAction !== undefined
-      ? { verification_ai_max_action: update.verificationAnalysisMaxAction }
-      : {}),
-    ...(update.verificationAnalysisRestrictThreshold !== undefined
-      ? { verification_ai_restrict_threshold: update.verificationAnalysisRestrictThreshold }
-      : {}),
-    ...(update.verificationPromptTemplate !== undefined
-      ? { verification_prompt_template: update.verificationPromptTemplate }
-      : {}),
-    ...(update.serverAbout !== undefined ? { server_about: update.serverAbout } : {}),
-    ...(update.verificationContext !== undefined
-      ? { verification_context: update.verificationContext }
-      : {}),
-    ...(update.expectedTopics !== undefined ? { expected_topics: update.expectedTopics } : {}),
-    ...(update.caseResponderRoleIds !== undefined
-      ? { case_responder_role_ids: update.caseResponderRoleIds }
-      : {}),
-    ...(update.caseResponderRoutingMode !== undefined
-      ? { case_responder_routing_mode: update.caseResponderRoutingMode }
-      : {}),
-    ...(update.caseResponderThreadMemberCap !== undefined
-      ? { case_responder_thread_member_cap: update.caseResponderThreadMemberCap }
-      : {}),
-    ...(update.messageDeletionEnabled !== undefined
-      ? { message_deletion_enabled: update.messageDeletionEnabled }
-      : {}),
-    ...(update.messageDeletionSourceMessageEnabled !== undefined
-      ? { message_deletion_source_message_enabled: update.messageDeletionSourceMessageEnabled }
-      : {}),
-    ...(update.messageDeletionWatchlistEnabled !== undefined
-      ? { message_deletion_watchlist_enabled: update.messageDeletionWatchlistEnabled }
-      : {}),
-    ...(update.messageDeletionWatchlistDisabledDefaultIds !== undefined
-      ? {
-          message_deletion_watchlist_disabled_default_ids:
-            update.messageDeletionWatchlistDisabledDefaultIds,
-        }
-      : {}),
-    ...(update.messageDeletionWatchlistCustomTerms !== undefined
-      ? { message_deletion_watchlist_custom_terms: update.messageDeletionWatchlistCustomTerms }
-      : {}),
-  };
+  const settings = { ...current.settings };
+  applyFixtureServerSettingsUpdate(settings, update);
 
   return {
     ...current,
