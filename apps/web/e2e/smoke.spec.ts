@@ -223,9 +223,12 @@ test('moderation inbox filters and previews triage items', async ({ page }) => {
   );
   await expect(results.getByText('Support reply needs review')).toBeVisible();
   await expect(results.getByText('Pending moderation case')).toHaveCount(0);
-  await page.getByText('Export Visible').click();
-  await expect(page.getByLabel('Visible inbox export')).toHaveValue(/support_attention/);
-  await page.getByRole('button', { name: 'Acknowledge Visible Replies' }).click();
+  await page.getByRole('button', { name: 'Select Visible' }).click();
+  await expect(page.getByText('1 selected')).toBeVisible();
+  await page.getByText('Export Selected').click();
+  await expect(page.getByLabel('Selected inbox export')).toHaveValue(/support_attention/);
+  await page.getByText('Export Selected').click();
+  await page.getByRole('button', { name: 'Acknowledge Selected Replies' }).click();
   await expect(
     page.getByRole('heading', { name: /fixture guild moderation inbox/i })
   ).toBeVisible();

@@ -3,6 +3,7 @@ import type { ModerationInboxItem } from '@drasil/contracts';
 import {
   buildModerationInboxExportText,
   filterModerationInboxItems,
+  getModerationInboxAttentionQueueItemIds,
   getModerationInboxVisibleItems,
   isModerationInboxSavedViewActive,
   moderationInboxSavedViews,
@@ -174,5 +175,24 @@ describe('moderationInboxViewModel', () => {
         'case\tCase with new line\tuser-case-1\tsource-case-1\tqueue-1\t/admin/guild/guild-1/cases/case-1\tDiscord thread: https://discord.com/channels/guild-1/thread-1',
       ].join('\n')
     );
+  });
+
+  it('deduplicates attention queue IDs for selected batch acknowledgements', () => {
+    const support = buildItem('support', {
+      kind: 'support_attention',
+      queueItemId: 'queue-1',
+    });
+    const duplicateReport = buildItem('report', {
+      kind: 'report_attention',
+      queueItemId: 'queue-1',
+    });
+    const observed = buildItem('observed', {
+      kind: 'observed_alert',
+      queueItemId: 'queue-observed',
+    });
+
+    expect(getModerationInboxAttentionQueueItemIds([support, duplicateReport, observed])).toEqual([
+      'queue-1',
+    ]);
   });
 });
