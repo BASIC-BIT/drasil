@@ -46,11 +46,20 @@ export default async function AdminPage() {
                   <h2>{guild.name}</h2>
                   <p className="muted">Open setup diagnostics or review active moderation cases.</p>
                   <div className="actions">
-                    <Link className="button" href={`/admin/guild/${guild.id}/cases`}>
+                    <Link className="button" href={`/admin/guild/${guild.id}/inbox`}>
+                      Inbox
+                    </Link>
+                    <Link className="button secondary" href={`/admin/guild/${guild.id}/cases`}>
                       Active Cases
                     </Link>
                     <Link className="button secondary" href={`/admin/guild/${guild.id}/reports`}>
                       Reports
+                    </Link>
+                    <Link className="button secondary" href={`/admin/guild/${guild.id}/history`}>
+                      History
+                    </Link>
+                    <Link className="button secondary" href={`/admin/guild/${guild.id}/operations`}>
+                      Operations
                     </Link>
                     <Link className="button secondary" href={`/admin/guild/${guild.id}/setup`}>
                       Setup

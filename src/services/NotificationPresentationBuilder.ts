@@ -25,7 +25,7 @@ import {
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { isDetectionEventExcludedFromAccounting } from '../utils/detectionEventAccounting';
 import { formatDiscordUserIdentity } from '../utils/discordUserIdentity';
-import { buildAdminCaseDetailUrl, buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
+import { buildAdminCaseDetailUrl, buildAdminModerationInboxUrl } from '../utils/publicWebLinks';
 import { getVerificationActionFailures } from '../utils/verificationActionFailures';
 
 interface AdminActionRowOptions {
@@ -449,7 +449,7 @@ export class NotificationPresentationBuilder {
           ButtonStyle.Secondary
         ),
       ];
-      const webQueueUrl = guildId ? buildAdminCaseQueueUrl(guildId) : null;
+      const webQueueUrl = guildId ? buildAdminModerationInboxUrl(guildId) : null;
       const rows = [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
       if (webQueueUrl) {
         rows.push(
@@ -493,7 +493,7 @@ export class NotificationPresentationBuilder {
       )
     );
 
-    const webQueueUrl = guildId ? buildAdminCaseQueueUrl(guildId) : null;
+    const webQueueUrl = guildId ? buildAdminModerationInboxUrl(guildId) : null;
     const rows = [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
     if (webQueueUrl) {
       rows.push(

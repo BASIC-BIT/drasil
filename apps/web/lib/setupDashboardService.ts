@@ -132,6 +132,22 @@ function addGuildPermissionChecklistItems(args: GuildPermissionChecklistArgs) {
   );
 
   checklist.push(
+    hasPermission(guildPermissions, DISCORD_PERMISSIONS.KickMembers)
+      ? item(
+          'kick-members',
+          'Kick members permission',
+          'ok',
+          'Moderator kick actions can be executed.'
+        )
+      : item(
+          'kick-members',
+          'Kick members permission',
+          'warning',
+          'Kick actions will fail until Drasil has Kick Members.'
+        )
+  );
+
+  checklist.push(
     hasPermission(guildPermissions, DISCORD_PERMISSIONS.ManageMessages)
       ? item(
           'manage-messages',

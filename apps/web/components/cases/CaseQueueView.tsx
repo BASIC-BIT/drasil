@@ -161,7 +161,9 @@ function CaseCard({ guildId, item }: { readonly guildId: string; readonly item: 
         </div>
         <div>
           <span className="muted">Last moderator action</span>
-          <strong>{item.lastActionType ? formatDetectionType(item.lastActionType) : 'None recorded'}</strong>
+          <strong>
+            {item.lastActionType ? formatDetectionType(item.lastActionType) : 'None recorded'}
+          </strong>
         </div>
         <div>
           <span className="muted">Member state</span>
@@ -194,8 +196,14 @@ export function CaseQueueView({
           <span>Drasil</span>
         </a>
         <div className="nav-cluster">
+          <a className="button secondary" href={`/admin/guild/${guildId}/inbox`}>
+            Inbox
+          </a>
           <a className="button secondary" href={`/admin/guild/${guildId}/reports`}>
             Reports
+          </a>
+          <a className="button secondary" href={`/admin/guild/${guildId}/history`}>
+            History
           </a>
           <a className="button secondary" href={`/admin/guild/${guildId}/setup`}>
             Setup
@@ -212,8 +220,8 @@ export function CaseQueueView({
         <div className="section-heading">
           <h1 className="page-title">{guildName} Case Queue</h1>
           <p className="lede">
-            Review pending moderation cases without moving the source of truth out of Discord.
-            Actions still happen through the linked threads and messages.
+            Review pending moderation cases without moving the source of truth out of Discord. Web
+            actions use the same bot-owned side effects as Discord.
           </p>
         </div>
         <div className="case-meta compact">
@@ -231,7 +239,11 @@ export function CaseQueueView({
           </div>
           <div>
             <span className="muted">Resolved</span>
-            <strong>{resolvedCaseCount}</strong>
+            <strong>
+              <a className="inline-link" href={`/admin/guild/${guildId}/history`}>
+                {resolvedCaseCount}
+              </a>
+            </strong>
           </div>
         </div>
       </section>

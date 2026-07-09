@@ -72,7 +72,7 @@ import {
   parseOpenCaseMessageContextModalCustomId,
 } from './CaseCommandHandler';
 import { SetupVerificationModalHandler } from './SetupVerificationModalHandler';
-import { buildAdminCaseDetailUrl, buildAdminCaseQueueUrl } from '../utils/publicWebLinks';
+import { buildAdminCaseDetailUrl, buildAdminModerationInboxUrl } from '../utils/publicWebLinks';
 import {
   handleSlashCommandConfirmationButton,
   isSlashCommandConfirmationCustomId,
@@ -451,7 +451,8 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const acknowledged = await this.moderationQueueService.acknowledgeAttentionItem(
       itemId,
-      guildId
+      guildId,
+      interaction.user.id
     );
     await interaction.editReply(
       acknowledged ? 'Queue reminder acknowledged.' : 'That queue reminder was already handled.'
@@ -809,7 +810,7 @@ export class InteractionHandler implements IInteractionHandler {
     }
 
     const buttons = [...actionButtons];
-    const webQueueUrl = buildAdminCaseQueueUrl(guildId);
+    const webQueueUrl = buildAdminModerationInboxUrl(guildId);
     if (webQueueUrl) {
       buttons.push(this.webLinkButton('Web Queue', webQueueUrl));
     }
@@ -999,7 +1000,7 @@ export class InteractionHandler implements IInteractionHandler {
       );
     }
 
-    const webQueueUrl = buildAdminCaseQueueUrl(guildId);
+    const webQueueUrl = buildAdminModerationInboxUrl(guildId);
     if (webQueueUrl) {
       components.push(
         new ActionRowBuilder<ButtonBuilder>().addComponents(

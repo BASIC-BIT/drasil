@@ -46,6 +46,10 @@ export function buildAdminCaseQueueUrl(guildId: string): string | null {
   return buildPublicWebUrl(`/admin/guild/${encodeURIComponent(guildId)}/cases`);
 }
 
+export function buildAdminModerationInboxUrl(guildId: string): string | null {
+  return buildPublicWebUrl(`/admin/guild/${encodeURIComponent(guildId)}/inbox`);
+}
+
 export function buildAdminCaseDetailUrl(guildId: string, caseId: string): string | null {
   return buildPublicWebUrl(
     `/admin/guild/${encodeURIComponent(guildId)}/cases/${encodeURIComponent(caseId)}`

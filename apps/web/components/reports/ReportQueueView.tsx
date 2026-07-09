@@ -9,7 +9,9 @@ interface ReportQueueViewProps {
   readonly closedReportCount: number;
   readonly sessionUsername: string;
   readonly reports: readonly ReportQueueItem[];
+  readonly canOpenReportCases: boolean;
   readonly closeReportAction: CloseReportAction;
+  readonly openReportCaseAction: OpenReportCaseAction;
 }
 
 const actionLabels: Record<ReportQueueAction, string> = {
@@ -31,6 +33,8 @@ type CloseReportAction = (
   action: ReportClosureAction
 ) => Promise<void>;
 
+type OpenReportCaseAction = (guildId: string, reportId: string) => Promise<void>;
+
 const closureActions: ReportClosureAction[] = [
   'mark_actioned',
   'dismiss_no_action',
@@ -38,32 +42,61 @@ const closureActions: ReportClosureAction[] = [
 ];
 
 function ReportActions({
+  canOpenReportCases,
   guildId,
   item,
   closeReportAction,
+  openReportCaseAction,
 }: {
+  readonly canOpenReportCases: boolean;
   readonly guildId: string;
   readonly item: ReportQueueItem;
   readonly closeReportAction: CloseReportAction;
+  readonly openReportCaseAction: OpenReportCaseAction;
 }) {
   const canClose = closureActions.some((action) => item.allowedActions.includes(action));
+  const canOpenCase = !item.latestCaseId && item.allowedActions.includes('open_case');
 
   return (
     <div className="action-stack">
       <div className="pill-list" aria-label="Report paths">
+        <a className="pill action-pill" href={`/admin/guild/${guildId}/reports/${item.id}`}>
+          Open Detail
+        </a>
         {item.reportThreadUrl ? (
-          <a className="pill action-pill" href={item.reportThreadUrl} rel="noreferrer" target="_blank">
+          <a
+            className="pill action-pill"
+            href={item.reportThreadUrl}
+            rel="noreferrer"
+            target="_blank"
+          >
             {actionLabels.open_report_thread}
           </a>
         ) : null}
         {item.latestCaseId ? (
-          <a className="pill action-pill" href={`/admin/guild/${guildId}/cases/${item.latestCaseId}`}>
+          <a
+            className="pill action-pill"
+            href={`/admin/guild/${guildId}/cases/${item.latestCaseId}`}
+          >
             Open Case
           </a>
         ) : null}
-        {!item.latestCaseId && item.allowedActions.includes('open_case') ? (
-          // TODO(#131): turn this placeholder into a case-creation action.
-          <span className="pill action-pill">{actionLabels.open_case}</span>
+        {canOpenCase && canOpenReportCases ? (
+          <form action={openReportCaseAction.bind(null, guildId, item.id)}>
+            <button className="button secondary compact-button" type="submit">
+              {actionLabels.open_case}
+            </button>
+          </form>
+        ) : null}
+        {canOpenCase && !canOpenReportCases ? (
+          <button
+            className="button secondary compact-button"
+            disabled
+            title="Requires the bot-side case opener"
+            type="button"
+          >
+            {actionLabels.open_case}
+          </button>
         ) : null}
       </div>
 
@@ -85,19 +118,27 @@ function ReportActions({
 }
 
 function ReportRow({
+  canOpenReportCases,
   guildId,
   item,
   closeReportAction,
+  openReportCaseAction,
 }: {
+  readonly canOpenReportCases: boolean;
   readonly guildId: string;
   readonly item: ReportQueueItem;
   readonly closeReportAction: CloseReportAction;
+  readonly openReportCaseAction: OpenReportCaseAction;
 }) {
   return (
     <article className="card case-card stack">
       <div className="case-card-header">
         <div className="case-title-block">
-          <h2>Report for {item.targetUserId ? `user ${item.targetUserId}` : 'unknown target'}</h2>
+          <h2>
+            <a href={`/admin/guild/${guildId}/reports/${item.id}`}>
+              Report for {item.targetUserId ? `user ${item.targetUserId}` : 'unknown target'}
+            </a>
+          </h2>
           <p className="muted">Reporter {item.reporterId}</p>
         </div>
         <span className={freshnessStatusClass(item.stale)}>
@@ -125,7 +166,13 @@ function ReportRow({
       </div>
 
       {item.summary ? <p>{item.summary}</p> : <p className="muted">No summary recorded.</p>}
-      <ReportActions closeReportAction={closeReportAction} guildId={guildId} item={item} />
+      <ReportActions
+        canOpenReportCases={canOpenReportCases}
+        closeReportAction={closeReportAction}
+        guildId={guildId}
+        item={item}
+        openReportCaseAction={openReportCaseAction}
+      />
     </article>
   );
 }
@@ -136,7 +183,9 @@ export function ReportQueueView({
   closedReportCount,
   sessionUsername,
   reports,
+  canOpenReportCases,
   closeReportAction,
+  openReportCaseAction,
 }: ReportQueueViewProps) {
   const staleCount = reports.filter((item) => item.stale).length;
 
@@ -148,8 +197,14 @@ export function ReportQueueView({
           <span>Drasil</span>
         </a>
         <div className="nav-cluster">
+          <a className="button secondary" href={`/admin/guild/${guildId}/inbox`}>
+            Inbox
+          </a>
           <a className="button secondary" href={`/admin/guild/${guildId}/cases`}>
             Cases
+          </a>
+          <a className="button secondary" href={`/admin/guild/${guildId}/history`}>
+            History
           </a>
           <a className="button secondary" href={`/admin/guild/${guildId}/setup`}>
             Setup
@@ -202,10 +257,12 @@ export function ReportQueueView({
         <section className="case-list" aria-label="Submitted reports">
           {reports.map((item) => (
             <ReportRow
+              canOpenReportCases={canOpenReportCases}
               closeReportAction={closeReportAction}
               guildId={guildId}
               item={item}
               key={item.id}
+              openReportCaseAction={openReportCaseAction}
             />
           ))}
         </section>

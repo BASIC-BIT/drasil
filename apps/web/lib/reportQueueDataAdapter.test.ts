@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { parseReportQueueRow } from './reportQueueDataAdapter';
+import { describe, expect, it, vi } from 'vitest';
+import { PostgresReportQueueDataAdapter, parseReportQueueRow } from './reportQueueDataAdapter';
 
 const baseRow = {
   id: 'report-1',
@@ -56,5 +56,87 @@ describe('reportQueueDataAdapter', () => {
       'dismiss_no_action',
       'mark_false_positive',
     ]);
+  });
+
+  it('omits open-case when a submitted report has no linked detection', () => {
+    const report = parseReportQueueRow(
+      { ...baseRow, latest_detection_id: null },
+      new Date('2026-06-02T01:00:00.000Z')
+    );
+
+    expect(report.allowedActions).toEqual([
+      'open_report_thread',
+      'mark_actioned',
+      'dismiss_no_action',
+      'mark_false_positive',
+    ]);
+  });
+
+  it('routes submitted report closures through the shared review service', async () => {
+    const closeSubmittedReport = vi.fn(async () => ({
+      actor: { id: 'admin-1', surface: 'web' as const },
+      action: 'mark_false_positive' as const,
+      reportId: 'report-1',
+      reportStatus: 'false_positive' as const,
+      status: 'closed' as const,
+      queueCleanupStatus: 'skipped' as const,
+    }));
+    const adapter = new PostgresReportQueueDataAdapter({
+      canOpenSubmittedReportCase: () => false,
+      closeSubmittedReport,
+      openCaseFromSubmittedReport: vi.fn(),
+    });
+
+    await expect(
+      adapter.closeSubmittedReport({
+        guildId: 'guild-1',
+        reportId: 'report-1',
+        action: 'mark_false_positive',
+        adminId: 'admin-1',
+      })
+    ).resolves.toBe(true);
+
+    expect(closeSubmittedReport).toHaveBeenCalledWith({
+      actor: { id: 'admin-1', surface: 'web' },
+      action: 'mark_false_positive',
+      reportId: 'report-1',
+      serverId: 'guild-1',
+    });
+  });
+
+  it('routes submitted report case open through the shared review service', async () => {
+    const openCaseFromSubmittedReport = vi.fn(async () => ({
+      actor: { id: 'admin-1', surface: 'web' as const },
+      action: 'open_case' as const,
+      caseId: 'case-1',
+      detectionEventId: 'det-1',
+      reportId: 'report-1',
+      status: 'opened' as const,
+      targetUserId: 'user-1',
+      queueCleanupStatus: 'skipped' as const,
+    }));
+    const adapter = new PostgresReportQueueDataAdapter({
+      canOpenSubmittedReportCase: () => true,
+      closeSubmittedReport: vi.fn(),
+      openCaseFromSubmittedReport,
+    });
+
+    await expect(
+      adapter.openCaseFromSubmittedReport({
+        guildId: 'guild-1',
+        reportId: 'report-1',
+        adminId: 'admin-1',
+      })
+    ).resolves.toMatchObject({
+      caseId: 'case-1',
+      status: 'opened',
+    });
+
+    expect(adapter.canOpenSubmittedReportCase()).toBe(true);
+    expect(openCaseFromSubmittedReport).toHaveBeenCalledWith({
+      actor: { id: 'admin-1', surface: 'web' },
+      reportId: 'report-1',
+      serverId: 'guild-1',
+    });
   });
 });

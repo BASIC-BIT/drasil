@@ -45,4 +45,51 @@ export async function closeSubmittedReport(
   }
 
   revalidatePath(`/admin/guild/${guildId}/reports`);
+  revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
+}
+
+const openCaseErrorMessages = {
+  already_handled: 'Report is no longer available to open. Refresh the queue and try again.',
+  case_exists: 'Report already has a linked case.',
+  missing_detection: 'Report does not have a linked detection event to open as a case.',
+  missing_target: 'Report does not have a confirmed target user to open as a case.',
+  opener_unavailable: 'Opening report cases from the web UI is not enabled in this environment.',
+} as const;
+
+export async function openSubmittedReportCase(guildId: string, reportId: string): Promise<void> {
+  const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
+  if (!session || !token) {
+    redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/reports/${reportId}`);
+  }
+
+  const parsedAction = reportQueueActionSchema.parse('open_case');
+  const setupService = createSetupDashboardService();
+  await setupService.assertCanManageGuild(guildId, token.accessToken);
+  const result = await createReportQueueDataAdapter().openCaseFromSubmittedReport({
+    guildId,
+    reportId,
+    adminId: session.userId,
+  });
+
+  revalidatePath(`/admin/guild/${guildId}/inbox`);
+  revalidatePath(`/admin/guild/${guildId}/cases`);
+  revalidatePath(`/admin/guild/${guildId}/reports`);
+  revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
+
+  if (result.status === 'opened') {
+    if (result.caseId) {
+      redirect(`/admin/guild/${guildId}/cases/${result.caseId}`);
+    }
+    return;
+  }
+  if (result.status === 'queued') {
+    return;
+  }
+  if (result.status === 'case_exists' && result.caseId) {
+    redirect(`/admin/guild/${guildId}/cases/${result.caseId}`);
+  }
+
+  throw new Error(
+    openCaseErrorMessages[result.status] ?? `Unsupported report action: ${parsedAction}`
+  );
 }

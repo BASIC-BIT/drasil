@@ -21,12 +21,15 @@ export default function HomePage() {
           <span className="eyebrow">Discord anti-spam operations</span>
           <h1>Review scams.</h1>
           <p className="lede">
-            Drasil turns reports, cases, verification, and triage into Discord-linked
-            cases without replacing moderator judgment.
+            Drasil turns reports, cases, verification, and triage into Discord-linked cases without
+            replacing moderator judgment.
           </p>
           <div className="actions">
             <Link className="button" href="/api/auth/discord?returnTo=/admin">
               Open setup dashboard
+            </Link>
+            <Link className="button secondary" href="/api/auth/discord?returnTo=/report">
+              Report a user
             </Link>
             <a
               className="button secondary"

@@ -31,18 +31,66 @@ import {
 } from '@/lib/casePresentation';
 
 interface CaseDetailViewProps {
+  readonly canQueueCaseActions: boolean;
   readonly guildId: string;
   readonly guildName: string;
   readonly sessionUsername: string;
   readonly detail: CaseDetail;
   readonly discordSnapshot?: CaseDiscordSnapshot;
+  readonly queueCaseAction: QueueCaseAction;
 }
 
-function SummaryPanel({ detail }: { readonly detail: CaseDetail }) {
+type WebCaseAction = Extract<
+  CaseAction,
+  | 'verify_user'
+  | 'kick_user'
+  | 'ban_user'
+  | 'ban_by_id'
+  | 'close_no_action'
+  | 'repair_thread'
+  | 'create_thread'
+  | 'sync_existing_ban'
+  | 'refresh_notification'
+  | 'reopen_case'
+>;
+
+type QueueCaseAction = (
+  guildId: string,
+  caseId: string,
+  action: WebCaseAction,
+  formData?: FormData
+) => Promise<void>;
+
+const executableCaseActions: readonly WebCaseAction[] = [
+  'verify_user',
+  'kick_user',
+  'ban_user',
+  'ban_by_id',
+  'close_no_action',
+  'refresh_notification',
+  'repair_thread',
+  'create_thread',
+  'sync_existing_ban',
+  'reopen_case',
+];
+const executableCaseActionSet = new Set<CaseAction>(executableCaseActions);
+const destructiveCaseActionSet = new Set<CaseAction>(['kick_user', 'ban_user', 'ban_by_id']);
+
+function SummaryPanel({
+  detail,
+  guildId,
+}: {
+  readonly detail: CaseDetail;
+  readonly guildId: string;
+}) {
   return (
     <section className="panel stack">
       <div className="case-card-header">
-        <CaseIdentity headingLevel={1} identity={detail.userIdentity} />
+        <CaseIdentity
+          headingLevel={1}
+          href={`/admin/guild/${guildId}/members/${detail.userId}`}
+          identity={detail.userIdentity}
+        />
         <span className={freshnessStatusClass(detail.stale)}>
           {detail.stale ? `${detail.staleHours}h stale` : `Fresh, ${detail.staleHours}h old`}
         </span>
@@ -110,7 +158,9 @@ function SummaryPanel({ detail }: { readonly detail: CaseDetail }) {
 }
 
 function ActionPills({ actions }: { readonly actions: readonly CaseAction[] }) {
-  const normalActions = actions.filter((action) => !isDebugCaseAction(action));
+  const normalActions = actions.filter(
+    (action) => !isDebugCaseAction(action) && !executableCaseActionSet.has(action)
+  );
   const debugActions = actions.filter(isDebugCaseAction);
 
   return (
@@ -143,7 +193,96 @@ function ActionPills({ actions }: { readonly actions: readonly CaseAction[] }) {
   );
 }
 
-function DiscordSurfaces({ detail }: { readonly detail: CaseDetail }) {
+function CaseActionControls({
+  canQueueCaseActions,
+  detail,
+  guildId,
+  queueCaseAction,
+}: {
+  readonly canQueueCaseActions: boolean;
+  readonly detail: CaseDetail;
+  readonly guildId: string;
+  readonly queueCaseAction: QueueCaseAction;
+}) {
+  const actions = executableCaseActions.filter((action) => detail.allowedActions.includes(action));
+  if (actions.length === 0) {
+    return null;
+  }
+
+  const standardActions = actions.filter((action) => !destructiveCaseActionSet.has(action));
+  const destructiveActions = actions.filter((action) => destructiveCaseActionSet.has(action));
+
+  return (
+    <div className="report-action-forms" aria-label="Case actions">
+      {standardActions.map((action) =>
+        canQueueCaseActions ? (
+          <form action={queueCaseAction.bind(null, guildId, detail.id, action)} key={action}>
+            <button className="button secondary compact-button" type="submit">
+              {formatCaseAction(action)}
+            </button>
+          </form>
+        ) : (
+          <button
+            className="button secondary compact-button"
+            disabled
+            key={action}
+            title="Requires the bot-side case action worker"
+            type="button"
+          >
+            {formatCaseAction(action)}
+          </button>
+        )
+      )}
+      {destructiveActions.map((action) =>
+        canQueueCaseActions ? (
+          <details className="destructive-action" key={action}>
+            <summary className="button secondary compact-button destructive-summary">
+              {formatCaseAction(action)}
+            </summary>
+            <form
+              action={queueCaseAction.bind(null, guildId, detail.id, action)}
+              className="destructive-action-panel"
+            >
+              <label className="field destructive-reason">
+                <span>Reason</span>
+                <textarea name="reason" rows={3} />
+              </label>
+              <label className="checkbox-field destructive-confirm">
+                <input name="confirmAction" type="checkbox" />
+                <span>Confirm {formatCaseAction(action)}</span>
+              </label>
+              <button className="button compact-button danger-button" type="submit">
+                Queue {formatCaseAction(action)}
+              </button>
+            </form>
+          </details>
+        ) : (
+          <button
+            className="button secondary compact-button"
+            disabled
+            key={action}
+            title="Requires the bot-side case action worker"
+            type="button"
+          >
+            {formatCaseAction(action)}
+          </button>
+        )
+      )}
+    </div>
+  );
+}
+
+function DiscordSurfaces({
+  canQueueCaseActions,
+  detail,
+  guildId,
+  queueCaseAction,
+}: {
+  readonly canQueueCaseActions: boolean;
+  readonly detail: CaseDetail;
+  readonly guildId: string;
+  readonly queueCaseAction: QueueCaseAction;
+}) {
   return (
     <section className="panel stack">
       <div className="section-heading compact-heading">
@@ -167,6 +306,12 @@ function DiscordSurfaces({ detail }: { readonly detail: CaseDetail }) {
           ))}
         </div>
       )}
+      <CaseActionControls
+        canQueueCaseActions={canQueueCaseActions}
+        detail={detail}
+        guildId={guildId}
+        queueCaseAction={queueCaseAction}
+      />
       <ActionPills actions={detail.allowedActions} />
     </section>
   );
@@ -241,7 +386,9 @@ function DiscordThreadBlock({ thread }: { readonly thread: CaseDiscordThreadSnap
           </CompactExternalLink>
         </div>
       </div>
-      {thread.error ? <p className="muted">Could not load thread messages: {thread.error}</p> : null}
+      {thread.error ? (
+        <p className="muted">Could not load thread messages: {thread.error}</p>
+      ) : null}
       {!thread.error && thread.messages.length === 0 ? (
         <p className="muted">No Discord messages returned for this thread.</p>
       ) : null}
@@ -297,9 +444,7 @@ function SourceMessageContent({
   const storedContextMessages = detail.messageContext.filter((item) => !item.isSource);
   const storedMessages = [...storedSourceMessages, ...storedContextMessages];
   const hasContent = Boolean(
-    discordSnapshot?.sourceMessage ||
-      detail.evidenceItems.length > 0 ||
-      storedMessages.length > 0
+    discordSnapshot?.sourceMessage || detail.evidenceItems.length > 0 || storedMessages.length > 0
   );
 
   return (
@@ -353,11 +498,7 @@ function SourceMessageContent({
   );
 }
 
-function ThreadContent({
-  discordSnapshot,
-}: {
-  readonly discordSnapshot?: CaseDiscordSnapshot;
-}) {
+function ThreadContent({ discordSnapshot }: { readonly discordSnapshot?: CaseDiscordSnapshot }) {
   const threads = discordSnapshot?.threads ?? [];
 
   return (
@@ -448,11 +589,13 @@ function ModerationOutcomes({ outcomes }: { readonly outcomes: readonly CaseMode
 }
 
 export function CaseDetailView({
+  canQueueCaseActions,
   guildId,
   guildName,
   sessionUsername,
   detail,
   discordSnapshot,
+  queueCaseAction,
 }: CaseDetailViewProps) {
   return (
     <main className="shell stack">
@@ -468,6 +611,9 @@ export function CaseDetailView({
           <a className="button secondary" href={`/admin/guild/${guildId}/reports`}>
             Reports
           </a>
+          <a className="button secondary" href={`/admin/guild/${guildId}/history`}>
+            History
+          </a>
           <a className="button secondary" href={`/admin/guild/${guildId}/setup`}>
             Setup
           </a>
@@ -476,9 +622,14 @@ export function CaseDetailView({
         </div>
       </nav>
 
-      <p className="muted">{guildName} Active Case Detail</p>
-      <SummaryPanel detail={detail} />
-      <DiscordSurfaces detail={detail} />
+      <p className="muted">{guildName} Case Detail</p>
+      <SummaryPanel detail={detail} guildId={guildId} />
+      <DiscordSurfaces
+        canQueueCaseActions={canQueueCaseActions}
+        detail={detail}
+        guildId={guildId}
+        queueCaseAction={queueCaseAction}
+      />
       <ModerationOutcomes outcomes={detail.moderationOutcomes} />
       <SourceMessageContent detail={detail} discordSnapshot={discordSnapshot} />
       <DetectionHistory detections={detail.detectionHistory} />

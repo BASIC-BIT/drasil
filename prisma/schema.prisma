@@ -38,28 +38,29 @@ model admin_actions {
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model detection_events {
-  id                                                                                     String                   @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  id                                                                                     String                       @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
   server_id                                                                              String?
   user_id                                                                                String?
   detection_type                                                                         detection_type
-  confidence                                                                             Float                    @db.Real
-  detected_at                                                                            DateTime?                @default(now()) @db.Timestamptz(6)
+  confidence                                                                             Float                        @db.Real
+  detected_at                                                                            DateTime?                    @default(now()) @db.Timestamptz(6)
   message_id                                                                             String?
   channel_id                                                                             String?
   thread_id                                                                              String?
   reasons                                                                                String[]
-  metadata                                                                               Json?                    @default("{}")
+  metadata                                                                               Json?                        @default("{}")
   admin_action                                                                           String?
   admin_action_by                                                                        String?
-  admin_action_at                                                                        DateTime?                @db.Timestamptz(6)
-  latest_verification_event_id                                                           String?                  @db.Uuid
+  admin_action_at                                                                        DateTime?                    @db.Timestamptz(6)
+  latest_verification_event_id                                                           String?                      @db.Uuid
   admin_actions                                                                          admin_actions[]
+  moderation_action_requests                                                             moderation_action_requests[]
   moderation_outcomes                                                                    moderation_outcomes[]
   moderation_queue_items                                                                 moderation_queue_items[]
-  servers                                                                                servers?                 @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
-  users                                                                                  users?                   @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
-  verification_events_detection_events_latest_verification_event_idToverification_events verification_events?     @relation("detection_events_latest_verification_event_idToverification_events", fields: [latest_verification_event_id], references: [id], onUpdate: NoAction, map: "fk_detection_events_verification")
-  verification_events_verification_events_detection_event_idTodetection_events           verification_events[]    @relation("verification_events_detection_event_idTodetection_events")
+  servers                                                                                servers?                     @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
+  users                                                                                  users?                       @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
+  verification_events_detection_events_latest_verification_event_idToverification_events verification_events?         @relation("detection_events_latest_verification_event_idToverification_events", fields: [latest_verification_event_id], references: [id], onUpdate: NoAction, map: "fk_detection_events_verification")
+  verification_events_verification_events_detection_event_idTodetection_events           verification_events[]        @relation("verification_events_detection_event_idTodetection_events")
 
   @@index([detected_at], map: "idx_detection_events_detected_at")
   @@index([detected_at], map: "idx_detection_events_detected_at_range", type: Brin)
@@ -100,6 +101,41 @@ model moderation_queue_items {
   @@index([source_thread_id], map: "idx_moderation_queue_items_thread")
   @@index([user_id], map: "idx_moderation_queue_items_user")
   @@index([verification_event_id], map: "idx_moderation_queue_items_verification")
+}
+
+model moderation_action_requests {
+  id                    String                           @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  server_id             String
+  action_type           moderation_action_request_type
+  status                moderation_action_request_status @default(queued)
+  actor_id              String
+  actor_surface         String
+  target_user_id        String?
+  detection_event_id    String?                          @db.Uuid
+  report_intake_id      String?                          @db.Uuid
+  verification_event_id String?                          @db.Uuid
+  idempotency_key       String                           @unique
+  requested_at          DateTime?                        @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime?                        @default(now()) @db.Timestamptz(6)
+  started_at            DateTime?                        @db.Timestamptz(6)
+  completed_at          DateTime?                        @db.Timestamptz(6)
+  failed_at             DateTime?                        @db.Timestamptz(6)
+  attempts              Int                              @default(0)
+  last_error            String?
+  metadata              Json?                            @default("{}")
+  result                Json?                            @default("{}")
+  detection_events      detection_events?                @relation(fields: [detection_event_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  report_intakes        report_intakes?                  @relation(fields: [report_intake_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  servers               servers                          @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
+  users                 users?                           @relation(fields: [target_user_id], references: [discord_id], onDelete: SetNull, onUpdate: NoAction)
+  verification_events   verification_events?             @relation(fields: [verification_event_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([action_type], map: "idx_moderation_action_requests_action")
+  @@index([detection_event_id], map: "idx_moderation_action_requests_detection")
+  @@index([report_intake_id], map: "idx_moderation_action_requests_report")
+  @@index([server_id, status, requested_at], map: "idx_moderation_action_requests_status")
+  @@index([target_user_id], map: "idx_moderation_action_requests_target")
+  @@index([verification_event_id], map: "idx_moderation_action_requests_verification")
 }
 
 model role_quarantine_snapshots {
@@ -226,21 +262,22 @@ model server_members {
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model servers {
-  guild_id                            String                      @id
+  guild_id                            String                       @id
   case_role_id                        String?
   admin_channel_id                    String?
   verification_channel_id             String?
   admin_notification_role_id          String?
-  heuristic_message_threshold         Int                         @default(5)
-  heuristic_message_timeframe_seconds Int                         @default(10)
-  heuristic_suspicious_keywords       String[]                    @default(["nitro scam", "free discord nitro", "free nitro", "discord nitro", "steam gift", "gift card", "click this link", "claim your prize", "crypto giveaway", "airdrop", "free robux"])
-  created_at                          DateTime?                   @default(now()) @db.Timestamptz(6)
-  updated_at                          DateTime?                   @default(now()) @db.Timestamptz(6)
+  heuristic_message_threshold         Int                          @default(5)
+  heuristic_message_timeframe_seconds Int                          @default(10)
+  heuristic_suspicious_keywords       String[]                     @default(["nitro scam", "free discord nitro", "free nitro", "discord nitro", "steam gift", "gift card", "click this link", "claim your prize", "crypto giveaway", "airdrop", "free robux"])
+  created_at                          DateTime?                    @default(now()) @db.Timestamptz(6)
+  updated_at                          DateTime?                    @default(now()) @db.Timestamptz(6)
   updated_by                          String?
-  settings                            Json?                       @default("{}")
-  is_active                           Boolean?                    @default(true)
+  settings                            Json?                        @default("{}")
+  is_active                           Boolean?                     @default(true)
   admin_actions                       admin_actions[]
   detection_events                    detection_events[]
+  moderation_action_requests          moderation_action_requests[]
   moderation_outcomes                 moderation_outcomes[]
   moderation_queue_items              moderation_queue_items[]
   report_intakes                      report_intakes[]
@@ -252,43 +289,45 @@ model servers {
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model users {
-  discord_id                String                      @id
-  username                  String?
-  created_at                DateTime?                   @default(now()) @db.Timestamptz(6)
-  updated_at                DateTime?                   @default(now()) @db.Timestamptz(6)
-  created_by                String?
-  updated_by                String?
-  global_reputation_score   Float?                      @db.Real
-  suspicious_server_count   Int?                        @default(0)
-  first_flagged_at          DateTime?                   @db.Timestamptz(6)
-  account_created_at        DateTime?                   @db.Timestamptz(6)
-  metadata                  Json?                       @default("{}")
-  admin_actions             admin_actions[]
-  detection_events          detection_events[]
-  moderation_outcomes       moderation_outcomes[]
-  moderation_queue_items    moderation_queue_items[]
-  report_intakes            report_intakes[]
-  role_quarantine_snapshots role_quarantine_snapshots[]
-  server_members            server_members[]
-  verification_events       verification_events[]
+  discord_id                 String                       @id
+  username                   String?
+  created_at                 DateTime?                    @default(now()) @db.Timestamptz(6)
+  updated_at                 DateTime?                    @default(now()) @db.Timestamptz(6)
+  created_by                 String?
+  updated_by                 String?
+  global_reputation_score    Float?                       @db.Real
+  suspicious_server_count    Int?                         @default(0)
+  first_flagged_at           DateTime?                    @db.Timestamptz(6)
+  account_created_at         DateTime?                    @db.Timestamptz(6)
+  metadata                   Json?                        @default("{}")
+  admin_actions              admin_actions[]
+  detection_events           detection_events[]
+  moderation_action_requests moderation_action_requests[]
+  moderation_outcomes        moderation_outcomes[]
+  moderation_queue_items     moderation_queue_items[]
+  report_intakes             report_intakes[]
+  role_quarantine_snapshots  role_quarantine_snapshots[]
+  server_members             server_members[]
+  verification_events        verification_events[]
 }
 
 model report_intakes {
-  id                       String                   @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
-  server_id                String
-  reporter_id              String
-  thread_id                String?                  @unique
-  status                   report_intake_status     @default(collecting_evidence)
-  summary                  String?
-  confirmed_target_user_id String?
-  created_at               DateTime?                @default(now()) @db.Timestamptz(6)
-  updated_at               DateTime?                @default(now()) @db.Timestamptz(6)
-  closed_at                DateTime?                @db.Timestamptz(6)
-  metadata                 Json?                    @default("{}")
-  moderation_queue_items   moderation_queue_items[]
-  report_intake_evidence   report_intake_evidence[]
-  servers                  servers                  @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
-  users                    users                    @relation(fields: [reporter_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
+  id                         String                       @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  server_id                  String
+  reporter_id                String
+  thread_id                  String?                      @unique
+  status                     report_intake_status         @default(collecting_evidence)
+  summary                    String?
+  confirmed_target_user_id   String?
+  created_at                 DateTime?                    @default(now()) @db.Timestamptz(6)
+  updated_at                 DateTime?                    @default(now()) @db.Timestamptz(6)
+  closed_at                  DateTime?                    @db.Timestamptz(6)
+  metadata                   Json?                        @default("{}")
+  moderation_action_requests moderation_action_requests[]
+  moderation_queue_items     moderation_queue_items[]
+  report_intake_evidence     report_intake_evidence[]
+  servers                    servers                      @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
+  users                      users                        @relation(fields: [reporter_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([server_id], map: "idx_report_intakes_server")
   @@index([reporter_id], map: "idx_report_intakes_reporter")
@@ -315,29 +354,30 @@ model report_intake_evidence {
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model verification_events {
-  id                                                                                  String                      @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  id                                                                                  String                       @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
   server_id                                                                           String?
   user_id                                                                             String?
-  detection_event_id                                                                  String?                     @db.Uuid
+  detection_event_id                                                                  String?                      @db.Uuid
   thread_id                                                                           String?
   private_evidence_thread_id                                                          String?
   notification_channel_id                                                             String?
   notification_message_id                                                             String?
-  status                                                                              verification_status         @default(pending)
-  created_at                                                                          DateTime?                   @default(now()) @db.Timestamptz(6)
-  updated_at                                                                          DateTime?                   @default(now()) @db.Timestamptz(6)
-  resolved_at                                                                         DateTime?                   @db.Timestamptz(6)
+  status                                                                              verification_status          @default(pending)
+  created_at                                                                          DateTime?                    @default(now()) @db.Timestamptz(6)
+  updated_at                                                                          DateTime?                    @default(now()) @db.Timestamptz(6)
+  resolved_at                                                                         DateTime?                    @db.Timestamptz(6)
   resolved_by                                                                         String?
   notes                                                                               String?
-  metadata                                                                            Json?                       @default("{}")
+  metadata                                                                            Json?                        @default("{}")
   admin_actions                                                                       admin_actions[]
-  detection_events_detection_events_latest_verification_event_idToverification_events detection_events[]          @relation("detection_events_latest_verification_event_idToverification_events")
-  detection_events_verification_events_detection_event_idTodetection_events           detection_events?           @relation("verification_events_detection_event_idTodetection_events", fields: [detection_event_id], references: [id], onUpdate: NoAction)
+  detection_events_detection_events_latest_verification_event_idToverification_events detection_events[]           @relation("detection_events_latest_verification_event_idToverification_events")
+  detection_events_verification_events_detection_event_idTodetection_events           detection_events?            @relation("verification_events_detection_event_idTodetection_events", fields: [detection_event_id], references: [id], onUpdate: NoAction)
+  moderation_action_requests                                                          moderation_action_requests[]
   moderation_outcomes                                                                 moderation_outcomes[]
   moderation_queue_items                                                              moderation_queue_items[]
   role_quarantine_snapshots                                                           role_quarantine_snapshots[]
-  servers                                                                             servers?                    @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
-  users                                                                               users?                      @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
+  servers                                                                             servers?                     @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
+  users                                                                               users?                       @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([created_at], map: "idx_verification_events_created_at_range", type: Brin)
   @@index([detection_event_id], map: "idx_verification_events_detection")
@@ -404,6 +444,46 @@ enum moderation_queue_item_type {
   support_thread_attention
   report_thread_attention
   pending_screening_member
+}
+
+enum moderation_action_request_type {
+  open_case_from_observed_detection
+  open_admin_case
+  manual_flag_user
+  submit_user_report
+  start_report_intake
+  close_report_intake
+  dismiss_observed_detection
+  mark_observed_detection_false_positive
+  undo_observed_detection_action
+  kick_observed_detection
+  ban_observed_detection
+  ignore_detection_accounting
+  restore_detection_accounting
+  verify_case_user
+  close_case_no_action
+  kick_case_user
+  ban_case_user
+  ban_case_user_by_id
+  repair_active_case
+  reopen_case
+  refresh_case_notification
+  sync_moderation_queue
+  clear_moderation_queue
+  close_resolved_case_threads
+  audit_case_role_lockdown
+  apply_case_role_lockdown
+  intake_role_members
+  sync_existing_ban
+  complete_setup_verification
+  upsert_report_instructions
+}
+
+enum moderation_action_request_status {
+  queued
+  processing
+  completed
+  failed
 }
 
 enum role_quarantine_snapshot_status {

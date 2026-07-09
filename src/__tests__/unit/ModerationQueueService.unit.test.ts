@@ -512,7 +512,8 @@ describe('ModerationQueueService', () => {
 
     const acknowledged = await service.acknowledgeAttentionItem(
       queueRepository.items[0].id,
-      'guild-1'
+      'guild-1',
+      'moderator-1'
     );
 
     expect(acknowledged).toBe(true);
@@ -533,7 +534,8 @@ describe('ModerationQueueService', () => {
 
     const acknowledged = await service.acknowledgeAttentionItem(
       queueRepository.items[0].id,
-      'other-guild'
+      'other-guild',
+      'moderator-1'
     );
 
     expect(acknowledged).toBe(false);

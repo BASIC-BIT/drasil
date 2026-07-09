@@ -28,6 +28,7 @@ import {
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { getModerationQueueSettings } from '../utils/moderationQueueSettings';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
+import { QueueAttentionService } from './QueueAttentionService';
 
 const QUEUE_ACK_CUSTOM_ID_PREFIX = 'queue:ack';
 const DISCORD_EMBED_FIELD_MAX_LENGTH = 1024;
@@ -75,7 +76,7 @@ export interface IModerationQueueService {
   ): Promise<void>;
   recordReportThreadAttention(reportIntake: ReportIntake, message: Message): Promise<void>;
   deleteReportThreadAttention(reportIntakeId: string): Promise<void>;
-  acknowledgeAttentionItem(itemId: string, serverId: string): Promise<boolean>;
+  acknowledgeAttentionItem(itemId: string, serverId: string, actorId: string): Promise<boolean>;
 }
 
 @injectable()
@@ -374,15 +375,20 @@ export class ModerationQueueService implements IModerationQueueService {
     await Promise.all(items.map((item) => this.deleteQueueMessage(item)));
   }
 
-  public async acknowledgeAttentionItem(itemId: string, serverId: string): Promise<boolean> {
-    const item = await this.moderationQueueRepository.findById(itemId);
-    if (!item || item.server_id !== serverId || !this.isAttentionItem(item)) {
-      return false;
-    }
-
-    await this.deleteQueueMessage(item);
-    await this.moderationQueueRepository.deleteById(item.id);
-    return true;
+  public async acknowledgeAttentionItem(
+    itemId: string,
+    serverId: string,
+    actorId: string
+  ): Promise<boolean> {
+    const service = new QueueAttentionService(this.moderationQueueRepository, {
+      deleteQueueMessage: (item): Promise<void> => this.deleteQueueMessage(item),
+    });
+    const result = await service.acknowledgeAttentionItem({
+      actor: { id: actorId, surface: 'discord_interaction' },
+      itemId,
+      serverId,
+    });
+    return result.status === 'acknowledged';
   }
 
   private async deleteStaleMirrorItems(
@@ -756,7 +762,9 @@ export class ModerationQueueService implements IModerationQueueService {
     }
   }
 
-  private async deleteQueueMessage(item: ModerationQueueItem): Promise<void> {
+  private async deleteQueueMessage(
+    item: Pick<ModerationQueueItem, 'id' | 'queue_channel_id' | 'queue_message_id'>
+  ): Promise<void> {
     if (!item.queue_channel_id || !item.queue_message_id) {
       return;
     }
@@ -796,13 +804,6 @@ export class ModerationQueueService implements IModerationQueueService {
     return (
       typeof metadata.observed_notification_channel_id === 'string' &&
       typeof metadata.observed_notification_message_id === 'string'
-    );
-  }
-
-  private isAttentionItem(item: ModerationQueueItem): boolean {
-    return (
-      item.item_type === ModerationQueueItemType.SUPPORT_THREAD_ATTENTION ||
-      item.item_type === ModerationQueueItemType.REPORT_THREAD_ATTENTION
     );
   }
 

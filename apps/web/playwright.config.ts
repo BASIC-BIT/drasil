@@ -27,6 +27,7 @@ const webServerEnv: Record<string, string> = {
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
+  workers: 1,
   timeout: 30_000,
   reporter: [['list'], ['html', { open: 'never' }]],
   expect: {
@@ -45,7 +46,7 @@ export default defineConfig({
     timezoneId: 'UTC',
   },
   webServer: {
-    command: `node ../../node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port ${port}`,
+    command: `node ../../node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1 --port ${port}`,
     url: baseURL,
     reuseExistingServer,
     timeout: 180_000,

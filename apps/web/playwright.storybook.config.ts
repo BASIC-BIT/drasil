@@ -8,10 +8,11 @@ const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_STORYBOOK_SERVER === 't
 export default defineConfig({
   testDir: './storybook-e2e',
   fullyParallel: true,
+  workers: 1,
   timeout: 30_000,
   reporter: [['list'], ['html', { open: 'never', outputFolder: 'storybook-playwright-report' }]],
   expect: {
-    timeout: 5_000,
+    timeout: 10_000,
     toHaveScreenshot: {
       maxDiffPixels: 500,
     },

@@ -1,4 +1,5 @@
 export const DISCORD_PERMISSIONS = {
+  KickMembers: 1n << 1n,
   BanMembers: 1n << 2n,
   Administrator: 1n << 3n,
   ManageChannels: 1n << 4n,
@@ -14,6 +15,7 @@ export const DISCORD_PERMISSIONS = {
   ManageThreads: 1n << 34n,
   CreatePrivateThreads: 1n << 35n,
   SendMessagesInThreads: 1n << 38n,
+  ModerateMembers: 1n << 40n,
 } as const;
 
 const ALL_PERMISSIONS = (1n << 60n) - 1n;

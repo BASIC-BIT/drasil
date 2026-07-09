@@ -72,6 +72,10 @@ import {
   ModerationQueueRepository,
 } from '../repositories/ModerationQueueRepository';
 import {
+  IModerationActionRequestRepository,
+  ModerationActionRequestRepository,
+} from '../repositories/ModerationActionRequestRepository';
+import {
   IIntegrityAuditRepository,
   IntegrityAuditRepository,
 } from '../repositories/IntegrityAuditRepository';
@@ -100,6 +104,10 @@ import {
   IModerationQueueService,
   ModerationQueueService,
 } from '../services/ModerationQueueService';
+import {
+  IModerationActionRequestService,
+  ModerationActionRequestService,
+} from '../services/ModerationActionRequestService';
 import {
   IRoleQuarantineSnapshotRepository,
   RoleQuarantineSnapshotRepository,
@@ -208,6 +216,10 @@ function configureRepositories(container: Container): void {
   container
     .bind<IModerationQueueRepository>(TYPES.ModerationQueueRepository)
     .to(ModerationQueueRepository)
+    .inSingletonScope();
+  container
+    .bind<IModerationActionRequestRepository>(TYPES.ModerationActionRequestRepository)
+    .to(ModerationActionRequestRepository)
     .inSingletonScope();
   container
     .bind<IRoleQuarantineSnapshotRepository>(TYPES.RoleQuarantineSnapshotRepository)
@@ -326,6 +338,10 @@ function configureServices(container: Container): void {
   container
     .bind<IModerationQueueService>(TYPES.ModerationQueueService)
     .to(ModerationQueueService)
+    .inSingletonScope();
+  container
+    .bind<IModerationActionRequestService>(TYPES.ModerationActionRequestService)
+    .to(ModerationActionRequestService)
     .inSingletonScope();
   container
     .bind<IRoleQuarantineService>(TYPES.RoleQuarantineService)

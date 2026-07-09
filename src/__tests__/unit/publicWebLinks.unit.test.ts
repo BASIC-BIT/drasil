@@ -2,6 +2,7 @@ import {
   buildAdminCaseDetailUrl,
   buildAdminCaseQueueUrl,
   buildAdminGuildSetupUrl,
+  buildAdminModerationInboxUrl,
   getPublicWebBaseUrl,
 } from '../../utils/publicWebLinks';
 
@@ -29,6 +30,7 @@ describe('publicWebLinks', () => {
 
     expect(getPublicWebBaseUrl()).toBeNull();
     expect(buildAdminCaseQueueUrl('guild-1')).toBeNull();
+    expect(buildAdminModerationInboxUrl('guild-1')).toBeNull();
   });
 
   it('builds admin routes from the bot-side public web URL', () => {
@@ -41,6 +43,9 @@ describe('publicWebLinks', () => {
     );
     expect(buildAdminCaseQueueUrl('guild-1')).toBe(
       'https://drasilbot.com/admin/guild/guild-1/cases'
+    );
+    expect(buildAdminModerationInboxUrl('guild-1')).toBe(
+      'https://drasilbot.com/admin/guild/guild-1/inbox'
     );
     expect(buildAdminCaseDetailUrl('guild-1', 'case-1')).toBe(
       'https://drasilbot.com/admin/guild/guild-1/cases/case-1'

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseCaseSummaryRow, resolveReportIntakeId } from './activeCaseDataAdapter';
+import {
+  FixtureActiveCaseDataAdapter,
+  parseCaseSummaryRow,
+  resolveReportIntakeId,
+} from './activeCaseDataAdapter';
 
 const baseRow = {
   id: 'ver-1',
@@ -59,6 +63,7 @@ describe('activeCaseDataAdapter', () => {
           'kick_user',
           'ban_user',
           'close_no_action',
+          'refresh_notification',
           'repair_thread',
         ],
       })
@@ -131,7 +136,12 @@ describe('activeCaseDataAdapter', () => {
     );
 
     expect(summary.presenceState).toBe('unknown');
-    expect(summary.allowedActions).toEqual(['view_history', 'ban_by_id', 'close_no_action']);
+    expect(summary.allowedActions).toEqual([
+      'view_history',
+      'ban_by_id',
+      'close_no_action',
+      'refresh_notification',
+    ]);
   });
 
   it('marks departed users with ban-by-id and close actions', () => {
@@ -145,7 +155,12 @@ describe('activeCaseDataAdapter', () => {
     );
 
     expect(summary.presenceState).toBe('left_or_removed');
-    expect(summary.allowedActions).toEqual(['view_history', 'ban_by_id', 'close_no_action']);
+    expect(summary.allowedActions).toEqual([
+      'view_history',
+      'ban_by_id',
+      'close_no_action',
+      'refresh_notification',
+    ]);
   });
 
   it('marks externally banned users with sync action', () => {
@@ -155,7 +170,47 @@ describe('activeCaseDataAdapter', () => {
     );
 
     expect(summary.presenceState).toBe('banned');
-    expect(summary.allowedActions).toEqual(['view_history', 'sync_existing_ban']);
+    expect(summary.allowedActions).toEqual([
+      'view_history',
+      'sync_existing_ban',
+      'refresh_notification',
+    ]);
+  });
+
+  it('keeps externally banned resolved rows read-only', () => {
+    const summary = parseCaseSummaryRow(
+      { ...baseRow, latest_outcome_type: 'banned', status: 'banned' },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.presenceState).toBe('banned');
+    expect(summary.allowedActions).toEqual(['view_history', 'refresh_notification']);
+  });
+
+  it('exposes reopen for resolved cases when the member is still in server', () => {
+    const summary = parseCaseSummaryRow(
+      { ...baseRow, status: 'verified' },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.presenceState).toBe('in_server');
+    expect(summary.allowedActions).toEqual(['view_history', 'reopen_case', 'refresh_notification']);
+  });
+
+  it('does not expose refresh when a case has no stored notification message', () => {
+    const summary = parseCaseSummaryRow(
+      { ...baseRow, notification_message_id: null },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.allowedActions).toEqual([
+      'view_history',
+      'verify_user',
+      'kick_user',
+      'ban_user',
+      'close_no_action',
+      'repair_thread',
+    ]);
   });
 
   it('keeps report evidence tied to the opening detection metadata', () => {
@@ -167,5 +222,73 @@ describe('activeCaseDataAdapter', () => {
     ).toBe('opening-intake');
     expect(resolveReportIntakeId({}, { reportIntakeId: 'latest-intake' })).toBe('latest-intake');
     expect(resolveReportIntakeId({}, {})).toBeNull();
+  });
+
+  it('queues fixture case actions only when the action is allowed', async () => {
+    const adapter = new FixtureActiveCaseDataAdapter();
+
+    await expect(
+      adapter.queueCaseAction({
+        action: 'repair_thread',
+        adminId: 'admin-1',
+        caseId: 'case-stale',
+        guildId: 'guild-1',
+      })
+    ).resolves.toEqual({
+      action: 'repair_thread',
+      caseId: 'case-stale',
+      status: 'queued',
+    });
+    await expect(
+      adapter.queueCaseAction({
+        action: 'refresh_notification',
+        adminId: 'admin-1',
+        caseId: 'case-stale',
+        guildId: 'guild-1',
+      })
+    ).resolves.toEqual({
+      action: 'refresh_notification',
+      caseId: 'case-stale',
+      status: 'queued',
+    });
+    await expect(
+      adapter.queueCaseAction({
+        action: 'verify_user',
+        adminId: 'admin-1',
+        caseId: 'case-left',
+        guildId: 'guild-1',
+      })
+    ).resolves.toEqual({
+      action: 'verify_user',
+      caseId: 'case-left',
+      status: 'not_allowed',
+    });
+    await expect(
+      adapter.queueCaseAction({
+        action: 'sync_existing_ban',
+        adminId: 'admin-1',
+        caseId: 'case-banned',
+        guildId: 'guild-1',
+      })
+    ).resolves.toEqual({
+      action: 'sync_existing_ban',
+      caseId: 'case-banned',
+      status: 'queued',
+    });
+  });
+
+  it('lists resolved fixture cases newest first with read-only actions', async () => {
+    const adapter = new FixtureActiveCaseDataAdapter();
+
+    await expect(adapter.listResolvedCases('guild-1')).resolves.toEqual([
+      expect.objectContaining({
+        id: 'case-resolved-ban',
+        allowedActions: ['view_history', 'refresh_notification'],
+      }),
+      expect.objectContaining({
+        id: 'case-resolved-verified',
+        allowedActions: ['view_history', 'reopen_case'],
+      }),
+    ]);
   });
 });

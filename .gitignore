@@ -27,6 +27,8 @@ src/generated/prisma/
 
 # Local-only agent context
 AGENTS.local.md
+apps/web/AGENTS.md
+apps/web/CLAUDE.md
 
 # Logs
 logs/

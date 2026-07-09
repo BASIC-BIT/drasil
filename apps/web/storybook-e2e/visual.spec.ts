@@ -33,6 +33,20 @@ test('case queue empty story visual baseline @storybook-visual', async ({ page }
   await expectVisualSchemes(page, 'storybook-case-queue-empty');
 });
 
+test('case history mixed story visual baseline @storybook-visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await gotoStory(page, 'active-triage-case-history--mixed-history');
+  await expect(page.getByRole('heading', { name: /fixture guild case history/i })).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-case-history-mixed');
+});
+
+test('case history empty story visual baseline @storybook-visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await gotoStory(page, 'active-triage-case-history--empty-history');
+  await expect(page.getByRole('heading', { name: /no resolved cases/i })).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-case-history-empty');
+});
+
 test('report queue mixed story visual baseline @storybook-visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await gotoStory(page, 'submitted-reports-report-queue--mixed-reports');
@@ -47,6 +61,36 @@ test('report queue empty story visual baseline @storybook-visual', async ({ page
   await expectVisualSchemes(page, 'storybook-report-queue-empty');
 });
 
+test('report detail submitted story visual baseline @storybook-visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await gotoStory(page, 'submitted-reports-report-detail--submitted-report');
+  await expect(page.getByRole('heading', { name: /report for user user-300/i })).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-report-detail-submitted');
+});
+
+test('report detail linked case story visual baseline @storybook-visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await gotoStory(page, 'submitted-reports-report-detail--linked-case-report');
+  await expect(page.getByRole('heading', { name: /report for user user-400/i })).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-report-detail-linked');
+});
+
+test('moderation inbox mixed story visual baseline @storybook-visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await gotoStory(page, 'active-triage-moderation-inbox--mixed-inbox');
+  await expect(
+    page.getByRole('heading', { name: /fixture guild moderation inbox/i })
+  ).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-moderation-inbox-mixed');
+});
+
+test('moderation inbox empty story visual baseline @storybook-visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await gotoStory(page, 'active-triage-moderation-inbox--empty-inbox');
+  await expect(page.getByRole('heading', { name: /no active inbox items/i })).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-moderation-inbox-empty');
+});
+
 test('case detail stale story visual baseline @storybook-visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await gotoStory(page, 'active-triage-case-detail--stale-restricted-case');
@@ -59,4 +103,26 @@ test('case detail left user story visual baseline @storybook-visual', async ({ p
   await gotoStory(page, 'active-triage-case-detail--left-user-case');
   await expect(page.getByRole('heading', { name: 'Gone User' })).toBeVisible();
   await expectVisualSchemes(page, 'storybook-case-detail-left');
+});
+
+test('case detail banned user story visual baseline @storybook-visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await gotoStory(page, 'active-triage-case-detail--banned-user-case');
+  await expect(page.getByRole('heading', { name: 'Banned User' })).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-case-detail-banned');
+});
+
+test('case detail resolved reopen story visual baseline @storybook-visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await gotoStory(page, 'active-triage-case-detail--resolved-reopen-case');
+  await expect(page.getByRole('heading', { name: 'Resolved Friend' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reopen Case' })).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-case-detail-resolved-reopen');
+});
+
+test('member profile story visual baseline @storybook-visual', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await gotoStory(page, 'active-triage-member-profile--banned-member-history');
+  await expect(page.getByRole('heading', { name: 'Banned User' })).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-member-profile-banned');
 });
