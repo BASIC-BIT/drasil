@@ -672,6 +672,15 @@ select {
   align-items: flex-start;
 }
 
+.selection-summary {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  color: var(--muted-strong);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
 .export-panel {
   width: min(760px, calc(100vw - 48px));
   max-width: 100%;
@@ -793,6 +802,8 @@ select {
 
 .inbox-row {
   display: grid;
+  gap: 14px;
+  align-items: start;
   border-left: 4px solid var(--transparent);
   padding: 18px 20px;
   transition:
@@ -800,13 +811,39 @@ select {
     border-color 0.16s ease;
 }
 
+.selectable-inbox-row {
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+
 .inbox-row.selected {
   border-left-color: var(--accent);
   background: var(--panel-strong);
 }
 
+.inbox-row.checked {
+  background: var(--accent-soft);
+}
+
+.inbox-row.selected.checked {
+  border-left-color: var(--accent);
+  background: linear-gradient(0deg, var(--accent-soft), var(--panel-strong));
+}
+
 .inbox-row + .inbox-row {
   border-top: 1px solid var(--line);
+}
+
+.inbox-row-select {
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.inbox-row-select input {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
 }
 
 .inbox-main {

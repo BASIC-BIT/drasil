@@ -11,6 +11,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { formatDetectionType, formatUtc, freshnessStatusClass } from '@/lib/casePresentation';
 import {
   buildModerationInboxExportText,
+  getModerationInboxAttentionQueueItemIds,
   getModerationInboxVisibleItems,
   isModerationInboxSavedViewActive,
   isModerationInboxAttentionKind,
@@ -128,9 +129,14 @@ function InboxControls({
   guildId,
   onFreshnessChange,
   onKindChange,
+  onClearSelection,
   onSearchChange,
   onSavedViewSelect,
+  onSelectVisible,
   onSortChange,
+  selectedAttentionQueueItemIds,
+  selectedCount,
+  selectedExportText,
   visibleAttentionQueueItemIds,
   visibleCount,
   visibleExportText,
@@ -140,13 +146,29 @@ function InboxControls({
   readonly guildId: string;
   readonly onFreshnessChange: (value: ModerationInboxFreshnessFilter) => void;
   readonly onKindChange: (value: ModerationInboxKindFilter) => void;
+  readonly onClearSelection: () => void;
   readonly onSearchChange: (value: string) => void;
   readonly onSavedViewSelect: (savedView: ModerationInboxSavedView) => void;
+  readonly onSelectVisible: () => void;
   readonly onSortChange: (value: ModerationInboxSortMode) => void;
+  readonly selectedAttentionQueueItemIds: readonly string[];
+  readonly selectedCount: number;
+  readonly selectedExportText: string;
   readonly visibleAttentionQueueItemIds: readonly string[];
   readonly visibleCount: number;
   readonly visibleExportText: string;
 }) {
+  const hasSelection = selectedCount > 0;
+  const exportItemsLabel = hasSelection ? 'Selected Review Packet' : 'Visible Review Packet';
+  const exportItemsText = hasSelection ? selectedExportText : visibleExportText;
+  const exportItemsCount = hasSelection ? selectedCount : visibleCount;
+  const acknowledgeQueueItemIds = hasSelection
+    ? selectedAttentionQueueItemIds
+    : visibleAttentionQueueItemIds;
+  const acknowledgeButtonLabel = hasSelection
+    ? 'Acknowledge Selected Replies'
+    : 'Acknowledge Visible Replies';
+
   return (
     <section className="panel inbox-toolbar" aria-label="Inbox controls">
       <div className="saved-view-list" aria-label="Saved inbox views">
@@ -167,32 +189,51 @@ function InboxControls({
       </div>
       {visibleAttentionQueueItemIds.length > 0 || visibleCount > 0 ? (
         <div className="bulk-action-row">
-          {visibleAttentionQueueItemIds.length > 0 ? (
+          <button
+            className="button secondary compact-button"
+            onClick={onSelectVisible}
+            type="button"
+          >
+            Select Visible
+          </button>
+          {hasSelection ? (
+            <button
+              className="button secondary compact-button"
+              onClick={onClearSelection}
+              type="button"
+            >
+              Clear Selection
+            </button>
+          ) : null}
+          <span className="selection-summary">
+            {hasSelection ? `${selectedCount} selected` : `${visibleCount} visible`}
+          </span>
+          {acknowledgeQueueItemIds.length > 0 ? (
             <form
               action={acknowledgeQueueItemsAction.bind(null, guildId)}
               className="bulk-action-form"
             >
-              {visibleAttentionQueueItemIds.map((queueItemId) => (
+              {acknowledgeQueueItemIds.map((queueItemId) => (
                 <input key={queueItemId} name="queueItemId" type="hidden" value={queueItemId} />
               ))}
               <button className="button secondary compact-button" type="submit">
-                Acknowledge Visible Replies
+                {acknowledgeButtonLabel}
               </button>
             </form>
           ) : null}
-          {visibleCount > 0 ? (
+          {exportItemsCount > 0 ? (
             <details className="inline-action export-action">
               <summary className="button secondary compact-button inline-action-summary">
-                Export Visible
+                {hasSelection ? 'Export Selected' : 'Export Visible'}
               </summary>
               <div className="inline-action-panel export-panel">
                 <label className="field">
-                  <span>Visible Review Packet</span>
+                  <span>{exportItemsLabel}</span>
                   <textarea
-                    aria-label="Visible inbox export"
+                    aria-label={hasSelection ? 'Selected inbox export' : 'Visible inbox export'}
                     readOnly
-                    rows={Math.min(Math.max(visibleCount + 1, 4), 8)}
-                    value={visibleExportText}
+                    rows={Math.min(Math.max(exportItemsCount + 1, 4), 8)}
+                    value={exportItemsText}
                   />
                 </label>
               </div>
@@ -402,16 +443,32 @@ function InboxActions({
 }
 
 function InboxRow({
+  checked,
   item,
   onSelect,
+  onSelectionToggle,
   selected,
 }: {
+  readonly checked: boolean;
   readonly item: ModerationInboxItem;
   readonly onSelect: () => void;
+  readonly onSelectionToggle: () => void;
   readonly selected: boolean;
 }) {
   return (
-    <article className={`inbox-row${selected ? ' selected' : ''}`}>
+    <article
+      className={`inbox-row selectable-inbox-row${selected ? ' selected' : ''}${
+        checked ? ' checked' : ''
+      }`}
+    >
+      <div className="inbox-row-select">
+        <input
+          aria-label={`Select ${item.title}`}
+          checked={checked}
+          onChange={onSelectionToggle}
+          type="checkbox"
+        />
+      </div>
       <div className="inbox-main">
         <div className="inbox-row-heading">
           <span className={itemKindClass(item.kind)}>{kindLabels[item.kind]}</span>
@@ -531,6 +588,7 @@ export function ModerationInboxView({
   const [sortMode, setSortMode] = useState<ModerationInboxSortMode>('priority');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedItemId, setSelectedItemId] = useState<string | null>(items[0]?.id ?? null);
+  const [selectedItemIds, setSelectedItemIds] = useState<ReadonlySet<string>>(new Set());
   const setSavedView = (savedView: ModerationInboxSavedView) => {
     setKind(savedView.controls.kind);
     setFreshness(savedView.controls.freshness);
@@ -550,23 +608,52 @@ export function ModerationInboxView({
   useEffect(() => {
     if (visibleItems.length === 0) {
       setSelectedItemId(null);
+      setSelectedItemIds(new Set());
       return;
     }
 
     if (!selectedItemId || !visibleItems.some((item) => item.id === selectedItemId)) {
       setSelectedItemId(visibleItems[0].id);
     }
+
+    const visibleItemIds = new Set(visibleItems.map((item) => item.id));
+    setSelectedItemIds((previous) => {
+      const next = new Set([...previous].filter((itemId) => visibleItemIds.has(itemId)));
+      return next.size === previous.size ? previous : next;
+    });
   }, [selectedItemId, visibleItems]);
 
   const selectedItem =
     visibleItems.find((item) => item.id === selectedItemId) ?? visibleItems[0] ?? null;
-  const visibleAttentionQueueItemIds = visibleItems
-    .filter((item) => isModerationInboxAttentionKind(item.kind) && item.queueItemId)
-    .map((item) => item.queueItemId as string);
+  const selectedItems = useMemo(
+    () => visibleItems.filter((item) => selectedItemIds.has(item.id)),
+    [selectedItemIds, visibleItems]
+  );
+  const selectedAttentionQueueItemIds = getModerationInboxAttentionQueueItemIds(selectedItems);
+  const visibleAttentionQueueItemIds = getModerationInboxAttentionQueueItemIds(visibleItems);
   const visibleExportText = useMemo(
     () => buildModerationInboxExportText(visibleItems),
     [visibleItems]
   );
+  const selectedExportText = useMemo(
+    () => buildModerationInboxExportText(selectedItems),
+    [selectedItems]
+  );
+  const toggleSelectedItem = (itemId: string) => {
+    setSelectedItemIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+      return next;
+    });
+  };
+  const selectVisibleItems = () => {
+    setSelectedItemIds(new Set(visibleItems.map((item) => item.id)));
+  };
+  const clearSelection = () => setSelectedItemIds(new Set());
   const staleCount = items.filter((item) => item.stale).length;
   const attentionCount = items.filter((item) => isModerationInboxAttentionKind(item.kind)).length;
 
@@ -654,9 +741,14 @@ export function ModerationInboxView({
             guildId={guildId}
             onFreshnessChange={setFreshness}
             onKindChange={setKind}
+            onClearSelection={clearSelection}
             onSearchChange={setSearchQuery}
             onSavedViewSelect={setSavedView}
+            onSelectVisible={selectVisibleItems}
             onSortChange={setSortMode}
+            selectedAttentionQueueItemIds={selectedAttentionQueueItemIds}
+            selectedCount={selectedItems.length}
+            selectedExportText={selectedExportText}
             visibleAttentionQueueItemIds={visibleAttentionQueueItemIds}
             visibleCount={visibleItems.length}
             visibleExportText={visibleExportText}
@@ -671,9 +763,11 @@ export function ModerationInboxView({
               ) : (
                 visibleItems.map((item) => (
                   <InboxRow
+                    checked={selectedItemIds.has(item.id)}
                     item={item}
                     key={item.id}
                     onSelect={() => setSelectedItemId(item.id)}
+                    onSelectionToggle={() => toggleSelectedItem(item.id)}
                     selected={item.id === selectedItem?.id}
                   />
                 ))

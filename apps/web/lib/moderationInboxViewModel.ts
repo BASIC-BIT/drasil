@@ -192,3 +192,19 @@ export function buildModerationInboxExportText(items: readonly ModerationInboxIt
 
   return [header.join('\t'), ...rows].join('\n');
 }
+
+export function getModerationInboxAttentionQueueItemIds(
+  items: readonly ModerationInboxItem[]
+): string[] {
+  const seen = new Set<string>();
+  return items
+    .filter((item) => isModerationInboxAttentionKind(item.kind) && item.queueItemId)
+    .map((item) => item.queueItemId as string)
+    .filter((queueItemId) => {
+      if (seen.has(queueItemId)) {
+        return false;
+      }
+      seen.add(queueItemId);
+      return true;
+    });
+}

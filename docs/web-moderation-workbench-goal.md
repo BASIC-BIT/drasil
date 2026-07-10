@@ -213,8 +213,9 @@ Current implementation footholds:
   Queue attention acknowledgement is the first low-risk web write and shares
   `QueueAttentionService` with the Discord button path; the visible-replies
   batch action loops each item through the same service. The inbox also exposes
-  a visible-row review export packet for external review without adding
-  moderation side effects. Destructive bulk web actions are still intentionally
+  selected-row checkboxes so moderators can export just the rows they are
+  reviewing and acknowledge selected reply-attention items without acting on
+  unrelated visible rows. Destructive bulk web actions are still intentionally
   deferred.
 - This branch also moves submitted-report actioned/dismissed/false-positive
   closures through `ReportReviewService`, including actor/surface metadata and
@@ -700,10 +701,11 @@ Useful bulk capabilities:
 - Batch close/dismiss false positive with an explicit reason.
 - Batch acknowledge attention items. Current first slice acknowledges visible
   reply-attention items by looping through the same `QueueAttentionService` as
-  single-item acknowledge.
+  single-item acknowledge; the next slice adds selected-row acknowledgement for
+  reply-attention rows.
 - Export/copy selected IDs and links for external review.
-  Current first slice exports visible filtered rows as a tab-separated review
-  packet.
+  Current slices export visible filtered rows or selected rows as a
+  tab-separated review packet.
 
 Avoid:
 
