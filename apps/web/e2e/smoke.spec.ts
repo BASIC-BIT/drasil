@@ -245,6 +245,101 @@ test('moderation inbox filters and previews triage items', async ({ page }) => {
   await expect(results.getByRole('heading', { name: /no matching inbox items/i })).toBeVisible();
 });
 
+test('moderation inbox exposes executable controls for every advertised fixture action', async ({
+  page,
+}) => {
+  await page.goto('/admin/guild/guild-1/inbox');
+
+  const detail = page.getByLabel('Selected inbox item');
+  const fixtureItems = [
+    'Pending moderation case',
+    'Submitted report',
+    'Support reply needs review',
+    'Observed alert pending review',
+  ];
+
+  for (const title of fixtureItems) {
+    await page.getByRole('button', { name: new RegExp(title, 'i') }).click();
+    const actions = detail.getByLabel(`Actions for ${title}`);
+    await expect(actions).toBeVisible();
+    await expect(actions.locator('span.action-pill')).toHaveCount(0);
+    await expect(actions.locator('button:disabled')).toHaveCount(0);
+  }
+});
+
+test('moderation inbox navigates and queues active case actions', async ({ page }) => {
+  await page.goto('/admin/guild/guild-1/inbox');
+
+  const detail = page.getByLabel('Selected inbox item');
+  const actions = detail.getByLabel('Actions for Pending moderation case');
+  await expect(actions.getByRole('link', { name: 'View Case' })).toHaveAttribute(
+    'href',
+    '/admin/guild/guild-1/cases/case-stale'
+  );
+  await expect(actions.getByRole('link', { name: 'View History' })).toHaveAttribute(
+    'href',
+    '/admin/guild/guild-1/members/user-100'
+  );
+  await expect(actions.getByRole('button', { name: 'Verify User' })).toBeEnabled();
+  await expect(actions.getByRole('button', { name: 'Close No Action' })).toBeEnabled();
+  await expect(actions.getByRole('button', { name: 'Refresh Notification' })).toBeEnabled();
+  await expect(actions.getByRole('button', { name: 'Repair Thread' })).toBeEnabled();
+  await expect(
+    actions.locator('details.destructive-action').filter({ hasText: 'Kick User' })
+  ).toBeVisible();
+
+  const refreshResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === '/admin/guild/guild-1/inbox'
+  );
+  await actions.getByRole('button', { name: 'Refresh Notification' }).click();
+  expect((await refreshResponsePromise).status()).toBeLessThan(400);
+  await expect(detail.getByRole('heading', { name: /pending moderation case/i })).toBeVisible();
+
+  const refreshedActions = detail.getByLabel('Actions for Pending moderation case');
+  const banAction = refreshedActions
+    .locator('details.destructive-action')
+    .filter({ hasText: 'Ban User' });
+  await banAction.getByText('Ban User', { exact: true }).click();
+  await banAction.getByLabel('Reason').fill('Confirmed malicious activity.');
+  await banAction.getByLabel('Confirm Ban User').check();
+
+  const banResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === '/admin/guild/guild-1/inbox'
+  );
+  await banAction.getByRole('button', { name: 'Queue Ban User' }).click();
+  expect((await banResponsePromise).status()).toBeLessThan(400);
+  await expect(detail.getByRole('heading', { name: /pending moderation case/i })).toBeVisible();
+});
+
+test('moderation inbox queues submitted report actions', async ({ page }) => {
+  await page.goto('/admin/guild/guild-1/inbox');
+
+  await page.getByRole('button', { name: /submitted report/i }).click();
+  const detail = page.getByLabel('Selected inbox item');
+  const actions = detail.getByLabel('Actions for Submitted report');
+  await expect(actions.getByRole('link', { name: 'View Report' })).toHaveAttribute(
+    'href',
+    '/admin/guild/guild-1/reports'
+  );
+  await expect(actions.getByRole('link', { name: 'Open Discord' })).toHaveAttribute(
+    'href',
+    'https://discord.com/channels/guild-1/report-thread-100'
+  );
+
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === '/admin/guild/guild-1/inbox'
+  );
+  await actions.getByRole('button', { name: 'Mark Actioned' }).click();
+  expect((await responsePromise).status()).toBeLessThan(400);
+  await expect(detail.getByRole('heading', { name: /submitted report/i })).toBeVisible();
+});
+
 test('moderation inbox acknowledges attention items through the shared action path', async ({
   page,
 }) => {

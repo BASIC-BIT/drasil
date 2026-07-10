@@ -8,6 +8,11 @@ import type {
 } from '@drasil/contracts';
 import { AccountControl } from '@/components/AccountControl';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import {
+  CaseActionControls,
+  executableCaseActions,
+  type QueueCaseAction,
+} from './CaseActionControls';
 import { discordDesktopUrlFromWebUrl } from '@/lib/discordUrls';
 import { CaseIdentity } from './CaseIdentity';
 import { DiscordExternalLink } from './DiscordExternalLink';
@@ -40,41 +45,7 @@ interface CaseDetailViewProps {
   readonly queueCaseAction: QueueCaseAction;
 }
 
-type WebCaseAction = Extract<
-  CaseAction,
-  | 'verify_user'
-  | 'kick_user'
-  | 'ban_user'
-  | 'ban_by_id'
-  | 'close_no_action'
-  | 'repair_thread'
-  | 'create_thread'
-  | 'sync_existing_ban'
-  | 'refresh_notification'
-  | 'reopen_case'
->;
-
-type QueueCaseAction = (
-  guildId: string,
-  caseId: string,
-  action: WebCaseAction,
-  formData?: FormData
-) => Promise<void>;
-
-const executableCaseActions: readonly WebCaseAction[] = [
-  'verify_user',
-  'kick_user',
-  'ban_user',
-  'ban_by_id',
-  'close_no_action',
-  'refresh_notification',
-  'repair_thread',
-  'create_thread',
-  'sync_existing_ban',
-  'reopen_case',
-];
 const executableCaseActionSet = new Set<CaseAction>(executableCaseActions);
-const destructiveCaseActionSet = new Set<CaseAction>(['kick_user', 'ban_user', 'ban_by_id']);
 
 function SummaryPanel({
   detail,
@@ -193,85 +164,6 @@ function ActionPills({ actions }: { readonly actions: readonly CaseAction[] }) {
   );
 }
 
-function CaseActionControls({
-  canQueueCaseActions,
-  detail,
-  guildId,
-  queueCaseAction,
-}: {
-  readonly canQueueCaseActions: boolean;
-  readonly detail: CaseDetail;
-  readonly guildId: string;
-  readonly queueCaseAction: QueueCaseAction;
-}) {
-  const actions = executableCaseActions.filter((action) => detail.allowedActions.includes(action));
-  if (actions.length === 0) {
-    return null;
-  }
-
-  const standardActions = actions.filter((action) => !destructiveCaseActionSet.has(action));
-  const destructiveActions = actions.filter((action) => destructiveCaseActionSet.has(action));
-
-  return (
-    <div className="report-action-forms" aria-label="Case actions">
-      {standardActions.map((action) =>
-        canQueueCaseActions ? (
-          <form action={queueCaseAction.bind(null, guildId, detail.id, action)} key={action}>
-            <button className="button secondary compact-button" type="submit">
-              {formatCaseAction(action)}
-            </button>
-          </form>
-        ) : (
-          <button
-            className="button secondary compact-button"
-            disabled
-            key={action}
-            title="Requires the bot-side case action worker"
-            type="button"
-          >
-            {formatCaseAction(action)}
-          </button>
-        )
-      )}
-      {destructiveActions.map((action) =>
-        canQueueCaseActions ? (
-          <details className="destructive-action" key={action}>
-            <summary className="button secondary compact-button destructive-summary">
-              {formatCaseAction(action)}
-            </summary>
-            <form
-              action={queueCaseAction.bind(null, guildId, detail.id, action)}
-              className="destructive-action-panel"
-            >
-              <label className="field destructive-reason">
-                <span>Reason</span>
-                <textarea name="reason" rows={3} />
-              </label>
-              <label className="checkbox-field destructive-confirm">
-                <input name="confirmAction" type="checkbox" />
-                <span>Confirm {formatCaseAction(action)}</span>
-              </label>
-              <button className="button compact-button danger-button" type="submit">
-                Queue {formatCaseAction(action)}
-              </button>
-            </form>
-          </details>
-        ) : (
-          <button
-            className="button secondary compact-button"
-            disabled
-            key={action}
-            title="Requires the bot-side case action worker"
-            type="button"
-          >
-            {formatCaseAction(action)}
-          </button>
-        )
-      )}
-    </div>
-  );
-}
-
 function DiscordSurfaces({
   canQueueCaseActions,
   detail,
@@ -307,8 +199,9 @@ function DiscordSurfaces({
         </div>
       )}
       <CaseActionControls
+        actions={detail.allowedActions}
         canQueueCaseActions={canQueueCaseActions}
-        detail={detail}
+        caseId={detail.id}
         guildId={guildId}
         queueCaseAction={queueCaseAction}
       />

@@ -8,6 +8,11 @@ import type {
 } from '@drasil/contracts';
 import { AccountControl } from '@/components/AccountControl';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import {
+  CaseActionControls,
+  isExecutableCaseAction,
+  type QueueCaseAction,
+} from '@/components/cases/CaseActionControls';
 import { formatDetectionType, formatUtc, freshnessStatusClass } from '@/lib/casePresentation';
 import {
   buildModerationInboxExportText,
@@ -26,15 +31,30 @@ import {
 interface ModerationInboxViewProps {
   readonly acknowledgeQueueItemAction: AcknowledgeQueueItemAction;
   readonly acknowledgeQueueItemsAction: AcknowledgeQueueItemsAction;
+  readonly canOpenReportCases: boolean;
+  readonly canQueueCaseActions: boolean;
+  readonly closeReportAction: CloseReportAction;
   readonly guildId: string;
   readonly guildName: string;
   readonly sessionUsername: string;
   readonly items: readonly ModerationInboxItem[];
+  readonly openReportCaseAction: OpenReportCaseAction;
+  readonly queueCaseAction: QueueCaseAction;
   readonly queueObservedAlertAction: QueueObservedAlertAction;
 }
 
 type AcknowledgeQueueItemAction = (guildId: string, queueItemId: string) => Promise<void>;
 type AcknowledgeQueueItemsAction = (guildId: string, formData: FormData) => Promise<void>;
+type ReportClosureAction = Extract<
+  ModerationInboxAction,
+  'mark_actioned' | 'dismiss_no_action' | 'mark_false_positive'
+>;
+type CloseReportAction = (
+  guildId: string,
+  reportId: string,
+  action: ReportClosureAction
+) => Promise<void>;
+type OpenReportCaseAction = (guildId: string, reportId: string) => Promise<void>;
 type QueueObservedAlertAction = (
   guildId: string,
   targetUserId: string,
@@ -102,6 +122,16 @@ const actionLabels: Record<ModerationInboxAction, string> = {
   view_history: 'View History',
   view_report: 'View Report',
 };
+
+const reportClosureActionSet = new Set<ModerationInboxAction>([
+  'mark_actioned',
+  'dismiss_no_action',
+  'mark_false_positive',
+]);
+
+function isReportClosureAction(action: ModerationInboxAction): action is ReportClosureAction {
+  return reportClosureActionSet.has(action);
+}
 
 function itemKindClass(kind: ModerationInboxItemKind): string {
   switch (kind) {
@@ -337,21 +367,51 @@ function InboxLinks({ item }: { readonly item: ModerationInboxItem }) {
 
 function InboxActions({
   acknowledgeQueueItemAction,
+  canOpenReportCases,
+  canQueueCaseActions,
+  closeReportAction,
   item,
+  openReportCaseAction,
+  queueCaseAction,
   queueObservedAlertAction,
 }: {
   readonly acknowledgeQueueItemAction: AcknowledgeQueueItemAction;
+  readonly canOpenReportCases: boolean;
+  readonly canQueueCaseActions: boolean;
+  readonly closeReportAction: CloseReportAction;
   readonly item: ModerationInboxItem;
+  readonly openReportCaseAction: OpenReportCaseAction;
+  readonly queueCaseAction: QueueCaseAction;
   readonly queueObservedAlertAction: QueueObservedAlertAction;
 }) {
   if (item.allowedActions.length === 0) {
     return <span className="muted">No actions available.</span>;
   }
 
+  const caseActions =
+    item.kind === 'case' ? item.allowedActions.filter(isExecutableCaseAction) : [];
+
   return (
     <div className="pill-list action-form-list" aria-label={`Actions for ${item.title}`}>
       {item.allowedActions.map((action) => {
-        if (action === 'acknowledge' && item.queueItemId) {
+        if (item.kind === 'case' && isExecutableCaseAction(action)) {
+          return null;
+        }
+
+        if (action === 'acknowledge') {
+          if (!item.queueItemId) {
+            return (
+              <button
+                className="button secondary compact-button"
+                disabled
+                key={`${item.id}-${action}`}
+                title="No queue item is available to acknowledge"
+                type="button"
+              >
+                {actionLabels[action]}
+              </button>
+            );
+          }
           return (
             <form
               action={acknowledgeQueueItemAction.bind(null, item.guildId, item.queueItemId)}
@@ -364,15 +424,98 @@ function InboxActions({
           );
         }
 
+        if (action === 'view_case' || action === 'view_report') {
+          return item.detailHref ? (
+            <a
+              className="button secondary compact-button"
+              href={item.detailHref}
+              key={`${item.id}-${action}`}
+            >
+              {actionLabels[action]}
+            </a>
+          ) : (
+            <button
+              className="button secondary compact-button"
+              disabled
+              key={`${item.id}-${action}`}
+              title="No detail page is available"
+              type="button"
+            >
+              {actionLabels[action]}
+            </button>
+          );
+        }
+
         if (action === 'view_history') {
           return (
             <a
-              className="pill action-pill"
+              className="button secondary compact-button"
               href={`/admin/guild/${item.guildId}/members/${item.subject.userId}`}
               key={`${item.id}-${action}`}
             >
               {actionLabels[action]}
             </a>
+          );
+        }
+
+        if (action === 'open_discord') {
+          const discordLink = item.links.find((link) => link.url.startsWith('http'));
+          return discordLink ? (
+            <a
+              className="button secondary compact-button"
+              href={discordLink.url}
+              key={`${item.id}-${action}`}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {actionLabels[action]}
+            </a>
+          ) : (
+            <button
+              className="button secondary compact-button"
+              disabled
+              key={`${item.id}-${action}`}
+              title="No Discord surface is available"
+              type="button"
+            >
+              {actionLabels[action]}
+            </button>
+          );
+        }
+
+        if (item.kind === 'submitted_report' && action === 'open_case') {
+          return canOpenReportCases ? (
+            <form
+              action={openReportCaseAction.bind(null, item.guildId, item.sourceId)}
+              key={`${item.id}-${action}`}
+            >
+              <button className="button secondary compact-button" type="submit">
+                {actionLabels[action]}
+              </button>
+            </form>
+          ) : (
+            <button
+              className="button secondary compact-button"
+              disabled
+              key={`${item.id}-${action}`}
+              title="Requires the bot-side case opener"
+              type="button"
+            >
+              {actionLabels[action]}
+            </button>
+          );
+        }
+
+        if (item.kind === 'submitted_report' && isReportClosureAction(action)) {
+          return (
+            <form
+              action={closeReportAction.bind(null, item.guildId, item.sourceId, action)}
+              key={`${item.id}-${action}`}
+            >
+              <button className="button secondary compact-button" type="submit">
+                {actionLabels[action]}
+              </button>
+            </form>
           );
         }
 
@@ -433,11 +576,26 @@ function InboxActions({
         }
 
         return (
-          <span className="pill action-pill" key={`${item.id}-${action}`}>
+          <button
+            className="button secondary compact-button"
+            disabled
+            key={`${item.id}-${action}`}
+            title="This action is not available from the inbox"
+            type="button"
+          >
             {actionLabels[action]}
-          </span>
+          </button>
         );
       })}
+      {caseActions.length > 0 ? (
+        <CaseActionControls
+          actions={caseActions}
+          canQueueCaseActions={canQueueCaseActions}
+          caseId={item.sourceId}
+          guildId={item.guildId}
+          queueCaseAction={queueCaseAction}
+        />
+      ) : null}
     </div>
   );
 }
@@ -511,11 +669,21 @@ function DetailMetric({ label, value }: { readonly label: string; readonly value
 
 function InboxDetailPanel({
   acknowledgeQueueItemAction,
+  canOpenReportCases,
+  canQueueCaseActions,
+  closeReportAction,
   item,
+  openReportCaseAction,
+  queueCaseAction,
   queueObservedAlertAction,
 }: {
   readonly acknowledgeQueueItemAction: AcknowledgeQueueItemAction;
+  readonly canOpenReportCases: boolean;
+  readonly canQueueCaseActions: boolean;
+  readonly closeReportAction: CloseReportAction;
   readonly item: ModerationInboxItem | null;
+  readonly openReportCaseAction: OpenReportCaseAction;
+  readonly queueCaseAction: QueueCaseAction;
   readonly queueObservedAlertAction: QueueObservedAlertAction;
 }) {
   if (!item) {
@@ -566,7 +734,12 @@ function InboxDetailPanel({
         <h3>Actions</h3>
         <InboxActions
           acknowledgeQueueItemAction={acknowledgeQueueItemAction}
+          canOpenReportCases={canOpenReportCases}
+          canQueueCaseActions={canQueueCaseActions}
+          closeReportAction={closeReportAction}
           item={item}
+          openReportCaseAction={openReportCaseAction}
+          queueCaseAction={queueCaseAction}
           queueObservedAlertAction={queueObservedAlertAction}
         />
       </div>
@@ -577,10 +750,15 @@ function InboxDetailPanel({
 export function ModerationInboxView({
   acknowledgeQueueItemAction,
   acknowledgeQueueItemsAction,
+  canOpenReportCases,
+  canQueueCaseActions,
+  closeReportAction,
   guildId,
   guildName,
   sessionUsername,
   items,
+  openReportCaseAction,
+  queueCaseAction,
   queueObservedAlertAction,
 }: ModerationInboxViewProps) {
   const [kind, setKind] = useState<ModerationInboxKindFilter>('all');
@@ -690,7 +868,7 @@ export function ModerationInboxView({
           <h1 className="page-title">{guildName} Moderation Inbox</h1>
           <p className="lede">
             Review cases, reports, observed alerts, and queue attention from one durable web
-            surface. Destructive actions remain gated for later shared-service work.
+            surface.
           </p>
         </div>
         <div className="case-meta compact">
@@ -775,7 +953,12 @@ export function ModerationInboxView({
             </div>
             <InboxDetailPanel
               acknowledgeQueueItemAction={acknowledgeQueueItemAction}
+              canOpenReportCases={canOpenReportCases}
+              canQueueCaseActions={canQueueCaseActions}
+              closeReportAction={closeReportAction}
               item={selectedItem}
+              openReportCaseAction={openReportCaseAction}
+              queueCaseAction={queueCaseAction}
               queueObservedAlertAction={queueObservedAlertAction}
             />
           </section>

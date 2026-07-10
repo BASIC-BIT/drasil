@@ -3,6 +3,8 @@ import { ModerationInboxView } from './ModerationInboxView';
 import { fixtureModerationInboxItems } from '@/lib/inboxFixtures';
 
 const noopAcknowledgeQueueItemAction = async () => undefined;
+const noopCaseAction = async () => undefined;
+const noopReportAction = async () => undefined;
 const noopQueueObservedAlertAction = async () => undefined;
 
 const meta = {
@@ -19,10 +21,15 @@ const meta = {
   args: {
     acknowledgeQueueItemAction: noopAcknowledgeQueueItemAction,
     acknowledgeQueueItemsAction: noopAcknowledgeQueueItemAction,
+    canOpenReportCases: true,
+    canQueueCaseActions: true,
+    closeReportAction: noopReportAction,
     guildId: 'guild-1',
     guildName: 'Fixture Guild',
     sessionUsername: 'Fixture Admin',
     items: fixtureModerationInboxItems(),
+    openReportCaseAction: noopReportAction,
+    queueCaseAction: noopCaseAction,
     queueObservedAlertAction: noopQueueObservedAlertAction,
   },
 } satisfies Meta<typeof ModerationInboxView>;

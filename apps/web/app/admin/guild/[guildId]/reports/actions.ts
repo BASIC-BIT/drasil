@@ -44,6 +44,7 @@ export async function closeSubmittedReport(
     throw new Error('Report is no longer available to close. Refresh the queue and try again.');
   }
 
+  revalidatePath(`/admin/guild/${guildId}/inbox`);
   revalidatePath(`/admin/guild/${guildId}/reports`);
   revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
 }
