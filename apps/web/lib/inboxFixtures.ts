@@ -37,9 +37,11 @@ export function fixtureModerationInboxItems(guildId = 'guild-1'): ModerationInbo
         'view_case',
         'view_history',
         'verify_user',
+        'kick_user',
         'ban_user',
         'close_no_action',
         'refresh_notification',
+        'repair_thread',
       ],
     }),
     moderationInboxItemSchema.parse({
