@@ -19,7 +19,7 @@ import { InboxActionForm, type InboxStateAction } from './InboxActionForm';
 import { InboxActionRequestPollingProvider } from './InboxActionRequestPoller';
 import { formatDetectionType, formatUtc, freshnessStatusClass } from '@/lib/casePresentation';
 import type { InboxActionState } from '@/lib/inboxActionState';
-import { findInboxActionRequest, hasActiveInboxActionRequests } from '@/lib/inboxActionReceipts';
+import { findInboxActionRequest } from '@/lib/inboxActionReceipts';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
 import {
   buildModerationInboxExportText,
@@ -1030,7 +1030,7 @@ export function ModerationInboxView({
   return (
     <InboxActionRequestPollingProvider
       enabled={pollActionRequests}
-      serverActive={hasActiveInboxActionRequests(recentActionRequests)}
+      serverRequests={recentActionRequests}
     >
       {content}
     </InboxActionRequestPollingProvider>

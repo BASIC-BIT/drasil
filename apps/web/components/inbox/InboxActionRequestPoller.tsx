@@ -10,6 +10,11 @@ import {
   type ReactNode,
 } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+  hasActiveInboxActionRequests,
+  reconcileLocalInboxActionRequestIds,
+} from '@/lib/inboxActionReceipts';
+import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
 
 const REFRESH_INTERVAL_MS = 2_000;
 type SetLocalRequestActive = (requestId: string, active: boolean) => void;
@@ -18,10 +23,10 @@ const InboxActionRequestPollingContext = createContext<SetLocalRequestActive>(()
 
 function EnabledInboxActionRequestPolling({
   children,
-  serverActive,
+  serverRequests,
 }: {
   readonly children: ReactNode;
-  readonly serverActive: boolean;
+  readonly serverRequests: readonly ModerationActionRequestSummary[];
 }) {
   const router = useRouter();
   const [localActiveRequestIds, setLocalActiveRequestIds] = useState<ReadonlySet<string>>(
@@ -42,7 +47,14 @@ function EnabledInboxActionRequestPolling({
       return next;
     });
   }, []);
+  const serverActive = hasActiveInboxActionRequests(serverRequests);
   const active = serverActive || localActiveRequestIds.size > 0;
+
+  useEffect(() => {
+    setLocalActiveRequestIds((previous) =>
+      reconcileLocalInboxActionRequestIds(previous, serverRequests)
+    );
+  }, [serverRequests]);
 
   useEffect(() => {
     if (!active) {
@@ -64,17 +76,17 @@ function EnabledInboxActionRequestPolling({
 export function InboxActionRequestPollingProvider({
   children,
   enabled,
-  serverActive,
+  serverRequests,
 }: {
   readonly children: ReactNode;
   readonly enabled: boolean;
-  readonly serverActive: boolean;
+  readonly serverRequests: readonly ModerationActionRequestSummary[];
 }) {
   if (!enabled) {
     return children;
   }
   return (
-    <EnabledInboxActionRequestPolling serverActive={serverActive}>
+    <EnabledInboxActionRequestPolling serverRequests={serverRequests}>
       {children}
     </EnabledInboxActionRequestPolling>
   );

@@ -17,6 +17,10 @@ export const initialInboxActionState: InboxActionState = {
   status: 'idle',
 };
 
+export function isInboxActionSubmitBlocked(status: InboxActionStatus): boolean {
+  return status === 'queued' || status === 'processing' || status === 'completed';
+}
+
 export function completedInboxActionState(
   message: string,
   requestId: string | null = null

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { fixtureModerationInboxItems } from './inboxFixtures';
-import { findInboxActionRequest, hasActiveInboxActionRequests } from './inboxActionReceipts';
+import {
+  findInboxActionRequest,
+  hasActiveInboxActionRequests,
+  reconcileLocalInboxActionRequestIds,
+} from './inboxActionReceipts';
 import type { ModerationActionRequestSummary } from './moderationActionRequestDataAdapter';
 
 function buildRequest(
@@ -89,5 +93,27 @@ describe('inboxActionReceipts', () => {
     expect(hasActiveInboxActionRequests([buildRequest({ status: 'queued' })])).toBe(true);
     expect(hasActiveInboxActionRequests([buildRequest({ status: 'completed' })])).toBe(false);
     expect(hasActiveInboxActionRequests([buildRequest({ status: 'failed' })])).toBe(false);
+  });
+
+  it('retains local polling ids until server data reports a terminal state', () => {
+    const localRequestIds = new Set([
+      'request-unobserved',
+      'request-active',
+      'request-completed',
+      'request-failed',
+    ]);
+
+    const whileActive = reconcileLocalInboxActionRequestIds(localRequestIds, [
+      buildRequest({ id: 'request-active', status: 'processing' }),
+    ]);
+    expect(whileActive).toBe(localRequestIds);
+
+    expect(
+      reconcileLocalInboxActionRequestIds(localRequestIds, [
+        buildRequest({ id: 'request-active', status: 'processing' }),
+        buildRequest({ id: 'request-completed', status: 'completed' }),
+        buildRequest({ id: 'request-failed', status: 'failed' }),
+      ])
+    ).toEqual(new Set(['request-unobserved', 'request-active']));
   });
 });

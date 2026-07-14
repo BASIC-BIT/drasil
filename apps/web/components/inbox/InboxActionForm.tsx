@@ -5,6 +5,7 @@ import { useFormStatus } from 'react-dom';
 import type { ReactNode } from 'react';
 import {
   initialInboxActionState,
+  isInboxActionSubmitBlocked,
   type InboxActionState,
   type InboxActionStatus,
 } from '@/lib/inboxActionState';
@@ -111,7 +112,6 @@ export function InboxActionForm({
       return;
     }
     setLocalRequestActive(requestId, actionInFlight);
-    return () => setLocalRequestActive(requestId, false);
   }, [actionInFlight, requestId, setLocalRequestActive]);
 
   return (
@@ -123,7 +123,7 @@ export function InboxActionForm({
     >
       {children}
       <InboxSubmitButton
-        blocked={actionInFlight}
+        blocked={isInboxActionSubmitBlocked(status)}
         buttonClassName={buttonClassName}
         buttonLabel={buttonLabel}
         pendingLabel={pendingLabel}

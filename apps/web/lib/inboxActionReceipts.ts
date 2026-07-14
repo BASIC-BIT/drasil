@@ -71,3 +71,16 @@ export function hasActiveInboxActionRequests(
       (request.status === 'queued' || request.status === 'processing')
   );
 }
+
+export function reconcileLocalInboxActionRequestIds(
+  localRequestIds: ReadonlySet<string>,
+  serverRequests: readonly ModerationActionRequestSummary[]
+): ReadonlySet<string> {
+  const next = new Set(localRequestIds);
+  for (const request of serverRequests) {
+    if (request.status === 'completed' || request.status === 'failed') {
+      next.delete(request.id);
+    }
+  }
+  return next.size === localRequestIds.size ? localRequestIds : next;
+}

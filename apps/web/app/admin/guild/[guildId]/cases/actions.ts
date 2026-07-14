@@ -199,11 +199,12 @@ async function performQueueCaseAction(
   guildId: string,
   caseId: string,
   action: WebCaseAction,
-  formData?: FormData
+  formData?: FormData,
+  returnTo = `/admin/guild/${guildId}/cases/${caseId}`
 ): Promise<CaseActionQueueResult> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
-    redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/cases/${caseId}`);
+    redirect(`/api/auth/discord?returnTo=${returnTo}`);
   }
 
   const parsedAction = caseActionSchema.parse(action);
@@ -253,7 +254,13 @@ export async function queueInboxCaseAction(
   formData: FormData
 ): Promise<InboxActionState> {
   try {
-    const result = await performQueueCaseAction(guildId, caseId, action, formData);
+    const result = await performQueueCaseAction(
+      guildId,
+      caseId,
+      action,
+      formData,
+      `/admin/guild/${guildId}/inbox`
+    );
     if (!result.requestId) {
       return failedInboxActionState('Drasil did not return an action request receipt.');
     }
