@@ -27,7 +27,7 @@ export default async function OperationsPage({ params }: PageProps) {
   const queueChannelLabel = queueChannel ? `#${queueChannel.name}` : queueChannelId;
   const [integritySnapshot, recentRequests] = await Promise.all([
     createOperationsIntegrityDataAdapter().getSnapshot(guildId),
-    createModerationActionRequestDataAdapter().listRecentRequests(guildId),
+    createModerationActionRequestDataAdapter().listRecentRequests(guildId, 25),
   ]);
 
   return (

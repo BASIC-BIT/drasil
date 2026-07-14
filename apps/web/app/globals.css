@@ -756,6 +756,13 @@ select {
   grid-template-columns: minmax(0, 1fr) minmax(160px, auto);
   gap: 16px;
   padding: 16px 18px;
+  scroll-margin-top: 16px;
+}
+
+.request-row:target,
+.request-row:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .request-row + .request-row {
@@ -959,6 +966,21 @@ select {
 .inbox-detail-section {
   display: grid;
   gap: 10px;
+}
+
+.action-receipt {
+  align-items: center;
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  gap: 8px;
+  margin-top: 8px;
+  max-width: 34rem;
+}
+
+.action-receipt a {
+  font-weight: 700;
 }
 
 .inbox-empty-result {

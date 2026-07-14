@@ -296,6 +296,15 @@ test('moderation inbox navigates and queues active case actions', async ({ page 
   await actions.getByRole('button', { name: 'Refresh Notification' }).click();
   expect((await refreshResponsePromise).status()).toBeLessThan(400);
   await expect(detail.getByRole('heading', { name: /pending moderation case/i })).toBeVisible();
+  const refreshReceipt = actions
+    .getByRole('button', { name: 'Refresh Notification' })
+    .locator('..');
+  await expect(refreshReceipt.getByText('queued', { exact: true })).toBeVisible();
+  await expect(refreshReceipt.getByRole('link', { name: 'View request' })).toHaveAttribute(
+    'href',
+    '/admin/guild/guild-1/operations#request-fixture-case-action-refresh_notification-case-stale'
+  );
+  await expect(actions.getByRole('button', { name: 'Refresh Notification' })).toBeDisabled();
 
   const refreshedActions = detail.getByLabel('Actions for Pending moderation case');
   const banAction = refreshedActions
@@ -313,6 +322,72 @@ test('moderation inbox navigates and queues active case actions', async ({ page 
   await banAction.getByRole('button', { name: 'Queue Ban User' }).click();
   expect((await banResponsePromise).status()).toBeLessThan(400);
   await expect(detail.getByRole('heading', { name: /pending moderation case/i })).toBeVisible();
+});
+
+test('moderation inbox blocks duplicate submissions while an action is pending', async ({
+  page,
+}) => {
+  let postCount = 0;
+  let releaseRequest: () => void = () => undefined;
+  let signalIntercepted: () => void = () => undefined;
+  const requestIntercepted = new Promise<void>((resolve) => {
+    signalIntercepted = resolve;
+  });
+  const requestReleased = new Promise<void>((resolve) => {
+    releaseRequest = resolve;
+  });
+  await page.route('**/admin/guild/guild-1/inbox', async (route) => {
+    if (route.request().method() === 'POST') {
+      postCount += 1;
+      signalIntercepted();
+      await requestReleased;
+    }
+    await route.continue();
+  });
+  await page.goto('/admin/guild/guild-1/inbox');
+
+  const actions = page
+    .getByLabel('Selected inbox item')
+    .getByLabel('Actions for Pending moderation case');
+  const actionForm = actions.getByRole('form', { name: 'Refresh Notification action' });
+  const button = actions.getByRole('button', { name: 'Refresh Notification' });
+  const firstSubmission = button.click();
+
+  await requestIntercepted;
+  const pendingButton = actionForm.locator('button[type="submit"]');
+  await expect(pendingButton).toBeDisabled();
+  await expect(pendingButton).toHaveText('Submitting...');
+  await pendingButton.click({ force: true });
+  releaseRequest();
+  await firstSubmission;
+  expect(postCount).toBe(1);
+});
+
+test('moderation inbox renders destructive validation failures inline', async ({ page }) => {
+  await page.goto('/admin/guild/guild-1/inbox');
+
+  const detail = page.getByLabel('Selected inbox item');
+  const banAction = detail.locator('details.destructive-action').filter({ hasText: 'Ban User' });
+  await banAction.getByText('Ban User', { exact: true }).click();
+  await banAction.getByRole('button', { name: 'Queue Ban User' }).click();
+  await expect(banAction.getByRole('alert')).toContainText(
+    'Confirm the moderation action before queueing it.'
+  );
+
+  await banAction.getByLabel('Confirm Ban User').check();
+  await banAction.getByRole('button', { name: 'Queue Ban User' }).click();
+  await expect(banAction.getByRole('alert')).toContainText('Ban reason is required.');
+
+  await page.getByRole('button', { name: /observed alert pending review/i }).click();
+  const observedKickAction = detail
+    .locator('details.destructive-action')
+    .filter({ hasText: 'Kick User' });
+  await observedKickAction.getByText('Kick User', { exact: true }).click();
+  await observedKickAction.getByLabel('Confirm Kick User').check();
+  await observedKickAction.getByRole('button', { name: 'Queue Kick User' }).click();
+  await expect(observedKickAction.getByRole('alert')).toContainText(
+    'Observed alert kick actions are disabled for this server.'
+  );
 });
 
 test('moderation inbox queues submitted report actions', async ({ page }) => {
@@ -350,6 +425,7 @@ test('moderation inbox acknowledges attention items through the shared action pa
   await expect(detail.getByRole('heading', { name: /support reply needs review/i })).toBeVisible();
 
   await detail.getByRole('button', { name: 'Acknowledge' }).click();
+  await expect(detail.getByRole('status')).toContainText('Reply was already handled.');
   await expect(
     page.getByRole('heading', { name: /fixture guild moderation inbox/i })
   ).toBeVisible();
@@ -372,10 +448,15 @@ test('moderation inbox queues observed alert decisions through the shared action
   );
   await expect(detail.getByRole('button', { name: 'Dismiss No Action' })).toBeVisible();
   await expect(detail.getByRole('button', { name: 'False Positive' })).toBeVisible();
+  await detail.getByRole('button', { name: 'Dismiss No Action' }).click();
+  const dismissReceipt = detail.getByRole('button', { name: 'Dismiss No Action' }).locator('..');
+  await expect(dismissReceipt.getByText('completed', { exact: true })).toBeVisible();
+  await expect(dismissReceipt).toContainText('Action was already handled.');
   const banAction = detail.locator('details.destructive-action').filter({ hasText: 'Ban User' });
   await banAction.getByText('Ban User', { exact: true }).click();
   await expect(banAction.getByLabel('Confirm Ban User')).toBeVisible();
 
+  await banAction.getByLabel('Reason').fill('Confirmed malicious activity.');
   await banAction.getByLabel('Confirm Ban User').check();
   await banAction.getByRole('button', { name: 'Queue Ban User' }).click();
   await expect(

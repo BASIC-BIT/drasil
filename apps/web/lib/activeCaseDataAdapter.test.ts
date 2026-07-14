@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   FixtureActiveCaseDataAdapter,
   parseCaseSummaryRow,
+  resolveCaseActionQueueStatus,
   resolveReportIntakeId,
 } from './activeCaseDataAdapter';
 
@@ -39,6 +40,13 @@ const baseRow = {
 };
 
 describe('activeCaseDataAdapter', () => {
+  it('preserves failed queue receipts for inline action feedback', () => {
+    expect(resolveCaseActionQueueStatus('queued')).toBe('queued');
+    expect(resolveCaseActionQueueStatus('processing')).toBe('queued');
+    expect(resolveCaseActionQueueStatus('completed')).toBe('already_handled');
+    expect(resolveCaseActionQueueStatus('failed')).toBe('failed');
+  });
+
   it('parses pending case summary rows with surface links and stale state', () => {
     const summary = parseCaseSummaryRow(baseRow, new Date('2026-06-03T01:00:00.000Z'));
 
@@ -237,6 +245,7 @@ describe('activeCaseDataAdapter', () => {
     ).resolves.toEqual({
       action: 'repair_thread',
       caseId: 'case-stale',
+      requestId: 'fixture-case-action-repair_thread-case-stale',
       status: 'queued',
     });
     await expect(
@@ -249,6 +258,7 @@ describe('activeCaseDataAdapter', () => {
     ).resolves.toEqual({
       action: 'refresh_notification',
       caseId: 'case-stale',
+      requestId: 'fixture-case-action-refresh_notification-case-stale',
       status: 'queued',
     });
     await expect(
@@ -261,6 +271,7 @@ describe('activeCaseDataAdapter', () => {
     ).resolves.toEqual({
       action: 'verify_user',
       caseId: 'case-left',
+      requestId: null,
       status: 'not_allowed',
     });
     await expect(
@@ -273,6 +284,7 @@ describe('activeCaseDataAdapter', () => {
     ).resolves.toEqual({
       action: 'sync_existing_ban',
       caseId: 'case-banned',
+      requestId: 'fixture-case-action-sync_existing_ban-case-banned',
       status: 'queued',
     });
   });

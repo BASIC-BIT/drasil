@@ -534,7 +534,12 @@ export function OperationsView({
         ) : (
           <div className="request-history" aria-label="Recent web requests">
             {recentRequests.map((request) => (
-              <article className="request-row" key={request.id}>
+              <article
+                className="request-row"
+                id={`request-${request.id}`}
+                key={request.id}
+                tabIndex={-1}
+              >
                 <div>
                   <span className={`status ${statusClass(request.status)}`}>{request.status}</span>
                   <h3>{formatRequestAction(request.actionType)}</h3>

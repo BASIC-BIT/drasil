@@ -22,13 +22,17 @@ describe('moderationActionRequestDataAdapter', () => {
       actionType: 'clear_moderation_queue',
       actorSurface: 'web',
       completedAt: '2026-06-08T01:20:00.000Z',
+      detectionEventId: null,
       failedAt: null,
       lastError: null,
       requestedAt: '2026-06-08T01:16:00.000Z',
+      reportIntakeId: null,
+      requestedAction: null,
       resultSummary: 'Removed 3 queue items.',
       status: 'completed',
       targetUserId: null,
       updatedAt: '2026-06-08T01:20:00.000Z',
+      verificationEventId: null,
     });
   });
 
@@ -56,6 +60,25 @@ describe('moderationActionRequestDataAdapter', () => {
         updated_at: new Date('2026-06-08T01:20:00.000Z'),
       }).resultSummary
     ).toBe('Dry run found 4 closable; already closed 2; missing 3; failed 1.');
+  });
+
+  it('parses the requested inbox action from request metadata', () => {
+    expect(
+      parseModerationActionRequestRow({
+        id: 'request-repair',
+        action_type: 'repair_active_case',
+        actor_surface: 'web',
+        completed_at: null,
+        failed_at: null,
+        last_error: null,
+        metadata: { case_action: 'create_thread' },
+        requested_at: new Date('2026-06-08T01:16:00.000Z'),
+        result: null,
+        status: 'queued',
+        target_user_id: 'user-1',
+        updated_at: new Date('2026-06-08T01:16:00.000Z'),
+      }).requestedAction
+    ).toBe('create_thread');
   });
 
   it('summarizes lockdown apply results', () => {

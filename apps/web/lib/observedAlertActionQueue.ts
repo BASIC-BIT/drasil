@@ -2,8 +2,10 @@ import type { ModerationInboxAction } from '@drasil/contracts';
 import { isWebE2eFixtureMode } from './e2eFixtures';
 import {
   queueModerationActionRequest,
+  queueModerationActionRequestWithReceipt,
   type ModerationActionRequestActionType,
   type ModerationActionRequestQueueStatus,
+  type ModerationActionRequestReceipt,
 } from './moderationActionRequestQueue';
 
 export type ObservedAlertWebAction = Extract<
@@ -34,12 +36,15 @@ export async function queueObservedAlertActionRequest(input: {
   readonly guildId: string;
   readonly reason?: string | null;
   readonly targetUserId: string;
-}): Promise<ModerationActionRequestQueueStatus> {
+}): Promise<ModerationActionRequestReceipt> {
   if (isWebE2eFixtureMode()) {
-    return 'queued';
+    return {
+      id: `fixture-observed-action-${input.action}-${input.detectionEventId}`,
+      status: input.action === 'dismiss_no_action' ? 'completed' : 'queued',
+    };
   }
 
-  return queueModerationActionRequest({
+  return queueModerationActionRequestWithReceipt({
     actionType: observedAlertRequestTypes[input.action],
     actorId: input.actorId,
     actorSurface: input.actorSurface,

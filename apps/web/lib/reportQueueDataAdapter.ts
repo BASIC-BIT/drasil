@@ -9,6 +9,7 @@ import type { QueueAttentionItemRecord } from '../../../src/services/QueueAttent
 import {
   ReportReviewService,
   type ReportCaseOpener,
+  type ReportCaseOpenResult,
   type ReportClosureAction,
   type OpenSubmittedReportCaseResult,
   type ReportOpenCaseCandidate,
@@ -22,7 +23,7 @@ import { deleteBotMessage } from './discordApi';
 import { fixtureSubmittedReports } from './reportFixtures';
 import { discordMessageUrl } from './discordUrls';
 import { isWebE2eFixtureMode } from './e2eFixtures';
-import { queueModerationActionRequest } from './moderationActionRequestQueue';
+import { queueModerationActionRequestWithReceipt } from './moderationActionRequestQueue';
 import { getPostgresPool } from './setupDataAdapter';
 
 export type { ReportClosureAction } from '../../../src/services/ReportReviewService';
@@ -190,8 +191,8 @@ class PostgresQueuedReportCaseOpener implements ReportCaseOpener {
     reportId?: string;
     serverId: string;
     userId: string;
-  }): Promise<{ status: 'queued' | 'already_handled' }> {
-    const status = await queueModerationActionRequest({
+  }): Promise<ReportCaseOpenResult> {
+    const receipt = await queueModerationActionRequestWithReceipt({
       actionType: 'open_case_from_observed_detection',
       actorId: input.actor.id,
       actorSurface: input.actor.surface,
@@ -205,7 +206,13 @@ class PostgresQueuedReportCaseOpener implements ReportCaseOpener {
       serverId: input.serverId,
       targetUserId: input.userId,
     });
-    return { status: status === 'completed' ? 'already_handled' : 'queued' };
+    if (receipt.status === 'failed') {
+      throw new Error('Report case action could not be queued. Refresh the inbox and try again.');
+    }
+    return {
+      requestId: receipt.id,
+      status: receipt.status === 'completed' ? 'already_handled' : 'queued',
+    };
   }
 }
 
@@ -342,6 +349,7 @@ export class FixtureReportQueueDataAdapter implements ReportQueueDataAdapter {
       caseId: report?.latestCaseId ?? `fixture-case-${input.reportId}`,
       detectionEventId: report?.latestDetectionId ?? null,
       reportId: input.reportId,
+      requestId: `fixture-report-open-case-${input.reportId}`,
       status: report?.targetUserId && report.latestDetectionId ? 'opened' : 'missing_detection',
       targetUserId: report?.targetUserId ?? null,
       queueCleanupStatus: 'skipped',

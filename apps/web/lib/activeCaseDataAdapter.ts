@@ -23,8 +23,9 @@ import {
 import { discordDesktopUrl, discordMessageUrl } from './discordUrls';
 import { getPostgresPool } from './setupDataAdapter';
 import {
-  queueModerationActionRequest,
+  queueModerationActionRequestWithReceipt,
   type ModerationActionRequestActionType,
+  type ModerationActionRequestQueueStatus,
 } from './moderationActionRequestQueue';
 
 export type WebCaseAction = Extract<
@@ -41,11 +42,17 @@ export type WebCaseAction = Extract<
   | 'reopen_case'
 >;
 
-export type CaseActionQueueStatus = 'queued' | 'already_handled' | 'case_not_found' | 'not_allowed';
+export type CaseActionQueueStatus =
+  | 'queued'
+  | 'already_handled'
+  | 'case_not_found'
+  | 'not_allowed'
+  | 'failed';
 
 export interface CaseActionQueueResult {
   readonly action: WebCaseAction;
   readonly caseId: string;
+  readonly requestId: string | null;
   readonly status: CaseActionQueueStatus;
 }
 
@@ -63,6 +70,15 @@ export interface ActiveCaseDataAdapter {
     guildId: string;
     reason?: string | null;
   }): Promise<CaseActionQueueResult>;
+}
+
+export function resolveCaseActionQueueStatus(
+  status: ModerationActionRequestQueueStatus
+): CaseActionQueueStatus {
+  if (status === 'completed') {
+    return 'already_handled';
+  }
+  return status === 'failed' ? 'failed' : 'queued';
 }
 
 interface CaseSummaryRow {
@@ -713,13 +729,18 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
   }): Promise<CaseActionQueueResult> {
     const detail = await this.getCaseDetail(input.guildId, input.caseId);
     if (!detail) {
-      return { action: input.action, caseId: input.caseId, status: 'case_not_found' };
+      return {
+        action: input.action,
+        caseId: input.caseId,
+        requestId: null,
+        status: 'case_not_found',
+      };
     }
     if (!detail.allowedActions.includes(input.action)) {
-      return { action: input.action, caseId: input.caseId, status: 'not_allowed' };
+      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
     }
 
-    const queueStatus = await queueModerationActionRequest({
+    const receipt = await queueModerationActionRequestWithReceipt({
       actionType: requestTypeByCaseAction[input.action],
       actorId: input.adminId,
       actorSurface: 'web',
@@ -737,7 +758,8 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
     return {
       action: input.action,
       caseId: input.caseId,
-      status: queueStatus === 'completed' ? 'already_handled' : 'queued',
+      requestId: receipt.id,
+      status: resolveCaseActionQueueStatus(receipt.status),
     };
   }
 }
@@ -780,12 +802,22 @@ export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
   }): Promise<CaseActionQueueResult> {
     const detail = fixtureActiveCaseDetail(input.caseId);
     if (!detail) {
-      return { action: input.action, caseId: input.caseId, status: 'case_not_found' };
+      return {
+        action: input.action,
+        caseId: input.caseId,
+        requestId: null,
+        status: 'case_not_found',
+      };
     }
     if (!detail.allowedActions.includes(input.action)) {
-      return { action: input.action, caseId: input.caseId, status: 'not_allowed' };
+      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
     }
-    return { action: input.action, caseId: input.caseId, status: 'queued' };
+    return {
+      action: input.action,
+      caseId: input.caseId,
+      requestId: `fixture-case-action-${input.action}-${input.caseId}`,
+      status: 'queued',
+    };
   }
 }
 

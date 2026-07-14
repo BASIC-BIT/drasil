@@ -9,6 +9,8 @@ import { deleteBotMessage } from './discordApi';
 import { isWebE2eFixtureMode } from './e2eFixtures';
 import { getPostgresPool } from './setupDataAdapter';
 
+export type { QueueAttentionAcknowledgeStatus } from '../../../src/services/QueueAttentionService';
+
 export interface QueueAttentionActionAdapter {
   acknowledgeAttentionItem(input: {
     guildId: string;
@@ -77,7 +79,7 @@ export class FixtureQueueAttentionActionAdapter implements QueueAttentionActionA
     return {
       actor: input.actor,
       itemId: input.queueItemId,
-      status: 'acknowledged',
+      status: input.queueItemId === 'queue-support-1' ? 'already_handled' : 'acknowledged',
     };
   }
 }

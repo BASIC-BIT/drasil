@@ -3,7 +3,11 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { caseActionSchema, type CaseAction } from '@drasil/contracts';
-import { createActiveCaseDataAdapter, type WebCaseAction } from '@/lib/activeCaseDataAdapter';
+import {
+  createActiveCaseDataAdapter,
+  type CaseActionQueueResult,
+  type WebCaseAction,
+} from '@/lib/activeCaseDataAdapter';
 import { fetchGuildResources } from '@/lib/discordApi';
 import {
   DISCORD_PERMISSIONS,
@@ -14,6 +18,11 @@ import {
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
+import {
+  failedInboxActionState,
+  queuedInboxActionState,
+  type InboxActionState,
+} from '@/lib/inboxActionState';
 
 const queuedCaseActions = new Set<CaseAction>([
   'verify_user',
@@ -31,6 +40,7 @@ const queuedCaseActions = new Set<CaseAction>([
 const queueCaseActionErrorMessages = {
   already_handled: 'Case action already completed. Refresh the case queue and try again.',
   case_not_found: 'Case is no longer available. Refresh the case queue and try again.',
+  failed: 'Case action could not be queued. Refresh the inbox and try again.',
   not_allowed: 'Case action is not available for this case state.',
 } as const;
 
@@ -185,15 +195,16 @@ async function assertCanQueueCaseAction(
   return { reason };
 }
 
-export async function queueCaseAction(
+async function performQueueCaseAction(
   guildId: string,
   caseId: string,
   action: WebCaseAction,
-  formData?: FormData
-): Promise<void> {
+  formData?: FormData,
+  returnTo = `/admin/guild/${guildId}/cases/${caseId}`
+): Promise<CaseActionQueueResult> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
-    redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/cases/${caseId}`);
+    redirect(`/api/auth/discord?returnTo=${returnTo}`);
   }
 
   const parsedAction = caseActionSchema.parse(action);
@@ -218,10 +229,43 @@ export async function queueCaseAction(
   revalidatePath(`/admin/guild/${guildId}/history`);
 
   if (result.status === 'queued') {
-    return;
+    return result;
   }
 
   throw new Error(
     queueCaseActionErrorMessages[result.status] ?? `Unsupported case action: ${parsedAction}`
   );
+}
+
+export async function queueCaseAction(
+  guildId: string,
+  caseId: string,
+  action: WebCaseAction,
+  formData?: FormData
+): Promise<void> {
+  await performQueueCaseAction(guildId, caseId, action, formData);
+}
+
+export async function queueInboxCaseAction(
+  guildId: string,
+  caseId: string,
+  action: WebCaseAction,
+  _previousState: InboxActionState,
+  formData: FormData
+): Promise<InboxActionState> {
+  try {
+    const result = await performQueueCaseAction(
+      guildId,
+      caseId,
+      action,
+      formData,
+      `/admin/guild/${guildId}/inbox`
+    );
+    if (!result.requestId) {
+      return failedInboxActionState('Drasil did not return an action request receipt.');
+    }
+    return queuedInboxActionState({ id: result.requestId, status: 'queued' });
+  } catch (error) {
+    return failedInboxActionState(error);
+  }
 }
