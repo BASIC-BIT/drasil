@@ -2,16 +2,18 @@ import { redirect } from 'next/navigation';
 import { ModerationInboxView } from '@/components/inbox/ModerationInboxView';
 import { createActiveCaseDataAdapter } from '@/lib/activeCaseDataAdapter';
 import { createModerationInboxDataAdapter } from '@/lib/moderationInboxDataAdapter';
+import { createModerationActionRequestDataAdapter } from '@/lib/moderationActionRequestDataAdapter';
 import { createReportQueueDataAdapter } from '@/lib/reportQueueDataAdapter';
+import { isWebE2eFixtureMode } from '@/lib/e2eFixtures';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 import {
-  acknowledgeQueueAttentionItem,
-  acknowledgeQueueAttentionItems,
-  queueObservedAlertAction,
+  acknowledgeInboxQueueAttentionItem,
+  acknowledgeInboxQueueAttentionItems,
+  queueInboxObservedAlertAction,
 } from './actions';
-import { queueCaseAction } from '../cases/actions';
-import { closeSubmittedReport, openSubmittedReportCase } from '../reports/actions';
+import { queueCaseAction, queueInboxCaseAction } from '../cases/actions';
+import { closeInboxSubmittedReport, openInboxSubmittedReportCase } from '../reports/actions';
 
 type PageProps = {
   readonly params: Promise<{ readonly guildId: string }>;
@@ -28,22 +30,29 @@ export default async function ModerationInboxPage({ params }: PageProps) {
   const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
   const inboxAdapter = createModerationInboxDataAdapter();
   const activeCaseAdapter = createActiveCaseDataAdapter();
+  const actionRequestAdapter = createModerationActionRequestDataAdapter();
   const reportQueueAdapter = createReportQueueDataAdapter();
-  const items = await inboxAdapter.listInboxItems(guildId);
+  const [items, recentActionRequests] = await Promise.all([
+    inboxAdapter.listInboxItems(guildId),
+    actionRequestAdapter.listRecentRequests(guildId, 25),
+  ]);
 
   return (
     <ModerationInboxView
-      acknowledgeQueueItemAction={acknowledgeQueueAttentionItem}
-      acknowledgeQueueItemsAction={acknowledgeQueueAttentionItems}
+      acknowledgeQueueItemAction={acknowledgeInboxQueueAttentionItem}
+      acknowledgeQueueItemsAction={acknowledgeInboxQueueAttentionItems}
       canOpenReportCases={reportQueueAdapter.canOpenSubmittedReportCase()}
       canQueueCaseActions={activeCaseAdapter.canQueueCaseActions()}
-      closeReportAction={closeSubmittedReport}
+      closeReportAction={closeInboxSubmittedReport}
       guildId={guildId}
       guildName={guild.name}
       items={items}
-      openReportCaseAction={openSubmittedReportCase}
+      openReportCaseAction={openInboxSubmittedReportCase}
+      pollActionRequests={!isWebE2eFixtureMode()}
       queueCaseAction={queueCaseAction}
-      queueObservedAlertAction={queueObservedAlertAction}
+      queueInboxCaseAction={queueInboxCaseAction}
+      queueObservedAlertAction={queueInboxObservedAlertAction}
+      recentActionRequests={recentActionRequests}
       sessionUsername={session.username}
     />
   );

@@ -1,5 +1,8 @@
 import type { CaseAction } from '@drasil/contracts';
 import { formatCaseAction } from '@/lib/casePresentation';
+import { InboxActionForm, type InboxStateAction } from '@/components/inbox/InboxActionForm';
+import type { InboxActionState } from '@/lib/inboxActionState';
+import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
 
 export type WebCaseAction = Extract<
   CaseAction,
@@ -21,6 +24,14 @@ export type QueueCaseAction = (
   action: WebCaseAction,
   formData?: FormData
 ) => Promise<void>;
+
+export type QueueInboxCaseAction = (
+  guildId: string,
+  caseId: string,
+  action: WebCaseAction,
+  previousState: InboxActionState,
+  formData: FormData
+) => Promise<InboxActionState>;
 
 export const executableCaseActions: readonly WebCaseAction[] = [
   'verify_user',
@@ -44,16 +55,22 @@ export function isExecutableCaseAction(action: string): action is WebCaseAction 
 
 export function CaseActionControls({
   actions,
+  actionRequestsByAction,
   canQueueCaseActions,
   caseId,
   guildId,
   queueCaseAction,
+  queueInboxCaseAction,
 }: {
   readonly actions: readonly CaseAction[];
+  readonly actionRequestsByAction?: Partial<
+    Record<WebCaseAction, ModerationActionRequestSummary | null>
+  >;
   readonly canQueueCaseActions: boolean;
   readonly caseId: string;
   readonly guildId: string;
   readonly queueCaseAction: QueueCaseAction;
+  readonly queueInboxCaseAction?: QueueInboxCaseAction;
 }) {
   const executableActions = executableCaseActions.filter((action) => actions.includes(action));
   if (executableActions.length === 0) {
@@ -71,16 +88,29 @@ export function CaseActionControls({
     <div className="report-action-forms" aria-label="Case actions">
       {standardActions.map((action) =>
         canQueueCaseActions ? (
-          <form action={queueCaseAction.bind(null, guildId, caseId, action)} key={action}>
-            <button className="button secondary compact-button" type="submit">
-              {formatCaseAction(action)}
-            </button>
-          </form>
+          queueInboxCaseAction ? (
+            <InboxActionForm
+              action={queueInboxCaseAction.bind(null, guildId, caseId, action) as InboxStateAction}
+              buttonLabel={formatCaseAction(action)}
+              durableRequest={actionRequestsByAction?.[action]}
+              key={`${caseId}-${action}`}
+              requestBaseHref={`/admin/guild/${guildId}/operations`}
+            />
+          ) : (
+            <form
+              action={queueCaseAction.bind(null, guildId, caseId, action)}
+              key={`${caseId}-${action}`}
+            >
+              <button className="button secondary compact-button" type="submit">
+                {formatCaseAction(action)}
+              </button>
+            </form>
+          )
         ) : (
           <button
             className="button secondary compact-button"
             disabled
-            key={action}
+            key={`${caseId}-${action}`}
             title="Requires the bot-side case action worker"
             type="button"
           >
@@ -90,32 +120,54 @@ export function CaseActionControls({
       )}
       {destructiveActions.map((action) =>
         canQueueCaseActions ? (
-          <details className="destructive-action" key={action}>
+          <details className="destructive-action" key={`${caseId}-${action}`}>
             <summary className="button secondary compact-button destructive-summary">
               {formatCaseAction(action)}
             </summary>
-            <form
-              action={queueCaseAction.bind(null, guildId, caseId, action)}
-              className="destructive-action-panel"
-            >
-              <label className="field destructive-reason">
-                <span>Reason</span>
-                <textarea name="reason" rows={3} />
-              </label>
-              <label className="checkbox-field destructive-confirm">
-                <input name="confirmAction" type="checkbox" />
-                <span>Confirm {formatCaseAction(action)}</span>
-              </label>
-              <button className="button compact-button danger-button" type="submit">
-                Queue {formatCaseAction(action)}
-              </button>
-            </form>
+            {queueInboxCaseAction ? (
+              <InboxActionForm
+                action={
+                  queueInboxCaseAction.bind(null, guildId, caseId, action) as InboxStateAction
+                }
+                buttonClassName="button compact-button danger-button"
+                buttonLabel={`Queue ${formatCaseAction(action)}`}
+                durableRequest={actionRequestsByAction?.[action]}
+                formClassName="destructive-action-panel"
+                requestBaseHref={`/admin/guild/${guildId}/operations`}
+              >
+                <label className="field destructive-reason">
+                  <span>Reason</span>
+                  <textarea name="reason" rows={3} />
+                </label>
+                <label className="checkbox-field destructive-confirm">
+                  <input name="confirmAction" type="checkbox" />
+                  <span>Confirm {formatCaseAction(action)}</span>
+                </label>
+              </InboxActionForm>
+            ) : (
+              <form
+                action={queueCaseAction.bind(null, guildId, caseId, action)}
+                className="destructive-action-panel"
+              >
+                <label className="field destructive-reason">
+                  <span>Reason</span>
+                  <textarea name="reason" rows={3} />
+                </label>
+                <label className="checkbox-field destructive-confirm">
+                  <input name="confirmAction" type="checkbox" />
+                  <span>Confirm {formatCaseAction(action)}</span>
+                </label>
+                <button className="button compact-button danger-button" type="submit">
+                  Queue {formatCaseAction(action)}
+                </button>
+              </form>
+            )}
           </details>
         ) : (
           <button
             className="button secondary compact-button"
             disabled
-            key={action}
+            key={`${caseId}-${action}`}
             title="Requires the bot-side case action worker"
             type="button"
           >

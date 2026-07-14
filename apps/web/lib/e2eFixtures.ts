@@ -165,7 +165,7 @@ export function fixtureServerRecord(): SetupServerRecord {
       observed_detection_notification_window_minutes: 60,
       automatic_detection_exempt_moderators: true,
       admin_case_open_requires_reason: false,
-      moderator_ban_action_requires_reason: false,
+      moderator_ban_action_requires_reason: true,
       moderator_kick_action_requires_reason: false,
       moderator_ban_action_enabled: true,
       moderator_kick_action_enabled: true,

@@ -9,6 +9,12 @@ import {
 } from '@/lib/reportQueueDataAdapter';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
+import {
+  completedInboxActionState,
+  failedInboxActionState,
+  queuedInboxActionState,
+  type InboxActionState,
+} from '@/lib/inboxActionState';
 
 const closureActions = new Set<ReportQueueAction>([
   'mark_actioned',
@@ -47,6 +53,21 @@ export async function closeSubmittedReport(
   revalidatePath(`/admin/guild/${guildId}/inbox`);
   revalidatePath(`/admin/guild/${guildId}/reports`);
   revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
+}
+
+export async function closeInboxSubmittedReport(
+  guildId: string,
+  reportId: string,
+  action: ReportClosureAction,
+  _previousState: InboxActionState,
+  _formData: FormData
+): Promise<InboxActionState> {
+  try {
+    await closeSubmittedReport(guildId, reportId, action);
+    return completedInboxActionState('Report action completed.');
+  } catch (error) {
+    return failedInboxActionState(error);
+  }
 }
 
 const openCaseErrorMessages = {
@@ -93,4 +114,54 @@ export async function openSubmittedReportCase(guildId: string, reportId: string)
   throw new Error(
     openCaseErrorMessages[result.status] ?? `Unsupported report action: ${parsedAction}`
   );
+}
+
+export async function openInboxSubmittedReportCase(
+  guildId: string,
+  reportId: string,
+  _previousState: InboxActionState,
+  _formData: FormData
+): Promise<InboxActionState> {
+  try {
+    const [session, token] = await Promise.all([
+      getCurrentAdminSession(),
+      getCurrentDiscordToken(),
+    ]);
+    if (!session || !token) {
+      redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/inbox`);
+    }
+
+    await createSetupDashboardService().assertCanManageGuild(guildId, token.accessToken);
+    const result = await createReportQueueDataAdapter().openCaseFromSubmittedReport({
+      guildId,
+      reportId,
+      adminId: session.userId,
+    });
+
+    revalidatePath(`/admin/guild/${guildId}/inbox`);
+    revalidatePath(`/admin/guild/${guildId}/cases`);
+    revalidatePath(`/admin/guild/${guildId}/reports`);
+    revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
+
+    if (result.status === 'queued' && result.requestId) {
+      return queuedInboxActionState(
+        { id: result.requestId, status: 'queued' },
+        'Open case queued.'
+      );
+    }
+    if (result.status === 'queued') {
+      throw new Error('Drasil did not return an action request receipt.');
+    }
+    if (result.status === 'opened' || result.status === 'case_exists') {
+      return completedInboxActionState(
+        result.status === 'opened' ? 'Case opened.' : 'A linked case already exists.'
+      );
+    }
+
+    throw new Error(
+      openCaseErrorMessages[result.status] ?? `Unsupported report action: ${result.action}`
+    );
+  } catch (error) {
+    return failedInboxActionState(error);
+  }
 }

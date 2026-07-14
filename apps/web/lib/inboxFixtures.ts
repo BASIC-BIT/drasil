@@ -141,6 +141,8 @@ export function fixtureModerationInboxItems(guildId = 'guild-1'): ModerationInbo
         'view_history',
         'dismiss_no_action',
         'mark_false_positive',
+        // Deliberately stale against fixture policy so E2E proves server-side denial is visible.
+        'kick_user',
         'ban_user',
         'open_discord',
       ],

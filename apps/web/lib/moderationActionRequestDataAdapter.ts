@@ -10,13 +10,17 @@ export interface ModerationActionRequestSummary {
   readonly actionType: ModerationActionRequestActionType;
   readonly actorSurface: string;
   readonly completedAt: string | null;
+  readonly detectionEventId: string | null;
   readonly failedAt: string | null;
   readonly lastError: string | null;
   readonly requestedAt: string;
+  readonly reportIntakeId: string | null;
+  readonly requestedAction: string | null;
   readonly resultSummary: string | null;
   readonly status: ModerationActionRequestQueueStatus;
   readonly targetUserId: string | null;
   readonly updatedAt: string;
+  readonly verificationEventId: string | null;
 }
 
 export interface ModerationActionRequestDataAdapter {
@@ -28,13 +32,17 @@ interface ModerationActionRequestRow {
   readonly action_type: ModerationActionRequestActionType;
   readonly actor_surface: string;
   readonly completed_at: unknown;
+  readonly detection_event_id?: string | null;
   readonly failed_at: unknown;
   readonly last_error: string | null;
+  readonly metadata?: unknown;
   readonly requested_at: unknown;
+  readonly report_intake_id?: string | null;
   readonly result: unknown;
   readonly status: ModerationActionRequestQueueStatus;
   readonly target_user_id: string | null;
   readonly updated_at: unknown;
+  readonly verification_event_id?: string | null;
 }
 
 function toIsoString(value: unknown): string {
@@ -177,13 +185,21 @@ export function parseModerationActionRequestRow(
     actionType: row.action_type,
     actorSurface: row.actor_surface,
     completedAt: toNullableIsoString(row.completed_at),
+    detectionEventId: row.detection_event_id ?? null,
     failedAt: toNullableIsoString(row.failed_at),
     lastError: row.last_error,
     requestedAt: toIsoString(row.requested_at),
+    reportIntakeId: row.report_intake_id ?? null,
+    requestedAction:
+      row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+        ? (readString((row.metadata as OperationResultRecord).case_action) ??
+          readString((row.metadata as OperationResultRecord).inbox_action))
+        : null,
     resultSummary: buildResultSummary(row.result),
     status: row.status,
     targetUserId: row.target_user_id,
     updatedAt: toIsoString(row.updated_at),
+    verificationEventId: row.verification_event_id ?? null,
   };
 }
 
@@ -199,13 +215,17 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          action_type::text as action_type,
          actor_surface,
          completed_at,
+         detection_event_id::text,
          failed_at,
          last_error,
+         metadata,
          requested_at,
+         report_intake_id::text,
          result,
          status::text as status,
          target_user_id,
-         updated_at
+         updated_at,
+         verification_event_id::text
        from moderation_action_requests
        where server_id = $1
        order by requested_at desc
@@ -228,91 +248,119 @@ export class FixtureModerationActionRequestDataAdapter implements ModerationActi
         actionType: 'sync_moderation_queue',
         actorSurface: 'web',
         completedAt: fixtureTimestampIso,
+        detectionEventId: null,
         failedAt: null,
         lastError: null,
         requestedAt: fixtureTimestampIso,
+        reportIntakeId: null,
+        requestedAction: null,
         resultSummary: 'Queue sync completed.',
         status: 'completed',
         targetUserId: null,
         updatedAt: fixtureTimestampIso,
+        verificationEventId: null,
       },
       {
         id: 'fixture-action-request-2',
         actionType: 'refresh_case_notification',
         actorSurface: 'web',
-        completedAt: null,
+        completedAt: '2026-06-08T01:11:02.000Z',
+        detectionEventId: null,
         failedAt: null,
         lastError: null,
         requestedAt: '2026-06-08T01:10:02.000Z',
+        reportIntakeId: null,
+        requestedAction: 'refresh_notification',
         resultSummary: null,
-        status: 'queued',
+        status: 'completed',
         targetUserId: 'user-100',
-        updatedAt: '2026-06-08T01:10:02.000Z',
+        updatedAt: '2026-06-08T01:11:02.000Z',
+        verificationEventId: null,
       },
       {
         id: 'fixture-action-request-3',
         actionType: 'close_resolved_case_threads',
         actorSurface: 'web',
         completedAt: '2026-06-08T01:05:02.000Z',
+        detectionEventId: null,
         failedAt: null,
         lastError: null,
         requestedAt: '2026-06-08T01:04:02.000Z',
+        reportIntakeId: null,
+        requestedAction: null,
         resultSummary: 'Dry run found 4 closable; already closed 2; missing 1; failed 0.',
         status: 'completed',
         targetUserId: null,
         updatedAt: '2026-06-08T01:05:02.000Z',
+        verificationEventId: null,
       },
       {
         id: 'fixture-action-request-4',
         actionType: 'audit_case_role_lockdown',
         actorSurface: 'web',
         completedAt: '2026-06-08T00:59:02.000Z',
+        detectionEventId: null,
         failedAt: null,
         lastError: null,
         requestedAt: '2026-06-08T00:58:02.000Z',
+        reportIntakeId: null,
+        requestedAction: null,
         resultSummary: 'Audit found 0 errors, 2 warnings, and 3 planned writes.',
         status: 'completed',
         targetUserId: null,
         updatedAt: '2026-06-08T00:59:02.000Z',
+        verificationEventId: null,
       },
       {
         id: 'fixture-action-request-5',
         actionType: 'intake_role_members',
         actorSurface: 'web',
         completedAt: '2026-06-08T00:51:02.000Z',
+        detectionEventId: null,
         failedAt: null,
         lastError: null,
         requestedAt: '2026-06-08T00:50:02.000Z',
+        reportIntakeId: null,
+        requestedAction: null,
         resultSummary: 'Dry run Manual Intake: selected 8 of 10; skipped active 1; failed 0.',
         status: 'completed',
         targetUserId: null,
         updatedAt: '2026-06-08T00:51:02.000Z',
+        verificationEventId: null,
       },
       {
         id: 'fixture-action-request-6',
         actionType: 'complete_setup_verification',
         actorSurface: 'web',
         completedAt: '2026-06-08T00:48:02.000Z',
+        detectionEventId: null,
         failedAt: null,
         lastError: null,
         requestedAt: '2026-06-08T00:47:02.000Z',
+        reportIntakeId: null,
+        requestedAction: null,
         resultSummary: 'Core setup saved; verification channel configured.',
         status: 'completed',
         targetUserId: null,
         updatedAt: '2026-06-08T00:48:02.000Z',
+        verificationEventId: null,
       },
       {
         id: 'fixture-action-request-7',
         actionType: 'upsert_report_instructions',
         actorSurface: 'web',
         completedAt: '2026-06-08T00:46:02.000Z',
+        detectionEventId: null,
         failedAt: null,
         lastError: null,
         requestedAt: '2026-06-08T00:45:02.000Z',
+        reportIntakeId: null,
+        requestedAction: null,
         resultSummary: 'Report instructions updated in report-channel-1.',
         status: 'completed',
         targetUserId: null,
         updatedAt: '2026-06-08T00:46:02.000Z',
+        verificationEventId: null,
       },
     ];
   }

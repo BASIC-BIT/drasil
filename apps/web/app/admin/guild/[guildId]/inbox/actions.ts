@@ -19,6 +19,13 @@ import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 import { createQueueAttentionActionAdapter } from '@/lib/queueAttentionActionAdapter';
+import {
+  completedInboxActionState,
+  failedInboxActionState,
+  queuedInboxActionState,
+  type InboxActionState,
+} from '@/lib/inboxActionState';
+import type { ModerationActionRequestReceipt } from '@/lib/moderationActionRequestQueue';
 
 type DestructiveObservedAlertAction = Extract<ObservedAlertWebAction, 'kick_user' | 'ban_user'>;
 
@@ -156,6 +163,20 @@ export async function acknowledgeQueueAttentionItem(
   revalidatePath(`/admin/guild/${guildId}/inbox`);
 }
 
+export async function acknowledgeInboxQueueAttentionItem(
+  guildId: string,
+  queueItemId: string,
+  _previousState: InboxActionState,
+  _formData: FormData
+): Promise<InboxActionState> {
+  try {
+    await acknowledgeQueueAttentionItem(guildId, queueItemId);
+    return completedInboxActionState('Reply acknowledged.');
+  } catch (error) {
+    return failedInboxActionState(error);
+  }
+}
+
 export async function acknowledgeQueueAttentionItems(
   guildId: string,
   formData: FormData
@@ -186,13 +207,32 @@ export async function acknowledgeQueueAttentionItems(
   revalidatePath(`/admin/guild/${guildId}/inbox`);
 }
 
-export async function queueObservedAlertAction(
+export async function acknowledgeInboxQueueAttentionItems(
+  guildId: string,
+  _previousState: InboxActionState,
+  formData: FormData
+): Promise<InboxActionState> {
+  try {
+    const queueItemCount = readQueueItemIds(formData).length;
+    if (queueItemCount === 0) {
+      throw new Error('Select at least one reply to acknowledge.');
+    }
+    await acknowledgeQueueAttentionItems(guildId, formData);
+    return completedInboxActionState(
+      `${queueItemCount} ${queueItemCount === 1 ? 'reply' : 'replies'} acknowledged.`
+    );
+  } catch (error) {
+    return failedInboxActionState(error);
+  }
+}
+
+async function performQueueObservedAlertAction(
   guildId: string,
   targetUserId: string,
   detectionEventId: string,
   action: ModerationInboxAction,
   formData?: FormData
-): Promise<void> {
+): Promise<ModerationActionRequestReceipt> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
     redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/inbox`);
@@ -206,7 +246,7 @@ export async function queueObservedAlertAction(
   const setupService = createSetupDashboardService();
   const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
   const options = await assertCanQueueObservedAlertAction(parsedAction, guild, formData);
-  const status = await queueObservedAlertActionRequest({
+  const receipt = await queueObservedAlertActionRequest({
     action: parsedAction,
     actorId: session.userId,
     actorSurface: 'web',
@@ -220,7 +260,41 @@ export async function queueObservedAlertAction(
   revalidatePath(`/admin/guild/${guildId}/cases`);
   revalidatePath(`/admin/guild/${guildId}/reports`);
 
-  if (status === 'failed') {
+  if (receipt.status === 'failed') {
     throw new Error('Observed alert action could not be queued. Refresh the inbox and try again.');
+  }
+
+  return receipt;
+}
+
+export async function queueObservedAlertAction(
+  guildId: string,
+  targetUserId: string,
+  detectionEventId: string,
+  action: ModerationInboxAction,
+  formData?: FormData
+): Promise<void> {
+  await performQueueObservedAlertAction(guildId, targetUserId, detectionEventId, action, formData);
+}
+
+export async function queueInboxObservedAlertAction(
+  guildId: string,
+  targetUserId: string,
+  detectionEventId: string,
+  action: ModerationInboxAction,
+  _previousState: InboxActionState,
+  formData: FormData
+): Promise<InboxActionState> {
+  try {
+    const receipt = await performQueueObservedAlertAction(
+      guildId,
+      targetUserId,
+      detectionEventId,
+      action,
+      formData
+    );
+    return queuedInboxActionState(receipt);
+  } catch (error) {
+    return failedInboxActionState(error);
   }
 }

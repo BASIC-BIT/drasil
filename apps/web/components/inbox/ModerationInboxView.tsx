@@ -11,9 +11,16 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import {
   CaseActionControls,
   isExecutableCaseAction,
+  type QueueInboxCaseAction,
   type QueueCaseAction,
+  type WebCaseAction,
 } from '@/components/cases/CaseActionControls';
+import { InboxActionForm, type InboxStateAction } from './InboxActionForm';
+import { InboxActionRequestPoller } from './InboxActionRequestPoller';
 import { formatDetectionType, formatUtc, freshnessStatusClass } from '@/lib/casePresentation';
+import type { InboxActionState } from '@/lib/inboxActionState';
+import { findInboxActionRequest, hasActiveInboxActionRequests } from '@/lib/inboxActionReceipts';
+import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
 import {
   buildModerationInboxExportText,
   getModerationInboxAttentionQueueItemIds,
@@ -40,11 +47,23 @@ interface ModerationInboxViewProps {
   readonly items: readonly ModerationInboxItem[];
   readonly openReportCaseAction: OpenReportCaseAction;
   readonly queueCaseAction: QueueCaseAction;
+  readonly queueInboxCaseAction: QueueInboxCaseAction;
   readonly queueObservedAlertAction: QueueObservedAlertAction;
+  readonly recentActionRequests: readonly ModerationActionRequestSummary[];
+  readonly pollActionRequests: boolean;
 }
 
-type AcknowledgeQueueItemAction = (guildId: string, queueItemId: string) => Promise<void>;
-type AcknowledgeQueueItemsAction = (guildId: string, formData: FormData) => Promise<void>;
+type AcknowledgeQueueItemAction = (
+  guildId: string,
+  queueItemId: string,
+  previousState: InboxActionState,
+  formData: FormData
+) => Promise<InboxActionState>;
+type AcknowledgeQueueItemsAction = (
+  guildId: string,
+  previousState: InboxActionState,
+  formData: FormData
+) => Promise<InboxActionState>;
 type ReportClosureAction = Extract<
   ModerationInboxAction,
   'mark_actioned' | 'dismiss_no_action' | 'mark_false_positive'
@@ -52,16 +71,24 @@ type ReportClosureAction = Extract<
 type CloseReportAction = (
   guildId: string,
   reportId: string,
-  action: ReportClosureAction
-) => Promise<void>;
-type OpenReportCaseAction = (guildId: string, reportId: string) => Promise<void>;
+  action: ReportClosureAction,
+  previousState: InboxActionState,
+  formData: FormData
+) => Promise<InboxActionState>;
+type OpenReportCaseAction = (
+  guildId: string,
+  reportId: string,
+  previousState: InboxActionState,
+  formData: FormData
+) => Promise<InboxActionState>;
 type QueueObservedAlertAction = (
   guildId: string,
   targetUserId: string,
   detectionEventId: string,
   action: ModerationInboxAction,
-  formData?: FormData
-) => Promise<void>;
+  previousState: InboxActionState,
+  formData: FormData
+) => Promise<InboxActionState>;
 
 interface ControlOption<TValue extends string> {
   readonly value: TValue;
@@ -239,17 +266,15 @@ function InboxControls({
             {hasSelection ? `${selectedCount} selected` : `${visibleCount} visible`}
           </span>
           {acknowledgeQueueItemIds.length > 0 ? (
-            <form
-              action={acknowledgeQueueItemsAction.bind(null, guildId)}
-              className="bulk-action-form"
+            <InboxActionForm
+              action={acknowledgeQueueItemsAction.bind(null, guildId) as InboxStateAction}
+              buttonLabel={acknowledgeButtonLabel}
+              formClassName="bulk-action-form"
             >
               {acknowledgeQueueItemIds.map((queueItemId) => (
                 <input key={queueItemId} name="queueItemId" type="hidden" value={queueItemId} />
               ))}
-              <button className="button secondary compact-button" type="submit">
-                {acknowledgeButtonLabel}
-              </button>
-            </form>
+            </InboxActionForm>
           ) : null}
           {exportItemsCount > 0 ? (
             <details className="inline-action export-action">
@@ -373,7 +398,9 @@ function InboxActions({
   item,
   openReportCaseAction,
   queueCaseAction,
+  queueInboxCaseAction,
   queueObservedAlertAction,
+  recentActionRequests,
 }: {
   readonly acknowledgeQueueItemAction: AcknowledgeQueueItemAction;
   readonly canOpenReportCases: boolean;
@@ -382,7 +409,9 @@ function InboxActions({
   readonly item: ModerationInboxItem;
   readonly openReportCaseAction: OpenReportCaseAction;
   readonly queueCaseAction: QueueCaseAction;
+  readonly queueInboxCaseAction: QueueInboxCaseAction;
   readonly queueObservedAlertAction: QueueObservedAlertAction;
+  readonly recentActionRequests: readonly ModerationActionRequestSummary[];
 }) {
   if (item.allowedActions.length === 0) {
     return <span className="muted">No actions available.</span>;
@@ -390,6 +419,12 @@ function InboxActions({
 
   const caseActions =
     item.kind === 'case' ? item.allowedActions.filter(isExecutableCaseAction) : [];
+  const actionRequestsByAction = Object.fromEntries(
+    caseActions.map((action) => [
+      action,
+      findInboxActionRequest(recentActionRequests, item, action),
+    ])
+  ) as Partial<Record<WebCaseAction, ModerationActionRequestSummary | null>>;
 
   return (
     <div className="pill-list action-form-list" aria-label={`Actions for ${item.title}`}>
@@ -413,14 +448,17 @@ function InboxActions({
             );
           }
           return (
-            <form
-              action={acknowledgeQueueItemAction.bind(null, item.guildId, item.queueItemId)}
+            <InboxActionForm
+              action={
+                acknowledgeQueueItemAction.bind(
+                  null,
+                  item.guildId,
+                  item.queueItemId
+                ) as InboxStateAction
+              }
+              buttonLabel={actionLabels[action]}
               key={`${item.id}-${action}`}
-            >
-              <button className="button secondary compact-button" type="submit">
-                {actionLabels[action]}
-              </button>
-            </form>
+            />
           );
         }
 
@@ -485,14 +523,15 @@ function InboxActions({
 
         if (item.kind === 'submitted_report' && action === 'open_case') {
           return canOpenReportCases ? (
-            <form
-              action={openReportCaseAction.bind(null, item.guildId, item.sourceId)}
+            <InboxActionForm
+              action={
+                openReportCaseAction.bind(null, item.guildId, item.sourceId) as InboxStateAction
+              }
+              buttonLabel={actionLabels[action]}
+              durableRequest={findInboxActionRequest(recentActionRequests, item, action)}
               key={`${item.id}-${action}`}
-            >
-              <button className="button secondary compact-button" type="submit">
-                {actionLabels[action]}
-              </button>
-            </form>
+              requestBaseHref={`/admin/guild/${item.guildId}/operations`}
+            />
           ) : (
             <button
               className="button secondary compact-button"
@@ -508,14 +547,18 @@ function InboxActions({
 
         if (item.kind === 'submitted_report' && isReportClosureAction(action)) {
           return (
-            <form
-              action={closeReportAction.bind(null, item.guildId, item.sourceId, action)}
+            <InboxActionForm
+              action={
+                closeReportAction.bind(
+                  null,
+                  item.guildId,
+                  item.sourceId,
+                  action
+                ) as InboxStateAction
+              }
+              buttonLabel={actionLabels[action]}
               key={`${item.id}-${action}`}
-            >
-              <button className="button secondary compact-button" type="submit">
-                {actionLabels[action]}
-              </button>
-            </form>
+            />
           );
         }
 
@@ -525,15 +568,21 @@ function InboxActions({
               <summary className="button secondary compact-button destructive-summary">
                 {actionLabels[action]}
               </summary>
-              <form
-                action={queueObservedAlertAction.bind(
-                  null,
-                  item.guildId,
-                  item.subject.userId,
-                  item.sourceId,
-                  action
-                )}
-                className="destructive-action-panel"
+              <InboxActionForm
+                action={
+                  queueObservedAlertAction.bind(
+                    null,
+                    item.guildId,
+                    item.subject.userId,
+                    item.sourceId,
+                    action
+                  ) as InboxStateAction
+                }
+                buttonClassName="button compact-button danger-button"
+                buttonLabel={`Queue ${actionLabels[action]}`}
+                durableRequest={findInboxActionRequest(recentActionRequests, item, action)}
+                formClassName="destructive-action-panel"
+                requestBaseHref={`/admin/guild/${item.guildId}/operations`}
               >
                 <label className="field destructive-reason">
                   <span>Reason</span>
@@ -543,10 +592,7 @@ function InboxActions({
                   <input name="confirmAction" type="checkbox" />
                   <span>Confirm {actionLabels[action]}</span>
                 </label>
-                <button className="button compact-button danger-button" type="submit">
-                  Queue {actionLabels[action]}
-                </button>
-              </form>
+              </InboxActionForm>
             </details>
           );
         }
@@ -558,20 +604,21 @@ function InboxActions({
             action === 'mark_false_positive')
         ) {
           return (
-            <form
-              action={queueObservedAlertAction.bind(
-                null,
-                item.guildId,
-                item.subject.userId,
-                item.sourceId,
-                action
-              )}
+            <InboxActionForm
+              action={
+                queueObservedAlertAction.bind(
+                  null,
+                  item.guildId,
+                  item.subject.userId,
+                  item.sourceId,
+                  action
+                ) as InboxStateAction
+              }
+              buttonLabel={actionLabels[action]}
+              durableRequest={findInboxActionRequest(recentActionRequests, item, action)}
               key={`${item.id}-${action}`}
-            >
-              <button className="button secondary compact-button" type="submit">
-                {actionLabels[action]}
-              </button>
-            </form>
+              requestBaseHref={`/admin/guild/${item.guildId}/operations`}
+            />
           );
         }
 
@@ -590,10 +637,12 @@ function InboxActions({
       {caseActions.length > 0 ? (
         <CaseActionControls
           actions={caseActions}
+          actionRequestsByAction={actionRequestsByAction}
           canQueueCaseActions={canQueueCaseActions}
           caseId={item.sourceId}
           guildId={item.guildId}
           queueCaseAction={queueCaseAction}
+          queueInboxCaseAction={queueInboxCaseAction}
         />
       ) : null}
     </div>
@@ -675,7 +724,9 @@ function InboxDetailPanel({
   item,
   openReportCaseAction,
   queueCaseAction,
+  queueInboxCaseAction,
   queueObservedAlertAction,
+  recentActionRequests,
 }: {
   readonly acknowledgeQueueItemAction: AcknowledgeQueueItemAction;
   readonly canOpenReportCases: boolean;
@@ -684,7 +735,9 @@ function InboxDetailPanel({
   readonly item: ModerationInboxItem | null;
   readonly openReportCaseAction: OpenReportCaseAction;
   readonly queueCaseAction: QueueCaseAction;
+  readonly queueInboxCaseAction: QueueInboxCaseAction;
   readonly queueObservedAlertAction: QueueObservedAlertAction;
+  readonly recentActionRequests: readonly ModerationActionRequestSummary[];
 }) {
   if (!item) {
     return (
@@ -740,7 +793,9 @@ function InboxDetailPanel({
           item={item}
           openReportCaseAction={openReportCaseAction}
           queueCaseAction={queueCaseAction}
+          queueInboxCaseAction={queueInboxCaseAction}
           queueObservedAlertAction={queueObservedAlertAction}
+          recentActionRequests={recentActionRequests}
         />
       </div>
     </aside>
@@ -758,8 +813,11 @@ export function ModerationInboxView({
   sessionUsername,
   items,
   openReportCaseAction,
+  pollActionRequests,
   queueCaseAction,
+  queueInboxCaseAction,
   queueObservedAlertAction,
+  recentActionRequests,
 }: ModerationInboxViewProps) {
   const [kind, setKind] = useState<ModerationInboxKindFilter>('all');
   const [freshness, setFreshness] = useState<ModerationInboxFreshnessFilter>('all');
@@ -837,6 +895,9 @@ export function ModerationInboxView({
 
   return (
     <main className="shell stack">
+      {pollActionRequests ? (
+        <InboxActionRequestPoller active={hasActiveInboxActionRequests(recentActionRequests)} />
+      ) : null}
       <nav className="topbar">
         <a className="brand" href="/admin">
           <span className="brand-mark" />
@@ -959,7 +1020,9 @@ export function ModerationInboxView({
               item={selectedItem}
               openReportCaseAction={openReportCaseAction}
               queueCaseAction={queueCaseAction}
+              queueInboxCaseAction={queueInboxCaseAction}
               queueObservedAlertAction={queueObservedAlertAction}
+              recentActionRequests={recentActionRequests}
             />
           </section>
         </>

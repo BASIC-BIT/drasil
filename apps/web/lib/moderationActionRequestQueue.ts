@@ -34,6 +34,11 @@ export type ModerationActionRequestActionType =
 
 export type ModerationActionRequestQueueStatus = 'queued' | 'processing' | 'completed' | 'failed';
 
+export interface ModerationActionRequestReceipt {
+  readonly id: string;
+  readonly status: ModerationActionRequestQueueStatus;
+}
+
 export interface QueueModerationActionRequestInput {
   readonly actionType: ModerationActionRequestActionType;
   readonly actorId: string;
@@ -50,9 +55,13 @@ export interface QueueModerationActionRequestInput {
 export async function queueModerationActionRequest(
   input: QueueModerationActionRequestInput
 ): Promise<ModerationActionRequestQueueStatus> {
-  const result = await getPostgresPool().query<{
-    status: ModerationActionRequestQueueStatus;
-  }>(
+  return (await queueModerationActionRequestWithReceipt(input)).status;
+}
+
+export async function queueModerationActionRequestWithReceipt(
+  input: QueueModerationActionRequestInput
+): Promise<ModerationActionRequestReceipt> {
+  const result = await getPostgresPool().query<ModerationActionRequestReceipt>(
     `insert into moderation_action_requests (
        server_id,
        action_type,
@@ -89,7 +98,7 @@ export async function queueModerationActionRequest(
          failed_at = null,
          last_error = null,
          metadata = coalesce(moderation_action_requests.metadata, '{}'::jsonb) || excluded.metadata
-     returning status`,
+     returning id::text, status::text as status`,
     [
       input.serverId,
       input.actionType,
@@ -104,5 +113,10 @@ export async function queueModerationActionRequest(
     ]
   );
 
-  return result.rows[0]?.status ?? 'failed';
+  return (
+    result.rows[0] ?? {
+      id: input.idempotencyKey,
+      status: 'failed',
+    }
+  );
 }

@@ -71,6 +71,7 @@ export interface ReportCaseOpener {
 
 export interface ReportCaseOpenResult {
   readonly caseId?: string | null;
+  readonly requestId?: string | null;
   readonly status: ReportCaseOpenStatus;
 }
 
@@ -107,6 +108,7 @@ export interface OpenSubmittedReportCaseResult {
   readonly caseId: string | null;
   readonly detectionEventId: string | null;
   readonly reportId: string;
+  readonly requestId?: string | null;
   readonly status: OpenSubmittedReportCaseStatus;
   readonly targetUserId: string | null;
   readonly queueCleanupStatus: ReportQueueCleanupStatus;
@@ -224,6 +226,7 @@ export class ReportReviewService {
       return this.buildOpenCaseResult(input, {
         caseId: opened.caseId,
         detectionEventId: candidate.latest_detection_id,
+        requestId: opened.requestId,
         status: opened.status,
         targetUserId: candidate.confirmed_target_user_id,
       });
@@ -271,6 +274,7 @@ export class ReportReviewService {
       readonly caseId?: string | null;
       readonly detectionEventId?: string | null;
       readonly queueCleanupStatus?: ReportQueueCleanupStatus;
+      readonly requestId?: string | null;
       readonly status: OpenSubmittedReportCaseStatus;
       readonly targetUserId?: string | null;
     }
@@ -281,6 +285,7 @@ export class ReportReviewService {
       caseId: overrides.caseId ?? null,
       detectionEventId: overrides.detectionEventId ?? null,
       reportId: input.reportId,
+      ...(overrides.requestId ? { requestId: overrides.requestId } : {}),
       status: overrides.status,
       targetUserId: overrides.targetUserId ?? null,
       queueCleanupStatus: overrides.queueCleanupStatus ?? 'skipped',

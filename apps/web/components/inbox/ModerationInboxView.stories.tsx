@@ -1,11 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { ModerationInboxView } from './ModerationInboxView';
 import { fixtureModerationInboxItems } from '@/lib/inboxFixtures';
+import { completedInboxActionState } from '@/lib/inboxActionState';
 
-const noopAcknowledgeQueueItemAction = async () => undefined;
+const noopInboxAction = async () => completedInboxActionState('Fixture action completed.');
 const noopCaseAction = async () => undefined;
-const noopReportAction = async () => undefined;
-const noopQueueObservedAlertAction = async () => undefined;
 
 const meta = {
   title: 'Active Triage/Moderation Inbox',
@@ -19,18 +18,21 @@ const meta = {
     },
   },
   args: {
-    acknowledgeQueueItemAction: noopAcknowledgeQueueItemAction,
-    acknowledgeQueueItemsAction: noopAcknowledgeQueueItemAction,
+    acknowledgeQueueItemAction: noopInboxAction,
+    acknowledgeQueueItemsAction: noopInboxAction,
     canOpenReportCases: true,
     canQueueCaseActions: true,
-    closeReportAction: noopReportAction,
+    closeReportAction: noopInboxAction,
     guildId: 'guild-1',
     guildName: 'Fixture Guild',
     sessionUsername: 'Fixture Admin',
     items: fixtureModerationInboxItems(),
-    openReportCaseAction: noopReportAction,
+    openReportCaseAction: noopInboxAction,
+    pollActionRequests: false,
     queueCaseAction: noopCaseAction,
-    queueObservedAlertAction: noopQueueObservedAlertAction,
+    queueInboxCaseAction: noopInboxAction,
+    queueObservedAlertAction: noopInboxAction,
+    recentActionRequests: [],
   },
 } satisfies Meta<typeof ModerationInboxView>;
 
