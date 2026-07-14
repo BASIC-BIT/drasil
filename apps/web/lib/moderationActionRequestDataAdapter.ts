@@ -233,7 +233,7 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          select id
          from moderation_action_requests
          where server_id = $1
-         order by requested_at desc
+         order by case when $3::boolean then updated_at else requested_at end desc
          limit $2
        ), inbox_request_ids as (
          select id from selected_request_ids

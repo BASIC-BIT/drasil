@@ -71,6 +71,19 @@ describe('inboxActionReceipts', () => {
     expect(findInboxActionRequest([request], caseItem!, 'repair_thread')).toBeNull();
   });
 
+  it('does not share a report-open receipt with its observed-alert mirror', () => {
+    expect(observedItem).toBeDefined();
+    expect(reportItem).toBeDefined();
+    const reportRequest = buildRequest({
+      actionType: 'open_case_from_observed_detection',
+      detectionEventId: observedItem?.sourceId ?? null,
+      reportIntakeId: reportItem?.sourceId ?? null,
+    });
+
+    expect(findInboxActionRequest([reportRequest], reportItem!, 'open_case')?.id).toBe('request-1');
+    expect(findInboxActionRequest([reportRequest], observedItem!, 'open_case')).toBeNull();
+  });
+
   it('reports only queued and processing requests as active', () => {
     expect(hasActiveInboxActionRequests([buildRequest({ status: 'processing' })])).toBe(true);
     expect(hasActiveInboxActionRequests([buildRequest({ status: 'queued' })])).toBe(true);

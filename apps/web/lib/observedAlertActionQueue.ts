@@ -40,7 +40,7 @@ export async function queueObservedAlertActionRequest(input: {
   if (isWebE2eFixtureMode()) {
     return {
       id: `fixture-observed-action-${input.action}-${input.detectionEventId}`,
-      status: 'queued',
+      status: input.action === 'dismiss_no_action' ? 'completed' : 'queued',
     };
   }
 

@@ -32,7 +32,7 @@ function requestMatchesItem(
     case 'case':
       return request.verificationEventId === item.sourceId;
     case 'observed_alert':
-      return request.detectionEventId === item.sourceId;
+      return request.reportIntakeId === null && request.detectionEventId === item.sourceId;
     case 'submitted_report':
       return request.reportIntakeId === item.sourceId;
     case 'pending_screening':

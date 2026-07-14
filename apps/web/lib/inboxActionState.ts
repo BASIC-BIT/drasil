@@ -17,10 +17,13 @@ export const initialInboxActionState: InboxActionState = {
   status: 'idle',
 };
 
-export function completedInboxActionState(message: string): InboxActionState {
+export function completedInboxActionState(
+  message: string,
+  requestId: string | null = null
+): InboxActionState {
   return {
     message,
-    requestId: null,
+    requestId,
     status: 'completed',
   };
 }

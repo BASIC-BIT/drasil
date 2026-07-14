@@ -425,6 +425,7 @@ test('moderation inbox acknowledges attention items through the shared action pa
   await expect(detail.getByRole('heading', { name: /support reply needs review/i })).toBeVisible();
 
   await detail.getByRole('button', { name: 'Acknowledge' }).click();
+  await expect(detail.getByRole('status')).toContainText('Reply was already handled.');
   await expect(
     page.getByRole('heading', { name: /fixture guild moderation inbox/i })
   ).toBeVisible();
@@ -447,6 +448,10 @@ test('moderation inbox queues observed alert decisions through the shared action
   );
   await expect(detail.getByRole('button', { name: 'Dismiss No Action' })).toBeVisible();
   await expect(detail.getByRole('button', { name: 'False Positive' })).toBeVisible();
+  await detail.getByRole('button', { name: 'Dismiss No Action' }).click();
+  const dismissReceipt = detail.getByRole('button', { name: 'Dismiss No Action' }).locator('..');
+  await expect(dismissReceipt.getByText('completed', { exact: true })).toBeVisible();
+  await expect(dismissReceipt).toContainText('Action was already handled.');
   const banAction = detail.locator('details.destructive-action').filter({ hasText: 'Ban User' });
   await banAction.getByText('Ban User', { exact: true }).click();
   await expect(banAction.getByLabel('Confirm Ban User')).toBeVisible();

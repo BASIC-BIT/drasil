@@ -18,7 +18,10 @@ import {
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
-import { createQueueAttentionActionAdapter } from '@/lib/queueAttentionActionAdapter';
+import {
+  createQueueAttentionActionAdapter,
+  type QueueAttentionAcknowledgeStatus,
+} from '@/lib/queueAttentionActionAdapter';
 import {
   completedInboxActionState,
   failedInboxActionState,
@@ -26,6 +29,11 @@ import {
   type InboxActionState,
 } from '@/lib/inboxActionState';
 import type { ModerationActionRequestReceipt } from '@/lib/moderationActionRequestQueue';
+import {
+  formatQueueAttentionAcknowledgement,
+  summarizeQueueAttentionAcknowledgements,
+  type QueueAttentionAcknowledgementSummary,
+} from '@/lib/queueAttentionReceipt';
 
 type DestructiveObservedAlertAction = Extract<ObservedAlertWebAction, 'kick_user' | 'ban_user'>;
 
@@ -146,7 +154,7 @@ async function assertCanQueueObservedAlertAction(
 export async function acknowledgeQueueAttentionItem(
   guildId: string,
   queueItemId: string
-): Promise<void> {
+): Promise<QueueAttentionAcknowledgeStatus> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
     redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/inbox`);
@@ -154,13 +162,14 @@ export async function acknowledgeQueueAttentionItem(
 
   const setupService = createSetupDashboardService();
   await setupService.assertCanManageGuild(guildId, token.accessToken);
-  await createQueueAttentionActionAdapter().acknowledgeAttentionItem({
+  const result = await createQueueAttentionActionAdapter().acknowledgeAttentionItem({
     guildId,
     queueItemId,
     actor: { id: session.userId, surface: 'web' },
   });
 
   revalidatePath(`/admin/guild/${guildId}/inbox`);
+  return result.status;
 }
 
 export async function acknowledgeInboxQueueAttentionItem(
@@ -170,8 +179,10 @@ export async function acknowledgeInboxQueueAttentionItem(
   _formData: FormData
 ): Promise<InboxActionState> {
   try {
-    await acknowledgeQueueAttentionItem(guildId, queueItemId);
-    return completedInboxActionState('Reply acknowledged.');
+    const status = await acknowledgeQueueAttentionItem(guildId, queueItemId);
+    return completedInboxActionState(
+      formatQueueAttentionAcknowledgement(summarizeQueueAttentionAcknowledgements([status]))
+    );
   } catch (error) {
     return failedInboxActionState(error);
   }
@@ -180,10 +191,10 @@ export async function acknowledgeInboxQueueAttentionItem(
 export async function acknowledgeQueueAttentionItems(
   guildId: string,
   formData: FormData
-): Promise<void> {
+): Promise<QueueAttentionAcknowledgementSummary> {
   const queueItemIds = readQueueItemIds(formData);
   if (queueItemIds.length === 0) {
-    return;
+    return summarizeQueueAttentionAcknowledgements([]);
   }
 
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
@@ -195,16 +206,19 @@ export async function acknowledgeQueueAttentionItems(
   await setupService.assertCanManageGuild(guildId, token.accessToken);
   const adapter = createQueueAttentionActionAdapter();
   const actor = { id: session.userId, surface: 'web' as const };
+  const statuses: QueueAttentionAcknowledgeStatus[] = [];
 
   for (const queueItemId of queueItemIds) {
-    await adapter.acknowledgeAttentionItem({
+    const result = await adapter.acknowledgeAttentionItem({
       guildId,
       queueItemId,
       actor,
     });
+    statuses.push(result.status);
   }
 
   revalidatePath(`/admin/guild/${guildId}/inbox`);
+  return summarizeQueueAttentionAcknowledgements(statuses);
 }
 
 export async function acknowledgeInboxQueueAttentionItems(
@@ -217,10 +231,8 @@ export async function acknowledgeInboxQueueAttentionItems(
     if (queueItemCount === 0) {
       throw new Error('Select at least one reply to acknowledge.');
     }
-    await acknowledgeQueueAttentionItems(guildId, formData);
-    return completedInboxActionState(
-      `${queueItemCount} ${queueItemCount === 1 ? 'reply' : 'replies'} acknowledged.`
-    );
+    const summary = await acknowledgeQueueAttentionItems(guildId, formData);
+    return completedInboxActionState(formatQueueAttentionAcknowledgement(summary));
   } catch (error) {
     return failedInboxActionState(error);
   }
@@ -293,6 +305,9 @@ export async function queueInboxObservedAlertAction(
       action,
       formData
     );
+    if (receipt.status === 'completed') {
+      return completedInboxActionState('Action was already handled.', receipt.id);
+    }
     return queuedInboxActionState(receipt);
   } catch (error) {
     return failedInboxActionState(error);
