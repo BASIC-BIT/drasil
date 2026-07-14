@@ -1,5 +1,6 @@
 import type { ModerationInboxAction, ModerationInboxItem } from '@drasil/contracts';
 import type { ModerationActionRequestSummary } from './moderationActionRequestDataAdapter';
+import { inboxModerationActionRequestTypes } from './inboxActionRequestTypes';
 import type { ModerationActionRequestActionType } from './moderationActionRequestQueue';
 
 const requestTypeByAction: Partial<
@@ -20,8 +21,8 @@ const requestTypeByAction: Partial<
   verify_user: ['verify_case_user'],
 };
 
-const inboxRequestTypes = new Set(
-  Object.values(requestTypeByAction).flatMap((actionTypes) => actionTypes ?? [])
+const inboxRequestTypes = new Set<ModerationActionRequestActionType>(
+  inboxModerationActionRequestTypes
 );
 
 function requestMatchesItem(

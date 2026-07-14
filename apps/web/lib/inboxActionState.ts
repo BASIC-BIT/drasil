@@ -21,6 +21,32 @@ export function isInboxActionSubmitBlocked(status: InboxActionStatus): boolean {
   return status === 'queued' || status === 'processing' || status === 'completed';
 }
 
+export function isInboxActionInFlight(status: InboxActionStatus): boolean {
+  return status === 'queued' || status === 'processing';
+}
+
+export function shouldUseDurableInboxActionState(
+  localState: InboxActionState,
+  durableRequest: {
+    readonly id: string;
+    readonly status: InboxActionStatus;
+    readonly updatedAt: string;
+  },
+  durableUpdatedAtAtSubmit: string | null
+): boolean {
+  if (localState.status === 'idle') {
+    return true;
+  }
+  if (durableRequest.id !== localState.requestId) {
+    return false;
+  }
+  const staleFailedReceipt =
+    isInboxActionInFlight(localState.status) &&
+    durableRequest.status === 'failed' &&
+    durableRequest.updatedAt === durableUpdatedAtAtSubmit;
+  return !staleFailedReceipt;
+}
+
 export function completedInboxActionState(
   message: string,
   requestId: string | null = null

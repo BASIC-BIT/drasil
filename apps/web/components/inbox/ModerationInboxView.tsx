@@ -270,6 +270,7 @@ function InboxControls({
               action={acknowledgeQueueItemsAction.bind(null, guildId) as InboxStateAction}
               buttonLabel={acknowledgeButtonLabel}
               formClassName="bulk-action-form"
+              key={acknowledgeQueueItemIds.join(':')}
             >
               {acknowledgeQueueItemIds.map((queueItemId) => (
                 <input key={queueItemId} name="queueItemId" type="hidden" value={queueItemId} />

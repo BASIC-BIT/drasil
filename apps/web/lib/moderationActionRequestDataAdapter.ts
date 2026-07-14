@@ -1,3 +1,4 @@
+import { inboxModerationActionRequestTypes } from './inboxActionRequestTypes';
 import type {
   ModerationActionRequestActionType,
   ModerationActionRequestQueueStatus,
@@ -233,6 +234,7 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          select id
          from moderation_action_requests
          where server_id = $1
+           and (not $3::boolean or action_type = any($4::moderation_action_request_type[]))
          order by case when $3::boolean then updated_at else requested_at end desc
          limit $2
        ), inbox_request_ids as (
@@ -242,6 +244,7 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          from moderation_action_requests
          where $3::boolean
            and server_id = $1
+           and action_type = any($4::moderation_action_request_type[])
            and status in ('queued', 'processing')
        )
        select
@@ -263,7 +266,7 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
        from moderation_action_requests requests
        join inbox_request_ids selected on selected.id = requests.id
        order by requests.requested_at desc`,
-      [guildId, boundedLimit, includeAllActive]
+      [guildId, boundedLimit, includeAllActive, inboxModerationActionRequestTypes]
     );
 
     return result.rows.map(parseModerationActionRequestRow);

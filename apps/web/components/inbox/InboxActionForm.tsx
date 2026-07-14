@@ -1,11 +1,13 @@
 'use client';
 
-import { useActionState, useEffect, useState } from 'react';
+import { useActionState, useEffect, useRef, useState } from 'react';
 import { useFormStatus } from 'react-dom';
 import type { ReactNode } from 'react';
 import {
   initialInboxActionState,
+  isInboxActionInFlight,
   isInboxActionSubmitBlocked,
+  shouldUseDurableInboxActionState,
   type InboxActionState,
   type InboxActionStatus,
 } from '@/lib/inboxActionState';
@@ -90,6 +92,7 @@ export function InboxActionForm({
 }) {
   const [localState, formAction] = useActionState(action, initialInboxActionState);
   const [submitting, setSubmitting] = useState(false);
+  const durableUpdatedAtAtSubmit = useRef<string | null>(null);
   const setLocalRequestActive = useInboxActionRequestPolling();
 
   useEffect(() => {
@@ -98,13 +101,13 @@ export function InboxActionForm({
   const durableApplies =
     durableRequest !== null &&
     durableRequest !== undefined &&
-    (localState.status === 'idle' || durableRequest.id === localState.requestId);
+    shouldUseDurableInboxActionState(localState, durableRequest, durableUpdatedAtAtSubmit.current);
   const status = durableApplies ? durableRequest.status : localState.status;
   const requestId = durableApplies ? durableRequest.id : localState.requestId;
   const message = durableApplies
     ? (durableRequest.lastError ?? durableRequest.resultSummary ?? defaultMessage(status))
     : (localState.message ?? defaultMessage(status));
-  const actionInFlight = status === 'queued' || status === 'processing';
+  const actionInFlight = isInboxActionInFlight(status);
   const showReceipt = status !== 'idle';
 
   useEffect(() => {
@@ -119,7 +122,10 @@ export function InboxActionForm({
       action={formAction}
       aria-label={`${buttonLabel} action`}
       className={formClassName}
-      onSubmit={() => setSubmitting(true)}
+      onSubmit={() => {
+        durableUpdatedAtAtSubmit.current = durableRequest?.updatedAt ?? null;
+        setSubmitting(true);
+      }}
     >
       {children}
       <InboxSubmitButton

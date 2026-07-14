@@ -22,14 +22,15 @@ const closureActions = new Set<ReportQueueAction>([
   'mark_false_positive',
 ]);
 
-export async function closeSubmittedReport(
+async function performCloseSubmittedReport(
   guildId: string,
   reportId: string,
-  action: ReportClosureAction
+  action: ReportClosureAction,
+  returnTo: string
 ): Promise<void> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
-    redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/reports`);
+    redirect(`/api/auth/discord?returnTo=${returnTo}`);
   }
 
   const parsedAction = reportQueueActionSchema.parse(action);
@@ -55,6 +56,14 @@ export async function closeSubmittedReport(
   revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
 }
 
+export async function closeSubmittedReport(
+  guildId: string,
+  reportId: string,
+  action: ReportClosureAction
+): Promise<void> {
+  await performCloseSubmittedReport(guildId, reportId, action, `/admin/guild/${guildId}/reports`);
+}
+
 export async function closeInboxSubmittedReport(
   guildId: string,
   reportId: string,
@@ -63,7 +72,7 @@ export async function closeInboxSubmittedReport(
   _formData: FormData
 ): Promise<InboxActionState> {
   try {
-    await closeSubmittedReport(guildId, reportId, action);
+    await performCloseSubmittedReport(guildId, reportId, action, `/admin/guild/${guildId}/inbox`);
     return completedInboxActionState('Report action completed.');
   } catch (error) {
     return failedInboxActionState(error);
