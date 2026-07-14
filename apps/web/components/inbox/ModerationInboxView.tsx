@@ -16,7 +16,7 @@ import {
   type WebCaseAction,
 } from '@/components/cases/CaseActionControls';
 import { InboxActionForm, type InboxStateAction } from './InboxActionForm';
-import { InboxActionRequestPoller } from './InboxActionRequestPoller';
+import { InboxActionRequestPollingProvider } from './InboxActionRequestPoller';
 import { formatDetectionType, formatUtc, freshnessStatusClass } from '@/lib/casePresentation';
 import type { InboxActionState } from '@/lib/inboxActionState';
 import { findInboxActionRequest, hasActiveInboxActionRequests } from '@/lib/inboxActionReceipts';
@@ -893,11 +893,8 @@ export function ModerationInboxView({
   const staleCount = items.filter((item) => item.stale).length;
   const attentionCount = items.filter((item) => isModerationInboxAttentionKind(item.kind)).length;
 
-  return (
+  const content = (
     <main className="shell stack">
-      {pollActionRequests ? (
-        <InboxActionRequestPoller active={hasActiveInboxActionRequests(recentActionRequests)} />
-      ) : null}
       <nav className="topbar">
         <a className="brand" href="/admin">
           <span className="brand-mark" />
@@ -1028,5 +1025,14 @@ export function ModerationInboxView({
         </>
       )}
     </main>
+  );
+
+  return (
+    <InboxActionRequestPollingProvider
+      enabled={pollActionRequests}
+      serverActive={hasActiveInboxActionRequests(recentActionRequests)}
+    >
+      {content}
+    </InboxActionRequestPollingProvider>
   );
 }

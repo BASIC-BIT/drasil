@@ -9,6 +9,7 @@ import {
   type InboxActionStatus,
 } from '@/lib/inboxActionState';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
+import { useInboxActionRequestPolling } from './InboxActionRequestPoller';
 
 export type InboxStateAction = (
   previousState: InboxActionState,
@@ -88,6 +89,7 @@ export function InboxActionForm({
 }) {
   const [localState, formAction] = useActionState(action, initialInboxActionState);
   const [submitting, setSubmitting] = useState(false);
+  const setLocalRequestActive = useInboxActionRequestPolling();
 
   useEffect(() => {
     setSubmitting(false);
@@ -103,6 +105,14 @@ export function InboxActionForm({
     : (localState.message ?? defaultMessage(status));
   const actionInFlight = status === 'queued' || status === 'processing';
   const showReceipt = status !== 'idle';
+
+  useEffect(() => {
+    if (!requestId) {
+      return;
+    }
+    setLocalRequestActive(requestId, actionInFlight);
+    return () => setLocalRequestActive(requestId, false);
+  }, [actionInFlight, requestId, setLocalRequestActive]);
 
   return (
     <form
