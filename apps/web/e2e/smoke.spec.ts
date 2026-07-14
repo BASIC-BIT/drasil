@@ -304,6 +304,7 @@ test('moderation inbox navigates and queues active case actions', async ({ page 
     'href',
     '/admin/guild/guild-1/operations#request-fixture-case-action-refresh_notification-case-stale'
   );
+  await expect(actions.getByRole('button', { name: 'Refresh Notification' })).toBeDisabled();
 
   const refreshedActions = detail.getByLabel('Actions for Pending moderation case');
   const banAction = refreshedActions

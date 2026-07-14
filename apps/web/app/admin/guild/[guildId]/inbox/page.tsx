@@ -34,7 +34,7 @@ export default async function ModerationInboxPage({ params }: PageProps) {
   const reportQueueAdapter = createReportQueueDataAdapter();
   const [items, recentActionRequests] = await Promise.all([
     inboxAdapter.listInboxItems(guildId),
-    actionRequestAdapter.listRecentRequests(guildId, 25),
+    actionRequestAdapter.listInboxRequests(guildId, 25),
   ]);
 
   return (

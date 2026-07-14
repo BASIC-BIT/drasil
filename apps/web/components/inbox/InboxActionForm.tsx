@@ -101,9 +101,7 @@ export function InboxActionForm({
   const message = durableApplies
     ? (durableRequest.lastError ?? durableRequest.resultSummary ?? defaultMessage(status))
     : (localState.message ?? defaultMessage(status));
-  const durableActionInFlight =
-    durableApplies &&
-    (durableRequest.status === 'queued' || durableRequest.status === 'processing');
+  const actionInFlight = status === 'queued' || status === 'processing';
   const showReceipt = status !== 'idle';
 
   return (
@@ -115,7 +113,7 @@ export function InboxActionForm({
     >
       {children}
       <InboxSubmitButton
-        blocked={durableActionInFlight}
+        blocked={actionInFlight}
         buttonClassName={buttonClassName}
         buttonLabel={buttonLabel}
         pendingLabel={pendingLabel}

@@ -24,6 +24,10 @@ export interface ModerationActionRequestSummary {
 }
 
 export interface ModerationActionRequestDataAdapter {
+  listInboxRequests(
+    guildId: string,
+    recentLimit?: number
+  ): Promise<ModerationActionRequestSummary[]>;
   listRecentRequests(guildId: string, limit?: number): Promise<ModerationActionRequestSummary[]>;
 }
 
@@ -204,33 +208,62 @@ export function parseModerationActionRequestRow(
 }
 
 export class PostgresModerationActionRequestDataAdapter implements ModerationActionRequestDataAdapter {
+  public async listInboxRequests(
+    guildId: string,
+    recentLimit = 8
+  ): Promise<ModerationActionRequestSummary[]> {
+    return this.listRequests(guildId, recentLimit, true);
+  }
+
   public async listRecentRequests(
     guildId: string,
     limit = 8
   ): Promise<ModerationActionRequestSummary[]> {
+    return this.listRequests(guildId, limit, false);
+  }
+
+  private async listRequests(
+    guildId: string,
+    limit: number,
+    includeAllActive: boolean
+  ): Promise<ModerationActionRequestSummary[]> {
     const boundedLimit = Math.max(1, Math.min(Math.floor(limit), 25));
     const result = await getPostgresPool().query<ModerationActionRequestRow>(
-      `select
-         id::text,
-         action_type::text as action_type,
-         actor_surface,
-         completed_at,
-         detection_event_id::text,
-         failed_at,
-         last_error,
-         metadata,
-         requested_at,
-         report_intake_id::text,
-         result,
-         status::text as status,
-         target_user_id,
-         updated_at,
-         verification_event_id::text
-       from moderation_action_requests
-       where server_id = $1
-       order by requested_at desc
-       limit $2`,
-      [guildId, boundedLimit]
+      `with selected_request_ids as (
+         select id
+         from moderation_action_requests
+         where server_id = $1
+         order by requested_at desc
+         limit $2
+       ), inbox_request_ids as (
+         select id from selected_request_ids
+         union
+         select id
+         from moderation_action_requests
+         where $3::boolean
+           and server_id = $1
+           and status in ('queued', 'processing')
+       )
+       select
+         requests.id::text,
+         requests.action_type::text as action_type,
+         requests.actor_surface,
+         requests.completed_at,
+         requests.detection_event_id::text,
+         requests.failed_at,
+         requests.last_error,
+         requests.metadata,
+         requests.requested_at,
+         requests.report_intake_id::text,
+         requests.result,
+         requests.status::text as status,
+         requests.target_user_id,
+         requests.updated_at,
+         requests.verification_event_id::text
+       from moderation_action_requests requests
+       join inbox_request_ids selected on selected.id = requests.id
+       order by requests.requested_at desc`,
+      [guildId, boundedLimit, includeAllActive]
     );
 
     return result.rows.map(parseModerationActionRequestRow);
@@ -238,6 +271,13 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
 }
 
 export class FixtureModerationActionRequestDataAdapter implements ModerationActionRequestDataAdapter {
+  public async listInboxRequests(
+    guildId: string,
+    recentLimit = 8
+  ): Promise<ModerationActionRequestSummary[]> {
+    return this.listRecentRequests(guildId, recentLimit);
+  }
+
   public async listRecentRequests(
     _guildId: string,
     _limit = 8
