@@ -1143,6 +1143,13 @@ export class UserModerationService implements IUserModerationService, ICombinedB
 
     const targetOperation = this.getActiveModerationOperation(targetEvent.metadata);
     if (
+      targetEvent.status === VerificationStatus.BANNED &&
+      targetOperation?.operationId === cleanupJobId &&
+      targetOperation.caseFinalized
+    ) {
+      return true;
+    }
+    if (
       targetEvent.status !== VerificationStatus.PENDING &&
       !(
         targetEvent.status === VerificationStatus.BANNED &&
@@ -1236,6 +1243,24 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         recordWithoutVerificationEvent: true,
       }
     );
+
+    const finalizedTargetEvent =
+      await this.verificationEventRepository.findById(verificationEventId);
+    if (!finalizedTargetEvent) {
+      throw new Error(
+        `Verification event ${verificationEventId} was not found after finalization.`
+      );
+    }
+    const markedFinalized = await this.verificationEventRepository.update(verificationEventId, {
+      metadata: this.withCompletedCombinedBanCleanup(
+        finalizedTargetEvent.metadata,
+        cleanupJobId,
+        resolvedAt
+      ),
+    });
+    if (!markedFinalized) {
+      throw new Error(`Failed to mark verification event ${verificationEventId} as finalized.`);
+    }
 
     void this.productAnalyticsService.captureUserEvent(
       guild.id,
@@ -2181,7 +2206,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
 
   private getActiveModerationOperation(
     metadata: VerificationEvent['metadata'] | Record<string, unknown>
-  ): { operationId: string } | null {
+  ): { operationId: string; caseFinalized: boolean } | null {
     const record = this.metadataToRecord(metadata as VerificationEvent['metadata']);
     const operation = record[ACTIVE_MODERATION_OPERATION_METADATA_KEY];
     if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
@@ -2196,7 +2221,34 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       return null;
     }
 
-    return { operationId: operationRecord.operation_id };
+    return {
+      operationId: operationRecord.operation_id,
+      caseFinalized: typeof operationRecord.case_finalized_at === 'string',
+    };
+  }
+
+  private withCompletedCombinedBanCleanup(
+    metadata: VerificationEvent['metadata'],
+    cleanupJobId: string,
+    finalizedAt: Date
+  ): VerificationEvent['metadata'] {
+    const record = this.metadataToRecord(metadata);
+    const operation = record[ACTIVE_MODERATION_OPERATION_METADATA_KEY];
+    if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
+      throw new Error('Combined ban cleanup operation marker is missing.');
+    }
+    const operationRecord = operation as Record<string, unknown>;
+    if (
+      operationRecord.kind !== COMBINED_BAN_CLEANUP_OPERATION_KIND ||
+      operationRecord.operation_id !== cleanupJobId
+    ) {
+      throw new Error('Combined ban cleanup operation marker does not match the cleanup job.');
+    }
+    record[ACTIVE_MODERATION_OPERATION_METADATA_KEY] = {
+      ...operationRecord,
+      case_finalized_at: finalizedAt.toISOString(),
+    };
+    return record as VerificationEvent['metadata'];
   }
 
   private withoutActiveModerationOperation(

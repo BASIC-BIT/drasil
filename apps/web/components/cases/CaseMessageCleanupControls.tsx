@@ -162,11 +162,22 @@ function ExecuteForm({
 }) {
   const router = useRouter();
   const [state, formAction] = useActionState(action, initialInboxActionState);
+  const [idempotencyToken, setIdempotencyToken] = useState('');
   const count = job.outcomes.candidateCount;
   const combined = job.mode === 'ban_with_cleanup';
   const confirmationLabel = combined
     ? `Confirm ban and delete ${count} message${count === 1 ? '' : 's'}`
     : `Confirm delete ${count} message${count === 1 ? '' : 's'}`;
+
+  useEffect(() => {
+    setIdempotencyToken(`execute-${job.id}-${crypto.randomUUID()}`);
+  }, [job.id]);
+
+  useEffect(() => {
+    if (state.status === 'failed') {
+      setIdempotencyToken(`execute-${job.id}-${crypto.randomUUID()}`);
+    }
+  }, [job.id, state.status]);
 
   useEffect(() => {
     if (!isInboxActionInFlight(state.status)) {
@@ -180,7 +191,7 @@ function ExecuteForm({
 
   return (
     <form action={formAction} className="cleanup-execute-form">
-      <input name="idempotencyKey" type="hidden" value={`execute-${job.id}`} />
+      <input name="idempotencyKey" type="hidden" value={idempotencyToken} />
       <input name="jobId" type="hidden" value={job.id} />
       <input name="mode" type="hidden" value={job.mode} />
       <input name="reason" type="hidden" value={job.reason} />
@@ -190,7 +201,9 @@ function ExecuteForm({
         <span>{confirmationLabel}</span>
       </label>
       <CleanupSubmitButton
-        blocked={!job.execution.canExecute || isInboxActionSubmitBlocked(state.status)}
+        blocked={
+          !idempotencyToken || !job.execution.canExecute || isInboxActionSubmitBlocked(state.status)
+        }
         label={combined ? 'Ban User and Delete Messages' : 'Delete Messages'}
         pendingLabel="Queueing..."
       />
@@ -235,7 +248,7 @@ export function CaseMessageCleanupControls({
     () => workspace.latestJobs.find((job) => job.mode === mode) ?? null,
     [mode, workspace.latestJobs]
   );
-  const detail = jobDetail?.mode === mode ? jobDetail : null;
+  const detail = jobDetail?.mode === mode && jobDetail.id === latestJob?.id ? jobDetail : null;
   const [startNewPreview, setStartNewPreview] = useState(false);
   const [readyForInteraction, setReadyForInteraction] = useState(false);
 
@@ -272,6 +285,8 @@ export function CaseMessageCleanupControls({
   const coverageClass = latestJob.coverage
     ? messageCleanupStatusClass(latestJob.coverage)
     : 'neutral';
+  const hasVisibleCandidates =
+    detail !== null && detail.items.length === latestJob.outcomes.candidateCount;
 
   return (
     <div className="cleanup-workspace">
@@ -304,7 +319,13 @@ export function CaseMessageCleanupControls({
       ) : null}
       {latestJob.status === 'ready' ? (
         latestJob.execution.canExecute ? (
-          <ExecuteForm action={executeAction} job={latestJob} />
+          hasVisibleCandidates ? (
+            <ExecuteForm action={executeAction} job={latestJob} />
+          ) : (
+            <p className="cleanup-blocked">
+              Open the job to review every frozen message before executing cleanup.
+            </p>
+          )
         ) : (
           <p className="cleanup-blocked">
             This preview cannot execute: {latestJob.execution.blockedReason?.split('_').join(' ')}.

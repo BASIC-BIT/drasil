@@ -806,6 +806,40 @@ describe('UserModerationService (unit)', () => {
       'active_moderation_operation.operation_id',
       'cleanup-job-1'
     );
+    expect(finalizedEvent?.metadata).toHaveProperty(
+      'active_moderation_operation.case_finalized_at',
+      expect.any(String)
+    );
+    const resolutionCalls = (threadManager.resolveVerificationThread as jest.Mock).mock.calls
+      .length;
+    const adminActionsAfterFirstFinalization = await adminActionRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    const outcomesAfterFirstFinalization = await moderationOutcomeRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+
+    await expect(
+      service.finalizeSuccessfulCombinedBan(
+        guild,
+        userId,
+        verificationEvent.id,
+        'cleanup-job-1',
+        'combined moderation action',
+        moderator,
+        detectionEvent.id
+      )
+    ).resolves.toBe(true);
+
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledTimes(resolutionCalls);
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      adminActionsAfterFirstFinalization.length
+    );
+    await expect(
+      moderationOutcomeRepository.findByUserAndServer(userId, guildId)
+    ).resolves.toHaveLength(outcomesAfterFirstFinalization.length);
     await expect(
       service.clearCombinedBanCleanupMarker(verificationEvent.id, 'cleanup-job-1')
     ).resolves.toBe(true);

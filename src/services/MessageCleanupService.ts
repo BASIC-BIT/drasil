@@ -4,6 +4,7 @@ import { TYPES } from '../di/symbols';
 import type { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import type { IMessageContextRepository } from '../repositories/MessageContextRepository';
 import type { IMessageDeletionJobRepository } from '../repositories/MessageDeletionJobRepository';
+import type { IServerRepository } from '../repositories/ServerRepository';
 import type { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import type { IMessageDeletionService } from './MessageDeletionService';
 import {
@@ -21,6 +22,7 @@ import {
   type MessageDeletionJobSummary,
   type MessageDeletionJobWithItems,
   type MessageDeletionPreviewResult,
+  type ServerSettings,
 } from '../repositories/types';
 
 const SEARCH_PAGE_SIZE = 25;
@@ -86,6 +88,7 @@ export class MessageCleanupService {
     private readonly detectionEvents: IDetectionEventsRepository,
     @inject(TYPES.MessageContextRepository)
     private readonly messageContexts: IMessageContextRepository,
+    @inject(TYPES.ServerRepository) private readonly servers: IServerRepository,
     @inject(TYPES.MessageDeletionService)
     private readonly deletionService: MessageCleanupDeletionService,
     private readonly now: () => Date = () => new Date()
@@ -146,10 +149,11 @@ export class MessageCleanupService {
 
     try {
       // A process exit bypasses this catch and leaves EXECUTING state for stale-request recovery.
+      const server = await this.servers.findById(execution.server_id);
       const prepared: PreparedDeletion[] = [];
       for (const item of execution.items) {
         if (item.status !== MessageDeletionItemStatus.PENDING) continue;
-        const candidate = await this.prepareDeletion(execution, item);
+        const candidate = await this.prepareDeletion(execution, item, server?.settings);
         if (candidate) prepared.push(candidate);
       }
       await this.deletePrepared(execution, prepared);
@@ -374,7 +378,8 @@ export class MessageCleanupService {
 
   private async prepareDeletion(
     job: MessageDeletionJobWithItems,
-    item: MessageDeletionItem
+    item: MessageDeletionItem,
+    settings?: ServerSettings
   ): Promise<PreparedDeletion | null> {
     const attemptedAt = this.now();
     const live = await this.fetchLiveMessage(item.channel_id, item.message_id);
@@ -412,6 +417,7 @@ export class MessageCleanupService {
           jobId: job.id,
           itemId: item.id,
           reason: job.reason,
+          settings,
         });
         if (!result.preserved || !result.evidenceMessageId) {
           throw new Error(result.reason ?? 'evidence_preservation_failed');

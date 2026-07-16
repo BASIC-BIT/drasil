@@ -27,6 +27,27 @@ test('source-message execution submits once and exposes its durable receipt', as
   await expect(form.locator('.action-receipt')).toHaveCount(1);
 });
 
+test('failed execution rotates its request token and can be retried', async ({ page }) => {
+  await page.goto(casePath);
+
+  const form = cleanupSection(page).locator('form.cleanup-execute-form');
+  const token = form.locator('input[name="idempotencyKey"]');
+  await expect(token).not.toHaveValue('');
+  const firstToken = await token.inputValue();
+  await token.evaluate((input: HTMLInputElement) => {
+    input.value = 'invalid';
+  });
+  await form.getByLabel('Confirm delete 1 message').check();
+  await form.getByRole('button', { name: 'Delete Messages' }).click();
+
+  await expect(form.locator('.action-receipt .status')).toHaveText('failed');
+  await expect(token).not.toHaveValue(firstToken);
+  await expect(token).not.toHaveValue('invalid');
+  await form.getByLabel('Confirm delete 1 message').check();
+  await form.getByRole('button', { name: 'Delete Messages' }).click();
+  await expect(form.locator('.action-receipt .status')).toHaveText('queued');
+});
+
 for (const scope of [
   { label: 'Source message', value: 'source_message' },
   { label: 'Last hour', value: 'last_hour' },
@@ -156,7 +177,10 @@ test('combined job detail exposes item outcomes and preserved evidence', async (
 
 test('inbox exposes cleanup only for the selected case item', async ({ page }) => {
   await page.goto('/admin/guild/guild-1/inbox');
-  await expect(cleanupSection(page)).toBeVisible();
+  const cleanup = cleanupSection(page);
+  await expect(cleanup).toBeVisible();
+  await expect(cleanup.getByText(/review every frozen message/i)).toBeVisible();
+  await expect(cleanup.getByRole('button', { name: 'Delete Messages' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Submitted report' }).click();
   await expect(cleanupSection(page)).toHaveCount(0);

@@ -2,6 +2,7 @@ import type { Client, Message } from 'discord.js';
 import type { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import type { IMessageContextRepository } from '../../repositories/MessageContextRepository';
 import type { IMessageDeletionJobRepository } from '../../repositories/MessageDeletionJobRepository';
+import type { IServerRepository } from '../../repositories/ServerRepository';
 import type { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import {
   MessageDeletionBanStatus,
@@ -21,6 +22,7 @@ import {
   type MessageDeletionJobSummary,
   type MessageDeletionJobWithItems,
   type MessageDeletionPreviewResult,
+  type ServerSettings,
   type VerificationEvent,
 } from '../../repositories/types';
 import {
@@ -247,6 +249,7 @@ function createHarness(
     detection?: DetectionEvent | null;
     contexts?: MessageContext[];
     deletion?: Partial<MessageCleanupDeletionService>;
+    serverSettings?: ServerSettings;
   } = {}
 ) {
   const jobs = new FakeJobRepository(input.job ?? buildJob());
@@ -265,6 +268,9 @@ function createHarness(
   const messageContexts = {
     findRecentByServerAndUser: jest.fn().mockResolvedValue(input.contexts ?? []),
   } as unknown as IMessageContextRepository;
+  const servers = {
+    findById: jest.fn().mockResolvedValue({ settings: input.serverSettings ?? {} }),
+  } as unknown as IServerRepository;
   const deletionService: MessageCleanupDeletionService = {
     preserveMessageEvidence: jest
       .fn()
@@ -279,6 +285,7 @@ function createHarness(
     verificationEvents,
     detectionEvents,
     messageContexts,
+    servers,
     deletionService,
     () => new Date(NOW)
   );
@@ -433,11 +440,24 @@ describe('MessageCleanupService', () => {
       }),
       channelsFetch: jest.fn().mockResolvedValue({ messages: { fetch: fetchMessage } }),
       deletion: { preserveMessageEvidence: preserve, bulkDeleteMessages: bulkDelete },
+      serverSettings: { report_ai_max_images: 1, report_ai_max_image_bytes: 2048 },
     });
 
     const result = await harness.service.executeJob('job-1');
 
     expect(preserve).toHaveBeenCalledTimes(2);
+    expect(preserve).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        settings: { report_ai_max_images: 1, report_ai_max_image_bytes: 2048 },
+      })
+    );
+    expect(preserve).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        settings: { report_ai_max_images: 1, report_ai_max_image_bytes: 2048 },
+      })
+    );
     expect(bulkDelete).toHaveBeenCalledWith({
       channelId: 'channel-1',
       messageIds: ['message-1', 'message-2'],
