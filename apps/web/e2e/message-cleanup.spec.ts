@@ -53,7 +53,9 @@ test('Start new preview creates a fresh stable token for each explicit intent', 
   await page.goto(`${casePath}?cleanupScenario=blocked-indexing`);
 
   const cleanup = cleanupSection(page);
-  await cleanup.getByRole('button', { name: 'Start new preview' }).click();
+  const startNewPreview = cleanup.getByRole('button', { name: 'Start new preview' });
+  await expect(startNewPreview).toBeEnabled();
+  await startNewPreview.click();
   const firstForm = previewForm(page);
   const firstToken = firstForm.locator('input[name="idempotencyKey"]');
   await expect(firstToken).not.toHaveValue('');
@@ -62,7 +64,11 @@ test('Start new preview creates a fresh stable token for each explicit intent', 
   await expect(firstToken).toHaveValue(firstValue);
 
   await page.reload();
-  await cleanupSection(page).getByRole('button', { name: 'Start new preview' }).click();
+  const reloadedStartNewPreview = cleanupSection(page).getByRole('button', {
+    name: 'Start new preview',
+  });
+  await expect(reloadedStartNewPreview).toBeEnabled();
+  await reloadedStartNewPreview.click();
   const secondToken = previewForm(page).locator('input[name="idempotencyKey"]');
   await expect(secondToken).not.toHaveValue('');
   expect(await secondToken.inputValue()).not.toBe(firstValue);

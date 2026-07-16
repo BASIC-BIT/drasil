@@ -502,7 +502,6 @@ export class MessageCleanupService {
       evidenceStatus: MessageDeletionEvidenceStatus.PRESERVED,
       evidenceMessageId: candidate.evidenceMessageId,
       attemptedAt: completedAt,
-      evidencePreservedAt: completedAt,
       deletedAt: completedAt,
       completedAt,
     });
@@ -518,7 +517,6 @@ export class MessageCleanupService {
       evidenceStatus: MessageDeletionEvidenceStatus.PRESERVED,
       evidenceMessageId: candidate.evidenceMessageId,
       attemptedAt: this.now(),
-      evidencePreservedAt: this.now(),
       failureReason: failure.reason,
     });
   }

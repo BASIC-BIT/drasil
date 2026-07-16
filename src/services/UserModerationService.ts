@@ -982,14 +982,16 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     if (!verificationEvent) {
       throw new Error(`Verification event ${verificationEventId} was not found.`);
     }
-    if (verificationEvent.status !== VerificationStatus.PENDING) {
-      throw new Error(`Verification event ${verificationEventId} is no longer pending.`);
-    }
-
     const metadata = this.metadataToRecord(verificationEvent.metadata);
     const existingOperation = this.getActiveModerationOperation(metadata);
-    if (existingOperation?.operationId === cleanupJobId) {
+    if (
+      existingOperation?.operationId === cleanupJobId &&
+      [VerificationStatus.PENDING, VerificationStatus.BANNED].includes(verificationEvent.status)
+    ) {
       return verificationEvent;
+    }
+    if (verificationEvent.status !== VerificationStatus.PENDING) {
+      throw new Error(`Verification event ${verificationEventId} is no longer pending.`);
     }
     if (existingOperation && existingOperation.operationId !== cleanupJobId) {
       throw new Error(`Verification event ${verificationEventId} already has an active operation.`);
@@ -1235,7 +1237,6 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       }
     );
 
-    await this.clearCombinedBanCleanupMarker(verificationEventId, cleanupJobId);
     void this.productAnalyticsService.captureUserEvent(
       guild.id,
       userId,

@@ -49,6 +49,7 @@ import { CaseRoleLockdownReport, ICaseRoleLockdownService } from './CaseRoleLock
 
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_MAX_REQUESTS_PER_TICK = 5;
+const REQUEST_HEARTBEAT_INTERVAL_MS = 60_000;
 const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notification';
 const OBSERVED_KICK_DEFAULT_REASON = 'Kicked from observed suspicious notification';
 
@@ -210,6 +211,12 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   }
 
   private async processClaimedRequest(request: ModerationActionRequest): Promise<void> {
+    const heartbeat = setInterval(() => {
+      void this.repository.heartbeat(request.id).catch((error) => {
+        console.warn(`Failed to heartbeat moderation action request ${request.id}:`, error);
+      });
+    }, REQUEST_HEARTBEAT_INTERVAL_MS);
+    heartbeat.unref();
     try {
       const processor = this.requestProcessors[request.action_type];
       if (!processor) {
@@ -223,6 +230,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       await processor(request);
     } catch (error) {
       await this.repository.fail(request.id, this.errorMessage(error));
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 
@@ -1019,34 +1028,36 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       throw error;
     }
 
-    await this.messageDeletionJobs.updateCaseFinalizationStatus(
-      job.id,
-      MessageDeletionCaseFinalizationStatus.PENDING
-    );
-    try {
-      await this.userModerationService.finalizeSuccessfulCombinedBan(
-        guild,
-        job.user_id,
-        job.verification_event_id,
-        job.id,
-        job.reason,
-        moderator,
-        request.detection_event_id ?? undefined
-      );
+    if (job.case_finalization_status !== MessageDeletionCaseFinalizationStatus.SUCCEEDED) {
       await this.messageDeletionJobs.updateCaseFinalizationStatus(
         job.id,
-        MessageDeletionCaseFinalizationStatus.SUCCEEDED
+        MessageDeletionCaseFinalizationStatus.PENDING
       );
-    } catch (error) {
-      await this.messageDeletionJobs.updateCaseFinalizationStatus(
-        job.id,
-        MessageDeletionCaseFinalizationStatus.FAILED
-      );
-      await this.userModerationService.clearCombinedBanCleanupMarker(
-        job.verification_event_id,
-        job.id
-      );
-      throw error;
+      try {
+        await this.userModerationService.finalizeSuccessfulCombinedBan(
+          guild,
+          job.user_id,
+          job.verification_event_id,
+          job.id,
+          job.reason,
+          moderator,
+          request.detection_event_id ?? undefined
+        );
+        await this.messageDeletionJobs.updateCaseFinalizationStatus(
+          job.id,
+          MessageDeletionCaseFinalizationStatus.SUCCEEDED
+        );
+      } catch (error) {
+        await this.messageDeletionJobs.updateCaseFinalizationStatus(
+          job.id,
+          MessageDeletionCaseFinalizationStatus.FAILED
+        );
+        await this.userModerationService.clearCombinedBanCleanupMarker(
+          job.verification_event_id,
+          job.id
+        );
+        throw error;
+      }
     }
 
     await this.repository.complete(request.id, {
@@ -1057,6 +1068,14 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       mode: job.mode,
       ...this.messageCleanupReceipt(cleanupResult),
     });
+    try {
+      await this.userModerationService.clearCombinedBanCleanupMarker(
+        job.verification_event_id,
+        job.id
+      );
+    } catch (error) {
+      console.warn(`Failed to clear completed cleanup marker for job ${job.id}:`, error);
+    }
   }
 
   private async banCaseUserById(request: ModerationActionRequest): Promise<void> {

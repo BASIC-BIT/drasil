@@ -311,9 +311,15 @@ export class MessageDeletionJobRepository implements IMessageDeletionJobReposito
         update message_deletion_items
         set status = ${outcome.status}::message_deletion_item_status,
             evidence_status = ${outcome.evidenceStatus}::message_deletion_evidence_status,
-            evidence_message_id = ${outcome.evidenceMessageId ?? null},
+            evidence_message_id = coalesce(
+              ${outcome.evidenceMessageId ?? null},
+              evidence_message_id
+            ),
             attempted_at = ${outcome.attemptedAt ?? new Date()},
-            evidence_preserved_at = ${outcome.evidencePreservedAt ?? null},
+            evidence_preserved_at = coalesce(
+              ${outcome.evidencePreservedAt ?? null},
+              evidence_preserved_at
+            ),
             deleted_at = ${outcome.deletedAt ?? null},
             completed_at = ${outcome.completedAt ?? new Date()},
             failure_reason = ${outcome.failureReason ?? null},

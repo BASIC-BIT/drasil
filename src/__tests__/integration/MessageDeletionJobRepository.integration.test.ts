@@ -108,11 +108,11 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
     const execution = await jobs.beginExecution(job.id);
     expect(execution?.items).toHaveLength(2);
     const [first, second] = execution!.items;
-    await jobs.markItemEvidencePreserved(first.id, 'evidence-message-1');
+    const evidencePreservedAt = new Date('2026-07-15T12:01:00.000Z');
+    await jobs.markItemEvidencePreserved(first.id, 'evidence-message-1', evidencePreservedAt);
     await jobs.updateItemOutcome(first.id, {
       status: MessageDeletionItemStatus.DELETED,
       evidenceStatus: MessageDeletionEvidenceStatus.PRESERVED,
-      evidenceMessageId: 'evidence-message-1',
       deletedAt: new Date(),
     });
     await jobs.updateItemOutcome(second.id, {
@@ -140,6 +140,7 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
         expect.objectContaining({
           status: MessageDeletionItemStatus.DELETED,
           evidence_message_id: 'evidence-message-1',
+          evidence_preserved_at: evidencePreservedAt,
         }),
         expect.objectContaining({ status: MessageDeletionItemStatus.CHANGED_SINCE_PREVIEW }),
       ],
@@ -275,11 +276,52 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
           updated_at = now() - interval '16 minutes'
       where id = ${request.id}::uuid
     `;
+    await expect(requests.heartbeat(request.id)).resolves.toMatchObject({
+      id: request.id,
+      status: ModerationActionRequestStatus.PROCESSING,
+    });
+    await prisma.$executeRaw`
+      update moderation_action_requests
+      set updated_at = now() - interval '16 minutes'
+      where id = ${request.id}::uuid
+    `;
 
     await expect(requests.claimNext()).resolves.toMatchObject({
       id: request.id,
       status: ModerationActionRequestStatus.PROCESSING,
       attempts: 1,
+    });
+  });
+
+  it('fails stale non-resumable case actions so they do not hold the case lock', async () => {
+    const verification = await createPendingCase();
+    const request = await requests.enqueue({
+      serverId: 'guild-1',
+      actionType: ModerationActionRequestType.REFRESH_CASE_NOTIFICATION,
+      actorId: 'administrator-1',
+      actorSurface: 'web',
+      targetUserId: 'user-1',
+      verificationEventId: verification.id,
+      idempotencyKey: `test:stale-refresh:${verification.id}`,
+    });
+    await requests.claimNext();
+    await prisma.$executeRaw`
+      update moderation_action_requests
+      set updated_at = now() - interval '16 minutes'
+      where id = ${request.id}::uuid
+    `;
+
+    await expect(requests.claimNext()).resolves.toBeNull();
+    const rows = await prisma.$queryRaw<
+      Array<{ last_error: string | null; status: ModerationActionRequestStatus }>
+    >`
+      select status::text as status, last_error
+      from moderation_action_requests
+      where id = ${request.id}::uuid
+    `;
+    expect(rows[0]).toEqual({
+      status: ModerationActionRequestStatus.FAILED,
+      last_error: 'Worker interrupted before this action completed.',
     });
   });
 });

@@ -11,6 +11,7 @@ import {
 export interface IModerationActionRequestRepository {
   enqueue(data: ModerationActionRequestCreate): Promise<ModerationActionRequest>;
   claimNext(): Promise<ModerationActionRequest | null>;
+  heartbeat(id: string): Promise<ModerationActionRequest | null>;
   complete(id: string, result?: Prisma.JsonValue | null): Promise<ModerationActionRequest | null>;
   fail(id: string, error: string): Promise<ModerationActionRequest | null>;
 }
@@ -93,6 +94,21 @@ export class ModerationActionRequestRepository implements IModerationActionReque
 
   public async claimNext(): Promise<ModerationActionRequest | null> {
     try {
+      await this.prisma.$executeRaw`
+        update moderation_action_requests
+        set status = 'failed'::moderation_action_request_status,
+            failed_at = now(),
+            updated_at = now(),
+            last_error = 'Worker interrupted before this action completed.'
+        where status = 'processing'::moderation_action_request_status
+          and verification_event_id is not null
+          and action_type not in (
+            'preview_case_message_deletion'::moderation_action_request_type,
+            'execute_case_message_deletion'::moderation_action_request_type,
+            'ban_case_user_with_message_cleanup'::moderation_action_request_type
+          )
+          and updated_at < now() - interval '15 minutes'
+      `;
       const rows = await this.prisma.$queryRaw<ModerationActionRequest[]>`
         update moderation_action_requests
         set status = 'processing'::moderation_action_request_status,
@@ -123,6 +139,21 @@ export class ModerationActionRequestRepository implements IModerationActionReque
       return rows[0] ?? null;
     } catch (error) {
       this.handleError(error, 'claimModerationActionRequest');
+    }
+  }
+
+  public async heartbeat(id: string): Promise<ModerationActionRequest | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<ModerationActionRequest[]>`
+        update moderation_action_requests
+        set updated_at = now()
+        where id = ${id}::uuid
+          and status = 'processing'::moderation_action_request_status
+        returning *
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'heartbeatModerationActionRequest');
     }
   }
 

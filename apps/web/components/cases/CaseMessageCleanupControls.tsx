@@ -237,6 +237,11 @@ export function CaseMessageCleanupControls({
   );
   const detail = jobDetail?.mode === mode ? jobDetail : null;
   const [startNewPreview, setStartNewPreview] = useState(false);
+  const [readyForInteraction, setReadyForInteraction] = useState(false);
+
+  useEffect(() => {
+    setReadyForInteraction(true);
+  }, []);
 
   useEffect(() => {
     setStartNewPreview(false);
@@ -313,6 +318,7 @@ export function CaseMessageCleanupControls({
         (latestJob.status === 'ready' && !latestJob.execution.canExecute)) ? (
         <button
           className="button secondary compact-button cleanup-new-preview"
+          disabled={!readyForInteraction}
           onClick={() => setStartNewPreview(true)}
           type="button"
         >

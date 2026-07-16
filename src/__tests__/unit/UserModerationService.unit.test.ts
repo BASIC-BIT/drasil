@@ -802,7 +802,18 @@ describe('UserModerationService (unit)', () => {
         resolved_by: moderator.id,
       })
     );
-    expect(finalizedEvent?.metadata).not.toHaveProperty('active_moderation_operation');
+    expect(finalizedEvent?.metadata).toHaveProperty(
+      'active_moderation_operation.operation_id',
+      'cleanup-job-1'
+    );
+    await expect(
+      service.clearCombinedBanCleanupMarker(verificationEvent.id, 'cleanup-job-1')
+    ).resolves.toBe(true);
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        metadata: expect.not.objectContaining({ active_moderation_operation: expect.anything() }),
+      })
+    );
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       VerificationStatus.BANNED,
@@ -874,6 +885,18 @@ describe('UserModerationService (unit)', () => {
       resolved_at: new Date(),
       resolved_by: moderator.id,
     });
+    await expect(
+      service.markCombinedBanCleanupPending(verificationEvent.id, 'cleanup-job-resume')
+    ).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.BANNED,
+        metadata: expect.objectContaining({
+          active_moderation_operation: expect.objectContaining({
+            operation_id: 'cleanup-job-resume',
+          }),
+        }),
+      })
+    );
 
     await service.finalizeSuccessfulCombinedBan(
       guild,
@@ -886,7 +909,13 @@ describe('UserModerationService (unit)', () => {
     );
 
     const finalized = await verificationEventRepository.findById(verificationEvent.id);
-    expect(finalized?.metadata).not.toHaveProperty('active_moderation_operation');
+    expect(finalized?.metadata).toHaveProperty(
+      'active_moderation_operation.operation_id',
+      'cleanup-job-resume'
+    );
+    await expect(
+      service.clearCombinedBanCleanupMarker(verificationEvent.id, 'cleanup-job-resume')
+    ).resolves.toBe(true);
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       VerificationStatus.BANNED,
