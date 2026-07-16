@@ -295,6 +295,46 @@ async function insertRequest(
   return receipt;
 }
 
+function frozenJobBelongsToRequest(
+  job: CleanupJobRow,
+  caseRow: CleanupCaseRow,
+  actorId: string
+): boolean {
+  return [
+    job.server_id === caseRow.server_id,
+    job.verification_event_id === caseRow.id,
+    job.user_id === caseRow.user_id,
+    job.evidence_thread_id === caseRow.private_evidence_thread_id,
+    job.requested_by === actorId,
+    job.actor_surface === ACTOR_SURFACE,
+  ].every(Boolean);
+}
+
+function frozenJobMatchesSubmission(
+  job: CleanupJobRow,
+  values: CleanupFormValues,
+  expectedMode: MessageCleanupJobMode
+): boolean {
+  return [
+    job.mode === expectedMode,
+    values.mode === expectedMode,
+    job.scope === values.scope,
+    job.reason === values.reason,
+  ].every(Boolean);
+}
+
+function frozenJobCanExecute(job: CleanupJobRow): boolean {
+  const hasReadyCoverage =
+    job.coverage === 'ready' ||
+    (job.scope === 'source_message' && job.coverage === 'partial' && job.candidate_count === 1);
+  return [
+    ['ready', 'executing'].includes(job.status),
+    hasReadyCoverage,
+    job.candidate_count >= 1,
+    job.candidate_count <= MESSAGE_CLEANUP_EXECUTION_CANDIDATE_LIMIT,
+  ].every(Boolean);
+}
+
 function assertFrozenJob(
   job: CleanupJobRow,
   caseRow: CleanupCaseRow,
@@ -302,33 +342,13 @@ function assertFrozenJob(
   values: CleanupFormValues,
   expectedMode: MessageCleanupJobMode
 ): void {
-  if (
-    job.server_id !== caseRow.server_id ||
-    job.verification_event_id !== caseRow.id ||
-    job.user_id !== caseRow.user_id ||
-    job.evidence_thread_id !== caseRow.private_evidence_thread_id ||
-    job.requested_by !== actorId ||
-    job.actor_surface !== ACTOR_SURFACE
-  ) {
+  if (!frozenJobBelongsToRequest(job, caseRow, actorId)) {
     throw new Error('The cleanup preview does not belong to this case and administrator.');
   }
-  if (
-    job.mode !== expectedMode ||
-    values.mode !== expectedMode ||
-    job.scope !== values.scope ||
-    job.reason !== values.reason
-  ) {
+  if (!frozenJobMatchesSubmission(job, values, expectedMode)) {
     throw new Error('The cleanup preview changed. Refresh the case before continuing.');
   }
-  const coverageReady =
-    job.coverage === 'ready' ||
-    (job.scope === 'source_message' && job.coverage === 'partial' && job.candidate_count === 1);
-  if (
-    !['ready', 'executing'].includes(job.status) ||
-    !coverageReady ||
-    job.candidate_count < 1 ||
-    job.candidate_count > MESSAGE_CLEANUP_EXECUTION_CANDIDATE_LIMIT
-  ) {
+  if (!frozenJobCanExecute(job)) {
     throw new Error('The cleanup preview is not eligible for execution.');
   }
   if (expectedMode === 'ban_with_cleanup' && job.ban_status !== 'not_requested') {
