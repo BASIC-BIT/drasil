@@ -1945,6 +1945,22 @@ describe('ModerationActionRequestService', () => {
     });
   });
 
+  it('executes a frozen cleanup preview created by another Administrator', async () => {
+    const { messageCleanupService, messageDeletionJobs, repository, service } = buildService([
+      executeMessageCleanupRequest,
+    ]);
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      requested_by: 'moderator-2',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(messageCleanupService.executeJob).toHaveBeenCalledWith('cleanup-job-1');
+    expect(repository.completed).toHaveLength(1);
+    expect(repository.failed).toEqual([]);
+  });
+
   it('revalidates Administrator permission in the worker', async () => {
     const { messageCleanupService, messageDeletionJobs, reporterMember, repository, service } =
       buildService([executeMessageCleanupRequest]);
@@ -1998,6 +2014,34 @@ describe('ModerationActionRequestService', () => {
     expect(repository.complete.mock.invocationCallOrder[0]).toBeLessThan(
       userModerationService.clearCombinedBanCleanupMarker.mock.invocationCallOrder[0]
     );
+  });
+
+  it('rechecks the current ban setting before combined cleanup', async () => {
+    const {
+      messageCleanupService,
+      messageDeletionJobs,
+      repository,
+      service,
+      userModerationService,
+    } = buildService([combinedBanCleanupRequest], {
+      moderator_ban_action_enabled: false,
+    });
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.markCombinedBanCleanupPending).not.toHaveBeenCalled();
+    expect(userModerationService.performDiscordBanById).not.toHaveBeenCalled();
+    expect(messageCleanupService.executeJob).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        id: 'combined-cleanup-request-1',
+        error: 'Moderator ban action is disabled for this server.',
+      },
+    ]);
   });
 
   it('clears the combined marker and skips cleanup when the Discord ban fails', async () => {

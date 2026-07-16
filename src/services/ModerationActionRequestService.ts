@@ -997,6 +997,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     const administrator = await this.requireCleanupAdministrator(request);
     const guild = administrator.guild;
     const moderator = administrator.user;
+    await this.assertModeratorBanActionEnabled(request.server_id);
     await this.assertBotPermission(guild, PermissionFlagsBits.BanMembers, 'Ban Members');
     await this.assertBotPermission(guild, PermissionFlagsBits.ManageMessages, 'Manage Messages');
 
@@ -1428,7 +1429,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       job.server_id !== request.server_id ||
       job.user_id !== request.target_user_id ||
       job.verification_event_id !== request.verification_event_id ||
-      job.requested_by !== request.actor_id ||
+      (request.action_type === ModerationActionRequestType.PREVIEW_CASE_MESSAGE_DELETION &&
+        job.requested_by !== request.actor_id) ||
       job.actor_surface !== request.actor_surface
     ) {
       throw new Error('Message cleanup job does not match the queued request.');
@@ -1536,6 +1538,14 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     }
 
     return reason || `No reason provided for web ${actionLabel} action.`;
+  }
+
+  private async assertModeratorBanActionEnabled(serverId: string): Promise<void> {
+    const config = await this.configService.getServerConfig(serverId);
+    const settings = getDetectionResponseSettings(config.settings);
+    if (!settings.moderatorBanActionEnabled) {
+      throw new Error('Moderator ban action is disabled for this server.');
+    }
   }
 
   private async resolveObservedDestructiveActionReason(
