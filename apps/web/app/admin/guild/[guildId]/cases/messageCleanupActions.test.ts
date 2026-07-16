@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   assertCanManageGuild: vi.fn(),
   connect: vi.fn(),
+  getServer: vi.fn(),
   getCurrentAdminSession: vi.fn(),
   getCurrentDiscordToken: vi.fn(),
   revalidatePath: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock('@/lib/session', () => ({
   getCurrentDiscordToken: mocks.getCurrentDiscordToken,
 }));
 vi.mock('@/lib/setupDataAdapter', () => ({
+  createSetupDataAdapter: () => ({ getServer: mocks.getServer }),
   getPostgresPool: () => ({ connect: mocks.connect }),
 }));
 vi.mock('@/lib/setupDashboardService', () => ({
@@ -117,6 +119,7 @@ beforeEach(() => {
     owner: false,
     permissions: '8',
   });
+  mocks.getServer.mockResolvedValue({ settings: { moderator_ban_action_enabled: true } });
 });
 
 afterEach(() => {
@@ -249,6 +252,51 @@ describe('messageCleanupActions', () => {
 
     expect(state.status).toBe('failed');
     expect(state.message).toBe('The cleanup preview is not eligible for execution.');
+  });
+
+  it('allows another current Administrator to execute a frozen case preview', async () => {
+    mocks.getCurrentAdminSession.mockResolvedValue({ userId: 'admin-2' });
+    databaseClient((text) => {
+      if (text.includes('where idempotency_key')) return [];
+      if (text.includes('from verification_events')) return [caseRow];
+      if (text.includes('from message_deletion_jobs')) return [readyJob];
+      if (text.includes('select id::text from moderation_action_requests')) return [];
+      if (text.includes('insert into moderation_action_requests')) {
+        return [{ id: REQUEST_ID, messageDeletionJobId: JOB_ID, status: 'queued' }];
+      }
+      return [];
+    });
+
+    const state = await executeCaseMessageCleanup(
+      'guild-1',
+      CASE_ID,
+      initialInboxActionState,
+      cleanupForm()
+    );
+
+    expect(state).toEqual({
+      message: 'Message cleanup queued.',
+      requestId: REQUEST_ID,
+      status: 'queued',
+    });
+  });
+
+  it('honors the server setting that disables moderator ban actions', async () => {
+    mocks.getServer.mockResolvedValue({ settings: { moderator_ban_action_enabled: false } });
+
+    const state = await banCaseUserWithMessageCleanup(
+      'guild-1',
+      CASE_ID,
+      initialInboxActionState,
+      cleanupForm({ mode: 'ban_with_cleanup' })
+    );
+
+    expect(state).toEqual({
+      message: 'Moderator ban actions are disabled for this server.',
+      requestId: null,
+      status: 'failed',
+    });
+    expect(mocks.connect).not.toHaveBeenCalled();
   });
 
   it('returns an existing completed execute receipt before mutable case or job checks', async () => {

@@ -135,6 +135,7 @@ function buildVerification(overrides: Partial<VerificationEvent> = {}): Verifica
 }
 
 class FakeJobRepository implements IMessageDeletionJobRepository {
+  public readonly beginPreviewMock = jest.fn();
   public readonly replacePreviewMock = jest.fn();
   public readonly updateItemOutcomeMock = jest.fn();
   public readonly markItemEvidencePreservedMock = jest.fn();
@@ -155,6 +156,7 @@ class FakeJobRepository implements IMessageDeletionJobRepository {
   }
 
   public async beginPreview(): Promise<MessageDeletionJobWithItems> {
+    this.beginPreviewMock();
     this.job.status = MessageDeletionJobStatus.DISCOVERING;
     return this.job;
   }
@@ -293,6 +295,33 @@ function createHarness(
 }
 
 describe('MessageCleanupService', () => {
+  it('resumes a preview already left in discovering state', async () => {
+    const source = buildMessage('source-1');
+    const detection = {
+      id: 'detection-1',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      message_id: 'source-1',
+      channel_id: 'channel-1',
+    } as DetectionEvent;
+    const harness = createHarness({
+      job: buildJob({
+        scope: MessageDeletionScope.SOURCE_MESSAGE,
+        status: MessageDeletionJobStatus.DISCOVERING,
+      }),
+      detection,
+      channelsFetch: jest.fn().mockResolvedValue({
+        messages: { fetch: jest.fn().mockResolvedValue(source) },
+      }),
+    });
+
+    const result = await harness.service.previewJob('job-1');
+
+    expect(result.status).toBe(MessageDeletionJobStatus.READY);
+    expect(result.items).toHaveLength(1);
+    expect(harness.jobs.beginPreviewMock).not.toHaveBeenCalled();
+  });
+
   it('discovers an exact source message from linked detection metadata', async () => {
     const source = buildMessage('source-1');
     const detection = {

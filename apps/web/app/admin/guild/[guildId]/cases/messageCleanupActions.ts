@@ -25,7 +25,7 @@ import type {
 } from '@/lib/moderationActionRequestQueue';
 import { isWebE2eFixtureMode } from '@/lib/e2eFixtures';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
-import { getPostgresPool } from '@/lib/setupDataAdapter';
+import { createSetupDataAdapter, getPostgresPool } from '@/lib/setupDataAdapter';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -129,6 +129,13 @@ async function cleanupActor(guildId: string, caseId: string): Promise<string> {
     throw new Error('You need Administrator permission to manage case message cleanup.');
   }
   return session.userId;
+}
+
+async function assertModeratorBanActionEnabled(guildId: string): Promise<void> {
+  const server = await createSetupDataAdapter().getServer(guildId);
+  if (server?.settings.moderator_ban_action_enabled === false) {
+    throw new Error('Moderator ban actions are disabled for this server.');
+  }
 }
 
 async function inTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -295,17 +302,12 @@ async function insertRequest(
   return receipt;
 }
 
-function frozenJobBelongsToRequest(
-  job: CleanupJobRow,
-  caseRow: CleanupCaseRow,
-  actorId: string
-): boolean {
+function frozenJobBelongsToCase(job: CleanupJobRow, caseRow: CleanupCaseRow): boolean {
   return [
     job.server_id === caseRow.server_id,
     job.verification_event_id === caseRow.id,
     job.user_id === caseRow.user_id,
     job.evidence_thread_id === caseRow.private_evidence_thread_id,
-    job.requested_by === actorId,
     job.actor_surface === ACTOR_SURFACE,
   ].every(Boolean);
 }
@@ -338,12 +340,11 @@ function frozenJobCanExecute(job: CleanupJobRow): boolean {
 function assertFrozenJob(
   job: CleanupJobRow,
   caseRow: CleanupCaseRow,
-  actorId: string,
   values: CleanupFormValues,
   expectedMode: MessageCleanupJobMode
 ): void {
-  if (!frozenJobBelongsToRequest(job, caseRow, actorId)) {
-    throw new Error('The cleanup preview does not belong to this case and administrator.');
+  if (!frozenJobBelongsToCase(job, caseRow)) {
+    throw new Error('The cleanup preview does not belong to this case.');
   }
   if (!frozenJobMatchesSubmission(job, values, expectedMode)) {
     throw new Error('The cleanup preview changed. Refresh the case before continuing.');
@@ -473,7 +474,7 @@ async function queueFrozenJob(
 
     const caseRow = await lockPendingCase(client, guildId, caseId);
     const job = await lockJob(client, jobId);
-    assertFrozenJob(job, caseRow, actorId, values, expectedMode);
+    assertFrozenJob(job, caseRow, values, expectedMode);
     await assertNoActiveRequest(client, caseId);
     return insertRequest(client, {
       actionType,
@@ -605,6 +606,7 @@ export async function banCaseUserWithMessageCleanup(
     const jobId = requireUuid(requiredFormString(formData, 'jobId'), 'Cleanup job id');
     const values = cleanupFormValues(formData);
     const actorId = await cleanupActor(guildId, caseId);
+    await assertModeratorBanActionEnabled(guildId);
     const receipt = await queueFrozenJob(
       guildId,
       caseId,

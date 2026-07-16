@@ -1,4 +1,4 @@
-import { inject, injectable } from 'inversify';
+import { inject, injectable, unmanaged } from 'inversify';
 import { Routes, SnowflakeUtil, type Client, type Message } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import type { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
@@ -91,6 +91,7 @@ export class MessageCleanupService {
     @inject(TYPES.ServerRepository) private readonly servers: IServerRepository,
     @inject(TYPES.MessageDeletionService)
     private readonly deletionService: MessageCleanupDeletionService,
+    @unmanaged()
     private readonly now: () => Date = () => new Date()
   ) {}
 
@@ -101,7 +102,10 @@ export class MessageCleanupService {
     if (current.status === MessageDeletionJobStatus.COMPLETED) {
       throw new Error('Completed message cleanup jobs cannot be previewed again.');
     }
-    const claimed = await this.jobs.beginPreview(jobId);
+    const claimed =
+      current.status === MessageDeletionJobStatus.DISCOVERING
+        ? current
+        : await this.jobs.beginPreview(jobId);
     if (!claimed) throw new Error('Message cleanup job is not available for preview.');
 
     try {
