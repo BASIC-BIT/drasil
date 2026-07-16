@@ -120,6 +120,34 @@ export interface IUserModerationService {
   recordMemberLeftGuild(member: GuildMember | PartialGuildMember): Promise<number>;
 }
 
+export interface ICombinedBanLifecycleService {
+  markCombinedBanCleanupPending(
+    verificationEventId: string,
+    cleanupJobId: string
+  ): Promise<VerificationEvent>;
+  performDiscordMemberBan(member: GuildMember, reason: string): Promise<void>;
+  performDiscordBanById(guild: Guild, userId: string, reason: string): Promise<void>;
+  finalizeSuccessfulMemberBan(
+    member: GuildMember,
+    reason: string,
+    moderator: User,
+    detectionEventId?: string
+  ): Promise<boolean>;
+  finalizeSuccessfulCombinedBan(
+    guild: Guild,
+    userId: string,
+    verificationEventId: string,
+    cleanupJobId: string,
+    reason: string,
+    moderator: User,
+    detectionEventId?: string
+  ): Promise<boolean>;
+  clearCombinedBanCleanupMarker(
+    verificationEventId: string,
+    cleanupJobId: string
+  ): Promise<boolean>;
+}
+
 export interface ObservedDiscordBanOptions {
   source: ModerationOutcomeSource;
   actorId?: string | null;
@@ -130,6 +158,10 @@ export interface ObservedDiscordBanOptions {
 }
 
 export type ObservedDiscordKickOptions = ObservedDiscordBanOptions;
+
+const ACTIVE_MODERATION_OPERATION_METADATA_KEY = 'active_moderation_operation';
+const COMBINED_BAN_CLEANUP_OPERATION_KIND = 'ban_with_message_cleanup';
+const DISCORD_AUDIT_LOG_REASON_MAX_LENGTH = 512;
 
 interface ModerationTarget {
   guildId: string;
@@ -143,7 +175,7 @@ interface ModerationTarget {
  * Service for managing user moderation actions like restricting, verifying, and banning users
  */
 @injectable()
-export class UserModerationService implements IUserModerationService {
+export class UserModerationService implements IUserModerationService, ICombinedBanLifecycleService {
   private serverMemberRepository: IServerMemberRepository;
   private notificationManager: INotificationManager; // Keep for now, might be replaced by events later
   private roleManager: IRoleManager; // Keep for now, might be replaced by events later
@@ -934,15 +966,82 @@ export class UserModerationService implements IUserModerationService {
     detectionEventId?: string
   ): Promise<boolean> {
     try {
-      const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
-      const verificationEvent =
-        pendingVerificationEvents.length > 0 ? pendingVerificationEvents[0] : null;
-      const resolvedAt = new Date();
-      const resolvedEvents: Array<{
-        event: VerificationEvent;
-        previousStatus: VerificationStatus;
-      }> = [];
+      await this.performDiscordMemberBan(member, reason);
+      return await this.finalizeSuccessfulMemberBan(member, reason, moderator, detectionEventId);
+    } catch (error) {
+      console.error(`Failed to ban user ${member.user.tag}:`, error);
+      throw error;
+    }
+  }
 
+  public async markCombinedBanCleanupPending(
+    verificationEventId: string,
+    cleanupJobId: string
+  ): Promise<VerificationEvent> {
+    const verificationEvent = await this.verificationEventRepository.findById(verificationEventId);
+    if (!verificationEvent) {
+      throw new Error(`Verification event ${verificationEventId} was not found.`);
+    }
+    if (verificationEvent.status !== VerificationStatus.PENDING) {
+      throw new Error(`Verification event ${verificationEventId} is no longer pending.`);
+    }
+
+    const metadata = this.metadataToRecord(verificationEvent.metadata);
+    const existingOperation = this.getActiveModerationOperation(metadata);
+    if (existingOperation?.operationId === cleanupJobId) {
+      return verificationEvent;
+    }
+    if (existingOperation && existingOperation.operationId !== cleanupJobId) {
+      throw new Error(`Verification event ${verificationEventId} already has an active operation.`);
+    }
+
+    const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
+      metadata: {
+        ...metadata,
+        [ACTIVE_MODERATION_OPERATION_METADATA_KEY]: {
+          kind: COMBINED_BAN_CLEANUP_OPERATION_KIND,
+          operation_id: cleanupJobId,
+          started_at: new Date().toISOString(),
+        },
+      } as VerificationEvent['metadata'],
+    });
+    if (!updatedEvent) {
+      throw new Error(`Failed to mark verification event ${verificationEventId} for cleanup.`);
+    }
+
+    return updatedEvent;
+  }
+
+  public async performDiscordMemberBan(member: GuildMember, reason: string): Promise<void> {
+    const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
+    await member.ban({ reason: auditReason || 'Moderator-requested ban' });
+    console.log(`Banned user ${member.user.tag}. Reason: ${reason}`);
+  }
+
+  public async performDiscordBanById(guild: Guild, userId: string, reason: string): Promise<void> {
+    const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
+    await guild.bans.create(userId, { reason: auditReason || 'Moderator-requested ban' });
+    console.log(`Banned user ${userId} for combined message cleanup. Reason: ${reason}`);
+  }
+
+  public async finalizeSuccessfulMemberBan(
+    member: GuildMember,
+    reason: string,
+    moderator: User,
+    detectionEventId?: string
+  ): Promise<boolean> {
+    const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
+    const verificationEvent =
+      pendingVerificationEvents.length > 0 ? pendingVerificationEvents[0] : null;
+    const resolvedAt = new Date();
+    const resolvedEvents: Array<{
+      event: VerificationEvent;
+      previousStatus: VerificationStatus;
+    }> = [];
+
+    await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'drasil_ban', moderator.id);
+
+    try {
       for (const pendingEvent of pendingVerificationEvents) {
         const previousStatus = pendingEvent.status;
         const eventToUpdate = {
@@ -951,7 +1050,9 @@ export class UserModerationService implements IUserModerationService {
           resolved_by: moderator.id,
           resolved_at: resolvedAt,
           notes: reason,
-          metadata: this.withUserSnapshot(pendingEvent.metadata, member.user, member),
+          metadata: this.withoutActiveModerationOperation(
+            this.withUserSnapshot(pendingEvent.metadata, member.user, member)
+          ),
         };
         const updatedEvent = await this.verificationEventRepository.update(
           pendingEvent.id,
@@ -959,7 +1060,7 @@ export class UserModerationService implements IUserModerationService {
         );
         if (!updatedEvent) {
           console.warn(
-            `Failed to update verification event ${pendingEvent.id} status to BANNED, but proceeding with ban.`
+            `Failed to update verification event ${pendingEvent.id} status to BANNED after the Discord ban.`
           );
           resolvedEvents.push({ event: eventToUpdate, previousStatus });
           continue;
@@ -968,66 +1069,201 @@ export class UserModerationService implements IUserModerationService {
         resolvedEvents.push({ event: updatedEvent, previousStatus });
       }
 
-      // Perform the ban
-      await member.ban({ reason });
-      console.log(`Banned user ${member.user.tag}. Reason: ${reason}`);
-      await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'drasil_ban', moderator.id);
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        verification_status: VerificationStatus.BANNED,
+        case_role_active: false,
+        last_status_change: new Date(),
+      });
 
-      try {
-        // Update server member status
-        await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-          verification_status: VerificationStatus.BANNED,
-          case_role_active: false,
-          last_status_change: new Date(),
-        });
-
-        for (const resolvedEvent of resolvedEvents) {
-          await this.finalizeResolvedVerificationEvent(
-            this.getModerationTarget(member),
-            resolvedEvent.event,
-            resolvedEvent.previousStatus,
-            VerificationStatus.BANNED,
-            moderator,
-            resolvedEvent.event.id === verificationEvent?.id,
-            {
-              notes: reason,
-              detectionEventId: detectionEventId ?? resolvedEvent.event.detection_event_id,
-            }
-          );
-        }
-      } catch (postBanError) {
-        console.error(
-          `Ban succeeded for ${member.user.tag}, but post-ban updates failed:`,
-          postBanError
+      for (const resolvedEvent of resolvedEvents) {
+        await this.finalizeResolvedVerificationEvent(
+          this.getModerationTarget(member),
+          resolvedEvent.event,
+          resolvedEvent.previousStatus,
+          VerificationStatus.BANNED,
+          moderator,
+          resolvedEvent.event.id === verificationEvent?.id,
+          {
+            notes: reason,
+            detectionEventId: detectionEventId ?? resolvedEvent.event.detection_event_id,
+          }
         );
       }
+    } catch (postBanError) {
+      console.error(
+        `Ban succeeded for ${member.user.tag}, but post-ban updates failed:`,
+        postBanError
+      );
+    }
 
-      await this.tryRecordModerationOutcomes(
-        this.getModerationTarget(member),
-        getResolutionModerationOutcomeType(VerificationStatus.BANNED),
-        ModerationOutcomeSource.DRASIL,
-        resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
+    await this.tryRecordModerationOutcomes(
+      this.getModerationTarget(member),
+      getResolutionModerationOutcomeType(VerificationStatus.BANNED),
+      ModerationOutcomeSource.DRASIL,
+      resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
+      {
+        actorId: moderator.id,
+        reason,
+        detectionEventId: detectionEventId ?? verificationEvent?.detection_event_id ?? null,
+        metadata: this.buildOutcomeMetadata({}, member.user, member),
+        recordWithoutVerificationEvent: true,
+      }
+    );
+
+    this.captureModerationAction(
+      member,
+      AdminActionType.BAN,
+      moderator,
+      verificationEvent?.id,
+      detectionEventId ?? verificationEvent?.detection_event_id
+    );
+    return true;
+  }
+
+  public async finalizeSuccessfulCombinedBan(
+    guild: Guild,
+    userId: string,
+    verificationEventId: string,
+    cleanupJobId: string,
+    reason: string,
+    moderator: User,
+    detectionEventId?: string
+  ): Promise<boolean> {
+    const existingBan = await guild.bans.fetch(userId);
+    const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
+      userId,
+      guild.id
+    );
+    const targetEvent = verificationEvents.find((event) => event.id === verificationEventId);
+    if (!targetEvent) {
+      throw new Error(`Verification event ${verificationEventId} was not found.`);
+    }
+
+    const targetOperation = this.getActiveModerationOperation(targetEvent.metadata);
+    if (
+      targetEvent.status !== VerificationStatus.PENDING &&
+      !(
+        targetEvent.status === VerificationStatus.BANNED &&
+        targetOperation?.operationId === cleanupJobId
+      )
+    ) {
+      if (targetEvent.status === VerificationStatus.BANNED && !targetOperation) {
+        return true;
+      }
+      throw new Error(`Verification event ${verificationEventId} cannot finalize cleanup.`);
+    }
+
+    const resolvedAt = new Date();
+    const pendingEvents = verificationEvents.filter(
+      (event) => event.status === VerificationStatus.PENDING
+    );
+    const resolvedEvents: Array<{
+      event: VerificationEvent;
+      previousStatus: VerificationStatus;
+    }> = [];
+
+    for (const pendingEvent of pendingEvents) {
+      const eventToUpdate = {
+        ...pendingEvent,
+        status: VerificationStatus.BANNED,
+        resolved_by: moderator.id,
+        resolved_at: resolvedAt,
+        notes: reason,
+        metadata: this.withUserSnapshot(pendingEvent.metadata, existingBan.user),
+      };
+      const updatedEvent = await this.verificationEventRepository.update(
+        pendingEvent.id,
+        eventToUpdate
+      );
+      if (!updatedEvent) {
+        throw new Error(`Failed to finalize verification event ${pendingEvent.id}.`);
+      }
+      resolvedEvents.push({ event: updatedEvent, previousStatus: pendingEvent.status });
+    }
+
+    if (
+      targetEvent.status === VerificationStatus.BANNED &&
+      targetOperation?.operationId === cleanupJobId
+    ) {
+      resolvedEvents.push({ event: targetEvent, previousStatus: VerificationStatus.PENDING });
+    }
+
+    await this.serverMemberRepository.upsertMember(guild.id, userId, {
+      verification_status: VerificationStatus.BANNED,
+      case_role_active: false,
+      last_status_change: resolvedAt,
+    });
+    await this.tryAbandonRoleQuarantine(guild.id, userId, 'drasil_ban', moderator.id);
+
+    const target: ModerationTarget = {
+      guildId: guild.id,
+      userId,
+      userTag: existingBan.user.tag,
+      username: existingBan.user.username,
+      accountCreatedAt: this.getUserAccountCreatedAt(existingBan.user),
+    };
+    for (const resolvedEvent of resolvedEvents) {
+      await this.finalizeResolvedVerificationEvent(
+        target,
+        resolvedEvent.event,
+        resolvedEvent.previousStatus,
+        VerificationStatus.BANNED,
+        moderator,
+        resolvedEvent.event.id === verificationEventId,
         {
-          actorId: moderator.id,
-          reason,
-          detectionEventId: detectionEventId ?? verificationEvent?.detection_event_id ?? null,
-          metadata: this.buildOutcomeMetadata({}, member.user, member),
-          recordWithoutVerificationEvent: true,
+          notes: reason,
+          detectionEventId: detectionEventId ?? resolvedEvent.event.detection_event_id,
+          metadata: { source_detail: COMBINED_BAN_CLEANUP_OPERATION_KIND },
         }
       );
-
-      this.captureModerationAction(
-        member,
-        AdminActionType.BAN,
-        moderator,
-        verificationEvent?.id,
-        detectionEventId ?? verificationEvent?.detection_event_id
-      );
-      return true; // Ban succeeded
-    } catch (error) {
-      console.error(`Failed to ban user ${member.user.tag}:`, error);
-      throw error;
     }
+
+    await this.tryRecordModerationOutcomes(
+      target,
+      getResolutionModerationOutcomeType(VerificationStatus.BANNED),
+      ModerationOutcomeSource.DRASIL,
+      resolvedEvents.map((resolvedEvent) => resolvedEvent.event),
+      {
+        actorId: moderator.id,
+        reason,
+        detectionEventId: detectionEventId ?? targetEvent.detection_event_id ?? null,
+        metadata: this.buildOutcomeMetadata(
+          { source_detail: COMBINED_BAN_CLEANUP_OPERATION_KIND },
+          existingBan.user
+        ),
+        recordWithoutVerificationEvent: true,
+      }
+    );
+
+    await this.clearCombinedBanCleanupMarker(verificationEventId, cleanupJobId);
+    void this.productAnalyticsService.captureUserEvent(
+      guild.id,
+      userId,
+      'moderation action completed',
+      { action_type: AdminActionType.BAN, source_detail: COMBINED_BAN_CLEANUP_OPERATION_KIND },
+      { moderatorId: moderator.id, verificationEventId, detectionEventId }
+    );
+    return true;
+  }
+
+  public async clearCombinedBanCleanupMarker(
+    verificationEventId: string,
+    cleanupJobId: string
+  ): Promise<boolean> {
+    const verificationEvent = await this.verificationEventRepository.findById(verificationEventId);
+    if (!verificationEvent) {
+      return false;
+    }
+
+    const operation = this.getActiveModerationOperation(verificationEvent.metadata);
+    if (!operation || operation.operationId !== cleanupJobId) {
+      return false;
+    }
+
+    const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
+      metadata: this.withoutActiveModerationOperation(verificationEvent.metadata),
+    });
+    return updatedEvent !== null;
   }
 
   public async kickUser(
@@ -1600,10 +1836,16 @@ export class UserModerationService implements IUserModerationService {
         user.id,
         guild.id
       );
-      const pendingVerificationEvents = verificationEvents.filter(
+      const allPendingVerificationEvents = verificationEvents.filter(
         (event) => event.status === VerificationStatus.PENDING
       );
+      const pendingVerificationEvents = allPendingVerificationEvents.filter(
+        (event) => !this.getActiveModerationOperation(event.metadata)
+      );
       if (pendingVerificationEvents.length === 0) {
+        if (allPendingVerificationEvents.length > 0) {
+          return 0;
+        }
         await this.tryAbandonRoleQuarantine(
           guild.id,
           user.id,
@@ -1934,6 +2176,34 @@ export class UserModerationService implements IUserModerationService {
     }
 
     return snapshot;
+  }
+
+  private getActiveModerationOperation(
+    metadata: VerificationEvent['metadata'] | Record<string, unknown>
+  ): { operationId: string } | null {
+    const record = this.metadataToRecord(metadata as VerificationEvent['metadata']);
+    const operation = record[ACTIVE_MODERATION_OPERATION_METADATA_KEY];
+    if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
+      return null;
+    }
+
+    const operationRecord = operation as Record<string, unknown>;
+    if (
+      operationRecord.kind !== COMBINED_BAN_CLEANUP_OPERATION_KIND ||
+      typeof operationRecord.operation_id !== 'string'
+    ) {
+      return null;
+    }
+
+    return { operationId: operationRecord.operation_id };
+  }
+
+  private withoutActiveModerationOperation(
+    metadata: VerificationEvent['metadata']
+  ): VerificationEvent['metadata'] {
+    const record = this.metadataToRecord(metadata);
+    delete record[ACTIVE_MODERATION_OPERATION_METADATA_KEY];
+    return record as VerificationEvent['metadata'];
   }
 
   private metadataToRecord(metadata: VerificationEvent['metadata']): Record<string, unknown> {

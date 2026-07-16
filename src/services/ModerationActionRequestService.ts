@@ -19,9 +19,14 @@ import { ReportInstructionsManager } from '../controllers/ReportInstructionsMana
 import { Prisma } from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
+import { IMessageDeletionJobRepository } from '../repositories/MessageDeletionJobRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import {
   AdminActionType,
+  MessageDeletionBanStatus,
+  MessageDeletionCaseFinalizationStatus,
+  MessageDeletionJobMode,
+  MessageDeletionJobWithItems,
   ModerationActionRequest,
   ModerationActionRequestType,
 } from '../repositories/types';
@@ -37,7 +42,8 @@ import { ISecurityActionService } from './SecurityActionService';
 import { ISetupDiagnosticsService, SetupDiagnosticReport } from './SetupDiagnosticsService';
 import { SetupWorkflowService } from './SetupWorkflowService';
 import { IThreadManager } from './ThreadManager';
-import { IUserModerationService } from './UserModerationService';
+import { ICombinedBanLifecycleService, IUserModerationService } from './UserModerationService';
+import { MessageCleanupService } from './MessageCleanupService';
 import { ICaseThreadClosureSweepService } from './CaseThreadClosureSweepService';
 import { CaseRoleLockdownReport, ICaseRoleLockdownService } from './CaseRoleLockdownService';
 
@@ -55,6 +61,7 @@ export interface IModerationActionRequestService {
 @injectable()
 export class ModerationActionRequestService implements IModerationActionRequestService {
   private timer: ReturnType<typeof setInterval> | null = null;
+  private processingPromise: Promise<number> | null = null;
   private readonly presentationBuilder = new NotificationPresentationBuilder();
   private readonly requestProcessors: Partial<
     Record<ModerationActionRequestType, (request: ModerationActionRequest) => Promise<void>>
@@ -85,6 +92,12 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       this.closeCaseNoAction(request),
     [ModerationActionRequestType.KICK_CASE_USER]: (request) => this.kickCaseUser(request),
     [ModerationActionRequestType.BAN_CASE_USER]: (request) => this.banCaseUser(request),
+    [ModerationActionRequestType.PREVIEW_CASE_MESSAGE_DELETION]: (request) =>
+      this.previewCaseMessageDeletion(request),
+    [ModerationActionRequestType.EXECUTE_CASE_MESSAGE_DELETION]: (request) =>
+      this.executeCaseMessageDeletion(request),
+    [ModerationActionRequestType.BAN_CASE_USER_WITH_MESSAGE_CLEANUP]: (request) =>
+      this.banCaseUserWithMessageCleanup(request),
     [ModerationActionRequestType.BAN_CASE_USER_BY_ID]: (request) => this.banCaseUserById(request),
     [ModerationActionRequestType.REPAIR_ACTIVE_CASE]: (request) => this.repairActiveCase(request),
     [ModerationActionRequestType.REOPEN_CASE]: (request) => this.reopenCase(request),
@@ -122,7 +135,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     @inject(TYPES.SecurityActionService)
     private readonly securityActionService: ISecurityActionService,
     @inject(TYPES.UserModerationService)
-    private readonly userModerationService: IUserModerationService,
+    private readonly userModerationService: IUserModerationService & ICombinedBanLifecycleService,
     @inject(TYPES.ModerationQueueService)
     private readonly moderationQueueService: IModerationQueueService,
     @inject(TYPES.CaseThreadClosureSweepService)
@@ -134,7 +147,11 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     @inject(TYPES.ProductAnalyticsService)
     private readonly productAnalyticsService: IProductAnalyticsService,
     @inject(TYPES.SetupDiagnosticsService)
-    private readonly setupDiagnosticsService: ISetupDiagnosticsService
+    private readonly setupDiagnosticsService: ISetupDiagnosticsService,
+    @inject(TYPES.MessageDeletionJobRepository)
+    private readonly messageDeletionJobs: IMessageDeletionJobRepository,
+    @inject(TYPES.MessageCleanupService)
+    private readonly messageCleanupService: MessageCleanupService
   ) {}
 
   public start(): void {
@@ -162,6 +179,22 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   }
 
   public async processPendingRequests(limit = DEFAULT_MAX_REQUESTS_PER_TICK): Promise<number> {
+    if (this.processingPromise) {
+      return this.processingPromise;
+    }
+
+    const processing = this.drainPendingRequests(limit);
+    this.processingPromise = processing;
+    try {
+      return await processing;
+    } finally {
+      if (this.processingPromise === processing) {
+        this.processingPromise = null;
+      }
+    }
+  }
+
+  private async drainPendingRequests(limit: number): Promise<number> {
     let processed = 0;
     while (processed < limit) {
       const request = await this.repository.claimNext();
@@ -906,6 +939,126 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     });
   }
 
+  private async previewCaseMessageDeletion(request: ModerationActionRequest): Promise<void> {
+    const job = await this.requireMessageDeletionJob(request);
+    await this.requireCleanupAdministrator(request);
+    const preview = await this.messageCleanupService.previewJob(job.id);
+
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      candidate_count: preview.candidate_count,
+      coverage: preview.coverage,
+      message_deletion_job_id: preview.id,
+      mode: preview.mode,
+      scope: preview.scope,
+      status: preview.status,
+      target_user_id: preview.user_id,
+      verification_event_id: preview.verification_event_id,
+    });
+  }
+
+  private async executeCaseMessageDeletion(request: ModerationActionRequest): Promise<void> {
+    const job = await this.requireMessageDeletionJob(request, MessageDeletionJobMode.DELETE_ONLY);
+    const administrator = await this.requireCleanupAdministrator(request);
+    await this.assertBotPermission(
+      administrator.guild,
+      PermissionFlagsBits.ManageMessages,
+      'Manage Messages'
+    );
+    const result = await this.messageCleanupService.executeJob(job.id);
+
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      message_deletion_job_id: job.id,
+      mode: job.mode,
+      ...this.messageCleanupReceipt(result),
+    });
+  }
+
+  private async banCaseUserWithMessageCleanup(request: ModerationActionRequest): Promise<void> {
+    const job = await this.requireMessageDeletionJob(
+      request,
+      MessageDeletionJobMode.BAN_WITH_CLEANUP
+    );
+    const administrator = await this.requireCleanupAdministrator(request);
+    const guild = administrator.guild;
+    const moderator = administrator.user;
+    await this.assertBotPermission(guild, PermissionFlagsBits.BanMembers, 'Ban Members');
+    await this.assertBotPermission(guild, PermissionFlagsBits.ManageMessages, 'Manage Messages');
+
+    await this.userModerationService.markCombinedBanCleanupPending(
+      job.verification_event_id,
+      job.id
+    );
+    if (job.ban_status !== MessageDeletionBanStatus.SUCCEEDED) {
+      await this.messageDeletionJobs.updateBanStatus(job.id, MessageDeletionBanStatus.PENDING);
+      try {
+        // Discord's PUT ban operation is idempotent, so a stale request can safely resume here.
+        await this.userModerationService.performDiscordBanById(guild, job.user_id, job.reason);
+      } catch (error) {
+        await Promise.all([
+          this.messageDeletionJobs.updateBanStatus(job.id, MessageDeletionBanStatus.FAILED),
+          this.userModerationService.clearCombinedBanCleanupMarker(
+            job.verification_event_id,
+            job.id
+          ),
+        ]);
+        throw error;
+      }
+      await this.messageDeletionJobs.updateBanStatus(job.id, MessageDeletionBanStatus.SUCCEEDED);
+    }
+
+    let cleanupResult: Awaited<ReturnType<MessageCleanupService['executeJob']>>;
+    try {
+      cleanupResult = await this.messageCleanupService.executeJob(job.id);
+    } catch (error) {
+      await this.userModerationService.clearCombinedBanCleanupMarker(
+        job.verification_event_id,
+        job.id
+      );
+      throw error;
+    }
+
+    await this.messageDeletionJobs.updateCaseFinalizationStatus(
+      job.id,
+      MessageDeletionCaseFinalizationStatus.PENDING
+    );
+    try {
+      await this.userModerationService.finalizeSuccessfulCombinedBan(
+        guild,
+        job.user_id,
+        job.verification_event_id,
+        job.id,
+        job.reason,
+        moderator,
+        request.detection_event_id ?? undefined
+      );
+      await this.messageDeletionJobs.updateCaseFinalizationStatus(
+        job.id,
+        MessageDeletionCaseFinalizationStatus.SUCCEEDED
+      );
+    } catch (error) {
+      await this.messageDeletionJobs.updateCaseFinalizationStatus(
+        job.id,
+        MessageDeletionCaseFinalizationStatus.FAILED
+      );
+      await this.userModerationService.clearCombinedBanCleanupMarker(
+        job.verification_event_id,
+        job.id
+      );
+      throw error;
+    }
+
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      banned: true,
+      case_finalized: true,
+      message_deletion_job_id: job.id,
+      mode: job.mode,
+      ...this.messageCleanupReceipt(cleanupResult),
+    });
+  }
+
   private async banCaseUserById(request: ModerationActionRequest): Promise<void> {
     if (!request.target_user_id || !request.verification_event_id) {
       throw new Error('Ban-by-ID request is missing target user or case id.');
@@ -1219,6 +1372,69 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   private async fetchGuildMember(serverId: string, userId: string): Promise<GuildMember> {
     const guild = await this.fetchGuild(serverId);
     return guild.members.fetch(userId);
+  }
+
+  private async requireCleanupAdministrator(
+    request: ModerationActionRequest
+  ): Promise<GuildMember> {
+    const administrator = await this.fetchGuildMember(request.server_id, request.actor_id);
+    if (!administrator.permissions.has(PermissionFlagsBits.Administrator)) {
+      throw new Error('Message cleanup requires current Administrator permission.');
+    }
+    return administrator;
+  }
+
+  private async requireMessageDeletionJob(
+    request: ModerationActionRequest,
+    expectedMode?: MessageDeletionJobMode
+  ): Promise<MessageDeletionJobWithItems> {
+    if (
+      !request.message_deletion_job_id ||
+      !request.target_user_id ||
+      !request.verification_event_id
+    ) {
+      throw new Error('Message cleanup request is missing its job, target user, or case id.');
+    }
+
+    const job = await this.messageDeletionJobs.findById(request.message_deletion_job_id);
+    if (!job) {
+      throw new Error('Message cleanup job was not found.');
+    }
+    if (
+      job.server_id !== request.server_id ||
+      job.user_id !== request.target_user_id ||
+      job.verification_event_id !== request.verification_event_id ||
+      job.requested_by !== request.actor_id ||
+      job.actor_surface !== request.actor_surface
+    ) {
+      throw new Error('Message cleanup job does not match the queued request.');
+    }
+    if (expectedMode && job.mode !== expectedMode) {
+      throw new Error(`Message cleanup job mode must be ${expectedMode}.`);
+    }
+    return job;
+  }
+
+  private messageCleanupReceipt(result: {
+    alreadyCompleted: boolean;
+    preservedCount: number;
+    deletedCount: number;
+    alreadyMissingCount: number;
+    changedCount: number;
+    evidenceFailedCount: number;
+    deleteFailedCount: number;
+    permissionDeniedCount: number;
+  }): Record<string, boolean | number> {
+    return {
+      already_completed: result.alreadyCompleted,
+      preserved_count: result.preservedCount,
+      deleted_count: result.deletedCount,
+      already_missing_count: result.alreadyMissingCount,
+      changed_since_preview_count: result.changedCount,
+      evidence_failed_count: result.evidenceFailedCount,
+      delete_failed_count: result.deleteFailedCount,
+      permission_denied_count: result.permissionDeniedCount,
+    };
   }
 
   private async assertBotPermission(

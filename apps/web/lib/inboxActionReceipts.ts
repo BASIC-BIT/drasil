@@ -7,7 +7,7 @@ const requestTypeByAction: Partial<
   Record<ModerationInboxAction, readonly ModerationActionRequestActionType[]>
 > = {
   ban_by_id: ['ban_case_user_by_id'],
-  ban_user: ['ban_case_user', 'ban_observed_detection'],
+  ban_user: ['ban_case_user', 'ban_case_user_with_message_cleanup', 'ban_observed_detection'],
   close_no_action: ['close_case_no_action'],
   create_thread: ['repair_active_case'],
   dismiss_no_action: ['dismiss_observed_detection'],

@@ -230,4 +230,71 @@ describe('MessageDeletionService (unit)', () => {
     expect(evidenceThread.send.mock.calls[0][0].files).toBeUndefined();
     fetchSpy.mockRestore();
   });
+
+  it('preserves one cleanup evidence message with durable job and item markers', async () => {
+    const repository = new InMemoryDetectionEventsRepository();
+    const evidenceThread = {
+      send: jest.fn().mockResolvedValue({ id: 'evidence-message-5' } as Message),
+    };
+    const client = {
+      channels: { fetch: jest.fn().mockResolvedValue(evidenceThread) },
+      rest: { delete: jest.fn(), post: jest.fn() },
+    } as unknown as Client;
+    const service = new MessageDeletionService(client, repository);
+
+    const result = await service.preserveMessageEvidence({
+      sourceMessage: buildMessage(),
+      evidenceThreadId: 'thread-1',
+      jobId: 'job-1',
+      itemId: 'item-1',
+      reason: 'Repeated unsolicited links',
+    });
+
+    expect(result).toEqual({ preserved: true, evidenceMessageId: 'evidence-message-5' });
+    expect(evidenceThread.send).toHaveBeenCalledTimes(1);
+    expect(evidenceThread.send.mock.calls[0][0].content).toContain('Cleanup job: job-1');
+    expect(evidenceThread.send.mock.calls[0][0].content).toContain('Cleanup item: item-1');
+  });
+
+  it('uses audit-log reasons for single and bulk Discord deletion', async () => {
+    const repository = new InMemoryDetectionEventsRepository();
+    const rest = { delete: jest.fn().mockResolvedValue(undefined), post: jest.fn() };
+    const client = { rest } as unknown as Client;
+    const service = new MessageDeletionService(client, repository);
+
+    await service.deleteMessage({
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      reason: 'Case cleanup',
+    });
+    await service.bulkDeleteMessages({
+      channelId: 'channel-1',
+      messageIds: ['message-1', 'message-2'],
+      reason: 'Case cleanup',
+    });
+
+    expect(rest.delete).toHaveBeenCalledWith('/channels/channel-1/messages/message-1', {
+      reason: 'Case cleanup',
+    });
+    expect(rest.post).toHaveBeenCalledWith('/channels/channel-1/messages/bulk-delete', {
+      body: { messages: ['message-1', 'message-2'] },
+      reason: 'Case cleanup',
+    });
+  });
+
+  it('rejects invalid bulk deletion batches before calling Discord', async () => {
+    const repository = new InMemoryDetectionEventsRepository();
+    const rest = { post: jest.fn() };
+    const client = { rest } as unknown as Client;
+    const service = new MessageDeletionService(client, repository);
+
+    await expect(
+      service.bulkDeleteMessages({
+        channelId: 'channel-1',
+        messageIds: ['message-1', 'message-1'],
+        reason: 'Case cleanup',
+      })
+    ).rejects.toThrow('2 to 100 unique message IDs');
+    expect(rest.post).not.toHaveBeenCalled();
+  });
 });

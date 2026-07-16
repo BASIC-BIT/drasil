@@ -18,6 +18,7 @@ function buildRequest(
     detectionEventId: null,
     failedAt: null,
     lastError: null,
+    messageDeletionJobId: null,
     requestedAt: '2026-06-08T01:00:00.000Z',
     reportIntakeId: null,
     requestedAction: null,
@@ -86,6 +87,16 @@ describe('inboxActionReceipts', () => {
 
     expect(findInboxActionRequest([reportRequest], reportItem!, 'open_case')?.id).toBe('request-1');
     expect(findInboxActionRequest([reportRequest], observedItem!, 'open_case')).toBeNull();
+  });
+
+  it('reconciles a combined cleanup request with the case ban action', () => {
+    const request = buildRequest({
+      actionType: 'ban_case_user_with_message_cleanup',
+      messageDeletionJobId: 'cleanup-job-1',
+      verificationEventId: caseItem!.sourceId,
+    });
+
+    expect(findInboxActionRequest([request], caseItem!, 'ban_user')?.id).toBe(request.id);
   });
 
   it('reports only queued and processing requests as active', () => {

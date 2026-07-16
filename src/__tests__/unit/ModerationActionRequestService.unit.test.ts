@@ -2,9 +2,16 @@ import { ModerationActionRequestService } from '../../services/ModerationActionR
 import { ChannelType } from 'discord.js';
 import {
   AdminActionType,
+  MessageDeletionBanStatus,
+  MessageDeletionCaseFinalizationStatus,
+  MessageDeletionCoverage,
+  MessageDeletionJobMode,
+  MessageDeletionJobStatus,
+  MessageDeletionScope,
   ModerationActionRequest,
   ModerationActionRequestStatus,
   ModerationActionRequestType,
+  type MessageDeletionJobWithItems,
 } from '../../repositories/types';
 import type { IModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
 
@@ -19,6 +26,7 @@ const baseRequest: ModerationActionRequest = {
   detection_event_id: 'det-1',
   report_intake_id: 'report-1',
   verification_event_id: null,
+  message_deletion_job_id: null,
   idempotency_key: 'web:report-open-case:guild-1:report-1:det-1',
   requested_at: new Date('2026-07-08T18:00:00.000Z'),
   updated_at: new Date('2026-07-08T18:00:00.000Z'),
@@ -29,6 +37,67 @@ const baseRequest: ModerationActionRequest = {
   last_error: null,
   metadata: {},
   result: {},
+};
+
+const messageCleanupJob: MessageDeletionJobWithItems = {
+  id: 'cleanup-job-1',
+  server_id: 'guild-1',
+  user_id: 'user-1',
+  verification_event_id: 'ver-1',
+  requested_by: 'moderator-1',
+  actor_surface: 'web',
+  mode: MessageDeletionJobMode.DELETE_ONLY,
+  ban_status: MessageDeletionBanStatus.NOT_REQUESTED,
+  case_finalization_status: MessageDeletionCaseFinalizationStatus.NOT_APPLICABLE,
+  scope: MessageDeletionScope.LAST_DAY,
+  status: MessageDeletionJobStatus.READY,
+  coverage: MessageDeletionCoverage.READY,
+  reason: 'Repeated unsolicited links',
+  evidence_thread_id: 'evidence-thread-1',
+  requested_window_start: new Date('2026-07-07T18:00:00.000Z'),
+  requested_window_end: new Date('2026-07-08T18:00:00.000Z'),
+  previewed_at: new Date('2026-07-08T18:00:00.000Z'),
+  started_at: null,
+  completed_at: null,
+  failed_at: null,
+  created_at: new Date('2026-07-08T18:00:00.000Z'),
+  updated_at: new Date('2026-07-08T18:00:00.000Z'),
+  candidate_count: 2,
+  preserved_count: 0,
+  deleted_count: 0,
+  already_missing_count: 0,
+  changed_count: 0,
+  evidence_failed_count: 0,
+  delete_failed_count: 0,
+  permission_denied_count: 0,
+  last_error: null,
+  metadata: {},
+  items: [],
+};
+
+const previewMessageCleanupRequest: ModerationActionRequest = {
+  ...baseRequest,
+  id: 'preview-cleanup-request-1',
+  action_type: ModerationActionRequestType.PREVIEW_CASE_MESSAGE_DELETION,
+  detection_event_id: null,
+  report_intake_id: null,
+  verification_event_id: 'ver-1',
+  message_deletion_job_id: 'cleanup-job-1',
+  idempotency_key: 'web:message-cleanup:preview:cleanup-job-1',
+};
+
+const executeMessageCleanupRequest: ModerationActionRequest = {
+  ...previewMessageCleanupRequest,
+  id: 'execute-cleanup-request-1',
+  action_type: ModerationActionRequestType.EXECUTE_CASE_MESSAGE_DELETION,
+  idempotency_key: 'web:message-cleanup:execute:cleanup-job-1',
+};
+
+const combinedBanCleanupRequest: ModerationActionRequest = {
+  ...previewMessageCleanupRequest,
+  id: 'combined-cleanup-request-1',
+  action_type: ModerationActionRequestType.BAN_CASE_USER_WITH_MESSAGE_CLEANUP,
+  idempotency_key: 'web:message-cleanup:ban:cleanup-job-1',
 };
 
 const verifyRequest: ModerationActionRequest = {
@@ -385,6 +454,7 @@ describe('ModerationActionRequestService', () => {
       guild,
       id: 'moderator-1',
       joinedAt: new Date('2026-01-01T00:00:00.000Z'),
+      permissions: { has: jest.fn(() => true) },
       user: { id: 'moderator-1', tag: 'moderator#0001', username: 'moderator' },
     };
     const role = { guild, id: 'role-1', name: 'Manual Intake' };
@@ -545,8 +615,14 @@ describe('ModerationActionRequestService', () => {
     const userModerationService = {
       banUser: jest.fn(async () => true),
       banUserById: jest.fn(async () => true),
+      clearCombinedBanCleanupMarker: jest.fn(async () => true),
       closeCaseNoAction: jest.fn(async () => 1),
+      finalizeSuccessfulCombinedBan: jest.fn(async () => true),
+      finalizeSuccessfulMemberBan: jest.fn(async () => true),
       kickUser: jest.fn(async () => true),
+      markCombinedBanCleanupPending: jest.fn(async () => ({ id: 'ver-1' })),
+      performDiscordBanById: jest.fn(async () => undefined),
+      performDiscordMemberBan: jest.fn(async () => undefined),
       syncAlreadyBannedUser: jest.fn(async () => 1),
       verifyUser: jest.fn(async () => true),
     };
@@ -635,6 +711,28 @@ describe('ModerationActionRequestService', () => {
     const setupDiagnosticsService = {
       validateSetupCandidate: jest.fn(async () => setupDiagnosticsReport),
     };
+    const messageDeletionJobs = {
+      findById: jest.fn(async (id: string): Promise<MessageDeletionJobWithItems | null> => {
+        void id;
+        return null;
+      }),
+      updateCaseFinalizationStatus: jest.fn(async () => null),
+      updateBanStatus: jest.fn(async () => null),
+    };
+    const messageCleanupService = {
+      executeJob: jest.fn(async () => ({
+        jobId: 'cleanup-job-1',
+        alreadyCompleted: false,
+        preservedCount: 2,
+        deletedCount: 1,
+        alreadyMissingCount: 0,
+        changedCount: 1,
+        evidenceFailedCount: 0,
+        deleteFailedCount: 0,
+        permissionDeniedCount: 0,
+      })),
+      previewJob: jest.fn(async () => messageCleanupJob),
+    };
     const service = new ModerationActionRequestService(
       repository,
       {
@@ -655,7 +753,9 @@ describe('ModerationActionRequestService', () => {
       caseRoleLockdownService as any,
       notificationManager as any,
       productAnalyticsService as any,
-      setupDiagnosticsService as any
+      setupDiagnosticsService as any,
+      messageDeletionJobs as any,
+      messageCleanupService as any
     );
 
     return {
@@ -685,6 +785,8 @@ describe('ModerationActionRequestService', () => {
       caseThreadClosureSweepService,
       caseRoleLockdownService,
       moderationQueueService,
+      messageCleanupService,
+      messageDeletionJobs,
       userModerationService,
     };
   }
@@ -1771,6 +1873,192 @@ describe('ModerationActionRequestService', () => {
         id: 'role-intake-request-1',
         error: 'Role intake execution requires a case reason.',
       },
+    ]);
+  });
+
+  it('previews a case-scoped cleanup job for a current administrator', async () => {
+    const { messageCleanupService, messageDeletionJobs, repository, service } = buildService([
+      previewMessageCleanupRequest,
+    ]);
+    messageDeletionJobs.findById.mockResolvedValue(messageCleanupJob);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(messageCleanupService.previewJob).toHaveBeenCalledWith('cleanup-job-1');
+    expect(repository.completed[0]).toEqual({
+      id: 'preview-cleanup-request-1',
+      result: expect.objectContaining({
+        candidate_count: 2,
+        coverage: MessageDeletionCoverage.READY,
+        message_deletion_job_id: 'cleanup-job-1',
+      }),
+    });
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('executes a frozen delete-only cleanup job', async () => {
+    const { messageCleanupService, messageDeletionJobs, repository, service } = buildService([
+      executeMessageCleanupRequest,
+    ]);
+    messageDeletionJobs.findById.mockResolvedValue(messageCleanupJob);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(messageCleanupService.executeJob).toHaveBeenCalledWith('cleanup-job-1');
+    expect(repository.completed[0]).toEqual({
+      id: 'execute-cleanup-request-1',
+      result: expect.objectContaining({
+        deleted_count: 1,
+        changed_since_preview_count: 1,
+        preserved_count: 2,
+      }),
+    });
+  });
+
+  it('revalidates Administrator permission in the worker', async () => {
+    const { messageCleanupService, messageDeletionJobs, reporterMember, repository, service } =
+      buildService([executeMessageCleanupRequest]);
+    messageDeletionJobs.findById.mockResolvedValue(messageCleanupJob);
+    reporterMember.permissions.has.mockReturnValue(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(messageCleanupService.executeJob).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        id: 'execute-cleanup-request-1',
+        error: 'Message cleanup requires current Administrator permission.',
+      },
+    ]);
+  });
+
+  it('bans first, cleans up second, and finalizes the case last', async () => {
+    const {
+      messageCleanupService,
+      messageDeletionJobs,
+      repository,
+      service,
+      userModerationService,
+    } = buildService([combinedBanCleanupRequest]);
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.markCombinedBanCleanupPending).toHaveBeenCalledWith(
+      'ver-1',
+      'cleanup-job-1'
+    );
+    expect(userModerationService.performDiscordBanById.mock.invocationCallOrder[0]).toBeLessThan(
+      messageCleanupService.executeJob.mock.invocationCallOrder[0]
+    );
+    expect(messageCleanupService.executeJob.mock.invocationCallOrder[0]).toBeLessThan(
+      userModerationService.finalizeSuccessfulCombinedBan.mock.invocationCallOrder[0]
+    );
+    expect(repository.completed[0]).toEqual({
+      id: 'combined-cleanup-request-1',
+      result: expect.objectContaining({
+        banned: true,
+        case_finalized: true,
+        deleted_count: 1,
+      }),
+    });
+  });
+
+  it('clears the combined marker and skips cleanup when the Discord ban fails', async () => {
+    const {
+      messageCleanupService,
+      messageDeletionJobs,
+      repository,
+      service,
+      userModerationService,
+    } = buildService([combinedBanCleanupRequest]);
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+    });
+    userModerationService.performDiscordBanById.mockRejectedValue(new Error('ban denied'));
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.clearCombinedBanCleanupMarker).toHaveBeenCalledWith(
+      'ver-1',
+      'cleanup-job-1'
+    );
+    expect(messageCleanupService.executeJob).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([{ id: 'combined-cleanup-request-1', error: 'ban denied' }]);
+  });
+
+  it('resumes cleanup without repeating a durable successful ban', async () => {
+    const { messageCleanupService, messageDeletionJobs, service, userModerationService } =
+      buildService([combinedBanCleanupRequest]);
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      ban_status: MessageDeletionBanStatus.SUCCEEDED,
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+      status: MessageDeletionJobStatus.EXECUTING,
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.performDiscordBanById).not.toHaveBeenCalled();
+    expect(messageCleanupService.executeJob).toHaveBeenCalledWith('cleanup-job-1');
+    expect(userModerationService.finalizeSuccessfulCombinedBan).toHaveBeenCalled();
+  });
+
+  it('leaves finalization untouched and clears the marker when cleanup fails after the ban', async () => {
+    const {
+      messageCleanupService,
+      messageDeletionJobs,
+      repository,
+      service,
+      userModerationService,
+    } = buildService([combinedBanCleanupRequest]);
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+    });
+    messageCleanupService.executeJob.mockRejectedValue(new Error('cleanup interrupted'));
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.finalizeSuccessfulCombinedBan).not.toHaveBeenCalled();
+    expect(messageDeletionJobs.updateCaseFinalizationStatus).not.toHaveBeenCalled();
+    expect(userModerationService.clearCombinedBanCleanupMarker).toHaveBeenCalledWith(
+      'ver-1',
+      'cleanup-job-1'
+    );
+    expect(repository.failed).toEqual([
+      { id: 'combined-cleanup-request-1', error: 'cleanup interrupted' },
+    ]);
+  });
+
+  it('records failed finalization and clears the marker after cleanup completes', async () => {
+    const { messageDeletionJobs, repository, service, userModerationService } = buildService([
+      combinedBanCleanupRequest,
+    ]);
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+    });
+    userModerationService.finalizeSuccessfulCombinedBan.mockRejectedValue(
+      new Error('thread finalization failed')
+    );
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(messageDeletionJobs.updateCaseFinalizationStatus).toHaveBeenLastCalledWith(
+      'cleanup-job-1',
+      MessageDeletionCaseFinalizationStatus.FAILED
+    );
+    expect(userModerationService.clearCombinedBanCleanupMarker).toHaveBeenCalledWith(
+      'ver-1',
+      'cleanup-job-1'
+    );
+    expect(repository.failed).toEqual([
+      { id: 'combined-cleanup-request-1', error: 'thread finalization failed' },
     ]);
   });
 

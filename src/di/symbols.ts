@@ -33,6 +33,7 @@ export const TYPES = {
   IntegrityAuditService: Symbol.for('IntegrityAuditService'),
   RoleGateService: Symbol.for('RoleGateService'),
   MessageDeletionService: Symbol.for('MessageDeletionService'),
+  MessageCleanupService: Symbol.for('MessageCleanupService'),
   CaseThreadClosureSweepService: Symbol.for('CaseThreadClosureSweepService'),
 
   // Repositories
@@ -47,6 +48,7 @@ export const TYPES = {
   ModerationOutcomeRepository: Symbol.for('ModerationOutcomeRepository'),
   ModerationQueueRepository: Symbol.for('ModerationQueueRepository'),
   ModerationActionRequestRepository: Symbol.for('ModerationActionRequestRepository'),
+  MessageDeletionJobRepository: Symbol.for('MessageDeletionJobRepository'),
   RoleQuarantineSnapshotRepository: Symbol.for('RoleQuarantineSnapshotRepository'),
   IntegrityAuditRepository: Symbol.for('IntegrityAuditRepository'),
   GlobalMessageWatchlistRepository: Symbol.for('GlobalMessageWatchlistRepository'),

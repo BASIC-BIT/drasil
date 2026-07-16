@@ -18,6 +18,9 @@ export type ModerationActionRequestActionType =
   | 'close_case_no_action'
   | 'kick_case_user'
   | 'ban_case_user'
+  | 'preview_case_message_deletion'
+  | 'execute_case_message_deletion'
+  | 'ban_case_user_with_message_cleanup'
   | 'ban_case_user_by_id'
   | 'repair_active_case'
   | 'reopen_case'
@@ -36,6 +39,7 @@ export type ModerationActionRequestQueueStatus = 'queued' | 'processing' | 'comp
 
 export interface ModerationActionRequestReceipt {
   readonly id: string;
+  readonly messageDeletionJobId?: string | null;
   readonly status: ModerationActionRequestQueueStatus;
 }
 
@@ -46,6 +50,7 @@ export interface QueueModerationActionRequestInput {
   readonly detectionEventId?: string | null;
   readonly idempotencyKey: string;
   readonly metadata?: Record<string, unknown>;
+  readonly messageDeletionJobId?: string | null;
   readonly reportIntakeId?: string | null;
   readonly serverId: string;
   readonly targetUserId?: string | null;
@@ -72,6 +77,7 @@ export async function queueModerationActionRequestWithReceipt(
        detection_event_id,
        report_intake_id,
        verification_event_id,
+       message_deletion_job_id,
        idempotency_key,
        metadata
      )
@@ -85,8 +91,9 @@ export async function queueModerationActionRequestWithReceipt(
        $6::uuid,
        $7::uuid,
        $8::uuid,
-       $9,
-       $10::jsonb
+       $9::uuid,
+       $10,
+       $11::jsonb
      )
      on conflict (idempotency_key) do update
      set status = case
@@ -97,8 +104,15 @@ export async function queueModerationActionRequestWithReceipt(
          updated_at = now(),
          failed_at = null,
          last_error = null,
-         metadata = coalesce(moderation_action_requests.metadata, '{}'::jsonb) || excluded.metadata
-     returning id::text, status::text as status`,
+         metadata = coalesce(moderation_action_requests.metadata, '{}'::jsonb) || excluded.metadata,
+         message_deletion_job_id = coalesce(
+           moderation_action_requests.message_deletion_job_id,
+           excluded.message_deletion_job_id
+         )
+     returning
+       id::text,
+       message_deletion_job_id::text as "messageDeletionJobId",
+       status::text as status`,
     [
       input.serverId,
       input.actionType,
@@ -108,6 +122,7 @@ export async function queueModerationActionRequestWithReceipt(
       input.detectionEventId ?? null,
       input.reportIntakeId ?? null,
       input.verificationEventId ?? null,
+      input.messageDeletionJobId ?? null,
       input.idempotencyKey,
       JSON.stringify(input.metadata ?? {}),
     ]
@@ -116,6 +131,7 @@ export async function queueModerationActionRequestWithReceipt(
   return (
     result.rows[0] ?? {
       id: input.idempotencyKey,
+      messageDeletionJobId: input.messageDeletionJobId ?? null,
       status: 'failed',
     }
   );

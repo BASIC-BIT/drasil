@@ -1,8 +1,14 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { CaseDetailView } from './CaseDetailView';
 import { fixtureCaseDetails, fixtureResolvedCaseDetails } from '@/lib/caseFixtures';
+import { completedInboxActionState } from '@/lib/inboxActionState';
+import {
+  fixtureMessageCleanupCaseWorkspaces,
+  fixtureMessageCleanupJobDetails,
+} from '@/lib/messageCleanupFixtures';
 
 const noopQueueCaseAction = async () => undefined;
+const noopCleanupAction = async () => completedInboxActionState('Fixture cleanup queued.');
 
 const meta = {
   title: 'Active Triage/Case Detail',
@@ -30,6 +36,19 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const StaleRestrictedCase: Story = {};
+
+export const StaleCaseWithMessageCleanup: Story = {
+  args: {
+    messageCleanup: {
+      combinedBanAction: noopCleanupAction,
+      combinedJob: fixtureMessageCleanupJobDetails[1],
+      deleteOnlyJob: fixtureMessageCleanupJobDetails[0],
+      executeAction: noopCleanupAction,
+      previewAction: noopCleanupAction,
+      workspace: fixtureMessageCleanupCaseWorkspaces[0],
+    },
+  },
+};
 
 export const LeftUserCase: Story = {
   args: {

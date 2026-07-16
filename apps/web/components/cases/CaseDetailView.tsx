@@ -11,6 +11,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import {
   CaseActionControls,
   executableCaseActions,
+  type CaseMessageCleanupIntegration,
   type QueueCaseAction,
 } from './CaseActionControls';
 import { discordDesktopUrlFromWebUrl } from '@/lib/discordUrls';
@@ -42,6 +43,7 @@ interface CaseDetailViewProps {
   readonly sessionUsername: string;
   readonly detail: CaseDetail;
   readonly discordSnapshot?: CaseDiscordSnapshot;
+  readonly messageCleanup?: CaseMessageCleanupIntegration;
   readonly queueCaseAction: QueueCaseAction;
 }
 
@@ -168,11 +170,13 @@ function DiscordSurfaces({
   canQueueCaseActions,
   detail,
   guildId,
+  messageCleanup,
   queueCaseAction,
 }: {
   readonly canQueueCaseActions: boolean;
   readonly detail: CaseDetail;
   readonly guildId: string;
+  readonly messageCleanup?: CaseMessageCleanupIntegration;
   readonly queueCaseAction: QueueCaseAction;
 }) {
   return (
@@ -203,6 +207,7 @@ function DiscordSurfaces({
         canQueueCaseActions={canQueueCaseActions}
         caseId={detail.id}
         guildId={guildId}
+        messageCleanup={messageCleanup}
         queueCaseAction={queueCaseAction}
       />
       <ActionPills actions={detail.allowedActions} />
@@ -488,6 +493,7 @@ export function CaseDetailView({
   sessionUsername,
   detail,
   discordSnapshot,
+  messageCleanup,
   queueCaseAction,
 }: CaseDetailViewProps) {
   return (
@@ -521,6 +527,7 @@ export function CaseDetailView({
         canQueueCaseActions={canQueueCaseActions}
         detail={detail}
         guildId={guildId}
+        messageCleanup={messageCleanup}
         queueCaseAction={queueCaseAction}
       />
       <ModerationOutcomes outcomes={detail.moderationOutcomes} />

@@ -45,9 +45,10 @@ const buildGuildWithBan = (guildId: string, userId: string, reason?: string): Gu
   ({
     id: guildId,
     bans: {
+      create: jest.fn().mockResolvedValue({ id: userId }),
       fetch: jest.fn().mockResolvedValue({
         reason,
-        user: { id: userId, tag: 'test-user#0001' },
+        user: { id: userId, username: 'test-user', tag: 'test-user#0001' },
       }),
     },
   }) as unknown as Guild;
@@ -682,6 +683,13 @@ describe('UserModerationService (unit)', () => {
       roleQuarantineService
     );
 
+    (member.ban as jest.Mock).mockImplementation(async () => {
+      await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+        expect.objectContaining({ status: VerificationStatus.PENDING })
+      );
+      expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+    });
+
     await service.banUser(member, 'banned in test', moderator);
 
     const updatedEvent = await verificationEventRepository.findById(verificationEvent.id);
@@ -725,6 +733,262 @@ describe('UserModerationService (unit)', () => {
       'drasil_ban',
       moderator.id
     );
+  });
+
+  it('keeps a combined ban case pending until successful-ban finalization', async () => {
+    const guildId = 'guild-combined-ban';
+    const userId = 'user-combined-ban';
+    const moderator = { id: 'mod-combined-ban' } as User;
+    const guild = buildGuildWithBan(guildId, userId, 'combined moderation action');
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await service.markCombinedBanCleanupPending(verificationEvent.id, 'cleanup-job-1');
+    await service.performDiscordBanById(guild, userId, 'combined moderation action');
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        resolved_at: null,
+        metadata: expect.objectContaining({
+          active_moderation_operation: expect.objectContaining({
+            kind: 'ban_with_message_cleanup',
+            operation_id: 'cleanup-job-1',
+          }),
+        }),
+      })
+    );
+    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+
+    await service.finalizeSuccessfulCombinedBan(
+      guild,
+      userId,
+      verificationEvent.id,
+      'cleanup-job-1',
+      'combined moderation action',
+      moderator,
+      detectionEvent.id
+    );
+
+    const finalizedEvent = await verificationEventRepository.findById(verificationEvent.id);
+    expect(finalizedEvent).toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.BANNED,
+        resolved_by: moderator.id,
+      })
+    );
+    expect(finalizedEvent?.metadata).not.toHaveProperty('active_moderation_operation');
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      VerificationStatus.BANNED,
+      moderator.id
+    );
+    expect(guild.bans.create).toHaveBeenCalledWith(userId, {
+      reason: 'combined moderation action',
+    });
+  });
+
+  it('truncates Discord ban audit reasons without truncating the durable moderation reason', async () => {
+    const guildId = 'guild-combined-long-reason';
+    const userId = 'user-combined-long-reason';
+    const reason = 'r'.repeat(700);
+    const guild = buildGuildWithBan(guildId, userId, reason);
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await service.performDiscordBanById(guild, userId, reason);
+
+    expect(guild.bans.create).toHaveBeenCalledWith(userId, { reason: 'r'.repeat(512) });
+  });
+
+  it('resumes combined finalization after a process exit leaves a banned case marker', async () => {
+    const guildId = 'guild-combined-resume';
+    const userId = 'user-combined-resume';
+    const moderator = { id: 'mod-combined-resume' } as User;
+    const guild = buildGuildWithBan(guildId, userId, 'combined cleanup');
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+    await service.markCombinedBanCleanupPending(verificationEvent.id, 'cleanup-job-resume');
+    const marked = await verificationEventRepository.findById(verificationEvent.id);
+    await verificationEventRepository.update(verificationEvent.id, {
+      ...marked!,
+      status: VerificationStatus.BANNED,
+      resolved_at: new Date(),
+      resolved_by: moderator.id,
+    });
+
+    await service.finalizeSuccessfulCombinedBan(
+      guild,
+      userId,
+      verificationEvent.id,
+      'cleanup-job-resume',
+      'combined cleanup',
+      moderator,
+      detectionEvent.id
+    );
+
+    const finalized = await verificationEventRepository.findById(verificationEvent.id);
+    expect(finalized?.metadata).not.toHaveProperty('active_moderation_operation');
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      VerificationStatus.BANNED,
+      moderator.id
+    );
+  });
+
+  it('ignores an observed Discord ban while combined cleanup is active', async () => {
+    const guildId = 'guild-combined-observed-ban';
+    const userId = 'user-combined-observed-ban';
+    const member = buildMember(guildId, userId);
+    const guild = { id: guildId } as Guild;
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await service.markCombinedBanCleanupPending(verificationEvent.id, 'cleanup-job-2');
+
+    await expect(
+      service.recordObservedDiscordBan(guild, member.user, {
+        source: ModerationOutcomeSource.UNKNOWN_EXTERNAL,
+        sourceDetail: 'guildBanAdd',
+      })
+    ).resolves.toBe(0);
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.PENDING })
+    );
+    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+    await expect(moderationOutcomeRepository.findByUserAndServer(userId, guildId)).resolves.toEqual(
+      []
+    );
+  });
+
+  it('clears the combined cleanup marker after the Discord ban fails', async () => {
+    const guildId = 'guild-combined-ban-failure';
+    const userId = 'user-combined-ban-failure';
+    const member = buildMember(guildId, userId);
+    (member.ban as jest.Mock).mockRejectedValue(new Error('Missing Ban Members permission'));
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const detectionEvent = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      detectionEvent.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await service.markCombinedBanCleanupPending(verificationEvent.id, 'cleanup-job-3');
+    await expect(
+      service.performDiscordMemberBan(member, 'combined moderation action')
+    ).rejects.toThrow('Missing Ban Members permission');
+    await expect(
+      service.clearCombinedBanCleanupMarker(verificationEvent.id, 'cleanup-job-3')
+    ).resolves.toBe(true);
+
+    const pendingEvent = await verificationEventRepository.findById(verificationEvent.id);
+    expect(pendingEvent?.status).toBe(VerificationStatus.PENDING);
+    expect(pendingEvent?.metadata).not.toHaveProperty('active_moderation_operation');
+    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
   });
 
   it('bans all duplicate pending cases for a user', async () => {
