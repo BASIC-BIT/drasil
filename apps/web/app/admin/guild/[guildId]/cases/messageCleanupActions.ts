@@ -352,7 +352,10 @@ function assertFrozenJob(
   if (!frozenJobCanExecute(job)) {
     throw new Error('The cleanup preview is not eligible for execution.');
   }
-  if (expectedMode === 'ban_with_cleanup' && job.ban_status !== 'not_requested') {
+  if (
+    expectedMode === 'ban_with_cleanup' &&
+    !['not_requested', 'failed'].includes(job.ban_status)
+  ) {
     throw new Error('The combined ban and cleanup has already started.');
   }
 }

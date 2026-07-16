@@ -950,7 +950,12 @@ export class ModerationActionRequestService implements IModerationActionRequestS
 
   private async previewCaseMessageDeletion(request: ModerationActionRequest): Promise<void> {
     const job = await this.requireMessageDeletionJob(request);
-    await this.requireCleanupAdministrator(request);
+    try {
+      await this.requireCleanupAdministrator(request);
+    } catch (error) {
+      await this.messageDeletionJobs.fail(job.id, this.errorMessage(error));
+      throw error;
+    }
     const preview = await this.messageCleanupService.previewJob(job.id);
 
     await this.repository.complete(request.id, {

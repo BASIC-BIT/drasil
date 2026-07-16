@@ -299,6 +299,37 @@ describe('messageCleanupActions', () => {
     expect(mocks.connect).not.toHaveBeenCalled();
   });
 
+  it('allows retrying a ready combined preview after its ban attempt failed', async () => {
+    const failedBanJob = {
+      ...readyJob,
+      ban_status: 'failed',
+      mode: 'ban_with_cleanup',
+    };
+    databaseClient((text) => {
+      if (text.includes('where idempotency_key')) return [];
+      if (text.includes('from verification_events')) return [caseRow];
+      if (text.includes('from message_deletion_jobs')) return [failedBanJob];
+      if (text.includes('select id::text from moderation_action_requests')) return [];
+      if (text.includes('insert into moderation_action_requests')) {
+        return [{ id: REQUEST_ID, messageDeletionJobId: JOB_ID, status: 'queued' }];
+      }
+      return [];
+    });
+
+    const state = await banCaseUserWithMessageCleanup(
+      'guild-1',
+      CASE_ID,
+      initialInboxActionState,
+      cleanupForm({ mode: 'ban_with_cleanup' })
+    );
+
+    expect(state).toEqual({
+      message: 'Ban and message cleanup queued.',
+      requestId: REQUEST_ID,
+      status: 'queued',
+    });
+  });
+
   it('returns an existing completed execute receipt before mutable case or job checks', async () => {
     const { query } = databaseClient((text) => {
       if (text.includes('where idempotency_key')) {
