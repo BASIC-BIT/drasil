@@ -209,7 +209,9 @@ describe('messageCleanupActions', () => {
       )
     ).toBe(false);
   });
+});
 
+describe('messageCleanupActions execution', () => {
   it('rejects execution when submitted frozen fields no longer match the job', async () => {
     const { query } = databaseClient((text) => {
       if (text.includes('from verification_events')) return [caseRow];
