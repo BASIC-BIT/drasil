@@ -120,6 +120,20 @@ test('case detail resolved reopen story visual baseline @storybook-visual', asyn
   await expectVisualSchemes(page, 'storybook-case-detail-resolved-reopen');
 });
 
+test('message cleanup controls render with the Storybook navigation shim @storybook-functional', async ({
+  page,
+}) => {
+  await gotoStory(page, 'active-triage-message-cleanup-controls--new-preview');
+  await expect(page.getByRole('button', { name: 'Preview Messages' })).toBeEnabled();
+
+  await gotoStory(page, 'active-triage-message-cleanup-controls--ready-source-message');
+  await expect(page.getByRole('heading', { name: 'Delete messages' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Delete Messages' })).toBeVisible();
+
+  await gotoStory(page, 'active-triage-message-cleanup-controls--combined-partial-outcome');
+  await expect(page.getByRole('heading', { name: 'Ban user and delete messages' })).toBeVisible();
+});
+
 test('member profile story visual baseline @storybook-visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await gotoStory(page, 'active-triage-member-profile--banned-member-history');

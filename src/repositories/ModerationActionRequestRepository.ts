@@ -11,6 +11,7 @@ import {
 export interface IModerationActionRequestRepository {
   enqueue(data: ModerationActionRequestCreate): Promise<ModerationActionRequest>;
   claimNext(): Promise<ModerationActionRequest | null>;
+  heartbeat(id: string): Promise<ModerationActionRequest | null>;
   complete(id: string, result?: Prisma.JsonValue | null): Promise<ModerationActionRequest | null>;
   fail(id: string, error: string): Promise<ModerationActionRequest | null>;
 }
@@ -48,6 +49,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
           detection_event_id,
           report_intake_id,
           verification_event_id,
+          message_deletion_job_id,
           idempotency_key,
           metadata
         )
@@ -61,6 +63,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
           ${data.detectionEventId ?? null}::uuid,
           ${data.reportIntakeId ?? null}::uuid,
           ${data.verificationEventId ?? null}::uuid,
+          ${data.messageDeletionJobId ?? null}::uuid,
           ${data.idempotencyKey},
           ${metadata}::jsonb
         )
@@ -73,6 +76,10 @@ export class ModerationActionRequestRepository implements IModerationActionReque
             updated_at = now(),
             failed_at = null,
             last_error = null,
+            message_deletion_job_id = coalesce(
+              moderation_action_requests.message_deletion_job_id,
+              excluded.message_deletion_job_id
+            ),
             metadata = coalesce(moderation_action_requests.metadata, '{}'::jsonb) || excluded.metadata
         returning *
       `;
@@ -87,6 +94,21 @@ export class ModerationActionRequestRepository implements IModerationActionReque
 
   public async claimNext(): Promise<ModerationActionRequest | null> {
     try {
+      await this.prisma.$executeRaw`
+        update moderation_action_requests
+        set status = 'failed'::moderation_action_request_status,
+            failed_at = now(),
+            updated_at = now(),
+            last_error = 'Worker interrupted before this action completed.'
+        where status = 'processing'::moderation_action_request_status
+          and verification_event_id is not null
+          and action_type not in (
+            'preview_case_message_deletion'::moderation_action_request_type,
+            'execute_case_message_deletion'::moderation_action_request_type,
+            'ban_case_user_with_message_cleanup'::moderation_action_request_type
+          )
+          and updated_at < now() - interval '15 minutes'
+      `;
       const rows = await this.prisma.$queryRaw<ModerationActionRequest[]>`
         update moderation_action_requests
         set status = 'processing'::moderation_action_request_status,
@@ -97,7 +119,18 @@ export class ModerationActionRequestRepository implements IModerationActionReque
           select id
           from moderation_action_requests
           where status = 'queued'::moderation_action_request_status
-          order by requested_at asc nulls last
+             or (
+               status = 'processing'::moderation_action_request_status
+               and action_type in (
+                 'preview_case_message_deletion'::moderation_action_request_type,
+                 'execute_case_message_deletion'::moderation_action_request_type,
+                 'ban_case_user_with_message_cleanup'::moderation_action_request_type
+               )
+               and updated_at < now() - interval '15 minutes'
+             )
+          order by
+            case when status = 'queued'::moderation_action_request_status then 0 else 1 end,
+            requested_at asc nulls last
           for update skip locked
           limit 1
         )
@@ -106,6 +139,21 @@ export class ModerationActionRequestRepository implements IModerationActionReque
       return rows[0] ?? null;
     } catch (error) {
       this.handleError(error, 'claimModerationActionRequest');
+    }
+  }
+
+  public async heartbeat(id: string): Promise<ModerationActionRequest | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<ModerationActionRequest[]>`
+        update moderation_action_requests
+        set updated_at = now()
+        where id = ${id}::uuid
+          and status = 'processing'::moderation_action_request_status
+        returning *
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'heartbeatModerationActionRequest');
     }
   }
 

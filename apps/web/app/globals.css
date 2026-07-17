@@ -1243,6 +1243,234 @@ select {
   color: var(--text);
 }
 
+.case-action-area,
+.case-message-cleanup-block,
+.cleanup-workspace,
+.cleanup-preview-form,
+.cleanup-execute-form,
+.cleanup-standard-ban-form {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.case-action-area {
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+.case-message-cleanup-block {
+  width: 100%;
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
+.case-message-cleanup-block h3,
+.cleanup-job-heading h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.cleanup-preview-form {
+  grid-template-columns: minmax(150px, 210px) minmax(260px, 1fr) auto;
+  align-items: end;
+}
+
+.cleanup-preview-form .action-receipt {
+  grid-column: 1 / -1;
+}
+
+.cleanup-reason-field textarea {
+  min-width: 0;
+}
+
+.cleanup-job-heading,
+.cleanup-message-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cleanup-job-heading > div,
+.cleanup-message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.cleanup-job-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.cleanup-job-facts > div {
+  min-width: 0;
+  padding: 10px 12px 10px 0;
+}
+
+.cleanup-job-facts dt {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.cleanup-job-facts dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.cleanup-job-facts .cleanup-job-reason {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
+}
+
+.cleanup-job-receipt,
+.cleanup-coverage,
+.cleanup-lifecycle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  font-size: 0.86rem;
+}
+
+.cleanup-job-receipt a {
+  font-weight: 800;
+}
+
+.cleanup-coverage {
+  border-left: 3px solid var(--line-strong);
+  padding-left: 10px;
+}
+
+.cleanup-coverage.warning {
+  border-color: var(--warn-line);
+}
+
+.cleanup-coverage.error {
+  border-color: var(--danger-line);
+}
+
+.cleanup-coverage.ok {
+  border-color: var(--ok-line);
+}
+
+.cleanup-outcome-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(88px, 1fr));
+  margin: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.cleanup-outcome-grid > div {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px 9px 0;
+}
+
+.cleanup-outcome-grid dt,
+.cleanup-outcome-grid dd {
+  margin: 0;
+}
+
+.cleanup-outcome-grid dd {
+  font-weight: 700;
+}
+
+.cleanup-message-list {
+  display: grid;
+  max-height: 540px;
+  overflow-y: auto;
+  margin: 0;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  padding: 0;
+  list-style: none;
+}
+
+.cleanup-message-row {
+  display: grid;
+  gap: 8px;
+  padding: 12px 4px;
+}
+
+.cleanup-message-row + .cleanup-message-row {
+  border-top: 1px solid var(--line);
+}
+
+.cleanup-message-links,
+.cleanup-message-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.cleanup-message-facts {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.cleanup-message-content {
+  margin: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--text);
+  font: inherit;
+  line-height: 1.4;
+}
+
+.cleanup-item-error {
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.cleanup-blocked {
+  margin: 0;
+  border-left: 3px solid var(--warn-line);
+  color: var(--muted-strong);
+  padding: 8px 10px;
+}
+
+.cleanup-execute-form {
+  justify-items: start;
+  border-top: 1px solid var(--danger-line);
+  padding-top: 12px;
+}
+
+.cleanup-new-preview-form {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line-strong);
+  padding-top: 12px;
+}
+
+.cleanup-new-preview-form h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.cleanup-ban-panel {
+  width: 100%;
+  max-width: 760px;
+  min-width: 0;
+}
+
+.cleanup-ban-panel .cleanup-workspace,
+.cleanup-ban-panel .cleanup-preview-form {
+  min-width: 0;
+}
+
 .destructive-confirm,
 .checkbox-field {
   display: flex;
@@ -1466,7 +1694,9 @@ select {
   }
 
   .evidence-group-header,
-  .evidence-row-header {
+  .evidence-row-header,
+  .cleanup-job-heading,
+  .cleanup-message-heading {
     display: grid;
   }
 
@@ -1496,6 +1726,27 @@ select {
 
   .inbox-detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .cleanup-preview-form,
+  .cleanup-job-facts,
+  .cleanup-outcome-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cleanup-job-facts > div,
+  .cleanup-outcome-grid > div {
+    border-top: 1px solid var(--line);
+    padding-right: 0;
+  }
+
+  .cleanup-job-facts > div:first-child,
+  .cleanup-outcome-grid > div:first-child {
+    border-top: 0;
+  }
+
+  .cleanup-ban-panel {
+    width: 100%;
   }
 
   .inbox-row {

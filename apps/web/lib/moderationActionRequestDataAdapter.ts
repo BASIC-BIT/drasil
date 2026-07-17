@@ -14,6 +14,7 @@ export interface ModerationActionRequestSummary {
   readonly detectionEventId: string | null;
   readonly failedAt: string | null;
   readonly lastError: string | null;
+  readonly messageDeletionJobId: string | null;
   readonly requestedAt: string;
   readonly reportIntakeId: string | null;
   readonly requestedAction: string | null;
@@ -29,6 +30,11 @@ export interface ModerationActionRequestDataAdapter {
     guildId: string,
     recentLimit?: number
   ): Promise<ModerationActionRequestSummary[]>;
+  listCaseRequests(
+    guildId: string,
+    verificationEventId: string,
+    limit?: number
+  ): Promise<ModerationActionRequestSummary[]>;
   listRecentRequests(guildId: string, limit?: number): Promise<ModerationActionRequestSummary[]>;
 }
 
@@ -41,6 +47,7 @@ interface ModerationActionRequestRow {
   readonly failed_at: unknown;
   readonly last_error: string | null;
   readonly metadata?: unknown;
+  readonly message_deletion_job_id?: string | null;
   readonly requested_at: unknown;
   readonly report_intake_id?: string | null;
   readonly result: unknown;
@@ -153,6 +160,23 @@ function formatSetupVerificationResult(result: OperationResultRecord) {
   return `Core setup saved; verification channel ${verificationAction}${reportError}.`;
 }
 
+function formatMessageCleanupResult(result: OperationResultRecord) {
+  const coverage = readString(result.coverage);
+  const candidates = readNumber(result.candidate_count);
+  if (coverage && candidates !== null) {
+    return `Preview found ${candidates} candidate message${candidates === 1 ? '' : 's'} with ${coverage} coverage.`;
+  }
+
+  const deleted = readNumber(result.deleted_count) ?? 0;
+  const preserved = readNumber(result.preserved_count) ?? 0;
+  const changed = readNumber(result.changed_since_preview_count) ?? 0;
+  const failed =
+    (readNumber(result.evidence_failed_count) ?? 0) +
+    (readNumber(result.delete_failed_count) ?? 0) +
+    (readNumber(result.permission_denied_count) ?? 0);
+  return `Preserved ${preserved}; deleted ${deleted}; changed ${changed}; failed ${failed}.`;
+}
+
 const operationResultFormatters: Partial<
   Record<ModerationActionRequestActionType, OperationResultFormatter>
 > = {
@@ -161,6 +185,9 @@ const operationResultFormatters: Partial<
   clear_moderation_queue: formatClearModerationQueueResult,
   close_resolved_case_threads: formatCloseResolvedThreadsResult,
   complete_setup_verification: formatSetupVerificationResult,
+  preview_case_message_deletion: formatMessageCleanupResult,
+  execute_case_message_deletion: formatMessageCleanupResult,
+  ban_case_user_with_message_cleanup: formatMessageCleanupResult,
   intake_role_members: formatRoleIntakeResult,
   sync_moderation_queue: formatQueueSyncResult,
   upsert_report_instructions: formatReportInstructionsResult,
@@ -193,6 +220,7 @@ export function parseModerationActionRequestRow(
     detectionEventId: row.detection_event_id ?? null,
     failedAt: toNullableIsoString(row.failed_at),
     lastError: row.last_error,
+    messageDeletionJobId: row.message_deletion_job_id ?? null,
     requestedAt: toIsoString(row.requested_at),
     reportIntakeId: row.report_intake_id ?? null,
     requestedAction:
@@ -221,6 +249,39 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
     limit = 8
   ): Promise<ModerationActionRequestSummary[]> {
     return this.listRequests(guildId, limit, false);
+  }
+
+  public async listCaseRequests(
+    guildId: string,
+    verificationEventId: string,
+    limit = 10
+  ): Promise<ModerationActionRequestSummary[]> {
+    const boundedLimit = Math.max(1, Math.min(Math.floor(limit), 25));
+    const result = await getPostgresPool().query<ModerationActionRequestRow>(
+      `select
+         id::text,
+         action_type::text as action_type,
+         actor_surface,
+         completed_at,
+         detection_event_id::text,
+         failed_at,
+         last_error,
+         message_deletion_job_id::text,
+         metadata,
+         requested_at,
+         report_intake_id::text,
+         result,
+         status::text as status,
+         target_user_id,
+         updated_at,
+         verification_event_id::text
+       from moderation_action_requests
+       where server_id = $1 and verification_event_id = $2::uuid
+       order by requested_at desc
+       limit $3`,
+      [guildId, verificationEventId, boundedLimit]
+    );
+    return result.rows.map(parseModerationActionRequestRow);
   }
 
   private async listRequests(
@@ -255,6 +316,7 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          requests.detection_event_id::text,
          requests.failed_at,
          requests.last_error,
+         requests.message_deletion_job_id::text,
          requests.metadata,
          requests.requested_at,
          requests.report_intake_id::text,
@@ -294,6 +356,7 @@ export class FixtureModerationActionRequestDataAdapter implements ModerationActi
         detectionEventId: null,
         failedAt: null,
         lastError: null,
+        messageDeletionJobId: null,
         requestedAt: fixtureTimestampIso,
         reportIntakeId: null,
         requestedAction: null,
@@ -311,6 +374,7 @@ export class FixtureModerationActionRequestDataAdapter implements ModerationActi
         detectionEventId: null,
         failedAt: null,
         lastError: null,
+        messageDeletionJobId: null,
         requestedAt: '2026-06-08T01:10:02.000Z',
         reportIntakeId: null,
         requestedAction: 'refresh_notification',
@@ -328,6 +392,7 @@ export class FixtureModerationActionRequestDataAdapter implements ModerationActi
         detectionEventId: null,
         failedAt: null,
         lastError: null,
+        messageDeletionJobId: null,
         requestedAt: '2026-06-08T01:04:02.000Z',
         reportIntakeId: null,
         requestedAction: null,
@@ -345,6 +410,7 @@ export class FixtureModerationActionRequestDataAdapter implements ModerationActi
         detectionEventId: null,
         failedAt: null,
         lastError: null,
+        messageDeletionJobId: null,
         requestedAt: '2026-06-08T00:58:02.000Z',
         reportIntakeId: null,
         requestedAction: null,
@@ -362,6 +428,7 @@ export class FixtureModerationActionRequestDataAdapter implements ModerationActi
         detectionEventId: null,
         failedAt: null,
         lastError: null,
+        messageDeletionJobId: null,
         requestedAt: '2026-06-08T00:50:02.000Z',
         reportIntakeId: null,
         requestedAction: null,
@@ -379,6 +446,7 @@ export class FixtureModerationActionRequestDataAdapter implements ModerationActi
         detectionEventId: null,
         failedAt: null,
         lastError: null,
+        messageDeletionJobId: null,
         requestedAt: '2026-06-08T00:47:02.000Z',
         reportIntakeId: null,
         requestedAction: null,
@@ -396,6 +464,7 @@ export class FixtureModerationActionRequestDataAdapter implements ModerationActi
         detectionEventId: null,
         failedAt: null,
         lastError: null,
+        messageDeletionJobId: null,
         requestedAt: '2026-06-08T00:45:02.000Z',
         reportIntakeId: null,
         requestedAction: null,
@@ -406,6 +475,16 @@ export class FixtureModerationActionRequestDataAdapter implements ModerationActi
         verificationEventId: null,
       },
     ];
+  }
+
+  public async listCaseRequests(
+    guildId: string,
+    verificationEventId: string,
+    limit = 10
+  ): Promise<ModerationActionRequestSummary[]> {
+    return (await this.listRecentRequests(guildId, limit)).filter(
+      (request) => request.verificationEventId === verificationEventId
+    );
   }
 }
 

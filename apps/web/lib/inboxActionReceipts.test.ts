@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fixtureModerationInboxItems } from './inboxFixtures';
 import {
   findInboxActionRequest,
+  findMessageCleanupActionRequest,
   hasActiveInboxActionRequests,
   reconcileLocalInboxActionRequestIds,
 } from './inboxActionReceipts';
@@ -18,6 +19,7 @@ function buildRequest(
     detectionEventId: null,
     failedAt: null,
     lastError: null,
+    messageDeletionJobId: null,
     requestedAt: '2026-06-08T01:00:00.000Z',
     reportIntakeId: null,
     requestedAction: null,
@@ -86,6 +88,30 @@ describe('inboxActionReceipts', () => {
 
     expect(findInboxActionRequest([reportRequest], reportItem!, 'open_case')?.id).toBe('request-1');
     expect(findInboxActionRequest([reportRequest], observedItem!, 'open_case')).toBeNull();
+  });
+
+  it('reconciles a combined cleanup request with the case ban action', () => {
+    const request = buildRequest({
+      actionType: 'ban_case_user_with_message_cleanup',
+      messageDeletionJobId: 'cleanup-job-1',
+      verificationEventId: caseItem!.sourceId,
+    });
+
+    expect(findInboxActionRequest([request], caseItem!, 'ban_user')?.id).toBe(request.id);
+  });
+
+  it('matches cleanup execution receipts to the frozen job', () => {
+    const request = buildRequest({
+      actionType: 'execute_case_message_deletion',
+      messageDeletionJobId: 'cleanup-job-1',
+    });
+    const job = {
+      id: 'cleanup-job-1',
+      mode: 'delete_only',
+    } as const;
+
+    expect(findMessageCleanupActionRequest([request], job)?.id).toBe(request.id);
+    expect(findMessageCleanupActionRequest([request], { ...job, id: 'other-job' })).toBeNull();
   });
 
   it('reports only queued and processing requests as active', () => {

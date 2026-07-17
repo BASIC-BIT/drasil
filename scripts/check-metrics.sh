@@ -43,4 +43,4 @@ while IFS= read -r file; do
   [[ -f "$ROOT_DIR/$file" ]] || continue
   lines="$(wc -l < "$ROOT_DIR/$file" | tr -d ' ')"
   printf '%5s %s\n' "$lines" "$file"
-done | sort -nr | head -20
+done | sort -nr | sed -n '1,20p'

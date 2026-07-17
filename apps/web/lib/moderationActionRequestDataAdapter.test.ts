@@ -25,6 +25,7 @@ describe('moderationActionRequestDataAdapter', () => {
       detectionEventId: null,
       failedAt: null,
       lastError: null,
+      messageDeletionJobId: null,
       requestedAt: '2026-06-08T01:16:00.000Z',
       reportIntakeId: null,
       requestedAction: null,
@@ -174,5 +175,34 @@ describe('moderationActionRequestDataAdapter', () => {
         updated_at: new Date('2026-06-08T01:20:00.000Z'),
       }).resultSummary
     ).toBe('Core setup saved; verification channel created.');
+  });
+
+  it('parses cleanup job receipts and aggregate result summaries', () => {
+    const request = parseModerationActionRequestRow({
+      id: 'request-cleanup',
+      action_type: 'execute_case_message_deletion',
+      actor_surface: 'web_case',
+      completed_at: new Date('2026-07-15T12:05:00.000Z'),
+      failed_at: null,
+      last_error: null,
+      message_deletion_job_id: 'job-1',
+      requested_at: new Date('2026-07-15T12:04:00.000Z'),
+      result: {
+        action_type: 'execute_case_message_deletion',
+        changed_since_preview_count: 1,
+        delete_failed_count: 0,
+        deleted_count: 3,
+        evidence_failed_count: 0,
+        permission_denied_count: 1,
+        preserved_count: 4,
+      },
+      status: 'completed',
+      target_user_id: 'user-1',
+      updated_at: new Date('2026-07-15T12:05:00.000Z'),
+      verification_event_id: 'case-1',
+    });
+
+    expect(request.messageDeletionJobId).toBe('job-1');
+    expect(request.resultSummary).toBe('Preserved 4; deleted 3; changed 1; failed 1.');
   });
 });

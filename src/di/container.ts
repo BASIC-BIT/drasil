@@ -76,6 +76,10 @@ import {
   ModerationActionRequestRepository,
 } from '../repositories/ModerationActionRequestRepository';
 import {
+  IMessageDeletionJobRepository,
+  MessageDeletionJobRepository,
+} from '../repositories/MessageDeletionJobRepository';
+import {
   IIntegrityAuditRepository,
   IntegrityAuditRepository,
 } from '../repositories/IntegrityAuditRepository';
@@ -119,6 +123,7 @@ import {
   IMessageDeletionService,
   MessageDeletionService,
 } from '../services/MessageDeletionService';
+import { MessageCleanupService } from '../services/MessageCleanupService';
 import {
   CaseThreadClosureSweepService,
   ICaseThreadClosureSweepService,
@@ -220,6 +225,10 @@ function configureRepositories(container: Container): void {
   container
     .bind<IModerationActionRequestRepository>(TYPES.ModerationActionRequestRepository)
     .to(ModerationActionRequestRepository)
+    .inSingletonScope();
+  container
+    .bind<IMessageDeletionJobRepository>(TYPES.MessageDeletionJobRepository)
+    .to(MessageDeletionJobRepository)
     .inSingletonScope();
   container
     .bind<IRoleQuarantineSnapshotRepository>(TYPES.RoleQuarantineSnapshotRepository)
@@ -359,6 +368,8 @@ function configureServices(container: Container): void {
     .bind<IMessageDeletionService>(TYPES.MessageDeletionService)
     .to(MessageDeletionService)
     .inSingletonScope();
+
+  container.bind<MessageCleanupService>(TYPES.MessageCleanupService).to(MessageCleanupService);
 
   container
     .bind<ICaseThreadClosureSweepService>(TYPES.CaseThreadClosureSweepService)

@@ -11,6 +11,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import {
   CaseActionControls,
   isExecutableCaseAction,
+  type CaseMessageCleanupIntegration,
   type QueueInboxCaseAction,
   type QueueCaseAction,
   type WebCaseAction,
@@ -45,6 +46,9 @@ interface ModerationInboxViewProps {
   readonly guildName: string;
   readonly sessionUsername: string;
   readonly items: readonly ModerationInboxItem[];
+  readonly messageCleanupByCaseId?: Readonly<
+    Record<string, CaseMessageCleanupIntegration | undefined>
+  >;
   readonly openReportCaseAction: OpenReportCaseAction;
   readonly queueCaseAction: QueueCaseAction;
   readonly queueInboxCaseAction: QueueInboxCaseAction;
@@ -397,6 +401,7 @@ function InboxActions({
   canQueueCaseActions,
   closeReportAction,
   item,
+  messageCleanup,
   openReportCaseAction,
   queueCaseAction,
   queueInboxCaseAction,
@@ -408,6 +413,7 @@ function InboxActions({
   readonly canQueueCaseActions: boolean;
   readonly closeReportAction: CloseReportAction;
   readonly item: ModerationInboxItem;
+  readonly messageCleanup?: CaseMessageCleanupIntegration;
   readonly openReportCaseAction: OpenReportCaseAction;
   readonly queueCaseAction: QueueCaseAction;
   readonly queueInboxCaseAction: QueueInboxCaseAction;
@@ -642,6 +648,7 @@ function InboxActions({
           canQueueCaseActions={canQueueCaseActions}
           caseId={item.sourceId}
           guildId={item.guildId}
+          messageCleanup={messageCleanup}
           queueCaseAction={queueCaseAction}
           queueInboxCaseAction={queueInboxCaseAction}
         />
@@ -723,6 +730,7 @@ function InboxDetailPanel({
   canQueueCaseActions,
   closeReportAction,
   item,
+  messageCleanupByCaseId,
   openReportCaseAction,
   queueCaseAction,
   queueInboxCaseAction,
@@ -734,6 +742,9 @@ function InboxDetailPanel({
   readonly canQueueCaseActions: boolean;
   readonly closeReportAction: CloseReportAction;
   readonly item: ModerationInboxItem | null;
+  readonly messageCleanupByCaseId?: Readonly<
+    Record<string, CaseMessageCleanupIntegration | undefined>
+  >;
   readonly openReportCaseAction: OpenReportCaseAction;
   readonly queueCaseAction: QueueCaseAction;
   readonly queueInboxCaseAction: QueueInboxCaseAction;
@@ -792,6 +803,9 @@ function InboxDetailPanel({
           canQueueCaseActions={canQueueCaseActions}
           closeReportAction={closeReportAction}
           item={item}
+          messageCleanup={
+            item.kind === 'case' ? messageCleanupByCaseId?.[item.sourceId] : undefined
+          }
           openReportCaseAction={openReportCaseAction}
           queueCaseAction={queueCaseAction}
           queueInboxCaseAction={queueInboxCaseAction}
@@ -813,6 +827,7 @@ export function ModerationInboxView({
   guildName,
   sessionUsername,
   items,
+  messageCleanupByCaseId,
   openReportCaseAction,
   pollActionRequests,
   queueCaseAction,
@@ -1016,6 +1031,7 @@ export function ModerationInboxView({
               canQueueCaseActions={canQueueCaseActions}
               closeReportAction={closeReportAction}
               item={selectedItem}
+              messageCleanupByCaseId={messageCleanupByCaseId}
               openReportCaseAction={openReportCaseAction}
               queueCaseAction={queueCaseAction}
               queueInboxCaseAction={queueInboxCaseAction}

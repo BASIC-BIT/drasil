@@ -1,5 +1,5 @@
 import { inject, injectable } from 'inversify';
-import type { Client, Message, MessageCreateOptions } from 'discord.js';
+import { Routes, type Client, type Message, type MessageCreateOptions } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import type { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import type { DetectionMessageAction } from './DetectionOrchestrator';
@@ -22,6 +22,33 @@ interface EvidenceThreadLike {
   send(options: MessageCreateOptions): Promise<Message>;
 }
 
+export interface PreserveMessageEvidenceInput {
+  readonly sourceMessage: Message;
+  readonly evidenceThreadId: string;
+  readonly jobId: string;
+  readonly itemId: string;
+  readonly reason: string;
+  readonly settings?: ServerSettings;
+}
+
+export interface PreserveMessageEvidenceResult {
+  readonly preserved: boolean;
+  readonly evidenceMessageId?: string;
+  readonly reason?: string;
+}
+
+export interface DeleteMessageInput {
+  readonly channelId: string;
+  readonly messageId: string;
+  readonly reason: string;
+}
+
+export interface BulkDeleteMessagesInput {
+  readonly channelId: string;
+  readonly messageIds: readonly string[];
+  readonly reason: string;
+}
+
 export interface SourceMessageDeletionInput {
   readonly detectionEventId: string;
   readonly sourceMessage: Message;
@@ -41,6 +68,11 @@ export interface IMessageDeletionService {
   preserveAndDeleteSourceMessage(
     input: SourceMessageDeletionInput
   ): Promise<SourceMessageDeletionResult>;
+  preserveMessageEvidence(
+    input: PreserveMessageEvidenceInput
+  ): Promise<PreserveMessageEvidenceResult>;
+  deleteMessage(input: DeleteMessageInput): Promise<void>;
+  bulkDeleteMessages(input: BulkDeleteMessagesInput): Promise<void>;
 }
 
 @injectable()
@@ -156,6 +188,40 @@ export class MessageDeletionService implements IMessageDeletionService {
     }
   }
 
+  public async preserveMessageEvidence(
+    input: PreserveMessageEvidenceInput
+  ): Promise<PreserveMessageEvidenceResult> {
+    const evidenceThread = await this.fetchEvidenceThread(input.evidenceThreadId);
+    if (!evidenceThread) {
+      return { preserved: false, reason: 'evidence_thread_unavailable' };
+    }
+
+    try {
+      const evidenceMessage = await this.preserveCleanupEvidence(input, evidenceThread);
+      return { preserved: true, evidenceMessageId: evidenceMessage.id };
+    } catch (error) {
+      return { preserved: false, reason: this.formatFailureReason(error) };
+    }
+  }
+
+  public async deleteMessage(input: DeleteMessageInput): Promise<void> {
+    await this.client.rest.delete(Routes.channelMessage(input.channelId, input.messageId), {
+      reason: this.formatAuditReason(input.reason),
+    });
+  }
+
+  public async bulkDeleteMessages(input: BulkDeleteMessagesInput): Promise<void> {
+    const messageIds = [...new Set(input.messageIds)];
+    if (messageIds.length < 2 || messageIds.length > 100) {
+      throw new Error('Discord bulk deletion requires 2 to 100 unique message IDs.');
+    }
+
+    await this.client.rest.post(Routes.channelBulkDelete(input.channelId), {
+      body: { messages: messageIds },
+      reason: this.formatAuditReason(input.reason),
+    });
+  }
+
   private buildMetadataBase(input: SourceMessageDeletionInput): Record<string, unknown> {
     return {
       source: input.action.source,
@@ -197,6 +263,64 @@ export class MessageDeletionService implements IMessageDeletionService {
       files: imageFiles.files.length > 0 ? imageFiles.files : undefined,
       allowedMentions: { parse: [] },
     });
+  }
+
+  private async preserveCleanupEvidence(
+    input: PreserveMessageEvidenceInput,
+    evidenceThread: EvidenceThreadLike
+  ): Promise<Message> {
+    const attachments = messageAttachmentsToReportMetadata(input.sourceMessage);
+    const eligibleImages = selectEligibleReportImageAttachments(
+      attachments,
+      getReportAiSettings(input.settings)
+    );
+    const imageFiles = await buildSpoilerImageAttachmentFileResult(eligibleImages, {
+      logger: console,
+    });
+
+    return evidenceThread.send({
+      content: this.buildCleanupEvidenceMessage(input, attachments, imageFiles.copiedAttachmentIds),
+      files: imageFiles.files.length > 0 ? imageFiles.files : undefined,
+      allowedMentions: { parse: [] },
+    });
+  }
+
+  private buildCleanupEvidenceMessage(
+    input: PreserveMessageEvidenceInput,
+    attachments: readonly ReportAttachmentMetadata[],
+    copiedAttachmentIds: ReadonlySet<string>
+  ): string {
+    const attachmentLines = attachments.length
+      ? attachments.map((attachment) => {
+          const copied = attachment.id && copiedAttachmentIds.has(attachment.id) ? ' copied' : '';
+          return `- ${attachment.name ?? attachment.id ?? 'attachment'} (${attachment.contentType ?? 'unknown'}, ${attachment.size ?? 'unknown'} bytes)${copied}`;
+        })
+      : ['- none'];
+
+    return this.truncateEvidenceMessage(
+      [
+        'Message preserved before moderator-requested deletion.',
+        '',
+        `Cleanup job: ${input.jobId}`,
+        `Cleanup item: ${input.itemId}`,
+        `Reason: ${input.reason}`,
+        `Message ID: ${input.sourceMessage.id}`,
+        `Channel ID: ${input.sourceMessage.channelId}`,
+        `Author: ${input.sourceMessage.author.tag} (${input.sourceMessage.author.id})`,
+        `Created: ${new Date(input.sourceMessage.createdTimestamp).toISOString()}`,
+        `Edited: ${input.sourceMessage.editedTimestamp ? new Date(input.sourceMessage.editedTimestamp).toISOString() : 'never'}`,
+        '',
+        'Message content:',
+        '```text',
+        this.formatCodeBlockText(input.sourceMessage.content || '[no text content]'),
+        '```',
+        '',
+        'Attachments:',
+        ...attachmentLines,
+        '',
+        'Spoilered image copies are attached when Discord still exposes eligible image data.',
+      ].join('\n')
+    );
   }
 
   private buildEvidenceMessage(
@@ -259,6 +383,10 @@ export class MessageDeletionService implements IMessageDeletionService {
 
   private formatFailureReason(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  private formatAuditReason(reason: string): string {
+    return reason.trim().slice(0, 512) || 'Moderator-requested case message cleanup';
   }
 
   private formatCodeBlockText(content: string): string {

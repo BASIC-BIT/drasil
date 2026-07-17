@@ -271,6 +271,9 @@ export enum ModerationActionRequestType {
   SYNC_EXISTING_BAN = 'sync_existing_ban',
   COMPLETE_SETUP_VERIFICATION = 'complete_setup_verification',
   UPSERT_REPORT_INSTRUCTIONS = 'upsert_report_instructions',
+  PREVIEW_CASE_MESSAGE_DELETION = 'preview_case_message_deletion',
+  EXECUTE_CASE_MESSAGE_DELETION = 'execute_case_message_deletion',
+  BAN_CASE_USER_WITH_MESSAGE_CLEANUP = 'ban_case_user_with_message_cleanup',
 }
 
 export enum ModerationActionRequestStatus {
@@ -278,6 +281,72 @@ export enum ModerationActionRequestStatus {
   PROCESSING = 'processing',
   COMPLETED = 'completed',
   FAILED = 'failed',
+}
+
+export enum MessageDeletionJobMode {
+  DELETE_ONLY = 'delete_only',
+  BAN_WITH_CLEANUP = 'ban_with_cleanup',
+}
+
+export enum MessageDeletionBanStatus {
+  NOT_REQUESTED = 'not_requested',
+  PENDING = 'pending',
+  SUCCEEDED = 'succeeded',
+  FAILED = 'failed',
+}
+
+export enum MessageDeletionCaseFinalizationStatus {
+  NOT_APPLICABLE = 'not_applicable',
+  PENDING = 'pending',
+  SUCCEEDED = 'succeeded',
+  FAILED = 'failed',
+}
+
+export enum MessageDeletionScope {
+  SOURCE_MESSAGE = 'source_message',
+  LAST_HOUR = 'last_hour',
+  LAST_DAY = 'last_day',
+  LAST_7_DAYS = 'last_7_days',
+}
+
+export enum MessageDeletionJobStatus {
+  QUEUED = 'queued',
+  DISCOVERING = 'discovering',
+  READY = 'ready',
+  EXECUTING = 'executing',
+  COMPLETED = 'completed',
+  FAILED = 'failed',
+}
+
+export enum MessageDeletionCoverage {
+  READY = 'ready',
+  PARTIAL = 'partial',
+  INDEXING = 'indexing',
+  DENIED = 'denied',
+  UNAVAILABLE = 'unavailable',
+  TOO_MANY = 'too_many',
+}
+
+export enum MessageDeletionDiscoverySource {
+  SOURCE_MESSAGE = 'source_message',
+  DISCORD_SEARCH = 'discord_search',
+  MESSAGE_CONTEXT = 'message_context',
+}
+
+export enum MessageDeletionEvidenceStatus {
+  PENDING = 'pending',
+  PRESERVED = 'preserved',
+  FAILED = 'failed',
+}
+
+export enum MessageDeletionItemStatus {
+  PENDING = 'pending',
+  DELETED = 'deleted',
+  ALREADY_MISSING = 'already_missing',
+  CHANGED_SINCE_PREVIEW = 'changed_since_preview',
+  EVIDENCE_FAILED = 'evidence_failed',
+  DELETE_FAILED = 'delete_failed',
+  PERMISSION_DENIED = 'permission_denied',
 }
 
 export enum RoleQuarantineSnapshotStatus {
@@ -432,6 +501,7 @@ export interface ModerationActionRequest {
   detection_event_id: string | null;
   report_intake_id: string | null;
   verification_event_id: string | null;
+  message_deletion_job_id: string | null;
   idempotency_key: string;
   requested_at: Date | null;
   updated_at: Date | null;
@@ -453,7 +523,127 @@ export interface ModerationActionRequestCreate {
   detectionEventId?: string | null;
   reportIntakeId?: string | null;
   verificationEventId?: string | null;
+  messageDeletionJobId?: string | null;
   idempotencyKey: string;
+  metadata?: Prisma.JsonValue | null;
+}
+
+export interface MessageDeletionJob {
+  id: string;
+  server_id: string;
+  user_id: string;
+  verification_event_id: string;
+  requested_by: string;
+  actor_surface: string;
+  mode: MessageDeletionJobMode;
+  ban_status: MessageDeletionBanStatus;
+  case_finalization_status: MessageDeletionCaseFinalizationStatus;
+  scope: MessageDeletionScope;
+  status: MessageDeletionJobStatus;
+  coverage: MessageDeletionCoverage | null;
+  reason: string;
+  evidence_thread_id: string;
+  requested_window_start: Date | null;
+  requested_window_end: Date | null;
+  previewed_at: Date | null;
+  started_at: Date | null;
+  completed_at: Date | null;
+  failed_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+  candidate_count: number;
+  preserved_count: number;
+  deleted_count: number;
+  already_missing_count: number;
+  changed_count: number;
+  evidence_failed_count: number;
+  delete_failed_count: number;
+  permission_denied_count: number;
+  last_error: string | null;
+  metadata: Prisma.JsonValue | null;
+}
+
+export interface MessageDeletionItem {
+  id: string;
+  job_id: string;
+  message_id: string;
+  channel_id: string;
+  author_id: string;
+  message_created_at: Date;
+  message_edited_at: Date | null;
+  content_preview: string;
+  attachment_count: number;
+  discovery_source: MessageDeletionDiscoverySource;
+  bulk_delete_eligible: boolean;
+  evidence_status: MessageDeletionEvidenceStatus;
+  status: MessageDeletionItemStatus;
+  evidence_message_id: string | null;
+  attempted_at: Date | null;
+  evidence_preserved_at: Date | null;
+  deleted_at: Date | null;
+  completed_at: Date | null;
+  failure_reason: string | null;
+  metadata: Prisma.JsonValue | null;
+}
+
+export interface MessageDeletionJobWithItems extends MessageDeletionJob {
+  items: MessageDeletionItem[];
+}
+
+export interface MessageDeletionJobCreate {
+  serverId: string;
+  userId: string;
+  verificationEventId: string;
+  requestedBy: string;
+  actorSurface: string;
+  mode: MessageDeletionJobMode;
+  scope: MessageDeletionScope;
+  reason: string;
+  evidenceThreadId: string;
+  metadata?: Prisma.JsonValue | null;
+}
+
+export interface MessageDeletionItemCreate {
+  messageId: string;
+  channelId: string;
+  authorId: string;
+  messageCreatedAt: Date;
+  messageEditedAt?: Date | null;
+  contentPreview: string;
+  attachmentCount: number;
+  discoverySource: MessageDeletionDiscoverySource;
+  bulkDeleteEligible: boolean;
+  metadata?: Prisma.JsonValue | null;
+}
+
+export interface MessageDeletionPreviewResult {
+  coverage: MessageDeletionCoverage;
+  requestedWindowStart?: Date | null;
+  requestedWindowEnd?: Date | null;
+  items: readonly MessageDeletionItemCreate[];
+  metadata?: Prisma.JsonValue | null;
+}
+
+export interface MessageDeletionItemOutcome {
+  status: MessageDeletionItemStatus;
+  evidenceStatus: MessageDeletionEvidenceStatus;
+  evidenceMessageId?: string | null;
+  attemptedAt?: Date;
+  evidencePreservedAt?: Date | null;
+  deletedAt?: Date | null;
+  completedAt?: Date;
+  failureReason?: string | null;
+  metadata?: Prisma.JsonValue | null;
+}
+
+export interface MessageDeletionJobSummary {
+  preservedCount: number;
+  deletedCount: number;
+  alreadyMissingCount: number;
+  changedCount: number;
+  evidenceFailedCount: number;
+  deleteFailedCount: number;
+  permissionDeniedCount: number;
   metadata?: Prisma.JsonValue | null;
 }
 

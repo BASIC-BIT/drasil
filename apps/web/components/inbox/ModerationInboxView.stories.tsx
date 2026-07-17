@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { ModerationInboxView } from './ModerationInboxView';
 import { fixtureModerationInboxItems } from '@/lib/inboxFixtures';
 import { completedInboxActionState } from '@/lib/inboxActionState';
+import { fixtureMessageCleanupCaseWorkspaces } from '@/lib/messageCleanupFixtures';
 
 const noopInboxAction = async () => completedInboxActionState('Fixture action completed.');
 const noopCaseAction = async () => undefined;
@@ -27,6 +28,16 @@ const meta = {
     guildName: 'Fixture Guild',
     sessionUsername: 'Fixture Admin',
     items: fixtureModerationInboxItems(),
+    messageCleanupByCaseId: {
+      'case-stale': {
+        combinedBanAction: noopInboxAction,
+        combinedJob: null,
+        deleteOnlyJob: null,
+        executeAction: noopInboxAction,
+        previewAction: noopInboxAction,
+        workspace: fixtureMessageCleanupCaseWorkspaces[0],
+      },
+    },
     openReportCaseAction: noopInboxAction,
     pollActionRequests: false,
     queueCaseAction: noopCaseAction,
