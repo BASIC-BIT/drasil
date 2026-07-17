@@ -2,6 +2,7 @@ import type { ModerationInboxAction, ModerationInboxItem } from '@drasil/contrac
 import type { ModerationActionRequestSummary } from './moderationActionRequestDataAdapter';
 import { inboxModerationActionRequestTypes } from './inboxActionRequestTypes';
 import type { ModerationActionRequestActionType } from './moderationActionRequestQueue';
+import type { MessageCleanupJobSummary } from '@drasil/contracts';
 
 const requestTypeByAction: Partial<
   Record<ModerationInboxAction, readonly ModerationActionRequestActionType[]>
@@ -59,6 +60,25 @@ export function findInboxActionRequest(
         actionTypes.includes(request.actionType) &&
         (!request.requestedAction || request.requestedAction === action) &&
         requestMatchesItem(request, item)
+    ) ?? null
+  );
+}
+
+export function findMessageCleanupActionRequest(
+  requests: readonly ModerationActionRequestSummary[],
+  job: Pick<MessageCleanupJobSummary, 'id' | 'mode'> | null
+): ModerationActionRequestSummary | null {
+  if (!job) {
+    return null;
+  }
+
+  const actionType =
+    job.mode === 'ban_with_cleanup'
+      ? 'ban_case_user_with_message_cleanup'
+      : 'execute_case_message_deletion';
+  return (
+    requests.find(
+      (request) => request.actionType === actionType && request.messageDeletionJobId === job.id
     ) ?? null
   );
 }

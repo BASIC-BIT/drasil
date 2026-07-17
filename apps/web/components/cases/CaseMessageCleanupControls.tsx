@@ -2,6 +2,7 @@
 
 import {
   MESSAGE_CLEANUP_REASON_MAX_LENGTH,
+  isMessageCleanupFinalizationRetry,
   type MessageCleanupCaseWorkspace,
   type MessageCleanupCoverage,
   type MessageCleanupJobDetail,
@@ -10,15 +11,17 @@ import {
   type MessageCleanupScope,
 } from '@drasil/contracts';
 import { useRouter } from 'next/navigation';
-import { useActionState, useEffect, useMemo, useState } from 'react';
+import { useActionState, useEffect, useMemo, useRef, useState } from 'react';
 import { useFormStatus } from 'react-dom';
 import { InboxActionForm, type InboxStateAction } from '@/components/inbox/InboxActionForm';
 import {
   initialInboxActionState,
   isInboxActionInFlight,
   isInboxActionSubmitBlocked,
+  shouldUseDurableInboxActionState,
   type InboxActionState,
 } from '@/lib/inboxActionState';
+import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
 import {
   MessageCleanupItemList,
   MessageCleanupJobSummaryBlock,
@@ -155,42 +158,68 @@ function PreviewForm({
 
 function ExecuteForm({
   action,
+  durableRequest,
   job,
+  requestBaseHref,
 }: {
   readonly action: MessageCleanupStateAction;
+  readonly durableRequest?: ModerationActionRequestSummary | null;
   readonly job: MessageCleanupJobSummary;
+  readonly requestBaseHref?: string;
 }) {
   const router = useRouter();
-  const [state, formAction] = useActionState(action, initialInboxActionState);
+  const [localState, formAction] = useActionState(action, initialInboxActionState);
   const [idempotencyToken, setIdempotencyToken] = useState('');
+  const durableUpdatedAtAtSubmit = useRef<string | null>(null);
   const count = job.outcomes.candidateCount;
   const combined = job.mode === 'ban_with_cleanup';
-  const confirmationLabel = combined
-    ? `Confirm ban and delete ${count} message${count === 1 ? '' : 's'}`
-    : `Confirm delete ${count} message${count === 1 ? '' : 's'}`;
+  const finalizationRetry = isMessageCleanupFinalizationRetry(job);
+  const durableApplies =
+    durableRequest !== null &&
+    durableRequest !== undefined &&
+    shouldUseDurableInboxActionState(localState, durableRequest, durableUpdatedAtAtSubmit.current);
+  const status = durableApplies ? durableRequest.status : localState.status;
+  const requestId = durableApplies ? durableRequest.id : localState.requestId;
+  const message = durableApplies
+    ? (durableRequest.lastError ??
+      durableRequest.resultSummary ??
+      'Drasil is processing this request.')
+    : localState.message;
+  const state: InboxActionState = { message, requestId, status };
+  const confirmationLabel = finalizationRetry
+    ? 'Confirm retry of case finalization'
+    : combined
+      ? `Confirm ban and delete ${count} message${count === 1 ? '' : 's'}`
+      : `Confirm delete ${count} message${count === 1 ? '' : 's'}`;
 
   useEffect(() => {
     setIdempotencyToken(`execute-${job.id}-${crypto.randomUUID()}`);
   }, [job.id]);
 
   useEffect(() => {
-    if (state.status === 'failed') {
+    if (status === 'failed') {
       setIdempotencyToken(`execute-${job.id}-${crypto.randomUUID()}`);
     }
-  }, [job.id, state.status]);
+  }, [job.id, status]);
 
   useEffect(() => {
-    if (!isInboxActionInFlight(state.status)) {
+    if (!isInboxActionInFlight(status)) {
       return;
     }
 
     router.refresh();
     const interval = window.setInterval(() => router.refresh(), 2000);
     return () => window.clearInterval(interval);
-  }, [router, state.status]);
+  }, [router, status]);
 
   return (
-    <form action={formAction} className="cleanup-execute-form">
+    <form
+      action={formAction}
+      className="cleanup-execute-form"
+      onSubmit={() => {
+        durableUpdatedAtAtSubmit.current = durableRequest?.updatedAt ?? null;
+      }}
+    >
       <input name="idempotencyKey" type="hidden" value={idempotencyToken} />
       <input name="jobId" type="hidden" value={job.id} />
       <input name="mode" type="hidden" value={job.mode} />
@@ -202,12 +231,21 @@ function ExecuteForm({
       </label>
       <CleanupSubmitButton
         blocked={
-          !idempotencyToken || !job.execution.canExecute || isInboxActionSubmitBlocked(state.status)
+          !idempotencyToken || !job.execution.canExecute || isInboxActionSubmitBlocked(status)
         }
-        label={combined ? 'Ban User and Delete Messages' : 'Delete Messages'}
+        label={
+          finalizationRetry
+            ? 'Retry Case Finalization'
+            : combined
+              ? 'Ban User and Delete Messages'
+              : 'Delete Messages'
+        }
         pendingLabel="Queueing..."
       />
       <CleanupActionReceipt state={state} />
+      {requestId && requestBaseHref ? (
+        <a href={`${requestBaseHref}#request-${requestId}`}>View request</a>
+      ) : null}
     </form>
   );
 }
@@ -231,12 +269,14 @@ function JobReceipt({ job }: { readonly job: MessageCleanupJobSummary }) {
 }
 
 export function CaseMessageCleanupControls({
+  durableRequest,
   executeAction,
   jobDetail,
   mode = 'delete_only',
   previewAction,
   workspace,
 }: {
+  readonly durableRequest?: ModerationActionRequestSummary | null;
   readonly executeAction: MessageCleanupStateAction;
   readonly jobDetail: MessageCleanupJobDetail | null;
   readonly mode?: MessageCleanupJobMode;
@@ -317,24 +357,27 @@ export function CaseMessageCleanupControls({
           <PreviewForm action={previewAction} mode={mode} />
         </div>
       ) : null}
-      {latestJob.status === 'ready' ? (
-        latestJob.execution.canExecute ? (
-          hasVisibleCandidates ? (
-            <ExecuteForm action={executeAction} job={latestJob} />
-          ) : (
-            <p className="cleanup-blocked">
-              Open the job to review every frozen message before executing cleanup.
-            </p>
-          )
+      {latestJob.execution.canExecute ? (
+        hasVisibleCandidates ? (
+          <ExecuteForm
+            action={executeAction}
+            durableRequest={durableRequest}
+            job={latestJob}
+            requestBaseHref={`/admin/guild/${latestJob.guildId}/operations`}
+          />
         ) : (
           <p className="cleanup-blocked">
-            This preview cannot execute: {latestJob.execution.blockedReason?.split('_').join(' ')}.
+            Open the job to review every frozen message before executing cleanup.
           </p>
         )
+      ) : latestJob.status === 'ready' ? (
+        <p className="cleanup-blocked">
+          This preview cannot execute: {latestJob.execution.blockedReason?.split('_').join(' ')}.
+        </p>
       ) : null}
       {!startNewPreview &&
       workspace.canPreview &&
-      (latestJob.status === 'completed' ||
+      ((latestJob.status === 'completed' && !latestJob.execution.canExecute) ||
         latestJob.status === 'failed' ||
         (latestJob.status === 'ready' && !latestJob.execution.canExecute)) ? (
         <button
@@ -354,14 +397,17 @@ export function CaseMessageCleanupControls({
 }
 
 export function CaseBanActionControl({
+  banActionLabel = 'Ban User',
   cleanup,
   durableRequest,
   requestBaseHref,
   standardBanFormAction,
   standardBanStateAction,
 }: {
+  readonly banActionLabel?: string;
   readonly cleanup?: {
     readonly executeAction: MessageCleanupStateAction;
+    readonly durableRequest?: ModerationActionRequestSummary | null;
     readonly jobDetail: MessageCleanupJobDetail | null;
     readonly previewAction: MessageCleanupStateAction;
     readonly workspace: MessageCleanupCaseWorkspace;
@@ -375,7 +421,9 @@ export function CaseBanActionControl({
 
   return (
     <details className="destructive-action cleanup-ban-action">
-      <summary className="button secondary compact-button destructive-summary">Ban User</summary>
+      <summary className="button secondary compact-button destructive-summary">
+        {banActionLabel}
+      </summary>
       <div className="destructive-action-panel cleanup-ban-panel">
         {cleanup ? (
           <label className="checkbox-field">
@@ -391,6 +439,7 @@ export function CaseBanActionControl({
         {alsoDeleteMessages && cleanup ? (
           <CaseMessageCleanupControls
             executeAction={cleanup.executeAction}
+            durableRequest={cleanup.durableRequest}
             jobDetail={cleanup.jobDetail}
             mode="ban_with_cleanup"
             previewAction={cleanup.previewAction}
@@ -400,7 +449,7 @@ export function CaseBanActionControl({
           <InboxActionForm
             action={standardBanStateAction}
             buttonClassName="button compact-button danger-button"
-            buttonLabel="Queue Ban User"
+            buttonLabel={`Queue ${banActionLabel}`}
             durableRequest={durableRequest}
             formClassName="cleanup-standard-ban-form"
             requestBaseHref={requestBaseHref}
@@ -411,7 +460,7 @@ export function CaseBanActionControl({
             </label>
             <label className="checkbox-field destructive-confirm">
               <input name="confirmAction" type="checkbox" />
-              <span>Confirm Ban User</span>
+              <span>Confirm {banActionLabel}</span>
             </label>
           </InboxActionForm>
         ) : standardBanFormAction ? (
@@ -422,10 +471,10 @@ export function CaseBanActionControl({
             </label>
             <label className="checkbox-field destructive-confirm">
               <input name="confirmAction" type="checkbox" />
-              <span>Confirm Ban User</span>
+              <span>Confirm {banActionLabel}</span>
             </label>
             <button className="button compact-button danger-button" type="submit">
-              Queue Ban User
+              Queue {banActionLabel}
             </button>
           </form>
         ) : null}

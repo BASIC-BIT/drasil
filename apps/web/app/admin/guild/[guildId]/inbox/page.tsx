@@ -7,6 +7,7 @@ import { createReportQueueDataAdapter } from '@/lib/reportQueueDataAdapter';
 import { isWebE2eFixtureMode } from '@/lib/e2eFixtures';
 import { DISCORD_PERMISSIONS, hasPermission, parsePermissions } from '@/lib/discordPermissions';
 import { createMessageCleanupDataAdapter } from '@/lib/messageCleanupDataAdapter';
+import { findMessageCleanupActionRequest } from '@/lib/inboxActionReceipts';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 import {
@@ -55,12 +56,16 @@ export default async function ModerationInboxPage({ params }: PageProps) {
     : [];
   const cleanupEntries = cleanupWorkspaces.map((workspace) => {
     const caseId = workspace.verificationEventId;
+    const deleteOnlyJob = workspace.latestJobs.find((job) => job.mode === 'delete_only') ?? null;
+    const combinedJob = workspace.latestJobs.find((job) => job.mode === 'ban_with_cleanup') ?? null;
     return [
       caseId,
       {
         combinedBanAction: banCaseUserWithMessageCleanup.bind(null, guildId, caseId),
         combinedJob: null,
+        combinedRequest: findMessageCleanupActionRequest(recentActionRequests, combinedJob),
         deleteOnlyJob: null,
+        deleteOnlyRequest: findMessageCleanupActionRequest(recentActionRequests, deleteOnlyJob),
         executeAction: executeCaseMessageCleanup.bind(null, guildId, caseId),
         previewAction: previewCaseMessageCleanup.bind(null, guildId, caseId),
         workspace,

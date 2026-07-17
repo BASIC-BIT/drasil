@@ -144,10 +144,13 @@ describe('message cleanup contracts', () => {
   it('blocks unsafe coverage and jobs above the execution cap', () => {
     expect(
       getMessageCleanupExecutionEligibility({
+        mode: 'delete_only',
         status: 'ready',
         coverage: 'partial',
         scope: 'last_day',
         candidateCount: 20,
+        banStatus: 'not_requested',
+        caseFinalizationStatus: 'not_applicable',
       })
     ).toEqual(
       expect.objectContaining({
@@ -158,10 +161,13 @@ describe('message cleanup contracts', () => {
 
     expect(
       getMessageCleanupExecutionEligibility({
+        mode: 'delete_only',
         status: 'ready',
         coverage: 'ready',
         scope: 'last_7_days',
         candidateCount: MESSAGE_CLEANUP_EXECUTION_CANDIDATE_LIMIT + 1,
+        banStatus: 'not_requested',
+        caseFinalizationStatus: 'not_applicable',
       })
     ).toEqual(
       expect.objectContaining({
@@ -174,20 +180,52 @@ describe('message cleanup contracts', () => {
   it('allows an exact source-message fallback preview but not an empty preview', () => {
     expect(
       getMessageCleanupExecutionEligibility({
+        mode: 'delete_only',
         status: 'ready',
         coverage: 'partial',
         scope: 'source_message',
         candidateCount: 1,
+        banStatus: 'not_requested',
+        caseFinalizationStatus: 'not_applicable',
       }).canExecute
     ).toBe(true);
 
     expect(
       getMessageCleanupExecutionEligibility({
+        mode: 'delete_only',
         status: 'ready',
         coverage: 'ready',
         scope: 'source_message',
         candidateCount: 0,
+        banStatus: 'not_requested',
+        caseFinalizationStatus: 'not_applicable',
       }).blockedReason
     ).toBe('no_candidates');
+  });
+
+  it('allows only a completed combined job with failed finalization to retry', () => {
+    const retry = getMessageCleanupExecutionEligibility({
+      mode: 'ban_with_cleanup',
+      status: 'completed',
+      coverage: 'ready',
+      scope: 'last_day',
+      candidateCount: 4,
+      banStatus: 'succeeded',
+      caseFinalizationStatus: 'failed',
+    });
+    const completed = getMessageCleanupExecutionEligibility({
+      mode: 'ban_with_cleanup',
+      status: 'completed',
+      coverage: 'ready',
+      scope: 'last_day',
+      candidateCount: 4,
+      banStatus: 'succeeded',
+      caseFinalizationStatus: 'succeeded',
+    });
+
+    expect(retry.canExecute).toBe(true);
+    expect(completed).toEqual(
+      expect.objectContaining({ canExecute: false, blockedReason: 'job_not_ready' })
+    );
   });
 });

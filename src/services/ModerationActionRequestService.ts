@@ -26,6 +26,7 @@ import {
   MessageDeletionBanStatus,
   MessageDeletionCaseFinalizationStatus,
   MessageDeletionJobMode,
+  MessageDeletionJobStatus,
   MessageDeletionJobWithItems,
   ModerationActionRequest,
   ModerationActionRequestType,
@@ -997,9 +998,13 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     const administrator = await this.requireCleanupAdministrator(request);
     const guild = administrator.guild;
     const moderator = administrator.user;
-    await this.assertModeratorBanActionEnabled(request.server_id);
-    await this.assertBotPermission(guild, PermissionFlagsBits.BanMembers, 'Ban Members');
-    await this.assertBotPermission(guild, PermissionFlagsBits.ManageMessages, 'Manage Messages');
+    if (job.ban_status !== MessageDeletionBanStatus.SUCCEEDED) {
+      await this.assertModeratorBanActionEnabled(request.server_id);
+      await this.assertBotPermission(guild, PermissionFlagsBits.BanMembers, 'Ban Members');
+    }
+    if (job.status !== MessageDeletionJobStatus.COMPLETED) {
+      await this.assertBotPermission(guild, PermissionFlagsBits.ManageMessages, 'Manage Messages');
+    }
 
     await this.userModerationService.markCombinedBanCleanupPending(
       job.verification_event_id,

@@ -48,6 +48,20 @@ test('failed execution rotates its request token and can be retried', async ({ p
   await expect(form.locator('.action-receipt .status')).toHaveText('queued');
 });
 
+test('worker-side execution failure becomes retryable without remounting the form', async ({
+  page,
+}) => {
+  await page.goto(`${casePath}?cleanupScenario=worker-failed`);
+
+  const form = cleanupSection(page).locator('form.cleanup-execute-form');
+  await expect(form.locator('.action-receipt .status')).toHaveText('failed');
+  await expect(form).toContainText('Discord rejected message deletion.');
+  await expect(form.getByRole('button', { name: 'Delete Messages' })).toBeEnabled();
+  await form.getByLabel('Confirm delete 1 message').check();
+  await form.getByRole('button', { name: 'Delete Messages' }).click();
+  await expect(form.locator('.action-receipt .status')).toHaveText('queued');
+});
+
 for (const scope of [
   { label: 'Source message', value: 'source_message' },
   { label: 'Last hour', value: 'last_hour' },
@@ -131,6 +145,29 @@ test('combined ban and cleanup submits the frozen job with confirmation', async 
   await expect(form.locator('.action-receipt .status')).toHaveText('queued');
   await expect(form).toContainText('Ban and message cleanup queued.');
   await expect(form.getByRole('button', { name: 'Ban User and Delete Messages' })).toBeDisabled();
+});
+
+test('ban by ID offers the same optional message cleanup flow', async ({ page }) => {
+  await page.goto(`${casePath}?cleanupScenario=ban-by-id`);
+
+  const ban = page.locator('details.cleanup-ban-action');
+  await ban.getByText('Ban by ID', { exact: true }).click();
+  await expect(ban.getByLabel('Also delete messages')).toBeVisible();
+  await ban.getByLabel('Also delete messages').check();
+  await expect(ban.locator('form.cleanup-execute-form')).toBeVisible();
+});
+
+test('failed case finalization can be retried without repeating cleanup', async ({ page }) => {
+  await page.goto(`${casePath}?cleanupScenario=finalization-retry`);
+
+  const ban = page.locator('details.cleanup-ban-action');
+  await ban.getByText('Ban User', { exact: true }).click();
+  await ban.getByLabel('Also delete messages').check();
+  const form = ban.locator('form.cleanup-execute-form');
+  await expect(form.getByRole('button', { name: 'Retry Case Finalization' })).toBeEnabled();
+  await form.getByLabel('Confirm retry of case finalization').check();
+  await form.getByRole('button', { name: 'Retry Case Finalization' }).click();
+  await expect(form.locator('.action-receipt .status')).toHaveText('queued');
 });
 
 test('changed messages remain preserved and visibly skipped', async ({ page }) => {

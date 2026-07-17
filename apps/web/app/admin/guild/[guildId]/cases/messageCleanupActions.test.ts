@@ -84,6 +84,7 @@ const readyJob = {
   evidence_thread_id: 'evidence-thread-1',
   candidate_count: 4,
   ban_status: 'not_requested',
+  case_finalization_status: 'not_applicable',
 };
 
 function cleanupForm(overrides: Record<string, string> = {}): FormData {
@@ -285,6 +286,14 @@ describe('messageCleanupActions execution', () => {
 
   it('honors the server setting that disables moderator ban actions', async () => {
     mocks.getServer.mockResolvedValue({ settings: { moderator_ban_action_enabled: false } });
+    databaseClient((text) => {
+      if (text.includes('where idempotency_key')) return [];
+      if (text.includes('from verification_events')) return [caseRow];
+      if (text.includes('from message_deletion_jobs')) {
+        return [{ ...readyJob, mode: 'ban_with_cleanup' }];
+      }
+      return [];
+    });
 
     const state = await banCaseUserWithMessageCleanup(
       'guild-1',
@@ -298,7 +307,7 @@ describe('messageCleanupActions execution', () => {
       requestId: null,
       status: 'failed',
     });
-    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(mocks.connect).toHaveBeenCalled();
   });
 
   it('allows retrying a ready combined preview after its ban attempt failed', async () => {
@@ -311,6 +320,40 @@ describe('messageCleanupActions execution', () => {
       if (text.includes('where idempotency_key')) return [];
       if (text.includes('from verification_events')) return [caseRow];
       if (text.includes('from message_deletion_jobs')) return [failedBanJob];
+      if (text.includes('select id::text from moderation_action_requests')) return [];
+      if (text.includes('insert into moderation_action_requests')) {
+        return [{ id: REQUEST_ID, messageDeletionJobId: JOB_ID, status: 'queued' }];
+      }
+      return [];
+    });
+
+    const state = await banCaseUserWithMessageCleanup(
+      'guild-1',
+      CASE_ID,
+      initialInboxActionState,
+      cleanupForm({ mode: 'ban_with_cleanup' })
+    );
+
+    expect(state).toEqual({
+      message: 'Ban and message cleanup queued.',
+      requestId: REQUEST_ID,
+      status: 'queued',
+    });
+  });
+
+  it('allows retrying failed finalization after a completed ban and cleanup', async () => {
+    mocks.getServer.mockResolvedValue({ settings: { moderator_ban_action_enabled: false } });
+    const finalizationRetryJob = {
+      ...readyJob,
+      ban_status: 'succeeded',
+      case_finalization_status: 'failed',
+      mode: 'ban_with_cleanup',
+      status: 'completed',
+    };
+    databaseClient((text) => {
+      if (text.includes('where idempotency_key')) return [];
+      if (text.includes('from verification_events')) return [caseRow];
+      if (text.includes('from message_deletion_jobs')) return [finalizationRetryJob];
       if (text.includes('select id::text from moderation_action_requests')) return [];
       if (text.includes('insert into moderation_action_requests')) {
         return [{ id: REQUEST_ID, messageDeletionJobId: JOB_ID, status: 'queued' }];

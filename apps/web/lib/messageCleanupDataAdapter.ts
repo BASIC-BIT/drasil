@@ -8,6 +8,8 @@ import {
   messageCleanupJobSummarySchema,
   messageCleanupItemSchema,
   type MessageCleanupCaseWorkspace,
+  type MessageCleanupBanStatus,
+  type MessageCleanupCaseFinalizationStatus,
   type MessageCleanupCoverage,
   type MessageCleanupItem,
   type MessageCleanupJobDetail,
@@ -70,8 +72,8 @@ export interface MessageCleanupJobRow extends QueryResultRow {
   scope: MessageCleanupScope;
   status: MessageCleanupJobStatus;
   coverage: MessageCleanupCoverage | null;
-  ban_status: string;
-  case_finalization_status: string;
+  ban_status: MessageCleanupBanStatus;
+  case_finalization_status: MessageCleanupCaseFinalizationStatus;
   reason: string;
   evidence_thread_id: string;
   requested_window_start: unknown;
@@ -234,10 +236,13 @@ export function parseMessageCleanupJobRow(row: MessageCleanupJobRow): MessageCle
       permissionDeniedCount: toCount(row.permission_denied_count),
     },
     execution: getMessageCleanupExecutionEligibility({
+      mode: row.mode,
       status: row.status,
       coverage: row.coverage,
       scope: row.scope,
       candidateCount,
+      banStatus: row.ban_status,
+      caseFinalizationStatus: row.case_finalization_status,
     }),
   });
 }

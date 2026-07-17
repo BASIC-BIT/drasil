@@ -4,11 +4,16 @@ import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import {
-  MESSAGE_CLEANUP_EXECUTION_CANDIDATE_LIMIT,
   MESSAGE_CLEANUP_REASON_MAX_LENGTH,
+  getMessageCleanupExecutionEligibility,
+  isMessageCleanupFinalizationRetry,
   messageCleanupJobModeSchema,
   messageCleanupScopeSchema,
+  type MessageCleanupBanStatus,
+  type MessageCleanupCaseFinalizationStatus,
+  type MessageCleanupCoverage,
   type MessageCleanupJobMode,
+  type MessageCleanupJobStatus,
   type MessageCleanupScope,
 } from '@drasil/contracts';
 import type { PoolClient, QueryResultRow } from 'pg';
@@ -50,12 +55,13 @@ interface CleanupJobRow extends QueryResultRow {
   actor_surface: string;
   mode: MessageCleanupJobMode;
   scope: MessageCleanupScope;
-  status: string;
-  coverage: string | null;
+  status: MessageCleanupJobStatus;
+  coverage: MessageCleanupCoverage | null;
   reason: string;
   evidence_thread_id: string;
   candidate_count: number;
-  ban_status: string;
+  ban_status: MessageCleanupBanStatus;
+  case_finalization_status: MessageCleanupCaseFinalizationStatus;
 }
 
 interface CleanupRequestRow extends QueryResultRow {
@@ -131,11 +137,9 @@ async function cleanupActor(guildId: string, caseId: string): Promise<string> {
   return session.userId;
 }
 
-async function assertModeratorBanActionEnabled(guildId: string): Promise<void> {
+async function moderatorBanActionEnabled(guildId: string): Promise<boolean> {
   const server = await createSetupDataAdapter().getServer(guildId);
-  if (server?.settings.moderator_ban_action_enabled === false) {
-    throw new Error('Moderator ban actions are disabled for this server.');
-  }
+  return server?.settings.moderator_ban_action_enabled !== false;
 }
 
 async function inTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -326,15 +330,15 @@ function frozenJobMatchesSubmission(
 }
 
 function frozenJobCanExecute(job: CleanupJobRow): boolean {
-  const hasReadyCoverage =
-    job.coverage === 'ready' ||
-    (job.scope === 'source_message' && job.coverage === 'partial' && job.candidate_count === 1);
-  return [
-    ['ready', 'executing'].includes(job.status),
-    hasReadyCoverage,
-    job.candidate_count >= 1,
-    job.candidate_count <= MESSAGE_CLEANUP_EXECUTION_CANDIDATE_LIMIT,
-  ].every(Boolean);
+  return getMessageCleanupExecutionEligibility({
+    mode: job.mode,
+    status: job.status === 'executing' ? 'ready' : job.status,
+    coverage: job.coverage,
+    scope: job.scope,
+    candidateCount: job.candidate_count,
+    banStatus: job.ban_status,
+    caseFinalizationStatus: job.case_finalization_status,
+  }).canExecute;
 }
 
 function assertFrozenJob(
@@ -354,7 +358,13 @@ function assertFrozenJob(
   }
   if (
     expectedMode === 'ban_with_cleanup' &&
-    !['not_requested', 'failed'].includes(job.ban_status)
+    !['not_requested', 'failed'].includes(job.ban_status) &&
+    !isMessageCleanupFinalizationRetry({
+      mode: job.mode,
+      status: job.status,
+      banStatus: job.ban_status,
+      caseFinalizationStatus: job.case_finalization_status,
+    })
   ) {
     throw new Error('The combined ban and cleanup has already started.');
   }
@@ -386,7 +396,8 @@ async function lockJob(client: PoolClient, jobId: string): Promise<CleanupJobRow
     `select id::text, server_id, user_id, verification_event_id::text,
             requested_by, actor_surface, mode::text as mode, scope::text as scope,
             status::text as status, coverage::text as coverage, reason,
-            evidence_thread_id, candidate_count, ban_status::text as ban_status
+            evidence_thread_id, candidate_count, ban_status::text as ban_status,
+            case_finalization_status::text as case_finalization_status
      from message_deletion_jobs
      where id = $1::uuid
      for update`,
@@ -465,7 +476,8 @@ async function queueFrozenJob(
   actorId: string,
   values: CleanupFormValues,
   actionType: 'execute_case_message_deletion' | 'ban_case_user_with_message_cleanup',
-  expectedMode: MessageCleanupJobMode
+  expectedMode: MessageCleanupJobMode,
+  banActionEnabled = true
 ): Promise<ModerationActionRequestReceipt> {
   const key = idempotencyKey(actionType, guildId, caseId, actorId, values.idempotencyToken);
   return inTransaction(async (client) => {
@@ -478,6 +490,18 @@ async function queueFrozenJob(
     const caseRow = await lockPendingCase(client, guildId, caseId);
     const job = await lockJob(client, jobId);
     assertFrozenJob(job, caseRow, values, expectedMode);
+    if (
+      expectedMode === 'ban_with_cleanup' &&
+      !banActionEnabled &&
+      !isMessageCleanupFinalizationRetry({
+        mode: job.mode,
+        status: job.status,
+        banStatus: job.ban_status,
+        caseFinalizationStatus: job.case_finalization_status,
+      })
+    ) {
+      throw new Error('Moderator ban actions are disabled for this server.');
+    }
     await assertNoActiveRequest(client, caseId);
     return insertRequest(client, {
       actionType,
@@ -609,7 +633,7 @@ export async function banCaseUserWithMessageCleanup(
     const jobId = requireUuid(requiredFormString(formData, 'jobId'), 'Cleanup job id');
     const values = cleanupFormValues(formData);
     const actorId = await cleanupActor(guildId, caseId);
-    await assertModeratorBanActionEnabled(guildId);
+    const banActionEnabled = await moderatorBanActionEnabled(guildId);
     const receipt = await queueFrozenJob(
       guildId,
       caseId,
@@ -617,7 +641,8 @@ export async function banCaseUserWithMessageCleanup(
       actorId,
       values,
       'ban_case_user_with_message_cleanup',
-      'ban_with_cleanup'
+      'ban_with_cleanup',
+      banActionEnabled
     );
     revalidateCleanupPaths(guildId, caseId);
     return queuedInboxActionState(receipt, 'Ban and message cleanup queued.');

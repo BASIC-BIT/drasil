@@ -200,18 +200,36 @@ export type MessageCleanupJobDetail = z.infer<typeof messageCleanupJobDetailSche
 export type MessageCleanupCaseWorkspace = z.infer<typeof messageCleanupCaseWorkspaceSchema>;
 
 export interface MessageCleanupExecutionInput {
+  readonly mode: MessageCleanupJobMode;
   readonly status: MessageCleanupJobStatus;
   readonly coverage: MessageCleanupCoverage | null;
   readonly scope: MessageCleanupScope;
   readonly candidateCount: number;
+  readonly banStatus: MessageCleanupBanStatus;
+  readonly caseFinalizationStatus: MessageCleanupCaseFinalizationStatus;
+}
+
+export function isMessageCleanupFinalizationRetry(
+  job: Pick<
+    MessageCleanupExecutionInput,
+    'mode' | 'status' | 'banStatus' | 'caseFinalizationStatus'
+  >
+): boolean {
+  return (
+    job.mode === 'ban_with_cleanup' &&
+    job.status === 'completed' &&
+    job.banStatus === 'succeeded' &&
+    job.caseFinalizationStatus === 'failed'
+  );
 }
 
 export function getMessageCleanupExecutionEligibility(
   job: MessageCleanupExecutionInput
 ): MessageCleanupExecutionEligibility {
   let blockedReason: MessageCleanupExecutionBlockReason | null = null;
+  const canRetryFinalization = isMessageCleanupFinalizationRetry(job);
 
-  if (job.status !== 'ready') {
+  if (job.status !== 'ready' && !canRetryFinalization) {
     blockedReason = 'job_not_ready';
   } else if (
     job.coverage !== 'ready' &&

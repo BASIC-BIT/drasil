@@ -1,5 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 import {
+  getMessageCleanupExecutionEligibility,
   messageCleanupJobDetailSchema,
   messageCleanupJobSummarySchema,
   type MessageCleanupCaseWorkspace,
@@ -10,6 +11,9 @@ import { createActiveCaseDataAdapter } from '@/lib/activeCaseDataAdapter';
 import { fetchCaseDiscordSnapshot } from '@/lib/caseDiscordContent';
 import { DISCORD_PERMISSIONS, hasPermission, parsePermissions } from '@/lib/discordPermissions';
 import { createMessageCleanupDataAdapter } from '@/lib/messageCleanupDataAdapter';
+import { createModerationActionRequestDataAdapter } from '@/lib/moderationActionRequestDataAdapter';
+import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
+import { findMessageCleanupActionRequest } from '@/lib/inboxActionReceipts';
 import { isWebE2eFixtureMode } from '@/lib/e2eFixtures';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
@@ -172,7 +176,7 @@ function withScenarioJobs(
         failureReason: null,
       })),
     });
-  } else if (scenario === 'combined-ready') {
+  } else if (scenario === 'combined-ready' || scenario === 'ban-by-id') {
     nextCombinedJob = messageCleanupJobDetailSchema.parse({
       ...deleteOnlyJob,
       id: 'cleanup-job-combined-ready',
@@ -180,6 +184,25 @@ function withScenarioJobs(
       banStatus: 'not_requested',
       caseFinalizationStatus: 'not_applicable',
       reason: 'Ban the case user and remove the frozen source message.',
+    });
+  } else if (scenario === 'finalization-retry') {
+    nextCombinedJob = messageCleanupJobDetailSchema.parse({
+      ...deleteOnlyJob,
+      id: 'cleanup-job-finalization-retry',
+      mode: 'ban_with_cleanup',
+      status: 'completed',
+      banStatus: 'succeeded',
+      caseFinalizationStatus: 'failed',
+      lastError: 'Case finalization failed.',
+      execution: getMessageCleanupExecutionEligibility({
+        mode: 'ban_with_cleanup',
+        status: 'completed',
+        coverage: deleteOnlyJob.coverage,
+        scope: deleteOnlyJob.scope,
+        candidateCount: deleteOnlyJob.outcomes.candidateCount,
+        banStatus: 'succeeded',
+        caseFinalizationStatus: 'failed',
+      }),
     });
   }
 
@@ -193,6 +216,34 @@ function withScenarioJobs(
     },
     deleteOnlyJob: nextDeleteOnlyJob,
     combinedJob: nextCombinedJob,
+  };
+}
+
+function scenarioCleanupRequest(
+  scenario: string | undefined,
+  job: MessageCleanupJobDetail | null
+): ModerationActionRequestSummary | null {
+  if (scenario !== 'worker-failed' || !job) {
+    return null;
+  }
+
+  return {
+    id: 'fixture-cleanup-worker-failure',
+    actionType: 'execute_case_message_deletion',
+    actorSurface: 'web_case',
+    completedAt: null,
+    detectionEventId: null,
+    failedAt: '2026-06-08T01:15:00.000Z',
+    lastError: 'Discord rejected message deletion.',
+    messageDeletionJobId: job.id,
+    requestedAt: '2026-06-08T01:14:00.000Z',
+    reportIntakeId: null,
+    requestedAction: null,
+    resultSummary: null,
+    status: 'failed',
+    targetUserId: job.targetUserId,
+    updatedAt: '2026-06-08T01:15:00.000Z',
+    verificationEventId: job.verificationEventId,
   };
 }
 
@@ -218,9 +269,12 @@ export default async function CaseDetailPage({ params, searchParams }: PageProps
   const canManageCleanup =
     isAdministrator && !(isWebE2eFixtureMode() && cleanupScenario === 'non-administrator');
   const cleanupAdapter = createMessageCleanupDataAdapter();
-  const cleanupWorkspace = canManageCleanup
-    ? await cleanupAdapter.getCaseWorkspace(guildId, caseId)
-    : null;
+  const [cleanupWorkspace, cleanupActionRequests] = canManageCleanup
+    ? await Promise.all([
+        cleanupAdapter.getCaseWorkspace(guildId, caseId),
+        createModerationActionRequestDataAdapter().listCaseRequests(guildId, caseId, 25),
+      ])
+    : [null, []];
   const deleteOnlyJobSummary = cleanupWorkspace?.latestJobs.find(
     (job) => job.mode === 'delete_only'
   );
@@ -245,11 +299,21 @@ export default async function CaseDetailPage({ params, searchParams }: PageProps
         isWebE2eFixtureMode() ? cleanupScenario : undefined
       )
     : null;
+  const fixtureScenario = isWebE2eFixtureMode() ? cleanupScenario : undefined;
+  const displayedDetail =
+    fixtureScenario === 'ban-by-id'
+      ? {
+          ...detail,
+          allowedActions: detail.allowedActions.map((action) =>
+            action === 'ban_user' ? ('ban_by_id' as const) : action
+          ),
+        }
+      : detail;
 
   return (
     <CaseDetailView
       canQueueCaseActions={activeCaseDataAdapter.canQueueCaseActions()}
-      detail={detail}
+      detail={displayedDetail}
       discordSnapshot={discordSnapshot}
       guildId={guildId}
       guildName={guild.name}
@@ -258,7 +322,14 @@ export default async function CaseDetailPage({ params, searchParams }: PageProps
           ? {
               combinedBanAction: banCaseUserWithMessageCleanup.bind(null, guildId, caseId),
               combinedJob: cleanupData.combinedJob,
+              combinedRequest: findMessageCleanupActionRequest(
+                cleanupActionRequests,
+                cleanupData.combinedJob
+              ),
               deleteOnlyJob: cleanupData.deleteOnlyJob,
+              deleteOnlyRequest:
+                scenarioCleanupRequest(fixtureScenario, cleanupData.deleteOnlyJob) ??
+                findMessageCleanupActionRequest(cleanupActionRequests, cleanupData.deleteOnlyJob),
               executeAction: executeCaseMessageCleanup.bind(null, guildId, caseId),
               previewAction: previewCaseMessageCleanup.bind(null, guildId, caseId),
               workspace: cleanupData.workspace,

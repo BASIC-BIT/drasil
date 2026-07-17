@@ -20,6 +20,8 @@ export interface CaseMessageCleanupIntegration {
   readonly previewAction: MessageCleanupStateAction;
   readonly executeAction: MessageCleanupStateAction;
   readonly combinedBanAction: MessageCleanupStateAction;
+  readonly deleteOnlyRequest?: ModerationActionRequestSummary | null;
+  readonly combinedRequest?: ModerationActionRequestSummary | null;
 }
 
 export type WebCaseAction = Extract<
@@ -142,12 +144,14 @@ export function CaseActionControls({
           )
         )}
         {destructiveActions.map((action) =>
-          canQueueCaseActions && action === 'ban_user' ? (
+          canQueueCaseActions && (action === 'ban_user' || action === 'ban_by_id') ? (
             <CaseBanActionControl
+              banActionLabel={formatCaseAction(action)}
               cleanup={
                 messageCleanup
                   ? {
                       executeAction: messageCleanup.combinedBanAction,
+                      durableRequest: messageCleanup.combinedRequest,
                       jobDetail: messageCleanup.combinedJob,
                       previewAction: messageCleanup.previewAction,
                       workspace: messageCleanup.workspace,
@@ -233,6 +237,7 @@ export function CaseActionControls({
           </div>
           <CaseMessageCleanupControls
             executeAction={messageCleanup.executeAction}
+            durableRequest={messageCleanup.deleteOnlyRequest}
             jobDetail={messageCleanup.deleteOnlyJob}
             previewAction={messageCleanup.previewAction}
             workspace={messageCleanup.workspace}

@@ -2111,6 +2111,32 @@ describe('ModerationActionRequestService', () => {
     expect(userModerationService.finalizeSuccessfulCombinedBan).toHaveBeenCalled();
   });
 
+  it('resumes post-ban work when moderator bans are later disabled', async () => {
+    const {
+      messageCleanupService,
+      messageDeletionJobs,
+      repository,
+      service,
+      userModerationService,
+    } = buildService([combinedBanCleanupRequest], {
+      moderator_ban_action_enabled: false,
+    });
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      ban_status: MessageDeletionBanStatus.SUCCEEDED,
+      case_finalization_status: MessageDeletionCaseFinalizationStatus.FAILED,
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+      status: MessageDeletionJobStatus.COMPLETED,
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.performDiscordBanById).not.toHaveBeenCalled();
+    expect(messageCleanupService.executeJob).toHaveBeenCalledWith('cleanup-job-1');
+    expect(userModerationService.finalizeSuccessfulCombinedBan).toHaveBeenCalled();
+    expect(repository.completed).toHaveLength(1);
+  });
+
   it('completes a recovered request without repeating durable case finalization', async () => {
     const {
       messageCleanupService,

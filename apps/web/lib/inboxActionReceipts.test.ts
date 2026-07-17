@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fixtureModerationInboxItems } from './inboxFixtures';
 import {
   findInboxActionRequest,
+  findMessageCleanupActionRequest,
   hasActiveInboxActionRequests,
   reconcileLocalInboxActionRequestIds,
 } from './inboxActionReceipts';
@@ -97,6 +98,20 @@ describe('inboxActionReceipts', () => {
     });
 
     expect(findInboxActionRequest([request], caseItem!, 'ban_user')?.id).toBe(request.id);
+  });
+
+  it('matches cleanup execution receipts to the frozen job', () => {
+    const request = buildRequest({
+      actionType: 'execute_case_message_deletion',
+      messageDeletionJobId: 'cleanup-job-1',
+    });
+    const job = {
+      id: 'cleanup-job-1',
+      mode: 'delete_only',
+    } as const;
+
+    expect(findMessageCleanupActionRequest([request], job)?.id).toBe(request.id);
+    expect(findMessageCleanupActionRequest([request], { ...job, id: 'other-job' })).toBeNull();
   });
 
   it('reports only queued and processing requests as active', () => {
