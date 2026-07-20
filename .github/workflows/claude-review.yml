@@ -313,6 +313,8 @@ jobs:
             --safe-mode
             --max-turns 100
             --tools "Read"
+            --allowedTools "Read"
+            --add-dir "${{ runner.temp }}/claude-review"
 
       - name: Extract Claude review Markdown
         id: extract_review
