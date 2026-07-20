@@ -8,6 +8,7 @@ permissions:
   contents: read
 
 concurrency:
+  # This repo-scoped group intentionally matches claude-review.yml so the skip label cancels that workflow.
   group: ${{ github.event.label.name == 'skip-claude-review' && format('claude-review-{0}', github.event.pull_request.number) || format('claude-review-control-noop-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event.label.name == 'skip-claude-review' }}
 
