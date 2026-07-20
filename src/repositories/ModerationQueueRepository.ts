@@ -7,7 +7,10 @@ import { ModerationQueueItem, ModerationQueueItemType, ModerationQueueItemUpsert
 export interface IModerationQueueRepository {
   findById(id: string): Promise<ModerationQueueItem | null>;
   findByCase(verificationEventId: string): Promise<ModerationQueueItem | null>;
+  listByCase(verificationEventId: string): Promise<ModerationQueueItem[]>;
   findByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem | null>;
+  listByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem[]>;
+  listByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]>;
   findByPendingScreeningMember(
     serverId: string,
     userId: string
@@ -28,10 +31,6 @@ export interface IModerationQueueRepository {
     queueMessageId: string | null
   ): Promise<ModerationQueueItem | null>;
   deleteById(id: string): Promise<ModerationQueueItem | null>;
-  deleteByCase(verificationEventId: string): Promise<ModerationQueueItem[]>;
-  deleteByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem[]>;
-  deleteByPendingScreeningMember(serverId: string, userId: string): Promise<ModerationQueueItem[]>;
-  deleteByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]>;
 }
 
 @injectable()
@@ -76,6 +75,20 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
     }
   }
 
+  async listByCase(verificationEventId: string): Promise<ModerationQueueItem[]> {
+    try {
+      const items = await this.prisma.moderation_queue_items.findMany({
+        where: {
+          item_type: ModerationQueueItemType.CASE_MIRROR as moderation_queue_item_type,
+          verification_event_id: verificationEventId,
+        },
+      });
+      return items as ModerationQueueItem[];
+    } catch (error) {
+      this.handleError(error, 'listModerationQueueItemsByCase');
+    }
+  }
+
   async findByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem | null> {
     try {
       const item = await this.prisma.moderation_queue_items.findFirst({
@@ -87,6 +100,31 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
       return item as ModerationQueueItem | null;
     } catch (error) {
       this.handleError(error, 'findModerationQueueItemByObservedAlert');
+    }
+  }
+
+  async listByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem[]> {
+    try {
+      const items = await this.prisma.moderation_queue_items.findMany({
+        where: {
+          item_type: ModerationQueueItemType.OBSERVED_ALERT_MIRROR as moderation_queue_item_type,
+          detection_event_id: detectionEventId,
+        },
+      });
+      return items as ModerationQueueItem[];
+    } catch (error) {
+      this.handleError(error, 'listModerationQueueItemsByObservedAlert');
+    }
+  }
+
+  async listByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]> {
+    try {
+      const items = await this.prisma.moderation_queue_items.findMany({
+        where: { report_intake_id: reportIntakeId },
+      });
+      return items as ModerationQueueItem[];
+    } catch (error) {
+      this.handleError(error, 'listModerationQueueItemsByReportIntake');
     }
   }
 
@@ -209,50 +247,6 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
         return null;
       }
       this.handleError(error, 'deleteModerationQueueItemById');
-    }
-  }
-
-  async deleteByCase(verificationEventId: string): Promise<ModerationQueueItem[]> {
-    return this.deleteMany({ verification_event_id: verificationEventId });
-  }
-
-  async deleteByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem[]> {
-    return this.deleteMany({
-      item_type: ModerationQueueItemType.OBSERVED_ALERT_MIRROR as moderation_queue_item_type,
-      detection_event_id: detectionEventId,
-    });
-  }
-
-  async deleteByPendingScreeningMember(
-    serverId: string,
-    userId: string
-  ): Promise<ModerationQueueItem[]> {
-    return this.deleteMany({
-      server_id: serverId,
-      user_id: userId,
-      item_type: ModerationQueueItemType.PENDING_SCREENING_MEMBER as moderation_queue_item_type,
-    });
-  }
-
-  async deleteByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]> {
-    return this.deleteMany({ report_intake_id: reportIntakeId });
-  }
-
-  private async deleteMany(
-    where: Prisma.moderation_queue_itemsWhereInput
-  ): Promise<ModerationQueueItem[]> {
-    try {
-      const items = await this.prisma.moderation_queue_items.findMany({ where });
-      if (items.length === 0) {
-        return [];
-      }
-
-      await this.prisma.moderation_queue_items.deleteMany({
-        where: { id: { in: items.map((item) => item.id) } },
-      });
-      return items as ModerationQueueItem[];
-    } catch (error) {
-      this.handleError(error, 'deleteModerationQueueItems');
     }
   }
 

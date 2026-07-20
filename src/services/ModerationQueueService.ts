@@ -3,6 +3,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   Client,
+  type Collection,
   EmbedBuilder,
   Message,
   MessageCreateOptions,
@@ -33,12 +34,17 @@ import { QueueAttentionService } from './QueueAttentionService';
 const QUEUE_ACK_CUSTOM_ID_PREFIX = 'queue:ack';
 const DISCORD_EMBED_FIELD_MAX_LENGTH = 1024;
 const QUEUE_PREVIEW_MAX_LENGTH = 700;
+const MODERATION_QUEUE_RECONCILIATION_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const MODERATION_QUEUE_RECONCILIATION_PAGE_SIZE = 100;
+const MODERATION_QUEUE_RECONCILIATION_MAX_MESSAGES = 1000;
+const CASE_MIRROR_TITLES = new Set(['Pending Moderation Case', 'Pending Case: Member Left Server']);
 
 interface QueueTextChannel {
   readonly id: string;
   send(options: MessageCreateOptions): Promise<Message>;
   messages: {
     fetch(messageId: string): Promise<Message>;
+    fetch(options: { limit: number; before?: string }): Promise<Collection<string, Message>>;
   };
 }
 
@@ -50,6 +56,8 @@ interface QueueMessagePayload {
 }
 
 export interface IModerationQueueService {
+  start(): void;
+  stop(): void;
   syncAllActiveServerQueues(): Promise<void>;
   syncServerQueue(serverId: string): Promise<void>;
   clearServerQueue(serverId: string): Promise<number>;
@@ -82,6 +90,8 @@ export interface IModerationQueueService {
 @injectable()
 export class ModerationQueueService implements IModerationQueueService {
   private readonly presentationBuilder = new NotificationPresentationBuilder();
+  private reconciliationTimer: ReturnType<typeof setInterval> | null = null;
+  private reconciliationRunning = false;
 
   constructor(
     @inject(TYPES.DiscordClient) private client: Client,
@@ -104,6 +114,26 @@ export class ModerationQueueService implements IModerationQueueService {
     return customId.startsWith(prefix) ? customId.slice(prefix.length) : null;
   }
 
+  public start(): void {
+    if (this.reconciliationTimer) {
+      return;
+    }
+
+    void this.runScheduledReconciliation();
+    this.reconciliationTimer = setInterval(() => {
+      void this.runScheduledReconciliation();
+    }, MODERATION_QUEUE_RECONCILIATION_INTERVAL_MS);
+  }
+
+  public stop(): void {
+    if (!this.reconciliationTimer) {
+      return;
+    }
+
+    clearInterval(this.reconciliationTimer);
+    this.reconciliationTimer = null;
+  }
+
   public async syncAllActiveServerQueues(): Promise<void> {
     const servers = await this.serverRepository.findAllActive();
     for (const server of servers) {
@@ -115,7 +145,8 @@ export class ModerationQueueService implements IModerationQueueService {
 
   public async syncServerQueue(serverId: string): Promise<void> {
     const serverConfig = await this.configService.getServerConfig(serverId);
-    if (!getModerationQueueSettings(serverConfig.settings).channelId) {
+    const queueChannel = await this.getQueueChannel(serverConfig.settings);
+    if (!queueChannel) {
       return;
     }
 
@@ -135,13 +166,22 @@ export class ModerationQueueService implements IModerationQueueService {
       new Set(pendingCases.map((event) => event.id)),
       new Set(observedAlerts.map((event) => event.id))
     );
+    await this.reconcileCaseMirrorMessages(
+      serverId,
+      queueChannel,
+      new Set(pendingCases.map((event) => event.id))
+    );
   }
 
   public async clearServerQueue(serverId: string): Promise<number> {
     const items = await this.moderationQueueRepository.listByServer(serverId);
-    await Promise.all(items.map((item) => this.deleteQueueMessage(item)));
-    await Promise.all(items.map((item) => this.moderationQueueRepository.deleteById(item.id)));
-    return items.length;
+    const deletedCount = await this.deleteQueueItems(items);
+    if (deletedCount !== items.length) {
+      throw new Error(
+        `Failed to delete ${items.length - deletedCount} live moderation queue message(s); queue configuration was preserved for retry.`
+      );
+    }
+    return deletedCount;
   }
 
   public async upsertCaseMirror(verificationEvent: VerificationEvent): Promise<void> {
@@ -181,8 +221,8 @@ export class ModerationQueueService implements IModerationQueueService {
   }
 
   public async deleteCaseMirror(verificationEventId: string): Promise<void> {
-    const items = await this.moderationQueueRepository.deleteByCase(verificationEventId);
-    await Promise.all(items.map((item) => this.deleteQueueMessage(item)));
+    const items = await this.moderationQueueRepository.listByCase(verificationEventId);
+    await this.deleteQueueItems(items);
   }
 
   public async upsertObservedAlertMirror(detectionEvent: DetectionEvent): Promise<void> {
@@ -232,8 +272,8 @@ export class ModerationQueueService implements IModerationQueueService {
   }
 
   public async deleteObservedAlertMirror(detectionEventId: string): Promise<void> {
-    const items = await this.moderationQueueRepository.deleteByObservedAlert(detectionEventId);
-    await Promise.all(items.map((item) => this.deleteQueueMessage(item)));
+    const items = await this.moderationQueueRepository.listByObservedAlert(detectionEventId);
+    await this.deleteQueueItems(items);
   }
 
   public async upsertPendingScreeningMember(
@@ -323,11 +363,10 @@ export class ModerationQueueService implements IModerationQueueService {
   }
 
   public async deletePendingScreeningMember(serverId: string, userId: string): Promise<void> {
-    const items = await this.moderationQueueRepository.deleteByPendingScreeningMember(
-      serverId,
-      userId
-    );
-    await Promise.all(items.map((item) => this.deleteQueueMessage(item)));
+    const items = await this.moderationQueueRepository.listByServerAndTypes(serverId, [
+      ModerationQueueItemType.PENDING_SCREENING_MEMBER,
+    ]);
+    await this.deleteQueueItems(items.filter((item) => item.user_id === userId));
   }
 
   public async recordSupportThreadAttention(
@@ -371,8 +410,8 @@ export class ModerationQueueService implements IModerationQueueService {
   }
 
   public async deleteReportThreadAttention(reportIntakeId: string): Promise<void> {
-    const items = await this.moderationQueueRepository.deleteByReportIntake(reportIntakeId);
-    await Promise.all(items.map((item) => this.deleteQueueMessage(item)));
+    const items = await this.moderationQueueRepository.listByReportIntake(reportIntakeId);
+    await this.deleteQueueItems(items);
   }
 
   public async acknowledgeAttentionItem(
@@ -381,7 +420,11 @@ export class ModerationQueueService implements IModerationQueueService {
     actorId: string
   ): Promise<boolean> {
     const service = new QueueAttentionService(this.moderationQueueRepository, {
-      deleteQueueMessage: (item): Promise<void> => this.deleteQueueMessage(item),
+      deleteQueueMessage: async (item): Promise<void> => {
+        if (!(await this.deleteQueueMessage(item))) {
+          throw new Error(`Failed to delete live moderation queue message for item ${item.id}.`);
+        }
+      },
     });
     const result = await service.acknowledgeAttentionItem({
       actor: { id: actorId, surface: 'discord_interaction' },
@@ -408,10 +451,136 @@ export class ModerationQueueService implements IModerationQueueService {
         item.item_type === ModerationQueueItemType.OBSERVED_ALERT_MIRROR &&
         (!item.detection_event_id || !activeObservedIds.has(item.detection_event_id));
       if (staleCase || staleObserved) {
-        await this.deleteQueueMessage(item);
-        await this.moderationQueueRepository.deleteById(item.id);
+        await this.deleteQueueItems([item]);
       }
     }
+  }
+
+  private async deleteQueueItems(items: ModerationQueueItem[]): Promise<number> {
+    const results = await Promise.all(
+      items.map(async (item) => {
+        if (!(await this.deleteQueueMessage(item))) {
+          return false;
+        }
+
+        await this.moderationQueueRepository.deleteById(item.id);
+        return true;
+      })
+    );
+    return results.filter(Boolean).length;
+  }
+
+  private async runScheduledReconciliation(): Promise<void> {
+    if (this.reconciliationRunning) {
+      return;
+    }
+
+    this.reconciliationRunning = true;
+    try {
+      await this.syncAllActiveServerQueues();
+    } catch (error) {
+      console.warn('Failed to reconcile live moderation queues:', error);
+    } finally {
+      this.reconciliationRunning = false;
+    }
+  }
+
+  private async reconcileCaseMirrorMessages(
+    serverId: string,
+    queueChannel: QueueTextChannel,
+    activeCaseIds: Set<string>
+  ): Promise<void> {
+    const botUserId = this.client.user?.id;
+    if (!botUserId) {
+      return;
+    }
+
+    const trackedCaseItems = await this.moderationQueueRepository.listByServerAndTypes(serverId, [
+      ModerationQueueItemType.CASE_MIRROR,
+    ]);
+    const trackedItemByCaseId = new Map(
+      trackedCaseItems
+        .filter(
+          (
+            item
+          ): item is ModerationQueueItem & {
+            verification_event_id: string;
+            queue_message_id: string;
+          } => Boolean(item.verification_event_id && item.queue_message_id)
+        )
+        .map((item) => [item.verification_event_id, item])
+    );
+
+    let before: string | undefined;
+    let inspected = 0;
+    while (inspected < MODERATION_QUEUE_RECONCILIATION_MAX_MESSAGES) {
+      const limit = Math.min(
+        MODERATION_QUEUE_RECONCILIATION_PAGE_SIZE,
+        MODERATION_QUEUE_RECONCILIATION_MAX_MESSAGES - inspected
+      );
+      let page: Collection<string, Message>;
+      try {
+        page = await queueChannel.messages.fetch({ limit, ...(before ? { before } : {}) });
+      } catch (error) {
+        console.warn(
+          `Failed to inspect live moderation queue history for guild ${serverId}:`,
+          error
+        );
+        return;
+      }
+
+      const messages = [...page.values()];
+      if (messages.length === 0) {
+        return;
+      }
+
+      for (const message of messages) {
+        const caseId = this.readCaseMirrorId(message);
+        if (!caseId || message.author.id !== botUserId) {
+          continue;
+        }
+
+        const trackedItem = trackedItemByCaseId.get(caseId);
+        const isCurrentTrackedMessage =
+          activeCaseIds.has(caseId) && trackedItem?.queue_message_id === message.id;
+        if (!isCurrentTrackedMessage) {
+          const deleted = await this.deleteDiscordMessage(
+            message,
+            `orphaned or duplicate case mirror ${caseId} in guild ${serverId}`
+          );
+          if (
+            deleted &&
+            !activeCaseIds.has(caseId) &&
+            trackedItem?.queue_message_id === message.id
+          ) {
+            await this.moderationQueueRepository.deleteById(trackedItem.id);
+          }
+        }
+      }
+
+      inspected += messages.length;
+      if (messages.length < limit) {
+        return;
+      }
+      before = messages[messages.length - 1].id;
+    }
+
+    console.warn(
+      `Stopped live moderation queue history reconciliation for guild ${serverId} after ${MODERATION_QUEUE_RECONCILIATION_MAX_MESSAGES} messages.`
+    );
+  }
+
+  private readCaseMirrorId(message: Message): string | null {
+    const embed = message.embeds.find((candidate) =>
+      candidate.title ? CASE_MIRROR_TITLES.has(candidate.title) : false
+    );
+    const caseField = embed?.fields.find((field) => field.name === 'Case');
+    if (!caseField) {
+      return null;
+    }
+
+    const match = caseField.value.match(/`([^`]+)`/);
+    return match?.[1] ?? null;
   }
 
   private async upsertAttentionItem(input: {
@@ -764,14 +933,56 @@ export class ModerationQueueService implements IModerationQueueService {
 
   private async deleteQueueMessage(
     item: Pick<ModerationQueueItem, 'id' | 'queue_channel_id' | 'queue_message_id'>
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!item.queue_channel_id || !item.queue_message_id) {
-      return;
+      return true;
     }
 
-    const channel = await this.getTextChannel(item.queue_channel_id);
-    const message = await channel?.messages.fetch(item.queue_message_id).catch(() => null);
-    await message?.delete().catch(() => null);
+    let channel: QueueTextChannel | null;
+    try {
+      const fetchedChannel = await this.client.channels.fetch(item.queue_channel_id);
+      channel =
+        fetchedChannel && 'send' in fetchedChannel && 'messages' in fetchedChannel
+          ? (fetchedChannel as unknown as QueueTextChannel)
+          : null;
+    } catch (error) {
+      console.warn(`Failed to fetch live moderation queue channel for item ${item.id}:`, error);
+      return false;
+    }
+    if (!channel) {
+      return true;
+    }
+
+    let message: Message;
+    try {
+      message = await channel.messages.fetch(item.queue_message_id);
+    } catch (error) {
+      if (this.isUnknownDiscordResource(error)) {
+        return true;
+      }
+      console.warn(`Failed to fetch live moderation queue message for item ${item.id}:`, error);
+      return false;
+    }
+
+    return this.deleteDiscordMessage(message, `queue item ${item.id}`);
+  }
+
+  private async deleteDiscordMessage(message: Message, subject: string): Promise<boolean> {
+    try {
+      await message.delete();
+      return true;
+    } catch (error) {
+      if (this.isUnknownDiscordResource(error)) {
+        return true;
+      }
+      console.warn(`Failed to delete live moderation queue message for ${subject}:`, error);
+      return false;
+    }
+  }
+
+  private isUnknownDiscordResource(error: unknown): boolean {
+    const code = (error as { code?: unknown } | null)?.code;
+    return code === 10003 || code === 10008;
   }
 
   private async getQueueChannel(

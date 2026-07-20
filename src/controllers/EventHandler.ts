@@ -236,9 +236,7 @@ export class EventHandler implements IEventHandler {
     await this.ensureConfigInitialized();
 
     await this.commandHandler.registerCommands();
-    void this.moderationQueueService?.syncAllActiveServerQueues().catch((error) => {
-      console.warn('Failed to sync live moderation queues on startup:', error);
-    });
+    this.moderationQueueService?.start();
     this.caseReviewReminderService?.start();
   }
 
