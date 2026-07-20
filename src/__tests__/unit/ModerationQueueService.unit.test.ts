@@ -19,7 +19,6 @@ import { ModerationQueueService } from '../../services/ModerationQueueService';
 class FakeDiscordMessage {
   public readonly id: string;
   public readonly channelId: string;
-  public readonly author: { id: string };
   public payload: Record<string, unknown>;
   public deleted = false;
   public edit = jest.fn(async (payload: MessageEditOptions) => {
@@ -31,36 +30,10 @@ class FakeDiscordMessage {
     return this as unknown as Message;
   });
 
-  constructor(
-    id: string,
-    channelId: string,
-    payload: Record<string, unknown>,
-    authorId = 'bot-user'
-  ) {
+  constructor(id: string, channelId: string, payload: Record<string, unknown>) {
     this.id = id;
     this.channelId = channelId;
     this.payload = payload;
-    this.author = { id: authorId };
-  }
-
-  public get embeds(): Array<{
-    title?: string;
-    fields: Array<{ name: string; value: string }>;
-  }> {
-    const embeds = Array.isArray(this.payload.embeds) ? this.payload.embeds : [];
-    return embeds.map((embed) => {
-      const serialized =
-        embed &&
-        typeof embed === 'object' &&
-        'toJSON' in embed &&
-        typeof embed.toJSON === 'function'
-          ? embed.toJSON()
-          : embed;
-      return serialized as {
-        title?: string;
-        fields: Array<{ name: string; value: string }>;
-      };
-    });
   }
 }
 
@@ -69,21 +42,12 @@ class FakeDiscordChannel {
   private nextMessageId = 0;
   public readonly sentMessages: FakeDiscordMessage[] = [];
   public readonly messages = {
-    fetch: jest.fn(async (request: string | { limit: number; before?: string }) => {
-      if (typeof request === 'string') {
-        const message = this.sentMessages.find((entry) => entry.id === request && !entry.deleted);
-        if (!message) {
-          throw Object.assign(new Error(`Message ${request} not found`), { code: 10008 });
-        }
-        return message as unknown as Message;
+    fetch: jest.fn(async (messageId: string) => {
+      const message = this.sentMessages.find((entry) => entry.id === messageId && !entry.deleted);
+      if (!message) {
+        throw Object.assign(new Error(`Message ${messageId} not found`), { code: 10008 });
       }
-
-      const visibleMessages = this.sentMessages.filter((entry) => !entry.deleted).reverse();
-      const startIndex = request.before
-        ? Math.max(0, visibleMessages.findIndex((entry) => entry.id === request.before) + 1)
-        : 0;
-      const page = visibleMessages.slice(startIndex, startIndex + request.limit);
-      return new Map(page.map((message) => [message.id, message])) as unknown;
+      return message as unknown as Message;
     }),
   };
   public readonly send = jest.fn(async (payload: MessageCreateOptions) => {
@@ -396,7 +360,6 @@ const buildService = (
     ),
   } as unknown as IDetectionEventsRepository;
   const client = {
-    user: { id: 'bot-user' },
     channels: {
       fetch: jest.fn(async (channelId: string) => (channelId === channel.id ? channel : null)),
     },
@@ -417,15 +380,6 @@ const buildService = (
 };
 
 describe('ModerationQueueService', () => {
-  const buildCaseMirrorMessagePayload = (caseId: string): Record<string, unknown> => ({
-    embeds: [
-      {
-        title: 'Pending Moderation Case',
-        fields: [{ name: 'Case', value: `\`${caseId}\`` }],
-      },
-    ],
-  });
-
   it('syncs pending cases and un-actioned observed alerts, then removes stale mirrors', async () => {
     const queueRepository = new FakeModerationQueueRepository();
     const stale = await queueRepository.upsert({
@@ -613,67 +567,6 @@ describe('ModerationQueueService', () => {
     expect(channel.sentMessages[0].delete).toHaveBeenCalledTimes(2);
     expect(queueRepository.items).toHaveLength(0);
     warnSpy.mockRestore();
-  });
-
-  it('removes an orphaned bot-authored case card during queue sync', async () => {
-    const channel = new FakeDiscordChannel('queue-channel');
-    const orphanedMessage = new FakeDiscordMessage(
-      'orphaned-message',
-      channel.id,
-      buildCaseMirrorMessagePayload('resolved-case')
-    );
-    const moderatorMessage = new FakeDiscordMessage(
-      'moderator-message',
-      channel.id,
-      buildCaseMirrorMessagePayload('resolved-case'),
-      'moderator-user'
-    );
-    const unrelatedBotMessage = new FakeDiscordMessage('unrelated-bot-message', channel.id, {
-      embeds: [{ title: 'Queue instructions', fields: [] }],
-    });
-    channel.sentMessages.push(orphanedMessage, moderatorMessage, unrelatedBotMessage);
-    const { service } = buildService({ channel });
-
-    await service.syncServerQueue('guild-1');
-
-    expect(orphanedMessage.delete).toHaveBeenCalledTimes(1);
-    expect(orphanedMessage.deleted).toBe(true);
-    expect(moderatorMessage.delete).not.toHaveBeenCalled();
-    expect(unrelatedBotMessage.delete).not.toHaveBeenCalled();
-  });
-
-  it('removes duplicate case cards while keeping the database-tracked active card', async () => {
-    const channel = new FakeDiscordChannel('queue-channel');
-    const trackedMessage = new FakeDiscordMessage(
-      'tracked-message',
-      channel.id,
-      buildCaseMirrorMessagePayload('case-1')
-    );
-    const duplicateMessage = new FakeDiscordMessage(
-      'duplicate-message',
-      channel.id,
-      buildCaseMirrorMessagePayload('case-1')
-    );
-    channel.sentMessages.push(trackedMessage, duplicateMessage);
-    const queueRepository = new FakeModerationQueueRepository();
-    await queueRepository.upsert({
-      serverId: 'guild-1',
-      userId: 'user-1',
-      itemType: ModerationQueueItemType.CASE_MIRROR,
-      verificationEventId: 'case-1',
-      queueChannelId: channel.id,
-      queueMessageId: trackedMessage.id,
-    });
-    const { service } = buildService({
-      channel,
-      pendingCases: [buildVerificationEvent()],
-      queueRepository,
-    });
-
-    await service.syncServerQueue('guild-1');
-
-    expect(trackedMessage.delete).not.toHaveBeenCalled();
-    expect(duplicateMessage.delete).toHaveBeenCalledTimes(1);
   });
 
   it('runs the shared queue reconciliation at startup and once per day', async () => {

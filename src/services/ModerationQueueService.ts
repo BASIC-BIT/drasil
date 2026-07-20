@@ -3,7 +3,6 @@ import {
   ButtonBuilder,
   ButtonStyle,
   Client,
-  type Collection,
   EmbedBuilder,
   Message,
   MessageCreateOptions,
@@ -35,16 +34,12 @@ const QUEUE_ACK_CUSTOM_ID_PREFIX = 'queue:ack';
 const DISCORD_EMBED_FIELD_MAX_LENGTH = 1024;
 const QUEUE_PREVIEW_MAX_LENGTH = 700;
 const MODERATION_QUEUE_RECONCILIATION_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const MODERATION_QUEUE_RECONCILIATION_PAGE_SIZE = 100;
-const MODERATION_QUEUE_RECONCILIATION_MAX_MESSAGES = 1000;
-const CASE_MIRROR_TITLES = new Set(['Pending Moderation Case', 'Pending Case: Member Left Server']);
 
 interface QueueTextChannel {
   readonly id: string;
   send(options: MessageCreateOptions): Promise<Message>;
   messages: {
     fetch(messageId: string): Promise<Message>;
-    fetch(options: { limit: number; before?: string }): Promise<Collection<string, Message>>;
   };
 }
 
@@ -145,8 +140,7 @@ export class ModerationQueueService implements IModerationQueueService {
 
   public async syncServerQueue(serverId: string): Promise<void> {
     const serverConfig = await this.configService.getServerConfig(serverId);
-    const queueChannel = await this.getQueueChannel(serverConfig.settings);
-    if (!queueChannel) {
+    if (!getModerationQueueSettings(serverConfig.settings).channelId) {
       return;
     }
 
@@ -165,11 +159,6 @@ export class ModerationQueueService implements IModerationQueueService {
       serverId,
       new Set(pendingCases.map((event) => event.id)),
       new Set(observedAlerts.map((event) => event.id))
-    );
-    await this.reconcileCaseMirrorMessages(
-      serverId,
-      queueChannel,
-      new Set(pendingCases.map((event) => event.id))
     );
   }
 
@@ -483,104 +472,6 @@ export class ModerationQueueService implements IModerationQueueService {
     } finally {
       this.reconciliationRunning = false;
     }
-  }
-
-  private async reconcileCaseMirrorMessages(
-    serverId: string,
-    queueChannel: QueueTextChannel,
-    activeCaseIds: Set<string>
-  ): Promise<void> {
-    const botUserId = this.client.user?.id;
-    if (!botUserId) {
-      return;
-    }
-
-    const trackedCaseItems = await this.moderationQueueRepository.listByServerAndTypes(serverId, [
-      ModerationQueueItemType.CASE_MIRROR,
-    ]);
-    const trackedItemByCaseId = new Map(
-      trackedCaseItems
-        .filter(
-          (
-            item
-          ): item is ModerationQueueItem & {
-            verification_event_id: string;
-            queue_message_id: string;
-          } => Boolean(item.verification_event_id && item.queue_message_id)
-        )
-        .map((item) => [item.verification_event_id, item])
-    );
-
-    let before: string | undefined;
-    let inspected = 0;
-    while (inspected < MODERATION_QUEUE_RECONCILIATION_MAX_MESSAGES) {
-      const limit = Math.min(
-        MODERATION_QUEUE_RECONCILIATION_PAGE_SIZE,
-        MODERATION_QUEUE_RECONCILIATION_MAX_MESSAGES - inspected
-      );
-      let page: Collection<string, Message>;
-      try {
-        page = await queueChannel.messages.fetch({ limit, ...(before ? { before } : {}) });
-      } catch (error) {
-        console.warn(
-          `Failed to inspect live moderation queue history for guild ${serverId}:`,
-          error
-        );
-        return;
-      }
-
-      const messages = [...page.values()];
-      if (messages.length === 0) {
-        return;
-      }
-
-      for (const message of messages) {
-        const caseId = this.readCaseMirrorId(message);
-        if (!caseId || message.author.id !== botUserId) {
-          continue;
-        }
-
-        const trackedItem = trackedItemByCaseId.get(caseId);
-        const isCurrentTrackedMessage =
-          activeCaseIds.has(caseId) && trackedItem?.queue_message_id === message.id;
-        if (!isCurrentTrackedMessage) {
-          const deleted = await this.deleteDiscordMessage(
-            message,
-            `orphaned or duplicate case mirror ${caseId} in guild ${serverId}`
-          );
-          if (
-            deleted &&
-            !activeCaseIds.has(caseId) &&
-            trackedItem?.queue_message_id === message.id
-          ) {
-            await this.moderationQueueRepository.deleteById(trackedItem.id);
-          }
-        }
-      }
-
-      inspected += messages.length;
-      if (messages.length < limit) {
-        return;
-      }
-      before = messages[messages.length - 1].id;
-    }
-
-    console.warn(
-      `Stopped live moderation queue history reconciliation for guild ${serverId} after ${MODERATION_QUEUE_RECONCILIATION_MAX_MESSAGES} messages.`
-    );
-  }
-
-  private readCaseMirrorId(message: Message): string | null {
-    const embed = message.embeds.find((candidate) =>
-      candidate.title ? CASE_MIRROR_TITLES.has(candidate.title) : false
-    );
-    const caseField = embed?.fields.find((field) => field.name === 'Case');
-    if (!caseField) {
-      return null;
-    }
-
-    const match = caseField.value.match(/`([^`]+)`/);
-    return match?.[1] ?? null;
   }
 
   private async upsertAttentionItem(input: {
