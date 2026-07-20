@@ -3,6 +3,7 @@ import {
   Events,
   GuildMember,
   Message,
+  MessageFlags,
   MessageType,
   PermissionFlagsBits,
   PermissionsBitField,
@@ -41,6 +42,7 @@ describe('EventHandler (unit)', () => {
     roleQuarantineService?: Record<string, jest.Mock>;
     verificationEventRepository?: Record<string, jest.Mock>;
     globalMessageWatchlistRepository?: Record<string, jest.Mock>;
+    interactionHandler?: Record<string, jest.Mock>;
   }): EventHandler {
     const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
     const detectionOrchestrator = overrides?.detectionOrchestrator ?? {
@@ -107,7 +109,11 @@ describe('EventHandler (unit)', () => {
         }),
       }) as any,
       { registerCommands: jest.fn() } as any,
-      { handleButtonInteraction: jest.fn(), handleModalSubmit: jest.fn() } as any,
+      (overrides?.interactionHandler ?? {
+        handleButtonInteraction: jest.fn(),
+        handleStringSelectMenuInteraction: jest.fn(),
+        handleModalSubmit: jest.fn(),
+      }) as any,
       { handleThreadMessage: jest.fn().mockResolvedValue(false) } as any,
       overrides?.productAnalyticsService as any,
       overrides?.setupDiagnosticsService as any,
@@ -203,6 +209,121 @@ describe('EventHandler (unit)', () => {
     expect(client.on).toHaveBeenCalledWith(Events.InteractionCreate, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildCreate, expect.any(Function));
     expect(client.on).not.toHaveBeenCalledWith('ready', expect.any(Function));
+  });
+
+  it('contains expired interactions without attempting another response', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const unknownInteractionError = Object.assign(new Error('Unknown interaction'), {
+      code: 10062,
+    });
+    const interactionHandler = {
+      handleButtonInteraction: jest.fn().mockRejectedValue(unknownInteractionError),
+      handleStringSelectMenuInteraction: jest.fn(),
+      handleModalSubmit: jest.fn(),
+    };
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const handler = buildHandler({ client, interactionHandler });
+    await handler.setupEventHandlers();
+    const interactionCreateHandler = client.on.mock.calls.find(
+      ([event]) => event === Events.InteractionCreate
+    )?.[1];
+    const interaction = {
+      isChatInputCommand: jest.fn().mockReturnValue(false),
+      isUserContextMenuCommand: jest.fn().mockReturnValue(false),
+      isMessageContextMenuCommand: jest.fn().mockReturnValue(false),
+      isButton: jest.fn().mockReturnValue(true),
+      isStringSelectMenu: jest.fn().mockReturnValue(false),
+      isModalSubmit: jest.fn().mockReturnValue(false),
+      isRepliable: jest.fn().mockReturnValue(true),
+      replied: false,
+      deferred: false,
+      reply: jest.fn(),
+    };
+
+    await expect(interactionCreateHandler?.(interaction as any)).resolves.toBeUndefined();
+
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(consoleWarn).toHaveBeenCalledWith(
+      'Discord interaction is no longer valid (10062); skipping fallback response.'
+    );
+    expect(consoleError).not.toHaveBeenCalled();
+
+    consoleWarn.mockRestore();
+    consoleError.mockRestore();
+  });
+
+  it('does not reject when the fallback interaction response has expired', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const interactionHandler = {
+      handleButtonInteraction: jest.fn().mockRejectedValue(new Error('button failed')),
+      handleStringSelectMenuInteraction: jest.fn(),
+      handleModalSubmit: jest.fn(),
+    };
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const handler = buildHandler({ client, interactionHandler });
+    await handler.setupEventHandlers();
+    const interactionCreateHandler = client.on.mock.calls.find(
+      ([event]) => event === Events.InteractionCreate
+    )?.[1];
+    const interaction = {
+      isChatInputCommand: jest.fn().mockReturnValue(false),
+      isUserContextMenuCommand: jest.fn().mockReturnValue(false),
+      isMessageContextMenuCommand: jest.fn().mockReturnValue(false),
+      isButton: jest.fn().mockReturnValue(true),
+      isStringSelectMenu: jest.fn().mockReturnValue(false),
+      isModalSubmit: jest.fn().mockReturnValue(false),
+      isRepliable: jest.fn().mockReturnValue(true),
+      replied: false,
+      deferred: false,
+      reply: jest
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('Unknown interaction'), { code: 10062 })),
+    };
+
+    await expect(interactionCreateHandler?.(interaction as any)).resolves.toBeUndefined();
+
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'An error occurred while processing this interaction.',
+      flags: MessageFlags.Ephemeral,
+    });
+    expect(consoleError).toHaveBeenCalledWith('Error handling interaction:', expect.any(Error));
+    expect(consoleWarn).toHaveBeenCalledWith(
+      'Discord interaction expired before the error response could be sent (10062).'
+    );
+
+    consoleWarn.mockRestore();
+    consoleError.mockRestore();
+  });
+
+  it('contains unexpected recoverable event handler rejections', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const handler = buildHandler({ client });
+    const eventError = new Error('event failed');
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    (handler as any).handleMessage = jest.fn().mockRejectedValue(eventError);
+    await handler.setupEventHandlers();
+    const listener = client.on.mock.calls.find(([event]) => event === Events.MessageCreate)?.[1];
+
+    await expect(listener?.({})).resolves.toBeUndefined();
+
+    expect(consoleError).toHaveBeenCalledWith(
+      'Unexpected error in recoverable Discord event "messageCreate":',
+      eventError
+    );
+    consoleError.mockRestore();
+  });
+
+  it('keeps ready-time initialization outside the recoverable event boundary', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const handler = buildHandler({ client });
+    const startupError = new Error('startup failed');
+    (handler as any).handleReady = jest.fn().mockRejectedValue(startupError);
+    await handler.setupEventHandlers();
+    const readyListener = client.on.mock.calls.find(([event]) => event === Events.ClientReady)?.[1];
+
+    await expect(readyListener?.()).rejects.toBe(startupError);
   });
 
   it('opens a manual intake case when the configured trigger role remains after the grace period', async () => {

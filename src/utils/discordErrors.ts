@@ -1,6 +1,7 @@
 export const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10003;
 export const DISCORD_UNKNOWN_MEMBER_ERROR_CODE = 10007;
 export const DISCORD_UNKNOWN_MESSAGE_ERROR_CODE = 10008;
+export const DISCORD_UNKNOWN_INTERACTION_ERROR_CODE = 10062;
 export const DISCORD_UNKNOWN_BAN_ERROR_CODE = 10026;
 
 export function getDiscordErrorCode(error: unknown): number | string | undefined {
@@ -15,6 +16,10 @@ export function isDiscordErrorCode(error: unknown, code: number): boolean {
 
 export function isDiscordUnknownBanError(error: unknown): boolean {
   return isDiscordErrorCode(error, DISCORD_UNKNOWN_BAN_ERROR_CODE);
+}
+
+export function isDiscordUnknownInteractionError(error: unknown): boolean {
+  return isDiscordErrorCode(error, DISCORD_UNKNOWN_INTERACTION_ERROR_CODE);
 }
 
 export function formatDiscordFetchError(error: unknown, maxLength = 180): string {
