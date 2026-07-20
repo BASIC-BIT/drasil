@@ -154,18 +154,28 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
   - the embed says no case was opened automatically
   - the embed shows heuristic reasons separately from the `Risk Analysis` field
 
-### 10. Case review and user reminder flow
+### 10. Daily moderation and user reminder flow
 
 - Start a fresh pending verification case with a user-facing verification thread.
+- Set a test member's Discord membership-screening state beyond the configured
+  long-pending threshold with no screening digest timestamp.
 - For deterministic local QA, set the case `updated_at` and reminder metadata in a test database instead of waiting real days.
 - Run the bot long enough for `CaseReviewReminderService` to tick.
 - Expected result:
+  - one `Daily moderation reminder` batch contains both `Case review` and
+    `Membership screening` sections
+  - configured case responder roles are mentioned only in the first batch message
   - admin digest groups pending cases into fresh, stale, and very stale
   - digest lines include the target user mention and direct admin/thread links
   - digest lines show the next user reminder timestamp or moderator-review language
   - user reminder posts in the user-facing verification thread and pings only the target user
   - user reminder does not post within one hour after the admin digest
   - target-user replies stop later user reminders and still notify admins through evidence mirroring/live queue
+- Run the service again inside the repeat window with another newly due screening member.
+- Expected result:
+  - no separate screening reminder is posted
+  - the screening moderation queue item is still reconciled
+  - the member is included and marked notified when the next admin reminder window opens
 
 ### 11. Observe-only notification coalescing
 

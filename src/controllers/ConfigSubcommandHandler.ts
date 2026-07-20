@@ -1234,7 +1234,7 @@ export class ConfigSubcommandHandler {
           const settings = getCaseReviewReminderSettings(serverConfig.settings);
           await interaction.reply({
             content:
-              'Current stale case review reminder settings:\n\n' +
+              'Current case review and admin reminder settings:\n\n' +
               this.formatCaseReviewReminderSettings(settings),
             flags: MessageFlags.Ephemeral,
           });
@@ -1280,7 +1280,7 @@ export class ConfigSubcommandHandler {
           const settings = getCaseReviewReminderSettings(updated.settings);
           await interaction.reply({
             content:
-              'Updated stale case reminder repeat interval.\n\n' +
+              'Updated shared admin reminder repeat interval.\n\n' +
               this.formatCaseReviewReminderSettings(settings),
             flags: MessageFlags.Ephemeral,
           });
@@ -1326,9 +1326,10 @@ export class ConfigSubcommandHandler {
     return [
       `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
       `Stale threshold: \`${settings.staleHours}h\``,
-      `Repeat interval: \`${settings.repeatHours}h\``,
+      `Admin reminder repeat interval: \`${settings.repeatHours}h\``,
       `Very stale threshold: \`${settings.veryStaleDays}d\``,
-      'Admin reminders post to the admin channel and mention configured case responder roles.',
+      'Admin reminder batches post to the admin channel, mention configured case responder roles, and may include long-pending membership screening.',
+      'Case review and pending-screening alerts remain independently enabled.',
       'User-facing support reminders post every 24h until the very-stale threshold.',
     ].join('\n');
   }

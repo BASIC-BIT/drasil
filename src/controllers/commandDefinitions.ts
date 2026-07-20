@@ -688,9 +688,9 @@ const baseApplicationCommandBuilders = [
     .addSubcommandGroup((group) =>
       group
         .setName('case-review')
-        .setDescription('Manage stale case review reminders')
+        .setDescription('Manage case review and the shared admin reminder cadence')
         .addSubcommand((subcommand) =>
-          subcommand.setName('view').setDescription('View stale case review reminder settings')
+          subcommand.setName('view').setDescription('View case review and reminder settings')
         )
         .addSubcommand((subcommand) =>
           subcommand.setName('enable').setDescription('Enable stale case review reminders')
@@ -714,11 +714,11 @@ const baseApplicationCommandBuilders = [
         .addSubcommand((subcommand) =>
           subcommand
             .setName('set-repeat-hours')
-            .setDescription('Set minimum hours between repeated stale reminders')
+            .setDescription('Set minimum hours between admin reminder batches')
             .addIntegerOption((option) =>
               option
                 .setName('hours')
-                .setDescription('Hours between repeat reminders')
+                .setDescription('Hours between admin reminder batches')
                 .setRequired(true)
                 .setMinValue(MIN_CASE_REVIEW_REMINDER_HOURS)
                 .setMaxValue(MAX_CASE_REVIEW_REMINDER_HOURS)

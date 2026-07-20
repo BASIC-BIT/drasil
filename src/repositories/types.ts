@@ -92,6 +92,7 @@ export interface ServerSettings {
   case_review_reminder_repeat_hours?: number;
   case_review_very_stale_days?: number;
   case_review_digest_last_sent_at?: string | null;
+  admin_reminder_digest_last_sent_at?: string | null;
   pending_screening_alerts_enabled?: boolean;
   pending_screening_long_pending_days?: number;
   moderation_queue_channel_id?: string | null;
