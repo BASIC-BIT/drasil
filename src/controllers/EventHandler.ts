@@ -47,7 +47,7 @@ import {
 import { IReportIntakeService } from '../services/ReportIntakeService';
 import { IReportIntakeAgentService } from '../services/ReportIntakeAgentService';
 import { ICaseReviewReminderService } from '../services/CaseReviewReminderService';
-import { isDiscordUnknownBanError } from '../utils/discordErrors';
+import { isDiscordUnknownBanError, isDiscordUnknownInteractionError } from '../utils/discordErrors';
 import { messageAttachmentsToReportMetadata } from '../utils/reportAttachments';
 import {
   findMessageWatchlistMatch,
@@ -214,14 +214,62 @@ export class EventHandler implements IEventHandler {
   }
 
   public async setupEventHandlers(): Promise<void> {
+    // Ready-time initialization is critical startup work and intentionally remains outside the
+    // recoverable operational event boundary.
     this.client.on(Events.ClientReady, this.handleReady.bind(this));
-    this.client.on(Events.MessageCreate, this.handleMessage.bind(this));
-    this.client.on(Events.GuildMemberAdd, this.handleGuildMemberAdd.bind(this));
-    this.client.on(Events.GuildMemberUpdate, this.handleGuildMemberUpdate.bind(this));
-    this.client.on(Events.GuildMemberRemove, this.handleGuildMemberRemove.bind(this));
-    this.client.on(Events.GuildBanAdd, this.handleGuildBanAdd.bind(this));
-    this.client.on(Events.InteractionCreate, this.handleInteraction.bind(this));
-    this.client.on(Events.GuildCreate, this.handleGuildCreate.bind(this));
+    this.client.on(
+      Events.MessageCreate,
+      this.createRecoverableEventHandler(Events.MessageCreate, this.handleMessage.bind(this))
+    );
+    this.client.on(
+      Events.GuildMemberAdd,
+      this.createRecoverableEventHandler(
+        Events.GuildMemberAdd,
+        this.handleGuildMemberAdd.bind(this)
+      )
+    );
+    this.client.on(
+      Events.GuildMemberUpdate,
+      this.createRecoverableEventHandler(
+        Events.GuildMemberUpdate,
+        this.handleGuildMemberUpdate.bind(this)
+      )
+    );
+    this.client.on(
+      Events.GuildMemberRemove,
+      this.createRecoverableEventHandler(
+        Events.GuildMemberRemove,
+        this.handleGuildMemberRemove.bind(this)
+      )
+    );
+    this.client.on(
+      Events.GuildBanAdd,
+      this.createRecoverableEventHandler(Events.GuildBanAdd, this.handleGuildBanAdd.bind(this))
+    );
+    this.client.on(
+      Events.InteractionCreate,
+      this.createRecoverableEventHandler(
+        Events.InteractionCreate,
+        this.handleInteraction.bind(this)
+      )
+    );
+    this.client.on(
+      Events.GuildCreate,
+      this.createRecoverableEventHandler(Events.GuildCreate, this.handleGuildCreate.bind(this))
+    );
+  }
+
+  private createRecoverableEventHandler<TArguments extends unknown[]>(
+    eventName: string,
+    handler: (...args: TArguments) => Promise<void>
+  ): (...args: TArguments) => Promise<void> {
+    return async (...args: TArguments): Promise<void> => {
+      try {
+        await handler(...args);
+      } catch (error) {
+        console.error(`Unexpected error in recoverable Discord event "${eventName}":`, error);
+      }
+    };
   }
 
   private async handleReady(): Promise<void> {
@@ -257,15 +305,35 @@ export class EventHandler implements IEventHandler {
         await this.interactionHandler.handleModalSubmit(interaction);
       }
     } catch (error) {
-      console.error('Error handling interaction:', error);
-
-      // Try to respond if the interaction hasn't been replied to
-      if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: 'An error occurred while processing this interaction.',
-          flags: MessageFlags.Ephemeral,
-        });
+      if (isDiscordUnknownInteractionError(error)) {
+        console.warn('Discord interaction is no longer valid (10062); skipping fallback response.');
+        return;
       }
+
+      console.error('Error handling interaction:', error);
+      await this.trySendInteractionErrorResponse(interaction);
+    }
+  }
+
+  private async trySendInteractionErrorResponse(interaction: Interaction): Promise<void> {
+    try {
+      if (!interaction.isRepliable() || interaction.replied || interaction.deferred) {
+        return;
+      }
+
+      await interaction.reply({
+        content: 'An error occurred while processing this interaction.',
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      if (isDiscordUnknownInteractionError(error)) {
+        console.warn(
+          'Discord interaction expired before the error response could be sent (10062).'
+        );
+        return;
+      }
+
+      console.warn('Failed to send interaction error response:', error);
     }
   }
 
