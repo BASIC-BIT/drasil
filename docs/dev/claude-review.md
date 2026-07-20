@@ -1,8 +1,9 @@
 # Claude PR Review
 
 Drasil runs Claude as an automatic pull request reviewer through
-`.github/workflows/claude-review.yml` for trusted same-repository PRs. The
-workflow is based on Perkcord's hardened subscription-backed reviewer.
+`.github/workflows/claude-review.yml` for trusted same-repository PRs targeting
+`main`. The workflow is based on Perkcord's hardened subscription-backed
+reviewer.
 
 ## Setup
 
@@ -36,8 +37,9 @@ review when needed.
   non-draft pull request.
 - Add the `skip-claude-review` label to cancel queued or in-flight Claude work
   through `.github/workflows/claude-review-control.yml` and mark the sticky
-  comment as skipped for the current commit. Removing the label re-enables
-  review on the next eligible pull request event.
+  comment as skipped for the current commit. Pushes made while the label remains
+  applied also refresh that skipped notice to the new head. Removing the label
+  re-enables review on the next eligible pull request event.
 
 Fork, cross-repository, draft, bot-authored, and bot-triggered pull requests are
 skipped because the workflow uses a repository secret and the Claude action is
@@ -45,6 +47,8 @@ not configured with `allowed_bots`.
 
 The `synchronize` trigger reviews every subsequent commit. Workflow concurrency
 cancels older runs for the same pull request so only the latest head publishes.
+The control workflow intentionally uses the same repo-scoped concurrency group
+as the review workflow so adding the skip label cancels active review work.
 
 ## Security and Output
 
@@ -55,14 +59,25 @@ On follow-up runs it resets the comment to a queued notice for the current commi
 before review begins, so a completed review for an older head is never left
 looking current. Claude runs in a separate read-scoped job and returns Markdown;
 a later trusted job publishes that output only if the pull request head still
-matches the reviewed commit.
+matches the reviewed commit. If the final comment update is rejected, the
+publisher fails instead of leaving a green workflow with a queued-looking
+comment.
+
+Both workflows use `pull_request_target` restricted to PRs targeting `main`, so
+GitHub loads their definitions from the trusted base branch before granting a
+repository token or the Claude secret. The review job checks out the exact PR
+head with persisted credentials disabled, but it never executes repository
+scripts or actions from that checkout. Generated context lives under the runner
+temporary directory rather than a PR-controlled path.
 
 Claude is restricted to the `Read` tool and denied shell, file writes, edits,
 GitHub comment tools, `.git`, `/proc`, and runner credential/config paths. The
 checkout does not persist credentials. Pull-request-provided Claude hooks,
 skills, plugins, MCP servers, memory, and `CLAUDE.md` customizations are disabled
-by safe mode. Line-specific findings use file and line references in the sticky
-comment rather than independent review threads.
+by safe mode. The review contract is loaded with `git show` from the trusted
+base commit; a PR's edits to `REVIEW.md` are reviewed as diff content but cannot
+calibrate their own review. Line-specific findings use file and line references
+in the sticky comment rather than independent review threads.
 
 The Claude CLI is capped at 100 turns. If it hits the cap or fails to produce a
 review, treat the failed job and sticky-comment notice as missing review
@@ -75,6 +90,12 @@ reviewing the upstream release.
 The workflow intentionally does not expose `issue_comment` or
 `workflow_dispatch` review triggers. Review remains tied to pull request commits
 and the marker-owned sticky comment.
+
+Because `pull_request_target` only loads workflows already present on the base
+branch, the bootstrap PR that first introduces this workflow cannot exercise
+the final secret-backed path against its own head. Validate its workflow syntax
+and security locally, then confirm the first post-merge PR runs prepare,
+generation, and publishing successfully.
 
 ## Review Calibration
 
