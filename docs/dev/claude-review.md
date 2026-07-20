@@ -49,9 +49,11 @@ cancels older runs for the same pull request so only the latest head publishes.
 
 The workflow owns one top-level comment marked with
 `<!-- claude-pr-review -->`. A small write-scoped preparation job creates or
-finds that marker-owned comment. Claude runs in a separate read-scoped job and
-returns Markdown; a later trusted job publishes that output only if the pull
-request head still matches the reviewed commit.
+finds that marker-owned comment. On follow-up runs it resets the comment to a
+queued notice for the current commit before review begins, so a completed review
+for an older head is never left looking current. Claude runs in a separate
+read-scoped job and returns Markdown; a later trusted job publishes that output
+only if the pull request head still matches the reviewed commit.
 
 Claude is restricted to the `Read` tool and denied shell, file writes, edits,
 GitHub comment tools, `.git`, `/proc`, and runner credential/config paths. The
