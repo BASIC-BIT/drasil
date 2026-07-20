@@ -110,21 +110,21 @@ If the user says "Reset the database", run `npm run db:reset:local`.
   exploratory, migration, provider, or production-impact checks that reviewers cannot infer from
   required CI/status checks.
 - Resolve PR review threads (including AI reviewer threads) before merge.
-- Prefer AI-assisted reviews (Copilot + Greptile) and recycle loops; keep critical context in the PR.
+- Prefer AI-assisted reviews (Claude + Copilot + Greptile) and recycle loops; keep critical context in the PR.
 - Do not merge immediately when checks turn green. After all required checks pass, wait a few
   minutes, then re-fetch PR comments, reviews, and review threads before merging because Copilot
   and other AI reviewers can post delayed recycle-pass comments after CI is already green.
 
 ## AI Review Recycle Loop
 
-When PRs trigger AI reviewers (Greptile/Copilot/Codex), treat their feedback as suggestions, not ground truth.
+When PRs trigger AI reviewers (Claude/Greptile/Copilot/Codex), treat their feedback as suggestions, not ground truth.
 
 - For each comment/thread: validate it against the repo context + intent before changing code.
 - Prefer replying in-thread with what you changed (or why you didn’t), then mark the thread resolved.
 - Keep CI green while iterating; when possible run `npm run check:ci` locally.
 - Before every merge, perform a final AI-review sweep even if all checks passed: wait briefly,
   run `gh pr view <pr> --comments --json comments,reviews`, inspect inline review threads/comments,
-  and only merge after confirming Copilot, Greptile, Codex, and human comments are addressed or
+  and only merge after confirming Claude, Copilot, Greptile, Codex, and human comments are addressed or
   intentionally acknowledged.
 
 Common pitfalls:
