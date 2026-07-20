@@ -68,16 +68,19 @@ GitHub loads their definitions from the trusted base branch before granting a
 repository token or the Claude secret. The review job checks out the exact PR
 head with persisted credentials disabled, but it never executes repository
 scripts or actions from that checkout. Generated context lives under the runner
-temporary directory rather than a PR-controlled path.
+temporary directory rather than a PR-controlled path, and that exact directory
+is explicitly added to Claude's readable roots.
 
-Claude is restricted to the `Read` tool and denied shell, file writes, edits,
-GitHub comment tools, `.git`, `/proc`, and runner credential/config paths. The
-checkout does not persist credentials. Pull-request-provided Claude hooks,
-skills, plugins, MCP servers, memory, and `CLAUDE.md` customizations are disabled
-by safe mode. The review contract is loaded with `git show` from the trusted
-base commit; a PR's edits to `REVIEW.md` are reviewed as diff content but cannot
-calibrate their own review. Line-specific findings use file and line references
-in the sticky comment rather than independent review threads.
+Claude is restricted to the `Read` tool, which is pre-authorized for the
+noninteractive review. The generated runner-temporary context directory is the
+only extra readable root added beyond the checkout. Shell, file writes, edits,
+GitHub comment tools, `.git`, `/proc`, and runner credential/config paths remain
+denied. The checkout does not persist credentials. Pull-request-provided Claude
+hooks, skills, plugins, MCP servers, memory, and `CLAUDE.md` customizations are
+disabled by safe mode. The review contract is loaded with `git show` from the
+trusted base commit; a PR's edits to `REVIEW.md` are reviewed as diff content
+but cannot calibrate their own review. Line-specific findings use file and line
+references in the sticky comment rather than independent review threads.
 
 The Claude CLI is capped at 100 turns. If it hits the cap or fails to produce a
 review, treat the failed job and sticky-comment notice as missing review
