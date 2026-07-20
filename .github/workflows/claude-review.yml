@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ format('claude-review-{0}', github.event.pull_request.number) }}
-  cancel-in-progress: true
+  group: ${{ contains(github.event.pull_request.labels.*.name, 'skip-claude-review') && format('claude-review-skipped-noop-{0}', github.run_id) || format('claude-review-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-claude-review') }}
 
 jobs:
   prepare-comment:
@@ -61,6 +61,8 @@ jobs:
 
           cat > "$body_file" <<EOF
           ${STICKY_MARKER}
+          [AGENT]
+
           ## Claude Review
 
           Claude review is queued for commit \`${PR_HEAD_SHA}\`.
@@ -348,11 +350,15 @@ jobs:
             printf '%s' "${REVIEW_MARKDOWN_B64}" | base64 -d > "$review_file"
             {
               echo "${STICKY_MARKER}"
+              echo "[AGENT]"
+              echo
               grep -vF "${STICKY_MARKER}" "$review_file" || true
             } > "$body_file"
           else
             cat > "$body_file" <<EOF
           ${STICKY_MARKER}
+          [AGENT]
+
           ## Claude Review
 
           Claude review did not complete for commit \`${PR_HEAD_SHA}\`.

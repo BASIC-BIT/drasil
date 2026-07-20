@@ -35,8 +35,9 @@ review when needed.
 - Open, update, reopen, or mark ready for review on a trusted same-repository,
   non-draft pull request.
 - Add the `skip-claude-review` label to cancel queued or in-flight Claude work
-  through `.github/workflows/claude-review-control.yml`. Removing the label
-  re-enables review on the next eligible pull request event.
+  through `.github/workflows/claude-review-control.yml` and mark the sticky
+  comment as skipped for the current commit. Removing the label re-enables
+  review on the next eligible pull request event.
 
 Fork, cross-repository, draft, bot-authored, and bot-triggered pull requests are
 skipped because the workflow uses a repository secret and the Claude action is
@@ -48,12 +49,13 @@ cancels older runs for the same pull request so only the latest head publishes.
 ## Security and Output
 
 The workflow owns one top-level comment marked with
-`<!-- claude-pr-review -->`. A small write-scoped preparation job creates or
-finds that marker-owned comment. On follow-up runs it resets the comment to a
-queued notice for the current commit before review begins, so a completed review
-for an older head is never left looking current. Claude runs in a separate
-read-scoped job and returns Markdown; a later trusted job publishes that output
-only if the pull request head still matches the reviewed commit.
+`<!-- claude-pr-review -->` and visibly attributes its content with `[AGENT]`.
+A small write-scoped preparation job creates or finds that marker-owned comment.
+On follow-up runs it resets the comment to a queued notice for the current commit
+before review begins, so a completed review for an older head is never left
+looking current. Claude runs in a separate read-scoped job and returns Markdown;
+a later trusted job publishes that output only if the pull request head still
+matches the reviewed commit.
 
 Claude is restricted to the `Read` tool and denied shell, file writes, edits,
 GitHub comment tools, `.git`, `/proc`, and runner credential/config paths. The
