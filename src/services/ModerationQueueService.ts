@@ -352,10 +352,11 @@ export class ModerationQueueService implements IModerationQueueService {
   }
 
   public async deletePendingScreeningMember(serverId: string, userId: string): Promise<void> {
-    const items = await this.moderationQueueRepository.listByServerAndTypes(serverId, [
-      ModerationQueueItemType.PENDING_SCREENING_MEMBER,
-    ]);
-    await this.deleteQueueItems(items.filter((item) => item.user_id === userId));
+    const item = await this.moderationQueueRepository.findByPendingScreeningMember(
+      serverId,
+      userId
+    );
+    await this.deleteQueueItems(item ? [item] : []);
   }
 
   public async recordSupportThreadAttention(
@@ -837,6 +838,9 @@ export class ModerationQueueService implements IModerationQueueService {
           ? (fetchedChannel as unknown as QueueTextChannel)
           : null;
     } catch (error) {
+      if (this.isUnknownDiscordResource(error)) {
+        return true;
+      }
       console.warn(`Failed to fetch live moderation queue channel for item ${item.id}:`, error);
       return false;
     }

@@ -339,6 +339,7 @@ const buildService = (
     observedAlerts?: DetectionEvent[];
     queueRepository?: FakeModerationQueueRepository;
     channel?: FakeDiscordChannel;
+    channelFetchError?: unknown;
   } = {}
 ) => {
   const server = input.server ?? buildServer();
@@ -361,7 +362,12 @@ const buildService = (
   } as unknown as IDetectionEventsRepository;
   const client = {
     channels: {
-      fetch: jest.fn(async (channelId: string) => (channelId === channel.id ? channel : null)),
+      fetch: jest.fn(async (channelId: string) => {
+        if (input.channelFetchError !== undefined) {
+          throw input.channelFetchError;
+        }
+        return channelId === channel.id ? channel : null;
+      }),
     },
   } as unknown as Client;
 
@@ -566,6 +572,52 @@ describe('ModerationQueueService', () => {
 
     expect(channel.sentMessages[0].delete).toHaveBeenCalledTimes(2);
     expect(queueRepository.items).toHaveLength(0);
+    warnSpy.mockRestore();
+  });
+
+  it('clears a case queue pointer when its Discord channel no longer exists', async () => {
+    const queueRepository = new FakeModerationQueueRepository();
+    await queueRepository.upsert({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      itemType: ModerationQueueItemType.CASE_MIRROR,
+      verificationEventId: 'case-1',
+      queueChannelId: 'deleted-channel',
+      queueMessageId: 'deleted-message',
+    });
+    const { service } = buildService({
+      queueRepository,
+      channelFetchError: Object.assign(new Error('Unknown Channel'), { code: 10003 }),
+    });
+
+    await service.deleteCaseMirror('case-1');
+
+    expect(queueRepository.items).toHaveLength(0);
+  });
+
+  it('retains a case queue pointer when the Discord channel fetch fails transiently', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const queueRepository = new FakeModerationQueueRepository();
+    await queueRepository.upsert({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      itemType: ModerationQueueItemType.CASE_MIRROR,
+      verificationEventId: 'case-1',
+      queueChannelId: 'queue-channel',
+      queueMessageId: 'queue-message',
+    });
+    const { service } = buildService({
+      queueRepository,
+      channelFetchError: new Error('Temporary Discord failure'),
+    });
+
+    await service.deleteCaseMirror('case-1');
+
+    expect(queueRepository.items).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to fetch live moderation queue channel'),
+      expect.any(Error)
+    );
     warnSpy.mockRestore();
   });
 
