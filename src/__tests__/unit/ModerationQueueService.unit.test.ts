@@ -43,9 +43,9 @@ class FakeDiscordChannel {
   public readonly sentMessages: FakeDiscordMessage[] = [];
   public readonly messages = {
     fetch: jest.fn(async (messageId: string) => {
-      const message = this.sentMessages.find((entry) => entry.id === messageId);
+      const message = this.sentMessages.find((entry) => entry.id === messageId && !entry.deleted);
       if (!message) {
-        throw new Error(`Message ${messageId} not found`);
+        throw Object.assign(new Error(`Message ${messageId} not found`), { code: 10008 });
       }
       return message as unknown as Message;
     }),
@@ -84,6 +84,16 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
     );
   }
 
+  async listByCase(verificationEventId: string): Promise<ModerationQueueItem[]> {
+    return this.items
+      .filter(
+        (item) =>
+          item.item_type === ModerationQueueItemType.CASE_MIRROR &&
+          item.verification_event_id === verificationEventId
+      )
+      .map((item) => ({ ...item }));
+  }
+
   async findByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem | null> {
     return this.clone(
       this.items.find(
@@ -92,6 +102,22 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
           item.detection_event_id === detectionEventId
       ) ?? null
     );
+  }
+
+  async listByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem[]> {
+    return this.items
+      .filter(
+        (item) =>
+          item.item_type === ModerationQueueItemType.OBSERVED_ALERT_MIRROR &&
+          item.detection_event_id === detectionEventId
+      )
+      .map((item) => ({ ...item }));
+  }
+
+  async listByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]> {
+    return this.items
+      .filter((item) => item.report_intake_id === reportIntakeId)
+      .map((item) => ({ ...item }));
   }
 
   async findByPendingScreeningMember(
@@ -204,34 +230,6 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
     return { ...deleted };
   }
 
-  async deleteByCase(verificationEventId: string): Promise<ModerationQueueItem[]> {
-    return this.deleteMatching((item) => item.verification_event_id === verificationEventId);
-  }
-
-  async deleteByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem[]> {
-    return this.deleteMatching(
-      (item) =>
-        item.item_type === ModerationQueueItemType.OBSERVED_ALERT_MIRROR &&
-        item.detection_event_id === detectionEventId
-    );
-  }
-
-  async deleteByPendingScreeningMember(
-    serverId: string,
-    userId: string
-  ): Promise<ModerationQueueItem[]> {
-    return this.deleteMatching(
-      (item) =>
-        item.item_type === ModerationQueueItemType.PENDING_SCREENING_MEMBER &&
-        item.server_id === serverId &&
-        item.user_id === userId
-    );
-  }
-
-  async deleteByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]> {
-    return this.deleteMatching((item) => item.report_intake_id === reportIntakeId);
-  }
-
   private matches(
     item: ModerationQueueItem,
     data: Parameters<IModerationQueueRepository['upsert']>[0]
@@ -252,13 +250,6 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
         item.item_type === data.itemType &&
         item.source_thread_id === data.sourceThreadId)
     );
-  }
-
-  // eslint-disable-next-line no-unused-vars -- TypeScript requires a parameter name in this function type.
-  private deleteMatching(predicate: (item: ModerationQueueItem) => boolean): ModerationQueueItem[] {
-    const deleted = this.items.filter(predicate);
-    this.items = this.items.filter((item) => !predicate(item));
-    return deleted.map((item) => ({ ...item }));
   }
 
   private clone(item: ModerationQueueItem | null): ModerationQueueItem | null {
@@ -348,6 +339,7 @@ const buildService = (
     observedAlerts?: DetectionEvent[];
     queueRepository?: FakeModerationQueueRepository;
     channel?: FakeDiscordChannel;
+    channelFetchError?: unknown;
   } = {}
 ) => {
   const server = input.server ?? buildServer();
@@ -370,7 +362,12 @@ const buildService = (
   } as unknown as IDetectionEventsRepository;
   const client = {
     channels: {
-      fetch: jest.fn(async (channelId: string) => (channelId === channel.id ? channel : null)),
+      fetch: jest.fn(async (channelId: string) => {
+        if (input.channelFetchError !== undefined) {
+          throw input.channelFetchError;
+        }
+        return channelId === channel.id ? channel : null;
+      }),
     },
   } as unknown as Client;
 
@@ -558,5 +555,85 @@ describe('ModerationQueueService', () => {
       expect.any(Error)
     );
     warnSpy.mockRestore();
+  });
+
+  it('retains a case queue pointer when Discord deletion fails so reconciliation can retry', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { channel, queueRepository, service } = buildService();
+    await service.upsertCaseMirror(buildVerificationEvent());
+    channel.sentMessages[0].delete.mockRejectedValueOnce(new Error('Temporary Discord failure'));
+
+    await service.deleteCaseMirror('case-1');
+
+    expect(queueRepository.items).toHaveLength(1);
+    expect(queueRepository.items[0].queue_message_id).toBe(channel.sentMessages[0].id);
+
+    await service.deleteCaseMirror('case-1');
+
+    expect(channel.sentMessages[0].delete).toHaveBeenCalledTimes(2);
+    expect(queueRepository.items).toHaveLength(0);
+    warnSpy.mockRestore();
+  });
+
+  it('clears a case queue pointer when its Discord channel no longer exists', async () => {
+    const queueRepository = new FakeModerationQueueRepository();
+    await queueRepository.upsert({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      itemType: ModerationQueueItemType.CASE_MIRROR,
+      verificationEventId: 'case-1',
+      queueChannelId: 'deleted-channel',
+      queueMessageId: 'deleted-message',
+    });
+    const { service } = buildService({
+      queueRepository,
+      channelFetchError: Object.assign(new Error('Unknown Channel'), { code: 10003 }),
+    });
+
+    await service.deleteCaseMirror('case-1');
+
+    expect(queueRepository.items).toHaveLength(0);
+  });
+
+  it('retains a case queue pointer when the Discord channel fetch fails transiently', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const queueRepository = new FakeModerationQueueRepository();
+    await queueRepository.upsert({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      itemType: ModerationQueueItemType.CASE_MIRROR,
+      verificationEventId: 'case-1',
+      queueChannelId: 'queue-channel',
+      queueMessageId: 'queue-message',
+    });
+    const { service } = buildService({
+      queueRepository,
+      channelFetchError: new Error('Temporary Discord failure'),
+    });
+
+    await service.deleteCaseMirror('case-1');
+
+    expect(queueRepository.items).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to fetch live moderation queue channel'),
+      expect.any(Error)
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('runs the shared queue reconciliation at startup and once per day', async () => {
+    jest.useFakeTimers();
+    const { service } = buildService();
+    const syncSpy = jest.spyOn(service, 'syncAllActiveServerQueues').mockResolvedValue();
+
+    service.start();
+    expect(syncSpy).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+
+    jest.advanceTimersByTime(24 * 60 * 60 * 1000);
+    expect(syncSpy).toHaveBeenCalledTimes(2);
+
+    service.stop();
+    jest.useRealTimers();
   });
 });
