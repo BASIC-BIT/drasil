@@ -266,7 +266,7 @@ export class ConfigSubcommandHandler {
     settings: ReturnType<typeof getRoleGateSettings>
   ): string {
     return [
-      `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
+      `Case review enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
       `Honeypot role: ${settings.honeypotRoleId ? `<@&${settings.honeypotRoleId}>` : '`none`'}`,
       `Member access role: ${settings.memberAccessRoleId ? `<@&${settings.memberAccessRoleId}>` : '`none`'}`,
       `Honeypot response: \`${settings.honeypotResponseMode}\``,
