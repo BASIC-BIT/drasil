@@ -61,7 +61,8 @@ These are configured in GitHub settings (not in git):
 - Protect `main` so merges require PRs.
 - Require CI to pass before merging (the GitHub Actions workflow in `.github/workflows/ci.yml`).
 - If using Greptile status checks, optionally require the Greptile check before merging.
-- Keep Copilot + Greptile automated reviews enabled.
+- Keep Claude, Copilot, and Greptile automated reviews enabled. Claude setup and behavior are
+  documented in `docs/dev/claude-review.md`.
 
 ## AI review + recycle loops
 
@@ -70,6 +71,7 @@ We want each merge to have:
 - Automated CI checks passing.
 - Greptile review completed.
 - Copilot code review requested/completed.
+- Claude's latest sticky review comment checked when the repository secret is configured.
 
 Practical loop:
 
@@ -79,7 +81,8 @@ Practical loop:
    - Put the critical context in the PR description (or a pinned PR comment).
    - Use the PR template's "AI Review Packet" section.
 4. For a re-review after major changes, comment `@greptileai` on the PR.
-5. Apply fixes in a new commit, push, and repeat until green.
+5. After each push, reread Claude's marker-owned sticky comment because it updates in place.
+6. Apply fixes in a new commit, push, and repeat until green.
 
 ## Asking questions during reviews
 
