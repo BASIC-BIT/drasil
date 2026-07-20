@@ -300,7 +300,7 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
 
   private async sendAdminDigest(
     server: Server,
-    pendingCases: VerificationEvent[],
+    digestCases: VerificationEvent[],
     pendingScreeningDigest: PendingScreeningDigest,
     settings: ReturnType<typeof getCaseReviewReminderSettings>,
     now: Date
@@ -311,7 +311,7 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     }
 
     const digestPlans = new Map(
-      pendingCases.map((event) => [
+      digestCases.map((event) => [
         event.id,
         buildCaseReminderPlan(event, settings, now, {
           lastAdminDigestAt: now,
@@ -324,13 +324,13 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     const messages = this.buildReminderMessages(
       server.guild_id,
       channel.id,
-      this.sortPendingCasesForDigest(pendingCases, digestPlans),
+      this.sortPendingCasesForDigest(digestCases, digestPlans),
       digestPlans,
       now,
       pendingScreeningDigest,
       roleMentions ? `Daily moderation reminder ${roleMentions}` : 'Daily moderation reminder'
     );
-    const actionRow = this.createDigestActionRow(server.guild_id, pendingCases.length > 0);
+    const actionRow = this.createDigestActionRow(server.guild_id, digestCases.length > 0);
     let allMessagesSent = true;
 
     for (let index = 0; index < messages.length; index += 1) {
@@ -340,7 +340,7 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
           allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
           ...(actionRow ? { components: [actionRow] } : {}),
         });
-        await this.stampAdminDigestSent(server.guild_id, now, pendingCases.length > 0);
+        await this.stampAdminDigestSent(server.guild_id, now, digestCases.length > 0);
         continue;
       }
 

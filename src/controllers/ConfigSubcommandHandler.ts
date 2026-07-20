@@ -266,7 +266,7 @@ export class ConfigSubcommandHandler {
     settings: ReturnType<typeof getRoleGateSettings>
   ): string {
     return [
-      `Case review enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
+      `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
       `Honeypot role: ${settings.honeypotRoleId ? `<@&${settings.honeypotRoleId}>` : '`none`'}`,
       `Member access role: ${settings.memberAccessRoleId ? `<@&${settings.memberAccessRoleId}>` : '`none`'}`,
       `Honeypot response: \`${settings.honeypotResponseMode}\``,
@@ -1324,7 +1324,7 @@ export class ConfigSubcommandHandler {
     settings: ReturnType<typeof getCaseReviewReminderSettings>
   ): string {
     return [
-      `Enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
+      `Case review enabled: \`${settings.enabled ? 'yes' : 'no'}\``,
       `Stale threshold: \`${settings.staleHours}h\``,
       `Admin reminder repeat interval: \`${settings.repeatHours}h\``,
       `Very stale threshold: \`${settings.veryStaleDays}d\``,
