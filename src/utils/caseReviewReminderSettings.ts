@@ -5,6 +5,7 @@ export const CASE_REVIEW_REMINDER_STALE_HOURS_SETTING_KEY = 'case_review_reminde
 export const CASE_REVIEW_REMINDER_REPEAT_HOURS_SETTING_KEY = 'case_review_reminder_repeat_hours';
 export const CASE_REVIEW_VERY_STALE_DAYS_SETTING_KEY = 'case_review_very_stale_days';
 export const CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY = 'case_review_digest_last_sent_at';
+export const ADMIN_REMINDER_DIGEST_LAST_SENT_AT_SETTING_KEY = 'admin_reminder_digest_last_sent_at';
 
 export const DEFAULT_CASE_REVIEW_REMINDER_STALE_HOURS = 24;
 export const DEFAULT_CASE_REVIEW_REMINDER_REPEAT_HOURS = 24;

@@ -967,7 +967,8 @@ export default async function GuildSetupPage({ params }: PageProps) {
         <div>
           <h2>Case Review</h2>
           <p className="muted">
-            Stale-case reminders use the same cadence settings as `/config case-review`.
+            Stale-case and long-pending membership-screening notices share this rolling admin
+            reminder cadence. Disabling case review does not disable screening notices.
           </p>
         </div>
         <div className="actions">
@@ -993,7 +994,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
             />
           </div>
           <div className="field">
-            <label htmlFor="caseReviewReminderRepeatHours">Repeat reminder hours</label>
+            <label htmlFor="caseReviewReminderRepeatHours">Admin reminder repeat hours</label>
             <input
               defaultValue={caseReviewReminderRepeatHours}
               id="caseReviewReminderRepeatHours"

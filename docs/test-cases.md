@@ -50,9 +50,16 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
   - Calls Discord ban and updates `server_member` to BANNED.
   - Updates `verification_event` and resolves thread when one exists.
 - `CaseReviewReminderService`
-  - Sends one grouped admin digest per repeat window.
+  - Sends one grouped admin reminder batch per repeat window.
+  - Combines case review and newly due long-pending membership-screening sections with
+    one responder-role mention.
+  - Sends a screening-only batch when no stale cases exist and keeps screening queue
+    reconciliation running while notification delivery waits for the next window.
+  - Keeps case-review and pending-screening enable flags independent.
+  - Marks a membership-screening episode notified only after its batch is delivered.
   - Shows next user reminder timestamps using the same scheduling logic that sends reminders.
-  - Moves user reminders to the end of the admin review window when they collide with a digest.
+  - Moves user reminders to the end of the admin review window when they collide with a
+    batch that includes case review.
   - Stops user reminders after target response or the very-stale reminder limit.
 - `RoleGateService`
   - Supports honeypot-only, member-access-only, and combined role-gate setups.

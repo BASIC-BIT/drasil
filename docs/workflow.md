@@ -155,13 +155,22 @@ snapshot with profile asset metadata, exact image hashes when fetchable, concise
 profile-image descriptions, stored message context, and recent detection history.
 This snapshot is moderator evidence only and does not make automatic decisions.
 
-## Case review reminders
+## Daily moderation reminders
 
 `CaseReviewReminderService` runs every 15 minutes and uses a daily, opinionated
-case-review workflow by default.
+moderation workflow by default.
 
-- Admin stale-case digests post to the admin channel at most once per server repeat
-  window. The default stale threshold and repeat cadence are 24 hours.
+- Admin reminder batches post to the admin channel at most once per server repeat
+  window. The default stale-case threshold and rolling repeat cadence are 24 hours.
+- A batch can contain case review, newly due long-pending membership-screening members,
+  or both. A screening-only batch is sent when no stale cases exist, and case responder
+  roles are mentioned only in the first message when a batch needs continuations.
+- Long-pending screening members continue to synchronize with the moderation queue on
+  every service tick. Their Discord notification waits for the next shared reminder
+  window and is sent once per pending episode.
+- Case review and pending-screening alerts retain independent enable settings. The
+  case-review repeat interval supplies the shared admin reminder cadence even when the
+  case-review section is disabled.
 - Digests group pending cases as fresh, stale, and very stale. Very stale cases are
   cases beyond the configured day threshold, defaulting to 3 days, and remain pending
   for moderator review.
@@ -171,9 +180,9 @@ case-review workflow by default.
 - User reminders run every 24 hours until the very-stale day threshold or until the
   target user responds. The first target-user reply is mirrored to admin evidence
   and sends a one-time admin-log notification so staff can respond quickly.
-- User reminders do not post inside the one-hour admin review window after a stale
-  digest. If a reminder would collide with that window, it is moved to the end of
-  the window and the digest shows the same next-reminder timestamp.
+- User reminders do not post inside the one-hour admin review window after a batch that
+  includes case review. If a reminder would collide with that window, it is moved to
+  the end of the window and the digest shows the same next-reminder timestamp.
 
 ## Manual resolved-thread sweep
 

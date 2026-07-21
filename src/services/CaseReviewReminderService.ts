@@ -8,6 +8,7 @@ import { IVerificationEventRepository } from '../repositories/VerificationEventR
 import { Server, ServerMember, VerificationEvent, VerificationStatus } from '../repositories/types';
 import { CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID } from '../utils/caseReviewDigestCustomIds';
 import {
+  ADMIN_REMINDER_DIGEST_LAST_SENT_AT_SETTING_KEY,
   CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY,
   getCaseReviewReminderSettings,
 } from '../utils/caseReviewReminderSettings';
@@ -28,9 +29,19 @@ import { REPORT_REVIEW_THREAD_TYPE, VERIFICATION_THREAD_TYPE_METADATA_KEY } from
 const CASE_REVIEW_REMINDER_INTERVAL_MS = 15 * 60 * 1000;
 const CASE_REVIEW_REMINDER_MAX_VISIBLE_CASES = 10;
 const CASE_REVIEW_DIGEST_MESSAGE_MAX_LENGTH = 1900;
-const CASE_REVIEW_DIGEST_CONTINUED_HEADING = 'Case review reminder continued';
+const ADMIN_REMINDER_DIGEST_CONTINUED_HEADING = 'Daily moderation reminder continued';
 const PENDING_SCREENING_DIGEST_MAX_MEMBERS = 25;
 const PENDING_SCREENING_QUEUE_SYNC_MAX_MEMBERS = 100;
+
+interface PendingScreeningDigest {
+  readonly members: ServerMember[];
+  readonly thresholdDays: number;
+}
+
+interface AdminDigestDelivery {
+  readonly sent: boolean;
+  readonly allMessagesSent: boolean;
+}
 
 export interface ICaseReviewReminderService {
   start(): void;
@@ -100,26 +111,24 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
   }
 
   private async processServer(server: Server, now: Date): Promise<void> {
-    await this.processLongPendingScreeningMembers(server, now);
-
+    const pendingScreeningDigest = await this.collectLongPendingScreeningMembers(server, now);
     const settings = getCaseReviewReminderSettings(server.settings);
-    if (!settings.enabled) {
-      return;
-    }
-
-    const pendingCases = await this.verificationEventRepository.findPendingByServer(
-      server.guild_id
-    );
-    const lastAdminDigestAt = this.parseDate(
+    const pendingCases = settings.enabled
+      ? await this.verificationEventRepository.findPendingByServer(server.guild_id)
+      : [];
+    const lastCaseReviewDigestAt = this.parseDate(
       server.settings[CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]
     );
+    const lastAdminDigestAt =
+      this.parseDate(server.settings[ADMIN_REMINDER_DIGEST_LAST_SENT_AT_SETTING_KEY]) ??
+      lastCaseReviewDigestAt;
     let adminDigestSentAt: Date | null = null;
 
     const initialPlans = new Map(
       pendingCases.map((event) => [
         event.id,
         buildCaseReminderPlan(event, settings, now, {
-          lastAdminDigestAt,
+          lastAdminDigestAt: lastCaseReviewDigestAt,
           supportsUserReminder: this.isUserFacingSupportCase(event),
         }),
       ])
@@ -127,38 +136,54 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     const staleCases = pendingCases.filter(
       (event) => initialPlans.get(event.id)?.freshness !== 'fresh'
     );
+    const digestCases = staleCases.length > 0 ? pendingCases : [];
+    const hasAdminReminderContent =
+      digestCases.length > 0 || pendingScreeningDigest.members.length > 0;
     if (
-      staleCases.length > 0 &&
+      hasAdminReminderContent &&
       this.shouldSendDigest(lastAdminDigestAt, now, settings.repeatHours)
     ) {
-      const digestSent = await this.sendAdminDigest(server, pendingCases, settings, now).catch(
-        (error) => {
-          console.warn(`Failed to send case review digest for guild ${server.guild_id}:`, error);
-          return false;
-        }
-      );
+      const delivery = await this.sendAdminDigest(
+        server,
+        digestCases,
+        pendingScreeningDigest,
+        settings,
+        now
+      ).catch((error) => {
+        console.warn(`Failed to send admin reminder digest for guild ${server.guild_id}:`, error);
+        return { sent: false, allMessagesSent: false };
+      });
 
-      if (digestSent) {
+      if (delivery.sent && digestCases.length > 0) {
         adminDigestSentAt = now;
+      }
+
+      if (delivery.allMessagesSent && pendingScreeningDigest.members.length > 0) {
+        await this.markPendingScreeningDigestSent(server, pendingScreeningDigest.members, now);
       }
     }
 
-    await this.processUserThreadReminders(
-      pendingCases,
-      settings,
-      now,
-      adminDigestSentAt ?? lastAdminDigestAt
-    );
+    if (settings.enabled) {
+      await this.processUserThreadReminders(
+        pendingCases,
+        settings,
+        now,
+        adminDigestSentAt ?? lastCaseReviewDigestAt
+      );
+    }
   }
 
-  private async processLongPendingScreeningMembers(server: Server, now: Date): Promise<void> {
+  private async collectLongPendingScreeningMembers(
+    server: Server,
+    now: Date
+  ): Promise<PendingScreeningDigest> {
+    const settings = getPendingScreeningSettings(server.settings);
     if (!this.serverMemberRepository) {
-      return;
+      return { members: [], thresholdDays: settings.longPendingDays };
     }
 
-    const settings = getPendingScreeningSettings(server.settings);
     if (!settings.enabled) {
-      return;
+      return { members: [], thresholdDays: settings.longPendingDays };
     }
 
     const thresholdAt = new Date(now.getTime() - settings.longPendingDays * 24 * 60 * 60 * 1000);
@@ -190,27 +215,23 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
         thresholdAt,
         PENDING_SCREENING_DIGEST_MAX_MEMBERS
       );
-    if (digestMembers.length === 0) {
-      return;
-    }
 
-    const sent = await this.sendPendingScreeningDigest(
-      server,
-      digestMembers,
-      settings.longPendingDays,
-      now
-    ).catch((error) => {
-      console.warn(`Failed to send pending screening digest for guild ${server.guild_id}:`, error);
-      return false;
-    });
-    if (!sent) {
+    return { members: digestMembers, thresholdDays: settings.longPendingDays };
+  }
+
+  private async markPendingScreeningDigestSent(
+    server: Server,
+    members: ServerMember[],
+    now: Date
+  ): Promise<void> {
+    if (!this.serverMemberRepository) {
       return;
     }
 
     await this.serverMemberRepository
       .markDiscordMemberPendingDigestSent(
         server.guild_id,
-        digestMembers.map((member) => member.user_id),
+        members.map((member) => member.user_id),
         now
       )
       .catch((error) => {
@@ -221,50 +242,13 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       });
   }
 
-  private async sendPendingScreeningDigest(
-    server: Server,
-    members: ServerMember[],
-    thresholdDays: number,
-    now: Date
-  ): Promise<boolean> {
-    const channel = await this.configService.getAdminChannel(server.guild_id);
-    if (!channel) {
-      return false;
-    }
-
-    const roleIds = this.presentationBuilder.getCaseNotificationRoleIds(server);
-    const messages = this.splitDigestLines(
-      this.buildPendingScreeningDigestLines(
-        members,
-        thresholdDays,
-        now,
-        this.presentationBuilder.formatRoleMentions(roleIds)
-      )
-    );
-
-    for (let index = 0; index < messages.length; index += 1) {
-      await channel.send({
-        content: messages[index],
-        allowedMentions: this.presentationBuilder.createAdminAllowedMentions(
-          index === 0 ? roleIds : []
-        ),
-      });
-    }
-
-    return messages.length > 0;
-  }
-
   private buildPendingScreeningDigestLines(
     members: ServerMember[],
     thresholdDays: number,
-    now: Date,
-    roleMentions = ''
+    now: Date
   ): string[] {
-    const heading = roleMentions
-      ? `Membership screening reminder ${roleMentions}`
-      : 'Membership screening reminder';
     const lines = [
-      heading,
+      'Membership screening',
       `${members.length} member${members.length === 1 ? '' : 's'} crossed the ${thresholdDays}-day Discord membership screening/onboarding threshold. This digest is sent once per pending episode; moderation queue items remain until screening clears or the member leaves.`,
       '',
     ];
@@ -316,17 +300,18 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
 
   private async sendAdminDigest(
     server: Server,
-    pendingCases: VerificationEvent[],
+    digestCases: VerificationEvent[],
+    pendingScreeningDigest: PendingScreeningDigest,
     settings: ReturnType<typeof getCaseReviewReminderSettings>,
     now: Date
-  ): Promise<boolean> {
+  ): Promise<AdminDigestDelivery> {
     const channel = await this.configService.getAdminChannel(server.guild_id);
     if (!channel) {
-      return false;
+      return { sent: false, allMessagesSent: false };
     }
 
     const digestPlans = new Map(
-      pendingCases.map((event) => [
+      digestCases.map((event) => [
         event.id,
         buildCaseReminderPlan(event, settings, now, {
           lastAdminDigestAt: now,
@@ -335,23 +320,27 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       ])
     );
     const roleIds = this.presentationBuilder.getCaseNotificationRoleIds(server);
+    const roleMentions = this.presentationBuilder.formatRoleMentions(roleIds);
     const messages = this.buildReminderMessages(
       server.guild_id,
       channel.id,
-      this.sortPendingCasesForDigest(pendingCases, digestPlans),
+      this.sortPendingCasesForDigest(digestCases, digestPlans),
       digestPlans,
       now,
-      this.presentationBuilder.formatRoleMentions(roleIds)
+      pendingScreeningDigest,
+      roleMentions ? `Daily moderation reminder ${roleMentions}` : 'Daily moderation reminder'
     );
+    const actionRow = this.createDigestActionRow(server.guild_id, digestCases.length > 0);
+    let allMessagesSent = true;
 
     for (let index = 0; index < messages.length; index += 1) {
       if (index === 0) {
         await channel.send({
           content: messages[index],
           allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
-          components: [this.createDigestActionRow(server.guild_id)],
+          ...(actionRow ? { components: [actionRow] } : {}),
         });
-        await this.stampAdminDigestSent(server.guild_id, now);
+        await this.stampAdminDigestSent(server.guild_id, now, digestCases.length > 0);
         continue;
       }
 
@@ -361,23 +350,30 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
           allowedMentions: this.presentationBuilder.createAdminAllowedMentions([]),
         })
         .catch((error) => {
+          allMessagesSent = false;
           console.warn(
-            `Failed to send continuation case review digest for guild ${server.guild_id}:`,
+            `Failed to send continuation admin reminder digest for guild ${server.guild_id}:`,
             error
           );
         });
     }
 
-    return messages.length > 0;
+    return { sent: messages.length > 0, allMessagesSent };
   }
 
-  private async stampAdminDigestSent(guildId: string, now: Date): Promise<void> {
+  private async stampAdminDigestSent(
+    guildId: string,
+    now: Date,
+    includesCaseReview: boolean
+  ): Promise<void> {
     try {
+      const sentAt = now.toISOString();
       await this.configService.updateServerSettings(guildId, {
-        [CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]: now.toISOString(),
+        [ADMIN_REMINDER_DIGEST_LAST_SENT_AT_SETTING_KEY]: sentAt,
+        ...(includesCaseReview ? { [CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]: sentAt } : {}),
       });
     } catch (error) {
-      console.error(`Failed to stamp case review digest metadata for ${guildId}:`, error);
+      console.error(`Failed to stamp admin reminder digest metadata for ${guildId}:`, error);
     }
   }
 
@@ -387,10 +383,19 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     events: VerificationEvent[],
     plans: Map<string, CaseReminderPlan>,
     now: Date,
-    heading = 'Case review reminder'
+    pendingScreeningDigest: PendingScreeningDigest,
+    heading = 'Daily moderation reminder'
   ): string[] {
     return this.splitDigestLines(
-      this.buildReminderMessageLines(guildId, adminChannelId, events, plans, now, heading)
+      this.buildReminderMessageLines(
+        guildId,
+        adminChannelId,
+        events,
+        plans,
+        now,
+        pendingScreeningDigest,
+        heading
+      )
     );
   }
 
@@ -400,59 +405,77 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     events: VerificationEvent[],
     plans: Map<string, CaseReminderPlan>,
     now: Date,
-    heading = 'Case review reminder'
+    pendingScreeningDigest: PendingScreeningDigest,
+    heading = 'Daily moderation reminder'
   ): string[] {
     const groupedEvents = this.groupEventsByFreshness(events, plans);
     const staleCount = groupedEvents.stale.length;
     const veryStaleCount = groupedEvents.very_stale.length;
-    const lines = [
-      `There ${events.length === 1 ? 'is' : 'are'} ${events.length} pending case${events.length === 1 ? '' : 's'} needing review: ${groupedEvents.fresh.length} fresh, ${staleCount} stale, ${veryStaleCount} very stale.`,
-    ];
+    const lines: string[] = [];
     if (heading) {
-      lines.unshift(heading);
+      lines.push(heading);
     }
 
-    let remainingVisibleCases = CASE_REVIEW_REMINDER_MAX_VISIBLE_CASES;
+    if (events.length > 0) {
+      lines.push(
+        '',
+        'Case review',
+        `There ${events.length === 1 ? 'is' : 'are'} ${events.length} pending case${events.length === 1 ? '' : 's'} needing review: ${groupedEvents.fresh.length} fresh, ${staleCount} stale, ${veryStaleCount} very stale.`
+      );
 
-    remainingVisibleCases = this.appendCaseGroup(
-      lines,
-      'Very stale - awaiting moderator review',
-      groupedEvents.very_stale,
-      plans,
-      guildId,
-      adminChannelId,
-      now,
-      remainingVisibleCases
-    );
-    remainingVisibleCases = this.appendCaseGroup(
-      lines,
-      'Stale - waiting on review or user response',
-      groupedEvents.stale,
-      plans,
-      guildId,
-      adminChannelId,
-      now,
-      remainingVisibleCases
-    );
-    this.appendCaseGroup(
-      lines,
-      'Fresh - pending but not stale yet',
-      groupedEvents.fresh,
-      plans,
-      guildId,
-      adminChannelId,
-      now,
-      remainingVisibleCases
-    );
+      let remainingVisibleCases = CASE_REVIEW_REMINDER_MAX_VISIBLE_CASES;
 
-    if (events.length > CASE_REVIEW_REMINDER_MAX_VISIBLE_CASES) {
-      lines.push('', 'Open the case selector to review additional pending cases.');
+      remainingVisibleCases = this.appendCaseGroup(
+        lines,
+        'Very stale - awaiting moderator review',
+        groupedEvents.very_stale,
+        plans,
+        guildId,
+        adminChannelId,
+        now,
+        remainingVisibleCases
+      );
+      remainingVisibleCases = this.appendCaseGroup(
+        lines,
+        'Stale - waiting on review or user response',
+        groupedEvents.stale,
+        plans,
+        guildId,
+        adminChannelId,
+        now,
+        remainingVisibleCases
+      );
+      this.appendCaseGroup(
+        lines,
+        'Fresh - pending but not stale yet',
+        groupedEvents.fresh,
+        plans,
+        guildId,
+        adminChannelId,
+        now,
+        remainingVisibleCases
+      );
+
+      if (events.length > CASE_REVIEW_REMINDER_MAX_VISIBLE_CASES) {
+        lines.push('', 'Open the case selector to review additional pending cases.');
+      }
+
+      lines.push(
+        '',
+        `User-facing support reminders are sent every ${SUPPORT_THREAD_REMINDER_INTERVAL_HOURS}h until the very-stale threshold. Very stale cases remain pending for moderator review; use Admin Actions to verify, kick, ban, or close after review.`
+      );
     }
 
-    lines.push(
-      '',
-      `User-facing support reminders are sent every ${SUPPORT_THREAD_REMINDER_INTERVAL_HOURS}h until the very-stale threshold. Very stale cases remain pending for moderator review; use Admin Actions to verify, kick, ban, or close after review.`
-    );
+    if (pendingScreeningDigest.members.length > 0) {
+      lines.push(
+        '',
+        ...this.buildPendingScreeningDigestLines(
+          pendingScreeningDigest.members,
+          pendingScreeningDigest.thresholdDays,
+          now
+        )
+      );
+    }
 
     return lines;
   }
@@ -468,10 +491,13 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
         candidateLines.join('\n').length > CASE_REVIEW_DIGEST_MESSAGE_MAX_LENGTH
       ) {
         messages.push(currentLines.join('\n'));
-        currentLines = [CASE_REVIEW_DIGEST_CONTINUED_HEADING];
+        currentLines = [ADMIN_REMINDER_DIGEST_CONTINUED_HEADING];
       }
 
-      if (currentLines.length === 1 && currentLines[0] === CASE_REVIEW_DIGEST_CONTINUED_HEADING) {
+      if (
+        currentLines.length === 1 &&
+        currentLines[0] === ADMIN_REMINDER_DIGEST_CONTINUED_HEADING
+      ) {
         if (line === '') {
           continue;
         }
@@ -677,13 +703,20 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     return `source: https://discord.com/channels/${guildId}/${sourceChannelId}/${sourceMessageId}`;
   }
 
-  private createDigestActionRow(guildId: string): ActionRowBuilder<ButtonBuilder> {
-    const buttons = [
-      new ButtonBuilder()
-        .setCustomId(CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID)
-        .setLabel('Open Cases')
-        .setStyle(ButtonStyle.Primary),
-    ];
+  private createDigestActionRow(
+    guildId: string,
+    hasCases: boolean
+  ): ActionRowBuilder<ButtonBuilder> | null {
+    const buttons: ButtonBuilder[] = [];
+
+    if (hasCases) {
+      buttons.push(
+        new ButtonBuilder()
+          .setCustomId(CASE_REVIEW_DIGEST_OPEN_CUSTOM_ID)
+          .setLabel('Open Cases')
+          .setStyle(ButtonStyle.Primary)
+      );
+    }
 
     const webQueueUrl = buildAdminModerationInboxUrl(guildId);
     if (webQueueUrl) {
@@ -692,7 +725,9 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       );
     }
 
-    return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
+    return buttons.length > 0
+      ? new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)
+      : null;
   }
 
   private readString(value: unknown): string | null {

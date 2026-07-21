@@ -11,7 +11,10 @@ import {
 } from '../../repositories/types';
 import { CaseReviewReminderService } from '../../services/CaseReviewReminderService';
 import type { IModerationQueueService } from '../../services/ModerationQueueService';
-import { CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY } from '../../utils/caseReviewReminderSettings';
+import {
+  ADMIN_REMINDER_DIGEST_LAST_SENT_AT_SETTING_KEY,
+  CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY,
+} from '../../utils/caseReviewReminderSettings';
 
 const buildServer = (settings: Server['settings']): Server => ({
   guild_id: 'guild-1',
@@ -189,20 +192,26 @@ describe('CaseReviewReminderService (unit)', () => {
     }
   });
 
-  it('sends a one-time admin digest and queue item when a member crosses the screening threshold', async () => {
+  it('sends a screening-only daily admin batch when a member crosses the threshold', async () => {
     const now = new Date('2026-06-03T12:00:00.000Z');
     const member = buildPendingScreeningMember({
       user_id: 'screening-user-1',
       discord_member_pending_since: new Date('2026-05-25T10:00:00.000Z'),
     });
     const adminSend = jest.fn().mockResolvedValue(undefined);
-    const { service, moderationQueueService, serverMemberRepository } = buildService({
-      server: buildServer({ pending_screening_long_pending_days: 7 }),
-      pendingCases: [],
-      longPendingScreeningMembers: [member],
-      pendingScreeningDigestMembers: [member],
-      adminSend,
-    });
+    const { service, configService, moderationQueueService, serverMemberRepository } = buildService(
+      {
+        server: buildServer({ pending_screening_long_pending_days: 7 }),
+        pendingCases: [
+          buildPendingCase(new Date('2026-06-03T10:00:00.000Z'), null, {
+            id: 'fresh-case',
+          }),
+        ],
+        longPendingScreeningMembers: [member],
+        pendingScreeningDigestMembers: [member],
+        adminSend,
+      }
+    );
 
     await service.runOnce(now);
 
@@ -212,11 +221,15 @@ describe('CaseReviewReminderService (unit)', () => {
       7,
       now
     );
-    expect(adminSend).toHaveBeenCalledWith({
-      content: expect.stringContaining('Membership screening reminder'),
-      allowedMentions: expect.any(Object),
-    });
+    expect(adminSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Daily moderation reminder'),
+        allowedMentions: expect.any(Object),
+      })
+    );
     const content = adminSend.mock.calls[0][0].content;
+    expect(content).toContain('Membership screening');
+    expect(content).not.toContain('Case review');
     expect(content).toContain(
       'crossed the 7-day Discord membership screening/onboarding threshold'
     );
@@ -227,6 +240,9 @@ describe('CaseReviewReminderService (unit)', () => {
       ['screening-user-1'],
       now
     );
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      [ADMIN_REMINDER_DIGEST_LAST_SENT_AT_SETTING_KEY]: now.toISOString(),
+    });
   });
 
   it('keeps already-digested long-pending screening members queued without another digest', async () => {
@@ -253,6 +269,180 @@ describe('CaseReviewReminderService (unit)', () => {
       now
     );
     expect(adminSend).not.toHaveBeenCalled();
+    expect(serverMemberRepository.markDiscordMemberPendingDigestSent).not.toHaveBeenCalled();
+  });
+
+  it('defers newly due screening members until the shared repeat window elapses', async () => {
+    const now = new Date('2026-06-03T12:00:00.000Z');
+    const member = buildPendingScreeningMember();
+    const adminSend = jest.fn().mockResolvedValue(undefined);
+    const { service, configService, moderationQueueService, serverMemberRepository } = buildService(
+      {
+        server: buildServer({
+          case_review_reminder_repeat_hours: 24,
+          [CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]: '2026-06-03T10:00:00.000Z',
+        }),
+        pendingCases: [],
+        longPendingScreeningMembers: [member],
+        pendingScreeningDigestMembers: [member],
+        adminSend,
+      }
+    );
+
+    await service.runOnce(now);
+
+    expect(moderationQueueService.upsertPendingScreeningMembers).toHaveBeenCalledWith(
+      'guild-1',
+      [member],
+      7,
+      now
+    );
+    expect(adminSend).not.toHaveBeenCalled();
+    expect(configService.updateServerSettings).not.toHaveBeenCalled();
+    expect(serverMemberRepository.markDiscordMemberPendingDigestSent).not.toHaveBeenCalled();
+  });
+
+  it('batches case review and membership screening with one responder-role mention', async () => {
+    const now = new Date('2026-06-03T12:00:00.000Z');
+    const staleCase = buildPendingCase(new Date('2026-06-02T10:00:00.000Z'));
+    const member = buildPendingScreeningMember();
+    const adminSend = jest.fn().mockResolvedValue(undefined);
+    const { service, serverMemberRepository } = buildService({
+      server: buildServer({
+        case_review_reminder_stale_hours: 24,
+        case_review_reminder_repeat_hours: 24,
+        case_responder_role_ids: ['123456789012345678'],
+        case_responder_routing_mode: 'ping_only',
+      }),
+      pendingCases: [staleCase],
+      longPendingScreeningMembers: [member],
+      pendingScreeningDigestMembers: [member],
+      adminSend,
+    });
+
+    await service.runOnce(now);
+
+    expect(adminSend).toHaveBeenCalledTimes(1);
+    const payload = adminSend.mock.calls[0][0];
+    expect(payload.content).toContain('Daily moderation reminder <@&123456789012345678>');
+    expect(payload.content).toContain('Case review');
+    expect(payload.content).toContain('Membership screening');
+    expect(payload.allowedMentions.roles).toEqual(['123456789012345678']);
+    expect(payload.components).toHaveLength(1);
+    expect(serverMemberRepository.markDiscordMemberPendingDigestSent).toHaveBeenCalledWith(
+      'guild-1',
+      [member.user_id],
+      now
+    );
+  });
+
+  it('does not delay a due support-thread reminder after a screening-only batch', async () => {
+    const now = new Date('2026-06-03T12:00:00.000Z');
+    const staleCase = buildPendingCase(new Date('2026-06-02T10:00:00.000Z'));
+    const adminSend = jest.fn().mockResolvedValue(undefined);
+    const threadSend = jest.fn().mockResolvedValue(undefined);
+    const { service, verificationEventRepository } = buildService({
+      server: buildServer({
+        case_review_reminder_stale_hours: 24,
+        case_review_reminder_repeat_hours: 24,
+        [ADMIN_REMINDER_DIGEST_LAST_SENT_AT_SETTING_KEY]: '2026-06-03T10:00:00.000Z',
+      }),
+      pendingCases: [staleCase],
+      adminSend,
+      threadSend,
+    });
+
+    await service.runOnce(now);
+
+    expect(adminSend).not.toHaveBeenCalled();
+    expect(threadSend).toHaveBeenCalledWith(
+      expect.objectContaining({ content: 'Ticket reminder: 26h elapsed. <@user-1> See above.' })
+    );
+    expect(verificationEventRepository.update).toHaveBeenCalledWith(
+      staleCase.id,
+      expect.any(Object),
+      { touchUpdatedAt: false }
+    );
+  });
+
+  it('keeps screening batches enabled when case review reminders are disabled', async () => {
+    const now = new Date('2026-06-03T12:00:00.000Z');
+    const member = buildPendingScreeningMember();
+    const adminSend = jest.fn().mockResolvedValue(undefined);
+    const { service, verificationEventRepository, serverMemberRepository } = buildService({
+      server: buildServer({ case_review_reminders_enabled: false }),
+      pendingCases: [buildPendingCase(new Date('2026-06-02T10:00:00.000Z'))],
+      longPendingScreeningMembers: [member],
+      pendingScreeningDigestMembers: [member],
+      adminSend,
+    });
+
+    await service.runOnce(now);
+
+    expect(verificationEventRepository.findPendingByServer).not.toHaveBeenCalled();
+    expect(adminSend).toHaveBeenCalledTimes(1);
+    expect(adminSend.mock.calls[0][0].content).toContain('Membership screening');
+    expect(adminSend.mock.calls[0][0].content).not.toContain('Case review');
+    expect(serverMemberRepository.markDiscordMemberPendingDigestSent).toHaveBeenCalled();
+  });
+
+  it('does not mark screening episodes when the daily admin batch fails', async () => {
+    const now = new Date('2026-06-03T12:00:00.000Z');
+    const member = buildPendingScreeningMember();
+    const adminSend = jest.fn().mockRejectedValue(new Error('Discord unavailable'));
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { service, configService, serverMemberRepository } = buildService({
+      server: buildServer({}),
+      pendingCases: [],
+      longPendingScreeningMembers: [member],
+      pendingScreeningDigestMembers: [member],
+      adminSend,
+    });
+
+    try {
+      await service.runOnce(now);
+    } finally {
+      consoleWarn.mockRestore();
+    }
+
+    expect(adminSend).toHaveBeenCalledTimes(1);
+    expect(configService.updateServerSettings).not.toHaveBeenCalled();
+    expect(serverMemberRepository.markDiscordMemberPendingDigestSent).not.toHaveBeenCalled();
+  });
+
+  it('does not mark screening episodes when a continuation message fails', async () => {
+    const now = new Date('2026-06-03T12:00:00.000Z');
+    const members = Array.from({ length: 25 }, (_, index) =>
+      buildPendingScreeningMember({
+        user_id: `screening-user-${String(index + 1).padStart(2, '0')}`,
+      })
+    );
+    const adminSend = jest
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new Error('Discord continuation unavailable'));
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { service, configService, serverMemberRepository } = buildService({
+      server: buildServer({}),
+      pendingCases: [],
+      longPendingScreeningMembers: members,
+      pendingScreeningDigestMembers: members,
+      adminSend,
+    });
+
+    try {
+      await service.runOnce(now);
+    } finally {
+      consoleWarn.mockRestore();
+    }
+
+    expect(adminSend.mock.calls.length).toBeGreaterThan(1);
+    expect(configService.updateServerSettings).toHaveBeenCalledWith(
+      'guild-1',
+      expect.objectContaining({
+        [ADMIN_REMINDER_DIGEST_LAST_SENT_AT_SETTING_KEY]: now.toISOString(),
+      })
+    );
     expect(serverMemberRepository.markDiscordMemberPendingDigestSent).not.toHaveBeenCalled();
   });
 
@@ -317,6 +507,7 @@ describe('CaseReviewReminderService (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith(
       'guild-1',
       expect.objectContaining({
+        [ADMIN_REMINDER_DIGEST_LAST_SENT_AT_SETTING_KEY]: now.toISOString(),
         [CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]: now.toISOString(),
       })
     );
@@ -354,7 +545,7 @@ describe('CaseReviewReminderService (unit)', () => {
     }
 
     for (const payload of payloads.slice(1)) {
-      expect(payload.content).toMatch(/^Case review reminder continued\n/);
+      expect(payload.content).toMatch(/^Daily moderation reminder continued\n/);
       expect(payload.allowedMentions.roles).toEqual([]);
       expect(payload.components).toBeUndefined();
     }
@@ -388,6 +579,7 @@ describe('CaseReviewReminderService (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith(
       'guild-1',
       expect.objectContaining({
+        [ADMIN_REMINDER_DIGEST_LAST_SENT_AT_SETTING_KEY]: now.toISOString(),
         [CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]: now.toISOString(),
       })
     );
