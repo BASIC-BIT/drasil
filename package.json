@@ -106,12 +106,11 @@
     "openai": "^4.89.0",
     "pg": "^8.20.0",
     "posthog-node": "^5.35.1",
-    "prisma": "^7.8.0",
+    "prisma": "^7.9.0",
     "reflect-metadata": "^0.2.2",
     "zod": "^3.25.76"
   },
   "overrides": {
-    "@hono/node-server": "1.19.13",
     "@opentelemetry/core": "2.8.0",
     "@opentelemetry/exporter-trace-otlp-proto": "0.219.0",
     "@opentelemetry/otlp-exporter-base": "0.219.0",
