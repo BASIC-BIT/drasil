@@ -1,0 +1,311 @@
+name: Manual Vercel Preview Deploy
+
+# Deliberately has no `push` or `pull_request` trigger. A preview deploy only
+# happens when a human asks for one: either the PR-comment workflow dispatches
+# this, someone dispatches it from the Actions UI, or another workflow calls it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_number:
+        description: 'Pull request number to deploy'
+        required: false
+        type: string
+      git_ref:
+        description: 'Branch, tag, or SHA to deploy when no pull_number is supplied'
+        required: false
+        type: string
+      comment_id:
+        description: 'Issue comment id that triggered the preview'
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      pull_number:
+        description: 'Pull request number to deploy'
+        required: false
+        type: string
+      git_ref:
+        description: 'Branch, tag, or SHA to deploy when no pull_number is supplied'
+        required: false
+        type: string
+      comment_id:
+        description: 'Issue comment id that triggered the preview'
+        required: false
+        type: string
+    outputs:
+      deployment_url:
+        description: 'Preview deployment URL'
+        value: ${{ jobs.deploy-preview.outputs.deployment_url }}
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  deploy-preview:
+    runs-on: ubuntu-latest
+    outputs:
+      deployment_url: ${{ steps.deploy.outputs.deployment_url }}
+    concurrency:
+      group: vercel-preview-${{ inputs.pull_number || inputs.git_ref || github.run_id }}
+      cancel-in-progress: true
+    steps:
+      - name: Resolve deploy target
+        id: pr
+        uses: actions/github-script@v9
+        env:
+          INPUT_PULL_NUMBER: ${{ inputs.pull_number }}
+          INPUT_GIT_REF: ${{ inputs.git_ref }}
+          INPUT_COMMENT_ID: ${{ inputs.comment_id }}
+        with:
+          script: |
+            const pullNumberInput = String(process.env.INPUT_PULL_NUMBER || '').trim();
+            const gitRefInput = String(process.env.INPUT_GIT_REF || '').trim();
+
+            core.setOutput('comment_id', String(process.env.INPUT_COMMENT_ID || ''));
+
+            if (!pullNumberInput && !gitRefInput) {
+              core.setFailed('Supply either pull_number or git_ref.');
+              return;
+            }
+
+            if (!pullNumberInput) {
+              if (gitRefInput) {
+                core.info(`Deploying git_ref ${gitRefInput} with no PR context.`);
+              }
+              let commit;
+              try {
+                ({ data: commit } = await github.rest.repos.getCommit({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: gitRefInput,
+                }));
+              } catch (error) {
+                const status = error.status ? ` (HTTP ${error.status})` : '';
+                core.setFailed(
+                  `Unable to resolve git_ref \`${gitRefInput}\` as a branch, tag, or commit${status}.`,
+                );
+                return;
+              }
+
+              core.setOutput('head_sha', commit.sha);
+              core.setOutput('head_ref', gitRefInput);
+              core.setOutput('pr_number', '');
+              return;
+            }
+
+            if (gitRefInput) {
+              core.warning('Both pull_number and git_ref were supplied; git_ref is ignored.');
+            }
+
+            const pullNumber = Number(pullNumberInput);
+            if (!Number.isInteger(pullNumber) || pullNumber <= 0) {
+              core.setFailed('pull_number must be a positive integer.');
+              return;
+            }
+
+            const { data: pull } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullNumber,
+            });
+
+            if (pull.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              core.setFailed(
+                'Manual preview deploys only run for PR branches inside this repository. Fork PRs must be mirrored to a trusted branch first.',
+              );
+              return;
+            }
+
+            if (pull.state !== 'open') {
+              core.setFailed(`Manual preview deploys only run for open PRs. This PR is ${pull.state}.`);
+              return;
+            }
+
+            core.setOutput('head_sha', pull.head.sha);
+            core.setOutput('head_ref', pull.head.ref);
+            core.setOutput('pr_number', String(pull.number));
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Validate Vercel configuration
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          : "${VERCEL_TOKEN:?Set VERCEL_TOKEN secret}"
+          : "${VERCEL_ORG_ID:?Set VERCEL_ORG_ID variable}"
+          : "${VERCEL_PROJECT_ID:?Set VERCEL_PROJECT_ID variable}"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@50.32.5
+
+      - name: Pull preview environment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: vercel pull --yes --environment=preview --token="$VERCEL_TOKEN"
+
+      - name: Build preview deployment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: vercel build --token="$VERCEL_TOKEN"
+
+      - name: Deploy preview
+        id: deploy
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          vercel deploy --prebuilt --archive=tgz --token="$VERCEL_TOKEN" > deployment-url.txt
+          DEPLOYMENT_URL="$(awk 'NF { line=$0 } END { gsub(/\r/, "", line); print line }' deployment-url.txt)"
+          : "${DEPLOYMENT_URL:?Unable to determine deployment URL}"
+          echo "deployment_url=$DEPLOYMENT_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Post preview comment
+        if: success() && steps.pr.outputs.pr_number != ''
+        uses: actions/github-script@v9
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        with:
+          script: |
+            const marker = '<!-- manual-vercel-preview-comment -->';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+
+            const body = [
+              marker,
+              '## Manual Vercel Preview',
+              `Branch \`${process.env.HEAD_REF}\`.`,
+              `Preview URL: ${process.env.DEPLOYMENT_URL}`,
+              '',
+              'Comment `@drasil preview` or `/vercel-preview` on this PR for a fresh preview deployment.',
+            ].join('\n');
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+
+            const existing = comments.find(
+              (comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker),
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Add rocket reaction
+        if: success() && steps.pr.outputs.comment_id != ''
+        uses: actions/github-script@v9
+        env:
+          COMMENT_ID: ${{ steps.pr.outputs.comment_id }}
+        with:
+          script: |
+            try {
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: Number(process.env.COMMENT_ID),
+                content: 'rocket',
+              });
+            } catch (error) {
+              core.warning(`Unable to add success reaction: ${error}`);
+            }
+
+      - name: Report failure on PR
+        if: failure() && steps.pr.outputs.pr_number != ''
+        uses: actions/github-script@v9
+        env:
+          COMMENT_ID: ${{ steps.pr.outputs.comment_id }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        with:
+          script: |
+            const marker = '<!-- manual-vercel-preview-failure-comment -->';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = [
+              marker,
+              'Manual Vercel preview deploy failed.',
+              `Check the workflow logs: ${runUrl}`,
+            ].join('\n');
+
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number,
+                per_page: 100,
+              });
+              const existing = comments.find(
+                (comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker),
+              );
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              }
+            } catch (error) {
+              core.warning(`Unable to post failure comment: ${error}`);
+            }
+
+            try {
+              const commentId = Number(process.env.COMMENT_ID || '0');
+              if (commentId > 0) {
+                await github.rest.reactions.createForIssueComment({
+                  owner,
+                  repo,
+                  comment_id: commentId,
+                  content: 'confused',
+                });
+              }
+            } catch (error) {
+              core.warning(`Unable to add failure reaction: ${error}`);
+            }
+
+      - name: Deployment summary
+        if: always() && steps.pr.outcome == 'success'
+        shell: bash
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## Manual Vercel Preview"
+            echo "- Ref: \`$HEAD_REF\`"
+            echo "- Commit SHA: \`$HEAD_SHA\`"
+            echo "- Preview URL: ${DEPLOYMENT_URL:-not produced}"
+            echo "- Workflow run: $RUN_URL"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -212,6 +212,16 @@ GitHub Actions production deploy variables/secrets:
 
 In Vercel, set the project root to `apps/web`. The checked-in `apps/web/vercel.json` disables Git-triggered deploys so GitHub Actions remains the production authority.
 
+## On-Demand Preview Deploys
+
+Preview deploys are opt-in per PR. Nothing deploys a preview automatically.
+
+- Comment `@drasil preview` or `/vercel-preview` on a PR. `.github/workflows/vercel-preview-comment.yml` checks the commenter's `author_association` (`OWNER`, `MEMBER`, or `COLLABORATOR`), rejects fork branches and closed PRs, then dispatches the deploy workflow.
+- `.github/workflows/vercel-preview-deploy.yml` runs on `workflow_dispatch` and `workflow_call` only. It has no `push` or `pull_request` trigger, so it cannot fire on its own. It exposes `deployment_url` as a `workflow_call` output for jobs that need to run against a preview.
+- It reuses the same `VERCEL_TOKEN` / `VERCEL_ORG_ID` / `VERCEL_PROJECT_ID` as the production deploy, and the same repo-root `vercel pull|build|deploy` invocation, differing only in `--environment=preview` and the absence of `--prod`.
+
+Before the first preview run, confirm in the Vercel project that the Preview environment variables are scoped to Preview and do not inherit production values. `DATABASE_URL`, `DRASIL_WEB_BOT_TOKEN`, `DRASIL_SESSION_SECRET`, and `DRASIL_OAUTH_ENCRYPTION_KEY` set to "All Environments" would point preview deployments at the production database and the live bot token.
+
 ## Day-One Quality Gates
 
 The web package starts with the same style of quality gates that proved useful in Perkcord and Chronote:

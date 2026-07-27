@@ -1,0 +1,130 @@
+name: Trigger Manual Vercel Preview
+
+on:
+  issue_comment:
+    types:
+      - created
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  queue-preview:
+    if: >-
+      ${{ github.event.issue.pull_request
+      && github.event.comment.user.type != 'Bot'
+      && (contains(github.event.comment.body, '@drasil preview')
+      || contains(github.event.comment.body, '/vercel-preview')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate trigger and load PR metadata
+        id: pr
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const allowedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+            const authorAssociation = context.payload.comment.author_association || 'NONE';
+            if (!allowedAssociations.has(authorAssociation)) {
+              core.setFailed(
+                `Manual preview deploys may only be triggered by trusted collaborators. Got: ${authorAssociation}`,
+              );
+              return;
+            }
+
+            const { data: pull } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            if (pull.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              core.setFailed(
+                'Manual preview deploys only run for PR branches inside this repository. Fork PRs must be mirrored to a trusted branch first.',
+              );
+              return;
+            }
+
+            if (pull.state !== 'open') {
+              core.setFailed(`Manual preview deploys only run for open PRs. This PR is ${pull.state}.`);
+              return;
+            }
+
+            core.setOutput('comment_id', String(context.payload.comment.id));
+            core.setOutput('pr_number', String(pull.number));
+
+      - name: Add eyes reaction
+        if: success()
+        uses: actions/github-script@v9
+        env:
+          COMMENT_ID: ${{ steps.pr.outputs.comment_id }}
+        with:
+          script: |
+            try {
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: Number(process.env.COMMENT_ID),
+                content: 'eyes',
+              });
+            } catch (error) {
+              core.warning(`Unable to add reaction: ${error}`);
+            }
+
+      - name: Dispatch preview deployment workflow
+        if: success()
+        uses: actions/github-script@v9
+        env:
+          COMMENT_ID: ${{ steps.pr.outputs.comment_id }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'vercel-preview-deploy.yml',
+              ref: context.payload.repository.default_branch,
+              inputs: {
+                pull_number: process.env.PR_NUMBER,
+                comment_id: process.env.COMMENT_ID,
+              },
+            });
+
+      - name: Report queue failure on PR
+        if: failure() && steps.pr.outcome == 'success'
+        uses: actions/github-script@v9
+        env:
+          COMMENT_ID: ${{ steps.pr.outputs.comment_id }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        with:
+          script: |
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              '<!-- manual-vercel-preview-queue-failure-comment -->',
+              'Manual Vercel preview request could not be queued.',
+              `Check the workflow logs: ${runUrl}`,
+            ].join('\n');
+
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number(process.env.PR_NUMBER),
+                body,
+              });
+            } catch (error) {
+              core.warning(`Unable to post queue failure comment: ${error}`);
+            }
+
+            try {
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: Number(process.env.COMMENT_ID),
+                content: 'confused',
+              });
+            } catch (error) {
+              core.warning(`Unable to add failure reaction: ${error}`);
+            }
