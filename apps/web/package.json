@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@drasil/contracts": "file:../../packages/contracts",
-    "next": "16.3.0-canary.6",
+    "next": "16.3.0-preview.9",
     "pg": "^8.20.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
