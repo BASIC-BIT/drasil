@@ -222,6 +222,8 @@ Preview deploys are opt-in per PR. Nothing deploys a preview automatically.
 
 Before the first preview run, confirm in the Vercel project that the Preview environment variables are scoped to Preview and do not inherit production values. `DATABASE_URL`, `DRASIL_WEB_BOT_TOKEN`, `DRASIL_SESSION_SECRET`, and `DRASIL_OAUTH_ENCRYPTION_KEY` set to "All Environments" would point preview deployments at the production database and the live bot token.
 
+This repository is public and the deploy workflow posts the preview URL as a PR comment, so a preview address becomes world-readable the moment it is produced. Confirm Vercel Deployment Protection is enabled for the Preview environment before the trigger is used. Without it, that published URL is an unauthenticated door to whatever the preview is wired to.
+
 ## Day-One Quality Gates
 
 The web package starts with the same style of quality gates that proved useful in Perkcord and Chronote:

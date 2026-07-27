@@ -41,7 +41,7 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: write
+  pull-requests: read
 
 jobs:
   deploy-preview:
@@ -71,6 +71,11 @@ jobs:
               return;
             }
 
+            // git_ref is trusted-operator-only and deliberately unguarded. Unlike the
+            // pull_number path below, it applies no same-repo check: repos.getCommit
+            // resolves commits anywhere in the fork network, so a fork SHA passed here
+            // will be checked out and built. Dispatching requires repo write access,
+            // so the only risk is a maintainer being handed a SHA to "just preview".
             if (!pullNumberInput) {
               if (gitRefInput) {
                 core.info(`Deploying git_ref ${gitRefInput} with no PR context.`);
