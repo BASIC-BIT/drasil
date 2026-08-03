@@ -563,7 +563,7 @@ describe('ReportInteractionHandler (unit)', () => {
     expect(reportIntakeService.openIntakeFromThread).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'You already have an open report thread: https://discord.com/channels/guild-1/existing-thread-1\nPlease continue there, or use the Close Report button in that thread if it was opened by mistake.',
+        'You already have an open report thread: https://discord.com/channels/guild-1/existing-thread-1\nPlease continue there. If it was opened by mistake, use the Close Report button there or send `close report` in the thread.',
     });
   });
 

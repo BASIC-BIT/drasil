@@ -910,11 +910,16 @@ export class ReportInteractionHandler {
   }
 
   private buildExistingReportIntakeMessage(guildId: string, threadId: string | null): string {
+    // Threads opened before the Close Report button shipped do not have one, so always offer the
+    // text fallback as well.
+    const cancelHint =
+      'If it was opened by mistake, use the Close Report button there or send `close report` in the thread.';
+
     if (threadId) {
-      return `You already have an open report thread: https://discord.com/channels/${guildId}/${threadId}\nPlease continue there, or use the Close Report button in that thread if it was opened by mistake.`;
+      return `You already have an open report thread: https://discord.com/channels/${guildId}/${threadId}\nPlease continue there. ${cancelHint}`;
     }
 
-    return 'You already have an open report intake. Please continue in the existing report thread, or use the Close Report button there if it was opened by mistake.';
+    return `You already have an open report intake. Please continue in the existing report thread. ${cancelHint}`;
   }
 
   private async deleteFailedReportIntakeThread(thread: ThreadChannel): Promise<void> {
