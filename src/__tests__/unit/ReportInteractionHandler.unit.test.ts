@@ -24,6 +24,7 @@ import {
   buildReportIntakeAdminActionsCustomId,
   buildReportIntakeAdminCloseCustomId,
   buildReportIntakeAdminConfirmCloseCustomId,
+  buildReportIntakeThreadCloseCustomId,
 } from '../../utils/reportIntakeAdminActions';
 import {
   REPORT_MESSAGE_MODAL_PREFIX,
@@ -562,7 +563,7 @@ describe('ReportInteractionHandler (unit)', () => {
     expect(reportIntakeService.openIntakeFromThread).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'You already have an open report thread: https://discord.com/channels/guild-1/existing-thread-1\nPlease continue there, or use /close-report in that thread if it was opened by mistake.',
+        'You already have an open report thread: https://discord.com/channels/guild-1/existing-thread-1\nPlease continue there. If it was opened by mistake, use the Close Report button there or send `close report` in the thread.',
     });
   });
 
@@ -877,6 +878,111 @@ describe('ReportInteractionHandler (unit)', () => {
       allowedMentions: { parse: [] },
     });
     expect(thread.setArchived).toHaveBeenCalledWith(true, 'Report intake closed');
+  });
+
+  describe('intake thread Close Report button', () => {
+    // Mirrors ReportIntakeService.closeIntakeForThread so the handler is tested against the real
+    // reporter-or-staff rule rather than a mock that always closes.
+    const closeLikeService = () =>
+      jest.fn(
+        async ({ closedById, closedByStaff }: { closedById: string; closedByStaff?: boolean }) =>
+          closedById === 'reporter-1' || closedByStaff === true
+            ? {
+                closed: true,
+                message: 'Report intake closed. No report has been filed.',
+                shouldArchiveThread: true,
+              }
+            : { closed: false, message: 'Only the reporter or staff can close this report intake.' }
+      );
+
+    const buildThreadCloseInteraction = (userId: string) => {
+      const thread = {
+        id: 'report-thread-1',
+        isThread: jest.fn().mockReturnValue(true),
+        send: jest.fn().mockResolvedValue(undefined),
+        archived: false,
+        setArchived: jest.fn().mockResolvedValue(undefined),
+      };
+      const interaction = buildInteraction(
+        buildReportIntakeThreadCloseCustomId('intake-1'),
+        'guild-1',
+        { id: userId } as User
+      );
+      (interaction as any).channel = thread;
+      (interaction as any).channelId = 'report-thread-1';
+      (interaction as any).message = { edit: jest.fn().mockResolvedValue(undefined) };
+      return { interaction, thread };
+    };
+
+    it('does not close the report when the clicker is neither the reporter nor staff', async () => {
+      const reportIntakeService = createReportIntakeService();
+      reportIntakeService.findIntakeById.mockResolvedValue(buildReportIntake());
+      reportIntakeService.closeIntakeForThread = closeLikeService() as any;
+      const handler = createHandler(reportIntakeService);
+      const { interaction, thread } = buildThreadCloseInteraction('bystander-1');
+
+      await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
+
+      expect(reportIntakeService.closeIntakeForThread).toHaveBeenCalledWith({
+        threadId: 'report-thread-1',
+        closedById: 'bystander-1',
+        closedByStaff: false,
+      });
+      expect(interaction.editReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: 'Only the reporter or staff can close this report intake.',
+        })
+      );
+      expect(thread.send).not.toHaveBeenCalled();
+      expect(thread.setArchived).not.toHaveBeenCalled();
+      expect((interaction.message as any).edit).not.toHaveBeenCalled();
+    });
+
+    it('lets the reporter close their own intake and retires the button', async () => {
+      const reportIntakeService = createReportIntakeService();
+      reportIntakeService.findIntakeById.mockResolvedValue(buildReportIntake());
+      reportIntakeService.closeIntakeForThread = closeLikeService() as any;
+      const handler = createHandler(reportIntakeService);
+      const { interaction, thread } = buildThreadCloseInteraction('reporter-1');
+
+      await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
+
+      expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+      expect(reportIntakeService.closeIntakeForThread).toHaveBeenCalledWith({
+        threadId: 'report-thread-1',
+        closedById: 'reporter-1',
+        closedByStaff: false,
+      });
+      expect(thread.send).toHaveBeenCalledWith({
+        content: 'Report intake closed. No report has been filed.',
+        allowedMentions: { parse: [] },
+      });
+      expect(thread.setArchived).toHaveBeenCalledWith(true, 'Report intake closed');
+      expect((interaction.message as any).edit).toHaveBeenCalledWith({ components: [] });
+    });
+
+    it('handles a click on an already-closed report without erroring', async () => {
+      const reportIntakeService = createReportIntakeService();
+      reportIntakeService.findIntakeById.mockResolvedValue(
+        buildReportIntake({ status: ReportIntakeStatus.CLOSED_BY_REPORTER })
+      );
+      reportIntakeService.closeIntakeForThread.mockResolvedValue({
+        closed: true,
+        message: 'This report intake is already closed. Archiving the thread now.',
+        shouldArchiveThread: true,
+      });
+      const handler = createHandler(reportIntakeService);
+      const { interaction, thread } = buildThreadCloseInteraction('reporter-1');
+
+      await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
+
+      expect(reportIntakeService.closeIntakeForThread).toHaveBeenCalledTimes(1);
+      expect(thread.send).toHaveBeenCalledWith({
+        content: 'This report intake is already closed. Archiving the thread now.',
+        allowedMentions: { parse: [] },
+      });
+      expect((interaction.message as any).edit).toHaveBeenCalledWith({ components: [] });
+    });
   });
 
   it('submits a confirmed report intake target through the user report workflow', async () => {

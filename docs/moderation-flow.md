@@ -38,7 +38,7 @@ flowchart LR
     TargetRejected -->|"Yes"| CollectEvidence
     TargetRejected -->|"No"| TargetConfirmed["Target confirmed"]
     TargetConfirmed --> SubmitIntakeReport["Submit report with intake evidence"]
-    CollectEvidence --> CloseIntake["/close-report or close report text"]
+    CollectEvidence --> CloseIntake["Close Report button or close report text"]
     CloseIntake --> IntakeClosed["Terminal: intake closed, no report filed"]
   end
 

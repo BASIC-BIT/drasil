@@ -114,11 +114,14 @@ The bot automatically registers the following slash commands during startup:
 - `/flaguser` - Manually flag a user for review
 - `/case` - Refresh, repair, and inspect active case notifications
 - `/audit` - Run moderation integrity audits
-- `/close-report` - Close legacy moderator-only report review threads
 - `/setupverification` - Legacy direct verification setup
 - `/setupreportbutton` - Legacy direct report-button setup
 
 Slash commands are automatically registered when the bot starts up. There's no need for manual registration.
+
+Report intake threads are closed with the **Close Report** button on the intake thread's opening
+message (usable by the reporter or report-intake staff), or through **Admin Actions -> Close Report**
+for moderators. The retired `/close-report` command did the same thing.
 
 ### Admin Channel Notifications
 

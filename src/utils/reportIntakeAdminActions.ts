@@ -7,6 +7,9 @@ const ACTION_TO_CODE = {
   close: 'c',
   confirm_close: 'cc',
   cancel: 'x',
+  // Rendered on the intake thread message itself, so the reporter can use it too.
+  // Authorization is still re-checked per click (reporter or report-intake staff).
+  thread_close: 'tc',
 } as const;
 
 const CODE_TO_ACTION = Object.fromEntries(
@@ -34,6 +37,10 @@ export function buildReportIntakeAdminConfirmCloseCustomId(intakeId: string): st
 
 export function buildReportIntakeAdminCancelCustomId(intakeId: string): string {
   return buildReportIntakeAdminActionCustomId('cancel', intakeId);
+}
+
+export function buildReportIntakeThreadCloseCustomId(intakeId: string): string {
+  return buildReportIntakeAdminActionCustomId('thread_close', intakeId);
 }
 
 export function isReportIntakeAdminActionCustomId(customId: string): boolean {

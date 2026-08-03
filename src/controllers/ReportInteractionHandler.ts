@@ -55,6 +55,8 @@ type ReportIntakeThreadChannel = Pick<ThreadChannel, 'id' | 'send'> &
 interface ReportIntakeAdminContext {
   intake: ReportIntake;
   thread: ReportIntakeThreadChannel | null;
+  /** Whether the clicking user passes the report-intake staff check for this guild. */
+  canModerate: boolean;
 }
 
 type ReportIntakeAdminResponseMode = 'reply' | 'update';
@@ -350,7 +352,7 @@ export class ReportInteractionHandler {
   ): Promise<void> {
     const parsed = parseReportIntakeAdminActionCustomId(customId);
     const responseMode: ReportIntakeAdminResponseMode =
-      parsed?.action === 'menu' || !parsed ? 'reply' : 'update';
+      !parsed || parsed.action === 'menu' || parsed.action === 'thread_close' ? 'reply' : 'update';
 
     try {
       if (!parsed) {
@@ -376,7 +378,10 @@ export class ReportInteractionHandler {
       const context = await this.resolveReportIntakeAdminContext(
         interaction,
         parsed.intakeId,
-        responseMode
+        responseMode,
+        // The in-thread close button is reporter-facing; closeIntakeForThread applies the
+        // reporter-or-staff rule itself, so do not gate the lookup on moderation permissions.
+        { requireModerator: parsed.action !== 'thread_close' }
       );
       if (!context) {
         return;
@@ -392,7 +397,10 @@ export class ReportInteractionHandler {
         return;
       }
 
-      await this.closeReportIntakeFromAdminAction(interaction, context);
+      const closed = await this.closeReportIntake(interaction, context);
+      if (closed && parsed.action === 'thread_close') {
+        await this.clearReportIntakeThreadButtons(interaction);
+      }
     } catch (error) {
       console.error('Error handling report intake admin action:', error);
       await this.respondToReportIntakeAdminInteraction(
@@ -602,7 +610,8 @@ export class ReportInteractionHandler {
   private async resolveReportIntakeAdminContext(
     interaction: ButtonInteraction,
     intakeId: string,
-    responseMode: ReportIntakeAdminResponseMode
+    responseMode: ReportIntakeAdminResponseMode,
+    options: { requireModerator: boolean } = { requireModerator: true }
   ): Promise<ReportIntakeAdminContext | null> {
     if (!this.reportIntakeService) {
       await this.respondToReportIntakeAdminInteraction(
@@ -654,7 +663,7 @@ export class ReportInteractionHandler {
       interaction.user.id,
       this.configService
     );
-    if (!canModerate) {
+    if (options.requireModerator && !canModerate) {
       await this.respondToReportIntakeAdminInteraction(
         interaction,
         { content: 'You need moderation permissions to use report admin actions.', components: [] },
@@ -669,7 +678,7 @@ export class ReportInteractionHandler {
         ? currentThread
         : await this.fetchReportIntakeThread(intake.thread_id);
 
-    return { intake, thread };
+    return { intake, thread, canModerate };
   }
 
   private async showReportIntakeAdminMenu(
@@ -720,17 +729,24 @@ export class ReportInteractionHandler {
     );
   }
 
-  private async closeReportIntakeFromAdminAction(
+  /**
+   * Single close path shared by the moderator confirmation flow and the in-thread Close Report
+   * button. Authorization is delegated to ReportIntakeService.closeIntakeForThread, which allows
+   * the reporter who owns the intake or a report-intake staff member.
+   *
+   * @returns whether the intake was closed (including "already closed", which is a no-op close)
+   */
+  private async closeReportIntake(
     interaction: ButtonInteraction,
     context: ReportIntakeAdminContext
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!this.reportIntakeService || !context.intake.thread_id) {
       await this.respondToReportIntakeAdminInteraction(
         interaction,
         { content: 'This report intake cannot be closed from this button.', components: [] },
         'update'
       );
-      return;
+      return false;
     }
 
     if (!context.thread) {
@@ -742,7 +758,7 @@ export class ReportInteractionHandler {
         },
         'update'
       );
-      return;
+      return false;
     }
 
     if (!interaction.deferred && !interaction.replied) {
@@ -752,7 +768,7 @@ export class ReportInteractionHandler {
     const result = await this.reportIntakeService.closeIntakeForThread({
       threadId: context.intake.thread_id,
       closedById: interaction.user.id,
-      closedByStaff: true,
+      closedByStaff: context.canModerate,
     });
 
     if (!result.closed) {
@@ -761,7 +777,7 @@ export class ReportInteractionHandler {
         { content: result.message, components: [] },
         'update'
       );
-      return;
+      return false;
     }
 
     await this.respondToReportIntakeAdminInteraction(
@@ -785,6 +801,23 @@ export class ReportInteractionHandler {
     if (result.shouldArchiveThread) {
       await this.archiveReportIntakeThread(context.thread, 'Report intake closed');
     }
+
+    return true;
+  }
+
+  /**
+   * Drop the buttons from the intake thread message so a closed report does not invite a second
+   * click. Best-effort: the close already succeeded by the time this runs.
+   */
+  private async clearReportIntakeThreadButtons(interaction: ButtonInteraction): Promise<void> {
+    const message = interaction.message as { edit?: (payload: unknown) => Promise<unknown> } | null;
+    if (typeof message?.edit !== 'function') {
+      return;
+    }
+
+    await message.edit({ components: [] }).catch((error) => {
+      console.warn('Failed to clear report intake thread buttons after close:', error);
+    });
   }
 
   private buildReportIntakeAdminMenuMessage(intake: ReportIntake): string {
@@ -877,11 +910,16 @@ export class ReportInteractionHandler {
   }
 
   private buildExistingReportIntakeMessage(guildId: string, threadId: string | null): string {
+    // Threads opened before the Close Report button shipped do not have one, so always offer the
+    // text fallback as well.
+    const cancelHint =
+      'If it was opened by mistake, use the Close Report button there or send `close report` in the thread.';
+
     if (threadId) {
-      return `You already have an open report thread: https://discord.com/channels/${guildId}/${threadId}\nPlease continue there, or use /close-report in that thread if it was opened by mistake.`;
+      return `You already have an open report thread: https://discord.com/channels/${guildId}/${threadId}\nPlease continue there. ${cancelHint}`;
     }
 
-    return 'You already have an open report intake. Please continue in the existing report thread, or use /close-report there if it was opened by mistake.';
+    return `You already have an open report intake. Please continue in the existing report thread. ${cancelHint}`;
   }
 
   private async deleteFailedReportIntakeThread(thread: ThreadChannel): Promise<void> {

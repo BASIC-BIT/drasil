@@ -8,7 +8,6 @@ import {
   RESTPostAPIApplicationCommandsJSONBody,
   PermissionFlagsBits,
   MessageFlags,
-  ThreadChannel,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject, optional } from 'inversify';
@@ -41,11 +40,9 @@ import { ReportCommandHandler } from './ReportCommandHandler';
 import { ReportInstructionsManager } from './ReportInstructionsManager';
 import { SetupCommandHandler } from './SetupCommandHandler';
 import { isUserInstallReportingEnabled } from '../utils/userInstallReporting';
-import { IReportIntakeService } from '../services/ReportIntakeService';
 import { IModerationQueueService } from '../services/ModerationQueueService';
 import { IIntegrityAuditService } from '../services/IntegrityAuditService';
 import { ICaseThreadClosureSweepService } from '../services/CaseThreadClosureSweepService';
-import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
 import { buildAdminGuildSetupUrl } from '../utils/publicWebLinks';
 import 'reflect-metadata';
 
@@ -94,7 +91,6 @@ export class CommandHandler implements ICommandHandler {
   private reportCommandHandler: ReportCommandHandler;
   private setupCommandHandler: SetupCommandHandler;
   private commands: RESTPostAPIApplicationCommandsJSONBody[];
-  private reportIntakeService?: IReportIntakeService;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -112,9 +108,6 @@ export class CommandHandler implements ICommandHandler {
     @inject(TYPES.CaseRoleLockdownService)
     @optional()
     caseRoleLockdownService?: ICaseRoleLockdownService,
-    @inject(TYPES.ReportIntakeService)
-    @optional()
-    reportIntakeService?: IReportIntakeService,
     @inject(TYPES.ModerationQueueService)
     @optional()
     moderationQueueService?: IModerationQueueService,
@@ -127,7 +120,6 @@ export class CommandHandler implements ICommandHandler {
   ) {
     this.client = client;
     this.configService = configService;
-    this.reportIntakeService = reportIntakeService;
     const resolvedProductAnalyticsService =
       productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.configSubcommandHandler = new ConfigSubcommandHandler(
@@ -252,10 +244,6 @@ export class CommandHandler implements ICommandHandler {
         await this.reportCommandHandler.handleSetupReportButtonCommand(interaction);
         break;
 
-      case 'close-report':
-        await this.handleCloseReportCommand(interaction);
-        break;
-
       default:
         await interaction.reply({
           content: `Unknown command: ${commandName}`,
@@ -309,70 +297,6 @@ export class CommandHandler implements ICommandHandler {
           content: `Unknown message command: ${interaction.commandName}`,
           flags: MessageFlags.Ephemeral,
         });
-    }
-  }
-
-  private async handleCloseReportCommand(interaction: ChatInputCommandInteraction): Promise<void> {
-    if (!interaction.guildId) {
-      await this.replyGuildInstallRequired(interaction);
-      return;
-    }
-
-    if (!this.reportIntakeService) {
-      await interaction.reply({
-        content: 'Report intake tracking is not available.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    const thread = this.getInteractionThread(interaction.channel);
-    if (!thread) {
-      await interaction.reply({
-        content: 'Use /close-report inside an open report intake thread.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    const guild = await this.client.guilds.fetch(interaction.guildId);
-    const result = await this.reportIntakeService.closeIntakeForThread({
-      threadId: thread.id,
-      closedById: interaction.user.id,
-      closedByStaff: await canModerateReportIntake(guild, interaction.user.id, this.configService),
-    });
-
-    if (result.closed) {
-      await interaction.reply({
-        content: result.message,
-        allowedMentions: { parse: [] },
-      });
-    } else {
-      await interaction.reply({
-        content: result.message,
-        flags: MessageFlags.Ephemeral,
-        allowedMentions: { parse: [] },
-      });
-    }
-
-    if (result.closed && result.shouldArchiveThread) {
-      await this.archiveReportIntakeThread(thread);
-    }
-  }
-
-  private getInteractionThread(
-    channel: ChatInputCommandInteraction['channel']
-  ): ThreadChannel | null {
-    return channel?.isThread() ? channel : null;
-  }
-
-  private async archiveReportIntakeThread(thread: ThreadChannel): Promise<void> {
-    try {
-      if (!thread.archived) {
-        await thread.setArchived(true, 'Report intake closed');
-      }
-    } catch (error) {
-      console.warn(`Failed to archive closed report intake thread ${thread.id}:`, error);
     }
   }
 

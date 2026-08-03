@@ -835,9 +835,16 @@ describe('ThreadManager (unit)', () => {
       },
     });
     const message = (thread.send as jest.Mock).mock.calls[0][0];
-    const button = message.components[0].toJSON().components[0];
-    expect(button.label).toBe('Admin Actions');
-    expect(parseReportIntakeAdminActionCustomId(button.custom_id)).toEqual({
+    const buttons = message.components[0].toJSON().components;
+    expect(buttons.map((button: { label: string }) => button.label)).toEqual([
+      'Close Report',
+      'Admin Actions',
+    ]);
+    expect(parseReportIntakeAdminActionCustomId(buttons[0].custom_id)).toEqual({
+      action: 'thread_close',
+      intakeId: 'intake-1',
+    });
+    expect(parseReportIntakeAdminActionCustomId(buttons[1].custom_id)).toEqual({
       action: 'menu',
       intakeId: 'intake-1',
     });
