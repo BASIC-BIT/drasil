@@ -38,7 +38,6 @@ describe('CommandHandler command catalog (unit)', () => {
       'audit',
       'flaguser',
       'case',
-      'close-report',
       'setupreportbutton',
     ]) {
       const command = commands.find((c) => c.name === name);
@@ -90,15 +89,11 @@ describe('CommandHandler command catalog (unit)', () => {
     );
   });
 
-  it('registers /close-report without default moderation permissions', () => {
+  it('no longer registers the retired /close-report command', () => {
     const { handler } = buildHandler();
     const commands = (handler as any).commands as any[];
-    const closeReportCommand = commands.find((c) => c.name === 'close-report');
 
-    expect(closeReportCommand).toBeDefined();
-    expect(closeReportCommand.default_member_permissions).toBeUndefined();
-    expect(closeReportCommand.integration_types).toEqual([ApplicationIntegrationType.GuildInstall]);
-    expect(closeReportCommand.contexts).toEqual([InteractionContextType.Guild]);
+    expect(commands.find((c) => c.name === 'close-report')).toBeUndefined();
   });
 
   it('registers case-role lockdown config commands', () => {

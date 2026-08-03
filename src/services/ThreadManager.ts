@@ -29,7 +29,10 @@ import {
 import { DetectionResult } from './DetectionOrchestrator';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
-import { buildReportIntakeAdminActionsCustomId } from '../utils/reportIntakeAdminActions';
+import {
+  buildReportIntakeAdminActionsCustomId,
+  buildReportIntakeThreadCloseCustomId,
+} from '../utils/reportIntakeAdminActions';
 
 export const VERIFICATION_THREAD_TYPE_METADATA_KEY = 'thread_type';
 export const VERIFICATION_THREAD_TYPE = 'verification';
@@ -316,7 +319,7 @@ export class ThreadManager implements IThreadManager {
         '',
         'Drasil will suggest possible report targets and ask for confirmation before submitting anything.',
         '',
-        'If this was opened by mistake, use /close-report in this thread.',
+        'If this was opened by mistake, use the Close Report button on this message.',
       ].join('\n')
     );
   }
@@ -1170,6 +1173,10 @@ export class ThreadManager implements IThreadManager {
       const components = reportIntakeId
         ? [
             new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder()
+                .setCustomId(buildReportIntakeThreadCloseCustomId(reportIntakeId))
+                .setLabel('Close Report')
+                .setStyle(ButtonStyle.Secondary),
               new ButtonBuilder()
                 .setCustomId(buildReportIntakeAdminActionsCustomId(reportIntakeId))
                 .setLabel('Admin Actions')

@@ -759,7 +759,62 @@ describe('ReportIntakeService', () => {
     expect(moderationQueueService.deleteReportThreadAttention).toHaveBeenCalledWith(intake.id);
   });
 
-  it('closes the current intake thread by slash command for reporter or staff', async () => {
+  it('refuses to close an intake thread for a user who is neither the reporter nor staff', async () => {
+    const { service, reportIntakeRepository, moderationQueueService } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+
+    const result = await service.closeIntakeForThread({
+      threadId: 'thread-1',
+      closedById: 'bystander-1',
+      closedByStaff: false,
+    });
+
+    const stored = await reportIntakeRepository.findById(intake.id);
+    expect(result).toEqual({
+      closed: false,
+      message: 'Only the reporter or staff can close this report intake.',
+    });
+    expect(stored?.status).toBe(ReportIntakeStatus.COLLECTING_EVIDENCE);
+    expect(stored?.closed_at).toBeNull();
+    expect(moderationQueueService.deleteReportThreadAttention).not.toHaveBeenCalled();
+  });
+
+  it('treats a repeated close of the same intake thread as a no-op', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+
+    const first = await service.closeIntakeForThread({
+      threadId: 'thread-1',
+      closedById: 'reporter-1',
+    });
+    const firstStored = await reportIntakeRepository.findById(intake.id);
+    const second = await service.closeIntakeForThread({
+      threadId: 'thread-1',
+      closedById: 'reporter-1',
+    });
+    const secondStored = await reportIntakeRepository.findById(intake.id);
+
+    expect(first.closed).toBe(true);
+    expect(second).toEqual({
+      closed: true,
+      message: 'This report intake is already closed. Archiving the thread now.',
+      shouldArchiveThread: true,
+    });
+    expect(secondStored?.status).toBe(ReportIntakeStatus.CLOSED_BY_REPORTER);
+    expect(secondStored?.closed_at).toEqual(firstStored?.closed_at);
+  });
+
+  it('closes the current intake thread from the close button for reporter or staff', async () => {
     const { service, reportIntakeRepository, moderationQueueService } = buildService();
     const intake = await service.openIntakeFromThread({
       serverId: 'guild-1',
@@ -789,7 +844,7 @@ describe('ReportIntakeService', () => {
     expect(moderationQueueService.deleteReportThreadAttention).toHaveBeenCalledWith(intake.id);
   });
 
-  it('archives submitted intake threads by slash command with closeout copy', async () => {
+  it('archives submitted intake threads from the close button with closeout copy', async () => {
     const { service, reportIntakeRepository, moderationQueueService } = buildService();
     const intake = await service.openIntakeFromThread({
       serverId: 'guild-1',

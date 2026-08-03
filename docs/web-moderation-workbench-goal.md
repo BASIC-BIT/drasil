@@ -435,9 +435,9 @@ Capture:
 
 Initial families to inventory:
 
-- Reports: `/report`, report context menus, report button intake,
-  `/close-report`, close/actioned/dismissed/false-positive, open case, kick, ban,
-  history, and undo.
+- Reports: `/report`, report context menus, report button intake, the intake
+  Close Report button, close/actioned/dismissed/false-positive, open case, kick,
+  ban, history, and undo.
 - Cases: `/case open`, context Open Case, `/flaguser`, verify, close no action,
   kick, ban, ban by ID, sync existing ban, repair/create thread, refresh, reopen,
   and history/member profile.
