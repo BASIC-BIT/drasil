@@ -71,7 +71,9 @@ We want each merge to have:
 - Automated CI checks passing.
 - Greptile review completed.
 - Copilot code review requested/completed.
-- Claude's latest sticky review comment checked when the repository secret is configured.
+- Claude's latest sticky review comment checked for every eligible trusted PR. The reviewer
+  retrieves the shared credential through the repository-bound AWS OIDC role described in
+  `docs/dev/claude-review.md`; Drasil has no repository copy.
 
 Practical loop:
 
