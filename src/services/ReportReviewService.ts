@@ -261,7 +261,8 @@ export class ReportReviewService {
       return 'cleared';
     } catch (error) {
       console.warn(
-        `[ReportReview] Failed to clear report-thread attention for intake ${reportIntakeId}:`,
+        '[ReportReview] Failed to clear report-thread attention for intake %s:',
+        reportIntakeId,
         error
       );
       return 'failed';

@@ -149,10 +149,12 @@ describe('ReportReviewService', () => {
 
   it('does not fail report closure when queue cleanup fails', async () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const cleanupError = new Error('Discord queue unavailable');
+    const reportId = 'report-%s-%j';
     const repository = new FakeReportReviewRepository();
     const queueRepository: ReportReviewQueueRepository = {
       deleteReportThreadAttention: jest.fn(async () => {
-        throw new Error('Discord queue unavailable');
+        throw cleanupError;
       }),
     };
     const queueMessageDeleter: QueueMessageDeleter = {
@@ -163,7 +165,7 @@ describe('ReportReviewService', () => {
     const result = await service.closeSubmittedReport({
       actor,
       action: 'mark_false_positive',
-      reportId: 'report-1',
+      reportId,
       serverId: 'guild-1',
       now,
     });
@@ -174,8 +176,9 @@ describe('ReportReviewService', () => {
       queueCleanupStatus: 'failed',
     });
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to clear report-thread attention'),
-      expect.any(Error)
+      '[ReportReview] Failed to clear report-thread attention for intake %s:',
+      reportId,
+      cleanupError
     );
     warnSpy.mockRestore();
   });
