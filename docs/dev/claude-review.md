@@ -7,22 +7,20 @@ reviewer.
 
 ## Setup
 
-Generate a Claude Code subscription OAuth token locally:
+The canonical Claude Code subscription OAuth token lives in BASIC's AWS Secrets
+Manager secret `/basic/shared/claude-code-oauth-token` in `us-east-2`. The review
+job uses GitHub OIDC to assume the narrowly scoped
+`basic-shared-claude-github-review` role for 15 minutes and retrieves that one
+secret at runtime. Drasil has no repository copy to rotate.
 
-```sh
-claude setup-token
-```
-
-Store the generated token as a GitHub Actions repository secret named
-`CLAUDE_CODE_OAUTH_TOKEN`. Secret values cannot be retrieved or copied from
-another repository, so Drasil must be provisioned separately.
-
-The workflow passes that secret to a pinned `anthropics/claude-code-action`
-commit through its `claude_code_oauth_token` input. The Claude generation job
-gets only read-scoped GitHub permissions and a read-scoped `github_token`; it
-does not need `id-token: write` or the Claude GitHub App OIDC token exchange. If
-the secret is not configured, the workflow exits successfully with a notice
-instead of failing pull requests.
+The AWS credential action emits short-lived credentials as step outputs rather
+than job environment variables. Only the retrieval step receives them. It masks
+the fetched token before passing it to the pinned
+`anthropics/claude-code-action` commit through the
+`claude_code_oauth_token` input. The job's `id-token: write` permission exists
+only for AWS role assumption; its explicit read-scoped `github_token` still
+prevents the Claude action from using its own GitHub App OIDC exchange. If AWS
+retrieval fails, review fails visibly instead of silently skipping.
 
 Treat the token like any other automation secret. It consumes the
 subscription's Claude Code quota and rate limits rather than Anthropic API
@@ -42,8 +40,9 @@ review when needed.
   re-enables review on the next eligible pull request event.
 
 Fork, cross-repository, draft, bot-authored, and bot-triggered pull requests are
-skipped because the workflow uses a repository secret and the Claude action is
-not configured with `allowed_bots`.
+skipped. The AWS role trust admits only this repository's `pull_request`
+subject, and the trusted base workflow independently requires a same-repository
+head before the review job can run.
 
 The `synchronize` trigger reviews every subsequent commit. Workflow concurrency
 cancels older runs for the same pull request so only the latest head publishes.
@@ -65,9 +64,9 @@ comment.
 
 Both workflows use `pull_request_target` restricted to PRs targeting `main`, so
 GitHub loads their definitions from the trusted base branch before granting a
-repository token or the Claude secret. The review job checks out the exact PR
-head with persisted credentials disabled, but it never executes repository
-scripts or actions from that checkout. Generated context lives under the runner
+repository token or AWS OIDC access. The review job checks out the exact PR head
+with persisted credentials disabled, but it never executes repository scripts
+or actions from that checkout. Generated context lives under the runner
 temporary directory rather than a PR-controlled path, and that exact directory
 is explicitly added to Claude's readable roots.
 
@@ -95,10 +94,10 @@ The workflow intentionally does not expose `issue_comment` or
 and the marker-owned sticky comment.
 
 Because `pull_request_target` only loads workflows already present on the base
-branch, the bootstrap PR that first introduces this workflow cannot exercise
-the final secret-backed path against its own head. Validate its workflow syntax
-and security locally, then confirm the first post-merge PR runs prepare,
-generation, and publishing successfully.
+branch, the migration PR cannot exercise the new AWS-backed path against its own
+head. Validate its workflow syntax and security locally, then confirm the first
+post-merge PR runs role assumption, retrieval, generation, and publishing
+successfully.
 
 ## Review Calibration
 
