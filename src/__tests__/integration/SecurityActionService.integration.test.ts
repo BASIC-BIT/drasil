@@ -73,6 +73,7 @@ describeIntegration('SecurityActionService (integration)', () => {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
       notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest
         .fn()
         .mockResolvedValue({ id: 'observe-1' } as Message),

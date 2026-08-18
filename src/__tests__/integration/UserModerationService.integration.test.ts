@@ -71,6 +71,7 @@ describeIntegration('UserModerationService (integration)', () => {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
       notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue({} as any),
       markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),

@@ -463,6 +463,65 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     );
   });
 
+  it('persists containment regression and discovers unfinished verified role restoration', async () => {
+    const serverId = 'guild-quarantine-reconciliation';
+    const userId = 'user-quarantine-reconciliation';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    const snapshots = new RoleQuarantineSnapshotRepository(prisma);
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser(userId, 'target');
+    const verification = await verifications.createFromDetection(
+      null,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verifications.update(verification.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date(),
+      parked_by: 'moderator-parked',
+    });
+    const snapshot = await snapshots.create({
+      serverId,
+      userId,
+      verificationEventId: verification.id,
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+      originalRoleIds: ['role-1'],
+      plannedRoleIds: ['role-1'],
+      removedRoleIds: ['role-1'],
+    });
+
+    await expect(snapshots.findActiveCompletedCompromised()).resolves.toEqual([]);
+    const regressed = await verifications.markParkedContainmentIncomplete(
+      verification.id,
+      verification.metadata
+    );
+    expect(regressed).toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        parked_at: null,
+        parked_by: null,
+      })
+    );
+    await expect(
+      verifications.markParkedContainmentIncomplete(verification.id, verification.metadata)
+    ).resolves.toBeNull();
+    await verifications.update(verification.id, {
+      status: VerificationStatus.VERIFIED,
+      resolved_by: 'moderator-verify',
+      resolved_at: new Date(),
+    });
+    await expect(snapshots.findActiveCompletedCompromised()).resolves.toEqual([
+      expect.objectContaining({ id: snapshot.id, verification_event_id: verification.id }),
+    ]);
+  });
+
   it('stores same-channel quarantine breaches separately for each case', async () => {
     const serverId = 'guild-quarantine-breach-attention';
     const servers = new ServerRepository(prisma);

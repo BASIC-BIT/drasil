@@ -1,14 +1,27 @@
 import { randomUUID } from 'node:crypto';
-import { Client } from 'discord.js';
+import { Client, Guild, GuildMember } from 'discord.js';
 import { inject, injectable } from 'inversify';
+import { Prisma } from '../db/prisma';
+import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
+import { IRoleQuarantineSnapshotRepository } from '../repositories/RoleQuarantineSnapshotRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
-import { CaseAttentionState, CaseContainmentStatus, CaseKind } from '../repositories/types';
 import {
-  CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
+  RoleQuarantineSnapshot,
+  VerificationEvent,
+} from '../repositories/types';
+import {
+  CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
 } from '../utils/caseRoleRelease';
+import { ICaseRoleLockdownService } from './CaseRoleLockdownService';
+import { IModerationQueueService } from './ModerationQueueService';
+import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
+import { IRoleQuarantineService } from './RoleQuarantineService';
 
 const CASE_ROLE_RELEASE_RECONCILIATION_INTERVAL_MS = 60 * 1000;
 
@@ -22,12 +35,24 @@ export interface ICaseRoleReleaseReconciliationService {
 export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseReconciliationService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  private readonly roleRestorationAlertedSnapshotIds = new Set<string>();
 
   constructor(
     @inject(TYPES.DiscordClient) private readonly client: Client,
     @inject(TYPES.VerificationEventRepository)
     private readonly verificationEventRepository: IVerificationEventRepository,
-    @inject(TYPES.RoleManager) private readonly roleManager: IRoleManager
+    @inject(TYPES.RoleManager) private readonly roleManager: IRoleManager,
+    @inject(TYPES.RoleQuarantineSnapshotRepository)
+    private readonly snapshotRepository: IRoleQuarantineSnapshotRepository,
+    @inject(TYPES.RoleQuarantineService)
+    private readonly roleQuarantineService: IRoleQuarantineService,
+    @inject(TYPES.CaseRoleLockdownService)
+    private readonly lockdownService: ICaseRoleLockdownService,
+    @inject(TYPES.ConfigService) private readonly configService: IConfigService,
+    @inject(TYPES.NotificationManager)
+    private readonly notificationManager: INotificationManager,
+    @inject(TYPES.ModerationQueueService)
+    private readonly moderationQueueService: IModerationQueueService
   ) {}
 
   public start(): void {
@@ -68,6 +93,8 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
           );
         });
       }
+      await this.reconcileCompletedRoleRestorations();
+      await this.reconcileParkedContainment(now);
     } finally {
       this.running = false;
     }
@@ -79,7 +106,7 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
       return;
     }
 
-    const attemptId = `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}reconcile:${randomUUID()}`;
+    const attemptId = `${CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX}${randomUUID()}`;
     const claimed = await this.verificationEventRepository.claimCaseRoleRelease(
       candidate.id,
       candidate.server_id,
@@ -116,14 +143,173 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
         throw new Error('Release-recovery ownership changed before completion.');
       }
     } catch (error) {
-      await this.verificationEventRepository.updateQuarantineAttempt(claimed.id, attemptId, {
-        case_kind: CaseKind.COMPROMISED_ACCOUNT,
-        attention_state: CaseAttentionState.REVIEW_REQUIRED,
-        containment_status: CaseContainmentStatus.INCOMPLETE,
-        parked_at: null,
-        parked_by: null,
-      });
+      const fallback = await this.verificationEventRepository.updateQuarantineAttempt(
+        claimed.id,
+        attemptId,
+        {
+          case_kind: CaseKind.COMPROMISED_ACCOUNT,
+          attention_state: CaseAttentionState.REVIEW_REQUIRED,
+          containment_status: CaseContainmentStatus.INCOMPLETE,
+          parked_at: null,
+          parked_by: null,
+        }
+      );
+      if (fallback) {
+        await this.surfaceReviewRequired(fallback);
+      }
       throw error;
     }
+  }
+
+  private async reconcileCompletedRoleRestorations(): Promise<void> {
+    const snapshots = await this.snapshotRepository.findActiveCompletedCompromised();
+    for (const snapshot of snapshots) {
+      await this.reconcileCompletedRoleRestoration(snapshot).catch((error) => {
+        console.error(`Failed to reconcile role restoration for snapshot ${snapshot.id}:`, error);
+      });
+    }
+  }
+
+  private async reconcileCompletedRoleRestoration(snapshot: RoleQuarantineSnapshot): Promise<void> {
+    if (!snapshot.verification_event_id) {
+      return;
+    }
+    const verificationEvent = await this.verificationEventRepository.findById(
+      snapshot.verification_event_id
+    );
+    if (!verificationEvent) {
+      return;
+    }
+
+    try {
+      const member = await this.fetchMember(snapshot.server_id, snapshot.user_id);
+      const result = await this.roleQuarantineService.restoreMemberRoles(member);
+      if (result.status === 'restored' || result.status === 'no_active_snapshot') {
+        this.roleRestorationAlertedSnapshotIds.delete(snapshot.id);
+        return;
+      }
+    } catch (error) {
+      if (!this.roleRestorationAlertedSnapshotIds.has(snapshot.id)) {
+        await this.notificationManager.notifyAccountQuarantineAttention(
+          verificationEvent,
+          'role_restoration_incomplete'
+        );
+        this.roleRestorationAlertedSnapshotIds.add(snapshot.id);
+      }
+      throw error;
+    }
+
+    if (!this.roleRestorationAlertedSnapshotIds.has(snapshot.id)) {
+      await this.notificationManager.notifyAccountQuarantineAttention(
+        verificationEvent,
+        'role_restoration_incomplete'
+      );
+      this.roleRestorationAlertedSnapshotIds.add(snapshot.id);
+    }
+  }
+
+  private async reconcileParkedContainment(now: Date): Promise<void> {
+    for (const guild of this.client.guilds.cache.values()) {
+      const parkedCases = await this.verificationEventRepository.findParkedByServer(guild.id);
+      for (const verificationEvent of parkedCases) {
+        if (
+          verificationEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT ||
+          verificationEvent.containment_status !== CaseContainmentStatus.CONTAINED ||
+          verificationEvent.quarantine_attempt_id !== null
+        ) {
+          continue;
+        }
+        await this.reconcileParkedCase(guild, verificationEvent, now).catch((error) => {
+          console.error(
+            `Failed to reconcile parked containment for case ${verificationEvent.id}:`,
+            error
+          );
+        });
+      }
+    }
+  }
+
+  private async reconcileParkedCase(
+    guild: Guild,
+    verificationEvent: VerificationEvent,
+    now: Date
+  ): Promise<void> {
+    let member: GuildMember | null = null;
+    let caseRolePresent = false;
+    let containmentReady = false;
+    let detail = 'Live containment audit failed.';
+    try {
+      member = await guild.members.fetch(verificationEvent.user_id);
+      const serverConfig = await this.configService.getServerConfig(guild.id);
+      caseRolePresent =
+        serverConfig.case_role_id !== null && member.roles.cache.has(serverConfig.case_role_id);
+      const [lockdown, memberAudit] = await Promise.all([
+        this.lockdownService.auditGuild(guild),
+        this.lockdownService.auditMemberBypasses(member, new Set(), verificationEvent.thread_id),
+      ]);
+      const blockingWarning = lockdown.issues.some(
+        (issue) => issue.code === 'lockdown-case-role-global-permissions'
+      );
+      containmentReady =
+        caseRolePresent &&
+        lockdown.enabled &&
+        lockdown.errorCount === 0 &&
+        lockdown.plannedActions.length === 0 &&
+        !blockingWarning &&
+        memberAudit.bypasses.length === 0 &&
+        memberAudit.retainedPrivilegedRoleIds.length === 0 &&
+        memberAudit.retainedAdministratorRoleIds.length === 0 &&
+        memberAudit.unremovablePrivilegeReasons.length === 0;
+      detail = containmentReady
+        ? 'Live containment audit passed.'
+        : `Live containment audit found drift: case role present=${caseRolePresent}, lockdown errors=${lockdown.errorCount}, planned actions=${lockdown.plannedActions.length}, bypasses=${memberAudit.bypasses.length}, privileged roles=${memberAudit.retainedPrivilegedRoleIds.length}, unremovable privileges=${memberAudit.unremovablePrivilegeReasons.length}.`;
+    } catch (error) {
+      detail = `Live containment audit failed: ${this.formatError(error)}`;
+    }
+    if (containmentReady) {
+      return;
+    }
+
+    const metadata = {
+      ...this.metadataToRecord(verificationEvent.metadata),
+      account_quarantine_reconciliation: {
+        checked_at: now.toISOString(),
+        result: 'incomplete',
+        detail,
+      },
+    } as unknown as VerificationEvent['metadata'];
+    const updated = await this.verificationEventRepository.markParkedContainmentIncomplete(
+      verificationEvent.id,
+      metadata
+    );
+    if (updated) {
+      await this.surfaceReviewRequired(updated);
+    }
+  }
+
+  private async surfaceReviewRequired(verificationEvent: VerificationEvent): Promise<void> {
+    await Promise.allSettled([
+      this.notificationManager.notifyAccountQuarantineAttention(
+        verificationEvent,
+        'containment_incomplete'
+      ),
+      this.moderationQueueService.upsertCaseMirror(verificationEvent),
+    ]);
+  }
+
+  private async fetchMember(serverId: string, userId: string): Promise<GuildMember> {
+    const guild =
+      this.client.guilds.cache.get(serverId) ?? (await this.client.guilds.fetch(serverId));
+    return guild.members.fetch(userId);
+  }
+
+  private metadataToRecord(metadata: Prisma.JsonValue | null): Record<string, unknown> {
+    return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+      ? (metadata as Record<string, unknown>)
+      : {};
+  }
+
+  private formatError(error: unknown): string {
+    return error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180);
   }
 }

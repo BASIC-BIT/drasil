@@ -54,7 +54,7 @@ import {
   MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY,
   MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY,
 } from '../../utils/detectionResponseSettings';
-import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../../utils/caseRoleRelease';
+import { isCaseRoleReleaseRecoveryAttempt } from '../../utils/caseRoleRelease';
 import {
   DEFAULT_USER_REPORT_EXTERNAL_RESPONSE_MODE,
   DEFAULT_USER_REPORT_REASON_REQUIRED,
@@ -540,12 +540,41 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
           event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
           event.attention_state === CaseAttentionState.PARKED &&
           event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
-          event.quarantine_attempt_id?.startsWith(CASE_ROLE_RELEASE_ATTEMPT_PREFIX) === true &&
+          isCaseRoleReleaseRecoveryAttempt(event.quarantine_attempt_id) &&
           (event.quarantine_lease_renewed_at === null ||
             event.quarantine_lease_renewed_at === undefined ||
             event.quarantine_lease_renewed_at <= staleBefore)
       )
       .map((event) => ({ ...event }));
+  }
+
+  async markParkedContainmentIncomplete(
+    id: string,
+    metadata: VerificationEvent['metadata']
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.status === VerificationStatus.PENDING &&
+        event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+        event.attention_state === CaseAttentionState.PARKED &&
+        event.containment_status === CaseContainmentStatus.CONTAINED &&
+        event.quarantine_attempt_id === null
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+    const updated = {
+      ...this.events[eventIndex],
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+      parked_at: null,
+      parked_by: null,
+      metadata,
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
   }
 
   async findResolvedWithThreadsByServer(
@@ -680,7 +709,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         ((event.containment_status === CaseContainmentStatus.CONTAINED &&
           event.quarantine_attempt_id === null) ||
           (event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
-            event.quarantine_attempt_id?.startsWith(CASE_ROLE_RELEASE_ATTEMPT_PREFIX) === true &&
+            isCaseRoleReleaseRecoveryAttempt(event.quarantine_attempt_id) &&
             (event.quarantine_lease_renewed_at === null ||
               event.quarantine_lease_renewed_at === undefined ||
               event.quarantine_lease_renewed_at <= staleBefore)))
@@ -1765,6 +1794,10 @@ export class InMemoryRoleQuarantineSnapshotRepository implements IRoleQuarantine
     }
 
     return this.clone(snapshots[0]);
+  }
+
+  async findActiveCompletedCompromised(): Promise<RoleQuarantineSnapshot[]> {
+    return [];
   }
 
   async update(

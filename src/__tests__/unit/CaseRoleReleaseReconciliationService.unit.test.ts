@@ -2,67 +2,123 @@ import { CaseRoleReleaseReconciliationService } from '../../services/CaseRoleRel
 import {
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
+  CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
+  isCaseRoleReleaseLeaseActive,
 } from '../../utils/caseRoleRelease';
 import {
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
+  RoleQuarantineSnapshotPurpose,
+  RoleQuarantineSnapshotStatus,
   VerificationStatus,
 } from '../../repositories/types';
 import { InMemoryVerificationEventRepository } from '../fakes/inMemoryRepositories';
 
+const readyLockdown = {
+  enabled: true,
+  issues: [],
+  plannedActions: [],
+  unsyncedAllowedChannels: [],
+  errorCount: 0,
+  warningCount: 0,
+};
+const readyMemberAudit = {
+  memberId: 'user-1',
+  bypasses: [],
+  retainedPrivilegedRoleIds: [],
+  retainedAdministratorRoleIds: [],
+  unremovablePrivilegeReasons: [],
+};
+
+function buildService(options: {
+  client: any;
+  verificationEvents: InMemoryVerificationEventRepository;
+  roleManager?: any;
+  snapshots?: any;
+  roleQuarantine?: any;
+  lockdown?: any;
+  config?: any;
+  notifications?: any;
+  queue?: any;
+}): CaseRoleReleaseReconciliationService {
+  return new CaseRoleReleaseReconciliationService(
+    options.client,
+    options.verificationEvents,
+    options.roleManager ?? {
+      assignCaseRole: jest.fn().mockResolvedValue(true),
+      removeCaseRole: jest.fn(),
+    },
+    options.snapshots ?? { findActiveCompletedCompromised: jest.fn().mockResolvedValue([]) },
+    options.roleQuarantine ?? { restoreMemberRoles: jest.fn() },
+    options.lockdown ?? {
+      auditGuild: jest.fn().mockResolvedValue(readyLockdown),
+      auditMemberBypasses: jest.fn().mockResolvedValue(readyMemberAudit),
+    },
+    options.config ?? {
+      getServerConfig: jest.fn().mockResolvedValue({ case_role_id: 'case-role-1' }),
+    },
+    options.notifications ?? {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    },
+    options.queue ?? { upsertCaseMirror: jest.fn().mockResolvedValue(undefined) }
+  );
+}
+
 describe('CaseRoleReleaseReconciliationService (unit)', () => {
-  it('restores the case role and clears an expired release claim', async () => {
+  it('restores the case role with a non-release reconciliation claim', async () => {
     const now = new Date('2026-08-18T12:00:00.000Z');
     const staleBefore = new Date(now.getTime() - CASE_ROLE_RELEASE_LEASE_MS);
-    const verificationEventRepository = new InMemoryVerificationEventRepository();
-    const verificationEvent = await verificationEventRepository.createFromDetection(
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
       null,
       'guild-1',
       'user-1',
       VerificationStatus.PENDING
     );
-    await verificationEventRepository.update(verificationEvent.id, {
+    await verificationEvents.update(verificationEvent.id, {
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       attention_state: CaseAttentionState.PARKED,
       containment_status: CaseContainmentStatus.CONTAINED,
       parked_at: new Date('2026-08-18T10:00:00.000Z'),
       parked_by: 'moderator-1',
     });
-    await verificationEventRepository.claimCaseRoleRelease(
+    await verificationEvents.claimCaseRoleRelease(
       verificationEvent.id,
       'guild-1',
       'user-1',
       `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}crashed`,
       new Date(0)
     );
-    await verificationEventRepository.update(verificationEvent.id, {
+    await verificationEvents.update(verificationEvent.id, {
       quarantine_lease_renewed_at: staleBefore,
     });
 
-    const member = { id: 'user-1' };
-    const guild = { members: { fetch: jest.fn().mockResolvedValue(member) } };
+    const member = { id: 'user-1', roles: { cache: new Map() } };
+    const guild = { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue(member) } };
     const client = {
-      guilds: {
-        cache: new Map([['guild-1', guild]]),
-        fetch: jest.fn(),
-      },
+      guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() },
     };
+    let reconciliationAttemptId: string | null = null;
     const roleManager = {
-      assignCaseRole: jest.fn().mockResolvedValue(true),
+      assignCaseRole: jest.fn().mockImplementation(async () => {
+        const claimed = await verificationEvents.findById(verificationEvent.id);
+        reconciliationAttemptId = claimed?.quarantine_attempt_id ?? null;
+        member.roles.cache.set('case-role-1', { id: 'case-role-1' });
+        return true;
+      }),
       removeCaseRole: jest.fn(),
     };
-    const service = new CaseRoleReleaseReconciliationService(
-      client as any,
-      verificationEventRepository,
-      roleManager as any
-    );
+    const service = buildService({ client, verificationEvents, roleManager });
 
     await service.runOnce(now);
 
-    expect(guild.members.fetch).toHaveBeenCalledWith('user-1');
+    expect(reconciliationAttemptId).toEqual(
+      expect.stringMatching(`^${CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX}`)
+    );
+    expect(isCaseRoleReleaseLeaseActive(reconciliationAttemptId, new Date(), now)).toBe(false);
     expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
-    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+    await expect(verificationEvents.findById(verificationEvent.id)).resolves.toEqual(
       expect.objectContaining({
         status: VerificationStatus.PENDING,
         attention_state: CaseAttentionState.PARKED,
@@ -71,5 +127,177 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
         quarantine_lease_renewed_at: null,
       })
     );
+  });
+
+  it('immediately surfaces a failed expired-release reconciliation', async () => {
+    const now = new Date('2026-08-18T12:00:00.000Z');
+    const staleBefore = new Date(now.getTime() - CASE_ROLE_RELEASE_LEASE_MS);
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    });
+    await verificationEvents.claimCaseRoleRelease(
+      verificationEvent.id,
+      'guild-1',
+      'user-1',
+      `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}crashed`,
+      new Date(0)
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      quarantine_lease_renewed_at: staleBefore,
+    });
+    const member = { id: 'user-1', roles: { cache: new Map() } };
+    const guild = { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue(member) } };
+    const notifications = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    };
+    const queue = { upsertCaseMirror: jest.fn().mockResolvedValue(undefined) };
+    const service = buildService({
+      client: { guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() } },
+      verificationEvents,
+      roleManager: {
+        assignCaseRole: jest.fn().mockResolvedValue(false),
+        removeCaseRole: jest.fn(),
+      },
+      notifications,
+      queue,
+    });
+
+    await service.runOnce(now);
+
+    const updated = await verificationEvents.findById(verificationEvent.id);
+    expect(updated).toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+      })
+    );
+    expect(notifications.notifyAccountQuarantineAttention).toHaveBeenCalledWith(
+      updated,
+      'containment_incomplete'
+    );
+    expect(queue.upsertCaseMirror).toHaveBeenCalledWith(updated);
+  });
+
+  it('regresses and surfaces a parked case when periodic permission audit finds drift', async () => {
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    });
+    const member = {
+      id: 'user-1',
+      roles: { cache: new Map([['case-role-1', { id: 'case-role-1' }]]) },
+    };
+    const guild = { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue(member) } };
+    const notifications = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    };
+    const queue = { upsertCaseMirror: jest.fn().mockResolvedValue(undefined) };
+    const service = buildService({
+      client: { guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() } },
+      verificationEvents,
+      lockdown: {
+        auditGuild: jest.fn().mockResolvedValue(readyLockdown),
+        auditMemberBypasses: jest.fn().mockResolvedValue({
+          ...readyMemberAudit,
+          bypasses: [
+            {
+              channelId: 'channel-1',
+              channelName: 'general',
+              subjectType: 'member',
+              subjectId: 'user-1',
+              permissions: ['Send Messages'],
+            },
+          ],
+        }),
+      },
+      notifications,
+      queue,
+    });
+
+    await service.runOnce(new Date('2026-08-18T12:00:00.000Z'));
+
+    const updated = await verificationEvents.findById(verificationEvent.id);
+    expect(updated).toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+      })
+    );
+    expect(notifications.notifyAccountQuarantineAttention).toHaveBeenCalledWith(
+      updated,
+      'containment_incomplete'
+    );
+    expect(queue.upsertCaseMirror).toHaveBeenCalledWith(updated);
+  });
+
+  it('resumes role restoration for a verified case with an active compromised snapshot', async () => {
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      status: VerificationStatus.VERIFIED,
+      resolved_by: 'moderator-1',
+      resolved_at: new Date(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    });
+    const snapshot = {
+      id: 'snapshot-1',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      verification_event_id: verificationEvent.id,
+      status: RoleQuarantineSnapshotStatus.ACTIVE,
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+      original_role_ids: ['role-1'],
+      planned_role_ids: ['role-1'],
+      removed_role_ids: ['role-1'],
+      restored_role_ids: [],
+      skipped_roles: [],
+      failed_removals: [],
+      failed_restores: [],
+      created_at: new Date(),
+      updated_at: new Date(),
+      restored_at: null,
+      restored_by: null,
+      metadata: {},
+    };
+    const member = { id: 'user-1' };
+    const guild = { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue(member) } };
+    const roleQuarantine = {
+      restoreMemberRoles: jest.fn().mockResolvedValue({ status: 'restored' }),
+    };
+    const service = buildService({
+      client: { guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() } },
+      verificationEvents,
+      snapshots: {
+        findActiveCompletedCompromised: jest.fn().mockResolvedValue([snapshot]),
+      },
+      roleQuarantine,
+    });
+
+    await service.runOnce();
+
+    expect(roleQuarantine.restoreMemberRoles).toHaveBeenCalledWith(member);
   });
 });

@@ -78,6 +78,7 @@ import { IVerificationEventRepository } from '../repositories/VerificationEventR
 import type { IGlobalMessageWatchlistRepository } from '../repositories/GlobalMessageWatchlistRepository';
 import { getAccountQuarantineSettings } from '../utils/accountQuarantineSettings';
 import { getCaseRoleLockdownSettings } from '../utils/caseRoleLockdownSettings';
+import { isCaseRoleReleaseLeaseActive } from '../utils/caseRoleRelease';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -944,7 +945,7 @@ export class EventHandler implements IEventHandler {
   }
 
   private async recordParkedQuarantineBreach(message: Message): Promise<void> {
-    if (!this.moderationQueueService || !this.verificationEventRepository || !message.guild) {
+    if (!this.verificationEventRepository || !message.guild) {
       return;
     }
 
@@ -988,9 +989,18 @@ export class EventHandler implements IEventHandler {
       if (
         activeCase?.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
         activeCase.attention_state === CaseAttentionState.PARKED &&
+        !isCaseRoleReleaseLeaseActive(
+          activeCase.quarantine_attempt_id,
+          activeCase.quarantine_lease_renewed_at
+        ) &&
         (!activeCase.thread_id || activeCase.thread_id !== message.channelId)
       ) {
-        await this.moderationQueueService.recordQuarantineBreachAttention(activeCase, message);
+        await this.notificationManager.notifyAccountQuarantineAttention(
+          activeCase,
+          'containment_breach',
+          message
+        );
+        await this.moderationQueueService?.recordQuarantineBreachAttention(activeCase, message);
       }
     } catch (error) {
       console.warn('Failed to record parked quarantine breach attention:', error);
