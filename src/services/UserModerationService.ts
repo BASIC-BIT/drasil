@@ -862,6 +862,11 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         throw new Error('No active verification event found to verify');
       }
 
+      const roleRemoved = await this.roleManager.removeCaseRole(member);
+      if (!roleRemoved) {
+        throw new Error(`Failed to remove case role from ${member.user.tag}`);
+      }
+
       const resolvedAt = new Date();
       const resolvedEvents: Array<{
         event: VerificationEvent;
@@ -889,11 +894,6 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         }
 
         resolvedEvents.push({ event: updatedEvent, previousStatus });
-      }
-
-      const roleRemoved = await this.roleManager.removeCaseRole(member);
-      if (!roleRemoved) {
-        throw new Error(`Failed to remove case role from ${member.user.tag}`);
       }
 
       const restoreResult = await this.tryRestoreRoleQuarantine(

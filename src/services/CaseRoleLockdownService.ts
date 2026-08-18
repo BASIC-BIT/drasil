@@ -81,7 +81,8 @@ export interface ICaseRoleLockdownService {
   auditGuild(guild: Guild): Promise<CaseRoleLockdownReport>;
   auditMemberBypasses(
     member: GuildMember,
-    ignoredRoleIds?: ReadonlySet<string>
+    ignoredRoleIds?: ReadonlySet<string>,
+    allowedThreadId?: string | null
   ): Promise<CaseRoleLockdownMemberAudit>;
   applyGuild(
     guild: Guild,
@@ -183,6 +184,10 @@ const COMPROMISED_ACCOUNT_PERMISSION_LABELS: readonly PermissionLabel[] = [
   { flag: PermissionFlagsBits.ManageMessages, label: 'Manage Messages' },
   { flag: PermissionFlagsBits.ManageThreads, label: 'Manage Threads' },
   { flag: PermissionFlagsBits.ManageWebhooks, label: 'Manage Webhooks' },
+  { flag: PermissionFlagsBits.MuteMembers, label: 'Mute Members' },
+  { flag: PermissionFlagsBits.DeafenMembers, label: 'Deafen Members' },
+  { flag: PermissionFlagsBits.MoveMembers, label: 'Move Members' },
+  { flag: PermissionFlagsBits.ManageNicknames, label: 'Manage Nicknames' },
 ];
 
 const HIGH_RISK_RESTRICTED_ROLE_PERMISSIONS: readonly PermissionLabel[] = [
@@ -205,7 +210,8 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
 
   public async auditMemberBypasses(
     member: GuildMember,
-    ignoredRoleIds: ReadonlySet<string> = new Set()
+    ignoredRoleIds: ReadonlySet<string> = new Set(),
+    allowedThreadId?: string | null
   ): Promise<CaseRoleLockdownMemberAudit> {
     const serverConfig = await this.configService.getServerConfig(member.guild.id);
     const settings = getCaseRoleLockdownSettings(serverConfig.settings);
@@ -281,6 +287,15 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
           });
         }
       }
+    }
+
+    if (serverConfig.verification_channel_id) {
+      await this.recordRecoverySiblingThreadBypasses(
+        member,
+        serverConfig.verification_channel_id,
+        allowedThreadId,
+        bypasses
+      );
     }
 
     return {
@@ -900,6 +915,37 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
       subjectId: member.id,
       permissions,
     });
+  }
+
+  private async recordRecoverySiblingThreadBypasses(
+    member: GuildMember,
+    recoveryParentId: string,
+    allowedThreadId: string | null | undefined,
+    bypasses: CaseRoleLockdownMemberBypass[]
+  ): Promise<void> {
+    const activeThreads = await member.guild.channels.fetchActiveThreads();
+    for (const thread of activeThreads.threads.values()) {
+      if (thread.parentId !== recoveryParentId || thread.id === allowedThreadId) {
+        continue;
+      }
+
+      if (thread.type === ChannelType.PrivateThread) {
+        const threadMembers = thread.members.cache.has(member.id)
+          ? thread.members.cache
+          : await thread.members.fetch();
+        if (!threadMembers.has(member.id)) {
+          continue;
+        }
+      }
+
+      bypasses.push({
+        channelId: thread.id,
+        channelName: thread.name,
+        subjectType: 'member',
+        subjectId: member.id,
+        permissions: ['Send Messages in Threads'],
+      });
+    }
   }
 
   private isLockdownChannel(

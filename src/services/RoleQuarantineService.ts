@@ -434,7 +434,11 @@ export class RoleQuarantineService implements IRoleQuarantineService {
         containmentBlocked = true;
       } else {
         try {
-          const memberAudit = await this.caseRoleLockdownService.auditMemberBypasses(newMember);
+          const memberAudit = await this.caseRoleLockdownService.auditMemberBypasses(
+            newMember,
+            new Set(),
+            verificationEvent.thread_id
+          );
           containmentBlocked =
             memberAudit.bypasses.length > 0 ||
             memberAudit.retainedPrivilegedRoleIds.length > 0 ||

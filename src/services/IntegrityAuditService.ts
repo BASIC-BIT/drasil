@@ -271,7 +271,11 @@ export class IntegrityAuditService implements IIntegrityAuditService {
         try {
           const [lockdownAudit, memberAudit] = await Promise.all([
             this.caseRoleLockdownService.auditGuild(liveMember.value.guild),
-            this.caseRoleLockdownService.auditMemberBypasses(liveMember.value),
+            this.caseRoleLockdownService.auditMemberBypasses(
+              liveMember.value,
+              new Set(),
+              verificationEvent.thread_id
+            ),
           ]);
           if (
             lockdownAudit.errorCount > 0 ||

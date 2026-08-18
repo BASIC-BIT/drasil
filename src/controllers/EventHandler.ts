@@ -81,6 +81,7 @@ import { getCaseRoleLockdownSettings } from '../utils/caseRoleLockdownSettings';
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const GLOBAL_MESSAGE_WATCHLIST_CACHE_TTL_MS = 30_000;
+const PARKED_QUARANTINE_CACHE_TTL_MS = 30_000;
 const GLOBAL_MESSAGE_WATCHLIST_INITIAL_FAILURE_RETRY_MS = 5_000;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
@@ -149,6 +150,10 @@ export class EventHandler implements IEventHandler {
   private globalMessageWatchlistLoadedAt = 0;
   private globalMessageWatchlistRetryAfter = 0;
   private globalMessageWatchlistHasLoaded = false;
+  private parkedQuarantineUsersCache = new Map<
+    string,
+    { readonly userIds: ReadonlySet<string>; readonly expiresAt: number }
+  >();
   private globalMessageWatchlistLoadPromise: Promise<
     readonly GlobalMessageWatchlistEntry[]
   > | null = null;
@@ -937,29 +942,37 @@ export class EventHandler implements IEventHandler {
     }
 
     const cachedConfig = this.configService.getCachedServerConfig(message.guild.id);
-    if (!cachedConfig || !getAccountQuarantineSettings(cachedConfig.settings).enabled) {
-      return;
-    }
-
-    const lockdownSettings = getCaseRoleLockdownSettings(cachedConfig.settings);
-    const isThread = message.channel.isThread();
-    const parentChannelId = isThread ? message.channel.parentId : null;
-    const categoryId = isThread
-      ? message.channel.parent?.parentId
-      : 'parentId' in message.channel
-        ? message.channel.parentId
-        : null;
-    if (
-      lockdownSettings.allowedChannelIds.includes(message.channelId) ||
-      (parentChannelId !== null && lockdownSettings.allowedChannelIds.includes(parentChannelId)) ||
-      (categoryId !== null &&
-        categoryId !== undefined &&
-        lockdownSettings.allowedCategoryIds.includes(categoryId))
-    ) {
+    if (!cachedConfig) {
       return;
     }
 
     try {
+      if (!getAccountQuarantineSettings(cachedConfig.settings).enabled) {
+        const parkedUserIds = await this.getCachedParkedQuarantineUserIds(message.guild.id);
+        if (!parkedUserIds.has(message.author.id)) {
+          return;
+        }
+      }
+
+      const lockdownSettings = getCaseRoleLockdownSettings(cachedConfig.settings);
+      const isThread = message.channel.isThread();
+      const parentChannelId = isThread ? message.channel.parentId : null;
+      const categoryId = isThread
+        ? message.channel.parent?.parentId
+        : 'parentId' in message.channel
+          ? message.channel.parentId
+          : null;
+      if (
+        lockdownSettings.allowedChannelIds.includes(message.channelId) ||
+        (parentChannelId !== null &&
+          lockdownSettings.allowedChannelIds.includes(parentChannelId)) ||
+        (categoryId !== null &&
+          categoryId !== undefined &&
+          lockdownSettings.allowedCategoryIds.includes(categoryId))
+      ) {
+        return;
+      }
+
       const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
         message.author.id,
         message.guild.id
@@ -974,6 +987,22 @@ export class EventHandler implements IEventHandler {
     } catch (error) {
       console.warn('Failed to record parked quarantine breach attention:', error);
     }
+  }
+
+  private async getCachedParkedQuarantineUserIds(serverId: string): Promise<ReadonlySet<string>> {
+    const now = Date.now();
+    const cached = this.parkedQuarantineUsersCache.get(serverId);
+    if (cached && cached.expiresAt > now) {
+      return cached.userIds;
+    }
+
+    const parkedCases = await this.verificationEventRepository?.findParkedByServer(serverId);
+    const userIds = new Set((parkedCases ?? []).map((event) => event.user_id));
+    this.parkedQuarantineUsersCache.set(serverId, {
+      userIds,
+      expiresAt: now + PARKED_QUARANTINE_CACHE_TTL_MS,
+    });
+    return userIds;
   }
 
   private async handleDiscordPendingStateChange(

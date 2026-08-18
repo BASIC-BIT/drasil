@@ -198,6 +198,10 @@ describe('RoleQuarantineService (unit)', () => {
       createRole({ id: 'message-role', permissions: [PermissionFlagsBits.ManageMessages] }),
       createRole({ id: 'thread-role', permissions: [PermissionFlagsBits.ManageThreads] }),
       createRole({ id: 'webhook-role', permissions: [PermissionFlagsBits.ManageWebhooks] }),
+      createRole({ id: 'mute-role', permissions: [PermissionFlagsBits.MuteMembers] }),
+      createRole({ id: 'deafen-role', permissions: [PermissionFlagsBits.DeafenMembers] }),
+      createRole({ id: 'move-role', permissions: [PermissionFlagsBits.MoveMembers] }),
+      createRole({ id: 'nickname-role', permissions: [PermissionFlagsBits.ManageNicknames] }),
     ];
     const member = createMember(removableRoles);
     const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
@@ -215,18 +219,24 @@ describe('RoleQuarantineService (unit)', () => {
       'message-role',
       'thread-role',
       'webhook-role',
+      'mute-role',
+      'deafen-role',
+      'move-role',
+      'nickname-role',
     ]);
     expect(result.skippedRoles).toEqual([]);
   });
 
   it('removes privileged and normally exempt roles for a compromised account', async () => {
-    const privilegedRole = createRole({
-      id: 'privileged-role',
-      permissions: [PermissionFlagsBits.ManageThreads],
-    });
+    const privilegedRoles = [
+      createRole({ id: 'mute-role', permissions: [PermissionFlagsBits.MuteMembers] }),
+      createRole({ id: 'deafen-role', permissions: [PermissionFlagsBits.DeafenMembers] }),
+      createRole({ id: 'move-role', permissions: [PermissionFlagsBits.MoveMembers] }),
+      createRole({ id: 'nickname-role', permissions: [PermissionFlagsBits.ManageNicknames] }),
+    ];
     const exemptRole = createRole({ id: '100000000000000005' });
     const manualRole = createRole({ id: '100000000000000010' });
-    const member = createMember([privilegedRole, exemptRole, manualRole]);
+    const member = createMember([...privilegedRoles, exemptRole, manualRole]);
     const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
     const service = new RoleQuarantineService(
       createConfigService({
@@ -251,11 +261,26 @@ describe('RoleQuarantineService (unit)', () => {
 
     expect(result.purpose).toBe(RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT);
     expect(result.removedRoleIds).toEqual([
-      'privileged-role',
+      'mute-role',
+      'deafen-role',
+      'move-role',
+      'nickname-role',
       '100000000000000005',
       '100000000000000010',
     ]);
     expect(result.failedRemovals).toEqual([]);
+    await expect(snapshots.findActiveByServerAndUser('guild-1', 'user-1')).resolves.toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          privileged_role_ids_at_snapshot: [
+            'mute-role',
+            'deafen-role',
+            'move-role',
+            'nickname-role',
+          ],
+        }),
+      })
+    );
   });
 
   it('restores a privileged role that was privileged when account quarantine began', async () => {
@@ -741,7 +766,7 @@ describe('RoleQuarantineService (unit)', () => {
     const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
 
     expect(result.skippedRoles).toEqual([expect.objectContaining({ role_id: 'managed-role' })]);
-    expect(lockdown.auditMemberBypasses).toHaveBeenCalledWith(newMember);
+    expect(lockdown.auditMemberBypasses).toHaveBeenCalledWith(newMember, new Set(), null);
     expect(verificationEventRepository.update).not.toHaveBeenCalledWith(
       parkedEvent.id,
       expect.objectContaining({ attention_state: CaseAttentionState.REVIEW_REQUIRED })

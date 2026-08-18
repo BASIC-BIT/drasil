@@ -157,6 +157,7 @@ describe('CaseRoleLockdownService (unit)', () => {
         fetch: jest
           .fn()
           .mockResolvedValue(new Map(channels.map((channel) => [channel.id, channel]))),
+        fetchActiveThreads: jest.fn().mockResolvedValue({ threads: new Map() }),
       },
     } as any;
   };
@@ -347,6 +348,71 @@ describe('CaseRoleLockdownService (unit)', () => {
         }),
       ])
     );
+  });
+
+  it('blocks containment when the recovery parent has an active public sibling thread', async () => {
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+    });
+    const guild = createGuild([verificationChannel]);
+    guild.channels.fetchActiveThreads.mockResolvedValue({
+      threads: new Map<string, any>([
+        [
+          'recovery-thread-1',
+          {
+            id: 'recovery-thread-1',
+            name: 'recovery',
+            parentId: 'verification-channel-1',
+            type: ChannelType.PrivateThread,
+          },
+        ],
+        [
+          'public-sibling-thread',
+          {
+            id: 'public-sibling-thread',
+            name: 'public-sibling',
+            parentId: 'verification-channel-1',
+            type: ChannelType.PublicThread,
+          },
+        ],
+        [
+          'private-sibling-thread',
+          {
+            id: 'private-sibling-thread',
+            name: 'private-sibling',
+            parentId: 'verification-channel-1',
+            type: ChannelType.PrivateThread,
+            members: {
+              cache: new Map([['user-1', { id: 'user-1' }]]),
+              fetch: jest.fn(),
+            },
+          },
+        ],
+      ]),
+    });
+    const member = {
+      id: 'user-1',
+      guild,
+      roles: { cache: new Map([[caseRoleId, { id: caseRoleId }]]) },
+    } as any;
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const audit = await service.auditMemberBypasses(member, new Set(), 'recovery-thread-1');
+
+    expect(audit.bypasses).toEqual([
+      expect.objectContaining({
+        channelId: 'public-sibling-thread',
+        subjectId: 'user-1',
+        permissions: ['Send Messages in Threads'],
+      }),
+      expect.objectContaining({
+        channelId: 'private-sibling-thread',
+        subjectId: 'user-1',
+        permissions: ['Send Messages in Threads'],
+      }),
+    ]);
   });
 
   it('unsyncs allowed channels only when explicitly confirmed', async () => {

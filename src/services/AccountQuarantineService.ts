@@ -90,7 +90,11 @@ export class AccountQuarantineService implements IAccountQuarantineService {
     const rolePreview = await this.roleQuarantine.previewCompromisedAccount(member);
     const [lockdown, memberAudit] = await Promise.all([
       this.lockdown.auditGuild(member.guild),
-      this.lockdown.auditMemberBypasses(member, new Set(rolePreview.plannedRoleIds)),
+      this.lockdown.auditMemberBypasses(
+        member,
+        new Set(rolePreview.plannedRoleIds),
+        event.thread_id
+      ),
     ]);
     return {
       enabled: getAccountQuarantineSettings(serverConfig.settings).enabled,
@@ -151,7 +155,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       failureStage = 'containment_audit';
       [lockdown, memberAudit] = await Promise.all([
         this.lockdown.auditGuild(member.guild),
-        this.lockdown.auditMemberBypasses(member),
+        this.lockdown.auditMemberBypasses(member, new Set(), claimedEvent.thread_id),
       ]);
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'final_role_sweep';
@@ -168,7 +172,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       failureStage = 'final_containment_audit';
       [lockdown, memberAudit] = await Promise.all([
         this.lockdown.auditGuild(member.guild),
-        this.lockdown.auditMemberBypasses(member),
+        this.lockdown.auditMemberBypasses(member, new Set(), claimedEvent.thread_id),
       ]);
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
     } catch (error) {

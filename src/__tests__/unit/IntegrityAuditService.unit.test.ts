@@ -637,7 +637,11 @@ describe('IntegrityAuditService (unit)', () => {
     const report = await service.auditGuild(guild, { scope: 'cases' });
 
     expect(caseRoleLockdownService.auditGuild).toHaveBeenCalledWith(guild);
-    expect(caseRoleLockdownService.auditMemberBypasses).toHaveBeenCalledWith(member);
+    expect(caseRoleLockdownService.auditMemberBypasses).toHaveBeenCalledWith(
+      member,
+      new Set(),
+      null
+    );
     expect(report.findings.map((finding) => finding.code)).toEqual(
       expect.arrayContaining([
         'parked_quarantine_lockdown_drift',

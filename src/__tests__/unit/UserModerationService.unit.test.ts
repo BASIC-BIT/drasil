@@ -266,6 +266,53 @@ describe('UserModerationService (unit)', () => {
     expect(member.ban).not.toHaveBeenCalled();
   });
 
+  it('keeps a parked quarantine pending when case-role removal fails during verification', async () => {
+    const guildId = 'guild-verify-case-role-failure';
+    const userId = 'user-verify-case-role-failure';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    roleManager.removeCaseRole.mockResolvedValue(false);
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
+      'Failed to remove case role'
+    );
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+        parked_by: 'moderator-parked',
+      })
+    );
+    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+  });
+
   it('restores quarantined roles when verifying a user', async () => {
     const guildId = 'guild-verify-restore-roles';
     const userId = 'user-verify-restore-roles';
