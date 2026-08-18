@@ -6,8 +6,6 @@ import { TYPES } from '../di/symbols';
 import { IRoleQuarantineSnapshotRepository } from '../repositories/RoleQuarantineSnapshotRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import {
-  CaseAttentionState,
-  CaseContainmentStatus,
   CaseKind,
   RoleQuarantineRoleDetail,
   RoleQuarantineSnapshot,
@@ -502,12 +500,10 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       containmentBlocked &&
       this.verificationEventRepository
     ) {
-      await this.verificationEventRepository.update(verificationEvent.id, {
-        attention_state: CaseAttentionState.REVIEW_REQUIRED,
-        containment_status: CaseContainmentStatus.INCOMPLETE,
-        parked_at: null,
-        parked_by: null,
-      });
+      await this.verificationEventRepository.markParkedContainmentIncomplete(
+        verificationEvent.id,
+        verificationEvent.metadata
+      );
     }
 
     return this.activeCaseUpdateResult(

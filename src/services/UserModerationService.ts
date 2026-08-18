@@ -246,6 +246,17 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
   }
 
+  private async deleteCaseAttention(verificationEventId: string): Promise<void> {
+    if (!this.moderationQueueService) {
+      return;
+    }
+    try {
+      await this.moderationQueueService.deleteCaseAttention(verificationEventId);
+    } catch (error) {
+      console.warn(`Failed to delete case attention for ${verificationEventId}:`, error);
+    }
+  }
+
   private async refreshLiveQueueCaseMirror(verificationEvent: VerificationEvent): Promise<void> {
     if (!this.moderationQueueService) {
       return;
@@ -835,7 +846,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
 
     await this.deleteLiveQueueCaseMirror(verificationEvent.id);
-    await this.moderationQueueService?.deleteCaseAttention(verificationEvent.id);
+    await this.deleteCaseAttention(verificationEvent.id);
   }
 
   private async finalizeResolvedVerificationEvent(
@@ -892,7 +903,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     });
 
     await this.deleteLiveQueueCaseMirror(verificationEvent.id);
-    await this.moderationQueueService?.deleteCaseAttention(verificationEvent.id);
+    await this.deleteCaseAttention(verificationEvent.id);
   }
 
   /**

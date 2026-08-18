@@ -84,10 +84,13 @@ import {
   ModerationQueueService,
 } from '../services/ModerationQueueService';
 import { IRoleGateService, RoleGateResolutionResult } from '../services/RoleGateService';
-import { IAccountQuarantineService } from '../services/AccountQuarantineService';
+import {
+  type AccountQuarantinePreview,
+  IAccountQuarantineService,
+} from '../services/AccountQuarantineService';
 import { getAccountQuarantineSettings } from '../utils/accountQuarantineSettings';
 import { truncatePreview } from '../utils/textPreview';
-import { buildAccountQuarantinePreviewFingerprint } from '../utils/accountQuarantinePreview';
+import { buildAccountQuarantinePreviewFingerprint as fingerprintAccountQuarantinePreview } from '../utils/accountQuarantinePreview';
 import {
   MODERATION_ACTION_REASON_FIELD_ID,
   MODERATOR_ACTION_BAN_DEFAULT_REASON,
@@ -107,7 +110,7 @@ const VERIFICATION_BAN_NOTES_FIELD_ID = 'verification_ban_notes';
 const VERIFICATION_BAN_DEFAULT_REASON = 'Banned by moderator during verification';
 const ACCOUNT_QUARANTINE_MODAL_PREFIX = 'verification:qa';
 const ACCOUNT_QUARANTINE_REASON_FIELD_ID = 'account_quarantine_reason';
-const ACCOUNT_QUARANTINE_MODAL_FINGERPRINT_LENGTH = 24;
+const ACCOUNT_QUARANTINE_CONFIRMATION_FINGERPRINT_LENGTH = 20;
 const VERIFICATION_KICK_MODAL_PREFIX = 'verification:kick_modal';
 const VERIFICATION_KICK_DEFAULT_REASON = 'Kicked by moderator during verification';
 const OBSERVED_KICK_MODAL_PREFIX = 'observed:kick_modal';
@@ -1208,7 +1211,8 @@ export class InteractionHandler implements IInteractionHandler {
           parsed.surface,
           parsed.userId,
           parsed.detectionEventId,
-          parsed.verificationEventId
+          parsed.verificationEventId,
+          parsed.confirmationFingerprint
         )
       )
       .setLabel(label)
@@ -1340,11 +1344,18 @@ export class InteractionHandler implements IInteractionHandler {
             confirmation.message
           )
         : null;
-    const confirmationParsed = quarantinePreview?.verificationEventId
-      ? { ...parsed, verificationEventId: quarantinePreview.verificationEventId }
-      : parsed;
+    const confirmationParsed =
+      quarantinePreview?.verificationEventId && quarantinePreview.confirmationFingerprint
+        ? {
+            ...parsed,
+            verificationEventId: quarantinePreview.verificationEventId,
+            confirmationFingerprint: quarantinePreview.confirmationFingerprint,
+          }
+        : parsed;
     const canContinue =
-      quarantinePreview === null || quarantinePreview.verificationEventId !== null;
+      quarantinePreview === null ||
+      (quarantinePreview.verificationEventId !== null &&
+        quarantinePreview.confirmationFingerprint !== null);
     const buttons = [
       ...(canContinue
         ? [
@@ -1413,7 +1424,11 @@ export class InteractionHandler implements IInteractionHandler {
     interaction: ButtonInteraction,
     parsed: ParsedAdminActionCustomId,
     baseMessage: string
-  ): Promise<{ readonly message: string; readonly verificationEventId: string | null }> {
+  ): Promise<{
+    readonly message: string;
+    readonly verificationEventId: string | null;
+    readonly confirmationFingerprint: string | null;
+  }> {
     const member = await interaction.guild?.members.fetch(parsed.userId).catch(() => null);
     const activeCase = interaction.guildId
       ? await this.verificationEventRepository.findActiveByUserAndServer(
@@ -1425,6 +1440,7 @@ export class InteractionHandler implements IInteractionHandler {
       return {
         message: `${baseMessage}\n\nA live containment preview is unavailable; cancel and retry from the active case.`,
         verificationEventId: null,
+        confirmationFingerprint: null,
       };
     }
 
@@ -1435,6 +1451,7 @@ export class InteractionHandler implements IInteractionHandler {
       return {
         message: `${baseMessage}\n\nDrasil could not produce a live containment preview. Cancel and retry after repairing the active case.`,
         verificationEventId: null,
+        confirmationFingerprint: null,
       };
     }
 
@@ -1462,6 +1479,9 @@ export class InteractionHandler implements IInteractionHandler {
     return {
       message: truncatePreview(lines.join('\n'), ACCOUNT_QUARANTINE_CONFIRMATION_MAX_LENGTH),
       verificationEventId: activeCase.id,
+      confirmationFingerprint: (
+        await this.buildAccountQuarantinePreviewFingerprint(preview, activeCase)
+      ).slice(0, ACCOUNT_QUARANTINE_CONFIRMATION_FINGERPRINT_LENGTH),
     };
   }
 
@@ -1533,14 +1553,19 @@ export class InteractionHandler implements IInteractionHandler {
         );
         return;
       }
-      if (!parsed.verificationEventId) {
+      if (!parsed.verificationEventId || !parsed.confirmationFingerprint) {
         await interaction.reply({
           content: 'The live containment preview expired. Return to the active case and retry.',
           flags: MessageFlags.Ephemeral,
         });
         return;
       }
-      await this.showAccountQuarantineModal(interaction, parsed.userId, parsed.verificationEventId);
+      await this.showAccountQuarantineModal(
+        interaction,
+        parsed.userId,
+        parsed.verificationEventId,
+        parsed.confirmationFingerprint
+      );
       return;
     }
 
@@ -1760,19 +1785,9 @@ export class InteractionHandler implements IInteractionHandler {
   private async showAccountQuarantineModal(
     interaction: ButtonInteraction,
     userId: string,
-    verificationEventId: string
+    verificationEventId: string,
+    previewFingerprint: string
   ): Promise<void> {
-    const guild = interaction.guild ?? (await this.client.guilds.fetch(interaction.guildId ?? ''));
-    const [member, activeCase] = await Promise.all([
-      guild.members.fetch(userId).catch(() => null),
-      this.verificationEventRepository.findActiveByUserAndServer(userId, guild.id),
-    ]);
-    if (!member || !activeCase || activeCase.id !== verificationEventId) {
-      throw new Error('The active case changed after preview. Return to the case and retry.');
-    }
-    const previewFingerprint = (
-      await this.buildAccountQuarantinePreviewFingerprint(member, activeCase)
-    ).slice(0, ACCOUNT_QUARANTINE_MODAL_FINGERPRINT_LENGTH);
     const modal = new ModalBuilder()
       .setCustomId(
         `${ACCOUNT_QUARANTINE_MODAL_PREFIX}:${userId}:${verificationEventId}:${previewFingerprint}`
@@ -2810,9 +2825,10 @@ export class InteractionHandler implements IInteractionHandler {
       if (!activeCase || activeCase.id !== previewedCaseId) {
         throw new Error('The active case changed after preview. Return to the case and retry.');
       }
+      const livePreview = await this.accountQuarantineService.preview(member, activeCase);
       const liveFingerprint = (
-        await this.buildAccountQuarantinePreviewFingerprint(member, activeCase)
-      ).slice(0, ACCOUNT_QUARANTINE_MODAL_FINGERPRINT_LENGTH);
+        await this.buildAccountQuarantinePreviewFingerprint(livePreview, activeCase)
+      ).slice(0, ACCOUNT_QUARANTINE_CONFIRMATION_FINGERPRINT_LENGTH);
       if (liveFingerprint !== previewedFingerprint) {
         throw new Error(
           'The live account-quarantine containment state changed. Return to the case and run a new preview.'
@@ -2866,13 +2882,9 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async buildAccountQuarantinePreviewFingerprint(
-    member: GuildMember,
+    preview: AccountQuarantinePreview,
     event: VerificationEvent
   ): Promise<string> {
-    if (!this.accountQuarantineService) {
-      throw new Error('Compromised-account quarantine is unavailable.');
-    }
-    const preview = await this.accountQuarantineService.preview(member, event);
     const [recoveryThreadReady, adminNotificationReady] = await Promise.all([
       this.isAccountQuarantineRecoveryThreadReady(event.thread_id),
       this.isAccountQuarantineNotificationReady(
@@ -2880,7 +2892,7 @@ export class InteractionHandler implements IInteractionHandler {
         event.notification_message_id
       ),
     ]);
-    return buildAccountQuarantinePreviewFingerprint(preview, {
+    return fingerprintAccountQuarantinePreview(preview, {
       adminNotificationReady,
       recoveryThreadId: event.thread_id,
       recoveryThreadReady,

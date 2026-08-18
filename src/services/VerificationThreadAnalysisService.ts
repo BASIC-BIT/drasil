@@ -125,13 +125,12 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
         const queuePromise = this.moderationQueueService
           ? this.moderationQueueService.recordSupportThreadAttention(responseEvent, message)
           : null;
-        const [mirrorResult, queueResult, directResult] = await Promise.allSettled([
+        const [mirrorResult, queueResult] = await Promise.allSettled([
           this.notificationManager.mirrorVerificationThreadMessageToEvidenceThread(
             responseEvent,
             message
           ),
-          queuePromise ?? Promise.resolve(),
-          this.notificationManager.notifyVerificationThreadUserResponse(responseEvent, message),
+          queuePromise ?? Promise.resolve({ delivered: false, created: false }),
         ]);
         if (mirrorResult.status === 'rejected') {
           console.warn(
@@ -145,15 +144,27 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
             queueResult.reason
           );
         }
-        if (directResult.status === 'rejected') {
-          console.warn(
-            `[VerificationThreadAnalysis] Failed to send parked recovery alert for verification event ${claimed.id}:`,
-            directResult.reason
-          );
+        const queueDelivered =
+          queueResult.status === 'fulfilled' && queueResult.value.delivered === true;
+        const shouldNotifyDirectly =
+          responseState.firstResponse ||
+          (queueResult.status === 'fulfilled' && queueResult.value.created === true);
+        let directDelivered = false;
+        if (shouldNotifyDirectly) {
+          try {
+            directDelivered =
+              (await this.notificationManager.notifyVerificationThreadUserResponse(
+                responseEvent,
+                message
+              )) === true;
+          } catch (error) {
+            console.warn(
+              `[VerificationThreadAnalysis] Failed to send parked recovery alert for verification event ${claimed.id}:`,
+              error
+            );
+          }
         }
-        const queueDelivered = queueResult.status === 'fulfilled' && queueResult.value === true;
-        const directDelivered = directResult.status === 'fulfilled' && directResult.value === true;
-        attentionDelivered = queueDelivered || directDelivered;
+        attentionDelivered = queueDelivered || directDelivered || !responseState.firstResponse;
       } finally {
         await this.verificationEventRepository.updateQuarantineAttempt(
           claimed.id,

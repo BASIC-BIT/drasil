@@ -258,7 +258,7 @@ const buildAccountQuarantineModalCustomId = (
     adminNotificationReady: false,
     recoveryThreadId: event.thread_id,
     recoveryThreadReady: false,
-  }).slice(0, 24);
+  }).slice(0, 20);
   return `verification:qa:${event.user_id}:${event.id}:${fingerprint}`;
 };
 
@@ -3044,6 +3044,91 @@ describe('InteractionHandler (unit)', () => {
     expect(securityActionService.repairActiveCase).not.toHaveBeenCalled();
     expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('containment state changed'),
+    });
+  });
+
+  it('binds modal submission to the containment preview shown before Continue', async () => {
+    const verificationEvent = buildVerificationEvent('ver-quarantine-confirmation-drift', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    const changedPreview: AccountQuarantinePreview = {
+      ...readyAccountQuarantinePreview,
+      rolePreview: {
+        ...readyAccountQuarantinePreview.rolePreview,
+        originalRoleIds: ['role-1', 'late-role'],
+        plannedRoleIds: ['role-1', 'late-role'],
+      },
+    };
+    const accountQuarantineService = {
+      preview: jest
+        .fn()
+        .mockResolvedValueOnce(readyAccountQuarantinePreview)
+        .mockResolvedValueOnce(changedPreview),
+      quarantine: jest.fn(),
+    };
+    const member = buildMember('guild-1', 'user-1');
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(member) },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accountQuarantineService as any
+    );
+    const previewInteraction = buildInteraction('admin_actions:q:c:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    Object.assign(previewInteraction, {
+      guild: { members: { fetch: jest.fn().mockResolvedValue(member) } },
+    });
+
+    await (handler as any).showAdminActionConfirmation(
+      previewInteraction,
+      { action: 'quarantine', surface: 'case', userId: 'user-1' },
+      { label: 'Continue', message: 'Confirm quarantine', style: ButtonStyle.Danger }
+    );
+
+    const previewResponse = (previewInteraction.update as jest.Mock).mock.calls[0][0];
+    const continueCustomId = previewResponse.components[0].toJSON().components[0].custom_id;
+    const continueInteraction = buildInteraction(continueCustomId, 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantOnlyModerationPermission(continueInteraction);
+    await handler.handleButtonInteraction(continueInteraction);
+
+    expect(accountQuarantineService.preview).toHaveBeenCalledTimes(1);
+    const modal = (continueInteraction.showModal as jest.Mock).mock.calls[0][0];
+    const submitInteraction = {
+      customId: modal.toJSON().custom_id,
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      fields: { getTextInputValue: jest.fn().mockReturnValue('Reported compromise') },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(submitInteraction);
+
+    expect(accountQuarantineService.preview).toHaveBeenCalledTimes(2);
+    expect(securityActionService.repairActiveCase).not.toHaveBeenCalled();
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(submitInteraction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('containment state changed'),
     });
   });

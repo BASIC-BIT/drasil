@@ -928,7 +928,7 @@ describe('UserModerationService (unit)', () => {
     );
     const moderationQueueService = {
       deleteCaseMirror: jest.fn().mockRejectedValue(new Error('queue unavailable')),
-      deleteCaseAttention: jest.fn().mockResolvedValue(undefined),
+      deleteCaseAttention: jest.fn().mockRejectedValue(new Error('attention unavailable')),
     } as unknown as IModerationQueueService;
     const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     const service = new UserModerationService(
@@ -949,6 +949,10 @@ describe('UserModerationService (unit)', () => {
         expect.stringContaining(`Failed to delete case ${verificationEvent.id}`),
         expect.any(Error)
       );
+      expect(consoleWarn).toHaveBeenCalledWith(
+        expect.stringContaining(`Failed to delete case attention for ${verificationEvent.id}`),
+        expect.any(Error)
+      );
     } finally {
       consoleWarn.mockRestore();
     }
@@ -959,6 +963,7 @@ describe('UserModerationService (unit)', () => {
     expect(adminActions).toHaveLength(1);
     expect(adminActions[0].action_type).toBe(AdminActionType.VERIFY);
     expect(moderationQueueService.deleteCaseMirror).toHaveBeenCalledWith(verificationEvent.id);
+    expect(moderationQueueService.deleteCaseAttention).toHaveBeenCalledWith(verificationEvent.id);
   });
 
   it('closes a pending case with no action and removes existing restriction', async () => {

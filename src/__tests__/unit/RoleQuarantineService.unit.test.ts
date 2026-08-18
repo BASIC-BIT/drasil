@@ -216,6 +216,7 @@ describe('RoleQuarantineService (unit)', () => {
       }),
       createRole({ id: 'event-role', permissions: [PermissionFlagsBits.ManageEvents] }),
       createRole({ id: 'create-event-role', permissions: [PermissionFlagsBits.CreateEvents] }),
+      createRole({ id: 'mention-role', permissions: [PermissionFlagsBits.MentionEveryone] }),
     ];
     const member = createMember(removableRoles);
     const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
@@ -241,6 +242,7 @@ describe('RoleQuarantineService (unit)', () => {
       'create-expression-role',
       'event-role',
       'create-event-role',
+      'mention-role',
     ]);
     expect(result.skippedRoles).toEqual([]);
   });
@@ -261,6 +263,7 @@ describe('RoleQuarantineService (unit)', () => {
       }),
       createRole({ id: 'event-role', permissions: [PermissionFlagsBits.ManageEvents] }),
       createRole({ id: 'create-event-role', permissions: [PermissionFlagsBits.CreateEvents] }),
+      createRole({ id: 'mention-role', permissions: [PermissionFlagsBits.MentionEveryone] }),
     ];
     const exemptRole = createRole({ id: '100000000000000005' });
     const manualRole = createRole({ id: '100000000000000010' });
@@ -297,6 +300,7 @@ describe('RoleQuarantineService (unit)', () => {
       'create-expression-role',
       'event-role',
       'create-event-role',
+      'mention-role',
       '100000000000000005',
       '100000000000000010',
     ]);
@@ -313,6 +317,7 @@ describe('RoleQuarantineService (unit)', () => {
             'create-expression-role',
             'event-role',
             'create-event-role',
+            'mention-role',
           ],
         }),
       })
@@ -828,7 +833,7 @@ describe('RoleQuarantineService (unit)', () => {
     const newMember = createMember([], [caseRole]);
     (newMember.roles.add as jest.Mock).mockRejectedValue(new Error('Missing permissions'));
     const verificationEventRepository = {
-      update: jest.fn().mockResolvedValue(createVerificationEvent()),
+      markParkedContainmentIncomplete: jest.fn().mockResolvedValue(null),
     };
     const service = new RoleQuarantineService(
       createConfigService({ role_quarantine_mode: 'off' }),
@@ -845,12 +850,10 @@ describe('RoleQuarantineService (unit)', () => {
     const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
 
     expect(result.containmentRegressed).toBe(true);
-    expect(verificationEventRepository.update).toHaveBeenCalledWith(parkedEvent.id, {
-      attention_state: CaseAttentionState.REVIEW_REQUIRED,
-      containment_status: CaseContainmentStatus.INCOMPLETE,
-      parked_at: null,
-      parked_by: null,
-    });
+    expect(verificationEventRepository.markParkedContainmentIncomplete).toHaveBeenCalledWith(
+      parkedEvent.id,
+      parkedEvent.metadata
+    );
   });
 
   it('skips unsafe newly gained roles during active-case enforcement', async () => {
@@ -912,10 +915,11 @@ describe('RoleQuarantineService (unit)', () => {
     const newMember = createMember([caseRole, managedRole], [caseRole, managedRole]);
     const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
     const verificationEventRepository = {
-      update: jest.fn().mockImplementation(async (_id, data) => ({
+      markParkedContainmentIncomplete: jest.fn().mockResolvedValue({
         ...createVerificationEvent(),
-        ...data,
-      })),
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+      }),
     };
     const lockdown = {
       auditMemberBypasses: jest.fn().mockResolvedValue({
@@ -948,10 +952,7 @@ describe('RoleQuarantineService (unit)', () => {
       null,
       'case-role'
     );
-    expect(verificationEventRepository.update).not.toHaveBeenCalledWith(
-      parkedEvent.id,
-      expect.objectContaining({ attention_state: CaseAttentionState.REVIEW_REQUIRED })
-    );
+    expect(verificationEventRepository.markParkedContainmentIncomplete).not.toHaveBeenCalled();
   });
 
   it('unparks a compromised account when an unremovable role has a live bypass', async () => {
@@ -965,9 +966,11 @@ describe('RoleQuarantineService (unit)', () => {
     const newMember = createMember([caseRole, managedRole], [caseRole, managedRole]);
     const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
     const verificationEventRepository = {
-      update: jest.fn().mockImplementation(async (_id, data) => ({
+      markParkedContainmentIncomplete: jest.fn().mockImplementation(async (_id, metadata) => ({
         ...createVerificationEvent(),
-        ...data,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        metadata,
       })),
     };
     const lockdown = {
@@ -994,14 +997,9 @@ describe('RoleQuarantineService (unit)', () => {
 
     await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
 
-    expect(verificationEventRepository.update).toHaveBeenCalledWith(
+    expect(verificationEventRepository.markParkedContainmentIncomplete).toHaveBeenCalledWith(
       parkedEvent.id,
-      expect.objectContaining({
-        attention_state: CaseAttentionState.REVIEW_REQUIRED,
-        containment_status: CaseContainmentStatus.INCOMPLETE,
-        parked_at: null,
-        parked_by: null,
-      })
+      parkedEvent.metadata
     );
   });
 

@@ -521,9 +521,14 @@ describe('ModerationQueueService', () => {
       createdTimestamp: Date.parse('2026-06-13T12:01:00Z'),
     } as unknown as Message;
 
-    await service.recordSupportThreadAttention(verificationEvent, firstMessage);
-    await service.recordSupportThreadAttention(verificationEvent, secondMessage);
+    const firstResult = await service.recordSupportThreadAttention(verificationEvent, firstMessage);
+    const secondResult = await service.recordSupportThreadAttention(
+      verificationEvent,
+      secondMessage
+    );
 
+    expect(firstResult).toEqual({ delivered: true, created: true });
+    expect(secondResult).toEqual({ delivered: true, created: false });
     expect(channel.send).toHaveBeenCalledTimes(1);
     expect(channel.send.mock.calls[0][0].content).toBe('<@&admin-role>');
     expect(channel.sentMessages[0].edit).toHaveBeenCalledTimes(1);
@@ -539,6 +544,10 @@ describe('ModerationQueueService', () => {
     expect(acknowledged).toBe(true);
     expect(channel.sentMessages[0].delete).toHaveBeenCalledTimes(1);
     expect(queueRepository.items).toHaveLength(0);
+
+    await expect(
+      service.recordSupportThreadAttention(verificationEvent, secondMessage)
+    ).resolves.toEqual({ delivered: true, created: true });
   });
 
   it('keeps recovery replies and outside-thread quarantine breaches as separate attention items', async () => {

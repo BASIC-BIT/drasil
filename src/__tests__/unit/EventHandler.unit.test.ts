@@ -95,6 +95,10 @@ describe('EventHandler (unit)', () => {
           }
         : undefined;
     if (verificationEventRepository) {
+      verificationEventRepository.findByUserAndServer ??= jest.fn().mockImplementation(async () => {
+        const active = await verificationEventRepository.findActiveByUserAndServer?.();
+        return active ? [active] : [];
+      });
       verificationEventRepository.claimParkedAttention ??= jest
         .fn()
         .mockImplementation(async () => verificationEventRepository.findActiveByUserAndServer?.());
@@ -173,6 +177,7 @@ describe('EventHandler (unit)', () => {
         createdTimestamp: new Date('2020-01-01T00:00:00.000Z').getTime(),
       },
       permissions,
+      roles: { cache: new Map() },
     } as unknown as GuildMember;
   }
 
@@ -1078,6 +1083,33 @@ describe('EventHandler (unit)', () => {
     );
   });
 
+  it('enforces an older incomplete compromised quarantine when the newest case is standard', async () => {
+    const newestStandardCase = {
+      id: 'verification-standard',
+      status: VerificationStatus.PENDING,
+      case_kind: CaseKind.STANDARD,
+      containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+    };
+    const incompleteCompromisedCase = {
+      id: 'verification-compromised',
+      status: VerificationStatus.PENDING,
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+    };
+    const verificationEventRepository = {
+      findActiveByUserAndServer: jest.fn().mockResolvedValue(newestStandardCase),
+      findByUserAndServer: jest
+        .fn()
+        .mockResolvedValue([newestStandardCase, incompleteCompromisedCase]),
+    };
+    const handler = buildHandler({ verificationEventRepository });
+
+    await expect((handler as any).findEnforcedActiveCase('user-1', 'guild-1')).resolves.toBe(
+      incompleteCompromisedCase
+    );
+  });
+
   it('does not refresh parked surfaces for a harmless retained managed role', async () => {
     const caseRole = { id: 'case-role' };
     const managedRole = { id: 'managed-role' };
@@ -1619,6 +1651,42 @@ describe('EventHandler (unit)', () => {
     await (handler as any).recordParkedQuarantineBreach(buildMessage(new PermissionsBitField()));
 
     expect(verificationEventRepository.findActiveByUserAndServer).not.toHaveBeenCalled();
+  });
+
+  it('does not query active cases for an uncached member without the configured case role', async () => {
+    const verificationEventRepository = {
+      findParkedByServer: jest.fn().mockResolvedValue([]),
+      findActiveByUserAndServer: jest.fn(),
+    };
+    const handler = buildHandler({
+      configService: buildQuarantineConfigService(),
+      verificationEventRepository,
+    });
+
+    await (handler as any).recordParkedQuarantineBreach(buildMessage(new PermissionsBitField()));
+
+    expect(verificationEventRepository.findParkedByServer).toHaveBeenCalledWith('guild-1');
+    expect(verificationEventRepository.findActiveByUserAndServer).not.toHaveBeenCalled();
+  });
+
+  it('checks an uncached member who still has the configured case role', async () => {
+    const verificationEventRepository = {
+      findParkedByServer: jest.fn().mockResolvedValue([]),
+      findActiveByUserAndServer: jest.fn().mockResolvedValue(null),
+    };
+    const handler = buildHandler({
+      configService: buildQuarantineConfigService(),
+      verificationEventRepository,
+    });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.member.roles.cache.set('case-role-1', { id: 'case-role-1' });
+
+    await (handler as any).recordParkedQuarantineBreach(message);
+
+    expect(verificationEventRepository.findActiveByUserAndServer).toHaveBeenCalledWith(
+      'user-1',
+      'guild-1'
+    );
   });
 
   it('continues monitoring an existing parked case after new quarantine entry is disabled', async () => {

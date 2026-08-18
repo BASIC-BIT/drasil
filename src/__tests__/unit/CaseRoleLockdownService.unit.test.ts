@@ -14,6 +14,7 @@ describe('CaseRoleLockdownService (unit)', () => {
   ];
   const recoveryParentDeniedPermissions = [
     PermissionFlagsBits.CreateInstantInvite,
+    PermissionFlagsBits.MentionEveryone,
     PermissionFlagsBits.SendMessages,
     PermissionFlagsBits.CreatePublicThreads,
     PermissionFlagsBits.CreatePrivateThreads,
@@ -25,6 +26,7 @@ describe('CaseRoleLockdownService (unit)', () => {
   ];
   const permissionFlagsByOption = {
     CreateInstantInvite: PermissionFlagsBits.CreateInstantInvite,
+    MentionEveryone: PermissionFlagsBits.MentionEveryone,
     ViewChannel: PermissionFlagsBits.ViewChannel,
     ReadMessageHistory: PermissionFlagsBits.ReadMessageHistory,
     SendMessages: PermissionFlagsBits.SendMessages,
@@ -318,6 +320,7 @@ describe('CaseRoleLockdownService (unit)', () => {
       effectiveMemberPermissions: [
         ...recoveryParentAllowedPermissions,
         PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.MentionEveryone,
       ],
     });
     const guild = createGuild([verificationChannel]);
@@ -334,7 +337,7 @@ describe('CaseRoleLockdownService (unit)', () => {
       expect.objectContaining({
         channelId: 'verification-channel-1',
         subjectId: 'user-1',
-        permissions: ['Send Messages'],
+        permissions: ['Mention Everyone', 'Send Messages'],
       }),
     ]);
   });
@@ -1204,6 +1207,28 @@ describe('CaseRoleLockdownService (unit)', () => {
 
     expect(audit.unremovablePrivilegeReasons).toEqual([
       'everyone_privileged_permissions:Manage Webhooks',
+    ]);
+  });
+
+  it('reports everyone Mention Everyone as a containment blocker', async () => {
+    const guild = createGuild([]);
+    guild.roles.cache.set('guild-1', {
+      id: 'guild-1',
+      permissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.MentionEveryone),
+      },
+    });
+    const member = {
+      id: 'user-1',
+      guild,
+      roles: { cache: new Map() },
+    } as any;
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const audit = await service.auditMemberBypasses(member);
+
+    expect(audit.unremovablePrivilegeReasons).toEqual([
+      'everyone_privileged_permissions:Mention Everyone',
     ]);
   });
 

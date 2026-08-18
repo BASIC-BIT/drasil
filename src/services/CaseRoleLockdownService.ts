@@ -154,6 +154,11 @@ const RECOVERY_PARENT_BLOCKED_PERMISSIONS: readonly LockdownPermission[] = [
     option: 'CreateInstantInvite',
     label: 'Create Instant Invite',
   },
+  {
+    flag: PermissionFlagsBits.MentionEveryone,
+    option: 'MentionEveryone',
+    label: 'Mention Everyone',
+  },
   { flag: PermissionFlagsBits.SendMessages, option: 'SendMessages', label: 'Send Messages' },
   {
     flag: PermissionFlagsBits.CreatePublicThreads,
@@ -185,6 +190,7 @@ const RECOVERY_PARENT_PERMISSION_OPTIONS: PermissionOverwriteOptions = {
   ViewChannel: true,
   ReadMessageHistory: true,
   CreateInstantInvite: false,
+  MentionEveryone: false,
   SendMessages: false,
   SendMessagesInThreads: true,
   CreatePublicThreads: false,
@@ -210,6 +216,7 @@ const COMPROMISED_ACCOUNT_PERMISSION_LABELS: readonly PermissionLabel[] = [
   { flag: PermissionFlagsBits.CreateGuildExpressions, label: 'Create Expressions' },
   { flag: PermissionFlagsBits.ManageEvents, label: 'Manage Events' },
   { flag: PermissionFlagsBits.CreateEvents, label: 'Create Events' },
+  { flag: PermissionFlagsBits.MentionEveryone, label: 'Mention Everyone' },
 ];
 
 const HIGH_RISK_RESTRICTED_ROLE_PERMISSIONS: readonly PermissionLabel[] = [
@@ -1107,6 +1114,9 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
     }
     if (!permissions.has(PermissionFlagsBits.SendMessagesInThreads)) {
       accessFailures.push('Missing Send Messages in Threads');
+    }
+    if (permissions.has(PermissionFlagsBits.MentionEveryone)) {
+      accessFailures.push('Mention Everyone');
     }
     if (thread.type === ChannelType.PrivateThread) {
       const threadMembers = await thread.members.fetch();

@@ -962,11 +962,16 @@ export class EventHandler implements IEventHandler {
         return;
       }
 
-      if (!getAccountQuarantineSettings(cachedConfig.settings).enabled) {
-        const parkedUserIds = await this.getCachedParkedQuarantineUserIds(message.guild.id);
-        if (!parkedUserIds.has(message.author.id)) {
-          return;
-        }
+      const parkedUserIds = await this.getCachedParkedQuarantineUserIds(message.guild.id);
+      const quarantineEntryEnabled = getAccountQuarantineSettings(cachedConfig.settings).enabled;
+      const hasConfiguredCaseRole = Boolean(
+        cachedConfig.case_role_id && message.member?.roles.cache.has(cachedConfig.case_role_id)
+      );
+      if (
+        !parkedUserIds.has(message.author.id) &&
+        (!quarantineEntryEnabled || !hasConfiguredCaseRole)
+      ) {
+        return;
       }
 
       const lockdownSettings = getCaseRoleLockdownSettings(cachedConfig.settings);
@@ -1075,21 +1080,24 @@ export class EventHandler implements IEventHandler {
       userId,
       serverId
     );
-    if (
-      newestActive?.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-      newestActive.attention_state === CaseAttentionState.PARKED
-    ) {
+    if (this.isEnforcedCompromisedAccountCase(newestActive)) {
       return newestActive;
     }
-    const parkedCase = (
+    const compromisedCase = (
       await this.verificationEventRepository.findByUserAndServer(userId, serverId)
-    ).find(
-      (event) =>
-        event.status === VerificationStatus.PENDING &&
-        event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-        event.attention_state === CaseAttentionState.PARKED
+    ).find((event) => this.isEnforcedCompromisedAccountCase(event));
+    return compromisedCase ?? newestActive;
+  }
+
+  private isEnforcedCompromisedAccountCase(
+    verificationEvent: VerificationEvent | null | undefined
+  ): verificationEvent is VerificationEvent {
+    return Boolean(
+      verificationEvent &&
+      verificationEvent.status === VerificationStatus.PENDING &&
+      verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+      verificationEvent.containment_status !== CaseContainmentStatus.NOT_APPLICABLE
     );
-    return parkedCase ?? newestActive;
   }
 
   private metadataToRecord(metadata: unknown): Record<string, unknown> {

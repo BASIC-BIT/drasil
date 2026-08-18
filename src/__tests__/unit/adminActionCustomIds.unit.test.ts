@@ -52,13 +52,15 @@ describe('adminActionCustomIds (unit)', () => {
   it('binds quarantine confirmation IDs to the previewed case', () => {
     const userId = '1234567890123456789';
     const verificationEventId = '12345678-1234-1234-1234-123456789012';
+    const confirmationFingerprint = '0123456789abcdef0123';
 
     const customId = buildAdminActionCustomId(
       'confirm_quarantine',
       'case',
       userId,
       undefined,
-      verificationEventId
+      verificationEventId,
+      confirmationFingerprint
     );
 
     expect(customId.length).toBeLessThanOrEqual(100);
@@ -67,6 +69,7 @@ describe('adminActionCustomIds (unit)', () => {
       surface: 'case',
       userId,
       verificationEventId,
+      confirmationFingerprint,
     });
   });
 
