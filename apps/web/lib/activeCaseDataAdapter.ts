@@ -327,12 +327,6 @@ function resolveUserIdentity(row: CaseSummaryRow): CaseUserIdentity {
   };
 }
 
-function pushSurface(surfaces: CaseSurfaceLink[], surface: CaseSurfaceLink | null): void {
-  if (surface) {
-    surfaces.push(surface);
-  }
-}
-
 function createChannelSurface(
   kind: CaseSurfaceKind,
   label: string,
@@ -356,58 +350,46 @@ function createMessageSurface(
 
 function buildSurfaces(row: CaseSummaryRow): CaseSurfaceLink[] {
   const metadata = metadataToRecord(row.metadata);
-  const surfaces: CaseSurfaceLink[] = [];
   const notificationChannelId = row.notification_channel_id ?? row.admin_channel_id;
-
-  pushSurface(
-    surfaces,
+  const reportIntakeThreadId = readString(metadata.report_intake_thread_id);
+  const sourceChannelId = readString(metadata.source_channel_id) ?? row.source_channel_id;
+  const sourceMessageId = readString(metadata.source_message_id) ?? row.source_message_id;
+  const surfaces = [
     createMessageSurface(
       'admin_notification',
       'Admin notification',
       row.server_id,
       notificationChannelId,
       row.notification_message_id
-    )
-  );
-  pushSurface(
-    surfaces,
+    ),
     createChannelSurface(
       'admin_evidence_thread',
       'Admin evidence',
       row.server_id,
       row.private_evidence_thread_id
-    )
-  );
-  pushSurface(
-    surfaces,
-    createChannelSurface('verification_thread', 'Verification thread', row.server_id, row.thread_id)
-  );
-
-  const reportIntakeThreadId = readString(metadata.report_intake_thread_id);
-  pushSurface(
-    surfaces,
+    ),
+    createChannelSurface(
+      'verification_thread',
+      'Verification thread',
+      row.server_id,
+      row.thread_id
+    ),
     createChannelSurface(
       'report_intake_thread',
       'Report intake',
       row.server_id,
       reportIntakeThreadId
-    )
-  );
-
-  const sourceChannelId = readString(metadata.source_channel_id) ?? row.source_channel_id;
-  const sourceMessageId = readString(metadata.source_message_id) ?? row.source_message_id;
-  pushSurface(
-    surfaces,
+    ),
     createMessageSurface(
       'source_message',
       'Source message',
       row.server_id,
       sourceChannelId,
       sourceMessageId
-    )
-  );
+    ),
+  ];
 
-  return surfaces;
+  return surfaces.filter((surface): surface is CaseSurfaceLink => surface !== null);
 }
 
 function resolvePresenceState(row: CaseSummaryRow): CasePresenceState {
