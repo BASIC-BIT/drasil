@@ -1482,7 +1482,9 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       } catch (banError) {
         for (const resolvedEvent of resolvedEvents) {
           await this.verificationEventRepository
-            .update(resolvedEvent.previousEvent.id, resolvedEvent.previousEvent)
+            .update(resolvedEvent.previousEvent.id, resolvedEvent.previousEvent, {
+              preservePendingCaseState: true,
+            })
             .catch((rollbackError) => {
               console.warn(
                 `Failed to roll back case ${resolvedEvent.previousEvent.id} after ban by ID failed:`,

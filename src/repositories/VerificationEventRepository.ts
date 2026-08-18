@@ -61,6 +61,8 @@ export interface IVerificationEventRepository {
       touchUpdatedAt?: boolean;
       /** Only for persisting a Discord ban or kick that has already succeeded. */
       allowQuarantineOverride?: boolean;
+      /** Only for rolling back a failed Discord action to an exact prior pending state. */
+      preservePendingCaseState?: boolean;
     }
   ): Promise<VerificationEvent | null>; // Return null if not found
 }
@@ -397,7 +399,11 @@ export class VerificationEventRepository implements IVerificationEventRepository
   async update(
     id: string,
     data: Partial<VerificationEvent>,
-    options: { touchUpdatedAt?: boolean; allowQuarantineOverride?: boolean } = {}
+    options: {
+      touchUpdatedAt?: boolean;
+      allowQuarantineOverride?: boolean;
+      preservePendingCaseState?: boolean;
+    } = {}
   ): Promise<VerificationEvent | null> {
     try {
       const now = new Date();
@@ -444,11 +450,13 @@ export class VerificationEventRepository implements IVerificationEventRepository
           // Nullify resolution fields if status is pending
           updateData.resolved_at = null;
           updateData.resolved_by = null;
-          updateData.attention_state = CaseAttentionState.REVIEW_REQUIRED;
-          updateData.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
-          updateData.quarantine_attempt_id = null;
-          updateData.parked_at = null;
-          updateData.parked_by = null;
+          if (options.preservePendingCaseState !== true) {
+            updateData.attention_state = CaseAttentionState.REVIEW_REQUIRED;
+            updateData.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
+            updateData.quarantine_attempt_id = null;
+            updateData.parked_at = null;
+            updateData.parked_by = null;
+          }
         }
       }
 

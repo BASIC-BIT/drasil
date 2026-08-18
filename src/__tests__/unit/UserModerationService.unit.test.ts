@@ -4,7 +4,9 @@ import { AdminActionService } from '../../services/AdminActionService';
 import { ModerationOutcomeService } from '../../services/ModerationOutcomeService';
 import {
   AdminActionType,
+  CaseAttentionState,
   CaseContainmentStatus,
+  CaseKind,
   DetectionType,
   ModerationOutcomeSource,
   ModerationOutcomeType,
@@ -1762,6 +1764,59 @@ describe('UserModerationService (unit)', () => {
         source: ModerationOutcomeSource.DRASIL,
         verification_event_id: verificationEvent.id,
         detection_event_id: detectionEvent.id,
+      })
+    );
+  });
+
+  it('preserves a parked quarantine when a ban by ID fails', async () => {
+    const guildId = 'guild-ban-by-id-rollback';
+    const userId = 'user-ban-by-id-rollback';
+    const moderator = { id: 'mod-ban' } as User;
+    const guild = {
+      id: guildId,
+      client: { users: { fetch: jest.fn().mockRejectedValue(new Error('Unknown user')) } },
+      bans: { create: jest.fn().mockRejectedValue(new Error('Missing permissions')) },
+    } as unknown as Guild;
+    const parkedAt = new Date('2026-08-18T07:00:00Z');
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'left-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: parkedAt,
+      parked_by: moderator.id,
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.banUserById(guild, userId, 'banned after leave', moderator)
+    ).rejects.toThrow('Missing permissions');
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+        parked_at: parkedAt,
+        parked_by: moderator.id,
       })
     );
   });

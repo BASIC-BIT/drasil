@@ -681,7 +681,11 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
   async update(
     id: string,
     data: Partial<VerificationEvent>,
-    options: { touchUpdatedAt?: boolean; allowQuarantineOverride?: boolean } = {}
+    options: {
+      touchUpdatedAt?: boolean;
+      allowQuarantineOverride?: boolean;
+      preservePendingCaseState?: boolean;
+    } = {}
   ): Promise<VerificationEvent | null> {
     const eventIndex = this.events.findIndex((item) => item.id === id);
     if (eventIndex === -1) {
@@ -738,11 +742,13 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       if (data.status === VerificationStatus.PENDING) {
         updated.resolved_at = null;
         updated.resolved_by = null;
-        updated.attention_state = CaseAttentionState.REVIEW_REQUIRED;
-        updated.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
-        updated.quarantine_attempt_id = null;
-        updated.parked_at = null;
-        updated.parked_by = null;
+        if (options.preservePendingCaseState !== true) {
+          updated.attention_state = CaseAttentionState.REVIEW_REQUIRED;
+          updated.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
+          updated.quarantine_attempt_id = null;
+          updated.parked_at = null;
+          updated.parked_by = null;
+        }
       }
     }
 
