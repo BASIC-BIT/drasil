@@ -958,6 +958,7 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(result).toMatchObject({
       repaired: true,
+      notificationReady: true,
       verificationEventId: verificationEvent.id,
       threadId: 'thread-1',
       userAdded: true,
@@ -1056,6 +1057,7 @@ describe('SecurityActionService (unit)', () => {
       );
       expect(result).toMatchObject({
         repaired: true,
+        notificationReady: false,
         verificationEventId: verificationEvent.id,
         threadId: 'thread-1',
         userAdded: true,

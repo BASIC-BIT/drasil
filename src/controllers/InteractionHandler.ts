@@ -2801,6 +2801,11 @@ export class InteractionHandler implements IInteractionHandler {
           'A usable user verification thread is required before this account can be quarantined.'
         );
       }
+      if (repair.notificationReady !== true) {
+        throw new Error(
+          'A usable persistent admin notification is required before this account can be quarantined.'
+        );
+      }
 
       const result = await this.accountQuarantineService.quarantine(
         member,

@@ -2844,6 +2844,7 @@ describe('InteractionHandler (unit)', () => {
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
     securityActionService.repairActiveCase.mockResolvedValue({
       repaired: true,
+      notificationReady: true,
       threadCreated: false,
       threadId: 'thread-1',
       verificationEventId: verificationEvent.id,
@@ -3030,6 +3031,62 @@ describe('InteractionHandler (unit)', () => {
     expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('usable user verification thread is required'),
+    });
+  });
+
+  it('requires a usable persistent admin notification before applying quarantine', async () => {
+    const verificationEvent = buildVerificationEvent('ver-notification-required', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    securityActionService.repairActiveCase.mockResolvedValue({
+      repaired: true,
+      notificationReady: false,
+      threadCreated: false,
+      threadId: verificationEvent.thread_id,
+      verificationEventId: verificationEvent.id,
+      userAdded: true,
+      promptSent: false,
+      promptAlreadyPresent: true,
+      message: 'Thread repaired, but notification unavailable.',
+    });
+    const accountQuarantineService = { quarantine: jest.fn() };
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accountQuarantineService as any
+    );
+    const interaction = {
+      customId: `verification:quarantine_modal:user-1:${verificationEvent.id}`,
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      fields: { getTextInputValue: jest.fn().mockReturnValue('Reported compromise') },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('usable persistent admin notification is required'),
     });
   });
 
