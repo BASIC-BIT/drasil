@@ -40,9 +40,11 @@ import {
   CaseContainmentStatus,
   CaseKind,
   DetectionType,
+  VerificationStatus,
   type GlobalMessageWatchlistEntry,
   type Server,
   type ServerSettings,
+  type VerificationEvent,
 } from '../repositories/types';
 import {
   ISetupDiagnosticsService,
@@ -884,10 +886,7 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
-      newMember.id,
-      newMember.guild.id
-    );
+    const verificationEvent = await this.findEnforcedActiveCase(newMember.id, newMember.guild.id);
     if (!verificationEvent) {
       return;
     }
@@ -989,10 +988,7 @@ export class EventHandler implements IEventHandler {
         return;
       }
 
-      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
-        message.author.id,
-        message.guild.id
-      );
+      const activeCase = await this.findEnforcedActiveCase(message.author.id, message.guild.id);
       if (
         activeCase?.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
         activeCase.attention_state === CaseAttentionState.PARKED &&
@@ -1037,6 +1033,34 @@ export class EventHandler implements IEventHandler {
     } catch (error) {
       console.warn('Failed to record parked quarantine breach attention:', error);
     }
+  }
+
+  private async findEnforcedActiveCase(
+    userId: string,
+    serverId: string
+  ): Promise<VerificationEvent | null> {
+    if (!this.verificationEventRepository) {
+      return null;
+    }
+    const newestActive = await this.verificationEventRepository.findActiveByUserAndServer(
+      userId,
+      serverId
+    );
+    if (
+      newestActive?.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+      newestActive.attention_state === CaseAttentionState.PARKED
+    ) {
+      return newestActive;
+    }
+    const parkedCase = (
+      await this.verificationEventRepository.findByUserAndServer(userId, serverId)
+    ).find(
+      (event) =>
+        event.status === VerificationStatus.PENDING &&
+        event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+        event.attention_state === CaseAttentionState.PARKED
+    );
+    return parkedCase ?? newestActive;
   }
 
   private async getCachedParkedQuarantineUserIds(serverId: string): Promise<ReadonlySet<string>> {

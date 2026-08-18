@@ -79,7 +79,7 @@ export interface IModerationQueueService {
   recordSupportThreadAttention(
     verificationEvent: VerificationEvent,
     message: Message
-  ): Promise<void>;
+  ): Promise<boolean>;
   recordQuarantineBreachAttention(
     verificationEvent: VerificationEvent,
     message: Message
@@ -385,12 +385,12 @@ export class ModerationQueueService implements IModerationQueueService {
   public async recordSupportThreadAttention(
     verificationEvent: VerificationEvent,
     message: Message
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (verificationEvent.status !== VerificationStatus.PENDING) {
-      return;
+      return false;
     }
 
-    await this.upsertAttentionItem({
+    return await this.upsertAttentionItem({
       itemType: ModerationQueueItemType.SUPPORT_THREAD_ATTENTION,
       serverId: verificationEvent.server_id,
       userId: verificationEvent.user_id,
@@ -421,8 +421,8 @@ export class ModerationQueueService implements IModerationQueueService {
       return;
     }
 
-    await this.runAttentionSerialized(`quarantine-breach:${verificationEvent.id}`, () =>
-      this.upsertAttentionItem({
+    await this.runAttentionSerialized(`quarantine-breach:${verificationEvent.id}`, async () => {
+      await this.upsertAttentionItem({
         itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
         serverId: verificationEvent.server_id,
         userId: verificationEvent.user_id,
@@ -433,8 +433,8 @@ export class ModerationQueueService implements IModerationQueueService {
         description: `<@${verificationEvent.user_id}> posted outside the permitted recovery thread while quarantined.`,
         subjectFieldName: 'Case',
         subjectFieldValue: `\`${verificationEvent.id}\``,
-      })
-    );
+      });
+    });
   }
 
   public async recordReportThreadAttention(
@@ -559,11 +559,11 @@ export class ModerationQueueService implements IModerationQueueService {
     description: string;
     subjectFieldName: string;
     subjectFieldValue: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const serverConfig = await this.configService.getServerConfig(input.serverId);
     const queueChannel = await this.getQueueChannel(serverConfig.settings);
     if (!queueChannel) {
-      return;
+      return false;
     }
 
     const existing =
@@ -578,7 +578,7 @@ export class ModerationQueueService implements IModerationQueueService {
             input.sourceThreadId
           );
     if (existing?.last_source_message_id === input.message.id) {
-      return;
+      return true;
     }
 
     const item = await this.moderationQueueRepository.upsert({
@@ -621,6 +621,7 @@ export class ModerationQueueService implements IModerationQueueService {
         message.id
       );
     }
+    return true;
   }
 
   private buildCaseMirrorPayload(

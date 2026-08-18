@@ -1834,7 +1834,9 @@ describe('UserModerationService (unit)', () => {
       userId,
       VerificationStatus.PENDING
     );
-    jest.spyOn(verificationEventRepository, 'update').mockRejectedValueOnce(new Error('DB down'));
+    jest
+      .spyOn(verificationEventRepository, 'completeTerminalActions')
+      .mockRejectedValueOnce(new Error('DB down'));
 
     const service = new UserModerationService(
       serverMemberRepository,
@@ -2315,7 +2317,7 @@ describe('UserModerationService (unit)', () => {
     notificationManager.logActionToMessage.mockResolvedValue(false);
     (guild.bans.create as jest.Mock).mockImplementation(async () => {
       const updatedBeforeBan = await verificationEventRepository.findById(verificationEvent.id);
-      expect(updatedBeforeBan?.status).toBe(VerificationStatus.BANNED);
+      expect(updatedBeforeBan?.status).toBe(VerificationStatus.PENDING);
       return {};
     });
 

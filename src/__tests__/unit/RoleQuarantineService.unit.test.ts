@@ -901,7 +901,12 @@ describe('RoleQuarantineService (unit)', () => {
     const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
 
     expect(result.skippedRoles).toEqual([expect.objectContaining({ role_id: 'managed-role' })]);
-    expect(lockdown.auditMemberBypasses).toHaveBeenCalledWith(newMember, new Set(), null);
+    expect(lockdown.auditMemberBypasses).toHaveBeenCalledWith(
+      newMember,
+      new Set(),
+      null,
+      'case-role'
+    );
     expect(verificationEventRepository.update).not.toHaveBeenCalledWith(
       parkedEvent.id,
       expect.objectContaining({ attention_state: CaseAttentionState.REVIEW_REQUIRED })
@@ -1020,6 +1025,40 @@ describe('RoleQuarantineService (unit)', () => {
     await expect(snapshots.findActiveByServerAndUser('guild-1', 'user-1')).resolves.toBeNull();
     const updated = await snapshots.update(snapshot.id, {});
     expect(updated?.status).toBe(RoleQuarantineSnapshotStatus.RESTORED);
+  });
+
+  it('abandons an earlier membership snapshot instead of restoring its roles', async () => {
+    const previousMembershipRole = createRole({ id: 'previous-membership-role' });
+    const member = createMember([], [previousMembershipRole]);
+    Object.assign(member, { joinedAt: new Date(Date.now() + 60_000) });
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const snapshot = await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'verification-1',
+      mode: 'on',
+      originalRoleIds: [previousMembershipRole.id],
+      plannedRoleIds: [previousMembershipRole.id],
+      removedRoleIds: [previousMembershipRole.id],
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'on' }),
+      snapshots
+    );
+
+    const result = await service.restoreMemberRoles(member, { id: 'moderator-1' } as User);
+
+    expect(result.status).toBe('abandoned_membership_changed');
+    expect(member.roles.add).not.toHaveBeenCalled();
+    expect(await snapshots.update(snapshot.id, {})).toEqual(
+      expect.objectContaining({
+        status: RoleQuarantineSnapshotStatus.ABANDONED,
+        metadata: expect.objectContaining({
+          abandon_reason: 'membership_replaced_before_role_restoration',
+          abandoned_by: 'moderator-1',
+        }),
+      })
+    );
   });
 
   it('does not restore roles removed after restriction started', async () => {

@@ -729,7 +729,7 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     );
   });
 
-  it('atomically fences a parked case through terminal-action completion', async () => {
+  it('atomically completes parked and ordinary pending cases after a terminal action', async () => {
     const serverId = 'guild-terminal-action-claim';
     const userId = 'user-terminal-action-claim';
     const servers = new ServerRepository(prisma);
@@ -738,6 +738,12 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     await servers.getOrCreateServer(serverId);
     await users.getOrCreateUser(userId, 'terminal-target');
     const verification = await verifications.createFromDetection(
+      null,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const standardVerification = await verifications.createFromDetection(
       null,
       serverId,
       userId,
@@ -776,21 +782,57 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       )
     ).resolves.toBeNull();
 
-    const completed = await verifications.update(
-      verification.id,
+    const completions = [
       {
-        status: VerificationStatus.KICKED,
-        resolved_by: 'moderator-1',
-        resolved_at: new Date('2026-08-18T12:01:00.000Z'),
+        id: standardVerification.id,
+        metadata: {},
+        requiresTerminalActionClaim: false,
       },
-      { expectedQuarantineAttemptId: attemptId }
+      {
+        id: verification.id,
+        metadata: {},
+        requiresTerminalActionClaim: true,
+      },
+    ];
+    await expect(
+      verifications.completeTerminalActions(
+        completions,
+        `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}wrong`,
+        VerificationStatus.KICKED,
+        'moderator-1',
+        new Date('2026-08-18T12:01:00.000Z'),
+        'terminal action'
+      )
+    ).resolves.toBeNull();
+    await expect(verifications.findById(standardVerification.id)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.PENDING })
     );
-    expect(completed).toEqual(
+    await expect(verifications.findById(verification.id)).resolves.toEqual(
       expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        quarantine_attempt_id: attemptId,
+      })
+    );
+
+    const completed = await verifications.completeTerminalActions(
+      completions,
+      attemptId,
+      VerificationStatus.KICKED,
+      'moderator-1',
+      new Date('2026-08-18T12:01:00.000Z'),
+      'terminal action'
+    );
+    expect(completed).toEqual([
+      expect.objectContaining({
+        id: standardVerification.id,
+        status: VerificationStatus.KICKED,
+      }),
+      expect.objectContaining({
+        id: verification.id,
         status: VerificationStatus.KICKED,
         quarantine_attempt_id: null,
         containment_status: CaseContainmentStatus.NOT_APPLICABLE,
-      })
-    );
+      }),
+    ]);
   });
 });

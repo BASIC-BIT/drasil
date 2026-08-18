@@ -339,6 +339,45 @@ describe('CaseRoleLockdownService (unit)', () => {
     ]);
   });
 
+  it('audits a persisted quarantine role after the configured role changes', async () => {
+    const persistedRoleId = 'persisted-case-role';
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+    });
+    const guild = createGuild([verificationChannel]);
+    const persistedRole = {
+      id: persistedRoleId,
+      managed: false,
+      permissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.Administrator),
+      },
+    };
+    guild.roles.fetch.mockImplementation((roleId: string) =>
+      Promise.resolve(roleId === persistedRoleId ? persistedRole : null)
+    );
+    guild.roles.cache.set(persistedRoleId, persistedRole);
+    const member = {
+      id: 'user-1',
+      guild,
+      roles: { cache: new Map([[persistedRoleId, persistedRole]]) },
+    } as any;
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const report = await service.auditGuild(guild, null, persistedRoleId);
+    const memberAudit = await service.auditMemberBypasses(member, new Set(), null, persistedRoleId);
+
+    expect(guild.roles.fetch).toHaveBeenCalledWith(persistedRoleId);
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'lockdown-case-role-global-permissions' }),
+      ])
+    );
+    expect(memberAudit.retainedAdministratorRoleIds).toEqual([]);
+    expect(memberAudit.retainedPrivilegedRoleIds).toEqual([]);
+  });
+
   it('blocks apply when an allowed channel is synced under a denied category', async () => {
     const category = createChannel({
       id: 'category-1',

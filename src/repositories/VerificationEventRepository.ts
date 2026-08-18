@@ -29,6 +29,12 @@ export interface VerificationReleaseCompletion {
   requiresCaseRoleReleaseClaim: boolean;
 }
 
+export interface TerminalActionCompletion {
+  id: string;
+  metadata: VerificationEvent['metadata'];
+  requiresTerminalActionClaim: boolean;
+}
+
 class VerificationReleaseConflictError extends Error {}
 class TerminalActionClaimConflictError extends Error {}
 
@@ -87,6 +93,14 @@ export interface IVerificationEventRepository {
     serverId: string,
     userId: string,
     attemptId: string
+  ): Promise<VerificationEvent[] | null>;
+  completeTerminalActions(
+    completions: readonly TerminalActionCompletion[],
+    attemptId: string | null,
+    status: VerificationStatus.BANNED | VerificationStatus.KICKED,
+    resolvedBy: string,
+    resolvedAt: Date,
+    notes: string
   ): Promise<VerificationEvent[] | null>;
   completeCaseRoleRelease(
     id: string,
@@ -364,6 +378,70 @@ export class VerificationEventRepository implements IVerificationEventRepository
         return null;
       }
       this.handleError(error, 'claimTerminalActions');
+    }
+  }
+
+  async completeTerminalActions(
+    completions: readonly TerminalActionCompletion[],
+    attemptId: string | null,
+    status: VerificationStatus.BANNED | VerificationStatus.KICKED,
+    resolvedBy: string,
+    resolvedAt: Date,
+    notes: string
+  ): Promise<VerificationEvent[] | null> {
+    if (completions.length === 0) {
+      return [];
+    }
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        for (const completion of completions) {
+          if (completion.requiresTerminalActionClaim && !attemptId) {
+            throw new TerminalActionClaimConflictError();
+          }
+          const completed = await transaction.verification_events.updateMany({
+            where: {
+              id: completion.id,
+              status: VerificationStatus.PENDING,
+              ...(completion.requiresTerminalActionClaim
+                ? {
+                    containment_status: CaseContainmentStatus.IN_PROGRESS,
+                    quarantine_attempt_id: attemptId as string,
+                  }
+                : {
+                    containment_status: { not: CaseContainmentStatus.IN_PROGRESS },
+                  }),
+            },
+            data: {
+              status,
+              resolved_by: resolvedBy,
+              resolved_at: resolvedAt,
+              notes,
+              attention_state: CaseAttentionState.REVIEW_REQUIRED,
+              containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+              quarantine_attempt_id: null,
+              quarantine_lease_renewed_at: null,
+              parked_at: null,
+              parked_by: null,
+              metadata: completion.metadata as Prisma.InputJsonValue,
+              updated_at: new Date(),
+            },
+          });
+          if (completed.count !== 1) {
+            throw new TerminalActionClaimConflictError();
+          }
+        }
+
+        const completedEvents = await transaction.verification_events.findMany({
+          where: { id: { in: completions.map((completion) => completion.id) } },
+        });
+        const byId = new Map(completedEvents.map((event) => [event.id, event]));
+        return completions.map((completion) => byId.get(completion.id) as VerificationEvent);
+      })) as VerificationEvent[];
+    } catch (error) {
+      if (error instanceof TerminalActionClaimConflictError) {
+        return null;
+      }
+      this.handleError(error, 'completeTerminalActions');
     }
   }
 

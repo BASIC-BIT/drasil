@@ -638,12 +638,47 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     );
   }
 
-  private terminalResolutionOptions(
-    event: VerificationEvent
-  ): { expectedQuarantineAttemptId: string } | undefined {
-    return isCaseTerminalActionAttempt(event.quarantine_attempt_id)
-      ? { expectedQuarantineAttemptId: event.quarantine_attempt_id as string }
-      : undefined;
+  private async completeTerminalVerificationEvents(
+    events: readonly VerificationEvent[],
+    status: VerificationStatus.BANNED | VerificationStatus.KICKED,
+    moderator: User,
+    resolvedAt: Date,
+    notes: string,
+    metadataFor: (event: VerificationEvent) => VerificationEvent['metadata']
+  ): Promise<Array<{ event: VerificationEvent; previousStatus: VerificationStatus }>> {
+    const terminalAttemptIds = [
+      ...new Set(
+        events
+          .map((event) => event.quarantine_attempt_id)
+          .filter(
+            (attemptId): attemptId is string =>
+              typeof attemptId === 'string' && isCaseTerminalActionAttempt(attemptId)
+          )
+      ),
+    ];
+    if (terminalAttemptIds.length > 1) {
+      throw new Error('Pending cases have conflicting terminal-action ownership.');
+    }
+    const completedEvents = await this.verificationEventRepository.completeTerminalActions(
+      events.map((event) => ({
+        id: event.id,
+        metadata: metadataFor(event),
+        requiresTerminalActionClaim: isCaseTerminalActionAttempt(event.quarantine_attempt_id),
+      })),
+      terminalAttemptIds[0] ?? null,
+      status,
+      moderator.id,
+      resolvedAt,
+      notes
+    );
+    if (!completedEvents) {
+      throw new Error(`Failed to atomically update verification events to ${status}.`);
+    }
+    const completedById = new Map(completedEvents.map((event) => [event.id, event]));
+    return events.map((event) => ({
+      event: completedById.get(event.id) as VerificationEvent,
+      previousStatus: event.status,
+    }));
   }
 
   private assertNoQuarantineInProgress(
@@ -1253,37 +1288,23 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     const verificationEvent =
       pendingVerificationEvents.length > 0 ? pendingVerificationEvents[0] : null;
     const resolvedAt = new Date();
-    const resolvedEvents: Array<{
+    let resolvedEvents: Array<{
       event: VerificationEvent;
       previousStatus: VerificationStatus;
     }> = [];
 
     try {
-      for (const pendingEvent of pendingVerificationEvents) {
-        const previousStatus = pendingEvent.status;
-        const eventToUpdate = {
-          ...pendingEvent,
-          status: VerificationStatus.BANNED,
-          resolved_by: moderator.id,
-          resolved_at: resolvedAt,
-          notes: reason,
-          metadata: this.withoutActiveModerationOperation(
+      resolvedEvents = await this.completeTerminalVerificationEvents(
+        pendingVerificationEvents,
+        VerificationStatus.BANNED,
+        moderator,
+        resolvedAt,
+        reason,
+        (pendingEvent) =>
+          this.withoutActiveModerationOperation(
             this.withUserSnapshot(pendingEvent.metadata, member.user, member)
-          ),
-        };
-        const updatedEvent = await this.verificationEventRepository.update(
-          pendingEvent.id,
-          eventToUpdate,
-          this.terminalResolutionOptions(pendingEvent)
-        );
-        if (!updatedEvent) {
-          throw new Error(
-            `Failed to update verification event ${pendingEvent.id} status to BANNED after the Discord ban.`
-          );
-        }
-
-        resolvedEvents.push({ event: updatedEvent, previousStatus });
-      }
+          )
+      );
 
       await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'drasil_ban', moderator.id);
 
@@ -1382,30 +1403,17 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     const pendingEvents = verificationEvents.filter(
       (event) => event.status === VerificationStatus.PENDING
     );
-    const resolvedEvents: Array<{
+    let resolvedEvents: Array<{
       event: VerificationEvent;
       previousStatus: VerificationStatus;
-    }> = [];
-
-    for (const pendingEvent of pendingEvents) {
-      const eventToUpdate = {
-        ...pendingEvent,
-        status: VerificationStatus.BANNED,
-        resolved_by: moderator.id,
-        resolved_at: resolvedAt,
-        notes: reason,
-        metadata: this.withUserSnapshot(pendingEvent.metadata, existingBan.user),
-      };
-      const updatedEvent = await this.verificationEventRepository.update(
-        pendingEvent.id,
-        eventToUpdate,
-        this.terminalResolutionOptions(pendingEvent)
-      );
-      if (!updatedEvent) {
-        throw new Error(`Failed to finalize verification event ${pendingEvent.id}.`);
-      }
-      resolvedEvents.push({ event: updatedEvent, previousStatus: pendingEvent.status });
-    }
+    }> = await this.completeTerminalVerificationEvents(
+      pendingEvents,
+      VerificationStatus.BANNED,
+      moderator,
+      resolvedAt,
+      reason,
+      (pendingEvent) => this.withUserSnapshot(pendingEvent.metadata, existingBan.user)
+    );
 
     if (
       targetEvent.status === VerificationStatus.BANNED &&
@@ -1533,34 +1541,20 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         throw error;
       }
       console.log(`Kicked user ${member.user.tag}. Reason: ${reason}`);
-      const resolvedEvents: Array<{
+      let resolvedEvents: Array<{
         event: VerificationEvent;
         previousStatus: VerificationStatus;
       }> = [];
 
       try {
-        for (const pendingEvent of claimedVerificationEvents) {
-          const previousStatus = pendingEvent.status;
-          const eventToUpdate = {
-            ...pendingEvent,
-            status: VerificationStatus.KICKED,
-            resolved_by: moderator.id,
-            resolved_at: resolvedAt,
-            notes: reason,
-            metadata: this.withUserSnapshot(pendingEvent.metadata, member.user, member),
-          };
-          const updatedEvent = await this.verificationEventRepository.update(
-            pendingEvent.id,
-            eventToUpdate,
-            this.terminalResolutionOptions(pendingEvent)
-          );
-          if (!updatedEvent) {
-            throw new Error(
-              `Failed to update verification event ${pendingEvent.id} status to KICKED after the Discord kick.`
-            );
-          }
-          resolvedEvents.push({ event: updatedEvent, previousStatus });
-        }
+        resolvedEvents = await this.completeTerminalVerificationEvents(
+          claimedVerificationEvents,
+          VerificationStatus.KICKED,
+          moderator,
+          resolvedAt,
+          reason,
+          (pendingEvent) => this.withUserSnapshot(pendingEvent.metadata, member.user, member)
+        );
 
         await this.tryAbandonRoleQuarantine(
           member.guild.id,
@@ -1641,65 +1635,39 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       const pendingVerificationEvents = verificationEvents.filter(
         (event) => event.status === VerificationStatus.PENDING
       );
-      this.assertNoQuarantineInProgress(pendingVerificationEvents);
+      const terminalClaim = await this.claimParkedTerminalActions(pendingVerificationEvents);
+      const claimedVerificationEvents = terminalClaim.events;
       const resolvedAt = new Date();
-      const resolvedEvents: Array<{
+      let resolvedEvents: Array<{
         event: VerificationEvent;
-        previousEvent: VerificationEvent;
         previousStatus: VerificationStatus;
       }> = [];
-
-      for (const pendingEvent of pendingVerificationEvents) {
-        const previousStatus = pendingEvent.status;
-        const eventToUpdate = {
-          ...pendingEvent,
-          status: VerificationStatus.BANNED,
-          resolved_by: moderator.id,
-          resolved_at: resolvedAt,
-          notes: reason,
-          metadata: {
-            ...this.metadataToRecord(pendingEvent.metadata),
-            ...(targetUser ? { user_snapshot: this.buildUserSnapshot(targetUser) } : {}),
-            membership_state: 'left_or_removed',
-            banned_by_id_at: resolvedAt.toISOString(),
-          } as VerificationEvent['metadata'],
-        };
-        const updatedEvent = await this.verificationEventRepository.update(
-          pendingEvent.id,
-          eventToUpdate
-        );
-        if (!updatedEvent) {
-          throw new Error(
-            `Account quarantine started before case ${pendingEvent.id} could be banned by ID.`
-          );
-        }
-        resolvedEvents.push({
-          event: updatedEvent,
-          previousEvent: pendingEvent,
-          previousStatus,
-        });
-      }
 
       try {
         await guild.bans.create(targetUser ?? userId, { reason });
       } catch (banError) {
-        for (const resolvedEvent of resolvedEvents) {
-          await this.verificationEventRepository
-            .update(resolvedEvent.previousEvent.id, resolvedEvent.previousEvent, {
-              preservePendingCaseState: true,
-            })
-            .catch((rollbackError) => {
-              console.warn(
-                `Failed to roll back case ${resolvedEvent.previousEvent.id} after ban by ID failed:`,
-                rollbackError
-              );
-            });
-        }
-
+        await this.rollbackParkedTerminalActions(
+          claimedVerificationEvents,
+          terminalClaim.attemptId
+        );
         throw banError;
       }
 
       console.log(`Banned user ${targetUser?.tag ?? userId} by ID. Reason: ${reason}`);
+      resolvedEvents = await this.completeTerminalVerificationEvents(
+        claimedVerificationEvents,
+        VerificationStatus.BANNED,
+        moderator,
+        resolvedAt,
+        reason,
+        (pendingEvent) =>
+          ({
+            ...this.metadataToRecord(pendingEvent.metadata),
+            ...(targetUser ? { user_snapshot: this.buildUserSnapshot(targetUser) } : {}),
+            membership_state: 'left_or_removed',
+            banned_by_id_at: resolvedAt.toISOString(),
+          }) as VerificationEvent['metadata']
+      );
       await this.tryAbandonRoleQuarantine(guild.id, userId, 'drasil_ban_by_id', moderator.id);
 
       try {

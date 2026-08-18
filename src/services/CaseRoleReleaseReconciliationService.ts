@@ -282,7 +282,11 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
         return;
       }
       const result = await this.roleQuarantineService.restoreMemberRoles(member);
-      if (result.status === 'restored' || result.status === 'no_active_snapshot') {
+      if (
+        result.status === 'restored' ||
+        result.status === 'no_active_snapshot' ||
+        result.status === 'abandoned_membership_changed'
+      ) {
         this.roleRestorationAlertedSnapshotIds.delete(snapshot.id);
         return;
       }
@@ -347,8 +351,13 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
         verificationEvent.quarantine_case_role_id ?? serverConfig.case_role_id;
       caseRolePresent = assignedCaseRoleId !== null && member.roles.cache.has(assignedCaseRoleId);
       const [lockdown, memberAudit] = await Promise.all([
-        this.lockdownService.auditGuild(guild, verificationEvent.thread_id),
-        this.lockdownService.auditMemberBypasses(member, new Set(), verificationEvent.thread_id),
+        this.lockdownService.auditGuild(guild, verificationEvent.thread_id, assignedCaseRoleId),
+        this.lockdownService.auditMemberBypasses(
+          member,
+          new Set(),
+          verificationEvent.thread_id,
+          assignedCaseRoleId
+        ),
       ]);
       const blockingWarning = lockdown.issues.some(
         (issue) => issue.code === 'lockdown-case-role-global-permissions'

@@ -79,11 +79,16 @@ export interface CaseRoleLockdownMemberAudit {
 }
 
 export interface ICaseRoleLockdownService {
-  auditGuild(guild: Guild, recoveryThreadId?: string | null): Promise<CaseRoleLockdownReport>;
+  auditGuild(
+    guild: Guild,
+    recoveryThreadId?: string | null,
+    caseRoleId?: string | null
+  ): Promise<CaseRoleLockdownReport>;
   auditMemberBypasses(
     member: GuildMember,
     ignoredRoleIds?: ReadonlySet<string>,
-    allowedThreadId?: string | null
+    allowedThreadId?: string | null,
+    caseRoleId?: string | null
   ): Promise<CaseRoleLockdownMemberAudit>;
   applyGuild(
     guild: Guild,
@@ -217,18 +222,21 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
 
   public async auditGuild(
     guild: Guild,
-    recoveryThreadId?: string | null
+    recoveryThreadId?: string | null,
+    caseRoleId?: string | null
   ): Promise<CaseRoleLockdownReport> {
     const recoveryParent = await this.resolveRecoveryParent(guild, recoveryThreadId);
-    return this.buildReport(guild, false, new Set(), recoveryParent?.id);
+    return this.buildReport(guild, false, new Set(), recoveryParent?.id, caseRoleId);
   }
 
   public async auditMemberBypasses(
     member: GuildMember,
     ignoredRoleIds: ReadonlySet<string> = new Set(),
-    allowedThreadId?: string | null
+    allowedThreadId?: string | null,
+    caseRoleId?: string | null
   ): Promise<CaseRoleLockdownMemberAudit> {
     const serverConfig = await this.configService.getServerConfig(member.guild.id);
+    const effectiveCaseRoleId = caseRoleId === undefined ? serverConfig.case_role_id : caseRoleId;
     const settings = getCaseRoleLockdownSettings(serverConfig.settings);
     let recoveryParent = await this.resolveRecoveryParent(member.guild, allowedThreadId);
     const recoveryParentId = recoveryParent?.id ?? serverConfig.verification_channel_id;
@@ -245,7 +253,7 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
       [...member.roles.cache.keys()].filter(
         (roleId) =>
           roleId !== member.guild.id &&
-          roleId !== serverConfig.case_role_id &&
+          roleId !== effectiveCaseRoleId &&
           !ignoredRoleIds.has(roleId)
       )
     );
@@ -504,7 +512,8 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
     guild: Guild,
     skipSetupChecks: boolean,
     recentlyUnsyncedAllowedChannelIds: ReadonlySet<string> = new Set(),
-    recoveryParentId?: string | null
+    recoveryParentId?: string | null,
+    caseRoleId?: string | null
   ): Promise<CaseRoleLockdownReport> {
     const serverConfig = await this.configService.getServerConfig(guild.id);
     const settings = getCaseRoleLockdownSettings(serverConfig.settings);
@@ -516,7 +525,8 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
     const plannedActions: CaseRoleLockdownPlannedAction[] = [];
     const syncedAllowedChannels: CaseRoleLockdownPlannedAction[] = [];
     const botMember = await this.getBotMember(guild);
-    const caseRole = await this.getCaseRole(guild, serverConfig.case_role_id);
+    const effectiveCaseRoleId = caseRoleId === undefined ? serverConfig.case_role_id : caseRoleId;
+    const caseRole = await this.getCaseRole(guild, effectiveCaseRoleId);
 
     if (!skipSetupChecks) {
       this.checkBotPermissions(botMember, issues);

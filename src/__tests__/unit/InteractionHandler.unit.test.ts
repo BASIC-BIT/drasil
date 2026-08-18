@@ -343,6 +343,7 @@ describe('InteractionHandler (unit)', () => {
       claimCaseRoleRelease: jest.fn(),
       claimParkedAttention: jest.fn(),
       claimTerminalActions: jest.fn(),
+      completeTerminalActions: jest.fn(),
       completeCaseRoleRelease: jest.fn(),
       completeVerificationRelease: jest.fn(),
       rollbackCaseRoleRelease: jest.fn(),

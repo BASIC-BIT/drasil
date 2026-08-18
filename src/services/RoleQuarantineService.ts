@@ -27,7 +27,11 @@ import { isCaseRoleReleaseLeaseActive } from '../utils/caseRoleRelease';
 import { ICaseRoleLockdownService } from './CaseRoleLockdownService';
 
 export type RoleQuarantineApplyStatus = 'off' | 'audit_only' | 'already_active' | 'quarantined';
-export type RoleQuarantineRestoreStatus = 'no_active_snapshot' | 'partially_restored' | 'restored';
+export type RoleQuarantineRestoreStatus =
+  | 'no_active_snapshot'
+  | 'abandoned_membership_changed'
+  | 'partially_restored'
+  | 'restored';
 export type RoleQuarantineAbandonStatus = 'no_active_snapshot' | 'abandoned';
 export type RoleQuarantineActiveCaseUpdateStatus =
   | 'off'
@@ -232,6 +236,31 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       return {
         status: 'no_active_snapshot',
         snapshotId: null,
+        attemptedRoleIds: [],
+        restoredRoleIds: [],
+        skippedRoles: [],
+        failedRestores: [],
+      };
+    }
+
+    if (
+      snapshot.created_at &&
+      member.joinedAt &&
+      member.joinedAt.getTime() > snapshot.created_at.getTime()
+    ) {
+      await this.snapshotRepository.update(snapshot.id, {
+        status: RoleQuarantineSnapshotStatus.ABANDONED,
+        metadata: {
+          ...this.metadataToRecord(snapshot.metadata),
+          abandoned_at: new Date().toISOString(),
+          abandoned_by: moderator?.id ?? null,
+          abandon_reason: 'membership_replaced_before_role_restoration',
+          replacement_membership_joined_at: member.joinedAt.toISOString(),
+        } as unknown as Prisma.JsonValue,
+      });
+      return {
+        status: 'abandoned_membership_changed',
+        snapshotId: snapshot.id,
         attemptedRoleIds: [],
         restoredRoleIds: [],
         skippedRoles: [],
@@ -451,7 +480,8 @@ export class RoleQuarantineService implements IRoleQuarantineService {
           const memberAudit = await this.caseRoleLockdownService.auditMemberBypasses(
             newMember,
             new Set(),
-            verificationEvent.thread_id
+            verificationEvent.thread_id,
+            activeCaseRoleId
           );
           containmentBlocked =
             memberAudit.bypasses.length > 0 ||

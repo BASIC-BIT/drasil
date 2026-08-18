@@ -117,32 +117,65 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       if (!claimed) {
         return;
       }
+      let responseEvent = claimed;
+      let attentionDelivered = false;
       try {
         const responseState = await this.markSupportThreadReminderResponded(claimed, message);
-        await this.notificationManager.mirrorVerificationThreadMessageToEvidenceThread(
-          responseState.verificationEvent,
-          message
-        );
-        await this.moderationQueueService?.recordSupportThreadAttention(
-          responseState.verificationEvent,
-          message
-        );
-        await this.notificationManager.notifyVerificationThreadUserResponse(
-          responseState.verificationEvent,
-          message
-        );
+        responseEvent = responseState.verificationEvent;
+        const queuePromise = this.moderationQueueService
+          ? this.moderationQueueService.recordSupportThreadAttention(responseEvent, message)
+          : null;
+        const [mirrorResult, queueResult, directResult] = await Promise.allSettled([
+          this.notificationManager.mirrorVerificationThreadMessageToEvidenceThread(
+            responseEvent,
+            message
+          ),
+          queuePromise ?? Promise.resolve(),
+          this.notificationManager.notifyVerificationThreadUserResponse(responseEvent, message),
+        ]);
+        if (mirrorResult.status === 'rejected') {
+          console.warn(
+            `[VerificationThreadAnalysis] Failed to mirror parked recovery reply for verification event ${claimed.id}:`,
+            mirrorResult.reason
+          );
+        }
+        if (queueResult.status === 'rejected') {
+          console.warn(
+            `[VerificationThreadAnalysis] Failed to queue parked recovery attention for verification event ${claimed.id}:`,
+            queueResult.reason
+          );
+        }
+        if (directResult.status === 'rejected') {
+          console.warn(
+            `[VerificationThreadAnalysis] Failed to send parked recovery alert for verification event ${claimed.id}:`,
+            directResult.reason
+          );
+        }
+        const queueDelivered = queueResult.status === 'fulfilled' && queueResult.value === true;
+        const directDelivered = directResult.status === 'fulfilled' && directResult.value === true;
+        attentionDelivered = queueDelivered || directDelivered;
       } finally {
         await this.verificationEventRepository.updateQuarantineAttempt(
           claimed.id,
           attentionAttemptId,
           {
-            attention_state: CaseAttentionState.PARKED,
-            containment_status:
-              claimed.containment_status === CaseContainmentStatus.IN_PROGRESS
+            attention_state: attentionDelivered
+              ? CaseAttentionState.PARKED
+              : CaseAttentionState.REVIEW_REQUIRED,
+            containment_status: attentionDelivered
+              ? claimed.containment_status === CaseContainmentStatus.IN_PROGRESS
                 ? CaseContainmentStatus.CONTAINED
-                : claimed.containment_status,
-            parked_at: claimed.parked_at,
-            parked_by: claimed.parked_by,
+                : claimed.containment_status
+              : CaseContainmentStatus.INCOMPLETE,
+            parked_at: attentionDelivered ? claimed.parked_at : null,
+            parked_by: attentionDelivered ? claimed.parked_by : null,
+            metadata: attentionDelivered
+              ? undefined
+              : {
+                  ...(this.asObject(responseEvent.metadata) ?? {}),
+                  recovery_attention_delivery_failed_at: new Date().toISOString(),
+                  recovery_attention_message_id: message.id,
+                },
           }
         );
       }

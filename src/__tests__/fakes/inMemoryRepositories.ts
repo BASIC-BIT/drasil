@@ -5,6 +5,7 @@ import type { IServerRepository } from '../../repositories/ServerRepository';
 import type { IUserRepository } from '../../repositories/UserRepository';
 import type {
   IVerificationEventRepository,
+  TerminalActionCompletion,
   VerificationReleaseCompletion,
 } from '../../repositories/VerificationEventRepository';
 import type { IReportIntakeRepository } from '../../repositories/ReportIntakeRepository';
@@ -811,6 +812,51 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       };
       this.events[eventIndex] = claimed;
       return { ...claimed };
+    });
+  }
+
+  async completeTerminalActions(
+    completions: readonly TerminalActionCompletion[],
+    attemptId: string | null,
+    status: VerificationStatus.BANNED | VerificationStatus.KICKED,
+    resolvedBy: string,
+    resolvedAt: Date,
+    notes: string
+  ): Promise<VerificationEvent[] | null> {
+    const eventIndexes = completions.map((completion) =>
+      this.events.findIndex(
+        (event) =>
+          event.id === completion.id &&
+          event.status === VerificationStatus.PENDING &&
+          (completion.requiresTerminalActionClaim
+            ? attemptId !== null &&
+              event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+              event.quarantine_attempt_id === attemptId
+            : event.containment_status !== CaseContainmentStatus.IN_PROGRESS)
+      )
+    );
+    if (eventIndexes.some((eventIndex) => eventIndex === -1)) {
+      return null;
+    }
+    const completedAt = new Date();
+    return eventIndexes.map((eventIndex, index) => {
+      const completed: VerificationEvent = {
+        ...this.events[eventIndex],
+        status,
+        resolved_by: resolvedBy,
+        resolved_at: resolvedAt,
+        notes,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        quarantine_attempt_id: null,
+        quarantine_lease_renewed_at: null,
+        parked_at: null,
+        parked_by: null,
+        metadata: completions[index].metadata,
+        updated_at: completedAt,
+      };
+      this.events[eventIndex] = completed;
+      return { ...completed };
     });
   }
 

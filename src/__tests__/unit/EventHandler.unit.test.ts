@@ -887,6 +887,7 @@ describe('EventHandler (unit)', () => {
     };
     const verificationEventRepository = {
       findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),
+      findByUserAndServer: jest.fn().mockResolvedValue([activeCase]),
       findById: jest.fn().mockResolvedValue({
         ...activeCase,
         containment_status: CaseContainmentStatus.INCOMPLETE,
@@ -961,6 +962,7 @@ describe('EventHandler (unit)', () => {
     };
     const verificationEventRepository = {
       findActiveByUserAndServer: jest.fn(),
+      findByUserAndServer: jest.fn().mockResolvedValue([]),
       findParkedByServer: jest.fn().mockResolvedValue([]),
     };
     const handler = buildHandler({
@@ -1025,6 +1027,54 @@ describe('EventHandler (unit)', () => {
       oldMember,
       newMember,
       activeCase
+    );
+  });
+
+  it('enforces an older parked quarantine when the newest pending case is standard', async () => {
+    const persistedCaseRole = { id: 'persisted-case-role' };
+    const oldMember = {
+      id: 'user-1',
+      user: { tag: 'test-user#0001' },
+      guild: { id: 'guild-1' },
+      roles: { cache: new Map([[persistedCaseRole.id, persistedCaseRole]]) },
+    };
+    const newMember = { ...oldMember, roles: { cache: new Map() } };
+    const newestStandardCase = {
+      id: 'verification-standard',
+      status: VerificationStatus.PENDING,
+      case_kind: CaseKind.STANDARD,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+    };
+    const parkedCase = {
+      id: 'verification-parked',
+      status: VerificationStatus.PENDING,
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_case_role_id: persistedCaseRole.id,
+    };
+    const roleQuarantineService = {
+      enforceActiveCaseRoleUpdate: jest.fn().mockResolvedValue({
+        addedRoleIds: [],
+        removedRoleIds: [],
+        skippedRoles: [],
+        failedRemovals: [],
+      }),
+    };
+    const verificationEventRepository = {
+      findActiveByUserAndServer: jest.fn().mockResolvedValue(newestStandardCase),
+      findByUserAndServer: jest.fn().mockResolvedValue([newestStandardCase, parkedCase]),
+    };
+    const handler = buildHandler({ roleQuarantineService, verificationEventRepository });
+
+    await (handler as any).enforceActiveCaseRoleQuarantine(oldMember, newMember, {
+      case_role_id: 'current-case-role',
+    });
+
+    expect(roleQuarantineService.enforceActiveCaseRoleUpdate).toHaveBeenCalledWith(
+      oldMember,
+      newMember,
+      parkedCase
     );
   });
 
