@@ -1134,10 +1134,13 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (this.readMetadataString(audit, 'moderation_action_request_id') !== request.id) {
       return false;
     }
+    const auditResult = this.readMetadataString(audit, 'result');
     const parked =
+      auditResult === 'contained' &&
       event.attention_state === CaseAttentionState.PARKED &&
       event.containment_status === CaseContainmentStatus.CONTAINED;
     const incomplete =
+      auditResult === 'incomplete' &&
       event.attention_state === CaseAttentionState.REVIEW_REQUIRED &&
       event.containment_status === CaseContainmentStatus.INCOMPLETE;
     if (!parked && !incomplete) {
