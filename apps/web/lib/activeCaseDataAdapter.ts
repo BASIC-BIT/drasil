@@ -174,6 +174,21 @@ const ACTIONS_BY_PRESENCE_STATE: Partial<Record<CasePresenceState, CaseAction[]>
   unknown: ['view_history', 'ban_by_id', 'close_no_action'],
 };
 
+const PENDING_IN_SERVER_ACTIONS = [
+  ['view_history', 'verify_user', 'kick_user', 'ban_user', 'close_no_action'],
+  ['view_history', 'verify_user', 'kick_user', 'ban_user'],
+] as const satisfies readonly (readonly CaseAction[])[];
+
+const ACCOUNT_QUARANTINE_ACTIONS_BY_STATE = [
+  [[], ['quarantine_compromised_account']],
+  [[], []],
+] as const satisfies readonly (readonly (readonly CaseAction[])[])[];
+
+const THREAD_REPAIR_ACTIONS_BY_STATE = [
+  [['create_thread'], ['repair_thread']],
+  [[], []],
+] as const satisfies readonly (readonly (readonly CaseAction[])[])[];
+
 const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActionType> = {
   ban_by_id: 'ban_case_user_by_id',
   ban_user: 'ban_case_user',
@@ -429,32 +444,19 @@ function resolveAllowedActions(
     return appendRefreshNotificationAction(row, presenceActions);
   }
 
+  const parkedIndex = Number(row.attention_state === 'parked') as 0 | 1;
+  const quarantineEnabledIndex = Number(
+    metadataToRecord(row.server_settings).account_quarantine_enabled === true
+  ) as 0 | 1;
   const actions: CaseAction[] = [
-    'view_history',
-    'verify_user',
-    'kick_user',
-    'ban_user',
-    'close_no_action',
+    ...PENDING_IN_SERVER_ACTIONS[parkedIndex],
+    ...ACCOUNT_QUARANTINE_ACTIONS_BY_STATE[parkedIndex][quarantineEnabledIndex],
   ];
-  if (row.attention_state === 'parked') {
-    return appendRefreshNotificationAction(row, [
-      'view_history',
-      'verify_user',
-      'kick_user',
-      'ban_user',
-    ]);
-  }
-  if (metadataToRecord(row.server_settings).account_quarantine_enabled === true) {
-    actions.push('quarantine_compromised_account');
-  }
   if (row.notification_message_id) {
     actions.push('refresh_notification');
   }
-  if (row.thread_id) {
-    actions.push('repair_thread');
-  } else {
-    actions.push('create_thread');
-  }
+  const threadPresentIndex = Number(Boolean(row.thread_id)) as 0 | 1;
+  actions.push(...THREAD_REPAIR_ACTIONS_BY_STATE[parkedIndex][threadPresentIndex]);
   return actions;
 }
 
