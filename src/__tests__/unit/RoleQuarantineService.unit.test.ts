@@ -3,6 +3,7 @@ import {
   RoleQuarantineApplyError,
   RoleQuarantineService,
 } from '../../services/RoleQuarantineService';
+import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../../utils/caseRoleRelease';
 import { InMemoryRoleQuarantineSnapshotRepository } from '../fakes/inMemoryRepositories';
 import { IConfigService } from '../../config/ConfigService';
 import {
@@ -202,6 +203,11 @@ describe('RoleQuarantineService (unit)', () => {
       createRole({ id: 'deafen-role', permissions: [PermissionFlagsBits.DeafenMembers] }),
       createRole({ id: 'move-role', permissions: [PermissionFlagsBits.MoveMembers] }),
       createRole({ id: 'nickname-role', permissions: [PermissionFlagsBits.ManageNicknames] }),
+      createRole({
+        id: 'expression-role',
+        permissions: [PermissionFlagsBits.ManageGuildExpressions],
+      }),
+      createRole({ id: 'event-role', permissions: [PermissionFlagsBits.ManageEvents] }),
     ];
     const member = createMember(removableRoles);
     const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
@@ -223,6 +229,8 @@ describe('RoleQuarantineService (unit)', () => {
       'deafen-role',
       'move-role',
       'nickname-role',
+      'expression-role',
+      'event-role',
     ]);
     expect(result.skippedRoles).toEqual([]);
   });
@@ -233,6 +241,11 @@ describe('RoleQuarantineService (unit)', () => {
       createRole({ id: 'deafen-role', permissions: [PermissionFlagsBits.DeafenMembers] }),
       createRole({ id: 'move-role', permissions: [PermissionFlagsBits.MoveMembers] }),
       createRole({ id: 'nickname-role', permissions: [PermissionFlagsBits.ManageNicknames] }),
+      createRole({
+        id: 'expression-role',
+        permissions: [PermissionFlagsBits.ManageGuildExpressions],
+      }),
+      createRole({ id: 'event-role', permissions: [PermissionFlagsBits.ManageEvents] }),
     ];
     const exemptRole = createRole({ id: '100000000000000005' });
     const manualRole = createRole({ id: '100000000000000010' });
@@ -265,6 +278,8 @@ describe('RoleQuarantineService (unit)', () => {
       'deafen-role',
       'move-role',
       'nickname-role',
+      'expression-role',
+      'event-role',
       '100000000000000005',
       '100000000000000010',
     ]);
@@ -277,6 +292,8 @@ describe('RoleQuarantineService (unit)', () => {
             'deafen-role',
             'move-role',
             'nickname-role',
+            'expression-role',
+            'event-role',
           ],
         }),
       })
@@ -643,6 +660,29 @@ describe('RoleQuarantineService (unit)', () => {
       `Restore compromised-account quarantine for case ${parkedEvent.id}`
     );
     expect(newMember.roles.cache.has(caseRole.id)).toBe(true);
+    expect(result.containmentRegressed).toBe(false);
+  });
+
+  it('does not restore the case role during a claimed verification release', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const oldMember = createMember([caseRole], [caseRole]);
+    const newMember = createMember([], [caseRole]);
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      new InMemoryRoleQuarantineSnapshotRepository()
+    );
+    const parkedEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_attempt_id: `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}attempt-1`,
+    } as VerificationEvent;
+
+    const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+
+    expect(newMember.roles.add).not.toHaveBeenCalled();
+    expect(result.status).toBe('no_new_roles');
     expect(result.containmentRegressed).toBe(false);
   });
 

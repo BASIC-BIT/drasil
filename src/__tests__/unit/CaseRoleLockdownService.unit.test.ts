@@ -119,6 +119,9 @@ describe('CaseRoleLockdownService (unit)', () => {
           (options.effectiveMemberPermissions ?? []).includes(permission)
         ),
       }),
+      threads: {
+        fetchArchived: jest.fn().mockResolvedValue({ threads: new Map() }),
+      },
     };
 
     return channel;
@@ -413,6 +416,68 @@ describe('CaseRoleLockdownService (unit)', () => {
         permissions: ['Send Messages in Threads'],
       }),
     ]);
+  });
+
+  it('blocks containment when the recovery parent has archived sibling threads', async () => {
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+    });
+    const privateMembers = new Map([['user-1', { id: 'user-1' }]]);
+    verificationChannel.threads.fetchArchived.mockImplementation(({ type }) =>
+      Promise.resolve({
+        threads:
+          type === 'public'
+            ? new Map([
+                [
+                  'archived-public-sibling',
+                  {
+                    id: 'archived-public-sibling',
+                    name: 'archived-public',
+                    parentId: 'verification-channel-1',
+                    type: ChannelType.PublicThread,
+                  },
+                ],
+              ])
+            : new Map([
+                [
+                  'archived-private-sibling',
+                  {
+                    id: 'archived-private-sibling',
+                    name: 'archived-private',
+                    parentId: 'verification-channel-1',
+                    type: ChannelType.PrivateThread,
+                    members: { cache: privateMembers, fetch: jest.fn() },
+                  },
+                ],
+              ]),
+      })
+    );
+    const guild = createGuild([verificationChannel]);
+    const member = {
+      id: 'user-1',
+      guild,
+      roles: { cache: new Map([[caseRoleId, { id: caseRoleId }]]) },
+    } as any;
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const audit = await service.auditMemberBypasses(member, new Set(), 'recovery-thread-1');
+
+    expect(verificationChannel.threads.fetchArchived).toHaveBeenCalledWith({
+      type: 'public',
+      fetchAll: true,
+    });
+    expect(verificationChannel.threads.fetchArchived).toHaveBeenCalledWith({
+      type: 'private',
+      fetchAll: true,
+    });
+    expect(audit.bypasses).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ channelId: 'archived-public-sibling' }),
+        expect.objectContaining({ channelId: 'archived-private-sibling' }),
+      ])
+    );
   });
 
   it('unsyncs allowed channels only when explicitly confirmed', async () => {

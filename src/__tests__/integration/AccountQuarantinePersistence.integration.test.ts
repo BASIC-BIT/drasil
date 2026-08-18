@@ -277,6 +277,43 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     );
   });
 
+  it('atomically claims a parked case-role release', async () => {
+    const serverId = 'guild-case-role-release-claim';
+    const userId = 'user-case-role-release-claim';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser(userId, 'target');
+    const verification = await verifications.createFromDetection(
+      null,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verifications.update(verification.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date(),
+      parked_by: 'moderator-1',
+    });
+
+    await expect(
+      verifications.claimCaseRoleRelease(verification.id, serverId, userId, 'case-role-release:1')
+    ).resolves.toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+        quarantine_attempt_id: 'case-role-release:1',
+      })
+    );
+    await expect(
+      verifications.claimCaseRoleRelease(verification.id, serverId, userId, 'case-role-release:2')
+    ).resolves.toBeNull();
+  });
+
   it('stores same-channel quarantine breaches separately for each case', async () => {
     const serverId = 'guild-quarantine-breach-attention';
     const servers = new ServerRepository(prisma);

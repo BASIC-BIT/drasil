@@ -23,6 +23,7 @@ import {
   COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS,
   STANDARD_QUARANTINE_PRIVILEGED_ROLE_PERMISSIONS,
 } from '../utils/privilegedRolePermissions';
+import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 import { ICaseRoleLockdownService } from './CaseRoleLockdownService';
 
 export type RoleQuarantineApplyStatus = 'off' | 'audit_only' | 'already_active' | 'quarantined';
@@ -349,10 +350,14 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       serverConfig.case_role_id !== null &&
       oldMember.roles.cache.has(serverConfig.case_role_id) &&
       !newMember.roles.cache.has(serverConfig.case_role_id);
+    const authorizedCaseRoleRelease =
+      caseRoleRemoved &&
+      verificationEvent.quarantine_attempt_id?.startsWith(CASE_ROLE_RELEASE_ATTEMPT_PREFIX) ===
+        true;
     let caseRoleRestored = false;
     let caseRoleRestoreError: string | null = null;
 
-    if (caseRoleRemoved && serverConfig.case_role_id) {
+    if (caseRoleRemoved && !authorizedCaseRoleRelease && serverConfig.case_role_id) {
       try {
         const caseRole =
           oldMember.roles.cache.get(serverConfig.case_role_id) ??
@@ -375,7 +380,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       return this.activeCaseUpdateResult(mode, 'off', null, addedRoleIds);
     }
 
-    if (addedRoles.length === 0 && !caseRoleRemoved) {
+    if (addedRoles.length === 0 && (!caseRoleRemoved || authorizedCaseRoleRelease)) {
       return this.activeCaseUpdateResult(mode, 'no_new_roles', null, addedRoleIds);
     }
 

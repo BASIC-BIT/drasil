@@ -638,6 +638,36 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return { ...claimed };
   }
 
+  async claimCaseRoleRelease(
+    id: string,
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.server_id === serverId &&
+        event.user_id === userId &&
+        event.status === VerificationStatus.PENDING &&
+        event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+        event.attention_state === CaseAttentionState.PARKED &&
+        event.containment_status === CaseContainmentStatus.CONTAINED &&
+        event.quarantine_attempt_id === null
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+
+    const claimed = {
+      ...this.events[eventIndex],
+      quarantine_attempt_id: attemptId,
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = claimed;
+    return { ...claimed };
+  }
+
   async renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean> {
     const eventIndex = this.events.findIndex(
       (event) =>

@@ -26,6 +26,7 @@ import { IRoleManager } from '../../services/RoleManager';
 import { IThreadManager } from '../../services/ThreadManager';
 import type { IModerationQueueService } from '../../services/ModerationQueueService';
 import type { IRoleQuarantineService } from '../../services/RoleQuarantineService';
+import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../../utils/caseRoleRelease';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -313,6 +314,159 @@ describe('UserModerationService (unit)', () => {
     expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
   });
 
+  it('claims a parked quarantine before removing the case role for verification', async () => {
+    const guildId = 'guild-verify-release-claim';
+    const userId = 'user-verify-release-claim';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    roleManager.removeCaseRole.mockImplementation(async () => {
+      const claimedEvent = await verificationEventRepository.findById(verificationEvent.id);
+      expect(claimedEvent?.quarantine_attempt_id).toEqual(
+        expect.stringMatching(`^${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}`)
+      );
+      return true;
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).resolves.toBe(
+      true
+    );
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.VERIFIED,
+        quarantine_attempt_id: null,
+      })
+    );
+  });
+
+  it('restores the case role and parked state when verification persistence fails', async () => {
+    const guildId = 'guild-verify-persistence-failure';
+    const userId = 'user-verify-persistence-failure';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const parkedAt = new Date('2026-08-18T09:00:00.000Z');
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: parkedAt,
+      parked_by: 'moderator-parked',
+    });
+    const repositoryUpdate = verificationEventRepository.update.bind(verificationEventRepository);
+    jest.spyOn(verificationEventRepository, 'update').mockImplementation((id, data, options) => {
+      if (data.status === VerificationStatus.VERIFIED) {
+        return Promise.resolve(null);
+      }
+      return repositoryUpdate(id, data, options);
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
+      'Failed to update verification event'
+    );
+
+    expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+        quarantine_attempt_id: null,
+        parked_at: parkedAt,
+        parked_by: 'moderator-parked',
+      })
+    );
+  });
+
+  it('does not clear another moderator release claim', async () => {
+    const guildId = 'guild-verify-concurrent-release';
+    const userId = 'user-verify-concurrent-release';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    await verificationEventRepository.claimCaseRoleRelease(
+      verificationEvent.id,
+      guildId,
+      userId,
+      `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}other-moderator`
+    );
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
+      'Failed to claim case'
+    );
+
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        quarantine_attempt_id: `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}other-moderator`,
+      })
+    );
+  });
+
   it('restores quarantined roles when verifying a user', async () => {
     const guildId = 'guild-verify-restore-roles';
     const userId = 'user-verify-restore-roles';
@@ -553,6 +707,46 @@ describe('UserModerationService (unit)', () => {
       moderator
     );
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
+  });
+
+  it('rejects close-no-action when the current case is a parked account quarantine', async () => {
+    const guildId = 'guild-close-parked';
+    const userId = 'user-close-parked';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.closeCaseNoAction(buildGuildWithMember(guildId, member), userId, {
+        id: 'moderator-close',
+      } as User)
+    ).rejects.toThrow(
+      'A parked account quarantine can only be released with Verify User, Kick User, or Ban User.'
+    );
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
   });
 
   it('retries no-action case role cleanup after case events are already closed', async () => {

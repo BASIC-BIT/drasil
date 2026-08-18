@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Guild, GuildMember, PartialGuildMember, User } from 'discord.js';
 import { injectable, inject, optional } from 'inversify';
 import { Prisma } from '../db/prisma';
@@ -33,6 +34,7 @@ import {
   RoleQuarantineApplyResult,
   RoleQuarantineRestoreResult,
 } from './RoleQuarantineService';
+import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 import { appendVerificationActionFailure } from '../utils/verificationActionFailures';
 import {
   getResolutionAdminActionType,
@@ -852,8 +854,12 @@ export class UserModerationService implements IUserModerationService, ICombinedB
    * @returns Promise resolving to true if successful, false if the role couldn't be removed
    */
   public async verifyUser(member: GuildMember, moderator: User): Promise<boolean> {
+    let pendingVerificationEvents: VerificationEvent[] = [];
+    const eventsToRollback = new Map<string, VerificationEvent>();
+    let roleRemoved = false;
+    let releaseCommitted = false;
     try {
-      const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
+      pendingVerificationEvents = await this.getPendingVerificationEvents(member);
       this.assertNoQuarantineInProgress(pendingVerificationEvents);
       const verificationEvent =
         pendingVerificationEvents.length > 0 ? pendingVerificationEvents[0] : null;
@@ -862,7 +868,28 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         throw new Error('No active verification event found to verify');
       }
 
-      const roleRemoved = await this.roleManager.removeCaseRole(member);
+      const releaseAttemptId = `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}${randomUUID()}`;
+      for (const pendingEvent of pendingVerificationEvents) {
+        if (
+          pendingEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT ||
+          pendingEvent.attention_state !== CaseAttentionState.PARKED
+        ) {
+          continue;
+        }
+
+        const claimedEvent = await this.verificationEventRepository.claimCaseRoleRelease(
+          pendingEvent.id,
+          member.guild.id,
+          member.id,
+          releaseAttemptId
+        );
+        if (!claimedEvent) {
+          throw new Error(`Failed to claim case ${pendingEvent.id} for verification release.`);
+        }
+        eventsToRollback.set(pendingEvent.id, pendingEvent);
+      }
+
+      roleRemoved = await this.roleManager.removeCaseRole(member);
       if (!roleRemoved) {
         throw new Error(`Failed to remove case role from ${member.user.tag}`);
       }
@@ -894,7 +921,9 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         }
 
         resolvedEvents.push({ event: updatedEvent, previousStatus });
+        eventsToRollback.set(pendingEvent.id, pendingEvent);
       }
+      releaseCommitted = true;
 
       const restoreResult = await this.tryRestoreRoleQuarantine(
         member,
@@ -961,6 +990,36 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       );
       return true; // Verification process completed successfully
     } catch (error) {
+      if (!releaseCommitted && roleRemoved) {
+        try {
+          const roleRestored = await this.roleManager.assignCaseRole(member);
+          if (!roleRestored) {
+            console.warn(
+              `Failed to restore case role for ${member.user.tag} after verification failed.`
+            );
+          }
+        } catch (restoreError) {
+          console.warn(
+            `Failed to restore case role for ${member.user.tag} after verification failed:`,
+            restoreError
+          );
+        }
+      }
+      if (!releaseCommitted) {
+        for (const pendingEvent of eventsToRollback.values()) {
+          await this.verificationEventRepository
+            .update(pendingEvent.id, pendingEvent, {
+              touchUpdatedAt: false,
+              preservePendingCaseState: true,
+            })
+            .catch((rollbackError) => {
+              console.warn(
+                `Failed to roll back case ${pendingEvent.id} after verification failed:`,
+                rollbackError
+              );
+            });
+        }
+      }
       console.error(`Failed to verify user ${member.user.tag}:`, error);
       throw error;
     }
@@ -1731,6 +1790,17 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         (event) => event.status === VerificationStatus.PENDING
       );
       this.assertNoQuarantineInProgress(pendingVerificationEvents);
+      if (
+        pendingVerificationEvents.some(
+          (event) =>
+            event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+            event.attention_state === CaseAttentionState.PARKED
+        )
+      ) {
+        throw new Error(
+          'A parked account quarantine can only be released with Verify User, Kick User, or Ban User.'
+        );
+      }
 
       const member = await guild.members.fetch(userId).catch(() => null);
       const serverMember = await this.serverMemberRepository.findByServerAndUser(guild.id, userId);

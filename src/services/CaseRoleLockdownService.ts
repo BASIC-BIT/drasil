@@ -10,6 +10,7 @@ import {
   PermissionsBitField,
   OverwriteType,
   Role,
+  TextChannel,
 } from 'discord.js';
 import { inject, injectable } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
@@ -188,6 +189,8 @@ const COMPROMISED_ACCOUNT_PERMISSION_LABELS: readonly PermissionLabel[] = [
   { flag: PermissionFlagsBits.DeafenMembers, label: 'Deafen Members' },
   { flag: PermissionFlagsBits.MoveMembers, label: 'Move Members' },
   { flag: PermissionFlagsBits.ManageNicknames, label: 'Manage Nicknames' },
+  { flag: PermissionFlagsBits.ManageGuildExpressions, label: 'Manage Expressions' },
+  { flag: PermissionFlagsBits.ManageEvents, label: 'Manage Events' },
 ];
 
 const HIGH_RISK_RESTRICTED_ROLE_PERMISSIONS: readonly PermissionLabel[] = [
@@ -254,11 +257,15 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
       );
     }
     const bypasses: CaseRoleLockdownMemberBypass[] = [];
+    let recoveryParent: TextChannel | null = null;
 
     for (const channel of await this.fetchLockdownChannels(member.guild)) {
       if (allowedChannelIds.has(channel.id) || allowedCategoryIds.has(channel.id)) {
         if (channel.id === serverConfig.verification_channel_id) {
           this.recordRecoveryParentMemberBypass(channel, member, bypasses);
+          if (channel.type === ChannelType.GuildText) {
+            recoveryParent = channel;
+          }
         }
         continue;
       }
@@ -293,6 +300,7 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
       await this.recordRecoverySiblingThreadBypasses(
         member,
         serverConfig.verification_channel_id,
+        recoveryParent,
         allowedThreadId,
         bypasses
       );
@@ -920,11 +928,26 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
   private async recordRecoverySiblingThreadBypasses(
     member: GuildMember,
     recoveryParentId: string,
+    recoveryParent: TextChannel | null,
     allowedThreadId: string | null | undefined,
     bypasses: CaseRoleLockdownMemberBypass[]
   ): Promise<void> {
     const activeThreads = await member.guild.channels.fetchActiveThreads();
-    for (const thread of activeThreads.threads.values()) {
+    const siblingThreads = new Map(activeThreads.threads);
+    if (recoveryParent) {
+      const [archivedPublicThreads, archivedPrivateThreads] = await Promise.all([
+        recoveryParent.threads.fetchArchived({ type: 'public', fetchAll: true }),
+        recoveryParent.threads.fetchArchived({ type: 'private', fetchAll: true }),
+      ]);
+      for (const thread of [
+        ...archivedPublicThreads.threads.values(),
+        ...archivedPrivateThreads.threads.values(),
+      ]) {
+        siblingThreads.set(thread.id, thread);
+      }
+    }
+
+    for (const thread of siblingThreads.values()) {
       if (thread.parentId !== recoveryParentId || thread.id === allowedThreadId) {
         continue;
       }

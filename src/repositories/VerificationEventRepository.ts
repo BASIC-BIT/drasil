@@ -48,6 +48,12 @@ export interface IVerificationEventRepository {
     attemptId: string,
     staleBefore: Date
   ): Promise<VerificationEvent | null>;
+  claimCaseRoleRelease(
+    id: string,
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent | null>;
   renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean>;
   updateQuarantineAttempt(
     id: string,
@@ -150,6 +156,40 @@ export class VerificationEventRepository implements IVerificationEventRepository
       })) as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'claimQuarantineAttempt');
+    }
+  }
+
+  async claimCaseRoleRelease(
+    id: string,
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const claimed = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            server_id: serverId,
+            user_id: userId,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            attention_state: CaseAttentionState.PARKED,
+            containment_status: CaseContainmentStatus.CONTAINED,
+            quarantine_attempt_id: null,
+          },
+          data: {
+            quarantine_attempt_id: attemptId,
+            updated_at: new Date(),
+          },
+        });
+        if (claimed.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'claimCaseRoleRelease');
     }
   }
 
