@@ -421,7 +421,7 @@ export class ModerationQueueService implements IModerationQueueService {
       serverId: verificationEvent.server_id,
       userId: verificationEvent.user_id,
       verificationEventId: verificationEvent.id,
-      sourceThreadId: verificationEvent.thread_id ?? message.channelId,
+      sourceThreadId: message.channelId,
       message,
       title: 'Quarantine Containment Breach',
       description: `<@${verificationEvent.user_id}> posted outside the permitted recovery thread while quarantined.`,

@@ -44,12 +44,23 @@ export interface IVerificationEventRepository {
     id: string,
     serverId: string,
     userId: string,
+    attemptId: string,
     staleBefore: Date
+  ): Promise<VerificationEvent | null>;
+  renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean>;
+  updateQuarantineAttempt(
+    id: string,
+    attemptId: string,
+    data: Partial<VerificationEvent>
   ): Promise<VerificationEvent | null>;
   update(
     id: string,
     data: Partial<VerificationEvent>,
-    options?: { touchUpdatedAt?: boolean }
+    options?: {
+      touchUpdatedAt?: boolean;
+      /** Only for persisting a Discord ban or kick that has already succeeded. */
+      allowQuarantineOverride?: boolean;
+    }
   ): Promise<VerificationEvent | null>; // Return null if not found
 }
 
@@ -105,6 +116,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
     id: string,
     serverId: string,
     userId: string,
+    attemptId: string,
     staleBefore: Date
   ): Promise<VerificationEvent | null> {
     try {
@@ -123,6 +135,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
           },
           data: {
             containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
             updated_at: new Date(),
           },
         });
@@ -133,6 +146,58 @@ export class VerificationEventRepository implements IVerificationEventRepository
       })) as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'claimQuarantineAttempt');
+    }
+  }
+
+  async renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean> {
+    try {
+      const renewed = await this.prisma.verification_events.updateMany({
+        where: {
+          id,
+          status: VerificationStatus.PENDING,
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: attemptId,
+        },
+        data: { updated_at: new Date() },
+      });
+      return renewed.count === 1;
+    } catch (error) {
+      this.handleError(error, 'renewQuarantineAttempt');
+    }
+  }
+
+  async updateQuarantineAttempt(
+    id: string,
+    attemptId: string,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const updated = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+          },
+          data: {
+            case_kind: data.case_kind as case_kind | undefined,
+            attention_state: data.attention_state as case_attention_state | undefined,
+            containment_status: data.containment_status as case_containment_status | undefined,
+            quarantine_attempt_id: null,
+            parked_at: data.parked_at,
+            parked_by: data.parked_by,
+            metadata: data.metadata as Prisma.InputJsonValue | undefined,
+            updated_at: new Date(),
+          },
+        });
+        if (updated.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'updateQuarantineAttempt');
     }
   }
 
@@ -330,7 +395,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
   async update(
     id: string,
     data: Partial<VerificationEvent>,
-    options: { touchUpdatedAt?: boolean } = {}
+    options: { touchUpdatedAt?: boolean; allowQuarantineOverride?: boolean } = {}
   ): Promise<VerificationEvent | null> {
     try {
       const now = new Date();
@@ -344,6 +409,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
         case_kind: data.case_kind as case_kind | undefined,
         attention_state: data.attention_state as case_attention_state | undefined,
         containment_status: data.containment_status as case_containment_status | undefined,
+        quarantine_attempt_id: data.quarantine_attempt_id,
         parked_at: data.parked_at,
         parked_by: data.parked_by,
         review_after: data.review_after,
@@ -366,12 +432,43 @@ export class VerificationEventRepository implements IVerificationEventRepository
           // Set resolution fields if status is resolved
           updateData.resolved_at = data.resolved_at instanceof Date ? data.resolved_at : now; // Use provided date or now
           updateData.resolved_by = data.resolved_by; // Use provided admin ID
+          updateData.attention_state = CaseAttentionState.REVIEW_REQUIRED;
+          updateData.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
+          updateData.quarantine_attempt_id = null;
+          updateData.parked_at = null;
+          updateData.parked_by = null;
           // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- This check is necessary
         } else if (data.status === VerificationStatus.PENDING) {
           // Nullify resolution fields if status is pending
           updateData.resolved_at = null;
           updateData.resolved_by = null;
+          updateData.attention_state = CaseAttentionState.REVIEW_REQUIRED;
+          updateData.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
+          updateData.quarantine_attempt_id = null;
+          updateData.parked_at = null;
+          updateData.parked_by = null;
         }
+      }
+
+      const isResolution =
+        data.status === VerificationStatus.VERIFIED ||
+        data.status === VerificationStatus.BANNED ||
+        data.status === VerificationStatus.KICKED ||
+        data.status === VerificationStatus.CLOSED_NO_ACTION;
+      if (isResolution && options.allowQuarantineOverride !== true) {
+        const updated = await this.prisma.verification_events.updateMany({
+          where: {
+            id,
+            containment_status: { not: CaseContainmentStatus.IN_PROGRESS },
+          },
+          data: updateData,
+        });
+        if (updated.count !== 1) {
+          return null;
+        }
+        return (await this.prisma.verification_events.findUnique({
+          where: { id },
+        })) as VerificationEvent | null;
       }
 
       const updatedEvent = await this.prisma.verification_events.update({

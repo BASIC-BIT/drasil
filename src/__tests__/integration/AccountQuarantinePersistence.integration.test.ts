@@ -140,12 +140,33 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     const staleBefore = new Date(Date.now() - 5 * 60 * 1000);
 
     await expect(
-      verifications.claimQuarantineAttempt(verification.id, serverId, userId, staleBefore)
+      verifications.claimQuarantineAttempt(
+        verification.id,
+        serverId,
+        userId,
+        'attempt-1',
+        staleBefore
+      )
     ).resolves.toEqual(
-      expect.objectContaining({ containment_status: CaseContainmentStatus.IN_PROGRESS })
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: 'attempt-1',
+      })
     );
     await expect(
-      verifications.claimQuarantineAttempt(verification.id, serverId, userId, staleBefore)
+      verifications.claimQuarantineAttempt(
+        verification.id,
+        serverId,
+        userId,
+        'attempt-2',
+        staleBefore
+      )
+    ).resolves.toBeNull();
+    await expect(verifications.renewQuarantineAttempt(verification.id, 'attempt-1')).resolves.toBe(
+      true
+    );
+    await expect(
+      verifications.update(verification.id, { status: VerificationStatus.VERIFIED })
     ).resolves.toBeNull();
 
     await verifications.update(
@@ -154,9 +175,67 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       { touchUpdatedAt: false }
     );
     await expect(
-      verifications.claimQuarantineAttempt(verification.id, serverId, userId, new Date())
+      verifications.claimQuarantineAttempt(
+        verification.id,
+        serverId,
+        userId,
+        'attempt-2',
+        new Date()
+      )
     ).resolves.toEqual(
-      expect.objectContaining({ containment_status: CaseContainmentStatus.IN_PROGRESS })
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: 'attempt-2',
+      })
+    );
+    await expect(verifications.renewQuarantineAttempt(verification.id, 'attempt-1')).resolves.toBe(
+      false
+    );
+    await expect(
+      verifications.updateQuarantineAttempt(verification.id, 'attempt-1', {
+        containment_status: CaseContainmentStatus.CONTAINED,
+      })
+    ).resolves.toBeNull();
+
+    const parked = await verifications.updateQuarantineAttempt(verification.id, 'attempt-2', {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date(),
+      parked_by: 'moderator-1',
+    });
+    expect(parked).toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.PARKED,
+        quarantine_attempt_id: null,
+      })
+    );
+
+    const resolved = await verifications.update(verification.id, {
+      status: VerificationStatus.VERIFIED,
+      resolved_by: 'moderator-1',
+    });
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.VERIFIED,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        parked_at: null,
+        parked_by: null,
+      })
+    );
+
+    const reopened = await verifications.update(verification.id, {
+      status: VerificationStatus.PENDING,
+    });
+    expect(reopened).toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        parked_at: null,
+        parked_by: null,
+      })
     );
   });
 });

@@ -5,6 +5,8 @@ import type { IModerationQueueRepository } from '../../repositories/ModerationQu
 import type { IServerRepository } from '../../repositories/ServerRepository';
 import type { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import {
+  CaseAttentionState,
+  CaseKind,
   DetectionEvent,
   DetectionType,
   ModerationQueueItem,
@@ -523,6 +525,38 @@ describe('ModerationQueueService', () => {
     expect(acknowledged).toBe(true);
     expect(channel.sentMessages[0].delete).toHaveBeenCalledTimes(1);
     expect(queueRepository.items).toHaveLength(0);
+  });
+
+  it('keeps recovery replies and outside-thread quarantine breaches as separate attention items', async () => {
+    const { queueRepository, service } = buildService();
+    const verificationEvent = {
+      ...buildVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+    };
+    const recoveryMessage = {
+      id: 'recovery-reply',
+      channelId: 'support-thread',
+      content: 'I recovered my account.',
+      url: 'https://discord.com/channels/guild-1/support-thread/recovery-reply',
+      createdTimestamp: Date.parse('2026-06-13T12:00:00Z'),
+      author: { id: 'user-1' },
+    } as unknown as Message;
+    const breachMessage = {
+      ...recoveryMessage,
+      id: 'outside-reply',
+      channelId: 'general-channel',
+      content: 'Unexpected message outside quarantine.',
+      url: 'https://discord.com/channels/guild-1/general-channel/outside-reply',
+    } as unknown as Message;
+
+    await service.recordSupportThreadAttention(verificationEvent, recoveryMessage);
+    await service.recordQuarantineBreachAttention(verificationEvent, breachMessage);
+
+    expect(queueRepository.items).toHaveLength(2);
+    expect(queueRepository.items.map((item) => item.source_thread_id)).toEqual(
+      expect.arrayContaining(['support-thread', 'general-channel'])
+    );
   });
 
   it('does not acknowledge attention items from another server', async () => {

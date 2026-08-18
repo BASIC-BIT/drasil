@@ -11,6 +11,7 @@ import {
 import { EventHandler } from '../../controllers/EventHandler';
 import {
   CaseAttentionState,
+  CaseContainmentStatus,
   CaseKind,
   DetectionType,
   ModerationOutcomeSource,
@@ -772,6 +773,7 @@ describe('EventHandler (unit)', () => {
       server_id: 'guild-1',
       user_id: 'user-1',
       status: VerificationStatus.PENDING,
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
       metadata: {},
     };
     const oldMember = {
@@ -824,18 +826,29 @@ describe('EventHandler (unit)', () => {
       enforceActiveCaseRoleUpdate: jest.fn().mockResolvedValue({
         addedRoleIds: [honeypotRole.id],
         removedRoleIds: [honeypotRole.id],
+        skippedRoles: [{ role_id: 'managed-role', reason: 'managed' }],
         failedRemovals: [],
       }),
     };
     const verificationEventRepository = {
       findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),
+      findById: jest.fn().mockResolvedValue({
+        ...activeCase,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+      }),
     };
+    const notificationManager = {
+      updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
+    };
+    const moderationQueueService = { upsertCaseMirror: jest.fn().mockResolvedValue(undefined) };
     const handler = buildHandler({
       client,
       configService,
       securityActionService,
       roleQuarantineService,
       verificationEventRepository,
+      notificationManager,
+      moderationQueueService,
     });
     await handler.setupEventHandlers();
     const updateHandler = client.on.mock.calls.find(
@@ -856,6 +869,11 @@ describe('EventHandler (unit)', () => {
     expect(
       roleQuarantineService.enforceActiveCaseRoleUpdate.mock.invocationCallOrder[0]
     ).toBeLessThan(securityActionService.handleHoneypotRoleAssignment.mock.invocationCallOrder[0]);
+    expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+      expect.objectContaining({ containment_status: CaseContainmentStatus.INCOMPLETE }),
+      VerificationStatus.PENDING
+    );
+    expect(moderationQueueService.upsertCaseMirror).toHaveBeenCalled();
   });
 
   it('does not enforce active-case role quarantine after restrictions are lifted', async () => {
@@ -1059,7 +1077,13 @@ describe('EventHandler (unit)', () => {
     const reportIntakeService = { handleThreadMessage: jest.fn().mockResolvedValue(true) };
     const reportIntakeAgentService = { scheduleAnalysisForThreadMessage: jest.fn() };
     const detectionOrchestrator = {
-      detectMessage: jest.fn(),
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'free nitro',
+      }),
       detectNewJoin: jest.fn(),
     };
     const handler = buildHandler({
@@ -1192,7 +1216,13 @@ describe('EventHandler (unit)', () => {
       findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),
     };
     const detectionOrchestrator = {
-      detectMessage: jest.fn(),
+      detectMessage: jest.fn().mockResolvedValue({
+        label: 'OK',
+        confidence: 0,
+        reasons: [],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'free nitro',
+      }),
       detectNewJoin: jest.fn(),
     };
     const handler = buildHandler({
@@ -1212,7 +1242,7 @@ describe('EventHandler (unit)', () => {
       activeCase,
       message
     );
-    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
+    expect(detectionOrchestrator.detectMessage).toHaveBeenCalled();
   });
 
   it('uses normal detection when no global watchlist rows are loaded', async () => {

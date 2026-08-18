@@ -22,6 +22,7 @@ import { INotificationManager } from '../../services/NotificationManager';
 import { IRoleManager } from '../../services/RoleManager';
 import {
   IRoleQuarantineService,
+  RoleQuarantineApplyError,
   RoleQuarantineApplyResult,
   RoleQuarantinePreviewResult,
 } from '../../services/RoleQuarantineService';
@@ -116,6 +117,15 @@ function buildHarness(
       ...event,
       containment_status: CaseContainmentStatus.IN_PROGRESS,
     }),
+    renewQuarantineAttempt: jest.fn().mockResolvedValue(true),
+    updateQuarantineAttempt: jest
+      .fn()
+      .mockImplementation(
+        async (_id: string, _attemptId: string, data: Partial<VerificationEvent>) => ({
+          ...event,
+          ...data,
+        })
+      ),
     update: jest.fn().mockImplementation(async (_id: string, data: Partial<VerificationEvent>) => ({
       ...event,
       ...data,
@@ -211,8 +221,9 @@ describe('AccountQuarantineService', () => {
     );
 
     expect(result.status).toBe('parked');
-    expect(harness.verificationEvents.update).toHaveBeenCalledWith(
+    expect(harness.verificationEvents.updateQuarantineAttempt).toHaveBeenCalledWith(
       event.id,
+      expect.any(String),
       expect.objectContaining({
         case_kind: CaseKind.COMPROMISED_ACCOUNT,
         attention_state: CaseAttentionState.PARKED,
@@ -259,8 +270,9 @@ describe('AccountQuarantineService', () => {
 
     expect(preview.canContain).toBe(false);
     expect(result.status).toBe('incomplete');
-    expect(harness.verificationEvents.update).toHaveBeenCalledWith(
+    expect(harness.verificationEvents.updateQuarantineAttempt).toHaveBeenCalledWith(
       event.id,
+      expect.any(String),
       expect.objectContaining({
         attention_state: CaseAttentionState.REVIEW_REQUIRED,
         containment_status: CaseContainmentStatus.INCOMPLETE,
@@ -319,6 +331,24 @@ describe('AccountQuarantineService', () => {
     expect(harness.roleManager.assignCaseRole).not.toHaveBeenCalled();
   });
 
+  it('stops before assigning the case role when the attempt lease is lost', async () => {
+    const harness = buildHarness();
+    harness.verificationEvents.renewQuarantineAttempt.mockResolvedValueOnce(false);
+    harness.verificationEvents.updateQuarantineAttempt.mockResolvedValueOnce(null);
+
+    await expect(
+      harness.service.quarantine(
+        harness.member,
+        event,
+        { id: 'moderator-1' } as User,
+        'Compromise report'
+      )
+    ).rejects.toThrow('superseded');
+
+    expect(harness.roleManager.assignCaseRole).not.toHaveBeenCalled();
+    expect(harness.moderationQueue.deleteCaseMirror).not.toHaveBeenCalled();
+  });
+
   it('records and surfaces a failed attempt before role removal completes', async () => {
     const harness = buildHarness();
     harness.roleQuarantine.quarantineCompromisedAccount.mockRejectedValueOnce(
@@ -334,8 +364,9 @@ describe('AccountQuarantineService', () => {
       )
     ).rejects.toThrow('Discord unavailable');
 
-    expect(harness.verificationEvents.update).toHaveBeenCalledWith(
+    expect(harness.verificationEvents.updateQuarantineAttempt).toHaveBeenCalledWith(
       event.id,
+      expect.any(String),
       expect.objectContaining({
         case_kind: CaseKind.COMPROMISED_ACCOUNT,
         attention_state: CaseAttentionState.REVIEW_REQUIRED,
@@ -369,8 +400,9 @@ describe('AccountQuarantineService', () => {
       )
     ).rejects.toThrow('Missing permissions');
 
-    expect(harness.verificationEvents.update).toHaveBeenCalledWith(
+    expect(harness.verificationEvents.updateQuarantineAttempt).toHaveBeenCalledWith(
       event.id,
+      expect.any(String),
       expect.objectContaining({
         case_kind: CaseKind.COMPROMISED_ACCOUNT,
         attention_state: CaseAttentionState.REVIEW_REQUIRED,
@@ -392,5 +424,86 @@ describe('AccountQuarantineService', () => {
       VerificationStatus.PENDING
     );
     expect(harness.moderationQueue.upsertCaseMirror).toHaveBeenCalled();
+  });
+
+  it('persists partial role effects when snapshot finalization fails', async () => {
+    const harness = buildHarness();
+    harness.roleQuarantine.quarantineCompromisedAccount.mockRejectedValueOnce(
+      new RoleQuarantineApplyError('Snapshot write failed', roleResult)
+    );
+
+    await expect(
+      harness.service.quarantine(
+        harness.member,
+        event,
+        { id: 'moderator-1' } as User,
+        'Compromise report'
+      )
+    ).rejects.toThrow('Snapshot write failed');
+
+    expect(harness.verificationEvents.updateQuarantineAttempt).toHaveBeenCalledWith(
+      event.id,
+      expect.any(String),
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          account_quarantine: expect.objectContaining({
+            failure_stage: 'role_removal',
+            removed_role_ids: ['role-1'],
+            snapshot_id: 'snapshot-1',
+          }),
+        }),
+      })
+    );
+  });
+
+  it('records state-persistence rejection as a failed attempt', async () => {
+    const harness = buildHarness();
+    harness.verificationEvents.updateQuarantineAttempt
+      .mockRejectedValueOnce(new Error('Database unavailable'))
+      .mockImplementationOnce(async (_id, _attemptId, data) => ({ ...event, ...data }));
+
+    await expect(
+      harness.service.quarantine(
+        harness.member,
+        event,
+        { id: 'moderator-1' } as User,
+        'Compromise report'
+      )
+    ).rejects.toThrow('Database unavailable');
+
+    expect(harness.verificationEvents.updateQuarantineAttempt).toHaveBeenLastCalledWith(
+      event.id,
+      expect.any(String),
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        metadata: expect.objectContaining({
+          account_quarantine: expect.objectContaining({
+            failure_stage: 'case_state_persistence',
+            removed_role_ids: ['role-1'],
+          }),
+        }),
+      })
+    );
+    expect(harness.notificationManager.updateNotificationButtons).toHaveBeenCalled();
+    expect(harness.moderationQueue.upsertCaseMirror).toHaveBeenCalled();
+  });
+
+  it('keeps parked surfaces current when the audit write fails', async () => {
+    const harness = buildHarness();
+    harness.adminActions.recordAction.mockRejectedValueOnce(new Error('Audit unavailable'));
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await expect(
+      harness.service.quarantine(
+        harness.member,
+        event,
+        { id: 'moderator-1' } as User,
+        'Compromise report'
+      )
+    ).resolves.toEqual(expect.objectContaining({ status: 'parked' }));
+
+    expect(harness.notificationManager.updateNotificationButtons).toHaveBeenCalled();
+    expect(harness.moderationQueue.deleteCaseMirror).toHaveBeenCalledWith(event.id);
+    errorSpy.mockRestore();
   });
 });

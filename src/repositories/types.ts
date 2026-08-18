@@ -454,6 +454,7 @@ export interface VerificationEvent {
   case_kind?: CaseKind;
   attention_state?: CaseAttentionState;
   containment_status?: CaseContainmentStatus;
+  quarantine_attempt_id?: string | null;
   parked_at?: Date | null;
   parked_by?: string | null;
   review_after?: Date | null;

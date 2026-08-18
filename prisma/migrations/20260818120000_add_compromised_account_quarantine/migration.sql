@@ -9,6 +9,7 @@ ALTER TABLE "verification_events"
   ADD COLUMN "case_kind" "case_kind" NOT NULL DEFAULT 'standard',
   ADD COLUMN "attention_state" "case_attention_state" NOT NULL DEFAULT 'review_required',
   ADD COLUMN "containment_status" "case_containment_status" NOT NULL DEFAULT 'not_applicable',
+  ADD COLUMN "quarantine_attempt_id" TEXT,
   ADD COLUMN "parked_at" TIMESTAMPTZ(6),
   ADD COLUMN "parked_by" TEXT,
   ADD COLUMN "review_after" TIMESTAMPTZ(6);

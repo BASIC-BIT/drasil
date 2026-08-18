@@ -4,6 +4,7 @@ import { AdminActionService } from '../../services/AdminActionService';
 import { ModerationOutcomeService } from '../../services/ModerationOutcomeService';
 import {
   AdminActionType,
+  CaseContainmentStatus,
   DetectionType,
   ModerationOutcomeSource,
   ModerationOutcomeType,
@@ -210,6 +211,57 @@ describe('UserModerationService (unit)', () => {
     );
     expect(notificationManager.logActionToMessage).toHaveBeenCalled();
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
+  });
+
+  it('does not resolve a case while account containment is in progress', async () => {
+    const guildId = 'guild-quarantine-in-progress';
+    const userId = 'user-quarantine-in-progress';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    const moderator = { id: 'moderator-1' } as User;
+    await expect(service.verifyUser(member, moderator)).rejects.toThrow(
+      'Account quarantine is currently in progress'
+    );
+    await expect(service.kickUser(member, 'Kick requested', moderator)).rejects.toThrow(
+      'Account quarantine is currently in progress'
+    );
+    await expect(service.banUser(member, 'Ban requested', moderator)).rejects.toThrow(
+      'Account quarantine is currently in progress'
+    );
+    await expect(
+      service.closeCaseNoAction(buildGuildWithMember(guildId, member), userId, moderator)
+    ).rejects.toThrow('Account quarantine is currently in progress');
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+      })
+    );
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
+    expect(member.kick).not.toHaveBeenCalled();
+    expect(member.ban).not.toHaveBeenCalled();
   });
 
   it('restores quarantined roles when verifying a user', async () => {

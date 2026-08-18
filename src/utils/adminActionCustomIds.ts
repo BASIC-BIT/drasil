@@ -91,18 +91,22 @@ export function buildAdminActionCustomId(
   action: string,
   surface: AdminActionSurface,
   userId: string,
-  detectionEventId?: string
+  detectionEventId?: string,
+  verificationEventId?: string
 ): string {
+  const optionalParts = verificationEventId
+    ? [detectionEventId ?? '_', verificationEventId]
+    : detectionEventId
+      ? [detectionEventId]
+      : [];
   return assertCustomIdLength(
     [
       ADMIN_ACTION_CUSTOM_ID_PREFIX,
       ACTION_TO_CODE[action] ?? action,
       SURFACE_TO_CODE[surface],
       userId,
-      detectionEventId,
-    ]
-      .filter((part): part is string => Boolean(part))
-      .join(':')
+      ...optionalParts,
+    ].join(':')
   );
 }
 
@@ -111,10 +115,12 @@ export interface ParsedAdminActionCustomId {
   readonly surface: AdminActionSurface;
   readonly userId: string;
   readonly detectionEventId?: string;
+  readonly verificationEventId?: string;
 }
 
 export function parseAdminActionCustomId(customId: string): ParsedAdminActionCustomId | null {
-  const [prefix, actionCode, surfaceCode, userId, detectionEventId] = customId.split(':');
+  const [prefix, actionCode, surfaceCode, userId, detectionEventId, verificationEventId] =
+    customId.split(':');
   if (prefix !== ADMIN_ACTION_CUSTOM_ID_PREFIX || !actionCode || !surfaceCode || !userId) {
     return null;
   }
@@ -128,6 +134,7 @@ export function parseAdminActionCustomId(customId: string): ParsedAdminActionCus
     action,
     surface,
     userId,
-    ...(detectionEventId ? { detectionEventId } : {}),
+    ...(detectionEventId && detectionEventId !== '_' ? { detectionEventId } : {}),
+    ...(verificationEventId ? { verificationEventId } : {}),
   };
 }

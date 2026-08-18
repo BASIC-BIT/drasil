@@ -16,6 +16,7 @@ import {
 import {
   fixtureActiveCaseDetail,
   fixtureActiveCaseSummaries,
+  fixtureParkedActiveCaseSummaries,
   fixtureResolvedCaseCount,
   fixtureResolvedCaseSummariesForHistory,
   isWebE2eFixtureMode,
@@ -439,12 +440,20 @@ function resolveAllowedActions(
     return appendRefreshNotificationAction(row, actions);
   }
 
+  if (row.attention_state === 'parked') {
+    const actions: CaseAction[] =
+      presenceState === 'in_server'
+        ? ['view_history', 'verify_user', 'kick_user', 'ban_user']
+        : ['view_history', 'ban_by_id'];
+    return appendRefreshNotificationAction(row, actions);
+  }
+
   const presenceActions = ACTIONS_BY_PRESENCE_STATE[presenceState];
   if (presenceActions) {
     return appendRefreshNotificationAction(row, presenceActions);
   }
 
-  const parkedIndex = Number(row.attention_state === 'parked') as 0 | 1;
+  const parkedIndex = 0;
   const quarantineEnabledIndex = Number(
     metadataToRecord(row.server_settings).account_quarantine_enabled === true
   ) as 0 | 1;
@@ -832,7 +841,7 @@ export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
   }
 
   public async listParkedCases(): Promise<CaseSummary[]> {
-    return fixtureActiveCaseSummaries().filter((item) => item.attentionState === 'parked');
+    return fixtureParkedActiveCaseSummaries();
   }
 
   public async listResolvedCases(_guildId: string): Promise<CaseSummary[]> {

@@ -1201,7 +1201,13 @@ export class InteractionHandler implements IInteractionHandler {
   ): ButtonBuilder {
     return new ButtonBuilder()
       .setCustomId(
-        buildAdminActionCustomId(action, parsed.surface, parsed.userId, parsed.detectionEventId)
+        buildAdminActionCustomId(
+          action,
+          parsed.surface,
+          parsed.userId,
+          parsed.detectionEventId,
+          parsed.verificationEventId
+        )
       )
       .setLabel(label)
       .setStyle(style);
@@ -1324,18 +1330,37 @@ export class InteractionHandler implements IInteractionHandler {
     options?: { update?: boolean }
   ): Promise<void> {
     const confirmAction = `confirm_${parsed.action}`;
-    const components = [
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        this.adminActionButton(parsed, confirmAction, confirmation.label, confirmation.style),
-        this.adminActionButton(parsed, 'cancel', 'Cancel', ButtonStyle.Secondary)
-      ),
+    const quarantinePreview =
+      parsed.surface === 'case' && parsed.action === 'quarantine'
+        ? await this.buildAccountQuarantineConfirmationMessage(
+            interaction,
+            parsed,
+            confirmation.message
+          )
+        : null;
+    const confirmationParsed = quarantinePreview?.verificationEventId
+      ? { ...parsed, verificationEventId: quarantinePreview.verificationEventId }
+      : parsed;
+    const canContinue =
+      quarantinePreview === null || quarantinePreview.verificationEventId !== null;
+    const buttons = [
+      ...(canContinue
+        ? [
+            this.adminActionButton(
+              confirmationParsed,
+              confirmAction,
+              confirmation.label,
+              confirmation.style
+            ),
+          ]
+        : []),
+      this.adminActionButton(parsed, 'cancel', 'Cancel', ButtonStyle.Secondary),
     ];
+    const components = [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
     const response = {
-      content: await this.buildAdminActionConfirmationMessage(
-        interaction,
-        parsed,
-        confirmation.message
-      ),
+      content:
+        quarantinePreview?.message ??
+        (await this.buildAdminActionConfirmationMessage(interaction, parsed, confirmation.message)),
       allowedMentions: { parse: [] },
       components,
     };
@@ -1353,10 +1378,6 @@ export class InteractionHandler implements IInteractionHandler {
     parsed: ParsedAdminActionCustomId,
     baseMessage: string
   ): Promise<string> {
-    if (parsed.surface === 'case' && parsed.action === 'quarantine') {
-      return this.buildAccountQuarantineConfirmationMessage(interaction, parsed, baseMessage);
-    }
-
     if (parsed.surface === 'case' && parsed.action === 'verify') {
       const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
         parsed.userId,
@@ -1390,7 +1411,7 @@ export class InteractionHandler implements IInteractionHandler {
     interaction: ButtonInteraction,
     parsed: ParsedAdminActionCustomId,
     baseMessage: string
-  ): Promise<string> {
+  ): Promise<{ readonly message: string; readonly verificationEventId: string | null }> {
     const member = await interaction.guild?.members.fetch(parsed.userId).catch(() => null);
     const activeCase = interaction.guildId
       ? await this.verificationEventRepository.findActiveByUserAndServer(
@@ -1399,14 +1420,20 @@ export class InteractionHandler implements IInteractionHandler {
         )
       : null;
     if (!member || !activeCase || !this.accountQuarantineService) {
-      return `${baseMessage}\n\nA live containment preview is unavailable; cancel and retry from the active case.`;
+      return {
+        message: `${baseMessage}\n\nA live containment preview is unavailable; cancel and retry from the active case.`,
+        verificationEventId: null,
+      };
     }
 
     const preview = await this.accountQuarantineService
       .preview(member, activeCase)
       .catch(() => null);
     if (!preview) {
-      return `${baseMessage}\n\nDrasil could not produce a live containment preview. Cancel and retry after repairing the active case.`;
+      return {
+        message: `${baseMessage}\n\nDrasil could not produce a live containment preview. Cancel and retry after repairing the active case.`,
+        verificationEventId: null,
+      };
     }
 
     const retained = preview.rolePreview.skippedRoles.map(
@@ -1430,7 +1457,10 @@ export class InteractionHandler implements IInteractionHandler {
     if (retained.length > 0) {
       lines.push('', `Unmanageable roles: ${retained.join(', ')}`);
     }
-    return truncatePreview(lines.join('\n'), ACCOUNT_QUARANTINE_CONFIRMATION_MAX_LENGTH);
+    return {
+      message: truncatePreview(lines.join('\n'), ACCOUNT_QUARANTINE_CONFIRMATION_MAX_LENGTH),
+      verificationEventId: activeCase.id,
+    };
   }
 
   private async showLegacyAdminActionConfirmation(
@@ -1501,7 +1531,14 @@ export class InteractionHandler implements IInteractionHandler {
         );
         return;
       }
-      await this.showAccountQuarantineModal(interaction, parsed.userId);
+      if (!parsed.verificationEventId) {
+        await interaction.reply({
+          content: 'The live containment preview expired. Return to the active case and retry.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      await this.showAccountQuarantineModal(interaction, parsed.userId, parsed.verificationEventId);
       return;
     }
 
@@ -1720,10 +1757,11 @@ export class InteractionHandler implements IInteractionHandler {
 
   private async showAccountQuarantineModal(
     interaction: ButtonInteraction,
-    userId: string
+    userId: string,
+    verificationEventId: string
   ): Promise<void> {
     const modal = new ModalBuilder()
-      .setCustomId(`${ACCOUNT_QUARANTINE_MODAL_PREFIX}:${userId}`)
+      .setCustomId(`${ACCOUNT_QUARANTINE_MODAL_PREFIX}:${userId}:${verificationEventId}`)
       .setTitle('Quarantine Compromised Account');
     const reasonInput = new TextInputBuilder()
       .setCustomId(ACCOUNT_QUARANTINE_REASON_FIELD_ID)
@@ -2730,9 +2768,11 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const userId = interaction.customId.slice(`${ACCOUNT_QUARANTINE_MODAL_PREFIX}:`.length);
+    const [userId, previewedCaseId] = interaction.customId
+      .slice(`${ACCOUNT_QUARANTINE_MODAL_PREFIX}:`.length)
+      .split(':');
     const reason = interaction.fields.getTextInputValue(ACCOUNT_QUARANTINE_REASON_FIELD_ID).trim();
-    if (!userId || !reason) {
+    if (!userId || !previewedCaseId || !reason) {
       await interaction.reply({
         content: 'A target user and quarantine reason are required.',
         flags: MessageFlags.Ephemeral,
@@ -2748,13 +2788,18 @@ export class InteractionHandler implements IInteractionHandler {
         throw new Error('The target is no longer a member of this server.');
       }
 
-      await this.securityActionService.repairActiveCase(member);
       const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
         userId,
         interaction.guildId
       );
-      if (!activeCase) {
-        throw new Error('No active verification case was found.');
+      if (!activeCase || activeCase.id !== previewedCaseId) {
+        throw new Error('The active case changed after preview. Return to the case and retry.');
+      }
+      const repair = await this.securityActionService.repairActiveCase(member);
+      if (repair.verificationEventId !== activeCase.id || !repair.threadId) {
+        throw new Error(
+          'A usable user verification thread is required before this account can be quarantined.'
+        );
       }
 
       const result = await this.accountQuarantineService.quarantine(

@@ -572,6 +572,14 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     return verificationEvents.filter((event) => event.status === VerificationStatus.PENDING);
   }
 
+  private assertNoQuarantineInProgress(events: readonly VerificationEvent[]): void {
+    if (events.some((event) => event.containment_status === CaseContainmentStatus.IN_PROGRESS)) {
+      throw new Error(
+        'Account quarantine is currently in progress. Wait for containment to finish before resolving this case.'
+      );
+    }
+  }
+
   private getModerationTarget(member: GuildMember | PartialGuildMember): ModerationTarget {
     return {
       guildId: member.guild.id,
@@ -846,6 +854,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   public async verifyUser(member: GuildMember, moderator: User): Promise<boolean> {
     try {
       const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
+      this.assertNoQuarantineInProgress(pendingVerificationEvents);
       const verificationEvent =
         pendingVerificationEvents.length > 0 ? pendingVerificationEvents[0] : null;
 
@@ -1020,12 +1029,21 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   }
 
   public async performDiscordMemberBan(member: GuildMember, reason: string): Promise<void> {
+    const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
+    this.assertNoQuarantineInProgress(pendingVerificationEvents);
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
     await member.ban({ reason: auditReason || 'Moderator-requested ban' });
     console.log(`Banned user ${member.user.tag}. Reason: ${reason}`);
   }
 
   public async performDiscordBanById(guild: Guild, userId: string, reason: string): Promise<void> {
+    const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
+      userId,
+      guild.id
+    );
+    this.assertNoQuarantineInProgress(
+      verificationEvents.filter((event) => event.status === VerificationStatus.PENDING)
+    );
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
     await guild.bans.create(userId, { reason: auditReason || 'Moderator-requested ban' });
     console.log(`Banned user ${userId} for combined message cleanup. Reason: ${reason}`);
@@ -1046,8 +1064,6 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       previousStatus: VerificationStatus;
     }> = [];
 
-    await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'drasil_ban', moderator.id);
-
     try {
       for (const pendingEvent of pendingVerificationEvents) {
         const previousStatus = pendingEvent.status;
@@ -1063,18 +1079,19 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         };
         const updatedEvent = await this.verificationEventRepository.update(
           pendingEvent.id,
-          eventToUpdate
+          eventToUpdate,
+          { allowQuarantineOverride: true }
         );
         if (!updatedEvent) {
-          console.warn(
+          throw new Error(
             `Failed to update verification event ${pendingEvent.id} status to BANNED after the Discord ban.`
           );
-          resolvedEvents.push({ event: eventToUpdate, previousStatus });
-          continue;
         }
 
         resolvedEvents.push({ event: updatedEvent, previousStatus });
       }
+
+      await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'drasil_ban', moderator.id);
 
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
         verification_status: VerificationStatus.BANNED,
@@ -1187,7 +1204,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       };
       const updatedEvent = await this.verificationEventRepository.update(
         pendingEvent.id,
-        eventToUpdate
+        eventToUpdate,
+        { allowQuarantineOverride: true }
       );
       if (!updatedEvent) {
         throw new Error(`Failed to finalize verification event ${pendingEvent.id}.`);
@@ -1305,14 +1323,13 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   ): Promise<boolean> {
     try {
       const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
+      this.assertNoQuarantineInProgress(pendingVerificationEvents);
       const verificationEvent =
         pendingVerificationEvents.length > 0 ? pendingVerificationEvents[0] : null;
       const resolvedAt = new Date();
 
       await member.kick(reason);
       console.log(`Kicked user ${member.user.tag}. Reason: ${reason}`);
-      await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'drasil_kick', moderator.id);
-
       const resolvedEvents: Array<{
         event: VerificationEvent;
         previousStatus: VerificationStatus;
@@ -1331,10 +1348,23 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           };
           const updatedEvent = await this.verificationEventRepository.update(
             pendingEvent.id,
-            eventToUpdate
+            eventToUpdate,
+            { allowQuarantineOverride: true }
           );
-          resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
+          if (!updatedEvent) {
+            throw new Error(
+              `Failed to update verification event ${pendingEvent.id} status to KICKED after the Discord kick.`
+            );
+          }
+          resolvedEvents.push({ event: updatedEvent, previousStatus });
         }
+
+        await this.tryAbandonRoleQuarantine(
+          member.guild.id,
+          member.id,
+          'drasil_kick',
+          moderator.id
+        );
 
         await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
           verification_status: VerificationStatus.KICKED,
@@ -1408,6 +1438,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       const pendingVerificationEvents = verificationEvents.filter(
         (event) => event.status === VerificationStatus.PENDING
       );
+      this.assertNoQuarantineInProgress(pendingVerificationEvents);
       const resolvedAt = new Date();
       const resolvedEvents: Array<{
         event: VerificationEvent;
@@ -1434,8 +1465,13 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           pendingEvent.id,
           eventToUpdate
         );
+        if (!updatedEvent) {
+          throw new Error(
+            `Account quarantine started before case ${pendingEvent.id} could be banned by ID.`
+          );
+        }
         resolvedEvents.push({
-          event: updatedEvent ?? eventToUpdate,
+          event: updatedEvent,
           previousEvent: pendingEvent,
           previousStatus,
         });
@@ -1555,6 +1591,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       const pendingVerificationEvents = verificationEvents.filter(
         (event) => event.status === VerificationStatus.PENDING
       );
+      this.assertNoQuarantineInProgress(pendingVerificationEvents);
       if (pendingVerificationEvents.length === 0) {
         await this.tryAbandonRoleQuarantine(
           guild.id,
@@ -1589,7 +1626,12 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           pendingEvent.id,
           eventToUpdate
         );
-        resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
+        if (!updatedEvent) {
+          throw new Error(
+            `Account quarantine started before case ${pendingEvent.id} could sync the existing ban.`
+          );
+        }
+        resolvedEvents.push({ event: updatedEvent, previousStatus });
       }
 
       await this.serverMemberRepository.upsertMember(guild.id, userId, {
@@ -1686,6 +1728,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       const pendingVerificationEvents = verificationEvents.filter(
         (event) => event.status === VerificationStatus.PENDING
       );
+      this.assertNoQuarantineInProgress(pendingVerificationEvents);
 
       const member = await guild.members.fetch(userId).catch(() => null);
       const serverMember = await this.serverMemberRepository.findByServerAndUser(guild.id, userId);
@@ -1744,7 +1787,12 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           pendingEvent.id,
           eventToUpdate
         );
-        resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
+        if (!updatedEvent) {
+          throw new Error(
+            `Account quarantine started before case ${pendingEvent.id} could close with no action.`
+          );
+        }
+        resolvedEvents.push({ event: updatedEvent, previousStatus });
       }
 
       if (shouldRemoveCaseRole) {
@@ -1918,9 +1966,13 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         };
         const updatedEvent = await this.verificationEventRepository.update(
           pendingEvent.id,
-          eventToUpdate
+          eventToUpdate,
+          { allowQuarantineOverride: true }
         );
-        resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
+        if (!updatedEvent) {
+          throw new Error(`Failed to record observed Discord ban for case ${pendingEvent.id}.`);
+        }
+        resolvedEvents.push({ event: updatedEvent, previousStatus });
       }
 
       await this.serverMemberRepository.upsertMember(guild.id, user.id, {
@@ -2030,9 +2082,13 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         };
         const updatedEvent = await this.verificationEventRepository.update(
           pendingEvent.id,
-          eventToUpdate
+          eventToUpdate,
+          { allowQuarantineOverride: true }
         );
-        resolvedEvents.push({ event: updatedEvent ?? eventToUpdate, previousStatus });
+        if (!updatedEvent) {
+          throw new Error(`Failed to record observed Discord kick for case ${pendingEvent.id}.`);
+        }
+        resolvedEvents.push({ event: updatedEvent, previousStatus });
       }
 
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {

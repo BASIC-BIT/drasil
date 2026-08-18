@@ -1,5 +1,8 @@
 import { GuildMember, PermissionFlagsBits, Role, User } from 'discord.js';
-import { RoleQuarantineService } from '../../services/RoleQuarantineService';
+import {
+  RoleQuarantineApplyError,
+  RoleQuarantineService,
+} from '../../services/RoleQuarantineService';
 import { InMemoryRoleQuarantineSnapshotRepository } from '../fakes/inMemoryRepositories';
 import { IConfigService } from '../../config/ConfigService';
 import {
@@ -324,8 +327,18 @@ describe('RoleQuarantineService (unit)', () => {
       .mockRejectedValueOnce(new Error('Database unavailable'));
 
     try {
-      await expect(service.quarantineMember(member, createVerificationEvent())).rejects.toThrow(
-        'Database unavailable'
+      const failure = await service
+        .quarantineMember(member, createVerificationEvent())
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(RoleQuarantineApplyError);
+      expect(failure).toEqual(
+        expect.objectContaining({
+          message: expect.stringContaining('Database unavailable'),
+          result: expect.objectContaining({
+            removedRoleIds: ['safe-role'],
+            snapshotId: expect.any(String),
+          }),
+        })
       );
       const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
       expect(snapshot?.removed_role_ids).toEqual(['safe-role']);

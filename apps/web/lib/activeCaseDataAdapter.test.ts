@@ -147,6 +147,22 @@ describe('activeCaseDataAdapter', () => {
     ]);
   });
 
+  it('does not expose close-no-action when a parked user has left the server', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        case_kind: 'compromised_account',
+        attention_state: 'parked',
+        containment_status: 'contained',
+        latest_outcome_type: 'member_left',
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.presenceState).toBe('left_or_removed');
+    expect(summary.allowedActions).toEqual(['view_history', 'ban_by_id', 'refresh_notification']);
+  });
+
   it('falls back to the admin channel when notification channel is missing', () => {
     const summary = parseCaseSummaryRow(
       { ...baseRow, notification_channel_id: null },
@@ -354,6 +370,18 @@ describe('activeCaseDataAdapter', () => {
       expect.objectContaining({
         id: 'case-resolved-verified',
         allowedActions: ['view_history', 'reopen_case'],
+      }),
+    ]);
+  });
+
+  it('provides a representative parked fixture outside the review queue', async () => {
+    const adapter = new FixtureActiveCaseDataAdapter();
+
+    await expect(adapter.listParkedCases()).resolves.toEqual([
+      expect.objectContaining({
+        attentionState: 'parked',
+        caseKind: 'compromised_account',
+        containmentStatus: 'contained',
       }),
     ]);
   });

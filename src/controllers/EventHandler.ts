@@ -399,7 +399,6 @@ export class EventHandler implements IEventHandler {
           activeCase.attention_state === CaseAttentionState.PARKED
         ) {
           await this.moderationQueueService.recordQuarantineBreachAttention(activeCase, message);
-          return;
         }
       }
       const responseSettings = getDetectionResponseSettings(serverConfig.settings, 'message');
@@ -913,6 +912,11 @@ export class EventHandler implements IEventHandler {
     ) {
       const updated = await this.verificationEventRepository.findById(verificationEvent.id);
       if (updated) {
+        await this.notificationManager
+          .updateNotificationButtons(updated, updated.status)
+          .catch((error) => {
+            console.warn(`Failed to refresh regressed quarantine ${updated.id}:`, error);
+          });
         await this.moderationQueueService?.upsertCaseMirror(updated);
       }
     }

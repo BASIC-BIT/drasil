@@ -1,4 +1,5 @@
 import { GuildMember, User } from 'discord.js';
+import { randomUUID } from 'node:crypto';
 import { inject, injectable } from 'inversify';
 import { Prisma } from '../db/prisma';
 import { TYPES } from '../di/symbols';
@@ -27,6 +28,7 @@ import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
 import {
   IRoleQuarantineService,
+  RoleQuarantineApplyError,
   RoleQuarantineApplyResult,
   RoleQuarantinePreviewResult,
 } from './RoleQuarantineService';
@@ -115,10 +117,12 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       throw new Error('Compromised-account quarantine is disabled for this server.');
     }
 
+    const attemptId = randomUUID();
     const claimedEvent = await this.verificationEvents.claimQuarantineAttempt(
       event.id,
       member.guild.id,
       member.id,
+      attemptId,
       new Date(Date.now() - QUARANTINE_ATTEMPT_STALE_MS)
     );
     if (!claimedEvent) {
@@ -136,16 +140,23 @@ export class AccountQuarantineService implements IAccountQuarantineService {
         claimedEvent,
         moderator
       );
+      await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'case_role_assignment';
       caseRoleAssigned = await this.roleManager.assignCaseRole(member);
+      await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'containment_audit';
       [lockdown, memberAudit] = await Promise.all([
         this.lockdown.auditGuild(member.guild),
         this.lockdown.auditMemberBypasses(member),
       ]);
+      await this.assertAttemptOwner(claimedEvent.id, attemptId);
     } catch (error) {
+      if (error instanceof RoleQuarantineApplyError) {
+        roleResult = error.result;
+      }
       await this.recordFailedAttempt({
         claimedEvent,
+        attemptId,
         error,
         failureStage,
         member,
@@ -181,57 +192,84 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       ...this.metadataToRecord(claimedEvent.metadata),
       account_quarantine: auditMetadata,
     } as unknown as VerificationEvent['metadata'];
-    const updated = await this.verificationEvents.update(claimedEvent.id, {
-      case_kind: CaseKind.COMPROMISED_ACCOUNT,
-      attention_state: complete ? CaseAttentionState.PARKED : CaseAttentionState.REVIEW_REQUIRED,
-      containment_status: complete
-        ? CaseContainmentStatus.CONTAINED
-        : CaseContainmentStatus.INCOMPLETE,
-      parked_at: complete ? now : null,
-      parked_by: complete ? moderator.id : null,
-      metadata,
-    });
-    if (!updated) {
+    let updated: VerificationEvent | null;
+    try {
+      updated = await this.verificationEvents.updateQuarantineAttempt(claimedEvent.id, attemptId, {
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: complete ? CaseAttentionState.PARKED : CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: complete
+          ? CaseContainmentStatus.CONTAINED
+          : CaseContainmentStatus.INCOMPLETE,
+        parked_at: complete ? now : null,
+        parked_by: complete ? moderator.id : null,
+        metadata,
+      });
+    } catch (error) {
       await this.recordFailedAttempt({
         claimedEvent,
-        error: new Error(`Verification event ${claimedEvent.id} no longer exists.`),
+        attemptId,
+        error,
         failureStage: 'case_state_persistence',
         member,
         moderator,
         reason: trimmedReason,
         roleResult,
       });
-      throw new Error(`Verification event ${claimedEvent.id} no longer exists.`);
+      throw error;
+    }
+    if (!updated) {
+      const stateError = new Error(
+        `Quarantine attempt for verification event ${claimedEvent.id} was superseded or the case was resolved.`
+      );
+      await this.recordFailedAttempt({
+        claimedEvent,
+        attemptId,
+        error: stateError,
+        failureStage: 'case_state_persistence',
+        member,
+        moderator,
+        reason: trimmedReason,
+        roleResult,
+      });
+      throw stateError;
     }
 
-    await this.adminActions.recordAction({
-      server_id: member.guild.id,
-      user_id: member.id,
-      admin_id: moderator.id,
-      verification_event_id: claimedEvent.id,
-      detection_event_id: claimedEvent.detection_event_id,
-      action_type: AdminActionType.QUARANTINE_COMPROMISED_ACCOUNT,
-      previous_status: VerificationStatus.PENDING,
-      new_status: VerificationStatus.PENDING,
-      notes: trimmedReason,
-      metadata: auditMetadata as unknown as Prisma.JsonValue,
-    });
-
-    if (complete) {
-      await this.moderationOutcomes.recordOutcome({
+    await this.adminActions
+      .recordAction({
         server_id: member.guild.id,
         user_id: member.id,
-        detection_event_id: claimedEvent.detection_event_id,
+        admin_id: moderator.id,
         verification_event_id: claimedEvent.id,
-        outcome_type: ModerationOutcomeType.ACCOUNT_QUARANTINED,
-        source: ModerationOutcomeSource.DRASIL,
-        actor_id: moderator.id,
-        reason: trimmedReason,
-        occurred_at: now,
+        detection_event_id: claimedEvent.detection_event_id,
+        action_type: AdminActionType.QUARANTINE_COMPROMISED_ACCOUNT,
+        previous_status: VerificationStatus.PENDING,
+        new_status: VerificationStatus.PENDING,
+        notes: trimmedReason,
         metadata: auditMetadata as unknown as Prisma.JsonValue,
-        username: member.user.username,
-        accountCreatedAt: member.user.createdAt,
+      })
+      .catch((error) => {
+        console.error(`Failed to audit quarantine attempt ${claimedEvent.id}:`, error);
       });
+
+    if (complete) {
+      await this.moderationOutcomes
+        .recordOutcome({
+          server_id: member.guild.id,
+          user_id: member.id,
+          detection_event_id: claimedEvent.detection_event_id,
+          verification_event_id: claimedEvent.id,
+          outcome_type: ModerationOutcomeType.ACCOUNT_QUARANTINED,
+          source: ModerationOutcomeSource.DRASIL,
+          actor_id: moderator.id,
+          reason: trimmedReason,
+          occurred_at: now,
+          metadata: auditMetadata as unknown as Prisma.JsonValue,
+          username: member.user.username,
+          accountCreatedAt: member.user.createdAt,
+        })
+        .catch((error) => {
+          console.error(`Failed to record quarantine outcome ${claimedEvent.id}:`, error);
+        });
     }
 
     await this.refreshPersistentNotification(updated, moderator);
@@ -281,6 +319,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
 
   private async recordFailedAttempt(input: {
     readonly claimedEvent: VerificationEvent;
+    readonly attemptId: string;
     readonly error: unknown;
     readonly failureStage: string;
     readonly member: GuildMember;
@@ -305,7 +344,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       account_quarantine: failureMetadata,
     } as unknown as VerificationEvent['metadata'];
     const updated = await this.verificationEvents
-      .update(input.claimedEvent.id, {
+      .updateQuarantineAttempt(input.claimedEvent.id, input.attemptId, {
         case_kind: CaseKind.COMPROMISED_ACCOUNT,
         attention_state: CaseAttentionState.REVIEW_REQUIRED,
         containment_status: CaseContainmentStatus.INCOMPLETE,
@@ -343,6 +382,12 @@ export class AccountQuarantineService implements IAccountQuarantineService {
     await this.moderationQueue.upsertCaseMirror(updated).catch((error) => {
       console.error(`Failed to refresh quarantine case ${input.claimedEvent.id}:`, error);
     });
+  }
+
+  private async assertAttemptOwner(eventId: string, attemptId: string): Promise<void> {
+    if (!(await this.verificationEvents.renewQuarantineAttempt(eventId, attemptId))) {
+      throw new Error('This quarantine attempt was superseded or the case was resolved.');
+    }
   }
 
   private async refreshPersistentNotification(

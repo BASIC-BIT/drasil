@@ -135,8 +135,20 @@ const LOCKDOWN_PERMISSION_OPTIONS = LOCKDOWN_PERMISSIONS.reduce<PermissionOverwr
   {}
 );
 
-const HIGH_RISK_RESTRICTED_ROLE_PERMISSIONS: readonly PermissionLabel[] = [
+const COMPROMISED_ACCOUNT_PERMISSION_LABELS: readonly PermissionLabel[] = [
   { flag: PermissionFlagsBits.Administrator, label: 'Administrator' },
+  { flag: PermissionFlagsBits.ManageRoles, label: 'Manage Roles' },
+  { flag: PermissionFlagsBits.ManageGuild, label: 'Manage Server' },
+  { flag: PermissionFlagsBits.ModerateMembers, label: 'Moderate Members' },
+  { flag: PermissionFlagsBits.ManageChannels, label: 'Manage Channels' },
+  { flag: PermissionFlagsBits.KickMembers, label: 'Kick Members' },
+  { flag: PermissionFlagsBits.BanMembers, label: 'Ban Members' },
+  { flag: PermissionFlagsBits.ManageMessages, label: 'Manage Messages' },
+  { flag: PermissionFlagsBits.ManageWebhooks, label: 'Manage Webhooks' },
+];
+
+const HIGH_RISK_RESTRICTED_ROLE_PERMISSIONS: readonly PermissionLabel[] = [
+  ...COMPROMISED_ACCOUNT_PERMISSION_LABELS,
   ...LOCKDOWN_PERMISSIONS,
 ];
 
@@ -189,8 +201,13 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
       unremovablePrivilegeReasons.push('guild_owner');
     }
     const everyoneRole = member.guild.roles.cache.get(member.guild.id);
-    if (everyoneRole?.permissions.has(PermissionFlagsBits.Administrator)) {
-      unremovablePrivilegeReasons.push('everyone_administrator');
+    const everyonePrivileges = COMPROMISED_ACCOUNT_PERMISSION_LABELS.filter((permission) =>
+      everyoneRole?.permissions.has(permission.flag)
+    ).map((permission) => permission.label);
+    if (everyonePrivileges.length > 0) {
+      unremovablePrivilegeReasons.push(
+        `everyone_privileged_permissions:${everyonePrivileges.join(', ')}`
+      );
     }
     const bypasses: CaseRoleLockdownMemberBypass[] = [];
 

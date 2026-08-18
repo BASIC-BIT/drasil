@@ -196,6 +196,29 @@ describe('CaseRoleLockdownService (unit)', () => {
     expect(configService.updateServerSettings).not.toHaveBeenCalled();
   });
 
+  it('warns when the case role has a compromised-account privilege', async () => {
+    const guild = createGuild([]);
+    guild.roles.fetch.mockResolvedValue({
+      id: caseRoleId,
+      managed: false,
+      permissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ManageWebhooks),
+      },
+    });
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const report = await service.auditGuild(guild);
+
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'lockdown-case-role-global-permissions',
+          message: expect.stringContaining('Manage Webhooks'),
+        }),
+      ])
+    );
+  });
+
   it('unsyncs allowed channels only when explicitly confirmed', async () => {
     const category = createChannel({
       id: 'category-1',
@@ -563,6 +586,31 @@ describe('CaseRoleLockdownService (unit)', () => {
 
     const audit = await service.auditMemberBypasses(member);
 
-    expect(audit.unremovablePrivilegeReasons).toEqual(['guild_owner', 'everyone_administrator']);
+    expect(audit.unremovablePrivilegeReasons).toEqual([
+      'guild_owner',
+      'everyone_privileged_permissions:Administrator',
+    ]);
+  });
+
+  it('reports non-Administrator dangerous everyone permissions as containment blockers', async () => {
+    const guild = createGuild([]);
+    guild.roles.cache.set('guild-1', {
+      id: 'guild-1',
+      permissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ManageWebhooks),
+      },
+    });
+    const member = {
+      id: 'user-1',
+      guild,
+      roles: { cache: new Map() },
+    } as any;
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const audit = await service.auditMemberBypasses(member);
+
+    expect(audit.unremovablePrivilegeReasons).toEqual([
+      'everyone_privileged_permissions:Manage Webhooks',
+    ]);
   });
 });

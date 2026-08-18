@@ -9,6 +9,8 @@ import { readOptionalEnv, isProduction } from './env';
 import {
   fixtureCaseDetails,
   fixtureCaseSummaries,
+  fixtureParkedCaseDetails,
+  fixtureParkedCaseSummaries,
   fixtureResolvedCaseDetails,
   fixtureResolvedCaseSummaries,
 } from './caseFixtures';
@@ -379,6 +381,10 @@ export function fixtureActiveCaseSummaries(): CaseSummary[] {
   return fixtureCaseSummaries();
 }
 
+export function fixtureParkedActiveCaseSummaries(): CaseSummary[] {
+  return fixtureParkedCaseSummaries();
+}
+
 export function fixtureResolvedCaseSummariesForHistory(): CaseSummary[] {
   return fixtureResolvedCaseSummaries();
 }
@@ -390,6 +396,7 @@ export function fixtureResolvedCaseCount(): number {
 export function fixtureActiveCaseDetail(caseId: string): CaseDetail | null {
   return (
     fixtureCaseDetails.find((item) => item.id === caseId) ??
+    fixtureParkedCaseDetails.find((item) => item.id === caseId) ??
     fixtureResolvedCaseDetails.find((item) => item.id === caseId) ??
     null
   );

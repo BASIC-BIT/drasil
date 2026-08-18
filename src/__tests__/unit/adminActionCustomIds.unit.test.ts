@@ -49,6 +49,27 @@ describe('adminActionCustomIds (unit)', () => {
     });
   });
 
+  it('binds quarantine confirmation IDs to the previewed case', () => {
+    const userId = '1234567890123456789';
+    const verificationEventId = '12345678-1234-1234-1234-123456789012';
+
+    const customId = buildAdminActionCustomId(
+      'confirm_quarantine',
+      'case',
+      userId,
+      undefined,
+      verificationEventId
+    );
+
+    expect(customId.length).toBeLessThanOrEqual(100);
+    expect(parseAdminActionCustomId(customId)).toEqual({
+      action: 'confirm_quarantine',
+      surface: 'case',
+      userId,
+      verificationEventId,
+    });
+  });
+
   it('does not map old observed-restrict custom ID codes', () => {
     expect(parseAdminActionCustomId('admin_actions:or:o:user-1:det-1')).toEqual({
       action: 'or',

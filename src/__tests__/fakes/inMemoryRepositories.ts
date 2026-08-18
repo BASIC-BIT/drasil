@@ -569,6 +569,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       case_kind: CaseKind.STANDARD,
       attention_state: CaseAttentionState.REVIEW_REQUIRED,
       containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+      quarantine_attempt_id: null,
       parked_at: null,
       parked_by: null,
       review_after: null,
@@ -609,6 +610,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     id: string,
     serverId: string,
     userId: string,
+    attemptId: string,
     staleBefore: Date
   ): Promise<VerificationEvent | null> {
     const eventIndex = this.events.findIndex(
@@ -628,16 +630,57 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     const claimed = {
       ...this.events[eventIndex],
       containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: attemptId,
       updated_at: new Date(),
     };
     this.events[eventIndex] = claimed;
     return { ...claimed };
   }
 
+  async renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.status === VerificationStatus.PENDING &&
+        event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id === attemptId
+    );
+    if (eventIndex === -1) {
+      return false;
+    }
+    this.events[eventIndex] = { ...this.events[eventIndex], updated_at: new Date() };
+    return true;
+  }
+
+  async updateQuarantineAttempt(
+    id: string,
+    attemptId: string,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.status === VerificationStatus.PENDING &&
+        event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id === attemptId
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+    const updated = {
+      ...this.events[eventIndex],
+      ...data,
+      quarantine_attempt_id: null,
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
   async update(
     id: string,
     data: Partial<VerificationEvent>,
-    options: { touchUpdatedAt?: boolean } = {}
+    options: { touchUpdatedAt?: boolean; allowQuarantineOverride?: boolean } = {}
   ): Promise<VerificationEvent | null> {
     const eventIndex = this.events.findIndex((item) => item.id === id);
     if (eventIndex === -1) {
@@ -645,6 +688,14 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     }
 
     const existing = this.events[eventIndex];
+    if (
+      data.status !== undefined &&
+      data.status !== VerificationStatus.PENDING &&
+      existing.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+      options.allowQuarantineOverride !== true
+    ) {
+      return null;
+    }
     const updated: VerificationEvent = { ...existing };
 
     if (data.thread_id !== undefined) updated.thread_id = data.thread_id;
@@ -657,6 +708,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     if (data.case_kind !== undefined) updated.case_kind = data.case_kind;
     if (data.attention_state !== undefined) updated.attention_state = data.attention_state;
     if (data.containment_status !== undefined) updated.containment_status = data.containment_status;
+    if (data.quarantine_attempt_id !== undefined)
+      updated.quarantine_attempt_id = data.quarantine_attempt_id;
     if (data.parked_at !== undefined) updated.parked_at = data.parked_at;
     if (data.parked_by !== undefined) updated.parked_by = data.parked_by;
     if (data.review_after !== undefined) updated.review_after = data.review_after;
@@ -675,10 +728,20 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       ) {
         updated.resolved_at = data.resolved_at ?? new Date();
         updated.resolved_by = data.resolved_by ?? updated.resolved_by;
+        updated.attention_state = CaseAttentionState.REVIEW_REQUIRED;
+        updated.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
+        updated.quarantine_attempt_id = null;
+        updated.parked_at = null;
+        updated.parked_by = null;
       }
       if (data.status === VerificationStatus.PENDING) {
         updated.resolved_at = null;
         updated.resolved_by = null;
+        updated.attention_state = CaseAttentionState.REVIEW_REQUIRED;
+        updated.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
+        updated.quarantine_attempt_id = null;
+        updated.parked_at = null;
+        updated.parked_by = null;
       }
     }
 

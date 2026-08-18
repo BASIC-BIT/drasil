@@ -45,6 +45,17 @@ export interface RoleQuarantineApplyResult {
   readonly failedRemovals: readonly RoleQuarantineRoleDetail[];
 }
 
+export class RoleQuarantineApplyError extends Error {
+  public constructor(
+    message: string,
+    public readonly result: RoleQuarantineApplyResult,
+    public readonly originalError?: unknown
+  ) {
+    super(message);
+    this.name = 'RoleQuarantineApplyError';
+  }
+}
+
 export interface RoleQuarantinePreviewResult {
   readonly purpose: RoleQuarantineSnapshotPurpose;
   readonly originalRoleIds: readonly string[];
@@ -544,26 +555,37 @@ export class RoleQuarantineService implements IRoleQuarantineService {
 
     const allRemovedRoleIds = this.uniqueStrings([...previouslyRemovedRoleIds, ...removedRoleIds]);
     const allFailedRemovals = failedRemovals;
-    const updatedSnapshot = await this.snapshotRepository.update(snapshot.id, {
-      purpose,
-      originalRoleIds,
-      plannedRoleIds,
-      removedRoleIds: allRemovedRoleIds,
-      failedRemovals: allFailedRemovals as unknown as Prisma.JsonValue,
-      metadata: snapshotMetadata,
-    });
-
-    return {
+    const partialResult: RoleQuarantineApplyResult = {
       status: 'quarantined',
       mode,
       purpose,
-      snapshotId: updatedSnapshot?.id ?? snapshot.id,
+      snapshotId: snapshot.id,
       originalRoleIds,
       plannedRoleIds,
       removedRoleIds: allRemovedRoleIds,
       skippedRoles,
       failedRemovals: allFailedRemovals,
     };
+    try {
+      const updatedSnapshot = await this.snapshotRepository.update(snapshot.id, {
+        purpose,
+        originalRoleIds,
+        plannedRoleIds,
+        removedRoleIds: allRemovedRoleIds,
+        failedRemovals: allFailedRemovals as unknown as Prisma.JsonValue,
+        metadata: snapshotMetadata,
+      });
+      if (!updatedSnapshot) {
+        throw new Error(`Role quarantine snapshot ${snapshot.id} no longer exists.`);
+      }
+      return { ...partialResult, snapshotId: updatedSnapshot.id };
+    } catch (error) {
+      throw new RoleQuarantineApplyError(
+        `Failed to finalize role quarantine snapshot for case ${verificationEvent.id}: ${this.formatError(error)}`,
+        partialResult,
+        error
+      );
+    }
   }
 
   private buildPolicy(
