@@ -202,6 +202,7 @@ describe('RoleQuarantineService (unit)', () => {
       createRole({ id: 'message-role', permissions: [PermissionFlagsBits.ManageMessages] }),
       createRole({ id: 'thread-role', permissions: [PermissionFlagsBits.ManageThreads] }),
       createRole({ id: 'webhook-role', permissions: [PermissionFlagsBits.ManageWebhooks] }),
+      createRole({ id: 'invite-role', permissions: [PermissionFlagsBits.CreateInstantInvite] }),
       createRole({ id: 'mute-role', permissions: [PermissionFlagsBits.MuteMembers] }),
       createRole({ id: 'deafen-role', permissions: [PermissionFlagsBits.DeafenMembers] }),
       createRole({ id: 'move-role', permissions: [PermissionFlagsBits.MoveMembers] }),
@@ -234,6 +235,7 @@ describe('RoleQuarantineService (unit)', () => {
       'message-role',
       'thread-role',
       'webhook-role',
+      'invite-role',
       'mute-role',
       'deafen-role',
       'move-role',
@@ -264,6 +266,7 @@ describe('RoleQuarantineService (unit)', () => {
       createRole({ id: 'event-role', permissions: [PermissionFlagsBits.ManageEvents] }),
       createRole({ id: 'create-event-role', permissions: [PermissionFlagsBits.CreateEvents] }),
       createRole({ id: 'mention-role', permissions: [PermissionFlagsBits.MentionEveryone] }),
+      createRole({ id: 'invite-role', permissions: [PermissionFlagsBits.CreateInstantInvite] }),
     ];
     const exemptRole = createRole({ id: '100000000000000005' });
     const manualRole = createRole({ id: '100000000000000010' });
@@ -301,6 +304,7 @@ describe('RoleQuarantineService (unit)', () => {
       'event-role',
       'create-event-role',
       'mention-role',
+      'invite-role',
       '100000000000000005',
       '100000000000000010',
     ]);
@@ -318,6 +322,7 @@ describe('RoleQuarantineService (unit)', () => {
             'event-role',
             'create-event-role',
             'mention-role',
+            'invite-role',
           ],
         }),
       })

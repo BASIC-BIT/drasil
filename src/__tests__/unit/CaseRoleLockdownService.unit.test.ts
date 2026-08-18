@@ -414,7 +414,11 @@ describe('CaseRoleLockdownService (unit)', () => {
       id: caseRoleId,
       managed: false,
       permissions: {
-        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ManageThreads),
+        has: jest.fn(
+          (permission: bigint) =>
+            permission === PermissionFlagsBits.ManageThreads ||
+            permission === PermissionFlagsBits.CreateInstantInvite
+        ),
       },
     });
     const service = new CaseRoleLockdownService(createConfigService() as any);
@@ -425,7 +429,7 @@ describe('CaseRoleLockdownService (unit)', () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: 'lockdown-case-role-global-permissions',
-          message: expect.stringContaining('Manage Threads'),
+          message: expect.stringContaining('Manage Threads, Create Invite'),
         }),
       ])
     );

@@ -699,6 +699,7 @@ export class ModerationQueueService implements IModerationQueueService {
           guildId: verificationEvent.server_id,
           verificationEventId: verificationEvent.id,
           verificationStatus: verificationEvent.status,
+          caseKind: verificationEvent.case_kind,
           caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
           includeBanAction,
         }

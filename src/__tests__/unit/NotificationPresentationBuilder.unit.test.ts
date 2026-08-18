@@ -392,6 +392,25 @@ describe('NotificationPresentationBuilder (unit)', () => {
     expect(buttons.map((button) => button.custom_id)).not.toContain('close_user-1');
   });
 
+  it.each(['in_server', 'left_or_removed'] as const)(
+    'removes close actions from incomplete compromised notification rows when membership is %s',
+    (caseMembershipState) => {
+      const rows = builder.createAdminNotificationActionRows('user-1', {
+        verificationStatus: VerificationStatus.PENDING,
+        caseKind: CaseKind.COMPROMISED_ACCOUNT,
+        caseAttentionState: CaseAttentionState.REVIEW_REQUIRED,
+        caseMembershipState,
+      });
+      const buttons = rows.flatMap(
+        (row) => row.toJSON().components as Array<{ label?: string; custom_id?: string }>
+      );
+
+      expect(buttons.map((button) => button.label)).not.toContain('Close');
+      expect(buttons.map((button) => button.custom_id)).not.toContain('close_user-1');
+      expect(buttons.map((button) => button.label)).toContain('Other Actions');
+    }
+  );
+
   it('renders incomplete quarantine blockers prominently in notifications', () => {
     const embed = new EmbedBuilder().setTitle('Suspicious User');
     builder.upsertAccountQuarantinePresentation(

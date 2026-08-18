@@ -208,6 +208,7 @@ const COMPROMISED_ACCOUNT_PERMISSION_LABELS: readonly PermissionLabel[] = [
   { flag: PermissionFlagsBits.ManageMessages, label: 'Manage Messages' },
   { flag: PermissionFlagsBits.ManageThreads, label: 'Manage Threads' },
   { flag: PermissionFlagsBits.ManageWebhooks, label: 'Manage Webhooks' },
+  { flag: PermissionFlagsBits.CreateInstantInvite, label: 'Create Invite' },
   { flag: PermissionFlagsBits.MuteMembers, label: 'Mute Members' },
   { flag: PermissionFlagsBits.DeafenMembers, label: 'Deafen Members' },
   { flag: PermissionFlagsBits.MoveMembers, label: 'Move Members' },

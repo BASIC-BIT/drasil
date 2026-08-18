@@ -38,6 +38,7 @@ interface AdminActionRowOptions {
   readonly includeBanAction?: boolean;
   readonly caseMembershipState?: CaseMembershipState;
   readonly caseAttentionState?: CaseAttentionState;
+  readonly caseKind?: CaseKind;
 }
 
 type CaseMembershipState = 'in_server' | 'left_or_removed';
@@ -410,7 +411,8 @@ export class NotificationPresentationBuilder {
           userId,
           options.includeBanAction !== false,
           options.caseMembershipState ?? 'in_server',
-          options.caseAttentionState === CaseAttentionState.PARKED
+          options.caseAttentionState === CaseAttentionState.PARKED,
+          options.caseKind === CaseKind.COMPROMISED_ACCOUNT
         )
       : [
           this.createCustomButton(`reopen_${userId}`, 'Reopen', ButtonStyle.Primary),
@@ -516,7 +518,8 @@ export class NotificationPresentationBuilder {
     userId: string,
     includeBanAction: boolean,
     caseMembershipState: CaseMembershipState,
-    isParked: boolean
+    isParked: boolean,
+    isCompromisedAccount: boolean
   ): ButtonBuilder[] {
     if (isParked) {
       const buttons = [this.createCustomButton(`verify_${userId}`, 'Verify', ButtonStyle.Success)];
@@ -542,8 +545,10 @@ export class NotificationPresentationBuilder {
         buttons.push(this.createCustomButton(`ban_${userId}`, 'Ban by ID...', ButtonStyle.Danger));
       }
 
+      if (!isCompromisedAccount) {
+        buttons.push(this.createCustomButton(`close_${userId}`, 'Close', ButtonStyle.Secondary));
+      }
       buttons.push(
-        this.createCustomButton(`close_${userId}`, 'Close', ButtonStyle.Secondary),
         this.createCustomButton(
           buildCaseAdminActionsCustomId(userId),
           'Other Actions',
@@ -560,8 +565,10 @@ export class NotificationPresentationBuilder {
       buttons.push(this.createCustomButton(`ban_${userId}`, 'Ban...', ButtonStyle.Danger));
     }
 
+    if (!isCompromisedAccount) {
+      buttons.push(this.createCustomButton(`close_${userId}`, 'Close', ButtonStyle.Secondary));
+    }
     buttons.push(
-      this.createCustomButton(`close_${userId}`, 'Close', ButtonStyle.Secondary),
       this.createCustomButton(
         buildCaseAdminActionsCustomId(userId),
         'Other Actions',
