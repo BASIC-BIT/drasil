@@ -139,6 +139,7 @@ export class PostgresOperationsIntegrityDataAdapter implements OperationsIntegri
                  'case_mirror'::moderation_queue_item_type,
                  'observed_alert_mirror'::moderation_queue_item_type,
                  'support_thread_attention'::moderation_queue_item_type,
+                 'quarantine_breach_attention'::moderation_queue_item_type,
                  'report_thread_attention'::moderation_queue_item_type,
                  'pending_screening_member'::moderation_queue_item_type
                )

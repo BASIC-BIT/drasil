@@ -1559,6 +1559,16 @@ export class InMemoryRoleQuarantineSnapshotRepository implements IRoleQuarantine
     return this.clone(snapshot);
   }
 
+  async createForQuarantineAttempt(
+    data: RoleQuarantineSnapshotCreate,
+    verificationEventId: string,
+    attemptId: string
+  ): Promise<RoleQuarantineSnapshot | null> {
+    void verificationEventId;
+    void attemptId;
+    return this.create(data);
+  }
+
   async findActiveByServerAndUser(
     serverId: string,
     userId: string
@@ -1616,6 +1626,17 @@ export class InMemoryRoleQuarantineSnapshotRepository implements IRoleQuarantine
     };
     this.snapshots[index] = updated;
     return this.clone(updated);
+  }
+
+  async updateForQuarantineAttempt(
+    id: string,
+    data: RoleQuarantineSnapshotUpdate,
+    verificationEventId: string,
+    attemptId: string
+  ): Promise<RoleQuarantineSnapshot | null> {
+    void verificationEventId;
+    void attemptId;
+    return this.update(id, data);
   }
 
   private clone(snapshot: RoleQuarantineSnapshot): RoleQuarantineSnapshot {

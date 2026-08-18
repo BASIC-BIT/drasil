@@ -246,7 +246,7 @@ describe('RoleQuarantineService (unit)', () => {
       member,
       verificationEvent,
       { id: 'moderator-1' } as User,
-      async () => undefined
+      { attemptId: 'attempt-1', assertOwner: async () => undefined }
     );
 
     expect(result.purpose).toBe(RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT);
@@ -363,18 +363,15 @@ describe('RoleQuarantineService (unit)', () => {
       createConfigService({ role_quarantine_mode: 'off' }),
       snapshots
     );
-    let guardCalls = 0;
-    const assertAttemptOwner = jest.fn(async () => {
-      guardCalls += 1;
-      if (guardCalls !== 3) {
-        return;
-      }
+    const assertAttemptOwner = jest.fn(async () => undefined);
+    jest.spyOn(snapshots, 'updateForQuarantineAttempt').mockImplementationOnce(async (id) => {
       const active = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
       if (!active) {
         throw new Error('Expected active snapshot');
       }
       await snapshots.update(active.id, { removedRoleIds: ['new-owner-role'] });
-      throw new Error('Attempt superseded');
+      expect(id).toBe(active.id);
+      return null;
     });
 
     const failure = await service
@@ -382,7 +379,7 @@ describe('RoleQuarantineService (unit)', () => {
         member,
         { ...createVerificationEvent(), case_kind: CaseKind.COMPROMISED_ACCOUNT },
         { id: 'moderator-1' } as User,
-        assertAttemptOwner
+        { attemptId: 'attempt-1', assertOwner: assertAttemptOwner }
       )
       .catch((error: unknown) => error);
 
@@ -437,13 +434,13 @@ describe('RoleQuarantineService (unit)', () => {
       member,
       verificationEvent,
       { id: 'moderator-1' } as User,
-      async () => undefined
+      { attemptId: 'attempt-1', assertOwner: async () => undefined }
     );
     const second = await service.quarantineCompromisedAccount(
       member,
       verificationEvent,
       { id: 'moderator-1' } as User,
-      async () => undefined
+      { attemptId: 'attempt-2', assertOwner: async () => undefined }
     );
 
     expect(first.failedRemovals).toEqual([
@@ -482,7 +479,7 @@ describe('RoleQuarantineService (unit)', () => {
       member,
       verificationEvent,
       { id: 'moderator-1' } as User,
-      async () => undefined
+      { attemptId: 'attempt-1', assertOwner: async () => undefined }
     );
 
     const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');

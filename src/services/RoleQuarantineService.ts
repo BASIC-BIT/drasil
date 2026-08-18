@@ -46,6 +46,11 @@ export interface RoleQuarantineApplyResult {
   readonly failedRemovals: readonly RoleQuarantineRoleDetail[];
 }
 
+export interface QuarantineAttemptFence {
+  readonly attemptId: string;
+  assertOwner(): Promise<void>;
+}
+
 export class RoleQuarantineApplyError extends Error {
   public constructor(
     message: string,
@@ -111,7 +116,7 @@ export interface IRoleQuarantineService {
     member: GuildMember,
     verificationEvent: VerificationEvent,
     moderator: User,
-    assertAttemptOwner: () => Promise<void>
+    attemptFence: QuarantineAttemptFence
   ): Promise<RoleQuarantineApplyResult>;
   quarantineMember(
     member: GuildMember,
@@ -203,14 +208,14 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     member: GuildMember,
     verificationEvent: VerificationEvent,
     moderator: User,
-    assertAttemptOwner: () => Promise<void>
+    attemptFence: QuarantineAttemptFence
   ): Promise<RoleQuarantineApplyResult> {
     return this.applyQuarantine(
       member,
       verificationEvent,
       moderator,
       RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
-      assertAttemptOwner
+      attemptFence
     );
   }
 
@@ -499,7 +504,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     verificationEvent: VerificationEvent,
     moderator: User | undefined,
     purpose: RoleQuarantineSnapshotPurpose,
-    assertAttemptOwner?: () => Promise<void>
+    attemptFence?: QuarantineAttemptFence
   ): Promise<RoleQuarantineApplyResult> {
     const serverConfig = await this.configService.getServerConfig(member.guild.id);
     const settings = getRoleQuarantineSettings(serverConfig.settings);
@@ -580,29 +585,38 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       ...previouslyRemovedRoleIds,
       ...newlyPlannedRoleIds,
     ]);
-    await assertAttemptOwner?.();
+    await attemptFence?.assertOwner();
     const snapshot = activeSnapshot
-      ? await this.snapshotRepository.update(activeSnapshot.id, {
-          verificationEventId: verificationEvent.id,
-          purpose,
-          originalRoleIds,
-          plannedRoleIds,
-          removedRoleIds: recoveryRoleIds,
-          skippedRoles: skippedRoles as unknown as Prisma.JsonValue,
-          metadata: snapshotMetadata,
-        })
-      : await this.snapshotRepository.create({
-          serverId: member.guild.id,
-          userId: member.id,
-          verificationEventId: verificationEvent.id,
-          mode,
-          purpose,
-          originalRoleIds,
-          plannedRoleIds,
-          removedRoleIds: recoveryRoleIds,
-          skippedRoles: skippedRoles as unknown as Prisma.JsonValue,
-          metadata: snapshotMetadata,
-        });
+      ? await this.persistSnapshotUpdate(
+          activeSnapshot.id,
+          {
+            verificationEventId: verificationEvent.id,
+            purpose,
+            originalRoleIds,
+            plannedRoleIds,
+            removedRoleIds: recoveryRoleIds,
+            skippedRoles: skippedRoles as unknown as Prisma.JsonValue,
+            metadata: snapshotMetadata,
+          },
+          verificationEvent.id,
+          attemptFence
+        )
+      : await this.persistSnapshotCreate(
+          {
+            serverId: member.guild.id,
+            userId: member.id,
+            verificationEventId: verificationEvent.id,
+            mode,
+            purpose,
+            originalRoleIds,
+            plannedRoleIds,
+            removedRoleIds: recoveryRoleIds,
+            skippedRoles: skippedRoles as unknown as Prisma.JsonValue,
+            metadata: snapshotMetadata,
+          },
+          verificationEvent.id,
+          attemptFence
+        );
 
     if (!snapshot) {
       throw new Error(
@@ -613,7 +627,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     const removedRoleIds: string[] = [];
     const failedRemovals: RoleQuarantineRoleDetail[] = [];
     for (const role of removableRoles) {
-      await assertAttemptOwner?.();
+      await attemptFence?.assertOwner();
       try {
         await member.roles.remove(role, `Drasil role quarantine for case ${verificationEvent.id}`);
         removedRoleIds.push(role.id);
@@ -636,15 +650,20 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       failedRemovals: allFailedRemovals,
     };
     try {
-      await assertAttemptOwner?.();
-      const updatedSnapshot = await this.snapshotRepository.update(snapshot.id, {
-        purpose,
-        originalRoleIds,
-        plannedRoleIds,
-        removedRoleIds: allRemovedRoleIds,
-        failedRemovals: allFailedRemovals as unknown as Prisma.JsonValue,
-        metadata: snapshotMetadata,
-      });
+      await attemptFence?.assertOwner();
+      const updatedSnapshot = await this.persistSnapshotUpdate(
+        snapshot.id,
+        {
+          purpose,
+          originalRoleIds,
+          plannedRoleIds,
+          removedRoleIds: allRemovedRoleIds,
+          failedRemovals: allFailedRemovals as unknown as Prisma.JsonValue,
+          metadata: snapshotMetadata,
+        },
+        verificationEvent.id,
+        attemptFence
+      );
       if (!updatedSnapshot) {
         throw new Error(`Role quarantine snapshot ${snapshot.id} no longer exists.`);
       }
@@ -656,6 +675,36 @@ export class RoleQuarantineService implements IRoleQuarantineService {
         error
       );
     }
+  }
+
+  private async persistSnapshotCreate(
+    data: Parameters<IRoleQuarantineSnapshotRepository['create']>[0],
+    verificationEventId: string,
+    attemptFence?: QuarantineAttemptFence
+  ): Promise<RoleQuarantineSnapshot | null> {
+    return attemptFence
+      ? this.snapshotRepository.createForQuarantineAttempt(
+          data,
+          verificationEventId,
+          attemptFence.attemptId
+        )
+      : this.snapshotRepository.create(data);
+  }
+
+  private async persistSnapshotUpdate(
+    id: string,
+    data: Parameters<IRoleQuarantineSnapshotRepository['update']>[1],
+    verificationEventId: string,
+    attemptFence?: QuarantineAttemptFence
+  ): Promise<RoleQuarantineSnapshot | null> {
+    return attemptFence
+      ? this.snapshotRepository.updateForQuarantineAttempt(
+          id,
+          data,
+          verificationEventId,
+          attemptFence.attemptId
+        )
+      : this.snapshotRepository.update(id, data);
   }
 
   private buildPolicy(

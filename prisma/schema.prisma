@@ -532,6 +532,7 @@ enum moderation_queue_item_type {
   case_mirror
   observed_alert_mirror
   support_thread_attention
+  quarantine_breach_attention
   report_thread_attention
   pending_screening_member
 }

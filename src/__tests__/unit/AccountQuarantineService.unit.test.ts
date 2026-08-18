@@ -247,8 +247,8 @@ describe('AccountQuarantineService', () => {
   it('passes a live attempt-ownership guard into every compromised role sweep', async () => {
     const harness = buildHarness();
     harness.roleQuarantine.quarantineCompromisedAccount.mockImplementation(
-      async (_member, _event, _moderator, assertAttemptOwner) => {
-        await assertAttemptOwner();
+      async (_member, _event, _moderator, attemptFence) => {
+        await attemptFence.assertOwner();
         return roleResult;
       }
     );

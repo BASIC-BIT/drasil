@@ -58,6 +58,7 @@ const queueKindByType: Record<string, ModerationInboxItemKind> = {
   pending_screening_member: 'pending_screening',
   report_thread_attention: 'report_attention',
   support_thread_attention: 'support_attention',
+  quarantine_breach_attention: 'support_attention',
 };
 
 const caseActionMap: Record<CaseAction, ModerationInboxAction> = {
@@ -188,8 +189,10 @@ function subjectFromQueueRow(row: ModerationQueueRow): ModerationInboxItem['subj
   };
 }
 
-function queueTitle(kind: ModerationInboxItemKind): string {
-  return queueTitleByKind[kind];
+function queueTitle(kind: ModerationInboxItemKind, itemType: string): string {
+  return itemType === 'quarantine_breach_attention'
+    ? 'Quarantine containment breach'
+    : queueTitleByKind[kind];
 }
 
 function queueStatusLabel(kind: ModerationInboxItemKind, row: ModerationQueueRow): string {
@@ -352,7 +355,7 @@ export function parseModerationQueueRow(
     sourceId,
     queueItemId: row.id,
     subject: subjectFromQueueRow(row),
-    title: queueTitle(kind),
+    title: queueTitle(kind, row.item_type),
     summary,
     statusLabel: queueStatusLabel(kind, row),
     signalLabel: confidenceSignal(row.detection_confidence),

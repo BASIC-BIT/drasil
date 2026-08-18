@@ -20,6 +20,10 @@ export interface IModerationQueueRepository {
     itemType: ModerationQueueItemType,
     sourceThreadId: string
   ): Promise<ModerationQueueItem | null>;
+  findAttentionByVerificationEvent(
+    itemType: ModerationQueueItemType,
+    verificationEventId: string
+  ): Promise<ModerationQueueItem | null>;
   listByServer(serverId: string): Promise<ModerationQueueItem[]>;
   listByServerAndTypes(
     serverId: string,
@@ -175,6 +179,23 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
     }
   }
 
+  async findAttentionByVerificationEvent(
+    itemType: ModerationQueueItemType,
+    verificationEventId: string
+  ): Promise<ModerationQueueItem | null> {
+    try {
+      const item = await this.prisma.moderation_queue_items.findFirst({
+        where: {
+          item_type: itemType as moderation_queue_item_type,
+          verification_event_id: verificationEventId,
+        },
+      });
+      return item as ModerationQueueItem | null;
+    } catch (error) {
+      this.handleError(error, 'findModerationQueueAttentionByVerificationEvent');
+    }
+  }
+
   async listByServer(serverId: string): Promise<ModerationQueueItem[]> {
     try {
       const items = await this.prisma.moderation_queue_items.findMany({
@@ -280,6 +301,12 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
       data.sourceThreadId
     ) {
       return this.findAttentionByThread(data.itemType, data.sourceThreadId);
+    }
+    if (
+      data.itemType === ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION &&
+      data.verificationEventId
+    ) {
+      return this.findAttentionByVerificationEvent(data.itemType, data.verificationEventId);
     }
 
     return null;

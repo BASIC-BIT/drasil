@@ -153,6 +153,17 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
     );
   }
 
+  async findAttentionByVerificationEvent(
+    itemType: ModerationQueueItemType,
+    verificationEventId: string
+  ): Promise<ModerationQueueItem | null> {
+    return this.clone(
+      this.items.find(
+        (item) => item.item_type === itemType && item.verification_event_id === verificationEventId
+      ) ?? null
+    );
+  }
+
   async listByServer(serverId: string): Promise<ModerationQueueItem[]> {
     return this.items.filter((item) => item.server_id === serverId).map((item) => ({ ...item }));
   }
@@ -256,7 +267,10 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
       ((data.itemType === ModerationQueueItemType.SUPPORT_THREAD_ATTENTION ||
         data.itemType === ModerationQueueItemType.REPORT_THREAD_ATTENTION) &&
         item.item_type === data.itemType &&
-        item.source_thread_id === data.sourceThreadId)
+        item.source_thread_id === data.sourceThreadId) ||
+      (data.itemType === ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION &&
+        item.item_type === data.itemType &&
+        item.verification_event_id === data.verificationEventId)
     );
   }
 
@@ -557,6 +571,45 @@ describe('ModerationQueueService', () => {
     expect(queueRepository.items.map((item) => item.source_thread_id)).toEqual(
       expect.arrayContaining(['support-thread', 'general-channel'])
     );
+    expect(queueRepository.items.map((item) => item.item_type)).toEqual(
+      expect.arrayContaining([
+        ModerationQueueItemType.SUPPORT_THREAD_ATTENTION,
+        ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
+      ])
+    );
+  });
+
+  it('keeps same-channel breaches scoped to each quarantined case', async () => {
+    const { queueRepository, service } = buildService();
+    const firstCase = {
+      ...buildVerificationEvent(),
+      id: 'case-1',
+      user_id: 'user-1',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+    };
+    const secondCase = { ...firstCase, id: 'case-2', user_id: 'user-2' };
+    const breachMessage = {
+      id: 'outside-reply-1',
+      channelId: 'general-channel',
+      content: 'Unexpected message outside quarantine.',
+      url: 'https://discord.com/channels/guild-1/general-channel/outside-reply-1',
+      createdTimestamp: Date.parse('2026-06-13T12:00:00Z'),
+      author: { id: 'user-1' },
+    } as unknown as Message;
+
+    await service.recordQuarantineBreachAttention(firstCase, breachMessage);
+    await service.recordQuarantineBreachAttention(secondCase, {
+      ...breachMessage,
+      id: 'outside-reply-2',
+      author: { id: 'user-2' },
+    } as unknown as Message);
+
+    expect(queueRepository.items).toHaveLength(2);
+    expect(queueRepository.items.map((item) => item.verification_event_id)).toEqual([
+      'case-1',
+      'case-2',
+    ]);
   });
 
   it('does not acknowledge attention items from another server', async () => {

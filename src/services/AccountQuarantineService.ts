@@ -139,7 +139,10 @@ export class AccountQuarantineService implements IAccountQuarantineService {
         member,
         claimedEvent,
         moderator,
-        () => this.assertAttemptOwner(claimedEvent.id, attemptId)
+        {
+          attemptId,
+          assertOwner: () => this.assertAttemptOwner(claimedEvent.id, attemptId),
+        }
       );
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'case_role_assignment';
@@ -156,7 +159,10 @@ export class AccountQuarantineService implements IAccountQuarantineService {
         member,
         claimedEvent,
         moderator,
-        () => this.assertAttemptOwner(claimedEvent.id, attemptId)
+        {
+          attemptId,
+          assertOwner: () => this.assertAttemptOwner(claimedEvent.id, attemptId),
+        }
       );
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'final_containment_audit';

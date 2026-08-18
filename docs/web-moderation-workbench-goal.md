@@ -145,7 +145,7 @@ Current implementation footholds:
 
 - `moderation_queue_items` already models the backbone of a unified inbox:
   `case_mirror`, `observed_alert_mirror`, `support_thread_attention`,
-  `report_thread_attention`, and `pending_screening_member`.
+  `quarantine_breach_attention`, `report_thread_attention`, and `pending_screening_member`.
 - `moderation_outcomes` already records first-class outcome history.
 - `CaseAction` and `ReportQueueAction` name the current allowed action surface;
   web executes attention acknowledgement, report closure, report Open Case, case

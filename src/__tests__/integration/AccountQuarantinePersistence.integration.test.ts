@@ -128,6 +128,7 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     const servers = new ServerRepository(prisma);
     const users = new UserRepository(prisma);
     const verifications = new VerificationEventRepository(prisma);
+    const snapshots = new RoleQuarantineSnapshotRepository(prisma);
 
     await servers.getOrCreateServer(serverId);
     await users.getOrCreateUser(userId, 'target');
@@ -166,6 +167,23 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     await expect(verifications.renewQuarantineAttempt(verification.id, 'attempt-1')).resolves.toBe(
       true
     );
+    const snapshot = await snapshots.createForQuarantineAttempt(
+      {
+        serverId,
+        userId,
+        verificationEventId: verification.id,
+        mode: 'on',
+        purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+        originalRoleIds: ['role-1'],
+        plannedRoleIds: ['role-1'],
+      },
+      verification.id,
+      'attempt-1'
+    );
+    expect(snapshot).toEqual(expect.objectContaining({ removed_role_ids: [] }));
+    if (!snapshot) {
+      throw new Error('Expected an attempt-owned role quarantine snapshot');
+    }
     await expect(
       verifications.update(verification.id, { status: VerificationStatus.VERIFIED })
     ).resolves.toBeNull();
@@ -198,6 +216,22 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
         containment_status: CaseContainmentStatus.CONTAINED,
       })
     ).resolves.toBeNull();
+    await expect(
+      snapshots.updateForQuarantineAttempt(
+        snapshot.id,
+        { removedRoleIds: ['stale-role'] },
+        verification.id,
+        'attempt-1'
+      )
+    ).resolves.toBeNull();
+    await expect(
+      snapshots.updateForQuarantineAttempt(
+        snapshot.id,
+        { removedRoleIds: ['role-1'] },
+        verification.id,
+        'attempt-2'
+      )
+    ).resolves.toEqual(expect.objectContaining({ removed_role_ids: ['role-1'] }));
 
     const parked = await verifications.updateQuarantineAttempt(verification.id, 'attempt-2', {
       case_kind: CaseKind.COMPROMISED_ACCOUNT,

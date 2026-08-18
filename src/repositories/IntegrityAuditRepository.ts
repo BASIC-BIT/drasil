@@ -131,6 +131,7 @@ export class IntegrityAuditRepository implements IIntegrityAuditRepository {
                 ModerationQueueItemType.CASE_MIRROR,
                 ModerationQueueItemType.OBSERVED_ALERT_MIRROR,
                 ModerationQueueItemType.SUPPORT_THREAD_ATTENTION,
+                ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
                 ModerationQueueItemType.REPORT_THREAD_ATTENTION,
                 ModerationQueueItemType.PENDING_SCREENING_MEMBER,
               ] as moderation_queue_item_type[],

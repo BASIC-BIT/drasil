@@ -228,7 +228,11 @@ export class ModerationQueueService implements IModerationQueueService {
   public async deleteCaseAttention(verificationEventId: string): Promise<void> {
     const items = await this.moderationQueueRepository.listByVerificationEvent(verificationEventId);
     await this.deleteQueueItems(
-      items.filter((item) => item.item_type === ModerationQueueItemType.SUPPORT_THREAD_ATTENTION)
+      items.filter(
+        (item) =>
+          item.item_type === ModerationQueueItemType.SUPPORT_THREAD_ATTENTION ||
+          item.item_type === ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION
+      )
     );
   }
 
@@ -417,7 +421,7 @@ export class ModerationQueueService implements IModerationQueueService {
     }
 
     await this.upsertAttentionItem({
-      itemType: ModerationQueueItemType.SUPPORT_THREAD_ATTENTION,
+      itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
       serverId: verificationEvent.server_id,
       userId: verificationEvent.user_id,
       verificationEventId: verificationEvent.id,
@@ -527,6 +531,7 @@ export class ModerationQueueService implements IModerationQueueService {
   private async upsertAttentionItem(input: {
     itemType:
       | ModerationQueueItemType.SUPPORT_THREAD_ATTENTION
+      | ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION
       | ModerationQueueItemType.REPORT_THREAD_ATTENTION;
     serverId: string;
     userId: string;
@@ -545,10 +550,17 @@ export class ModerationQueueService implements IModerationQueueService {
       return;
     }
 
-    const existing = await this.moderationQueueRepository.findAttentionByThread(
-      input.itemType,
-      input.sourceThreadId
-    );
+    const existing =
+      input.itemType === ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION &&
+      input.verificationEventId
+        ? await this.moderationQueueRepository.findAttentionByVerificationEvent(
+            input.itemType,
+            input.verificationEventId
+          )
+        : await this.moderationQueueRepository.findAttentionByThread(
+            input.itemType,
+            input.sourceThreadId
+          );
     if (existing?.last_source_message_id === input.message.id) {
       return;
     }

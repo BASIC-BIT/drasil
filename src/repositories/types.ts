@@ -257,6 +257,7 @@ export enum ModerationQueueItemType {
   CASE_MIRROR = 'case_mirror',
   OBSERVED_ALERT_MIRROR = 'observed_alert_mirror',
   SUPPORT_THREAD_ATTENTION = 'support_thread_attention',
+  QUARANTINE_BREACH_ATTENTION = 'quarantine_breach_attention',
   REPORT_THREAD_ATTENTION = 'report_thread_attention',
   PENDING_SCREENING_MEMBER = 'pending_screening_member',
 }
