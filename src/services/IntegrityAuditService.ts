@@ -1,5 +1,5 @@
 import { Client, Guild, GuildBan, GuildMember } from 'discord.js';
-import { inject, injectable } from 'inversify';
+import { inject, injectable, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import {
@@ -33,6 +33,7 @@ import {
   normalizeIntegrityAuditScope,
 } from '../utils/integrityAuditSettings';
 import { getModerationQueueSettings } from '../utils/moderationQueueSettings';
+import { ICaseRoleLockdownService } from './CaseRoleLockdownService';
 import {
   getResolutionAdminActionType,
   getResolutionModerationOutcomeType,
@@ -121,7 +122,10 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     @inject(TYPES.DiscordClient) private readonly client: Client,
     @inject(TYPES.ConfigService) private readonly configService: IConfigService,
     @inject(TYPES.IntegrityAuditRepository)
-    private readonly integrityAuditRepository: IIntegrityAuditRepository
+    private readonly integrityAuditRepository: IIntegrityAuditRepository,
+    @inject(TYPES.CaseRoleLockdownService)
+    @optional()
+    private readonly caseRoleLockdownService?: ICaseRoleLockdownService
   ) {}
 
   public async auditGuild(
@@ -154,7 +158,7 @@ export class IntegrityAuditService implements IIntegrityAuditService {
         !this.includesCaseRoleChecks(scope),
         findings
       );
-      this.auditParkedCases(
+      await this.auditParkedCases(
         candidates.pendingVerificationEvents,
         candidates.activeRoleQuarantineSnapshots,
         candidates.moderationQueueItems,
@@ -201,14 +205,14 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     };
   }
 
-  private auditParkedCases(
+  private async auditParkedCases(
     cases: IntegrityAuditVerificationEvent[],
     snapshots: RoleQuarantineSnapshot[],
     queueItems: IntegrityAuditModerationQueueItem[],
     liveUsers: Map<string, LiveUserState>,
     caseRoleId: string | null,
     findings: IntegrityAuditFinding[]
-  ): void {
+  ): Promise<void> {
     const activeSnapshotCaseIds = new Set(
       snapshots
         .map((snapshot) => snapshot.verification_event_id)
@@ -262,6 +266,42 @@ export class IntegrityAuditService implements IIntegrityAuditService {
             'Parked account quarantine is missing the configured case role in Discord.'
           )
         );
+      }
+      if (liveMember?.status === 'found' && this.caseRoleLockdownService) {
+        try {
+          const memberAudit = await this.caseRoleLockdownService.auditMemberBypasses(
+            liveMember.value
+          );
+          if (memberAudit.bypasses.length > 0) {
+            findings.push(
+              this.buildCaseFinding(
+                'error',
+                'parked_quarantine_permission_bypass',
+                verificationEvent,
+                `Parked account quarantine has ${memberAudit.bypasses.length} live channel permission bypass(es).`
+              )
+            );
+          }
+          if (memberAudit.retainedPrivilegedRoleIds.length > 0) {
+            findings.push(
+              this.buildCaseFinding(
+                'error',
+                'parked_quarantine_privileged_role',
+                verificationEvent,
+                `Parked account quarantine retains privileged role(s): ${memberAudit.retainedPrivilegedRoleIds.join(', ')}.`
+              )
+            );
+          }
+        } catch (error) {
+          findings.push(
+            this.buildCaseFinding(
+              'error',
+              'parked_quarantine_live_audit_failed',
+              verificationEvent,
+              `Could not audit live quarantine bypasses: ${formatDiscordFetchError(error, ERROR_DETAIL_MAX_LENGTH)}`
+            )
+          );
+        }
       }
       if (mirroredCaseIds.has(verificationEvent.id)) {
         findings.push(

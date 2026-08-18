@@ -470,6 +470,7 @@ model verification_events {
   @@index([notification_channel_id], map: "idx_verification_events_notification_channel")
   @@index([private_evidence_thread_id], map: "idx_verification_events_private_evidence_thread")
   @@index([server_id], map: "idx_verification_events_server")
+  @@index([server_id, status, attention_state], map: "idx_verification_events_server_status_attention")
   @@index([status], map: "idx_verification_events_status")
   @@index([thread_id], map: "idx_verification_events_thread")
   @@index([user_id], map: "idx_verification_events_user")

@@ -6,6 +6,9 @@ import {
 } from '../../repositories/IntegrityAuditRepository';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   ModerationOutcomeSource,
   ModerationOutcomeType,
   ModerationQueueItemType,
@@ -537,5 +540,101 @@ describe('IntegrityAuditService (unit)', () => {
 
     expect(findingCodes).not.toContain('pending_case_role_missing');
     expect(findingCodes).toContain('case_role_member_role_missing');
+  });
+
+  it('reports live permission and privileged-role drift for a parked quarantine', async () => {
+    const parkedCase = {
+      id: 'parked-1',
+      server_id: 'guild-1',
+      user_id: 'user-parked',
+      detection_event_id: null,
+      thread_id: null,
+      private_evidence_thread_id: null,
+      notification_channel_id: null,
+      notification_message_id: null,
+      status: VerificationStatus.PENDING,
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      created_at: baseDate,
+      updated_at: baseDate,
+      resolved_at: null,
+      resolved_by: null,
+      notes: null,
+      metadata: {},
+      admin_actions: [],
+      moderation_outcomes: [],
+    };
+    const candidates = buildCandidates({
+      pendingVerificationEvents: [parkedCase],
+      activeRoleQuarantineSnapshots: [
+        {
+          id: 'snapshot-parked-1',
+          server_id: 'guild-1',
+          user_id: 'user-parked',
+          verification_event_id: parkedCase.id,
+          status: RoleQuarantineSnapshotStatus.ACTIVE,
+          mode: 'on',
+          original_role_ids: [],
+          planned_role_ids: [],
+          removed_role_ids: [],
+          restored_role_ids: [],
+          skipped_roles: [],
+          failed_removals: [],
+          failed_restores: [],
+          created_at: baseDate,
+          updated_at: baseDate,
+          restored_at: null,
+          restored_by: null,
+          metadata: {},
+        },
+      ],
+    });
+    const member = {
+      id: 'user-parked',
+      roles: { cache: { has: jest.fn().mockReturnValue(true) } },
+    };
+    const caseRoleLockdownService = {
+      auditMemberBypasses: jest.fn().mockResolvedValue({
+        memberId: member.id,
+        bypasses: [
+          {
+            channelId: 'channel-1',
+            channelName: 'general',
+            subjectType: 'member',
+            subjectId: member.id,
+            permissions: ['Send Messages'],
+          },
+        ],
+        retainedPrivilegedRoleIds: ['privileged-role'],
+        retainedAdministratorRoleIds: [],
+      }),
+    };
+    const service = new IntegrityAuditService(
+      { channels: { fetch: jest.fn() } } as any,
+      {
+        getServerConfig: jest.fn().mockResolvedValue({
+          case_role_id: 'case-role-1',
+          settings: {},
+        }),
+      } as any,
+      { listCandidates: jest.fn().mockResolvedValue(candidates) },
+      caseRoleLockdownService as any
+    );
+    const guild = {
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(member) },
+      bans: { fetch: jest.fn().mockRejectedValue({ code: 10026 }) },
+    } as unknown as Guild;
+
+    const report = await service.auditGuild(guild, { scope: 'cases' });
+
+    expect(caseRoleLockdownService.auditMemberBypasses).toHaveBeenCalledWith(member);
+    expect(report.findings.map((finding) => finding.code)).toEqual(
+      expect.arrayContaining([
+        'parked_quarantine_permission_bypass',
+        'parked_quarantine_privileged_role',
+      ])
+    );
   });
 });

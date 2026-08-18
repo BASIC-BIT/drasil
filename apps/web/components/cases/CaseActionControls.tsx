@@ -7,6 +7,7 @@ import { formatCaseAction } from '@/lib/casePresentation';
 import { InboxActionForm, type InboxStateAction } from '@/components/inbox/InboxActionForm';
 import type { InboxActionState } from '@/lib/inboxActionState';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
+import { resolveDurableRequestForCaseAction } from '@/lib/caseActionRequestState';
 import {
   CaseBanActionControl,
   CaseMessageCleanupControls,
@@ -76,6 +77,12 @@ const destructiveCaseActionSet = new Set<WebCaseAction>([
   'quarantine_compromised_account',
 ]);
 
+function ActionAttemptInput({ action }: { readonly action: WebCaseAction }) {
+  return action === 'quarantine_compromised_account' ? (
+    <input name="actionAttemptId" type="hidden" value={globalThis.crypto.randomUUID()} />
+  ) : null;
+}
+
 export function isExecutableCaseAction(action: string): action is WebCaseAction {
   return executableCaseActionSet.has(action as CaseAction);
 }
@@ -124,7 +131,10 @@ export function CaseActionControls({
                   queueInboxCaseAction.bind(null, guildId, caseId, action) as InboxStateAction
                 }
                 buttonLabel={formatCaseAction(action)}
-                durableRequest={actionRequestsByAction?.[action]}
+                durableRequest={resolveDurableRequestForCaseAction(
+                  action,
+                  actionRequestsByAction?.[action]
+                )}
                 key={`${caseId}-${action}`}
                 requestBaseHref={`/admin/guild/${guildId}/operations`}
               />
@@ -165,7 +175,10 @@ export function CaseActionControls({
                     }
                   : undefined
               }
-              durableRequest={actionRequestsByAction?.[action]}
+              durableRequest={resolveDurableRequestForCaseAction(
+                action,
+                actionRequestsByAction?.[action]
+              )}
               key={`${caseId}-${action}`}
               requestBaseHref={`/admin/guild/${guildId}/operations`}
               standardBanFormAction={
@@ -191,10 +204,14 @@ export function CaseActionControls({
                   }
                   buttonClassName="button compact-button danger-button"
                   buttonLabel={`Queue ${formatCaseAction(action)}`}
-                  durableRequest={actionRequestsByAction?.[action]}
+                  durableRequest={resolveDurableRequestForCaseAction(
+                    action,
+                    actionRequestsByAction?.[action]
+                  )}
                   formClassName="destructive-action-panel"
                   requestBaseHref={`/admin/guild/${guildId}/operations`}
                 >
+                  <ActionAttemptInput action={action} />
                   {action === 'quarantine_compromised_account' ? (
                     <p className="muted">
                       Removes manageable roles, applies the case-role lockdown, and parks the case
@@ -220,6 +237,7 @@ export function CaseActionControls({
                   action={queueCaseAction.bind(null, guildId, caseId, action)}
                   className="destructive-action-panel"
                 >
+                  <ActionAttemptInput action={action} />
                   {action === 'quarantine_compromised_account' ? (
                     <p className="muted">
                       Removes manageable roles, applies the case-role lockdown, and parks the case

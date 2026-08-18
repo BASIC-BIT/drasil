@@ -44,10 +44,13 @@ const queueCaseActionErrorMessages = {
   failed: 'Case action could not be queued. Refresh the inbox and try again.',
   not_allowed: 'Case action is not available for this case state.',
 } as const;
+const ACTION_ATTEMPT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type DestructiveCaseAction = Extract<WebCaseAction, 'kick_user' | 'ban_user' | 'ban_by_id'>;
 
 interface DestructiveActionOptions {
+  readonly attemptId: string | null;
   readonly reason: string | null;
 }
 
@@ -188,12 +191,16 @@ async function assertCanQueueCaseAction(
     if (!reason) {
       throw new Error('Account quarantine reason is required.');
     }
-    return { reason };
+    const attemptId = readFormString(formData, 'actionAttemptId');
+    if (!attemptId || !ACTION_ATTEMPT_ID_PATTERN.test(attemptId)) {
+      throw new Error('Account quarantine attempt expired. Refresh the page and try again.');
+    }
+    return { attemptId, reason };
   }
 
   const destructiveContext = destructiveActionContext(action);
   if (!destructiveContext) {
-    return { reason: null };
+    return { attemptId: null, reason: null };
   }
 
   if (formData?.get('confirmAction') !== 'on') {
@@ -208,7 +215,7 @@ async function assertCanQueueCaseAction(
   const reason = readDestructiveReason(formData, settings, destructiveContext);
   await assertBotCanRunDestructiveAction(guild.id, destructiveContext);
 
-  return { reason };
+  return { attemptId: null, reason };
 }
 
 async function performQueueCaseAction(
@@ -234,6 +241,7 @@ async function performQueueCaseAction(
   const result = await createActiveCaseDataAdapter().queueCaseAction({
     action: parsedAction as WebCaseAction,
     adminId: session.userId,
+    attemptId: options.attemptId,
     caseId,
     guildId,
     reason: options.reason,

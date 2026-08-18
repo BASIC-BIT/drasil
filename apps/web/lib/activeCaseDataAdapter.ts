@@ -57,6 +57,15 @@ export interface CaseActionQueueResult {
   readonly status: CaseActionQueueStatus;
 }
 
+export interface QueueCaseActionInput {
+  readonly action: WebCaseAction;
+  readonly adminId: string;
+  readonly attemptId?: string | null;
+  readonly caseId: string;
+  readonly guildId: string;
+  readonly reason?: string | null;
+}
+
 export interface ActiveCaseDataAdapter {
   canQueueCaseActions(): boolean;
   listActiveCases(guildId: string): Promise<CaseSummary[]>;
@@ -65,13 +74,7 @@ export interface ActiveCaseDataAdapter {
   listCasesForMember(guildId: string, userId: string, limit?: number): Promise<CaseSummary[]>;
   countResolvedCases(guildId: string): Promise<number>;
   getCaseDetail(guildId: string, caseId: string): Promise<CaseDetail | null>;
-  queueCaseAction(input: {
-    action: WebCaseAction;
-    adminId: string;
-    caseId: string;
-    guildId: string;
-    reason?: string | null;
-  }): Promise<CaseActionQueueResult>;
+  queueCaseAction(input: QueueCaseActionInput): Promise<CaseActionQueueResult>;
 }
 
 export function resolveCaseActionQueueStatus(
@@ -81,6 +84,13 @@ export function resolveCaseActionQueueStatus(
     return 'already_handled';
   }
   return status === 'failed' ? 'failed' : 'queued';
+}
+
+export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): string {
+  const baseKey = `web:case-action:${input.action}:${input.guildId}:${input.caseId}`;
+  return input.action === 'quarantine_compromised_account' && input.attemptId
+    ? `${baseKey}:${input.attemptId}`
+    : baseKey;
 }
 
 interface CaseSummaryRow {
@@ -784,13 +794,7 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
     });
   }
 
-  public async queueCaseAction(input: {
-    action: WebCaseAction;
-    adminId: string;
-    caseId: string;
-    guildId: string;
-    reason?: string | null;
-  }): Promise<CaseActionQueueResult> {
+  public async queueCaseAction(input: QueueCaseActionInput): Promise<CaseActionQueueResult> {
     const detail = await this.getCaseDetail(input.guildId, input.caseId);
     if (!detail) {
       return {
@@ -808,7 +812,7 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       actionType: requestTypeByCaseAction[input.action],
       actorId: input.adminId,
       actorSurface: 'web',
-      idempotencyKey: `web:case-action:${input.action}:${input.guildId}:${input.caseId}`,
+      idempotencyKey: buildCaseActionIdempotencyKey(input),
       metadata: {
         case_action: input.action,
         ...(input.reason ? { reason: input.reason } : {}),
@@ -861,13 +865,7 @@ export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
     return fixtureActiveCaseDetail(caseId);
   }
 
-  public async queueCaseAction(input: {
-    action: WebCaseAction;
-    adminId: string;
-    caseId: string;
-    guildId: string;
-    reason?: string | null;
-  }): Promise<CaseActionQueueResult> {
+  public async queueCaseAction(input: QueueCaseActionInput): Promise<CaseActionQueueResult> {
     const detail = fixtureActiveCaseDetail(input.caseId);
     if (!detail) {
       return {

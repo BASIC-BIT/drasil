@@ -533,10 +533,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     }
 
     const allRemovedRoleIds = this.uniqueStrings([...previouslyRemovedRoleIds, ...removedRoleIds]);
-    const allFailedRemovals = this.mergeRoleDetails([
-      ...this.readRoleDetails(snapshot.failed_removals),
-      ...failedRemovals,
-    ]);
+    const allFailedRemovals = failedRemovals;
     const updatedSnapshot = await this.snapshotRepository.update(snapshot.id, {
       purpose,
       originalRoleIds,
@@ -860,16 +857,6 @@ export class RoleQuarantineService implements IRoleQuarantineService {
 
   private uniqueStrings(values: readonly string[]): string[] {
     return [...new Set(values)];
-  }
-
-  private mergeRoleDetails(
-    details: readonly RoleQuarantineRoleDetail[]
-  ): RoleQuarantineRoleDetail[] {
-    const byRole = new Map<string, RoleQuarantineRoleDetail>();
-    for (const detail of details) {
-      byRole.set(detail.role_id, detail);
-    }
-    return [...byRole.values()];
   }
 
   private metadataToRecord(metadata: unknown): Record<string, unknown> {

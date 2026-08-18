@@ -335,6 +335,36 @@ describe('RoleQuarantineService (unit)', () => {
     expect(snapshot?.removed_role_ids).toEqual(['safe-role']);
   });
 
+  it('clears a transient removal failure after a compromised-account retry succeeds', async () => {
+    const role = createRole({ id: 'retry-role' });
+    const member = createMember([role]);
+    (member.roles.remove as jest.Mock).mockRejectedValueOnce(new Error('Discord unavailable'));
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      snapshots
+    );
+    const verificationEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    };
+
+    const first = await service.quarantineCompromisedAccount(member, verificationEvent, {
+      id: 'moderator-1',
+    } as User);
+    const second = await service.quarantineCompromisedAccount(member, verificationEvent, {
+      id: 'moderator-1',
+    } as User);
+
+    expect(first.failedRemovals).toEqual([
+      expect.objectContaining({ role_id: role.id, reason: 'Discord unavailable' }),
+    ]);
+    expect(second.failedRemovals).toEqual([]);
+    expect(second.removedRoleIds).toEqual([role.id]);
+    const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+    expect(snapshot?.failed_removals).toEqual([]);
+  });
+
   it('preserves legacy audit-only mode without removing roles', async () => {
     const safeRole = createRole({ id: 'safe-role' });
     const member = createMember([safeRole]);

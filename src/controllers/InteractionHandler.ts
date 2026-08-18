@@ -665,15 +665,19 @@ export class InteractionHandler implements IInteractionHandler {
           this.adminActionButton(parsed, 'verify', 'Verify User', ButtonStyle.Success),
           ...(canKick
             ? [this.adminActionButton(parsed, 'kick', 'Kick User', ButtonStyle.Danger)]
-            : []),
-          this.adminActionButton(
-            parsed,
-            'close_no_action',
-            'Close No Action',
-            ButtonStyle.Secondary
-          ),
-          this.adminActionButton(parsed, 'repair', 'Repair Active Case', ButtonStyle.Primary)
+            : [])
         );
+        if (activeCase.attention_state !== CaseAttentionState.PARKED) {
+          actionButtons.push(
+            this.adminActionButton(
+              parsed,
+              'close_no_action',
+              'Close No Action',
+              ButtonStyle.Secondary
+            ),
+            this.adminActionButton(parsed, 'repair', 'Repair Active Case', ButtonStyle.Primary)
+          );
+        }
         if (
           this.accountQuarantineService &&
           accountQuarantineEnabled &&
@@ -690,7 +694,7 @@ export class InteractionHandler implements IInteractionHandler {
             )
           );
         }
-        if (!activeCase.thread_id) {
+        if (!activeCase.thread_id && activeCase.attention_state !== CaseAttentionState.PARKED) {
           actionButtons.push(
             this.adminActionButton(parsed, 'thread', 'Create Thread', ButtonStyle.Primary)
           );
@@ -1678,6 +1682,18 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
+      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        userId,
+        guildId
+      );
+      if (activeCase?.attention_state === CaseAttentionState.PARKED) {
+        await interaction.followUp({
+          content:
+            'A parked account quarantine can only be released with Verify User, Kick User, or Ban User.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
       const guild = await this.client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId).catch(() => null);
       if (!member) {
@@ -1799,6 +1815,18 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
+      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        userId,
+        guildId
+      );
+      if (activeCase?.attention_state === CaseAttentionState.PARKED) {
+        await interaction.followUp({
+          content:
+            'A parked account quarantine can only be released with Verify User, Kick User, or Ban User.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
       const guild = await this.client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId).catch(() => null);
       const roleGatePreview =

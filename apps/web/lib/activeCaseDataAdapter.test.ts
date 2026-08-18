@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildCaseActionIdempotencyKey,
   FixtureActiveCaseDataAdapter,
   parseCaseSummaryRow,
   resolveCaseActionQueueStatus,
@@ -40,6 +41,24 @@ const baseRow = {
 };
 
 describe('activeCaseDataAdapter', () => {
+  it('uses a per-attempt quarantine key while retaining duplicate-submit idempotency', () => {
+    const input = {
+      action: 'quarantine_compromised_account' as const,
+      adminId: 'admin-1',
+      attemptId: 'attempt-1',
+      caseId: 'case-1',
+      guildId: 'guild-1',
+    };
+
+    expect(buildCaseActionIdempotencyKey(input)).toBe(
+      'web:case-action:quarantine_compromised_account:guild-1:case-1:attempt-1'
+    );
+    expect(buildCaseActionIdempotencyKey(input)).toBe(buildCaseActionIdempotencyKey(input));
+    expect(buildCaseActionIdempotencyKey({ ...input, attemptId: 'attempt-2' })).not.toBe(
+      buildCaseActionIdempotencyKey(input)
+    );
+  });
+
   it('preserves failed queue receipts for inline action feedback', () => {
     expect(resolveCaseActionQueueStatus('queued')).toBe('queued');
     expect(resolveCaseActionQueueStatus('processing')).toBe('queued');
