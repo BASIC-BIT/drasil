@@ -125,6 +125,34 @@ function SummaryPanel({
         </div>
       ) : null}
 
+      {detail.containmentStatus === 'in_progress' ? (
+        <div className="member-warning neutral-warning">
+          <strong>Account Quarantine In Progress</strong>
+          <span>Drasil is running containment now; duplicate attempts will be rejected.</span>
+        </div>
+      ) : null}
+      {detail.containmentStatus === 'incomplete' ? (
+        <div className="member-warning">
+          <strong>Account Quarantine Incomplete</strong>
+          <span>
+            The account is not parked. Retry from Discord after repairing blockers. Removed roles:{' '}
+            {detail.quarantineEffects?.removedRoleCount ?? 0}; retained roles:{' '}
+            {detail.quarantineEffects?.retainedRoleCount ?? 0}; failed removals:{' '}
+            {detail.quarantineEffects?.failedRoleCount ?? 0}; permission bypasses:{' '}
+            {detail.quarantineEffects?.memberBypassCount ?? 0}.
+          </span>
+        </div>
+      ) : null}
+      {detail.attentionState === 'parked' ? (
+        <div className="member-warning neutral-warning">
+          <strong>Parked Account Quarantine</strong>
+          <span>
+            The verification thread remains open for a recovery report. Release requires moderator
+            verification, kick, or ban.
+          </span>
+        </div>
+      ) : null}
+
       {detail.notes ? <p>{detail.notes}</p> : <p className="muted">No moderator notes recorded.</p>}
     </section>
   );

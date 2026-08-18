@@ -86,6 +86,7 @@ import {
 import { IRoleGateService, RoleGateResolutionResult } from '../services/RoleGateService';
 import { IAccountQuarantineService } from '../services/AccountQuarantineService';
 import { getAccountQuarantineSettings } from '../utils/accountQuarantineSettings';
+import { truncatePreview } from '../utils/textPreview';
 import {
   MODERATION_ACTION_REASON_FIELD_ID,
   MODERATOR_ACTION_BAN_DEFAULT_REASON,
@@ -111,6 +112,7 @@ const OBSERVED_KICK_MODAL_PREFIX = 'observed:kick_modal';
 const MODERATION_ACTION_CONFIRMATION_PREFIX = 'moderation_action_confirm';
 const MODERATION_ACTION_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const CASE_REVIEW_DIGEST_PAGE_SIZE = 25;
+const ACCOUNT_QUARANTINE_CONFIRMATION_MAX_LENGTH = 1900;
 
 interface PendingModerationActionConfirmation {
   readonly action: ModeratorUserAction;
@@ -1417,6 +1419,7 @@ export class InteractionHandler implements IInteractionHandler {
       `Privileged roles to remove: ${preview.rolePreview.privilegedRoleIds.length}`,
       `Roles Drasil cannot remove: ${retained.length}`,
       `Member/channel bypasses: ${preview.memberAudit.bypasses.length}`,
+      `Unremovable privilege blockers: ${preview.memberAudit.unremovablePrivilegeReasons.length}`,
       `Lockdown changes still required: ${preview.lockdown.plannedActions.length}`,
       preview.canContain
         ? 'Containment check: ready. Submitting the next form will park this case.'
@@ -1427,7 +1430,7 @@ export class InteractionHandler implements IInteractionHandler {
     if (retained.length > 0) {
       lines.push('', `Unmanageable roles: ${retained.join(', ')}`);
     }
-    return lines.join('\n');
+    return truncatePreview(lines.join('\n'), ACCOUNT_QUARANTINE_CONFIRMATION_MAX_LENGTH);
   }
 
   private async showLegacyAdminActionConfirmation(

@@ -18,6 +18,7 @@ import {
 } from '../../services/CaseRoleLockdownService';
 import { IModerationOutcomeService } from '../../services/ModerationOutcomeService';
 import { IModerationQueueService } from '../../services/ModerationQueueService';
+import { INotificationManager } from '../../services/NotificationManager';
 import { IRoleManager } from '../../services/RoleManager';
 import {
   IRoleQuarantineService,
@@ -91,6 +92,7 @@ function memberAudit(
     bypasses: [],
     retainedPrivilegedRoleIds: [],
     retainedAdministratorRoleIds: [],
+    unremovablePrivilegeReasons: [],
     ...overrides,
   };
 }
@@ -121,6 +123,10 @@ function buildHarness(
       : CaseContainmentStatus.INCOMPLETE,
   };
   const verificationEvents = {
+    claimQuarantineAttempt: jest.fn().mockResolvedValue({
+      ...event,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+    }),
     update: jest.fn().mockResolvedValue(updatedEvent),
   } as unknown as jest.Mocked<IVerificationEventRepository>;
   const roleQuarantine = {
@@ -154,6 +160,10 @@ function buildHarness(
     deleteCaseMirror: jest.fn().mockResolvedValue(undefined),
     upsertCaseMirror: jest.fn().mockResolvedValue(undefined),
   } as unknown as jest.Mocked<IModerationQueueService>;
+  const notificationManager = {
+    logActionToMessage: jest.fn().mockResolvedValue(true),
+    updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
+  } as unknown as jest.Mocked<INotificationManager>;
   const service = new AccountQuarantineService(
     {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -167,7 +177,8 @@ function buildHarness(
     roleManager,
     adminActions,
     moderationOutcomes,
-    moderationQueue
+    moderationQueue,
+    notificationManager
   );
 
   return {
@@ -176,6 +187,7 @@ function buildHarness(
     member,
     moderationOutcomes,
     moderationQueue,
+    notificationManager,
     roleManager,
     roleQuarantine,
     service,
@@ -218,6 +230,11 @@ describe('AccountQuarantineService', () => {
     );
     expect(harness.adminActions.recordAction).toHaveBeenCalledTimes(1);
     expect(harness.moderationOutcomes.recordOutcome).toHaveBeenCalledTimes(1);
+    expect(harness.notificationManager.logActionToMessage).toHaveBeenCalled();
+    expect(harness.notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+      expect.objectContaining({ attention_state: CaseAttentionState.PARKED }),
+      VerificationStatus.PENDING
+    );
     expect(harness.moderationQueue.deleteCaseMirror).toHaveBeenCalledWith(event.id);
   });
 
@@ -260,6 +277,25 @@ describe('AccountQuarantineService', () => {
     expect(harness.moderationOutcomes.recordOutcome).not.toHaveBeenCalled();
   });
 
+  it('does not park while guild ownership or everyone permissions bypass containment', async () => {
+    const harness = buildHarness();
+    harness.lockdown.auditMemberBypasses.mockResolvedValue(
+      memberAudit({ unremovablePrivilegeReasons: ['guild_owner'] })
+    );
+
+    const preview = await harness.service.preview(harness.member, event);
+    const result = await harness.service.quarantine(
+      harness.member,
+      event,
+      { id: 'moderator-1' } as User,
+      'Compromise report'
+    );
+
+    expect(preview.canContain).toBe(false);
+    expect(result.status).toBe('incomplete');
+    expect(harness.moderationOutcomes.recordOutcome).not.toHaveBeenCalled();
+  });
+
   it('refuses to quarantine when the feature is disabled', async () => {
     const harness = buildHarness({ enabled: false });
 
@@ -272,5 +308,45 @@ describe('AccountQuarantineService', () => {
       )
     ).rejects.toThrow('disabled');
     expect(harness.roleQuarantine.quarantineCompromisedAccount).not.toHaveBeenCalled();
+  });
+
+  it('rejects a concurrent quarantine attempt before mutating Discord', async () => {
+    const harness = buildHarness();
+    harness.verificationEvents.claimQuarantineAttempt.mockResolvedValueOnce(null);
+
+    await expect(
+      harness.service.quarantine(
+        harness.member,
+        event,
+        { id: 'moderator-1' } as User,
+        'Compromise report'
+      )
+    ).rejects.toThrow('another quarantine attempt is in progress');
+
+    expect(harness.roleQuarantine.quarantineCompromisedAccount).not.toHaveBeenCalled();
+    expect(harness.roleManager.assignCaseRole).not.toHaveBeenCalled();
+  });
+
+  it('releases the durable claim when containment side effects fail', async () => {
+    const harness = buildHarness();
+    harness.roleQuarantine.quarantineCompromisedAccount.mockRejectedValueOnce(
+      new Error('Discord unavailable')
+    );
+
+    await expect(
+      harness.service.quarantine(
+        harness.member,
+        event,
+        { id: 'moderator-1' } as User,
+        'Compromise report'
+      )
+    ).rejects.toThrow('Discord unavailable');
+
+    expect(harness.verificationEvents.update).toHaveBeenCalledWith(event.id, {
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+      parked_at: null,
+      parked_by: null,
+    });
   });
 });

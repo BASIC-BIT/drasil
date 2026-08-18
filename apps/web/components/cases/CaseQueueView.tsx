@@ -87,6 +87,46 @@ function MemberStateNotice({ item }: { readonly item: CaseSummary }) {
   );
 }
 
+function QuarantineStateNotice({ item }: { readonly item: CaseSummary }) {
+  if (item.containmentStatus === 'in_progress') {
+    return (
+      <div className="member-warning neutral-warning">
+        <strong>Account Quarantine In Progress</strong>
+        <span>Drasil is running containment now; duplicate attempts will be rejected.</span>
+      </div>
+    );
+  }
+
+  if (item.containmentStatus === 'incomplete') {
+    const effects = item.quarantineEffects;
+    return (
+      <div className="member-warning">
+        <strong>Account Quarantine Incomplete</strong>
+        <span>
+          The account is not parked. Review blockers before retrying in Discord. Removed roles:{' '}
+          {effects?.removedRoleCount ?? 0}; retained roles: {effects?.retainedRoleCount ?? 0};
+          failed removals: {effects?.failedRoleCount ?? 0}; permission bypasses:{' '}
+          {effects?.memberBypassCount ?? 0}.
+        </span>
+      </div>
+    );
+  }
+
+  if (item.attentionState !== 'parked') {
+    return null;
+  }
+
+  return (
+    <div className="member-warning neutral-warning">
+      <strong>Parked Account Quarantine</strong>
+      <span>
+        The user remains contained while their verification thread stays open for a recovery report.
+        Release requires moderator verification.
+      </span>
+    </div>
+  );
+}
+
 function ActionPills({
   actions,
   itemId,
@@ -173,16 +213,7 @@ function CaseCard({ guildId, item }: { readonly guildId: string; readonly item: 
       </div>
 
       <MemberStateNotice item={item} />
-
-      {item.attentionState === 'parked' ? (
-        <div className="member-warning neutral-warning">
-          <strong>Parked Account Quarantine</strong>
-          <span>
-            The user remains contained while their verification thread stays open for a recovery
-            report. Release requires moderator verification.
-          </span>
-        </div>
-      ) : null}
+      <QuarantineStateNotice item={item} />
 
       <SurfaceLinks item={item} />
       <ActionPills actions={item.allowedActions} itemId={item.id} />

@@ -292,6 +292,16 @@ export class IntegrityAuditService implements IIntegrityAuditService {
               )
             );
           }
+          if (memberAudit.unremovablePrivilegeReasons.length > 0) {
+            findings.push(
+              this.buildCaseFinding(
+                'error',
+                'parked_quarantine_unremovable_privilege',
+                verificationEvent,
+                `Parked account quarantine has unremovable privilege blocker(s): ${memberAudit.unremovablePrivilegeReasons.join(', ')}.`
+              )
+            );
+          }
         } catch (error) {
           findings.push(
             this.buildCaseFinding(

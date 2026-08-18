@@ -605,6 +605,35 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return { ...matchingEvents[0] };
   }
 
+  async claimQuarantineAttempt(
+    id: string,
+    serverId: string,
+    userId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.server_id === serverId &&
+        event.user_id === userId &&
+        event.status === VerificationStatus.PENDING &&
+        event.attention_state === CaseAttentionState.REVIEW_REQUIRED &&
+        (event.containment_status !== CaseContainmentStatus.IN_PROGRESS ||
+          event.updated_at <= staleBefore)
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+
+    const claimed = {
+      ...this.events[eventIndex],
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = claimed;
+    return { ...claimed };
+  }
+
   async update(
     id: string,
     data: Partial<VerificationEvent>,
@@ -1491,6 +1520,10 @@ export class InMemoryRoleQuarantineSnapshotRepository implements IRoleQuarantine
     const existing = this.snapshots[index];
     const updated: RoleQuarantineSnapshot = {
       ...existing,
+      verification_event_id:
+        data.verificationEventId === undefined
+          ? existing.verification_event_id
+          : data.verificationEventId,
       status: data.status ?? existing.status,
       purpose: data.purpose ?? existing.purpose,
       original_role_ids: data.originalRoleIds

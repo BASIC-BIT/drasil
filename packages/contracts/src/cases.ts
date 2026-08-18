@@ -60,7 +60,9 @@ export const caseSummarySchema = z.object({
   updatedAt: z.string(),
   caseKind: z.enum(['standard', 'compromised_account']).optional(),
   attentionState: z.enum(['review_required', 'parked']).optional(),
-  containmentStatus: z.enum(['not_applicable', 'contained', 'incomplete']).optional(),
+  containmentStatus: z
+    .enum(['not_applicable', 'in_progress', 'contained', 'incomplete'])
+    .optional(),
   parkedAt: z.string().nullable().optional(),
   parkedBy: z.string().nullable().optional(),
   quarantineEffects: z

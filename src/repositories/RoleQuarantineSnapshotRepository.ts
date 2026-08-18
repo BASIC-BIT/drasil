@@ -81,6 +81,7 @@ export class RoleQuarantineSnapshotRepository implements IRoleQuarantineSnapshot
       const updated = await this.prisma.role_quarantine_snapshots.update({
         where: { id },
         data: {
+          verification_event_id: data.verificationEventId,
           status: data.status as role_quarantine_snapshot_status | undefined,
           purpose: data.purpose as role_quarantine_snapshot_purpose | undefined,
           original_role_ids: data.originalRoleIds,

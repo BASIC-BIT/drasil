@@ -544,4 +544,25 @@ describe('CaseRoleLockdownService (unit)', () => {
       ])
     );
   });
+
+  it('reports guild ownership and everyone Administrator as unremovable privilege blockers', async () => {
+    const guild = createGuild([]);
+    guild.ownerId = 'user-1';
+    guild.roles.cache.set('guild-1', {
+      id: 'guild-1',
+      permissions: {
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.Administrator),
+      },
+    });
+    const member = {
+      id: 'user-1',
+      guild,
+      roles: { cache: new Map() },
+    } as any;
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const audit = await service.auditMemberBypasses(member);
+
+    expect(audit.unremovablePrivilegeReasons).toEqual(['guild_owner', 'everyone_administrator']);
+  });
 });

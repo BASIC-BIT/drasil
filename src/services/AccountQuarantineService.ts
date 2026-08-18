@@ -23,12 +23,15 @@ import {
 } from './CaseRoleLockdownService';
 import { IModerationOutcomeService } from './ModerationOutcomeService';
 import { IModerationQueueService } from './ModerationQueueService';
+import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
 import {
   IRoleQuarantineService,
   RoleQuarantineApplyResult,
   RoleQuarantinePreviewResult,
 } from './RoleQuarantineService';
+
+const QUARANTINE_ATTEMPT_STALE_MS = 5 * 60 * 1000;
 
 export interface AccountQuarantinePreview {
   readonly enabled: boolean;
@@ -71,7 +74,9 @@ export class AccountQuarantineService implements IAccountQuarantineService {
     @inject(TYPES.ModerationOutcomeService)
     private readonly moderationOutcomes: IModerationOutcomeService,
     @inject(TYPES.ModerationQueueService)
-    private readonly moderationQueue: IModerationQueueService
+    private readonly moderationQueue: IModerationQueueService,
+    @inject(TYPES.NotificationManager)
+    private readonly notificationManager: INotificationManager
   ) {}
 
   public async preview(
@@ -110,16 +115,35 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       throw new Error('Compromised-account quarantine is disabled for this server.');
     }
 
-    const roleResult = await this.roleQuarantine.quarantineCompromisedAccount(
-      member,
-      event,
-      moderator
+    const claimedEvent = await this.verificationEvents.claimQuarantineAttempt(
+      event.id,
+      member.guild.id,
+      member.id,
+      new Date(Date.now() - QUARANTINE_ATTEMPT_STALE_MS)
     );
-    const caseRoleAssigned = await this.roleManager.assignCaseRole(member);
-    const [lockdown, memberAudit] = await Promise.all([
-      this.lockdown.auditGuild(member.guild),
-      this.lockdown.auditMemberBypasses(member),
-    ]);
+    if (!claimedEvent) {
+      throw new Error('This case is already parked or another quarantine attempt is in progress.');
+    }
+
+    let roleResult: RoleQuarantineApplyResult;
+    let caseRoleAssigned: boolean;
+    let lockdown: CaseRoleLockdownReport;
+    let memberAudit: CaseRoleLockdownMemberAudit;
+    try {
+      roleResult = await this.roleQuarantine.quarantineCompromisedAccount(
+        member,
+        claimedEvent,
+        moderator
+      );
+      caseRoleAssigned = await this.roleManager.assignCaseRole(member);
+      [lockdown, memberAudit] = await Promise.all([
+        this.lockdown.auditGuild(member.guild),
+        this.lockdown.auditMemberBypasses(member),
+      ]);
+    } catch (error) {
+      await this.releaseFailedClaim(claimedEvent.id);
+      throw error;
+    }
     const complete =
       caseRoleAssigned &&
       roleResult.failedRemovals.length === 0 &&
@@ -140,12 +164,13 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       member_bypasses: memberAudit.bypasses,
       retained_privileged_role_ids: memberAudit.retainedPrivilegedRoleIds,
       retained_administrator_role_ids: memberAudit.retainedAdministratorRoleIds,
+      unremovable_privilege_reasons: memberAudit.unremovablePrivilegeReasons,
     };
     const metadata = {
-      ...this.metadataToRecord(event.metadata),
+      ...this.metadataToRecord(claimedEvent.metadata),
       account_quarantine: auditMetadata,
     } as unknown as VerificationEvent['metadata'];
-    const updated = await this.verificationEvents.update(event.id, {
+    const updated = await this.verificationEvents.update(claimedEvent.id, {
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       attention_state: complete ? CaseAttentionState.PARKED : CaseAttentionState.REVIEW_REQUIRED,
       containment_status: complete
@@ -156,15 +181,16 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       metadata,
     });
     if (!updated) {
-      throw new Error(`Verification event ${event.id} no longer exists.`);
+      await this.releaseFailedClaim(claimedEvent.id);
+      throw new Error(`Verification event ${claimedEvent.id} no longer exists.`);
     }
 
     await this.adminActions.recordAction({
       server_id: member.guild.id,
       user_id: member.id,
       admin_id: moderator.id,
-      verification_event_id: event.id,
-      detection_event_id: event.detection_event_id,
+      verification_event_id: claimedEvent.id,
+      detection_event_id: claimedEvent.detection_event_id,
       action_type: AdminActionType.QUARANTINE_COMPROMISED_ACCOUNT,
       previous_status: VerificationStatus.PENDING,
       new_status: VerificationStatus.PENDING,
@@ -176,8 +202,8 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       await this.moderationOutcomes.recordOutcome({
         server_id: member.guild.id,
         user_id: member.id,
-        detection_event_id: event.detection_event_id,
-        verification_event_id: event.id,
+        detection_event_id: claimedEvent.detection_event_id,
+        verification_event_id: claimedEvent.id,
         outcome_type: ModerationOutcomeType.ACCOUNT_QUARANTINED,
         source: ModerationOutcomeSource.DRASIL,
         actor_id: moderator.id,
@@ -187,7 +213,11 @@ export class AccountQuarantineService implements IAccountQuarantineService {
         username: member.user.username,
         accountCreatedAt: member.user.createdAt,
       });
-      await this.moderationQueue.deleteCaseMirror(event.id);
+    }
+
+    await this.refreshPersistentNotification(updated, moderator);
+    if (complete) {
+      await this.moderationQueue.deleteCaseMirror(claimedEvent.id);
     } else {
       await this.moderationQueue.upsertCaseMirror(updated);
     }
@@ -225,8 +255,41 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       !blockingWarning &&
       memberAudit.bypasses.length === 0 &&
       memberAudit.retainedPrivilegedRoleIds.length === 0 &&
-      memberAudit.retainedAdministratorRoleIds.length === 0
+      memberAudit.retainedAdministratorRoleIds.length === 0 &&
+      memberAudit.unremovablePrivilegeReasons.length === 0
     );
+  }
+
+  private async releaseFailedClaim(eventId: string): Promise<void> {
+    await this.verificationEvents
+      .update(eventId, {
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        parked_at: null,
+        parked_by: null,
+      })
+      .catch((error) => {
+        console.error(`Failed to release quarantine claim for case ${eventId}:`, error);
+      });
+  }
+
+  private async refreshPersistentNotification(
+    event: VerificationEvent,
+    moderator: User
+  ): Promise<void> {
+    if (!event.notification_message_id) {
+      return;
+    }
+    await this.notificationManager
+      .logActionToMessage(event, AdminActionType.QUARANTINE_COMPROMISED_ACCOUNT, moderator)
+      .catch((error) => {
+        console.warn(`Failed to append quarantine action to notification ${event.id}:`, error);
+      });
+    await this.notificationManager
+      .updateNotificationButtons(event, VerificationStatus.PENDING)
+      .catch((error) => {
+        console.warn(`Failed to refresh quarantine notification ${event.id}:`, error);
+      });
   }
 
   private metadataToRecord(metadata: unknown): Record<string, unknown> {

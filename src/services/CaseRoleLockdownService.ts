@@ -74,6 +74,7 @@ export interface CaseRoleLockdownMemberAudit {
   readonly bypasses: readonly CaseRoleLockdownMemberBypass[];
   readonly retainedPrivilegedRoleIds: readonly string[];
   readonly retainedAdministratorRoleIds: readonly string[];
+  readonly unremovablePrivilegeReasons: readonly string[];
 }
 
 export interface ICaseRoleLockdownService {
@@ -181,6 +182,14 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
         PRIVILEGED_ROLE_PERMISSIONS.some((permission) => role.permissions.has(permission))
       );
     });
+    const unremovablePrivilegeReasons: string[] = [];
+    if (member.id === member.guild.ownerId) {
+      unremovablePrivilegeReasons.push('guild_owner');
+    }
+    const everyoneRole = member.guild.roles.cache.get(member.guild.id);
+    if (everyoneRole?.permissions.has(PermissionFlagsBits.Administrator)) {
+      unremovablePrivilegeReasons.push('everyone_administrator');
+    }
     const bypasses: CaseRoleLockdownMemberBypass[] = [];
 
     for (const channel of await this.fetchLockdownChannels(member.guild)) {
@@ -219,6 +228,7 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
       bypasses,
       retainedPrivilegedRoleIds,
       retainedAdministratorRoleIds,
+      unremovablePrivilegeReasons,
     };
   }
 

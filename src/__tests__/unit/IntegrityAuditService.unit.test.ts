@@ -608,6 +608,7 @@ describe('IntegrityAuditService (unit)', () => {
         ],
         retainedPrivilegedRoleIds: ['privileged-role'],
         retainedAdministratorRoleIds: [],
+        unremovablePrivilegeReasons: [],
       }),
     };
     const service = new IntegrityAuditService(

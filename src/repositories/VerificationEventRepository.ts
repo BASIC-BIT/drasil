@@ -9,7 +9,12 @@ import {
 } from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository';
-import { CaseAttentionState, VerificationEvent, VerificationStatus } from './types'; // Use local enum
+import {
+  CaseAttentionState,
+  CaseContainmentStatus,
+  VerificationEvent,
+  VerificationStatus,
+} from './types'; // Use local enum
 
 export interface IVerificationEventRepository {
   findByUserAndServer(
@@ -35,6 +40,12 @@ export interface IVerificationEventRepository {
   getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]>;
   findById(id: string): Promise<VerificationEvent | null>;
   findByThreadId(threadId: string): Promise<VerificationEvent | null>;
+  claimQuarantineAttempt(
+    id: string,
+    serverId: string,
+    userId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null>;
   update(
     id: string,
     data: Partial<VerificationEvent>,
@@ -87,6 +98,41 @@ export class VerificationEventRepository implements IVerificationEventRepository
       return event as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'findByThreadId');
+    }
+  }
+
+  async claimQuarantineAttempt(
+    id: string,
+    serverId: string,
+    userId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const claimed = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            server_id: serverId,
+            user_id: userId,
+            status: VerificationStatus.PENDING,
+            attention_state: CaseAttentionState.REVIEW_REQUIRED,
+            OR: [
+              { containment_status: { not: CaseContainmentStatus.IN_PROGRESS } },
+              { updated_at: { lte: staleBefore } },
+            ],
+          },
+          data: {
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            updated_at: new Date(),
+          },
+        });
+        if (claimed.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'claimQuarantineAttempt');
     }
   }
 

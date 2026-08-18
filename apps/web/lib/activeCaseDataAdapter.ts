@@ -105,7 +105,7 @@ interface CaseSummaryRow {
   status: string;
   case_kind?: 'standard' | 'compromised_account';
   attention_state?: 'review_required' | 'parked';
-  containment_status?: 'not_applicable' | 'contained' | 'incomplete';
+  containment_status?: 'not_applicable' | 'in_progress' | 'contained' | 'incomplete';
   parked_at?: unknown;
   parked_by?: string | null;
   created_at: unknown;

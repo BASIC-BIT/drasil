@@ -121,4 +121,42 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       expect.objectContaining({ outcome_type: ModerationOutcomeType.ACCOUNT_QUARANTINED }),
     ]);
   });
+
+  it('atomically claims one quarantine attempt and permits stale-claim recovery', async () => {
+    const serverId = 'guild-account-quarantine-claim';
+    const userId = 'user-account-quarantine-claim';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser(userId, 'target');
+    const verification = await verifications.createFromDetection(
+      null,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const staleBefore = new Date(Date.now() - 5 * 60 * 1000);
+
+    await expect(
+      verifications.claimQuarantineAttempt(verification.id, serverId, userId, staleBefore)
+    ).resolves.toEqual(
+      expect.objectContaining({ containment_status: CaseContainmentStatus.IN_PROGRESS })
+    );
+    await expect(
+      verifications.claimQuarantineAttempt(verification.id, serverId, userId, staleBefore)
+    ).resolves.toBeNull();
+
+    await verifications.update(
+      verification.id,
+      { updated_at: new Date('2026-01-01T00:00:00.000Z') },
+      { touchUpdatedAt: false }
+    );
+    await expect(
+      verifications.claimQuarantineAttempt(verification.id, serverId, userId, new Date())
+    ).resolves.toEqual(
+      expect.objectContaining({ containment_status: CaseContainmentStatus.IN_PROGRESS })
+    );
+  });
 });

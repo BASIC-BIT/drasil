@@ -57,7 +57,6 @@ export type QueueInboxCaseAction = (
 
 export const executableCaseActions: readonly WebCaseAction[] = [
   'verify_user',
-  'quarantine_compromised_account',
   'kick_user',
   'ban_user',
   'ban_by_id',
@@ -70,18 +69,7 @@ export const executableCaseActions: readonly WebCaseAction[] = [
 ];
 
 const executableCaseActionSet = new Set<CaseAction>(executableCaseActions);
-const destructiveCaseActionSet = new Set<WebCaseAction>([
-  'kick_user',
-  'ban_user',
-  'ban_by_id',
-  'quarantine_compromised_account',
-]);
-
-function ActionAttemptInput({ action }: { readonly action: WebCaseAction }) {
-  return action === 'quarantine_compromised_account' ? (
-    <input name="actionAttemptId" type="hidden" value={globalThis.crypto.randomUUID()} />
-  ) : null;
-}
+const destructiveCaseActionSet = new Set<WebCaseAction>(['kick_user', 'ban_user', 'ban_by_id']);
 
 export function isExecutableCaseAction(action: string): action is WebCaseAction {
   return executableCaseActionSet.has(action as CaseAction);
@@ -109,7 +97,8 @@ export function CaseActionControls({
   readonly queueInboxCaseAction?: QueueInboxCaseAction;
 }) {
   const executableActions = executableCaseActions.filter((action) => actions.includes(action));
-  if (executableActions.length === 0) {
+  const hasDiscordQuarantine = actions.includes('quarantine_compromised_account');
+  if (executableActions.length === 0 && !hasDiscordQuarantine) {
     return null;
   }
 
@@ -123,6 +112,14 @@ export function CaseActionControls({
   return (
     <div className="case-action-area">
       <div className="report-action-forms" aria-label="Case actions">
+        {hasDiscordQuarantine ? (
+          <span
+            className="pill action-pill"
+            title="Open the Discord case and review the live containment preview before confirming"
+          >
+            Quarantine in Discord (live preview)
+          </span>
+        ) : null}
         {standardActions.map((action) =>
           canQueueCaseActions ? (
             queueInboxCaseAction ? (
@@ -211,21 +208,9 @@ export function CaseActionControls({
                   formClassName="destructive-action-panel"
                   requestBaseHref={`/admin/guild/${guildId}/operations`}
                 >
-                  <ActionAttemptInput action={action} />
-                  {action === 'quarantine_compromised_account' ? (
-                    <p className="muted">
-                      Removes manageable roles, applies the case-role lockdown, and parks the case
-                      only if containment is complete. The user stays in the server and their
-                      verification thread remains open.
-                    </p>
-                  ) : null}
                   <label className="field destructive-reason">
                     <span>Reason</span>
-                    <textarea
-                      name="reason"
-                      required={action === 'quarantine_compromised_account'}
-                      rows={3}
-                    />
+                    <textarea name="reason" rows={3} />
                   </label>
                   <label className="checkbox-field destructive-confirm">
                     <input name="confirmAction" type="checkbox" />
@@ -237,21 +222,9 @@ export function CaseActionControls({
                   action={queueCaseAction.bind(null, guildId, caseId, action)}
                   className="destructive-action-panel"
                 >
-                  <ActionAttemptInput action={action} />
-                  {action === 'quarantine_compromised_account' ? (
-                    <p className="muted">
-                      Removes manageable roles, applies the case-role lockdown, and parks the case
-                      only if containment is complete. The user stays in the server and their
-                      verification thread remains open.
-                    </p>
-                  ) : null}
                   <label className="field destructive-reason">
                     <span>Reason</span>
-                    <textarea
-                      name="reason"
-                      required={action === 'quarantine_compromised_account'}
-                      rows={3}
-                    />
+                    <textarea name="reason" rows={3} />
                   </label>
                   <label className="checkbox-field destructive-confirm">
                     <input name="confirmAction" type="checkbox" />

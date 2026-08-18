@@ -495,6 +495,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     ]);
     const snapshot = activeSnapshot
       ? await this.snapshotRepository.update(activeSnapshot.id, {
+          verificationEventId: verificationEvent.id,
           purpose,
           originalRoleIds,
           plannedRoleIds,

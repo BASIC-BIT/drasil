@@ -222,6 +222,7 @@ export class NotificationManager implements INotificationManager {
         verificationEventId: verificationEvent.id,
         verificationStatus: verificationEvent.status,
         caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
+        caseAttentionState: verificationEvent.attention_state,
         includeBanAction: responseSettings.moderatorBanActionEnabled,
       });
 
@@ -1058,6 +1059,7 @@ export class NotificationManager implements INotificationManager {
         updatedEmbed,
         verificationEvent
       );
+      this.presentationBuilder.upsertAccountQuarantinePresentation(updatedEmbed, verificationEvent);
     }
 
     const serverConfig = await this.configService
@@ -1076,6 +1078,7 @@ export class NotificationManager implements INotificationManager {
           verificationEventId: verificationEvent.id,
           verificationStatus: newStatus,
           caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
+          caseAttentionState: verificationEvent.attention_state,
           includeBanAction: responseSettings?.moderatorBanActionEnabled ?? true,
         }
       ),

@@ -3,6 +3,9 @@ import { NotificationPresentationBuilder } from '../../services/NotificationPres
 import { DetectionResult } from '../../services/DetectionOrchestrator';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   DetectionEvent,
   DetectionType,
   VerificationEvent,
@@ -62,6 +65,9 @@ const buildVerificationEvent = (overrides: Partial<VerificationEvent> = {}): Ver
   notification_channel_id: overrides.notification_channel_id ?? null,
   notification_message_id: overrides.notification_message_id ?? null,
   status: overrides.status ?? VerificationStatus.PENDING,
+  case_kind: overrides.case_kind,
+  attention_state: overrides.attention_state,
+  containment_status: overrides.containment_status,
   created_at: overrides.created_at ?? new Date('2026-01-03T00:00:00Z'),
   updated_at: overrides.updated_at ?? new Date('2026-01-03T00:00:00Z'),
   resolved_at: overrides.resolved_at ?? null,
@@ -371,6 +377,44 @@ describe('NotificationPresentationBuilder (unit)', () => {
       'close_user-1',
       'admin_actions:m:c:user-1',
     ]);
+  });
+
+  it('removes close actions from parked quarantine notification rows', () => {
+    const rows = builder.createAdminNotificationActionRows('user-1', {
+      verificationStatus: VerificationStatus.PENDING,
+      caseAttentionState: CaseAttentionState.PARKED,
+    });
+    const buttons = rows.flatMap(
+      (row) => row.toJSON().components as Array<{ label?: string; custom_id?: string }>
+    );
+
+    expect(buttons.map((button) => button.label)).toEqual(['Verify', 'Ban...', 'Other Actions']);
+    expect(buttons.map((button) => button.custom_id)).not.toContain('close_user-1');
+  });
+
+  it('renders incomplete quarantine blockers prominently in notifications', () => {
+    const embed = new EmbedBuilder().setTitle('Suspicious User');
+    builder.upsertAccountQuarantinePresentation(
+      embed,
+      buildVerificationEvent({
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        metadata: {
+          account_quarantine: {
+            removed_role_ids: ['role-1'],
+            retained_roles: [{ role_id: 'role-2' }],
+            failed_removals: [{ role_id: 'role-3' }],
+            member_bypasses: [{ channel_id: 'channel-1' }],
+          },
+        },
+      })
+    );
+
+    expect(embed.data.title).toBe('Account Quarantine Needs Review');
+    expect(getField(embed, 'Account Quarantine')).toContain('Containment is incomplete');
+    expect(getField(embed, 'Account Quarantine')).toContain('Removed roles: 1');
+    expect(getField(embed, 'Account Quarantine')).toContain('Permission bypasses: 1');
   });
 
   it('collapses observed action rows after an observed alert is actioned', () => {

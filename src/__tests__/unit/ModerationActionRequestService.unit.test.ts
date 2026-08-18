@@ -773,6 +773,7 @@ describe('ModerationActionRequestService', () => {
           bypasses: [],
           retainedPrivilegedRoleIds: [],
           retainedAdministratorRoleIds: [],
+          unremovablePrivilegeReasons: [],
         },
       })),
     };

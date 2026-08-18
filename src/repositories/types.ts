@@ -212,6 +212,7 @@ export enum CaseAttentionState {
 
 export enum CaseContainmentStatus {
   NOT_APPLICABLE = 'not_applicable',
+  IN_PROGRESS = 'in_progress',
   CONTAINED = 'contained',
   INCOMPLETE = 'incomplete',
 }
@@ -426,6 +427,7 @@ export interface RoleQuarantineSnapshotCreate {
 }
 
 export interface RoleQuarantineSnapshotUpdate {
+  verificationEventId?: string | null;
   status?: RoleQuarantineSnapshotStatus;
   purpose?: RoleQuarantineSnapshotPurpose;
   originalRoleIds?: string[];

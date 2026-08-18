@@ -26,7 +26,6 @@ import {
 
 const queuedCaseActions = new Set<CaseAction>([
   'verify_user',
-  'quarantine_compromised_account',
   'kick_user',
   'ban_user',
   'ban_by_id',
@@ -44,8 +43,6 @@ const queueCaseActionErrorMessages = {
   failed: 'Case action could not be queued. Refresh the inbox and try again.',
   not_allowed: 'Case action is not available for this case state.',
 } as const;
-const ACTION_ATTEMPT_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type DestructiveCaseAction = Extract<WebCaseAction, 'kick_user' | 'ban_user' | 'ban_by_id'>;
 
@@ -178,25 +175,6 @@ async function assertCanQueueCaseAction(
   formData: FormData | undefined
 ): Promise<DestructiveActionOptions> {
   assertActorPermission(action, guild);
-
-  if (action === 'quarantine_compromised_account') {
-    if (formData?.get('confirmAction') !== 'on') {
-      throw new Error('Confirm the account quarantine before queueing it.');
-    }
-    const server = await createSetupDataAdapter().getServer(guild.id);
-    if (server?.settings.account_quarantine_enabled !== true) {
-      throw new Error('Compromised-account quarantine is disabled for this server.');
-    }
-    const reason = readFormString(formData, 'reason');
-    if (!reason) {
-      throw new Error('Account quarantine reason is required.');
-    }
-    const attemptId = readFormString(formData, 'actionAttemptId');
-    if (!attemptId || !ACTION_ATTEMPT_ID_PATTERN.test(attemptId)) {
-      throw new Error('Account quarantine attempt expired. Refresh the page and try again.');
-    }
-    return { attemptId, reason };
-  }
 
   const destructiveContext = destructiveActionContext(action);
   if (!destructiveContext) {

@@ -1,6 +1,6 @@
 CREATE TYPE "case_kind" AS ENUM ('standard', 'compromised_account');
 CREATE TYPE "case_attention_state" AS ENUM ('review_required', 'parked');
-CREATE TYPE "case_containment_status" AS ENUM ('not_applicable', 'contained', 'incomplete');
+CREATE TYPE "case_containment_status" AS ENUM ('not_applicable', 'in_progress', 'contained', 'incomplete');
 CREATE TYPE "role_quarantine_snapshot_purpose" AS ENUM ('standard_case', 'compromised_account');
 
 ALTER TYPE "admin_action_type" ADD VALUE 'quarantine_compromised_account';

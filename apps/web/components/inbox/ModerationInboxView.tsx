@@ -630,6 +630,18 @@ function InboxActions({
           );
         }
 
+        if (item.kind === 'case' && action === 'quarantine_compromised_account') {
+          return (
+            <span
+              className="pill action-pill"
+              key={`${item.id}-${action}`}
+              title="Open the Discord case and review the live containment preview before confirming"
+            >
+              Quarantine in Discord (live preview)
+            </span>
+          );
+        }
+
         return (
           <button
             className="button secondary compact-button"

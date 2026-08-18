@@ -12,6 +12,9 @@ import type { ReportAIAnalysis, VerificationThreadAnalysisResult } from './GPTSe
 import { CASE_STAFF_ROUTING_METADATA_KEY } from './ThreadManager';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   DetectionEvent,
   DetectionType,
   Server,
@@ -34,6 +37,7 @@ interface AdminActionRowOptions {
   readonly verificationStatus?: VerificationStatus;
   readonly includeBanAction?: boolean;
   readonly caseMembershipState?: CaseMembershipState;
+  readonly caseAttentionState?: CaseAttentionState;
 }
 
 type CaseMembershipState = 'in_server' | 'left_or_removed';
@@ -77,6 +81,7 @@ export class NotificationPresentationBuilder {
   public static readonly LATEST_ADMIN_ACTION_FIELD_NAME = 'Latest Admin Action';
   public static readonly MODERATION_ACTION_WARNING_FIELD_NAME = 'Moderation Action Warning';
   public static readonly RESOLUTION_FIELD_NAME = 'Resolution';
+  public static readonly ACCOUNT_QUARANTINE_FIELD_NAME = 'Account Quarantine';
 
   public createSuspiciousUserEmbed(
     member: GuildMember,
@@ -404,7 +409,8 @@ export class NotificationPresentationBuilder {
       ? this.createPendingCaseAdminButtons(
           userId,
           options.includeBanAction !== false,
-          options.caseMembershipState ?? 'in_server'
+          options.caseMembershipState ?? 'in_server',
+          options.caseAttentionState === CaseAttentionState.PARKED
         )
       : [
           this.createCustomButton(`reopen_${userId}`, 'Reopen', ButtonStyle.Primary),
@@ -509,8 +515,24 @@ export class NotificationPresentationBuilder {
   private createPendingCaseAdminButtons(
     userId: string,
     includeBanAction: boolean,
-    caseMembershipState: CaseMembershipState
+    caseMembershipState: CaseMembershipState,
+    isParked: boolean
   ): ButtonBuilder[] {
+    if (isParked) {
+      const buttons = [this.createCustomButton(`verify_${userId}`, 'Verify', ButtonStyle.Success)];
+      if (includeBanAction) {
+        buttons.push(this.createCustomButton(`ban_${userId}`, 'Ban...', ButtonStyle.Danger));
+      }
+      buttons.push(
+        this.createCustomButton(
+          buildCaseAdminActionsCustomId(userId),
+          'Other Actions',
+          ButtonStyle.Secondary
+        )
+      );
+      return buttons;
+    }
+
     if (caseMembershipState === 'left_or_removed') {
       const buttons = [
         this.createCustomButton(`history_${userId}`, 'History', ButtonStyle.Secondary),
@@ -710,6 +732,48 @@ export class NotificationPresentationBuilder {
     if (fieldIndex !== undefined && fieldIndex >= 0) {
       embed.spliceFields(fieldIndex, 1);
     }
+  }
+
+  public upsertAccountQuarantinePresentation(
+    embed: EmbedBuilder,
+    verificationEvent: VerificationEvent
+  ): void {
+    const fields = (embed.data.fields ?? []).filter(
+      (field) => field.name !== NotificationPresentationBuilder.ACCOUNT_QUARANTINE_FIELD_NAME
+    );
+    if (
+      verificationEvent.status !== VerificationStatus.PENDING ||
+      verificationEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT
+    ) {
+      embed.setFields(...fields);
+      return;
+    }
+
+    const metadata = this.verificationMetadataToRecord(verificationEvent.metadata);
+    const quarantine = this.verificationMetadataToRecord(metadata.account_quarantine);
+    const count = (value: unknown): number => (Array.isArray(value) ? value.length : 0);
+    const status =
+      verificationEvent.attention_state === CaseAttentionState.PARKED &&
+      verificationEvent.containment_status === CaseContainmentStatus.CONTAINED
+        ? 'Contained and parked. Keep the verification thread open until the user reports recovery; release only through moderator verification, kick, or ban.'
+        : verificationEvent.containment_status === CaseContainmentStatus.IN_PROGRESS
+          ? 'Containment is currently in progress. A second quarantine attempt will be rejected.'
+          : 'Containment is incomplete. Review and repair the blockers before retrying quarantine.';
+    fields.push({
+      name: NotificationPresentationBuilder.ACCOUNT_QUARANTINE_FIELD_NAME,
+      value: [
+        status,
+        `Removed roles: ${count(quarantine.removed_role_ids)} · Retained roles: ${count(quarantine.retained_roles)} · Failed removals: ${count(quarantine.failed_removals)} · Permission bypasses: ${count(quarantine.member_bypasses)}`,
+      ].join('\n'),
+      inline: false,
+    });
+    embed.setColor(CASE_COLOR_WARNING);
+    embed.setTitle(
+      verificationEvent.attention_state === CaseAttentionState.PARKED
+        ? 'Account Quarantine Parked'
+        : 'Account Quarantine Needs Review'
+    );
+    embed.setFields(...fields);
   }
 
   public upsertResolvedCasePresentation(
@@ -1150,9 +1214,7 @@ export class NotificationPresentationBuilder {
     return { ...metadata } as Record<string, unknown>;
   }
 
-  private verificationMetadataToRecord(
-    metadata: VerificationEvent['metadata'] | undefined
-  ): Record<string, unknown> {
+  private verificationMetadataToRecord(metadata: unknown): Record<string, unknown> {
     if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
       return {};
     }

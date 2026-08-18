@@ -334,6 +334,7 @@ describe('InteractionHandler (unit)', () => {
       getVerificationHistory: jest.fn(),
       findById: jest.fn(),
       findByThreadId: jest.fn(),
+      claimQuarantineAttempt: jest.fn(),
       update: jest.fn(),
     };
     threadManager = {
@@ -2866,6 +2867,7 @@ describe('InteractionHandler (unit)', () => {
           bypasses: [],
           retainedPrivilegedRoleIds: [],
           retainedAdministratorRoleIds: [],
+          unremovablePrivilegeReasons: [],
         },
       }),
     };
@@ -2917,6 +2919,58 @@ describe('InteractionHandler (unit)', () => {
     expect(interaction.editReply).toHaveBeenCalledWith(
       expect.objectContaining({ content: expect.stringContaining('parked the case') })
     );
+  });
+
+  it('bounds a large compromised-account preview to Discord message limits', async () => {
+    const verificationEvent = buildVerificationEvent('ver-quarantine-preview', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    const member = buildMember('guild-1', 'user-1');
+    const accountQuarantineService = {
+      preview: jest.fn().mockResolvedValue({
+        canContain: false,
+        rolePreview: {
+          plannedRoleIds: [],
+          privilegedRoleIds: [],
+          skippedRoles: Array.from({ length: 100 }, (_, index) => ({
+            role_id: `role-${index}`,
+            reason: `managed role with a long blocker reason ${index}`,
+          })),
+        },
+        memberAudit: { bypasses: [], unremovablePrivilegeReasons: [] },
+        lockdown: { plannedActions: [] },
+      }),
+    };
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accountQuarantineService as any
+    );
+
+    const message = await (handler as any).buildAccountQuarantineConfirmationMessage(
+      {
+        guildId: 'guild-1',
+        guild: { members: { fetch: jest.fn().mockResolvedValue(member) } },
+      },
+      { userId: 'user-1' },
+      'Confirm quarantine'
+    );
+
+    expect(message.length).toBeLessThanOrEqual(1900);
+    expect(message).toContain('truncated');
+    expect(message).toContain('Roles Drasil cannot remove: 100');
   });
 
   it('rejects setup verification modal when submitter is not admin', async () => {

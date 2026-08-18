@@ -365,6 +365,37 @@ describe('RoleQuarantineService (unit)', () => {
     expect(snapshot?.failed_removals).toEqual([]);
   });
 
+  it('relinks an upgraded active snapshot to the current compromised-account case', async () => {
+    const role = createRole({ id: 'current-role' });
+    const member = createMember([role]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'older-case',
+      mode: 'on',
+      originalRoleIds: ['older-role'],
+      plannedRoleIds: ['older-role'],
+      removedRoleIds: ['older-role'],
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      snapshots
+    );
+    const verificationEvent = {
+      ...createVerificationEvent(),
+      id: 'current-case',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    };
+
+    await service.quarantineCompromisedAccount(member, verificationEvent, {
+      id: 'moderator-1',
+    } as User);
+
+    const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+    expect(snapshot?.verification_event_id).toBe('current-case');
+  });
+
   it('preserves legacy audit-only mode without removing roles', async () => {
     const safeRole = createRole({ id: 'safe-role' });
     const member = createMember([safeRole]);

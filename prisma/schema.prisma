@@ -668,6 +668,7 @@ enum case_attention_state {
 
 enum case_containment_status {
   not_applicable
+  in_progress
   contained
   incomplete
 }
