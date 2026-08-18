@@ -20,7 +20,10 @@ import { InboxActionForm, type InboxStateAction } from './InboxActionForm';
 import { InboxActionRequestPollingProvider } from './InboxActionRequestPoller';
 import { formatDetectionType, formatUtc, freshnessStatusClass } from '@/lib/casePresentation';
 import type { InboxActionState } from '@/lib/inboxActionState';
-import { findInboxActionRequest } from '@/lib/inboxActionReceipts';
+import {
+  findAccountQuarantineActionRequests,
+  findInboxActionRequest,
+} from '@/lib/inboxActionReceipts';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
 import {
   buildModerationInboxExportText,
@@ -433,6 +436,10 @@ function InboxActions({
       findInboxActionRequest(recentActionRequests, item, action),
     ])
   ) as Partial<Record<WebCaseAction, ModerationActionRequestSummary | null>>;
+  const accountQuarantineRequests =
+    item.kind === 'case'
+      ? findAccountQuarantineActionRequests(recentActionRequests, item.sourceId)
+      : undefined;
 
   return (
     <div className="pill-list action-form-list" aria-label={`Actions for ${item.title}`}>
@@ -630,18 +637,6 @@ function InboxActions({
           );
         }
 
-        if (item.kind === 'case' && action === 'quarantine_compromised_account') {
-          return (
-            <span
-              className="pill action-pill"
-              key={`${item.id}-${action}`}
-              title="Open the Discord case and review the live containment preview before confirming"
-            >
-              Quarantine in Discord (live preview)
-            </span>
-          );
-        }
-
         return (
           <button
             className="button secondary compact-button"
@@ -657,6 +652,7 @@ function InboxActions({
       {caseActions.length > 0 ? (
         <CaseActionControls
           actions={caseActions}
+          accountQuarantineRequests={accountQuarantineRequests}
           actionRequestsByAction={actionRequestsByAction}
           canQueueCaseActions={canQueueCaseActions}
           caseId={item.sourceId}

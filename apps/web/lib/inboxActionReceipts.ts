@@ -20,7 +20,31 @@ const requestTypeByAction: Partial<
   repair_thread: ['repair_active_case'],
   sync_existing_ban: ['sync_existing_ban'],
   verify_user: ['verify_case_user'],
+  quarantine_compromised_account: ['preview_account_quarantine', 'quarantine_compromised_account'],
 };
+
+export interface AccountQuarantineActionRequests {
+  readonly execute: ModerationActionRequestSummary | null;
+  readonly preview: ModerationActionRequestSummary | null;
+}
+
+export function findAccountQuarantineActionRequests(
+  requests: readonly ModerationActionRequestSummary[],
+  verificationEventId: string
+): AccountQuarantineActionRequests {
+  const matchesCase = (request: ModerationActionRequestSummary) =>
+    request.verificationEventId === verificationEventId;
+  return {
+    execute:
+      requests.find(
+        (request) => request.actionType === 'quarantine_compromised_account' && matchesCase(request)
+      ) ?? null,
+    preview:
+      requests.find(
+        (request) => request.actionType === 'preview_account_quarantine' && matchesCase(request)
+      ) ?? null,
+  };
+}
 
 const inboxRequestTypes = new Set<ModerationActionRequestActionType>(
   inboxModerationActionRequestTypes

@@ -277,6 +277,8 @@ export enum ModerationActionRequestType {
   IGNORE_DETECTION_ACCOUNTING = 'ignore_detection_accounting',
   RESTORE_DETECTION_ACCOUNTING = 'restore_detection_accounting',
   VERIFY_CASE_USER = 'verify_case_user',
+  PREVIEW_ACCOUNT_QUARANTINE = 'preview_account_quarantine',
+  QUARANTINE_COMPROMISED_ACCOUNT = 'quarantine_compromised_account',
   CLOSE_CASE_NO_ACTION = 'close_case_no_action',
   KICK_CASE_USER = 'kick_case_user',
   BAN_CASE_USER = 'ban_case_user',

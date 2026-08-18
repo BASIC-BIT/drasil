@@ -2,6 +2,7 @@ import { PrismaClient } from '../../db/prisma';
 import { AdminActionRepository } from '../../repositories/AdminActionRepository';
 import { DetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import { ModerationOutcomeRepository } from '../../repositories/ModerationOutcomeRepository';
+import { ModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
 import { ModerationQueueRepository } from '../../repositories/ModerationQueueRepository';
 import { RoleQuarantineSnapshotRepository } from '../../repositories/RoleQuarantineSnapshotRepository';
 import { ServerRepository } from '../../repositories/ServerRepository';
@@ -15,6 +16,7 @@ import {
   DetectionType,
   ModerationOutcomeSource,
   ModerationOutcomeType,
+  ModerationActionRequestType,
   ModerationQueueItemType,
   RoleQuarantineSnapshotPurpose,
   VerificationStatus,
@@ -33,6 +35,72 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
 
   beforeEach(() => {
     prisma = getPrismaClient();
+  });
+
+  it('persists the two-phase web preview and execution request types', async () => {
+    const serverId = 'guild-account-quarantine-web-actions';
+    const userId = 'user-account-quarantine-web-actions';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const detections = new DetectionEventsRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    const requests = new ModerationActionRequestRepository(prisma);
+
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser(userId, 'target');
+    const detection = await detections.create({
+      server_id: serverId,
+      user_id: userId,
+      detection_type: DetectionType.ADMIN_FLAG,
+      confidence: 1,
+      reasons: ['Moderator-reported account compromise'],
+      detected_at: new Date(),
+    });
+    const verification = await verifications.createFromDetection(
+      detection.id,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const preview = await requests.enqueue({
+      actionType: ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE,
+      actorId: 'moderator-1',
+      actorSurface: 'web',
+      idempotencyKey: `web:quarantine-preview:${verification.id}`,
+      metadata: { quarantine_phase: 'preview' },
+      serverId,
+      targetUserId: userId,
+      verificationEventId: verification.id,
+    });
+    await requests.complete(preview.id, {
+      action_type: ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE,
+      can_contain: true,
+    });
+
+    await expect(requests.findById(preview.id)).resolves.toEqual(
+      expect.objectContaining({
+        action_type: ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE,
+        status: 'completed',
+      })
+    );
+    await expect(
+      requests.enqueue({
+        actionType: ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT,
+        actorId: 'moderator-1',
+        actorSurface: 'web',
+        idempotencyKey: `web:quarantine-execute:${preview.id}`,
+        metadata: { preview_request_id: preview.id, quarantine_phase: 'execute' },
+        serverId,
+        targetUserId: userId,
+        verificationEventId: verification.id,
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        action_type: ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT,
+        status: 'queued',
+      })
+    );
   });
 
   it('persists parked case state, queue classification, role provenance, and audit provenance', async () => {

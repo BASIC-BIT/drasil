@@ -37,6 +37,7 @@ const QUARANTINE_ATTEMPT_STALE_MS = 5 * 60 * 1000;
 
 export interface AccountQuarantinePreview {
   readonly enabled: boolean;
+  readonly caseRoleId: string | null;
   readonly rolePreview: RoleQuarantinePreviewResult;
   readonly lockdown: CaseRoleLockdownReport;
   readonly memberAudit: CaseRoleLockdownMemberAudit;
@@ -99,6 +100,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
     ]);
     return {
       enabled: getAccountQuarantineSettings(serverConfig.settings).enabled,
+      caseRoleId: serverConfig.case_role_id,
       rolePreview,
       lockdown,
       memberAudit,

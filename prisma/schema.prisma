@@ -554,6 +554,8 @@ enum moderation_action_request_type {
   ignore_detection_accounting
   restore_detection_accounting
   verify_case_user
+  preview_account_quarantine
+  quarantine_compromised_account
   close_case_no_action
   kick_case_user
   ban_case_user

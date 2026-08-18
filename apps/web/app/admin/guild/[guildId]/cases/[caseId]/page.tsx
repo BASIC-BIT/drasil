@@ -7,13 +7,17 @@ import {
   type MessageCleanupJobDetail,
 } from '@drasil/contracts';
 import { CaseDetailView } from '@/components/cases/CaseDetailView';
+import { InboxActionRequestPollingProvider } from '@/components/inbox/InboxActionRequestPoller';
 import { createActiveCaseDataAdapter } from '@/lib/activeCaseDataAdapter';
 import { fetchCaseDiscordSnapshot } from '@/lib/caseDiscordContent';
 import { DISCORD_PERMISSIONS, hasPermission, parsePermissions } from '@/lib/discordPermissions';
 import { createMessageCleanupDataAdapter } from '@/lib/messageCleanupDataAdapter';
 import { createModerationActionRequestDataAdapter } from '@/lib/moderationActionRequestDataAdapter';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
-import { findMessageCleanupActionRequest } from '@/lib/inboxActionReceipts';
+import {
+  findAccountQuarantineActionRequests,
+  findMessageCleanupActionRequest,
+} from '@/lib/inboxActionReceipts';
 import { isWebE2eFixtureMode } from '@/lib/e2eFixtures';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
@@ -269,12 +273,10 @@ export default async function CaseDetailPage({ params, searchParams }: PageProps
   const canManageCleanup =
     isAdministrator && !(isWebE2eFixtureMode() && cleanupScenario === 'non-administrator');
   const cleanupAdapter = createMessageCleanupDataAdapter();
-  const [cleanupWorkspace, cleanupActionRequests] = canManageCleanup
-    ? await Promise.all([
-        cleanupAdapter.getCaseWorkspace(guildId, caseId),
-        createModerationActionRequestDataAdapter().listCaseRequests(guildId, caseId, 25),
-      ])
-    : [null, []];
+  const [cleanupWorkspace, caseActionRequests] = await Promise.all([
+    canManageCleanup ? cleanupAdapter.getCaseWorkspace(guildId, caseId) : null,
+    createModerationActionRequestDataAdapter().listCaseRequests(guildId, caseId, 25),
+  ]);
   const deleteOnlyJobSummary = cleanupWorkspace?.latestJobs.find(
     (job) => job.mode === 'delete_only'
   );
@@ -311,33 +313,39 @@ export default async function CaseDetailPage({ params, searchParams }: PageProps
       : detail;
 
   return (
-    <CaseDetailView
-      canQueueCaseActions={activeCaseDataAdapter.canQueueCaseActions()}
-      detail={displayedDetail}
-      discordSnapshot={discordSnapshot}
-      guildId={guildId}
-      guildName={guild.name}
-      messageCleanup={
-        cleanupData
-          ? {
-              combinedBanAction: banCaseUserWithMessageCleanup.bind(null, guildId, caseId),
-              combinedJob: cleanupData.combinedJob,
-              combinedRequest: findMessageCleanupActionRequest(
-                cleanupActionRequests,
-                cleanupData.combinedJob
-              ),
-              deleteOnlyJob: cleanupData.deleteOnlyJob,
-              deleteOnlyRequest:
-                scenarioCleanupRequest(fixtureScenario, cleanupData.deleteOnlyJob) ??
-                findMessageCleanupActionRequest(cleanupActionRequests, cleanupData.deleteOnlyJob),
-              executeAction: executeCaseMessageCleanup.bind(null, guildId, caseId),
-              previewAction: previewCaseMessageCleanup.bind(null, guildId, caseId),
-              workspace: cleanupData.workspace,
-            }
-          : undefined
-      }
-      queueCaseAction={queueCaseAction}
-      sessionUsername={session.username}
-    />
+    <InboxActionRequestPollingProvider
+      enabled={activeCaseDataAdapter.canQueueCaseActions()}
+      serverRequests={caseActionRequests}
+    >
+      <CaseDetailView
+        accountQuarantineRequests={findAccountQuarantineActionRequests(caseActionRequests, caseId)}
+        canQueueCaseActions={activeCaseDataAdapter.canQueueCaseActions()}
+        detail={displayedDetail}
+        discordSnapshot={discordSnapshot}
+        guildId={guildId}
+        guildName={guild.name}
+        messageCleanup={
+          cleanupData
+            ? {
+                combinedBanAction: banCaseUserWithMessageCleanup.bind(null, guildId, caseId),
+                combinedJob: cleanupData.combinedJob,
+                combinedRequest: findMessageCleanupActionRequest(
+                  caseActionRequests,
+                  cleanupData.combinedJob
+                ),
+                deleteOnlyJob: cleanupData.deleteOnlyJob,
+                deleteOnlyRequest:
+                  scenarioCleanupRequest(fixtureScenario, cleanupData.deleteOnlyJob) ??
+                  findMessageCleanupActionRequest(caseActionRequests, cleanupData.deleteOnlyJob),
+                executeAction: executeCaseMessageCleanup.bind(null, guildId, caseId),
+                previewAction: previewCaseMessageCleanup.bind(null, guildId, caseId),
+                workspace: cleanupData.workspace,
+              }
+            : undefined
+        }
+        queueCaseAction={queueCaseAction}
+        sessionUsername={session.username}
+      />
+    </InboxActionRequestPollingProvider>
   );
 }

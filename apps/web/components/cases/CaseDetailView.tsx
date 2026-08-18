@@ -22,6 +22,7 @@ import type {
   CaseDiscordSnapshot,
   CaseDiscordThreadSnapshot,
 } from '@/lib/caseDiscordContent';
+import type { AccountQuarantineActionRequests } from '@/lib/inboxActionReceipts';
 import {
   confidenceStatusClass,
   formatCaseAction,
@@ -37,6 +38,7 @@ import {
 } from '@/lib/casePresentation';
 
 interface CaseDetailViewProps {
+  readonly accountQuarantineRequests?: AccountQuarantineActionRequests;
   readonly canQueueCaseActions: boolean;
   readonly guildId: string;
   readonly guildName: string;
@@ -195,12 +197,14 @@ function ActionPills({ actions }: { readonly actions: readonly CaseAction[] }) {
 }
 
 function DiscordSurfaces({
+  accountQuarantineRequests,
   canQueueCaseActions,
   detail,
   guildId,
   messageCleanup,
   queueCaseAction,
 }: {
+  readonly accountQuarantineRequests?: AccountQuarantineActionRequests;
   readonly canQueueCaseActions: boolean;
   readonly detail: CaseDetail;
   readonly guildId: string;
@@ -232,6 +236,7 @@ function DiscordSurfaces({
       )}
       <CaseActionControls
         actions={detail.allowedActions}
+        accountQuarantineRequests={accountQuarantineRequests}
         canQueueCaseActions={canQueueCaseActions}
         caseId={detail.id}
         guildId={guildId}
@@ -515,6 +520,7 @@ function ModerationOutcomes({ outcomes }: { readonly outcomes: readonly CaseMode
 }
 
 export function CaseDetailView({
+  accountQuarantineRequests,
   canQueueCaseActions,
   guildId,
   guildName,
@@ -552,6 +558,7 @@ export function CaseDetailView({
       <p className="muted">{guildName} Case Detail</p>
       <SummaryPanel detail={detail} guildId={guildId} />
       <DiscordSurfaces
+        accountQuarantineRequests={accountQuarantineRequests}
         canQueueCaseActions={canQueueCaseActions}
         detail={detail}
         guildId={guildId}

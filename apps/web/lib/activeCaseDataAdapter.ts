@@ -13,6 +13,7 @@ import {
   type CaseSurfaceLink,
   type CaseUserIdentity,
 } from '@drasil/contracts';
+import { z } from 'zod';
 import {
   fixtureActiveCaseDetail,
   fixtureActiveCaseSummaries,
@@ -32,6 +33,7 @@ import {
 export type WebCaseAction = Extract<
   CaseAction,
   | 'verify_user'
+  | 'quarantine_compromised_account'
   | 'kick_user'
   | 'ban_user'
   | 'ban_by_id'
@@ -60,8 +62,11 @@ export interface CaseActionQueueResult {
 export interface QueueCaseActionInput {
   readonly action: WebCaseAction;
   readonly adminId: string;
+  readonly attemptId?: string | null;
   readonly caseId: string;
   readonly guildId: string;
+  readonly quarantinePhase?: 'preview' | 'execute' | null;
+  readonly previewRequestId?: string | null;
   readonly reason?: string | null;
 }
 
@@ -191,6 +196,8 @@ const THREAD_REPAIR_ACTIONS_BY_STATE = [
   [[], []],
 ] as const satisfies readonly (readonly (readonly CaseAction[])[])[];
 
+const uuidSchema = z.string().uuid();
+
 const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActionType> = {
   ban_by_id: 'ban_case_user_by_id',
   ban_user: 'ban_case_user',
@@ -202,7 +209,28 @@ const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActi
   reopen_case: 'reopen_case',
   sync_existing_ban: 'sync_existing_ban',
   verify_user: 'verify_case_user',
+  quarantine_compromised_account: 'quarantine_compromised_account',
 };
+
+function resolveCaseActionRequestType(
+  input: QueueCaseActionInput
+): ModerationActionRequestActionType {
+  if (input.action === 'quarantine_compromised_account' && input.quarantinePhase === 'preview') {
+    return 'preview_account_quarantine';
+  }
+  return requestTypeByCaseAction[input.action];
+}
+
+export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): string {
+  const base = `web:case-action:${input.action}:${input.guildId}:${input.caseId}`;
+  if (input.action !== 'quarantine_compromised_account') {
+    return base;
+  }
+  if (input.quarantinePhase === 'preview') {
+    return `${base}:preview:${input.attemptId ?? 'missing-attempt'}`;
+  }
+  return `${base}:execute:${input.previewRequestId ?? 'missing-preview'}`;
+}
 
 function sortCaseSummariesForHistory(cases: readonly CaseSummary[]): CaseSummary[] {
   return [...cases].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
@@ -388,7 +416,6 @@ function buildSurfaces(row: CaseSummaryRow): CaseSurfaceLink[] {
       sourceMessageId
     ),
   ];
-
   return surfaces.filter((surface): surface is CaseSurfaceLink => surface !== null);
 }
 
@@ -789,13 +816,37 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
     }
 
+    if (
+      input.action === 'quarantine_compromised_account' &&
+      input.quarantinePhase !== 'preview' &&
+      input.quarantinePhase !== 'execute'
+    ) {
+      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
+    }
+    if (
+      input.action === 'quarantine_compromised_account' &&
+      input.quarantinePhase === 'preview' &&
+      !input.attemptId
+    ) {
+      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
+    }
+    if (
+      input.action === 'quarantine_compromised_account' &&
+      input.quarantinePhase === 'execute' &&
+      !(await this.isValidAccountQuarantinePreview(input, detail.userId))
+    ) {
+      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
+    }
+
     const receipt = await queueModerationActionRequestWithReceipt({
-      actionType: requestTypeByCaseAction[input.action],
+      actionType: resolveCaseActionRequestType(input),
       actorId: input.adminId,
       actorSurface: 'web',
-      idempotencyKey: `web:case-action:${input.action}:${input.guildId}:${input.caseId}`,
+      idempotencyKey: buildCaseActionIdempotencyKey(input),
       metadata: {
         case_action: input.action,
+        ...(input.quarantinePhase ? { quarantine_phase: input.quarantinePhase } : {}),
+        ...(input.previewRequestId ? { preview_request_id: input.previewRequestId } : {}),
         ...(input.reason ? { reason: input.reason } : {}),
         requested_surface: 'web',
       },
@@ -810,6 +861,30 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       requestId: receipt.id,
       status: resolveCaseActionQueueStatus(receipt.status),
     };
+  }
+
+  private async isValidAccountQuarantinePreview(
+    input: QueueCaseActionInput,
+    targetUserId: string
+  ): Promise<boolean> {
+    if (!input.previewRequestId || !uuidSchema.safeParse(input.previewRequestId).success) {
+      return false;
+    }
+    const result = await getPostgresPool().query<{ readonly id: string }>(
+      `select id::text
+       from moderation_action_requests
+       where id = $1::uuid
+         and server_id = $2
+         and actor_id = $3
+         and target_user_id = $4
+         and verification_event_id = $5::uuid
+         and action_type = 'preview_account_quarantine'
+         and status = 'completed'
+         and completed_at > now() - interval '10 minutes'
+       limit 1`,
+      [input.previewRequestId, input.guildId, input.adminId, targetUserId, input.caseId]
+    );
+    return result.rows.length === 1;
   }
 }
 

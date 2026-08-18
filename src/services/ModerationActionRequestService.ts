@@ -13,7 +13,7 @@ import {
   ThreadChannel,
   User,
 } from 'discord.js';
-import { inject, injectable } from 'inversify';
+import { inject, injectable, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { ReportInstructionsManager } from '../controllers/ReportInstructionsManager';
 import { Prisma } from '../db/prisma';
@@ -29,6 +29,7 @@ import {
   MessageDeletionJobStatus,
   MessageDeletionJobWithItems,
   ModerationActionRequest,
+  ModerationActionRequestStatus,
   ModerationActionRequestType,
 } from '../repositories/types';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
@@ -47,12 +48,14 @@ import { ICombinedBanLifecycleService, IUserModerationService } from './UserMode
 import { MessageCleanupService } from './MessageCleanupService';
 import { ICaseThreadClosureSweepService } from './CaseThreadClosureSweepService';
 import { CaseRoleLockdownReport, ICaseRoleLockdownService } from './CaseRoleLockdownService';
+import { IAccountQuarantineService } from './AccountQuarantineService';
 
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_MAX_REQUESTS_PER_TICK = 5;
 const REQUEST_HEARTBEAT_INTERVAL_MS = 60_000;
 const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notification';
 const OBSERVED_KICK_DEFAULT_REASON = 'Kicked from observed suspicious notification';
+const ACCOUNT_QUARANTINE_PREVIEW_MAX_AGE_MS = 10 * 60 * 1000;
 
 export interface IModerationActionRequestService {
   start(): void;
@@ -90,6 +93,10 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     [ModerationActionRequestType.RESTORE_DETECTION_ACCOUNTING]: (request) =>
       this.restoreDetectionAccounting(request),
     [ModerationActionRequestType.VERIFY_CASE_USER]: (request) => this.verifyCaseUser(request),
+    [ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE]: (request) =>
+      this.previewAccountQuarantine(request),
+    [ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT]: (request) =>
+      this.quarantineCompromisedAccount(request),
     [ModerationActionRequestType.CLOSE_CASE_NO_ACTION]: (request) =>
       this.closeCaseNoAction(request),
     [ModerationActionRequestType.KICK_CASE_USER]: (request) => this.kickCaseUser(request),
@@ -153,7 +160,10 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     @inject(TYPES.MessageDeletionJobRepository)
     private readonly messageDeletionJobs: IMessageDeletionJobRepository,
     @inject(TYPES.MessageCleanupService)
-    private readonly messageCleanupService: MessageCleanupService
+    private readonly messageCleanupService: MessageCleanupService,
+    @inject(TYPES.AccountQuarantineService)
+    @optional()
+    private readonly accountQuarantineService?: IAccountQuarantineService
   ) {}
 
   public start(): void {
@@ -895,6 +905,192 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       verification_event_id: request.verification_event_id,
       verified,
     });
+  }
+
+  private async previewAccountQuarantine(request: ModerationActionRequest): Promise<void> {
+    const accountQuarantineService = this.requireAccountQuarantineService();
+    const [{ event, member }] = await Promise.all([
+      this.loadAccountQuarantineTarget(request),
+      this.requireAccountQuarantineModerator(request),
+    ]);
+    const preview = await accountQuarantineService.preview(member, event);
+    const [recoveryThreadReady, adminNotificationReady] = await Promise.all([
+      this.isRecoveryThreadReady(event.thread_id),
+      this.isAdminNotificationReady(event.notification_channel_id, event.notification_message_id),
+    ]);
+    const roleSummary = (roleId: string): { role_id: string; role_name: string | null } => ({
+      role_id: roleId,
+      role_name: member.guild.roles.cache.get(roleId)?.name ?? null,
+    });
+
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      admin_notification_ready: adminNotificationReady,
+      can_contain: preview.enabled && preview.canContain,
+      case_role: preview.caseRoleId ? roleSummary(preview.caseRoleId) : null,
+      case_role_ready:
+        preview.caseRoleId !== null &&
+        preview.lockdown.enabled &&
+        preview.lockdown.errorCount === 0 &&
+        preview.lockdown.plannedActions.length === 0 &&
+        !preview.lockdown.issues.some(
+          (issue) => issue.code === 'lockdown-case-role-global-permissions'
+        ),
+      enabled: preview.enabled,
+      lockdown_error_count: preview.lockdown.errorCount,
+      lockdown_issues: preview.lockdown.issues.map((issue) => ({
+        code: issue.code,
+        message: issue.message,
+        severity: issue.severity,
+      })),
+      lockdown_planned_actions: preview.lockdown.plannedActions.length,
+      member_bypasses: preview.memberAudit.bypasses.map((bypass) => ({
+        channel_id: bypass.channelId,
+        channel_name: bypass.channelName,
+        permissions: [...bypass.permissions],
+        subject_id: bypass.subjectId,
+        subject_type: bypass.subjectType,
+      })),
+      planned_roles: preview.rolePreview.plannedRoleIds.map(roleSummary),
+      previewed_at: new Date().toISOString(),
+      privileged_roles: preview.rolePreview.privilegedRoleIds.map(roleSummary),
+      recovery_thread_ready: recoveryThreadReady,
+      recovery_thread_id: event.thread_id,
+      retained_roles: preview.rolePreview.skippedRoles.map((role) => ({ ...role })),
+      target_user_id: request.target_user_id,
+      unremovable_privilege_reasons: [...preview.memberAudit.unremovablePrivilegeReasons],
+      verification_event_id: request.verification_event_id,
+    });
+  }
+
+  private async quarantineCompromisedAccount(request: ModerationActionRequest): Promise<void> {
+    const accountQuarantineService = this.requireAccountQuarantineService();
+    const reason = this.readMetadataString(request.metadata, 'reason')?.trim();
+    if (!reason) {
+      throw new Error('Account-quarantine request requires a reason.');
+    }
+    await this.assertValidAccountQuarantinePreview(request);
+
+    const [member, moderator] = await Promise.all([
+      this.fetchGuildMember(request.server_id, request.target_user_id ?? ''),
+      this.fetchModerator(request.actor_id),
+      this.requireAccountQuarantineModerator(request),
+    ]);
+    const repair = await this.securityActionService.repairActiveCase(member);
+    const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+      request.target_user_id ?? '',
+      request.server_id
+    );
+    if (!activeCase || activeCase.id !== request.verification_event_id) {
+      throw new Error('The previewed verification case is no longer active.');
+    }
+    if (repair.verificationEventId !== activeCase.id || !repair.threadId) {
+      throw new Error(
+        'A usable user verification thread is required before this account can be quarantined.'
+      );
+    }
+    if (repair.notificationReady !== true) {
+      throw new Error(
+        'A usable persistent admin notification is required before this account can be quarantined.'
+      );
+    }
+
+    const result = await accountQuarantineService.quarantine(member, activeCase, moderator, reason);
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      containment_status: result.verificationEvent.containment_status,
+      failed_role_removals: result.roleResult.failedRemovals.length,
+      member_bypasses: result.memberAudit.bypasses.length,
+      parked: result.status === 'parked',
+      preview_request_id: this.readMetadataString(request.metadata, 'preview_request_id'),
+      retained_roles: result.roleResult.skippedRoles.length,
+      target_user_id: request.target_user_id,
+      verification_event_id: request.verification_event_id,
+    });
+  }
+
+  private requireAccountQuarantineService(): IAccountQuarantineService {
+    if (!this.accountQuarantineService) {
+      throw new Error('Compromised-account quarantine is unavailable.');
+    }
+    return this.accountQuarantineService;
+  }
+
+  private async requireAccountQuarantineModerator(
+    request: ModerationActionRequest
+  ): Promise<GuildMember> {
+    const moderator = await this.fetchGuildMember(request.server_id, request.actor_id);
+    if (
+      !moderator.permissions.has(PermissionFlagsBits.ManageGuild) &&
+      !moderator.permissions.has(PermissionFlagsBits.ModerateMembers)
+    ) {
+      throw new Error('Account quarantine requires current moderation permission.');
+    }
+    return moderator;
+  }
+
+  private async loadAccountQuarantineTarget(request: ModerationActionRequest): Promise<{
+    readonly event: NonNullable<Awaited<ReturnType<IVerificationEventRepository['findById']>>>;
+    readonly member: GuildMember;
+  }> {
+    if (!request.target_user_id || !request.verification_event_id) {
+      throw new Error('Account-quarantine request is missing target user or case id.');
+    }
+    const [event, member] = await Promise.all([
+      this.verificationEventRepository.findById(request.verification_event_id),
+      this.fetchGuildMember(request.server_id, request.target_user_id),
+    ]);
+    if (
+      !event ||
+      event.server_id !== request.server_id ||
+      event.user_id !== request.target_user_id
+    ) {
+      throw new Error('The requested verification case is no longer active.');
+    }
+    return { event, member };
+  }
+
+  private async assertValidAccountQuarantinePreview(
+    request: ModerationActionRequest
+  ): Promise<void> {
+    if (!request.target_user_id || !request.verification_event_id) {
+      throw new Error('Account-quarantine request is missing target user or case id.');
+    }
+    const previewRequestId = this.readMetadataString(request.metadata, 'preview_request_id');
+    const previewRequest = previewRequestId
+      ? await this.repository.findById(previewRequestId)
+      : null;
+    const completedAt = previewRequest?.completed_at?.getTime() ?? 0;
+    if (
+      !previewRequest ||
+      previewRequest.action_type !== ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE ||
+      previewRequest.status !== ModerationActionRequestStatus.COMPLETED ||
+      previewRequest.actor_id !== request.actor_id ||
+      previewRequest.server_id !== request.server_id ||
+      previewRequest.target_user_id !== request.target_user_id ||
+      previewRequest.verification_event_id !== request.verification_event_id ||
+      completedAt < Date.now() - ACCOUNT_QUARANTINE_PREVIEW_MAX_AGE_MS
+    ) {
+      throw new Error('The live account-quarantine preview is missing, stale, or mismatched.');
+    }
+  }
+
+  private async isRecoveryThreadReady(threadId: string | null): Promise<boolean> {
+    if (!threadId) {
+      return false;
+    }
+    const channel = await this.client.channels.fetch(threadId).catch(() => null);
+    return Boolean(channel?.isThread() && channel.archived !== true && channel.locked !== true);
+  }
+
+  private async isAdminNotificationReady(
+    channelId: string | null,
+    messageId: string | null
+  ): Promise<boolean> {
+    if (!channelId || !messageId) {
+      return false;
+    }
+    return Boolean(await this.fetchOpenCaseSourceMessage(channelId, messageId));
   }
 
   private async kickCaseUser(request: ModerationActionRequest): Promise<void> {

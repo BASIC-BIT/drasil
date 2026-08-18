@@ -6,6 +6,8 @@ CREATE TYPE "role_quarantine_snapshot_purpose" AS ENUM ('standard_case', 'compro
 ALTER TYPE "admin_action_type" ADD VALUE 'quarantine_compromised_account';
 ALTER TYPE "moderation_outcome_type" ADD VALUE 'account_quarantined';
 ALTER TYPE "moderation_queue_item_type" ADD VALUE 'quarantine_breach_attention';
+ALTER TYPE "moderation_action_request_type" ADD VALUE 'preview_account_quarantine';
+ALTER TYPE "moderation_action_request_type" ADD VALUE 'quarantine_compromised_account';
 ALTER TABLE "verification_events"
   ADD COLUMN "case_kind" "case_kind" NOT NULL DEFAULT 'standard',
   ADD COLUMN "attention_state" "case_attention_state" NOT NULL DEFAULT 'review_required',

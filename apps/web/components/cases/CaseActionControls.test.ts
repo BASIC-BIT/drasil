@@ -1,0 +1,85 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it } from 'vitest';
+import { initialInboxActionState } from '@/lib/inboxActionState';
+import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
+import { CaseActionControls } from './CaseActionControls';
+
+function completedPreview(previewedAt: string): ModerationActionRequestSummary {
+  return {
+    accountQuarantinePreview: {
+      adminNotificationReady: true,
+      canContain: true,
+      caseRole: { reason: null, roleId: 'case-role-1', roleName: 'Case Role' },
+      caseRoleReady: true,
+      enabled: true,
+      lockdownErrorCount: 0,
+      lockdownIssueCount: 0,
+      lockdownPlannedActionCount: 0,
+      memberBypassCount: 0,
+      plannedRoles: [{ reason: null, roleId: 'member-role-1', roleName: 'Member' }],
+      previewedAt,
+      privilegedRoles: [],
+      recoveryThreadId: 'thread-1',
+      recoveryThreadReady: true,
+      retainedRoles: [],
+      unremovablePrivilegeReasons: [],
+    },
+    actionType: 'preview_account_quarantine',
+    actorSurface: 'web',
+    completedAt: previewedAt,
+    detectionEventId: null,
+    failedAt: null,
+    id: 'preview-request-1',
+    lastError: null,
+    messageDeletionJobId: null,
+    reportIntakeId: null,
+    requestedAction: 'quarantine_compromised_account',
+    requestedAt: previewedAt,
+    resultSummary: 'Live preview: remove 1 role; retain 0; bypasses 0.',
+    status: 'completed',
+    targetUserId: 'user-1',
+    updatedAt: previewedAt,
+    verificationEventId: 'case-1',
+  };
+}
+
+const queueCaseAction = async () => undefined;
+const queueInboxCaseAction = async () => initialInboxActionState;
+
+function renderControls(preview: ModerationActionRequestSummary): string {
+  return renderToStaticMarkup(
+    createElement(CaseActionControls, {
+      accountQuarantineRequests: { execute: null, preview },
+      actions: ['quarantine_compromised_account'],
+      canQueueCaseActions: true,
+      caseId: 'case-1',
+      guildId: 'guild-1',
+      queueCaseAction: queueCaseAction as never,
+      queueInboxCaseAction: queueInboxCaseAction as never,
+    })
+  );
+}
+
+describe('CaseActionControls account quarantine', () => {
+  it('allows a completed stale preview to be refreshed', () => {
+    const markup = renderControls(completedPreview('2020-01-01T00:00:00.000Z'));
+
+    expect(markup).toContain(
+      '<button class="button secondary compact-button" type="submit">Preview account quarantine</button>'
+    );
+  });
+
+  it('renders the reasoned confirmation only after a fresh completed preview', () => {
+    const markup = renderControls(completedPreview(new Date(Date.now() + 60_000).toISOString()));
+
+    expect(markup).toContain('Account quarantine live preview');
+    expect(markup).toContain('Remove: Member');
+    expect(markup).toContain('name="reason"');
+    expect(markup).toContain('Confirm compromised-account quarantine');
+    expect(markup).toContain('Queue account quarantine');
+    expect(markup).toContain(
+      'The user stays in the server, their verification thread remains open, and no Discord timeout is applied.'
+    );
+  });
+});

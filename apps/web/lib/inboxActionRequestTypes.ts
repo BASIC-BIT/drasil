@@ -7,6 +7,8 @@ export const inboxModerationActionRequestTypes = [
   'kick_observed_detection',
   'ban_observed_detection',
   'verify_case_user',
+  'preview_account_quarantine',
+  'quarantine_compromised_account',
   'close_case_no_action',
   'kick_case_user',
   'ban_case_user',

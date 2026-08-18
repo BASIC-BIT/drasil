@@ -10,6 +10,7 @@ import {
 
 export interface IModerationActionRequestRepository {
   enqueue(data: ModerationActionRequestCreate): Promise<ModerationActionRequest>;
+  findById(id: string): Promise<ModerationActionRequest | null>;
   claimNext(): Promise<ModerationActionRequest | null>;
   heartbeat(id: string): Promise<ModerationActionRequest | null>;
   complete(id: string, result?: Prisma.JsonValue | null): Promise<ModerationActionRequest | null>;
@@ -92,6 +93,16 @@ export class ModerationActionRequestRepository implements IModerationActionReque
     }
   }
 
+  public async findById(id: string): Promise<ModerationActionRequest | null> {
+    try {
+      return (await this.prisma.moderation_action_requests.findUnique({
+        where: { id },
+      })) as ModerationActionRequest | null;
+    } catch (error) {
+      this.handleError(error, 'findModerationActionRequestById');
+    }
+  }
+
   public async claimNext(): Promise<ModerationActionRequest | null> {
     try {
       await this.prisma.$executeRaw`
@@ -103,6 +114,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
         where status = 'processing'::moderation_action_request_status
           and verification_event_id is not null
           and action_type not in (
+            'preview_account_quarantine'::moderation_action_request_type,
             'preview_case_message_deletion'::moderation_action_request_type,
             'execute_case_message_deletion'::moderation_action_request_type,
             'ban_case_user_with_message_cleanup'::moderation_action_request_type
@@ -122,6 +134,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
              or (
                status = 'processing'::moderation_action_request_status
                and action_type in (
+                 'preview_account_quarantine'::moderation_action_request_type,
                  'preview_case_message_deletion'::moderation_action_request_type,
                  'execute_case_message_deletion'::moderation_action_request_type,
                  'ban_case_user_with_message_cleanup'::moderation_action_request_type

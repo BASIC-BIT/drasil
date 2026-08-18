@@ -1,5 +1,6 @@
 'use server';
 
+import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { caseActionSchema, type CaseAction } from '@drasil/contracts';
@@ -26,6 +27,7 @@ import {
 
 const queuedCaseActions = new Set<CaseAction>([
   'verify_user',
+  'quarantine_compromised_account',
   'kick_user',
   'ban_user',
   'ban_by_id',
@@ -46,7 +48,10 @@ const queueCaseActionErrorMessages = {
 
 type DestructiveCaseAction = Extract<WebCaseAction, 'kick_user' | 'ban_user' | 'ban_by_id'>;
 
-interface DestructiveActionOptions {
+interface CaseActionOptions {
+  readonly attemptId: string | null;
+  readonly quarantinePhase: 'preview' | 'execute' | null;
+  readonly previewRequestId: string | null;
   readonly reason: string | null;
 }
 
@@ -172,12 +177,54 @@ async function assertCanQueueCaseAction(
   action: WebCaseAction,
   guild: { readonly id: string; readonly owner: boolean; readonly permissions: string },
   formData: FormData | undefined
-): Promise<DestructiveActionOptions> {
+): Promise<CaseActionOptions> {
   assertActorPermission(action, guild);
+
+  if (action === 'quarantine_compromised_account') {
+    const quarantinePhase = readFormString(formData, 'quarantinePhase');
+    if (quarantinePhase !== 'preview' && quarantinePhase !== 'execute') {
+      throw new Error('Start with a live account-quarantine preview.');
+    }
+    const setupAdapter = createSetupDataAdapter();
+    const server = await setupAdapter.getServer(guild.id);
+    if (server?.settings.account_quarantine_enabled !== true) {
+      throw new Error('Compromised-account quarantine is disabled for this server.');
+    }
+    if (quarantinePhase === 'preview') {
+      return {
+        attemptId: randomUUID(),
+        quarantinePhase,
+        previewRequestId: null,
+        reason: null,
+      };
+    }
+    if (formData?.get('confirmAction') !== 'on') {
+      throw new Error('Confirm the account quarantine before queueing it.');
+    }
+    const reason = readFormString(formData, 'reason');
+    if (!reason) {
+      throw new Error('An account-quarantine reason is required.');
+    }
+    const previewRequestId = readFormString(formData, 'previewRequestId');
+    if (!previewRequestId) {
+      throw new Error('The live account-quarantine preview is missing. Preview again.');
+    }
+    return {
+      attemptId: null,
+      quarantinePhase,
+      previewRequestId,
+      reason,
+    };
+  }
 
   const destructiveContext = destructiveActionContext(action);
   if (!destructiveContext) {
-    return { reason: null };
+    return {
+      attemptId: null,
+      quarantinePhase: null,
+      previewRequestId: null,
+      reason: null,
+    };
   }
 
   if (formData?.get('confirmAction') !== 'on') {
@@ -192,7 +239,12 @@ async function assertCanQueueCaseAction(
   const reason = readDestructiveReason(formData, settings, destructiveContext);
   await assertBotCanRunDestructiveAction(guild.id, destructiveContext);
 
-  return { reason };
+  return {
+    attemptId: null,
+    quarantinePhase: null,
+    previewRequestId: null,
+    reason,
+  };
 }
 
 async function performQueueCaseAction(
@@ -218,8 +270,11 @@ async function performQueueCaseAction(
   const result = await createActiveCaseDataAdapter().queueCaseAction({
     action: parsedAction as WebCaseAction,
     adminId: session.userId,
+    attemptId: options.attemptId,
     caseId,
     guildId,
+    quarantinePhase: options.quarantinePhase,
+    previewRequestId: options.previewRequestId,
     reason: options.reason,
   });
 

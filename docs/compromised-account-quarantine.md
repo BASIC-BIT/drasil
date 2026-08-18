@@ -248,6 +248,9 @@ regained control.
 ### 4. Web Workflow
 
 - Add the quarantine action with the same authority, preview, and confirmation contract.
+- Generate the web preview through the bot-side worker, then require a reasoned execution request
+  bound to that moderator, case, target, and completed preview. Treat previews older than ten minutes
+  as stale and require a fresh one.
 - Separate `Needs Review` from `Parked Quarantines`.
 - Render containment state, role effects, recovery attention, and terminal actions.
 

@@ -7,6 +7,7 @@ import { isWebE2eFixtureMode, fixtureTimestampIso } from './e2eFixtures';
 import { getPostgresPool } from './setupDataAdapter';
 
 export interface ModerationActionRequestSummary {
+  readonly accountQuarantinePreview?: AccountQuarantinePreviewSummary | null;
   readonly id: string;
   readonly actionType: ModerationActionRequestActionType;
   readonly actorSurface: string;
@@ -23,6 +24,31 @@ export interface ModerationActionRequestSummary {
   readonly targetUserId: string | null;
   readonly updatedAt: string;
   readonly verificationEventId: string | null;
+}
+
+export interface AccountQuarantineRoleSummary {
+  readonly roleId: string;
+  readonly roleName: string | null;
+  readonly reason: string | null;
+}
+
+export interface AccountQuarantinePreviewSummary {
+  readonly adminNotificationReady: boolean;
+  readonly canContain: boolean;
+  readonly caseRoleReady: boolean;
+  readonly caseRole: AccountQuarantineRoleSummary | null;
+  readonly enabled: boolean;
+  readonly lockdownErrorCount: number;
+  readonly lockdownIssueCount: number;
+  readonly lockdownPlannedActionCount: number;
+  readonly memberBypassCount: number;
+  readonly plannedRoles: readonly AccountQuarantineRoleSummary[];
+  readonly previewedAt: string | null;
+  readonly privilegedRoles: readonly AccountQuarantineRoleSummary[];
+  readonly recoveryThreadReady: boolean;
+  readonly recoveryThreadId: string | null;
+  readonly retainedRoles: readonly AccountQuarantineRoleSummary[];
+  readonly unremovablePrivilegeReasons: readonly string[];
 }
 
 export interface ModerationActionRequestDataAdapter {
@@ -90,6 +116,67 @@ type OperationResultFormatter = (result: OperationResultRecord) => string | null
 
 function readString(value: unknown) {
   return typeof value === 'string' ? value : null;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function readRoleSummaries(value: unknown): AccountQuarantineRoleSummary[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return [];
+    }
+    const record = item as OperationResultRecord;
+    const roleId = readString(record.role_id);
+    if (!roleId) {
+      return [];
+    }
+    return [
+      {
+        roleId,
+        roleName: readString(record.role_name),
+        reason: readString(record.reason),
+      },
+    ];
+  });
+}
+
+function readRoleSummary(value: unknown): AccountQuarantineRoleSummary | null {
+  return readRoleSummaries(value ? [value] : [])[0] ?? null;
+}
+
+function parseAccountQuarantinePreview(result: unknown): AccountQuarantinePreviewSummary | null {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return null;
+  }
+  const record = result as OperationResultRecord;
+  if (record.action_type !== 'preview_account_quarantine') {
+    return null;
+  }
+  return {
+    adminNotificationReady: readBoolean(record.admin_notification_ready) ?? false,
+    canContain: readBoolean(record.can_contain) ?? false,
+    caseRoleReady: readBoolean(record.case_role_ready) ?? false,
+    caseRole: readRoleSummary(record.case_role),
+    enabled: readBoolean(record.enabled) ?? false,
+    lockdownErrorCount: readNumber(record.lockdown_error_count) ?? 0,
+    lockdownIssueCount: Array.isArray(record.lockdown_issues) ? record.lockdown_issues.length : 0,
+    lockdownPlannedActionCount: readNumber(record.lockdown_planned_actions) ?? 0,
+    memberBypassCount: Array.isArray(record.member_bypasses) ? record.member_bypasses.length : 0,
+    plannedRoles: readRoleSummaries(record.planned_roles),
+    previewedAt: readString(record.previewed_at),
+    privilegedRoles: readRoleSummaries(record.privileged_roles),
+    recoveryThreadReady: readBoolean(record.recovery_thread_ready) ?? false,
+    recoveryThreadId: readString(record.recovery_thread_id),
+    retainedRoles: readRoleSummaries(record.retained_roles),
+    unremovablePrivilegeReasons: readStringArray(record.unremovable_privilege_reasons),
+  };
 }
 
 function formatClearModerationQueueResult(result: OperationResultRecord) {
@@ -177,6 +264,19 @@ function formatMessageCleanupResult(result: OperationResultRecord) {
   return `Preserved ${preserved}; deleted ${deleted}; changed ${changed}; failed ${failed}.`;
 }
 
+function formatAccountQuarantinePreviewResult(result: OperationResultRecord) {
+  const planned = Array.isArray(result.planned_roles) ? result.planned_roles.length : 0;
+  const retained = Array.isArray(result.retained_roles) ? result.retained_roles.length : 0;
+  const bypasses = Array.isArray(result.member_bypasses) ? result.member_bypasses.length : 0;
+  return `Live preview: remove ${planned} role${planned === 1 ? '' : 's'}; retain ${retained}; bypasses ${bypasses}.`;
+}
+
+function formatAccountQuarantineResult(result: OperationResultRecord) {
+  return result.parked === true
+    ? 'Account quarantined and case parked.'
+    : 'Containment incomplete; case remains in review.';
+}
+
 const operationResultFormatters: Partial<
   Record<ModerationActionRequestActionType, OperationResultFormatter>
 > = {
@@ -188,6 +288,8 @@ const operationResultFormatters: Partial<
   preview_case_message_deletion: formatMessageCleanupResult,
   execute_case_message_deletion: formatMessageCleanupResult,
   ban_case_user_with_message_cleanup: formatMessageCleanupResult,
+  preview_account_quarantine: formatAccountQuarantinePreviewResult,
+  quarantine_compromised_account: formatAccountQuarantineResult,
   intake_role_members: formatRoleIntakeResult,
   sync_moderation_queue: formatQueueSyncResult,
   upsert_report_instructions: formatReportInstructionsResult,
@@ -212,7 +314,9 @@ function buildResultSummary(result: unknown): string | null {
 export function parseModerationActionRequestRow(
   row: ModerationActionRequestRow
 ): ModerationActionRequestSummary {
+  const accountQuarantinePreview = parseAccountQuarantinePreview(row.result);
   return {
+    ...(accountQuarantinePreview ? { accountQuarantinePreview } : {}),
     id: row.id,
     actionType: row.action_type,
     actorSurface: row.actor_surface,
