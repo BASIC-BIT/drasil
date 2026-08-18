@@ -13,6 +13,7 @@ import {
   User,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
+import { randomUUID } from 'node:crypto';
 import { injectable, inject, optional } from 'inversify';
 import { UserProfileData } from '../services/GPTService';
 import { DetectionResult, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
@@ -78,7 +79,10 @@ import { IVerificationEventRepository } from '../repositories/VerificationEventR
 import type { IGlobalMessageWatchlistRepository } from '../repositories/GlobalMessageWatchlistRepository';
 import { getAccountQuarantineSettings } from '../utils/accountQuarantineSettings';
 import { getCaseRoleLockdownSettings } from '../utils/caseRoleLockdownSettings';
-import { isCaseRoleReleaseLeaseActive } from '../utils/caseRoleRelease';
+import {
+  CASE_ATTENTION_ATTEMPT_PREFIX,
+  isCaseRoleReleaseLeaseActive,
+} from '../utils/caseRoleRelease';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -995,12 +999,35 @@ export class EventHandler implements IEventHandler {
         ) &&
         (!activeCase.thread_id || activeCase.thread_id !== message.channelId)
       ) {
-        await this.notificationManager.notifyAccountQuarantineAttention(
-          activeCase,
-          'containment_breach',
-          message
+        const attentionAttemptId = `${CASE_ATTENTION_ATTEMPT_PREFIX}${randomUUID()}`;
+        const claimed = await this.verificationEventRepository.claimParkedAttention(
+          activeCase.id,
+          message.guild.id,
+          message.author.id,
+          attentionAttemptId
         );
-        await this.moderationQueueService?.recordQuarantineBreachAttention(activeCase, message);
+        if (!claimed) {
+          return;
+        }
+        try {
+          await this.moderationQueueService?.recordQuarantineBreachAttention(claimed, message);
+          await this.notificationManager.notifyAccountQuarantineAttention(
+            claimed,
+            'containment_breach',
+            message
+          );
+        } finally {
+          await this.verificationEventRepository.updateQuarantineAttempt(
+            claimed.id,
+            attentionAttemptId,
+            {
+              attention_state: CaseAttentionState.PARKED,
+              containment_status: CaseContainmentStatus.CONTAINED,
+              parked_at: claimed.parked_at,
+              parked_by: claimed.parked_by,
+            }
+          );
+        }
       }
     } catch (error) {
       console.warn('Failed to record parked quarantine breach attention:', error);

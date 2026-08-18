@@ -6,6 +6,7 @@ import {
 import { VerificationThreadAnalysisService } from '../../services/VerificationThreadAnalysisService';
 import {
   CaseAttentionState,
+  CaseContainmentStatus,
   CaseKind,
   DetectionType,
   VerificationStatus,
@@ -173,6 +174,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       thread_id: 'thread-1',
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
       metadata: {
         support_thread_reminder: {
           userRespondedAt: '2026-06-03T11:00:00.000Z',
@@ -227,6 +229,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       thread_id: 'thread-1',
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
     });
     const moderationQueueService = {
       recordSupportThreadAttention: jest.fn().mockResolvedValue(undefined),
@@ -270,6 +273,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       thread_id: 'thread-1',
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
       quarantine_attempt_id: `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}verify-1`,
       quarantine_lease_renewed_at: new Date(),
     });
@@ -292,6 +296,51 @@ describe('VerificationThreadAnalysisService (unit)', () => {
 
     await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
 
+    expect(moderationQueueService.recordSupportThreadAttention).not.toHaveBeenCalled();
+    expect(notificationManager.notifyVerificationThreadUserResponse).not.toHaveBeenCalled();
+  });
+
+  it('does not recreate recovery attention when release wins after the initial case read', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    });
+    const claimSpy = jest
+      .spyOn(verificationRepo, 'claimParkedAttention')
+      .mockResolvedValueOnce(null);
+    const moderationQueueService = { recordSupportThreadAttention: jest.fn() };
+    const notificationManager = {
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn(),
+      notifyVerificationThreadUserResponse: jest.fn(),
+    };
+    const service = new VerificationThreadAnalysisService(
+      { getServerConfig: jest.fn() } as any,
+      { analyzeVerificationThreadResponses: jest.fn() } as any,
+      notificationManager as any,
+      verificationRepo,
+      detectionRepo,
+      moderationQueueService as any
+    );
+    const { message } = buildMessage({ content: 'I have my account back.' });
+
+    await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+
+    expect(claimSpy).toHaveBeenCalledWith(
+      verificationEvent.id,
+      'guild-1',
+      'user-1',
+      expect.stringMatching(/^case-attention:/)
+    );
     expect(moderationQueueService.recordSupportThreadAttention).not.toHaveBeenCalled();
     expect(notificationManager.notifyVerificationThreadUserResponse).not.toHaveBeenCalled();
   });

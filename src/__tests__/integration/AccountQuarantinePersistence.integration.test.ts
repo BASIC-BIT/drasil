@@ -20,7 +20,10 @@ import {
   VerificationStatus,
 } from '../../repositories/types';
 import { getPrismaClient } from '../testDb';
-import { CASE_ROLE_RELEASE_LEASE_MS } from '../../utils/caseRoleRelease';
+import {
+  CASE_ATTENTION_ATTEMPT_PREFIX,
+  CASE_ROLE_RELEASE_LEASE_MS,
+} from '../../utils/caseRoleRelease';
 
 const describeIntegration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 
@@ -73,6 +76,7 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       attention_state: CaseAttentionState.PARKED,
       containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_case_role_id: 'assigned-case-role',
       parked_at: parkedAt,
       parked_by: moderatorId,
     });
@@ -109,7 +113,11 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
 
     await expect(verifications.findReviewablePendingByServer(serverId)).resolves.toEqual([]);
     await expect(verifications.findParkedByServer(serverId)).resolves.toEqual([
-      expect.objectContaining({ id: verification.id, parked_by: moderatorId }),
+      expect.objectContaining({
+        id: verification.id,
+        parked_by: moderatorId,
+        quarantine_case_role_id: 'assigned-case-role',
+      }),
     ]);
     await expect(verifications.findActiveByUserAndServer(userId, serverId)).resolves.toEqual(
       expect.objectContaining({ id: verification.id, attention_state: CaseAttentionState.PARKED })
@@ -234,6 +242,9 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
         'attempt-2'
       )
     ).resolves.toEqual(expect.objectContaining({ removed_role_ids: ['role-1'] }));
+    await expect(
+      verifications.recordQuarantineCaseRole(verification.id, 'attempt-2', 'assigned-case-role')
+    ).resolves.toBe(true);
 
     const parked = await verifications.updateQuarantineAttempt(verification.id, 'attempt-2', {
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
@@ -246,6 +257,7 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       expect.objectContaining({
         attention_state: CaseAttentionState.PARKED,
         quarantine_attempt_id: null,
+        quarantine_case_role_id: 'assigned-case-role',
       })
     );
 
@@ -386,6 +398,85 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
         status: VerificationStatus.BANNED,
         resolved_by: 'moderator-ban',
       })
+    );
+  });
+
+  it('atomically fences parked attention against verification release and recovers expiry', async () => {
+    const serverId = 'guild-parked-attention-claim';
+    const userId = 'user-parked-attention-claim';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser(userId, 'target');
+    const verification = await verifications.createFromDetection(
+      null,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verifications.update(verification.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date(),
+      parked_by: 'moderator-1',
+    });
+    const attentionAttemptId = `${CASE_ATTENTION_ATTEMPT_PREFIX}1`;
+
+    await expect(
+      verifications.claimParkedAttention(verification.id, serverId, userId, attentionAttemptId)
+    ).resolves.toEqual(
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: attentionAttemptId,
+      })
+    );
+    await expect(
+      verifications.claimCaseRoleRelease(
+        verification.id,
+        serverId,
+        userId,
+        'case-role-release:blocked',
+        new Date(0)
+      )
+    ).resolves.toBeNull();
+
+    const staleBefore = new Date();
+    await prisma.verification_events.update({
+      where: { id: verification.id },
+      data: { quarantine_lease_renewed_at: new Date(0) },
+    });
+    await expect(verifications.findExpiredQuarantineAttempts(staleBefore)).resolves.toEqual([
+      expect.objectContaining({ id: verification.id, quarantine_attempt_id: attentionAttemptId }),
+    ]);
+    await expect(
+      verifications.recoverExpiredQuarantineAttempt(
+        verification.id,
+        attentionAttemptId,
+        staleBefore,
+        {
+          attention_state: CaseAttentionState.PARKED,
+          containment_status: CaseContainmentStatus.CONTAINED,
+        }
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+        quarantine_attempt_id: null,
+      })
+    );
+    await expect(
+      verifications.claimCaseRoleRelease(
+        verification.id,
+        serverId,
+        userId,
+        'case-role-release:allowed',
+        new Date(0)
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({ quarantine_attempt_id: 'case-role-release:allowed' })
     );
   });
 

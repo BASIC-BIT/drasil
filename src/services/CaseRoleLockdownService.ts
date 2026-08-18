@@ -342,6 +342,9 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
         bypasses
       );
     }
+    if (allowedThreadId) {
+      await this.recordRecoveryThreadAccessBypasses(member, allowedThreadId, bypasses);
+    }
 
     return {
       memberId: member.id,
@@ -1039,6 +1042,48 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
         permissions: ['Send Messages in Threads'],
       });
     }
+  }
+
+  private async recordRecoveryThreadAccessBypasses(
+    member: GuildMember,
+    recoveryThreadId: string,
+    bypasses: CaseRoleLockdownMemberBypass[]
+  ): Promise<void> {
+    const thread = await member.guild.channels.fetch(recoveryThreadId);
+    if (!thread?.isThread()) {
+      throw new Error(`Recovery thread ${recoveryThreadId} could not be audited.`);
+    }
+
+    const accessFailures: string[] = [];
+    if (thread.archived) {
+      accessFailures.push('Recovery thread archived');
+    }
+    if (thread.locked) {
+      accessFailures.push('Recovery thread locked');
+    }
+    const permissions = thread.permissionsFor(member);
+    if (!permissions.has(PermissionFlagsBits.ViewChannel)) {
+      accessFailures.push('Missing View Channel');
+    }
+    if (!permissions.has(PermissionFlagsBits.SendMessagesInThreads)) {
+      accessFailures.push('Missing Send Messages in Threads');
+    }
+    if (thread.type === ChannelType.PrivateThread) {
+      const threadMembers = await thread.members.fetch();
+      if (!threadMembers.has(member.id)) {
+        accessFailures.push('Missing private thread membership');
+      }
+    }
+    if (accessFailures.length === 0) {
+      return;
+    }
+    bypasses.push({
+      channelId: thread.id,
+      channelName: thread.name,
+      subjectType: 'member',
+      subjectId: member.id,
+      permissions: accessFailures,
+    });
   }
 
   private async resolveRecoveryParent(

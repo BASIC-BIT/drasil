@@ -168,7 +168,23 @@ describe('CaseRoleLockdownService (unit)', () => {
                 ? {
                     id: channelId,
                     parentId: 'verification-channel-1',
+                    name: 'recovery-thread',
+                    type: ChannelType.PrivateThread,
+                    archived: false,
+                    locked: false,
                     isThread: () => true,
+                    permissionsFor: jest.fn().mockReturnValue({
+                      has: jest.fn((permission: bigint) =>
+                        [
+                          PermissionFlagsBits.ViewChannel,
+                          PermissionFlagsBits.SendMessagesInThreads,
+                        ].includes(permission)
+                      ),
+                    }),
+                    members: {
+                      cache: new Map([['user-1', {}]]),
+                      fetch: jest.fn().mockResolvedValue(new Map([['user-1', {}]])),
+                    },
                   }
                 : (channelMap.get(channelId) ?? null)
               : channelMap
@@ -435,6 +451,58 @@ describe('CaseRoleLockdownService (unit)', () => {
     ]);
   });
 
+  it('blocks containment when the persisted private recovery thread is unusable', async () => {
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+    });
+    const guild = createGuild([verificationChannel]);
+    const originalFetch = guild.channels.fetch.getMockImplementation();
+    guild.channels.fetch.mockImplementation((channelId?: string) => {
+      if (channelId !== 'recovery-thread-1') {
+        return originalFetch?.(channelId);
+      }
+      return Promise.resolve({
+        id: channelId,
+        parentId: verificationChannel.id,
+        name: 'recovery-thread',
+        type: ChannelType.PrivateThread,
+        archived: false,
+        locked: true,
+        isThread: () => true,
+        permissionsFor: jest.fn().mockReturnValue({
+          has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ViewChannel),
+        }),
+        members: {
+          cache: new Map(),
+          fetch: jest.fn().mockResolvedValue(new Map()),
+        },
+      });
+    });
+    const member = {
+      id: 'user-1',
+      guild,
+      roles: { cache: new Map([[caseRoleId, { id: caseRoleId }]]) },
+    } as any;
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const audit = await service.auditMemberBypasses(member, new Set(), 'recovery-thread-1');
+
+    expect(audit.bypasses).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channelId: 'recovery-thread-1',
+          permissions: expect.arrayContaining([
+            'Recovery thread locked',
+            'Missing Send Messages in Threads',
+            'Missing private thread membership',
+          ]),
+        }),
+      ])
+    );
+  });
+
   it('audits the persisted recovery thread parent instead of the current configured channel', async () => {
     const configuredChannel = createChannel({
       id: 'verification-channel-1',
@@ -461,7 +529,22 @@ describe('CaseRoleLockdownService (unit)', () => {
         return Promise.resolve({
           id: channelId,
           parentId: actualParent.id,
+          name: 'recovery-thread',
+          type: ChannelType.PrivateThread,
+          archived: false,
+          locked: false,
           isThread: () => true,
+          permissionsFor: jest.fn().mockReturnValue({
+            has: jest.fn((permission: bigint) =>
+              [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessagesInThreads].includes(
+                permission
+              )
+            ),
+          }),
+          members: {
+            cache: new Map([['user-1', {}]]),
+            fetch: jest.fn().mockResolvedValue(new Map([['user-1', {}]])),
+          },
         });
       }
       return Promise.resolve(channelId === actualParent.id ? actualParent : configuredChannel);

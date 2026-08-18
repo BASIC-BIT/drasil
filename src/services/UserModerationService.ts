@@ -878,7 +878,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     const eventsToRollback = new Map<string, VerificationEvent>();
     const releaseClaimedEventIds = new Set<string>();
     const releaseAttemptId = `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}${randomUUID()}`;
-    let roleRemoved = false;
+    let configuredRoleRemoved = false;
+    const removedPersistedRoleIds = new Set<string>();
     let releaseCommitted = false;
     try {
       pendingVerificationEvents = await this.getPendingVerificationEvents(member);
@@ -913,9 +914,31 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         eventsToRollback.set(pendingEvent.id, pendingEvent);
       }
 
-      roleRemoved = await this.roleManager.removeCaseRole(member);
-      if (!roleRemoved) {
-        throw new Error(`Failed to remove case role from ${member.user.tag}`);
+      const persistedCaseRoleIds = new Set(
+        pendingVerificationEvents
+          .map((pendingEvent) => pendingEvent.quarantine_case_role_id)
+          .filter((roleId): roleId is string => typeof roleId === 'string' && roleId.length > 0)
+      );
+      const requiresConfiguredCaseRoleRemoval = pendingVerificationEvents.some(
+        (pendingEvent) =>
+          pendingEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT ||
+          !pendingEvent.quarantine_case_role_id
+      );
+      if (requiresConfiguredCaseRoleRemoval) {
+        configuredRoleRemoved = await this.roleManager.removeCaseRole(member);
+        if (!configuredRoleRemoved) {
+          throw new Error(`Failed to remove case role from ${member.user.tag}`);
+        }
+      }
+      for (const roleId of persistedCaseRoleIds) {
+        const wasPresent = member.roles.cache.has(roleId);
+        const removed = await this.roleManager.removeCaseRole(member, roleId);
+        if (!removed) {
+          throw new Error(`Failed to remove assigned quarantine role ${roleId}.`);
+        }
+        if (wasPresent) {
+          removedPersistedRoleIds.add(roleId);
+        }
       }
 
       const resolvedAt = new Date();
@@ -1028,12 +1051,23 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           }
         }
       }
-      if (!releaseCommitted && roleRemoved && releaseClaimRolledBack) {
+      if (
+        !releaseCommitted &&
+        releaseClaimRolledBack &&
+        (configuredRoleRemoved || removedPersistedRoleIds.size > 0)
+      ) {
         try {
-          const roleRestored = await this.roleManager.assignCaseRole(member);
-          if (!roleRestored) {
+          const configuredRoleRestored = configuredRoleRemoved
+            ? await this.roleManager.assignCaseRole(member)
+            : true;
+          const persistedRoleResults = await Promise.all(
+            [...removedPersistedRoleIds].map((roleId) =>
+              this.roleManager.assignCaseRole(member, roleId)
+            )
+          );
+          if (!configuredRoleRestored || persistedRoleResults.some((restored) => !restored)) {
             console.warn(
-              `Failed to restore case role for ${member.user.tag} after verification failed.`
+              `Failed to restore one or more case roles for ${member.user.tag} after verification failed.`
             );
           }
         } catch (restoreError) {

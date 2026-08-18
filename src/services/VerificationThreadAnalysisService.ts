@@ -1,5 +1,6 @@
 import { injectable, inject, optional } from 'inversify';
 import type { Message } from 'discord.js';
+import { randomUUID } from 'node:crypto';
 import { TYPES } from '../di/symbols';
 import type { IConfigService } from '../config/ConfigService';
 import type { IGPTService, VerificationThreadAnalysisResult } from './GPTService';
@@ -8,6 +9,7 @@ import type { IVerificationEventRepository } from '../repositories/VerificationE
 import type { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import {
   CaseAttentionState,
+  CaseContainmentStatus,
   CaseKind,
   VerificationEvent,
   VerificationStatus,
@@ -21,7 +23,10 @@ import {
   getSupportThreadReminderState,
   markSupportThreadReminderUserResponded,
 } from '../utils/supportThreadReminderState';
-import { isCaseRoleReleaseLeaseActive } from '../utils/caseRoleRelease';
+import {
+  CASE_ATTENTION_ATTEMPT_PREFIX,
+  isCaseRoleReleaseLeaseActive,
+} from '../utils/caseRoleRelease';
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds: string[];
@@ -98,6 +103,52 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       return;
     }
 
+    const parkedAccountRecovery =
+      verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+      verificationEvent.attention_state === CaseAttentionState.PARKED;
+    if (parkedAccountRecovery) {
+      const attentionAttemptId = `${CASE_ATTENTION_ATTEMPT_PREFIX}${randomUUID()}`;
+      const claimed = await this.verificationEventRepository.claimParkedAttention(
+        verificationEvent.id,
+        verificationEvent.server_id,
+        verificationEvent.user_id,
+        attentionAttemptId
+      );
+      if (!claimed) {
+        return;
+      }
+      try {
+        const responseState = await this.markSupportThreadReminderResponded(claimed, message);
+        await this.notificationManager.mirrorVerificationThreadMessageToEvidenceThread(
+          responseState.verificationEvent,
+          message
+        );
+        await this.moderationQueueService?.recordSupportThreadAttention(
+          responseState.verificationEvent,
+          message
+        );
+        await this.notificationManager.notifyVerificationThreadUserResponse(
+          responseState.verificationEvent,
+          message
+        );
+      } finally {
+        await this.verificationEventRepository.updateQuarantineAttempt(
+          claimed.id,
+          attentionAttemptId,
+          {
+            attention_state: CaseAttentionState.PARKED,
+            containment_status:
+              claimed.containment_status === CaseContainmentStatus.IN_PROGRESS
+                ? CaseContainmentStatus.CONTAINED
+                : claimed.containment_status,
+            parked_at: claimed.parked_at,
+            parked_by: claimed.parked_by,
+          }
+        );
+      }
+      return;
+    }
+
     const responseState = await this.markSupportThreadReminderResponded(verificationEvent, message);
     verificationEvent = responseState.verificationEvent;
 
@@ -105,30 +156,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       verificationEvent,
       message
     );
-    let parkedAccountRecovery =
-      verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-      verificationEvent.attention_state === CaseAttentionState.PARKED;
-    if (parkedAccountRecovery) {
-      const latest = await this.verificationEventRepository.findById(verificationEvent.id);
-      if (
-        !latest ||
-        latest.status !== VerificationStatus.PENDING ||
-        isCaseRoleReleaseLeaseActive(
-          latest.quarantine_attempt_id,
-          latest.quarantine_lease_renewed_at
-        )
-      ) {
-        return;
-      }
-      verificationEvent = latest;
-      parkedAccountRecovery =
-        verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-        verificationEvent.attention_state === CaseAttentionState.PARKED;
-    }
-    if (parkedAccountRecovery) {
-      await this.moderationQueueService?.recordSupportThreadAttention(verificationEvent, message);
-    }
-    if (responseState.firstResponse || parkedAccountRecovery) {
+    if (responseState.firstResponse) {
       await this.notificationManager.notifyVerificationThreadUserResponse(
         verificationEvent,
         message

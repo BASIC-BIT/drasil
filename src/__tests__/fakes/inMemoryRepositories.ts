@@ -548,6 +548,23 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       .map((event) => ({ ...event }));
   }
 
+  async findExpiredQuarantineAttempts(staleBefore: Date): Promise<VerificationEvent[]> {
+    return this.events
+      .filter(
+        (event) =>
+          event.status === VerificationStatus.PENDING &&
+          event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+          event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+          event.quarantine_attempt_id !== null &&
+          event.quarantine_attempt_id !== undefined &&
+          !isCaseRoleReleaseRecoveryAttempt(event.quarantine_attempt_id) &&
+          (event.quarantine_lease_renewed_at === null ||
+            event.quarantine_lease_renewed_at === undefined ||
+            event.quarantine_lease_renewed_at <= staleBefore)
+      )
+      .map((event) => ({ ...event }));
+  }
+
   async markParkedContainmentIncomplete(
     id: string,
     metadata: VerificationEvent['metadata']
@@ -620,6 +637,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       containment_status: CaseContainmentStatus.NOT_APPLICABLE,
       quarantine_attempt_id: null,
       quarantine_lease_renewed_at: null,
+      quarantine_case_role_id: null,
       parked_at: null,
       parked_by: null,
       review_after: null,
@@ -718,6 +736,37 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       return null;
     }
 
+    const claimed = {
+      ...this.events[eventIndex],
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: attemptId,
+      quarantine_lease_renewed_at: new Date(),
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = claimed;
+    return { ...claimed };
+  }
+
+  async claimParkedAttention(
+    id: string,
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.server_id === serverId &&
+        event.user_id === userId &&
+        event.status === VerificationStatus.PENDING &&
+        event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+        event.attention_state === CaseAttentionState.PARKED &&
+        event.containment_status === CaseContainmentStatus.CONTAINED &&
+        event.quarantine_attempt_id === null
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
     const claimed = {
       ...this.events[eventIndex],
       containment_status: CaseContainmentStatus.IN_PROGRESS,
@@ -855,6 +904,56 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return true;
   }
 
+  async recordQuarantineCaseRole(id: string, attemptId: string, roleId: string): Promise<boolean> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.status === VerificationStatus.PENDING &&
+        event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id === attemptId
+    );
+    if (eventIndex === -1) {
+      return false;
+    }
+    this.events[eventIndex] = {
+      ...this.events[eventIndex],
+      quarantine_case_role_id: roleId,
+      quarantine_lease_renewed_at: new Date(),
+      updated_at: new Date(),
+    };
+    return true;
+  }
+
+  async recoverExpiredQuarantineAttempt(
+    id: string,
+    attemptId: string,
+    staleBefore: Date,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.status === VerificationStatus.PENDING &&
+        event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id === attemptId &&
+        (event.quarantine_lease_renewed_at === null ||
+          event.quarantine_lease_renewed_at === undefined ||
+          event.quarantine_lease_renewed_at <= staleBefore)
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+    const updated = {
+      ...this.events[eventIndex],
+      ...data,
+      quarantine_attempt_id: null,
+      quarantine_lease_renewed_at: null,
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
   async updateQuarantineAttempt(
     id: string,
     attemptId: string,
@@ -920,6 +1019,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       updated.quarantine_attempt_id = data.quarantine_attempt_id;
     if (data.quarantine_lease_renewed_at !== undefined)
       updated.quarantine_lease_renewed_at = data.quarantine_lease_renewed_at;
+    if (data.quarantine_case_role_id !== undefined)
+      updated.quarantine_case_role_id = data.quarantine_case_role_id;
     if (data.parked_at !== undefined) updated.parked_at = data.parked_at;
     if (data.parked_by !== undefined) updated.parked_by = data.parked_by;
     if (data.review_after !== undefined) updated.review_after = data.review_after;
@@ -954,6 +1055,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
           updated.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
           updated.quarantine_attempt_id = null;
           updated.quarantine_lease_renewed_at = null;
+          updated.quarantine_case_role_id = null;
           updated.parked_at = null;
           updated.parked_by = null;
         }

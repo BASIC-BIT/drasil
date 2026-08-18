@@ -12,6 +12,7 @@ ALTER TABLE "verification_events"
   ADD COLUMN "containment_status" "case_containment_status" NOT NULL DEFAULT 'not_applicable',
   ADD COLUMN "quarantine_attempt_id" TEXT,
   ADD COLUMN "quarantine_lease_renewed_at" TIMESTAMPTZ(6),
+  ADD COLUMN "quarantine_case_role_id" TEXT,
   ADD COLUMN "parked_at" TIMESTAMPTZ(6),
   ADD COLUMN "parked_by" TEXT,
   ADD COLUMN "review_after" TIMESTAMPTZ(6);

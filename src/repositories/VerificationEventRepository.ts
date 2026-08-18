@@ -17,6 +17,7 @@ import {
   VerificationStatus,
 } from './types'; // Use local enum
 import {
+  CASE_ATTENTION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
 } from '../utils/caseRoleRelease';
@@ -41,6 +42,7 @@ export interface IVerificationEventRepository {
   findReviewablePendingByServer(serverId: string): Promise<VerificationEvent[]>;
   findParkedByServer(serverId: string): Promise<VerificationEvent[]>;
   findExpiredCaseRoleReleases(staleBefore: Date): Promise<VerificationEvent[]>;
+  findExpiredQuarantineAttempts(staleBefore: Date): Promise<VerificationEvent[]>;
   markParkedContainmentIncomplete(
     id: string,
     metadata: VerificationEvent['metadata']
@@ -72,6 +74,12 @@ export interface IVerificationEventRepository {
     attemptId: string,
     staleBefore: Date
   ): Promise<VerificationEvent | null>;
+  claimParkedAttention(
+    id: string,
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent | null>;
   completeCaseRoleRelease(
     id: string,
     attemptId: string,
@@ -87,6 +95,13 @@ export interface IVerificationEventRepository {
   ): Promise<VerificationEvent[] | null>;
   rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null>;
   renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean>;
+  recordQuarantineCaseRole(id: string, attemptId: string, roleId: string): Promise<boolean>;
+  recoverExpiredQuarantineAttempt(
+    id: string,
+    attemptId: string,
+    staleBefore: Date,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null>;
   updateQuarantineAttempt(
     id: string,
     attemptId: string,
@@ -255,6 +270,45 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
+  async claimParkedAttention(
+    id: string,
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent | null> {
+    if (!attemptId.startsWith(CASE_ATTENTION_ATTEMPT_PREFIX)) {
+      throw new RepositoryError('Parked attention claims require an attention attempt ID.');
+    }
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const claimed = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            server_id: serverId,
+            user_id: userId,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            attention_state: CaseAttentionState.PARKED,
+            containment_status: CaseContainmentStatus.CONTAINED,
+            quarantine_attempt_id: null,
+          },
+          data: {
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+            quarantine_lease_renewed_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
+        if (claimed.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'claimParkedAttention');
+    }
+  }
+
   async completeCaseRoleRelease(
     id: string,
     attemptId: string,
@@ -402,6 +456,67 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
+  async recordQuarantineCaseRole(id: string, attemptId: string, roleId: string): Promise<boolean> {
+    try {
+      const updated = await this.prisma.verification_events.updateMany({
+        where: {
+          id,
+          status: VerificationStatus.PENDING,
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: attemptId,
+        },
+        data: {
+          quarantine_case_role_id: roleId,
+          quarantine_lease_renewed_at: new Date(),
+          updated_at: new Date(),
+        },
+      });
+      return updated.count === 1;
+    } catch (error) {
+      this.handleError(error, 'recordQuarantineCaseRole');
+    }
+  }
+
+  async recoverExpiredQuarantineAttempt(
+    id: string,
+    attemptId: string,
+    staleBefore: Date,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const recovered = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+            OR: [
+              { quarantine_lease_renewed_at: null },
+              { quarantine_lease_renewed_at: { lte: staleBefore } },
+            ],
+          },
+          data: {
+            attention_state: data.attention_state as case_attention_state | undefined,
+            containment_status: data.containment_status as case_containment_status | undefined,
+            quarantine_attempt_id: null,
+            quarantine_lease_renewed_at: null,
+            parked_at: data.parked_at,
+            parked_by: data.parked_by,
+            metadata: data.metadata as Prisma.InputJsonValue | undefined,
+            updated_at: new Date(),
+          },
+        });
+        if (recovered.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'recoverExpiredQuarantineAttempt');
+    }
+  }
+
   async updateQuarantineAttempt(
     id: string,
     attemptId: string,
@@ -424,6 +539,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             quarantine_lease_renewed_at: null,
             parked_at: data.parked_at,
             parked_by: data.parked_by,
+            quarantine_case_role_id: data.quarantine_case_role_id,
             metadata: data.metadata as Prisma.InputJsonValue | undefined,
             updated_at: new Date(),
           },
@@ -570,6 +686,34 @@ export class VerificationEventRepository implements IVerificationEventRepository
       })) as VerificationEvent[];
     } catch (error) {
       this.handleError(error, 'findExpiredCaseRoleReleases');
+    }
+  }
+
+  async findExpiredQuarantineAttempts(staleBefore: Date): Promise<VerificationEvent[]> {
+    try {
+      return (await this.prisma.verification_events.findMany({
+        where: {
+          status: VerificationStatus.PENDING,
+          case_kind: CaseKind.COMPROMISED_ACCOUNT,
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: { not: null },
+          OR: [
+            { quarantine_lease_renewed_at: null },
+            { quarantine_lease_renewed_at: { lte: staleBefore } },
+          ],
+          NOT: [
+            { quarantine_attempt_id: { startsWith: CASE_ROLE_RELEASE_ATTEMPT_PREFIX } },
+            {
+              quarantine_attempt_id: {
+                startsWith: CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
+              },
+            },
+          ],
+        },
+        orderBy: { updated_at: 'asc' },
+      })) as VerificationEvent[];
+    } catch (error) {
+      this.handleError(error, 'findExpiredQuarantineAttempts');
     }
   }
 
@@ -720,6 +864,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
         containment_status: data.containment_status as case_containment_status | undefined,
         quarantine_attempt_id: data.quarantine_attempt_id,
         quarantine_lease_renewed_at: data.quarantine_lease_renewed_at,
+        quarantine_case_role_id: data.quarantine_case_role_id,
         parked_at: data.parked_at,
         parked_by: data.parked_by,
         review_after: data.review_after,
@@ -759,6 +904,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             updateData.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
             updateData.quarantine_attempt_id = null;
             updateData.quarantine_lease_renewed_at = null;
+            updateData.quarantine_case_role_id = null;
             updateData.parked_at = null;
             updateData.parked_by = null;
           }

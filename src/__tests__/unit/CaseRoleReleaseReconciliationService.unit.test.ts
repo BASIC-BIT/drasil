@@ -1,5 +1,6 @@
 import { CaseRoleReleaseReconciliationService } from '../../services/CaseRoleReleaseReconciliationService';
 import {
+  CASE_ATTENTION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
@@ -185,6 +186,124 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
       'containment_incomplete'
     );
     expect(queue.upsertCaseMirror).toHaveBeenCalledWith(updated);
+  });
+
+  it('returns an expired quarantine-entry attempt to review automatically', async () => {
+    const now = new Date('2026-08-18T12:00:00.000Z');
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: 'abandoned-entry-attempt',
+      quarantine_lease_renewed_at: new Date('2026-08-18T11:00:00.000Z'),
+    });
+    const notifications = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    };
+    const queue = { upsertCaseMirror: jest.fn().mockResolvedValue(undefined) };
+    const service = buildService({
+      client: { guilds: { cache: new Map(), fetch: jest.fn() } },
+      verificationEvents,
+      notifications,
+      queue,
+    });
+
+    await service.runOnce(now);
+
+    const recovered = await verificationEvents.findById(verificationEvent.id);
+    expect(recovered).toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        quarantine_attempt_id: null,
+        quarantine_lease_renewed_at: null,
+      })
+    );
+    expect(notifications.notifyAccountQuarantineAttention).toHaveBeenCalledWith(
+      recovered,
+      'containment_incomplete'
+    );
+    expect(queue.upsertCaseMirror).toHaveBeenCalledWith(recovered);
+  });
+
+  it('releases an expired attention lease back to the parked state', async () => {
+    const now = new Date('2026-08-18T12:00:00.000Z');
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: `${CASE_ATTENTION_ATTEMPT_PREFIX}abandoned`,
+      quarantine_lease_renewed_at: new Date('2026-08-18T11:00:00.000Z'),
+      parked_at: new Date('2026-08-18T10:00:00.000Z'),
+      parked_by: 'moderator-1',
+    });
+    const service = buildService({
+      client: { guilds: { cache: new Map(), fetch: jest.fn() } },
+      verificationEvents,
+    });
+
+    await service.runOnce(now);
+
+    await expect(verificationEvents.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+        quarantine_attempt_id: null,
+      })
+    );
+  });
+
+  it('audits the persisted quarantine role after the configured case role changes', async () => {
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_case_role_id: 'original-case-role',
+      parked_at: new Date('2026-08-18T10:00:00.000Z'),
+      parked_by: 'moderator-1',
+    });
+    const member = {
+      id: 'user-1',
+      roles: { cache: new Map([['original-case-role', { id: 'original-case-role' }]]) },
+    };
+    const guild = { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue(member) } };
+    const service = buildService({
+      client: { guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() } },
+      verificationEvents,
+      config: {
+        getServerConfig: jest.fn().mockResolvedValue({ case_role_id: 'replacement-case-role' }),
+      },
+    });
+
+    await service.runOnce(new Date('2026-08-18T12:00:00.000Z'));
+
+    await expect(verificationEvents.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+      })
+    );
   });
 
   it('regresses and surfaces a parked case when periodic permission audit finds drift', async () => {

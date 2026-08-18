@@ -16,6 +16,7 @@ import {
 import {
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
+  isCaseAttentionAttempt,
 } from '../utils/caseRoleRelease';
 import { ICaseRoleLockdownService } from './CaseRoleLockdownService';
 import { IModerationQueueService } from './ModerationQueueService';
@@ -93,10 +94,71 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
           );
         });
       }
+      const expiredQuarantineAttempts =
+        await this.verificationEventRepository.findExpiredQuarantineAttempts(staleBefore);
+      for (const verificationEvent of expiredQuarantineAttempts) {
+        await this.reconcileExpiredQuarantineAttempt(verificationEvent, staleBefore, now).catch(
+          (error) => {
+            console.error(
+              `Failed to reconcile expired quarantine attempt for case ${verificationEvent.id}:`,
+              error
+            );
+          }
+        );
+      }
       await this.reconcileCompletedRoleRestorations();
       await this.reconcileParkedContainment(now);
     } finally {
       this.running = false;
+    }
+  }
+
+  private async reconcileExpiredQuarantineAttempt(
+    verificationEvent: VerificationEvent,
+    staleBefore: Date,
+    now: Date
+  ): Promise<void> {
+    const attemptId = verificationEvent.quarantine_attempt_id;
+    if (!attemptId) {
+      return;
+    }
+    if (isCaseAttentionAttempt(attemptId)) {
+      await this.verificationEventRepository.recoverExpiredQuarantineAttempt(
+        verificationEvent.id,
+        attemptId,
+        staleBefore,
+        {
+          attention_state: CaseAttentionState.PARKED,
+          containment_status: CaseContainmentStatus.CONTAINED,
+          parked_at: verificationEvent.parked_at,
+          parked_by: verificationEvent.parked_by,
+        }
+      );
+      return;
+    }
+
+    const metadata = {
+      ...this.metadataToRecord(verificationEvent.metadata),
+      account_quarantine_reconciliation: {
+        checked_at: now.toISOString(),
+        result: 'incomplete',
+        detail: 'Expired quarantine-entry attempt was returned to moderator review.',
+      },
+    } as unknown as VerificationEvent['metadata'];
+    const recovered = await this.verificationEventRepository.recoverExpiredQuarantineAttempt(
+      verificationEvent.id,
+      attemptId,
+      staleBefore,
+      {
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        parked_at: null,
+        parked_by: null,
+        metadata,
+      }
+    );
+    if (recovered) {
+      await this.surfaceReviewRequired(recovered);
     }
   }
 
@@ -123,7 +185,9 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
         this.client.guilds.cache.get(claimed.server_id) ??
         (await this.client.guilds.fetch(claimed.server_id));
       const member = await guild.members.fetch(claimed.user_id);
-      const restored = await this.roleManager.assignCaseRole(member);
+      const restored = claimed.quarantine_case_role_id
+        ? await this.roleManager.assignCaseRole(member, claimed.quarantine_case_role_id)
+        : await this.roleManager.assignCaseRole(member);
       if (!restored) {
         throw new Error('Configured case role could not be restored.');
       }
@@ -241,8 +305,9 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
     try {
       member = await guild.members.fetch(verificationEvent.user_id);
       const serverConfig = await this.configService.getServerConfig(guild.id);
-      caseRolePresent =
-        serverConfig.case_role_id !== null && member.roles.cache.has(serverConfig.case_role_id);
+      const assignedCaseRoleId =
+        verificationEvent.quarantine_case_role_id ?? serverConfig.case_role_id;
+      caseRolePresent = assignedCaseRoleId !== null && member.roles.cache.has(assignedCaseRoleId);
       const [lockdown, memberAudit] = await Promise.all([
         this.lockdownService.auditGuild(guild, verificationEvent.thread_id),
         this.lockdownService.auditMemberBypasses(member, new Set(), verificationEvent.thread_id),

@@ -87,12 +87,24 @@ describe('EventHandler (unit)', () => {
       notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
       ...overrides?.notificationManager,
     };
-    const verificationEventRepository = overrides?.verificationEventRepository
-      ? {
-          findParkedByServer: jest.fn().mockResolvedValue([{ user_id: 'user-1' }]),
-          ...overrides.verificationEventRepository,
-        }
-      : undefined;
+    const verificationEventRepository: Record<string, any> | undefined =
+      overrides?.verificationEventRepository
+        ? {
+            findParkedByServer: jest.fn().mockResolvedValue([{ user_id: 'user-1' }]),
+            ...overrides.verificationEventRepository,
+          }
+        : undefined;
+    if (verificationEventRepository) {
+      verificationEventRepository.claimParkedAttention ??= jest
+        .fn()
+        .mockImplementation(async () => verificationEventRepository.findActiveByUserAndServer?.());
+      verificationEventRepository.updateQuarantineAttempt ??= jest
+        .fn()
+        .mockImplementation(async (_id, _attemptId, data) => ({
+          ...(await verificationEventRepository.findActiveByUserAndServer?.()),
+          ...data,
+        }));
+    }
 
     return new EventHandler(
       client as any,
@@ -1342,6 +1354,42 @@ describe('EventHandler (unit)', () => {
 
     await (handler as any).recordParkedQuarantineBreach(buildMessage(new PermissionsBitField()));
 
+    expect(notificationManager.notifyAccountQuarantineAttention).not.toHaveBeenCalled();
+    expect(moderationQueueService.recordQuarantineBreachAttention).not.toHaveBeenCalled();
+  });
+
+  it('does not recreate breach attention when release wins after the initial case read', async () => {
+    const activeCase = {
+      id: 'verification-1',
+      user_id: 'user-1',
+      server_id: 'guild-1',
+      thread_id: 'recovery-thread',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_attempt_id: null,
+    };
+    const notificationManager = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    };
+    const moderationQueueService = {
+      recordQuarantineBreachAttention: jest.fn().mockResolvedValue(undefined),
+    };
+    const claimParkedAttention = jest.fn().mockResolvedValue(null);
+    const handler = buildHandler({
+      configService: buildQuarantineConfigService(),
+      notificationManager,
+      moderationQueueService,
+      verificationEventRepository: {
+        findParkedByServer: jest.fn().mockResolvedValue([activeCase]),
+        findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),
+        claimParkedAttention,
+      },
+    });
+
+    await (handler as any).recordParkedQuarantineBreach(buildMessage(new PermissionsBitField()));
+
+    expect(claimParkedAttention).toHaveBeenCalled();
     expect(notificationManager.notifyAccountQuarantineAttention).not.toHaveBeenCalled();
     expect(moderationQueueService.recordQuarantineBreachAttention).not.toHaveBeenCalled();
   });

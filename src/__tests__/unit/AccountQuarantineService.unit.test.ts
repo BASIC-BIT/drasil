@@ -118,6 +118,7 @@ function buildHarness(
       containment_status: CaseContainmentStatus.IN_PROGRESS,
     }),
     renewQuarantineAttempt: jest.fn().mockResolvedValue(true),
+    recordQuarantineCaseRole: jest.fn().mockResolvedValue(true),
     updateQuarantineAttempt: jest
       .fn()
       .mockImplementation(
@@ -229,7 +230,13 @@ describe('AccountQuarantineService', () => {
         attention_state: CaseAttentionState.PARKED,
         containment_status: CaseContainmentStatus.CONTAINED,
         parked_by: moderator.id,
+        quarantine_case_role_id: 'case-role',
       })
+    );
+    expect(harness.verificationEvents.recordQuarantineCaseRole).toHaveBeenCalledWith(
+      event.id,
+      expect.any(String),
+      'case-role'
     );
     expect(harness.adminActions.recordAction).toHaveBeenCalledTimes(1);
     expect(harness.moderationOutcomes.recordOutcome).toHaveBeenCalledTimes(1);

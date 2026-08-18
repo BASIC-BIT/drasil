@@ -41,6 +41,7 @@ const buildMember = (guildId: string, userId: string): GuildMember =>
       tag: 'test-user#0001',
     } as User,
     roles: {
+      cache: new Map(),
       add: jest.fn().mockResolvedValue(undefined),
       remove: jest.fn().mockResolvedValue(undefined),
     },
@@ -365,6 +366,46 @@ describe('UserModerationService (unit)', () => {
         quarantine_attempt_id: null,
       })
     );
+  });
+
+  it('removes the persisted quarantine role after the configured role changes', async () => {
+    const guildId = 'guild-verify-persisted-role';
+    const userId = 'user-verify-persisted-role';
+    const member = buildMember(guildId, userId);
+    member.roles.cache.set('original-case-role', { id: 'original-case-role' } as any);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_case_role_id: 'original-case-role',
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).resolves.toBe(
+      true
+    );
+
+    expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member, 'original-case-role');
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalledWith(member);
   });
 
   it('restores containment without partially resolving duplicate cases when persistence fails', async () => {

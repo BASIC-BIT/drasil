@@ -138,6 +138,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
     let lockdown: CaseRoleLockdownReport;
     let memberAudit: CaseRoleLockdownMemberAudit;
     let failureStage = 'role_removal';
+    const assignedCaseRoleId = serverConfig.case_role_id;
     try {
       roleResult = await this.roleQuarantine.quarantineCompromisedAccount(
         member,
@@ -150,7 +151,20 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       );
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'case_role_assignment';
-      caseRoleAssigned = await this.roleManager.assignCaseRole(member);
+      caseRoleAssigned = assignedCaseRoleId
+        ? await this.roleManager.assignCaseRole(member, assignedCaseRoleId)
+        : false;
+      if (
+        caseRoleAssigned &&
+        assignedCaseRoleId &&
+        !(await this.verificationEvents.recordQuarantineCaseRole(
+          claimedEvent.id,
+          attemptId,
+          assignedCaseRoleId
+        ))
+      ) {
+        throw new Error('The quarantine case-role assignment could not be durably recorded.');
+      }
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'containment_audit';
       [lockdown, memberAudit] = await Promise.all([
@@ -202,6 +216,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       reason: trimmedReason,
       result: complete ? 'contained' : 'incomplete',
       case_role_assigned: caseRoleAssigned,
+      case_role_id: caseRoleAssigned ? assignedCaseRoleId : null,
       snapshot_id: roleResult.snapshotId,
       removed_role_ids: roleResult.removedRoleIds,
       retained_roles: roleResult.skippedRoles,
@@ -227,6 +242,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
           : CaseContainmentStatus.INCOMPLETE,
         parked_at: complete ? now : null,
         parked_by: complete ? moderator.id : null,
+        quarantine_case_role_id: caseRoleAssigned ? assignedCaseRoleId : undefined,
         metadata,
       });
     } catch (error) {
