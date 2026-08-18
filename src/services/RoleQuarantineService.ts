@@ -23,6 +23,7 @@ import {
   COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS,
   STANDARD_QUARANTINE_PRIVILEGED_ROLE_PERMISSIONS,
 } from '../utils/privilegedRolePermissions';
+import { ICaseRoleLockdownService } from './CaseRoleLockdownService';
 
 export type RoleQuarantineApplyStatus = 'off' | 'audit_only' | 'already_active' | 'quarantined';
 export type RoleQuarantineRestoreStatus = 'no_active_snapshot' | 'partially_restored' | 'restored';
@@ -146,7 +147,10 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     private readonly snapshotRepository: IRoleQuarantineSnapshotRepository,
     @inject(TYPES.VerificationEventRepository)
     @optional()
-    private readonly verificationEventRepository?: IVerificationEventRepository
+    private readonly verificationEventRepository?: IVerificationEventRepository,
+    @inject(TYPES.CaseRoleLockdownService)
+    @optional()
+    private readonly caseRoleLockdownService?: ICaseRoleLockdownService
   ) {}
 
   public async quarantineMember(
@@ -379,9 +383,34 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       failed_removals: failedRemovals,
     });
 
+    let containmentBlocked = failedRemovals.length > 0;
     if (
       purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT &&
-      (skippedRoles.length > 0 || failedRemovals.length > 0) &&
+      skippedRoles.length > 0 &&
+      !containmentBlocked
+    ) {
+      if (!this.caseRoleLockdownService) {
+        containmentBlocked = true;
+      } else {
+        try {
+          const memberAudit = await this.caseRoleLockdownService.auditMemberBypasses(newMember);
+          containmentBlocked =
+            memberAudit.bypasses.length > 0 ||
+            memberAudit.retainedPrivilegedRoleIds.length > 0 ||
+            memberAudit.unremovablePrivilegeReasons.length > 0;
+        } catch (error) {
+          console.warn(
+            `Failed to audit skipped role(s) for compromised-account quarantine ${verificationEvent.id}:`,
+            error
+          );
+          containmentBlocked = true;
+        }
+      }
+    }
+
+    if (
+      purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT &&
+      containmentBlocked &&
       this.verificationEventRepository
     ) {
       await this.verificationEventRepository.update(verificationEvent.id, {

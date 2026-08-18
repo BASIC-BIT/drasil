@@ -590,11 +590,23 @@ describe('IntegrityAuditService (unit)', () => {
         },
       ],
     });
+    const guild = {
+      id: 'guild-1',
+      members: { fetch: jest.fn() },
+      bans: { fetch: jest.fn().mockRejectedValue({ code: 10026 }) },
+    } as unknown as Guild;
     const member = {
       id: 'user-parked',
+      guild,
       roles: { cache: { has: jest.fn().mockReturnValue(true) } },
     };
+    (guild.members.fetch as jest.Mock).mockResolvedValue(member);
     const caseRoleLockdownService = {
+      auditGuild: jest.fn().mockResolvedValue({
+        errorCount: 1,
+        warningCount: 0,
+        plannedActions: [{ scope: 'channel', channelId: 'channel-2', channelName: 'general' }],
+      }),
       auditMemberBypasses: jest.fn().mockResolvedValue({
         memberId: member.id,
         bypasses: [
@@ -622,17 +634,13 @@ describe('IntegrityAuditService (unit)', () => {
       { listCandidates: jest.fn().mockResolvedValue(candidates) },
       caseRoleLockdownService as any
     );
-    const guild = {
-      id: 'guild-1',
-      members: { fetch: jest.fn().mockResolvedValue(member) },
-      bans: { fetch: jest.fn().mockRejectedValue({ code: 10026 }) },
-    } as unknown as Guild;
-
     const report = await service.auditGuild(guild, { scope: 'cases' });
 
+    expect(caseRoleLockdownService.auditGuild).toHaveBeenCalledWith(guild);
     expect(caseRoleLockdownService.auditMemberBypasses).toHaveBeenCalledWith(member);
     expect(report.findings.map((finding) => finding.code)).toEqual(
       expect.arrayContaining([
+        'parked_quarantine_lockdown_drift',
         'parked_quarantine_permission_bypass',
         'parked_quarantine_privileged_role',
       ])

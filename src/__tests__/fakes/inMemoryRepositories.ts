@@ -629,6 +629,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
 
     const claimed = {
       ...this.events[eventIndex],
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
       containment_status: CaseContainmentStatus.IN_PROGRESS,
       quarantine_attempt_id: attemptId,
       updated_at: new Date(),

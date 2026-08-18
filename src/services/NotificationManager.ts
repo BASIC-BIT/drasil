@@ -217,6 +217,7 @@ export class NotificationManager implements INotificationManager {
         detectionEvents,
         sourceMessage
       );
+      this.presentationBuilder.upsertAccountQuarantinePresentation(embed, verificationEvent);
       const actionRows = this.presentationBuilder.createAdminNotificationActionRows(member.id, {
         guildId: member.guild.id,
         verificationEventId: verificationEvent.id,

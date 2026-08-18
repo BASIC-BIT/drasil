@@ -150,6 +150,19 @@ export class AccountQuarantineService implements IAccountQuarantineService {
         this.lockdown.auditMemberBypasses(member),
       ]);
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
+      failureStage = 'final_role_sweep';
+      roleResult = await this.roleQuarantine.quarantineCompromisedAccount(
+        member,
+        claimedEvent,
+        moderator
+      );
+      await this.assertAttemptOwner(claimedEvent.id, attemptId);
+      failureStage = 'final_containment_audit';
+      [lockdown, memberAudit] = await Promise.all([
+        this.lockdown.auditGuild(member.guild),
+        this.lockdown.auditMemberBypasses(member),
+      ]);
+      await this.assertAttemptOwner(claimedEvent.id, attemptId);
     } catch (error) {
       if (error instanceof RoleQuarantineApplyError) {
         roleResult = error.result;

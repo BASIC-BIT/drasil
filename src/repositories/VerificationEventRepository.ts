@@ -12,6 +12,7 @@ import { RepositoryError } from './BaseRepository';
 import {
   CaseAttentionState,
   CaseContainmentStatus,
+  CaseKind,
   VerificationEvent,
   VerificationStatus,
 } from './types'; // Use local enum
@@ -134,6 +135,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             ],
           },
           data: {
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
             containment_status: CaseContainmentStatus.IN_PROGRESS,
             quarantine_attempt_id: attemptId,
             updated_at: new Date(),

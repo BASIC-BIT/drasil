@@ -149,6 +149,7 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       )
     ).resolves.toEqual(
       expect.objectContaining({
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
         containment_status: CaseContainmentStatus.IN_PROGRESS,
         quarantine_attempt_id: 'attempt-1',
       })
@@ -184,6 +185,7 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       )
     ).resolves.toEqual(
       expect.objectContaining({
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
         containment_status: CaseContainmentStatus.IN_PROGRESS,
         quarantine_attempt_id: 'attempt-2',
       })

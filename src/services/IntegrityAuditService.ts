@@ -269,9 +269,26 @@ export class IntegrityAuditService implements IIntegrityAuditService {
       }
       if (liveMember?.status === 'found' && this.caseRoleLockdownService) {
         try {
-          const memberAudit = await this.caseRoleLockdownService.auditMemberBypasses(
-            liveMember.value
-          );
+          const [lockdownAudit, memberAudit] = await Promise.all([
+            this.caseRoleLockdownService.auditGuild(liveMember.value.guild),
+            this.caseRoleLockdownService.auditMemberBypasses(liveMember.value),
+          ]);
+          if (
+            lockdownAudit.errorCount > 0 ||
+            lockdownAudit.warningCount > 0 ||
+            lockdownAudit.plannedActions.length > 0
+          ) {
+            findings.push(
+              this.buildCaseFinding(
+                lockdownAudit.errorCount > 0 || lockdownAudit.plannedActions.length > 0
+                  ? 'error'
+                  : 'warning',
+                'parked_quarantine_lockdown_drift',
+                verificationEvent,
+                `Parked account quarantine has ${lockdownAudit.errorCount} lockdown error(s), ${lockdownAudit.warningCount} warning(s), and ${lockdownAudit.plannedActions.length} unapplied lockdown action(s).`
+              )
+            );
+          }
           if (memberAudit.bypasses.length > 0) {
             findings.push(
               this.buildCaseFinding(

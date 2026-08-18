@@ -36,6 +36,7 @@ import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { REPORT_INTAKE_THREAD_NAME_PREFIX } from '../services/ThreadManager';
 import {
   CaseAttentionState,
+  CaseContainmentStatus,
   CaseKind,
   DetectionType,
   type GlobalMessageWatchlistEntry,
@@ -344,6 +345,8 @@ export class EventHandler implements IEventHandler {
     if (message.author.bot) return;
     if (!message.guild || !message.member) return;
 
+    await this.recordParkedQuarantineBreach(message);
+
     if (message.channel.isThread()) {
       try {
         const reportIntakeHandled = await this.reportIntakeService?.handleThreadMessage(message);
@@ -389,18 +392,6 @@ export class EventHandler implements IEventHandler {
       }
 
       const serverConfig = await this.configService.getServerConfig(serverId);
-      if (this.moderationQueueService && this.verificationEventRepository) {
-        const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
-          userId,
-          serverId
-        );
-        if (
-          activeCase?.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-          activeCase.attention_state === CaseAttentionState.PARKED
-        ) {
-          await this.moderationQueueService.recordQuarantineBreachAttention(activeCase, message);
-        }
-      }
       const responseSettings = getDetectionResponseSettings(serverConfig.settings, 'message');
       if (responseSettings.mode === 'off') {
         console.log(
@@ -911,7 +902,11 @@ export class EventHandler implements IEventHandler {
       (result.skippedRoles.length > 0 || result.failedRemovals.length > 0)
     ) {
       const updated = await this.verificationEventRepository.findById(verificationEvent.id);
-      if (updated) {
+      if (
+        updated &&
+        (updated.attention_state !== CaseAttentionState.PARKED ||
+          updated.containment_status !== CaseContainmentStatus.CONTAINED)
+      ) {
         await this.notificationManager
           .updateNotificationButtons(updated, updated.status)
           .catch((error) => {
@@ -919,6 +914,28 @@ export class EventHandler implements IEventHandler {
           });
         await this.moderationQueueService?.upsertCaseMirror(updated);
       }
+    }
+  }
+
+  private async recordParkedQuarantineBreach(message: Message): Promise<void> {
+    if (!this.moderationQueueService || !this.verificationEventRepository || !message.guild) {
+      return;
+    }
+
+    try {
+      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        message.author.id,
+        message.guild.id
+      );
+      if (
+        activeCase?.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+        activeCase.attention_state === CaseAttentionState.PARKED &&
+        (!activeCase.thread_id || activeCase.thread_id !== message.channelId)
+      ) {
+        await this.moderationQueueService.recordQuarantineBreachAttention(activeCase, message);
+      }
+    } catch (error) {
+      console.warn('Failed to record parked quarantine breach attention:', error);
     }
   }
 

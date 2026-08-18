@@ -6,6 +6,8 @@ import {
 import { InMemoryRoleQuarantineSnapshotRepository } from '../fakes/inMemoryRepositories';
 import { IConfigService } from '../../config/ConfigService';
 import {
+  CaseAttentionState,
+  CaseContainmentStatus,
   CaseKind,
   RoleQuarantineSnapshotPurpose,
   RoleQuarantineSnapshotStatus,
@@ -596,6 +598,101 @@ describe('RoleQuarantineService (unit)', () => {
     expect(newMember.roles.cache.has('safe-role')).toBe(false);
     expect(newMember.roles.cache.has('managed-role')).toBe(true);
     expect(newMember.roles.cache.has('100000000000000005')).toBe(true);
+  });
+
+  it('keeps a compromised account parked when a harmless managed role cannot be removed', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const managedRole = createRole({ id: 'managed-role', managed: true });
+    const oldMember = createMember([caseRole], [caseRole, managedRole]);
+    const newMember = createMember([caseRole, managedRole], [caseRole, managedRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const verificationEventRepository = {
+      update: jest.fn().mockImplementation(async (_id, data) => ({
+        ...createVerificationEvent(),
+        ...data,
+      })),
+    };
+    const lockdown = {
+      auditMemberBypasses: jest.fn().mockResolvedValue({
+        memberId: 'user-1',
+        bypasses: [],
+        retainedPrivilegedRoleIds: [],
+        retainedAdministratorRoleIds: [],
+        unremovablePrivilegeReasons: [],
+      }),
+    };
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'on' }),
+      snapshots,
+      verificationEventRepository as any,
+      lockdown as any
+    );
+    const parkedEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    } as VerificationEvent;
+
+    const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+
+    expect(result.skippedRoles).toEqual([expect.objectContaining({ role_id: 'managed-role' })]);
+    expect(lockdown.auditMemberBypasses).toHaveBeenCalledWith(newMember);
+    expect(verificationEventRepository.update).not.toHaveBeenCalledWith(
+      parkedEvent.id,
+      expect.objectContaining({ attention_state: CaseAttentionState.REVIEW_REQUIRED })
+    );
+  });
+
+  it('unparks a compromised account when an unremovable role has a live bypass', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const managedRole = createRole({
+      id: 'managed-role',
+      managed: true,
+      permissions: [PermissionFlagsBits.Administrator],
+    });
+    const oldMember = createMember([caseRole], [caseRole, managedRole]);
+    const newMember = createMember([caseRole, managedRole], [caseRole, managedRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const verificationEventRepository = {
+      update: jest.fn().mockImplementation(async (_id, data) => ({
+        ...createVerificationEvent(),
+        ...data,
+      })),
+    };
+    const lockdown = {
+      auditMemberBypasses: jest.fn().mockResolvedValue({
+        memberId: 'user-1',
+        bypasses: [],
+        retainedPrivilegedRoleIds: ['managed-role'],
+        retainedAdministratorRoleIds: ['managed-role'],
+        unremovablePrivilegeReasons: [],
+      }),
+    };
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'on' }),
+      snapshots,
+      verificationEventRepository as any,
+      lockdown as any
+    );
+    const parkedEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    } as VerificationEvent;
+
+    await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+
+    expect(verificationEventRepository.update).toHaveBeenCalledWith(
+      parkedEvent.id,
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        parked_at: null,
+        parked_by: null,
+      })
+    );
   });
 
   it('audits newly gained roles without removing them in audit-only mode', async () => {

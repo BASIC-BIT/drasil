@@ -239,6 +239,40 @@ describe('AccountQuarantineService', () => {
       VerificationStatus.PENDING
     );
     expect(harness.moderationQueue.deleteCaseMirror).toHaveBeenCalledWith(event.id);
+    expect(harness.roleQuarantine.quarantineCompromisedAccount).toHaveBeenCalledTimes(2);
+    expect(harness.lockdown.auditGuild).toHaveBeenCalledTimes(2);
+    expect(harness.lockdown.auditMemberBypasses).toHaveBeenCalledTimes(2);
+  });
+
+  it('captures a role added during containment in the final role sweep', async () => {
+    const harness = buildHarness();
+    harness.roleQuarantine.quarantineCompromisedAccount
+      .mockResolvedValueOnce({ ...roleResult, removedRoleIds: [] })
+      .mockResolvedValueOnce({
+        ...roleResult,
+        originalRoleIds: ['role-1', 'late-role'],
+        plannedRoleIds: ['role-1', 'late-role'],
+        removedRoleIds: ['role-1', 'late-role'],
+      });
+
+    await harness.service.quarantine(
+      harness.member,
+      event,
+      { id: 'moderator-1' } as User,
+      'Compromise report'
+    );
+
+    expect(harness.verificationEvents.updateQuarantineAttempt).toHaveBeenCalledWith(
+      event.id,
+      expect.any(String),
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          account_quarantine: expect.objectContaining({
+            removed_role_ids: ['role-1', 'late-role'],
+          }),
+        }),
+      })
+    );
   });
 
   it('keeps an incompletely contained account in review and reports it to the queue', async () => {
