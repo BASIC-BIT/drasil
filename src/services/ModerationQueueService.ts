@@ -591,7 +591,10 @@ export class ModerationQueueService implements IModerationQueueService {
             input.sourceThreadId
           );
     if (existing?.last_source_message_id === input.message.id) {
-      return { delivered: true, created: false };
+      return {
+        delivered: Boolean(existing.queue_channel_id && existing.queue_message_id),
+        created: false,
+      };
     }
 
     const item = await this.moderationQueueRepository.upsert({
@@ -634,7 +637,7 @@ export class ModerationQueueService implements IModerationQueueService {
         message.id
       );
     }
-    return { delivered: true, created: existing === null };
+    return { delivered: message !== null, created: existing === null };
   }
 
   private buildCaseMirrorPayload(

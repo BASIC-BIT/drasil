@@ -1913,14 +1913,10 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       );
       this.assertNoQuarantineInProgress(pendingVerificationEvents);
       if (
-        pendingVerificationEvents.some(
-          (event) =>
-            event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-            event.attention_state === CaseAttentionState.PARKED
-        )
+        pendingVerificationEvents.some((event) => event.case_kind === CaseKind.COMPROMISED_ACCOUNT)
       ) {
         throw new Error(
-          'A parked account quarantine can only be released with Verify User, Kick User, or Ban User.'
+          'An account quarantine can only be released with Verify User, Kick User, or Ban User.'
         );
       }
 
@@ -2379,7 +2375,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       for (const pendingEvent of pendingVerificationEvents) {
         const eventToUpdate = {
           ...pendingEvent,
-          ...(pendingEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT
+          ...(pendingEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+          !isCaseTerminalActionAttempt(pendingEvent.quarantine_attempt_id)
             ? {
                 attention_state: CaseAttentionState.REVIEW_REQUIRED,
                 containment_status: CaseContainmentStatus.INCOMPLETE,

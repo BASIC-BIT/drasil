@@ -693,6 +693,29 @@ describe('ModerationQueueService', () => {
     warnSpy.mockRestore();
   });
 
+  it('reports attention as undelivered when the Discord queue send fails', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const channel = new FakeDiscordChannel('queue-channel');
+    channel.send.mockRejectedValueOnce(new Error('Missing permissions'));
+    const { queueRepository, service } = buildService({ channel });
+    const message = {
+      id: 'recovery-send-failed',
+      channelId: 'support-thread',
+      content: 'I recovered my account.',
+      url: 'https://discord.com/channels/guild-1/support-thread/recovery-send-failed',
+      createdTimestamp: Date.parse('2026-06-13T12:00:00Z'),
+      author: { id: 'user-1' },
+    } as unknown as Message;
+
+    await expect(
+      service.recordSupportThreadAttention(buildVerificationEvent(), message)
+    ).resolves.toEqual({ delivered: false, created: true });
+
+    expect(queueRepository.items).toHaveLength(1);
+    expect(queueRepository.items[0].queue_message_id).toBeNull();
+    warnSpy.mockRestore();
+  });
+
   it('retains a case queue pointer when Discord deletion fails so reconciliation can retry', async () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     const { channel, queueRepository, service } = buildService();

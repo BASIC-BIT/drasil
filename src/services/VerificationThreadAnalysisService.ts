@@ -108,7 +108,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       verificationEvent.attention_state === CaseAttentionState.PARKED;
     if (parkedAccountRecovery) {
       const attentionAttemptId = `${CASE_ATTENTION_ATTEMPT_PREFIX}${randomUUID()}`;
-      const claimed = await this.verificationEventRepository.claimParkedAttention(
+      const claimed = await this.verificationEventRepository.claimAccountQuarantineAttention(
         verificationEvent.id,
         verificationEvent.server_id,
         verificationEvent.user_id,
@@ -312,7 +312,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
         `[VerificationThreadAnalysis] Failed to persist support-thread response metadata for verification event ${verificationEvent.id}`,
         error
       );
-      return { verificationEvent: { ...verificationEvent, metadata }, firstResponse: false };
+      return { verificationEvent: { ...verificationEvent, metadata }, firstResponse: true };
     }
   }
 

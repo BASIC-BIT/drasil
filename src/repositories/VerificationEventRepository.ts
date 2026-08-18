@@ -82,7 +82,7 @@ export interface IVerificationEventRepository {
     attemptId: string,
     staleBefore: Date
   ): Promise<VerificationEvent | null>;
-  claimParkedAttention(
+  claimAccountQuarantineAttention(
     id: string,
     serverId: string,
     userId: string,
@@ -294,14 +294,16 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
-  async claimParkedAttention(
+  async claimAccountQuarantineAttention(
     id: string,
     serverId: string,
     userId: string,
     attemptId: string
   ): Promise<VerificationEvent | null> {
     if (!attemptId.startsWith(CASE_ATTENTION_ATTEMPT_PREFIX)) {
-      throw new RepositoryError('Parked attention claims require an attention attempt ID.');
+      throw new RepositoryError(
+        'Account-quarantine attention claims require an attention attempt ID.'
+      );
     }
     try {
       return (await this.prisma.$transaction(async (transaction) => {
@@ -312,8 +314,12 @@ export class VerificationEventRepository implements IVerificationEventRepository
             user_id: userId,
             status: VerificationStatus.PENDING,
             case_kind: CaseKind.COMPROMISED_ACCOUNT,
-            attention_state: CaseAttentionState.PARKED,
-            containment_status: CaseContainmentStatus.CONTAINED,
+            attention_state: {
+              in: [CaseAttentionState.PARKED, CaseAttentionState.REVIEW_REQUIRED],
+            },
+            containment_status: {
+              in: [CaseContainmentStatus.CONTAINED, CaseContainmentStatus.INCOMPLETE],
+            },
             quarantine_attempt_id: null,
           },
           data: {
@@ -329,7 +335,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
         return await transaction.verification_events.findUnique({ where: { id } });
       })) as VerificationEvent | null;
     } catch (error) {
-      this.handleError(error, 'claimParkedAttention');
+      this.handleError(error, 'claimAccountQuarantineAttention');
     }
   }
 

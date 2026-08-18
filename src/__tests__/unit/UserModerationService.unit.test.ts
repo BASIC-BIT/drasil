@@ -1106,7 +1106,46 @@ describe('UserModerationService (unit)', () => {
         id: 'moderator-close',
       } as User)
     ).rejects.toThrow(
-      'A parked account quarantine can only be released with Verify User, Kick User, or Ban User.'
+      'An account quarantine can only be released with Verify User, Kick User, or Ban User.'
+    );
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
+  });
+
+  it('rejects close-no-action when compromised-account containment is incomplete', async () => {
+    const guildId = 'guild-close-incomplete';
+    const userId = 'user-close-incomplete';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+      quarantine_case_role_id: 'persisted-quarantine-role',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.closeCaseNoAction(buildGuildWithMember(guildId, member), userId, {
+        id: 'moderator-close',
+      } as User)
+    ).rejects.toThrow(
+      'An account quarantine can only be released with Verify User, Kick User, or Ban User.'
     );
     expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
   });
@@ -2289,6 +2328,48 @@ describe('UserModerationService (unit)', () => {
         quarantine_attempt_id: null,
         parked_at: null,
         parked_by: null,
+      })
+    );
+  });
+
+  it('preserves a terminal-action claim when guildMemberRemove arrives first', async () => {
+    const guildId = 'guild-terminal-member-remove';
+    const userId = 'user-terminal-member-remove';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const terminalAttemptId = 'case-terminal-action:attempt-1';
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: terminalAttemptId,
+      quarantine_lease_renewed_at: new Date(),
+      parked_at: new Date(),
+      parked_by: 'moderator-1',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(service.recordMemberLeftGuild(member)).resolves.toBe(1);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: terminalAttemptId,
       })
     );
   });

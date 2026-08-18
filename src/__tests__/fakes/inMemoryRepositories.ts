@@ -748,7 +748,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return { ...claimed };
   }
 
-  async claimParkedAttention(
+  async claimAccountQuarantineAttention(
     id: string,
     serverId: string,
     userId: string,
@@ -761,8 +761,10 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         event.user_id === userId &&
         event.status === VerificationStatus.PENDING &&
         event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-        event.attention_state === CaseAttentionState.PARKED &&
-        event.containment_status === CaseContainmentStatus.CONTAINED &&
+        (event.attention_state === CaseAttentionState.PARKED ||
+          event.attention_state === CaseAttentionState.REVIEW_REQUIRED) &&
+        (event.containment_status === CaseContainmentStatus.CONTAINED ||
+          event.containment_status === CaseContainmentStatus.INCOMPLETE) &&
         event.quarantine_attempt_id === null
     );
     if (eventIndex === -1) {

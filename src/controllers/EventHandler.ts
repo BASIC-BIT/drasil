@@ -81,15 +81,12 @@ import { IVerificationEventRepository } from '../repositories/VerificationEventR
 import type { IGlobalMessageWatchlistRepository } from '../repositories/GlobalMessageWatchlistRepository';
 import { getAccountQuarantineSettings } from '../utils/accountQuarantineSettings';
 import { getCaseRoleLockdownSettings } from '../utils/caseRoleLockdownSettings';
-import {
-  CASE_ATTENTION_ATTEMPT_PREFIX,
-  isCaseRoleReleaseLeaseActive,
-} from '../utils/caseRoleRelease';
+import { CASE_ATTENTION_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const GLOBAL_MESSAGE_WATCHLIST_CACHE_TTL_MS = 30_000;
-const PARKED_QUARANTINE_CACHE_TTL_MS = 30_000;
+const ACTIVE_QUARANTINE_CACHE_TTL_MS = 30_000;
 const GLOBAL_MESSAGE_WATCHLIST_INITIAL_FAILURE_RETRY_MS = 5_000;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
@@ -159,7 +156,7 @@ export class EventHandler implements IEventHandler {
   private globalMessageWatchlistLoadedAt = 0;
   private globalMessageWatchlistRetryAfter = 0;
   private globalMessageWatchlistHasLoaded = false;
-  private parkedQuarantineUsersCache = new Map<
+  private activeQuarantineUsersCache = new Map<
     string,
     { readonly userIds: ReadonlySet<string>; readonly expiresAt: number }
   >();
@@ -900,10 +897,6 @@ export class EventHandler implements IEventHandler {
 
     const hasCaseRole = this.memberHasRole(newMember, activeCaseRoleId);
     const caseRoleRemoved = this.memberHasRole(oldMember, activeCaseRoleId) && !hasCaseRole;
-    if (!hasCaseRole && !caseRoleRemoved) {
-      return;
-    }
-
     const gainedRole = [...newMember.roles.cache.values()].some(
       (role) =>
         role.id !== newMember.guild.id &&
@@ -962,13 +955,13 @@ export class EventHandler implements IEventHandler {
         return;
       }
 
-      const parkedUserIds = await this.getCachedParkedQuarantineUserIds(message.guild.id);
+      const quarantinedUserIds = await this.getCachedActiveQuarantineUserIds(message.guild.id);
       const quarantineEntryEnabled = getAccountQuarantineSettings(cachedConfig.settings).enabled;
       const hasConfiguredCaseRole = Boolean(
         cachedConfig.case_role_id && message.member?.roles.cache.has(cachedConfig.case_role_id)
       );
       if (
-        !parkedUserIds.has(message.author.id) &&
+        !quarantinedUserIds.has(message.author.id) &&
         (!quarantineEntryEnabled || !hasConfiguredCaseRole)
       ) {
         return;
@@ -995,16 +988,15 @@ export class EventHandler implements IEventHandler {
 
       const activeCase = await this.findEnforcedActiveCase(message.author.id, message.guild.id);
       if (
-        activeCase?.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-        activeCase.attention_state === CaseAttentionState.PARKED &&
-        !isCaseRoleReleaseLeaseActive(
-          activeCase.quarantine_attempt_id,
-          activeCase.quarantine_lease_renewed_at
-        ) &&
+        this.isEnforcedCompromisedAccountCase(activeCase) &&
+        activeCase.quarantine_attempt_id === null &&
         (!activeCase.thread_id || activeCase.thread_id !== message.channelId)
       ) {
+        const wasParked =
+          activeCase.attention_state === CaseAttentionState.PARKED &&
+          activeCase.containment_status === CaseContainmentStatus.CONTAINED;
         const attentionAttemptId = `${CASE_ATTENTION_ATTEMPT_PREFIX}${randomUUID()}`;
-        const claimed = await this.verificationEventRepository.claimParkedAttention(
+        const claimed = await this.verificationEventRepository.claimAccountQuarantineAttention(
           activeCase.id,
           message.guild.id,
           message.author.id,
@@ -1041,18 +1033,19 @@ export class EventHandler implements IEventHandler {
             directResult.status === 'fulfilled' && directResult.value === true;
           attentionDelivered = queueDelivered || directDelivered;
         } finally {
+          const shouldRemainParked = attentionDelivered && wasParked;
           await this.verificationEventRepository.updateQuarantineAttempt(
             claimed.id,
             attentionAttemptId,
             {
-              attention_state: attentionDelivered
+              attention_state: shouldRemainParked
                 ? CaseAttentionState.PARKED
                 : CaseAttentionState.REVIEW_REQUIRED,
-              containment_status: attentionDelivered
+              containment_status: shouldRemainParked
                 ? CaseContainmentStatus.CONTAINED
                 : CaseContainmentStatus.INCOMPLETE,
-              parked_at: attentionDelivered ? claimed.parked_at : null,
-              parked_by: attentionDelivered ? claimed.parked_by : null,
+              parked_at: shouldRemainParked ? claimed.parked_at : null,
+              parked_by: shouldRemainParked ? claimed.parked_by : null,
               metadata: attentionDelivered
                 ? undefined
                 : {
@@ -1107,18 +1100,26 @@ export class EventHandler implements IEventHandler {
     return { ...(metadata as Record<string, unknown>) };
   }
 
-  private async getCachedParkedQuarantineUserIds(serverId: string): Promise<ReadonlySet<string>> {
+  private async getCachedActiveQuarantineUserIds(serverId: string): Promise<ReadonlySet<string>> {
     const now = Date.now();
-    const cached = this.parkedQuarantineUsersCache.get(serverId);
+    const cached = this.activeQuarantineUsersCache.get(serverId);
     if (cached && cached.expiresAt > now) {
       return cached.userIds;
     }
 
-    const parkedCases = await this.verificationEventRepository?.findParkedByServer(serverId);
-    const userIds = new Set((parkedCases ?? []).map((event) => event.user_id));
-    this.parkedQuarantineUsersCache.set(serverId, {
+    const pendingCases = await this.verificationEventRepository?.findPendingByServer(serverId);
+    const userIds = new Set(
+      (pendingCases ?? [])
+        .filter(
+          (event) =>
+            event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+            event.containment_status !== CaseContainmentStatus.NOT_APPLICABLE
+        )
+        .map((event) => event.user_id)
+    );
+    this.activeQuarantineUsersCache.set(serverId, {
       userIds,
-      expiresAt: now + PARKED_QUARANTINE_CACHE_TTL_MS,
+      expiresAt: now + ACTIVE_QUARANTINE_CACHE_TTL_MS,
     });
     return userIds;
   }

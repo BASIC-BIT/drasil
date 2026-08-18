@@ -392,7 +392,7 @@ describe('InteractionHandler (unit)', () => {
       findByThreadId: jest.fn(),
       claimQuarantineAttempt: jest.fn(),
       claimCaseRoleRelease: jest.fn(),
-      claimParkedAttention: jest.fn(),
+      claimAccountQuarantineAttention: jest.fn(),
       claimTerminalActions: jest.fn(),
       completeTerminalActions: jest.fn(),
       completeCaseRoleRelease: jest.fn(),
@@ -897,7 +897,7 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
-  it('rejects a stale close-no-action confirmation for a parked quarantine', async () => {
+  it('rejects a stale close-no-action confirmation for an account quarantine', async () => {
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue({
       ...buildVerificationEvent('ver-parked', 'user-1'),
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
@@ -926,7 +926,7 @@ describe('InteractionHandler (unit)', () => {
     expect(userModerationService.closeCaseNoAction).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledWith({
       content:
-        'A parked account quarantine can only be released with Verify User, Kick User, or Ban User.',
+        'An account quarantine can only be released with Verify User, Kick User, or Ban User.',
       flags: MessageFlags.Ephemeral,
     });
   });

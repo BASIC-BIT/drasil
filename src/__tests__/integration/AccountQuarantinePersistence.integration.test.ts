@@ -507,7 +507,12 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     const attentionAttemptId = `${CASE_ATTENTION_ATTEMPT_PREFIX}1`;
 
     await expect(
-      verifications.claimParkedAttention(verification.id, serverId, userId, attentionAttemptId)
+      verifications.claimAccountQuarantineAttention(
+        verification.id,
+        serverId,
+        userId,
+        attentionAttemptId
+      )
     ).resolves.toEqual(
       expect.objectContaining({
         containment_status: CaseContainmentStatus.IN_PROGRESS,
@@ -559,6 +564,38 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       )
     ).resolves.toEqual(
       expect.objectContaining({ quarantine_attempt_id: 'case-role-release:allowed' })
+    );
+  });
+
+  it('claims moderator attention for an incomplete compromised quarantine', async () => {
+    const serverId = 'guild-incomplete-attention-claim';
+    const userId = 'user-incomplete-attention-claim';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser(userId, 'target');
+    const verification = await verifications.createFromDetection(
+      null,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verifications.update(verification.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+    });
+    const attemptId = `${CASE_ATTENTION_ATTEMPT_PREFIX}incomplete`;
+
+    await expect(
+      verifications.claimAccountQuarantineAttention(verification.id, serverId, userId, attemptId)
+    ).resolves.toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: attemptId,
+      })
     );
   });
 

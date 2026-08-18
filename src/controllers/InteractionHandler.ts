@@ -1890,10 +1890,10 @@ export class InteractionHandler implements IInteractionHandler {
         userId,
         guildId
       );
-      if (activeCase?.attention_state === CaseAttentionState.PARKED) {
+      if (activeCase?.case_kind === CaseKind.COMPROMISED_ACCOUNT) {
         await interaction.followUp({
           content:
-            'A parked account quarantine can only be released with Verify User, Kick User, or Ban User.',
+            'An account quarantine can only be released with Verify User, Kick User, or Ban User.',
           flags: MessageFlags.Ephemeral,
         });
         return;
