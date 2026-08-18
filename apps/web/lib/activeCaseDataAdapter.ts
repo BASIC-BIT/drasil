@@ -459,34 +459,27 @@ function resolveAllowedActions(
 
   const presenceActions = ACTIONS_BY_PRESENCE_STATE[presenceState];
   if (presenceActions) {
-    return appendRefreshNotificationAction(
-      row,
-      row.case_kind === 'compromised_account'
-        ? presenceActions.filter((action) => action !== 'close_no_action')
-        : presenceActions
-    );
+    return appendRefreshNotificationAction(row, resolveCaseKindActions(row, presenceActions));
   }
 
   const parkedIndex = 0;
   const quarantineEnabledIndex = Number(
     metadataToRecord(row.server_settings).account_quarantine_enabled === true
   ) as 0 | 1;
-  const actions: CaseAction[] = [
+  const actions = resolveCaseKindActions(row, [
     ...PENDING_IN_SERVER_ACTIONS[parkedIndex],
     ...ACCOUNT_QUARANTINE_ACTIONS_BY_STATE[parkedIndex][quarantineEnabledIndex],
-  ];
-  if (row.case_kind === 'compromised_account') {
-    const closeNoActionIndex = actions.indexOf('close_no_action');
-    if (closeNoActionIndex >= 0) {
-      actions.splice(closeNoActionIndex, 1);
-    }
-  }
-  if (row.notification_message_id) {
-    actions.push('refresh_notification');
-  }
+  ]);
+  const actionsWithNotification = appendRefreshNotificationAction(row, actions);
   const threadPresentIndex = Number(Boolean(row.thread_id)) as 0 | 1;
-  actions.push(...THREAD_REPAIR_ACTIONS_BY_STATE[parkedIndex][threadPresentIndex]);
-  return actions;
+  actionsWithNotification.push(...THREAD_REPAIR_ACTIONS_BY_STATE[parkedIndex][threadPresentIndex]);
+  return actionsWithNotification;
+}
+
+function resolveCaseKindActions(row: CaseSummaryRow, actions: readonly CaseAction[]): CaseAction[] {
+  return row.case_kind === 'compromised_account'
+    ? actions.filter((action) => action !== 'close_no_action')
+    : [...actions];
 }
 
 function appendRefreshNotificationAction(
