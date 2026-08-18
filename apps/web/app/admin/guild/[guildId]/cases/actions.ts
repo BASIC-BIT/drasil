@@ -47,7 +47,6 @@ const queueCaseActionErrorMessages = {
 type DestructiveCaseAction = Extract<WebCaseAction, 'kick_user' | 'ban_user' | 'ban_by_id'>;
 
 interface DestructiveActionOptions {
-  readonly attemptId: string | null;
   readonly reason: string | null;
 }
 
@@ -178,7 +177,7 @@ async function assertCanQueueCaseAction(
 
   const destructiveContext = destructiveActionContext(action);
   if (!destructiveContext) {
-    return { attemptId: null, reason: null };
+    return { reason: null };
   }
 
   if (formData?.get('confirmAction') !== 'on') {
@@ -193,7 +192,7 @@ async function assertCanQueueCaseAction(
   const reason = readDestructiveReason(formData, settings, destructiveContext);
   await assertBotCanRunDestructiveAction(guild.id, destructiveContext);
 
-  return { attemptId: null, reason };
+  return { reason };
 }
 
 async function performQueueCaseAction(
@@ -219,7 +218,6 @@ async function performQueueCaseAction(
   const result = await createActiveCaseDataAdapter().queueCaseAction({
     action: parsedAction as WebCaseAction,
     adminId: session.userId,
-    attemptId: options.attemptId,
     caseId,
     guildId,
     reason: options.reason,

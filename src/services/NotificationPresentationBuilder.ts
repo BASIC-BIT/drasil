@@ -752,19 +752,26 @@ export class NotificationPresentationBuilder {
     const metadata = this.verificationMetadataToRecord(verificationEvent.metadata);
     const quarantine = this.verificationMetadataToRecord(metadata.account_quarantine);
     const count = (value: unknown): number => (Array.isArray(value) ? value.length : 0);
+    const failureStage =
+      typeof quarantine.failure_stage === 'string' ? quarantine.failure_stage : null;
+    const failureMessage = typeof quarantine.error === 'string' ? quarantine.error : null;
     const status =
-      verificationEvent.attention_state === CaseAttentionState.PARKED &&
-      verificationEvent.containment_status === CaseContainmentStatus.CONTAINED
-        ? 'Contained and parked. Keep the verification thread open until the user reports recovery; release only through moderator verification, kick, or ban.'
-        : verificationEvent.containment_status === CaseContainmentStatus.IN_PROGRESS
-          ? 'Containment is currently in progress. A second quarantine attempt will be rejected.'
-          : 'Containment is incomplete. Review and repair the blockers before retrying quarantine.';
+      quarantine.result === 'failed'
+        ? `Containment attempt failed${failureStage ? ` during ${failureStage.replace(/_/g, ' ')}` : ''}${failureMessage ? `: ${failureMessage}.` : '.'} Review the case and repair the failure before retrying quarantine.`
+        : verificationEvent.attention_state === CaseAttentionState.PARKED &&
+            verificationEvent.containment_status === CaseContainmentStatus.CONTAINED
+          ? 'Contained and parked. Keep the verification thread open until the user reports recovery; release only through moderator verification, kick, or ban.'
+          : verificationEvent.containment_status === CaseContainmentStatus.IN_PROGRESS
+            ? 'Containment is currently in progress. A second quarantine attempt will be rejected.'
+            : 'Containment is incomplete. Review and repair the blockers before retrying quarantine.';
     fields.push({
       name: NotificationPresentationBuilder.ACCOUNT_QUARANTINE_FIELD_NAME,
-      value: [
-        status,
-        `Removed roles: ${count(quarantine.removed_role_ids)} · Retained roles: ${count(quarantine.retained_roles)} · Failed removals: ${count(quarantine.failed_removals)} · Permission bypasses: ${count(quarantine.member_bypasses)}`,
-      ].join('\n'),
+      value: this.truncateEmbedFieldValue(
+        [
+          status,
+          `Removed roles: ${count(quarantine.removed_role_ids)} · Retained roles: ${count(quarantine.retained_roles)} · Failed removals: ${count(quarantine.failed_removals)} · Permission bypasses: ${count(quarantine.member_bypasses)}`,
+        ].join('\n')
+      ),
       inline: false,
     });
     embed.setColor(CASE_COLOR_WARNING);

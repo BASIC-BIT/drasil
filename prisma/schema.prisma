@@ -569,7 +569,6 @@ enum moderation_action_request_type {
   preview_case_message_deletion
   execute_case_message_deletion
   ban_case_user_with_message_cleanup
-  quarantine_compromised_account
 }
 
 enum moderation_action_request_status {

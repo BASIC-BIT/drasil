@@ -295,7 +295,6 @@ export enum ModerationActionRequestType {
   PREVIEW_CASE_MESSAGE_DELETION = 'preview_case_message_deletion',
   EXECUTE_CASE_MESSAGE_DELETION = 'execute_case_message_deletion',
   BAN_CASE_USER_WITH_MESSAGE_CLEANUP = 'ban_case_user_with_message_cleanup',
-  QUARANTINE_COMPROMISED_ACCOUNT = 'quarantine_compromised_account',
 }
 
 export enum ModerationActionRequestStatus {

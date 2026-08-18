@@ -7,7 +7,6 @@ import { formatCaseAction } from '@/lib/casePresentation';
 import { InboxActionForm, type InboxStateAction } from '@/components/inbox/InboxActionForm';
 import type { InboxActionState } from '@/lib/inboxActionState';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
-import { resolveDurableRequestForCaseAction } from '@/lib/caseActionRequestState';
 import {
   CaseBanActionControl,
   CaseMessageCleanupControls,
@@ -28,7 +27,6 @@ export interface CaseMessageCleanupIntegration {
 export type WebCaseAction = Extract<
   CaseAction,
   | 'verify_user'
-  | 'quarantine_compromised_account'
   | 'kick_user'
   | 'ban_user'
   | 'ban_by_id'
@@ -128,10 +126,7 @@ export function CaseActionControls({
                   queueInboxCaseAction.bind(null, guildId, caseId, action) as InboxStateAction
                 }
                 buttonLabel={formatCaseAction(action)}
-                durableRequest={resolveDurableRequestForCaseAction(
-                  action,
-                  actionRequestsByAction?.[action]
-                )}
+                durableRequest={actionRequestsByAction?.[action]}
                 key={`${caseId}-${action}`}
                 requestBaseHref={`/admin/guild/${guildId}/operations`}
               />
@@ -172,10 +167,7 @@ export function CaseActionControls({
                     }
                   : undefined
               }
-              durableRequest={resolveDurableRequestForCaseAction(
-                action,
-                actionRequestsByAction?.[action]
-              )}
+              durableRequest={actionRequestsByAction?.[action]}
               key={`${caseId}-${action}`}
               requestBaseHref={`/admin/guild/${guildId}/operations`}
               standardBanFormAction={
@@ -201,10 +193,7 @@ export function CaseActionControls({
                   }
                   buttonClassName="button compact-button danger-button"
                   buttonLabel={`Queue ${formatCaseAction(action)}`}
-                  durableRequest={resolveDurableRequestForCaseAction(
-                    action,
-                    actionRequestsByAction?.[action]
-                  )}
+                  durableRequest={actionRequestsByAction?.[action]}
                   formClassName="destructive-action-panel"
                   requestBaseHref={`/admin/guild/${guildId}/operations`}
                 >

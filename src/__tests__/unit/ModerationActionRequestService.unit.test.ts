@@ -110,14 +110,6 @@ const verifyRequest: ModerationActionRequest = {
   verification_event_id: 'ver-1',
 };
 
-const quarantineRequest: ModerationActionRequest = {
-  ...verifyRequest,
-  action_type: ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT,
-  id: 'quarantine-request-1',
-  idempotency_key: 'web:case-action:quarantine_compromised_account:guild-1:ver-1',
-  metadata: { reason: 'Owner reported account compromise.' },
-};
-
 const openAdminCaseRequest: ModerationActionRequest = {
   ...baseRequest,
   action_type: ModerationActionRequestType.OPEN_ADMIN_CASE,
@@ -762,21 +754,6 @@ describe('ModerationActionRequestService', () => {
         user_id: 'user-1',
       })),
     };
-    const accountQuarantineService = {
-      quarantine: jest.fn(async () => ({
-        status: 'parked',
-        verificationEvent: { containment_status: 'contained' },
-        roleResult: { failedRemovals: [], skippedRoles: [] },
-        lockdown: { plannedActions: [] },
-        memberAudit: {
-          memberId: 'user-1',
-          bypasses: [],
-          retainedPrivilegedRoleIds: [],
-          retainedAdministratorRoleIds: [],
-          unremovablePrivilegeReasons: [],
-        },
-      })),
-    };
     const service = new ModerationActionRequestService(
       repository,
       verificationEventRepository as any,
@@ -793,8 +770,7 @@ describe('ModerationActionRequestService', () => {
       productAnalyticsService as any,
       setupDiagnosticsService as any,
       messageDeletionJobs as any,
-      messageCleanupService as any,
-      accountQuarantineService as any
+      messageCleanupService as any
     );
 
     return {
@@ -828,41 +804,8 @@ describe('ModerationActionRequestService', () => {
       messageDeletionJobs,
       userModerationService,
       verificationEventRepository,
-      accountQuarantineService,
     };
   }
-
-  it('repairs and parks compromised-account quarantine requests through the bot worker', async () => {
-    const {
-      accountQuarantineService,
-      member,
-      moderator,
-      repository,
-      securityActionService,
-      service,
-      verificationEventRepository,
-    } = buildService([quarantineRequest]);
-
-    await expect(service.processPendingRequests()).resolves.toBe(1);
-
-    expect(securityActionService.repairActiveCase).toHaveBeenCalledWith(member);
-    expect(verificationEventRepository.findActiveByUserAndServer).toHaveBeenCalledWith(
-      'user-1',
-      'guild-1'
-    );
-    expect(accountQuarantineService.quarantine).toHaveBeenCalledWith(
-      member,
-      expect.objectContaining({ id: 'ver-1' }),
-      moderator,
-      'Owner reported account compromise.'
-    );
-    expect(repository.completed[0]).toEqual(
-      expect.objectContaining({
-        id: quarantineRequest.id,
-        result: expect.objectContaining({ parked: true }),
-      })
-    );
-  });
 
   it('opens observed cases through the logged-in bot Discord client', async () => {
     const { repository, securityActionService, service, member, moderator } = buildService();

@@ -103,7 +103,6 @@ function buildHarness(
   const enabled = input.enabled ?? true;
   const ready = input.ready ?? true;
   const retainedPrivilegedRole = input.retainedPrivilegedRole ?? false;
-  const containmentReady = ready && !retainedPrivilegedRole;
   const member = {
     id: 'user-1',
     guild: { id: 'guild-1' },
@@ -112,22 +111,15 @@ function buildHarness(
       createdAt: new Date('2025-01-01T00:00:00Z'),
     },
   } as unknown as GuildMember;
-  const updatedEvent = {
-    ...event,
-    case_kind: CaseKind.COMPROMISED_ACCOUNT,
-    attention_state: containmentReady
-      ? CaseAttentionState.PARKED
-      : CaseAttentionState.REVIEW_REQUIRED,
-    containment_status: containmentReady
-      ? CaseContainmentStatus.CONTAINED
-      : CaseContainmentStatus.INCOMPLETE,
-  };
   const verificationEvents = {
     claimQuarantineAttempt: jest.fn().mockResolvedValue({
       ...event,
       containment_status: CaseContainmentStatus.IN_PROGRESS,
     }),
-    update: jest.fn().mockResolvedValue(updatedEvent),
+    update: jest.fn().mockImplementation(async (_id: string, data: Partial<VerificationEvent>) => ({
+      ...event,
+      ...data,
+    })),
   } as unknown as jest.Mocked<IVerificationEventRepository>;
   const roleQuarantine = {
     previewCompromisedAccount: jest.fn().mockResolvedValue(rolePreview),
@@ -327,7 +319,7 @@ describe('AccountQuarantineService', () => {
     expect(harness.roleManager.assignCaseRole).not.toHaveBeenCalled();
   });
 
-  it('releases the durable claim when containment side effects fail', async () => {
+  it('records and surfaces a failed attempt before role removal completes', async () => {
     const harness = buildHarness();
     harness.roleQuarantine.quarantineCompromisedAccount.mockRejectedValueOnce(
       new Error('Discord unavailable')
@@ -342,11 +334,63 @@ describe('AccountQuarantineService', () => {
       )
     ).rejects.toThrow('Discord unavailable');
 
-    expect(harness.verificationEvents.update).toHaveBeenCalledWith(event.id, {
-      attention_state: CaseAttentionState.REVIEW_REQUIRED,
-      containment_status: CaseContainmentStatus.INCOMPLETE,
-      parked_at: null,
-      parked_by: null,
-    });
+    expect(harness.verificationEvents.update).toHaveBeenCalledWith(
+      event.id,
+      expect.objectContaining({
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        parked_at: null,
+        parked_by: null,
+      })
+    );
+    expect(harness.adminActions.recordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          result: 'failed',
+          failure_stage: 'role_removal',
+        }),
+      })
+    );
+    expect(harness.notificationManager.updateNotificationButtons).toHaveBeenCalled();
+    expect(harness.moderationQueue.upsertCaseMirror).toHaveBeenCalled();
+  });
+
+  it('surfaces partial role removal when applying the case role fails', async () => {
+    const harness = buildHarness();
+    harness.roleManager.assignCaseRole.mockRejectedValueOnce(new Error('Missing permissions'));
+
+    await expect(
+      harness.service.quarantine(
+        harness.member,
+        event,
+        { id: 'moderator-1' } as User,
+        'Compromise report'
+      )
+    ).rejects.toThrow('Missing permissions');
+
+    expect(harness.verificationEvents.update).toHaveBeenCalledWith(
+      event.id,
+      expect.objectContaining({
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        metadata: expect.objectContaining({
+          account_quarantine: expect.objectContaining({
+            result: 'failed',
+            failure_stage: 'case_role_assignment',
+            removed_role_ids: ['role-1'],
+            snapshot_id: 'snapshot-1',
+          }),
+        }),
+      })
+    );
+    expect(harness.adminActions.recordAction).toHaveBeenCalled();
+    expect(harness.notificationManager.logActionToMessage).not.toHaveBeenCalled();
+    expect(harness.notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
+      expect.objectContaining({ containment_status: CaseContainmentStatus.INCOMPLETE }),
+      VerificationStatus.PENDING
+    );
+    expect(harness.moderationQueue.upsertCaseMirror).toHaveBeenCalled();
   });
 });

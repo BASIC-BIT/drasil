@@ -31,7 +31,6 @@ import {
 export type WebCaseAction = Extract<
   CaseAction,
   | 'verify_user'
-  | 'quarantine_compromised_account'
   | 'kick_user'
   | 'ban_user'
   | 'ban_by_id'
@@ -60,7 +59,6 @@ export interface CaseActionQueueResult {
 export interface QueueCaseActionInput {
   readonly action: WebCaseAction;
   readonly adminId: string;
-  readonly attemptId?: string | null;
   readonly caseId: string;
   readonly guildId: string;
   readonly reason?: string | null;
@@ -84,13 +82,6 @@ export function resolveCaseActionQueueStatus(
     return 'already_handled';
   }
   return status === 'failed' ? 'failed' : 'queued';
-}
-
-export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): string {
-  const baseKey = `web:case-action:${input.action}:${input.guildId}:${input.caseId}`;
-  return input.action === 'quarantine_compromised_account' && input.attemptId
-    ? `${baseKey}:${input.attemptId}`
-    : baseKey;
 }
 
 interface CaseSummaryRow {
@@ -210,7 +201,6 @@ const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActi
   reopen_case: 'reopen_case',
   sync_existing_ban: 'sync_existing_ban',
   verify_user: 'verify_case_user',
-  quarantine_compromised_account: 'quarantine_compromised_account',
 };
 
 function sortCaseSummariesForHistory(cases: readonly CaseSummary[]): CaseSummary[] {
@@ -812,7 +802,7 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       actionType: requestTypeByCaseAction[input.action],
       actorId: input.adminId,
       actorSurface: 'web',
-      idempotencyKey: buildCaseActionIdempotencyKey(input),
+      idempotencyKey: `web:case-action:${input.action}:${input.guildId}:${input.caseId}`,
       metadata: {
         case_action: input.action,
         ...(input.reason ? { reason: input.reason } : {}),

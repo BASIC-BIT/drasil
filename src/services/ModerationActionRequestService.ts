@@ -13,7 +13,7 @@ import {
   ThreadChannel,
   User,
 } from 'discord.js';
-import { inject, injectable, optional } from 'inversify';
+import { inject, injectable } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { ReportInstructionsManager } from '../controllers/ReportInstructionsManager';
 import { Prisma } from '../db/prisma';
@@ -47,7 +47,6 @@ import { ICombinedBanLifecycleService, IUserModerationService } from './UserMode
 import { MessageCleanupService } from './MessageCleanupService';
 import { ICaseThreadClosureSweepService } from './CaseThreadClosureSweepService';
 import { CaseRoleLockdownReport, ICaseRoleLockdownService } from './CaseRoleLockdownService';
-import { IAccountQuarantineService } from './AccountQuarantineService';
 
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_MAX_REQUESTS_PER_TICK = 5;
@@ -91,8 +90,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     [ModerationActionRequestType.RESTORE_DETECTION_ACCOUNTING]: (request) =>
       this.restoreDetectionAccounting(request),
     [ModerationActionRequestType.VERIFY_CASE_USER]: (request) => this.verifyCaseUser(request),
-    [ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT]: (request) =>
-      this.quarantineCompromisedAccount(request),
     [ModerationActionRequestType.CLOSE_CASE_NO_ACTION]: (request) =>
       this.closeCaseNoAction(request),
     [ModerationActionRequestType.KICK_CASE_USER]: (request) => this.kickCaseUser(request),
@@ -156,10 +153,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     @inject(TYPES.MessageDeletionJobRepository)
     private readonly messageDeletionJobs: IMessageDeletionJobRepository,
     @inject(TYPES.MessageCleanupService)
-    private readonly messageCleanupService: MessageCleanupService,
-    @inject(TYPES.AccountQuarantineService)
-    @optional()
-    private readonly accountQuarantineService?: IAccountQuarantineService
+    private readonly messageCleanupService: MessageCleanupService
   ) {}
 
   public start(): void {
@@ -900,49 +894,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       target_user_id: request.target_user_id,
       verification_event_id: request.verification_event_id,
       verified,
-    });
-  }
-
-  private async quarantineCompromisedAccount(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.verification_event_id) {
-      throw new Error('Account-quarantine request is missing target user or case id.');
-    }
-    if (!this.accountQuarantineService) {
-      throw new Error('Compromised-account quarantine is unavailable.');
-    }
-    const reason = this.readMetadataString(request.metadata, 'reason')?.trim();
-    if (!reason) {
-      throw new Error('Account-quarantine request requires a reason.');
-    }
-
-    const [member, moderator] = await Promise.all([
-      this.fetchGuildMember(request.server_id, request.target_user_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    await this.securityActionService.repairActiveCase(member);
-    const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
-      request.target_user_id,
-      request.server_id
-    );
-    if (!activeCase || activeCase.id !== request.verification_event_id) {
-      throw new Error('The requested verification case is no longer active.');
-    }
-
-    const result = await this.accountQuarantineService.quarantine(
-      member,
-      activeCase,
-      moderator,
-      reason
-    );
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      containment_status: result.verificationEvent.containment_status,
-      failed_role_removals: result.roleResult.failedRemovals.length,
-      member_bypasses: result.memberAudit.bypasses.length,
-      parked: result.status === 'parked',
-      retained_roles: result.roleResult.skippedRoles.length,
-      target_user_id: request.target_user_id,
-      verification_event_id: request.verification_event_id,
     });
   }
 

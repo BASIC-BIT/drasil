@@ -417,6 +417,31 @@ describe('NotificationPresentationBuilder (unit)', () => {
     expect(getField(embed, 'Account Quarantine')).toContain('Permission bypasses: 1');
   });
 
+  it('renders partial-failure details in the persistent quarantine notification', () => {
+    const embed = new EmbedBuilder().setTitle('Suspicious User');
+    builder.upsertAccountQuarantinePresentation(
+      embed,
+      buildVerificationEvent({
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        metadata: {
+          account_quarantine: {
+            result: 'failed',
+            failure_stage: 'case_role_assignment',
+            error: 'Missing permissions',
+            removed_role_ids: ['role-1'],
+          },
+        },
+      })
+    );
+
+    expect(getField(embed, 'Account Quarantine')).toContain(
+      'Containment attempt failed during case role assignment: Missing permissions'
+    );
+    expect(getField(embed, 'Account Quarantine')).toContain('Removed roles: 1');
+  });
+
   it('collapses observed action rows after an observed alert is actioned', () => {
     const rows = builder.createObservedActionRows('user-1', 'det-1', 'guild-1', {
       actioned: true,
