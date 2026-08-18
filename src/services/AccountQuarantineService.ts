@@ -52,13 +52,18 @@ export interface AccountQuarantineResult {
   readonly memberAudit: CaseRoleLockdownMemberAudit;
 }
 
+export interface AccountQuarantineRequestContext {
+  readonly moderationActionRequestId?: string;
+}
+
 export interface IAccountQuarantineService {
   preview(member: GuildMember, event: VerificationEvent): Promise<AccountQuarantinePreview>;
   quarantine(
     member: GuildMember,
     event: VerificationEvent,
     moderator: User,
-    reason: string
+    reason: string,
+    context?: AccountQuarantineRequestContext
   ): Promise<AccountQuarantineResult>;
 }
 
@@ -112,7 +117,8 @@ export class AccountQuarantineService implements IAccountQuarantineService {
     member: GuildMember,
     event: VerificationEvent,
     moderator: User,
-    reason: string
+    reason: string,
+    context: AccountQuarantineRequestContext = {}
   ): Promise<AccountQuarantineResult> {
     this.assertActiveTarget(member, event);
     const trimmedReason = reason.trim();
@@ -212,6 +218,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
         failureStage,
         member,
         moderator,
+        moderationActionRequestId: context.moderationActionRequestId,
         reason: trimmedReason,
         roleResult,
       });
@@ -225,6 +232,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
     const auditMetadata = {
       attempted_at: now.toISOString(),
       attempted_by: moderator.id,
+      moderation_action_request_id: context.moderationActionRequestId ?? null,
       reason: trimmedReason,
       result: complete ? 'contained' : 'incomplete',
       case_role_assigned: caseRoleAssigned,
@@ -265,6 +273,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
         failureStage: 'case_state_persistence',
         member,
         moderator,
+        moderationActionRequestId: context.moderationActionRequestId,
         reason: trimmedReason,
         roleResult,
       });
@@ -281,6 +290,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
         failureStage: 'case_state_persistence',
         member,
         moderator,
+        moderationActionRequestId: context.moderationActionRequestId,
         reason: trimmedReason,
         roleResult,
       });
@@ -377,12 +387,14 @@ export class AccountQuarantineService implements IAccountQuarantineService {
     readonly failureStage: string;
     readonly member: GuildMember;
     readonly moderator: User;
+    readonly moderationActionRequestId?: string;
     readonly reason: string;
     readonly roleResult?: RoleQuarantineApplyResult;
   }): Promise<void> {
     const failureMetadata = {
       attempted_at: new Date().toISOString(),
       attempted_by: input.moderator.id,
+      moderation_action_request_id: input.moderationActionRequestId ?? null,
       reason: input.reason,
       result: 'failed',
       failure_stage: input.failureStage,

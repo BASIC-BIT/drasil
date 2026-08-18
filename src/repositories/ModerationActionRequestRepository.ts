@@ -115,6 +115,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
           and verification_event_id is not null
           and action_type not in (
             'preview_account_quarantine'::moderation_action_request_type,
+            'quarantine_compromised_account'::moderation_action_request_type,
             'preview_case_message_deletion'::moderation_action_request_type,
             'execute_case_message_deletion'::moderation_action_request_type,
             'ban_case_user_with_message_cleanup'::moderation_action_request_type
@@ -135,6 +136,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
                status = 'processing'::moderation_action_request_status
                and action_type in (
                  'preview_account_quarantine'::moderation_action_request_type,
+                 'quarantine_compromised_account'::moderation_action_request_type,
                  'preview_case_message_deletion'::moderation_action_request_type,
                  'execute_case_message_deletion'::moderation_action_request_type,
                  'ban_case_user_with_message_cleanup'::moderation_action_request_type

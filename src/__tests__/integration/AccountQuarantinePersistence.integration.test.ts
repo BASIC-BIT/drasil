@@ -84,21 +84,34 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
         status: 'completed',
       })
     );
-    await expect(
-      requests.enqueue({
-        actionType: ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT,
-        actorId: 'moderator-1',
-        actorSurface: 'web',
-        idempotencyKey: `web:quarantine-execute:${preview.id}`,
-        metadata: { preview_request_id: preview.id, quarantine_phase: 'execute' },
-        serverId,
-        targetUserId: userId,
-        verificationEventId: verification.id,
-      })
-    ).resolves.toEqual(
+    const execute = await requests.enqueue({
+      actionType: ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT,
+      actorId: 'moderator-1',
+      actorSurface: 'web',
+      idempotencyKey: `web:quarantine-execute:${preview.id}`,
+      metadata: { preview_request_id: preview.id, quarantine_phase: 'execute' },
+      serverId,
+      targetUserId: userId,
+      verificationEventId: verification.id,
+    });
+    expect(execute).toEqual(
       expect.objectContaining({
         action_type: ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT,
         status: 'queued',
+      })
+    );
+    await prisma.$executeRaw`
+      update moderation_action_requests
+      set status = 'processing'::moderation_action_request_status,
+          updated_at = now() - interval '16 minutes'
+      where id = ${execute.id}::uuid
+    `;
+
+    await expect(requests.claimNext()).resolves.toEqual(
+      expect.objectContaining({
+        action_type: ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT,
+        id: execute.id,
+        status: 'processing',
       })
     );
   });

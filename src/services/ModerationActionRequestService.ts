@@ -23,6 +23,9 @@ import { IMessageDeletionJobRepository } from '../repositories/MessageDeletionJo
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   MessageDeletionBanStatus,
   MessageDeletionCaseFinalizationStatus,
   MessageDeletionJobMode,
@@ -49,6 +52,7 @@ import { MessageCleanupService } from './MessageCleanupService';
 import { ICaseThreadClosureSweepService } from './CaseThreadClosureSweepService';
 import { CaseRoleLockdownReport, ICaseRoleLockdownService } from './CaseRoleLockdownService';
 import { IAccountQuarantineService } from './AccountQuarantineService';
+import { buildAccountQuarantinePreviewFingerprint } from '../utils/accountQuarantinePreview';
 
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_MAX_REQUESTS_PER_TICK = 5;
@@ -922,11 +926,16 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       role_id: roleId,
       role_name: member.guild.roles.cache.get(roleId)?.name ?? null,
     });
+    const containmentFingerprint = buildAccountQuarantinePreviewFingerprint(preview, {
+      adminNotificationReady,
+      recoveryThreadReady,
+    });
 
     await this.repository.complete(request.id, {
       action_type: request.action_type,
       admin_notification_ready: adminNotificationReady,
       can_contain: preview.enabled && preview.canContain,
+      containment_fingerprint: containmentFingerprint,
       case_role: preview.caseRoleId ? roleSummary(preview.caseRoleId) : null,
       case_role_ready:
         preview.caseRoleId !== null &&
@@ -969,21 +978,42 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (!reason) {
       throw new Error('Account-quarantine request requires a reason.');
     }
-    await this.assertValidAccountQuarantinePreview(request);
+    if (await this.completeCommittedAccountQuarantineRequest(request)) {
+      return;
+    }
+    const previewRequest = await this.assertValidAccountQuarantinePreview(request);
 
-    const [member, moderator] = await Promise.all([
+    const [member, moderator, , activeCase] = await Promise.all([
       this.fetchGuildMember(request.server_id, request.target_user_id ?? ''),
       this.fetchModerator(request.actor_id),
       this.requireAccountQuarantineModerator(request),
+      this.verificationEventRepository.findActiveByUserAndServer(
+        request.target_user_id ?? '',
+        request.server_id
+      ),
     ]);
-    const repair = await this.securityActionService.repairActiveCase(member);
-    const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
-      request.target_user_id ?? '',
-      request.server_id
-    );
     if (!activeCase || activeCase.id !== request.verification_event_id) {
       throw new Error('The previewed verification case is no longer active.');
     }
+    const livePreview = await accountQuarantineService.preview(member, activeCase);
+    const [recoveryThreadReady, adminNotificationReady] = await Promise.all([
+      this.isRecoveryThreadReady(activeCase.thread_id),
+      this.isAdminNotificationReady(
+        activeCase.notification_channel_id,
+        activeCase.notification_message_id
+      ),
+    ]);
+    const liveFingerprint = buildAccountQuarantinePreviewFingerprint(livePreview, {
+      adminNotificationReady,
+      recoveryThreadReady,
+    });
+    if (
+      this.readMetadataString(previewRequest.result, 'containment_fingerprint') !== liveFingerprint
+    ) {
+      throw new Error('The live account-quarantine containment state changed; run a new preview.');
+    }
+
+    const repair = await this.securityActionService.repairActiveCase(member);
     if (repair.verificationEventId !== activeCase.id || !repair.threadId) {
       throw new Error(
         'A usable user verification thread is required before this account can be quarantined.'
@@ -995,7 +1025,13 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       );
     }
 
-    const result = await accountQuarantineService.quarantine(member, activeCase, moderator, reason);
+    const result = await accountQuarantineService.quarantine(
+      member,
+      activeCase,
+      moderator,
+      reason,
+      { moderationActionRequestId: request.id }
+    );
     await this.repository.complete(request.id, {
       action_type: request.action_type,
       containment_status: result.verificationEvent.containment_status,
@@ -1052,7 +1088,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
 
   private async assertValidAccountQuarantinePreview(
     request: ModerationActionRequest
-  ): Promise<void> {
+  ): Promise<ModerationActionRequest> {
     if (!request.target_user_id || !request.verification_event_id) {
       throw new Error('Account-quarantine request is missing target user or case id.');
     }
@@ -1073,6 +1109,52 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     ) {
       throw new Error('The live account-quarantine preview is missing, stale, or mismatched.');
     }
+    return previewRequest;
+  }
+
+  private async completeCommittedAccountQuarantineRequest(
+    request: ModerationActionRequest
+  ): Promise<boolean> {
+    if (!request.target_user_id || !request.verification_event_id) {
+      return false;
+    }
+    const event = await this.verificationEventRepository.findById(request.verification_event_id);
+    if (
+      !event ||
+      event.server_id !== request.server_id ||
+      event.user_id !== request.target_user_id ||
+      event.case_kind !== CaseKind.COMPROMISED_ACCOUNT ||
+      event.quarantine_attempt_id !== null
+    ) {
+      return false;
+    }
+    const audit = this.readMetadataRecord(event.metadata, 'account_quarantine');
+    if (this.readMetadataString(audit, 'moderation_action_request_id') !== request.id) {
+      return false;
+    }
+    const parked =
+      event.attention_state === CaseAttentionState.PARKED &&
+      event.containment_status === CaseContainmentStatus.CONTAINED;
+    const incomplete =
+      event.attention_state === CaseAttentionState.REVIEW_REQUIRED &&
+      event.containment_status === CaseContainmentStatus.INCOMPLETE;
+    if (!parked && !incomplete) {
+      return false;
+    }
+
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      containment_status: event.containment_status,
+      failed_role_removals: this.readMetadataArrayLength(audit, 'failed_removals'),
+      member_bypasses: this.readMetadataArrayLength(audit, 'member_bypasses'),
+      parked,
+      preview_request_id: this.readMetadataString(request.metadata, 'preview_request_id'),
+      recovered_after_worker_interruption: true,
+      retained_roles: this.readMetadataArrayLength(audit, 'retained_roles'),
+      target_user_id: request.target_user_id,
+      verification_event_id: request.verification_event_id,
+    });
+    return true;
   }
 
   private async isRecoveryThreadReady(threadId: string | null): Promise<boolean> {
@@ -1797,6 +1879,24 @@ export class ModerationActionRequestService implements IModerationActionRequestS
 
     const value = (metadata as Record<string, unknown>)[key];
     return typeof value === 'string' ? value : null;
+  }
+
+  private readMetadataRecord(metadata: unknown, key: string): Record<string, unknown> | null {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return null;
+    }
+    const value = (metadata as Record<string, unknown>)[key];
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  }
+
+  private readMetadataArrayLength(metadata: unknown, key: string): number {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return 0;
+    }
+    const value = (metadata as Record<string, unknown>)[key];
+    return Array.isArray(value) ? value.length : 0;
   }
 
   private readMetadataBoolean(metadata: unknown, key: string): boolean | null {

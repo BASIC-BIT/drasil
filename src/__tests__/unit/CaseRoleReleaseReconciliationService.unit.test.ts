@@ -43,8 +43,20 @@ function buildService(options: {
   notifications?: any;
   queue?: any;
 }): CaseRoleReleaseReconciliationService {
+  const client = {
+    ...options.client,
+    channels: options.client.channels ?? {
+      fetch: jest.fn().mockResolvedValue({
+        archived: false,
+        isThread: jest.fn().mockReturnValue(true),
+        locked: false,
+        setArchived: jest.fn().mockResolvedValue(undefined),
+        setLocked: jest.fn().mockResolvedValue(undefined),
+      }),
+    },
+  };
   return new CaseRoleReleaseReconciliationService(
-    options.client,
+    client,
     options.verificationEvents,
     options.roleManager ?? {
       assignCaseRole: jest.fn().mockResolvedValue(true),
@@ -83,6 +95,7 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
       containment_status: CaseContainmentStatus.CONTAINED,
       parked_at: new Date('2026-08-18T10:00:00.000Z'),
       parked_by: 'moderator-1',
+      thread_id: 'thread-1',
     });
     await verificationEvents.claimCaseRoleRelease(
       verificationEvent.id,
@@ -144,6 +157,7 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       attention_state: CaseAttentionState.PARKED,
       containment_status: CaseContainmentStatus.CONTAINED,
+      thread_id: 'thread-1',
     });
     await verificationEvents.claimCaseRoleRelease(
       verificationEvent.id,
@@ -282,6 +296,57 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
     );
   });
 
+  it('reopens an auto-archived recovery thread while keeping a healthy case parked', async () => {
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      attention_state: CaseAttentionState.PARKED,
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T10:00:00.000Z'),
+      parked_by: 'moderator-1',
+      thread_id: 'thread-1',
+    });
+    const member = {
+      id: 'user-1',
+      roles: { cache: new Map([['case-role-1', { id: 'case-role-1' }]]) },
+    };
+    const guild = { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue(member) } };
+    const thread = {
+      archived: true,
+      isThread: jest.fn().mockReturnValue(true),
+      locked: false,
+      setArchived: jest.fn().mockResolvedValue(undefined),
+      setLocked: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = buildService({
+      client: {
+        channels: { fetch: jest.fn().mockResolvedValue(thread) },
+        guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() },
+      },
+      verificationEvents,
+    });
+
+    await service.runOnce(new Date('2026-08-18T12:00:00.000Z'));
+
+    expect(thread.setArchived).toHaveBeenCalledWith(
+      false,
+      'Keep parked account-recovery thread available'
+    );
+    expect(thread.setLocked).not.toHaveBeenCalled();
+    await expect(verificationEvents.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+      })
+    );
+  });
+
   it('audits the persisted quarantine role after the configured case role changes', async () => {
     const verificationEvents = new InMemoryVerificationEventRepository();
     const verificationEvent = await verificationEvents.createFromDetection(
@@ -297,6 +362,7 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
       quarantine_case_role_id: 'original-case-role',
       parked_at: new Date('2026-08-18T10:00:00.000Z'),
       parked_by: 'moderator-1',
+      thread_id: 'thread-1',
     });
     const member = {
       id: 'user-1',
@@ -333,6 +399,7 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       attention_state: CaseAttentionState.PARKED,
       containment_status: CaseContainmentStatus.CONTAINED,
+      thread_id: 'thread-1',
     });
     const member = {
       id: 'user-1',

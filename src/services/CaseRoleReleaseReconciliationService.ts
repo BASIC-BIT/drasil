@@ -343,8 +343,10 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
     let member: GuildMember | null = null;
     let caseRolePresent = false;
     let containmentReady = false;
+    let recoveryThreadReady = false;
     let detail = 'Live containment audit failed.';
     try {
+      recoveryThreadReady = await this.ensureParkedRecoveryThreadOpen(verificationEvent.thread_id);
       member = await guild.members.fetch(verificationEvent.user_id);
       const serverConfig = await this.configService.getServerConfig(guild.id);
       const assignedCaseRoleId =
@@ -363,6 +365,7 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
         (issue) => issue.code === 'lockdown-case-role-global-permissions'
       );
       containmentReady =
+        recoveryThreadReady &&
         caseRolePresent &&
         lockdown.enabled &&
         lockdown.errorCount === 0 &&
@@ -374,7 +377,7 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
         memberAudit.unremovablePrivilegeReasons.length === 0;
       detail = containmentReady
         ? 'Live containment audit passed.'
-        : `Live containment audit found drift: case role present=${caseRolePresent}, lockdown errors=${lockdown.errorCount}, planned actions=${lockdown.plannedActions.length}, bypasses=${memberAudit.bypasses.length}, privileged roles=${memberAudit.retainedPrivilegedRoleIds.length}, unremovable privileges=${memberAudit.unremovablePrivilegeReasons.length}.`;
+        : `Live containment audit found drift: recovery thread ready=${recoveryThreadReady}, case role present=${caseRolePresent}, lockdown errors=${lockdown.errorCount}, planned actions=${lockdown.plannedActions.length}, bypasses=${memberAudit.bypasses.length}, privileged roles=${memberAudit.retainedPrivilegedRoleIds.length}, unremovable privileges=${memberAudit.unremovablePrivilegeReasons.length}.`;
     } catch (error) {
       detail = `Live containment audit failed: ${this.formatError(error)}`;
     }
@@ -407,6 +410,23 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
       ),
       this.moderationQueueService.upsertCaseMirror(verificationEvent),
     ]);
+  }
+
+  private async ensureParkedRecoveryThreadOpen(threadId: string | null): Promise<boolean> {
+    if (!threadId) {
+      return false;
+    }
+    const channel = await this.client.channels.fetch(threadId).catch(() => null);
+    if (!channel?.isThread()) {
+      return false;
+    }
+    if (channel.archived) {
+      await channel.setArchived(false, 'Keep parked account-recovery thread available');
+    }
+    if (channel.locked) {
+      await channel.setLocked(false, 'Keep parked account-recovery thread available');
+    }
+    return true;
   }
 
   private async fetchMember(serverId: string, userId: string): Promise<GuildMember> {
