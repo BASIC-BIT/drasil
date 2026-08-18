@@ -759,13 +759,18 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     const attemptId = `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}integration`;
 
     const claimed = await verifications.claimTerminalActions(
-      [verification.id],
+      [standardVerification.id, verification.id],
       serverId,
       userId,
       attemptId
     );
 
     expect(claimed).toEqual([
+      expect.objectContaining({
+        id: standardVerification.id,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: attemptId,
+      }),
       expect.objectContaining({
         id: verification.id,
         containment_status: CaseContainmentStatus.IN_PROGRESS,
@@ -786,7 +791,7 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       {
         id: standardVerification.id,
         metadata: {},
-        requiresTerminalActionClaim: false,
+        requiresTerminalActionClaim: true,
       },
       {
         id: verification.id,

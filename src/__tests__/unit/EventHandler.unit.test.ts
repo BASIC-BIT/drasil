@@ -1417,6 +1417,54 @@ describe('EventHandler (unit)', () => {
     );
   });
 
+  it('returns a breach to durable review when every attention delivery path fails', async () => {
+    const activeCase = {
+      id: 'verification-1',
+      user_id: 'user-1',
+      server_id: 'guild-1',
+      thread_id: 'recovery-thread',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_attempt_id: null,
+      parked_at: new Date('2026-08-18T12:00:00.000Z'),
+      parked_by: 'moderator-1',
+      metadata: {},
+    };
+    const updateQuarantineAttempt = jest.fn().mockResolvedValue(activeCase);
+    const handler = buildHandler({
+      configService: buildQuarantineConfigService(),
+      notificationManager: {
+        notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(false),
+      },
+      moderationQueueService: {
+        recordQuarantineBreachAttention: jest.fn().mockResolvedValue(false),
+      },
+      verificationEventRepository: {
+        findParkedByServer: jest.fn().mockResolvedValue([activeCase]),
+        findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),
+        updateQuarantineAttempt,
+      },
+    });
+    const message = buildMessage(new PermissionsBitField());
+
+    await (handler as any).recordParkedQuarantineBreach(message);
+
+    expect(updateQuarantineAttempt).toHaveBeenCalledWith(
+      activeCase.id,
+      expect.stringMatching(/^case-attention:/),
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        parked_at: null,
+        parked_by: null,
+        metadata: expect.objectContaining({
+          breach_attention_message_id: message.id,
+        }),
+      })
+    );
+  });
+
   it('suppresses breach attention during an active verification release', async () => {
     const activeCase = {
       id: 'verification-1',

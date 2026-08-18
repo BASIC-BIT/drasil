@@ -559,10 +559,41 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     const mode: RoleQuarantineMode =
       purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT ? 'on' : settings.mode;
     const currentRoleIds = this.getSnapshotRoleIds(member, serverConfig.case_role_id);
-    const activeSnapshot = await this.snapshotRepository.findActiveByServerAndUser(
+    let activeSnapshot = await this.snapshotRepository.findActiveByServerAndUser(
       member.guild.id,
       member.id
     );
+
+    if (
+      activeSnapshot &&
+      purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT &&
+      activeSnapshot.created_at &&
+      member.joinedAt &&
+      member.joinedAt.getTime() > activeSnapshot.created_at.getTime()
+    ) {
+      await attemptFence?.assertOwner();
+      const abandonedSnapshot = await this.persistSnapshotUpdate(
+        activeSnapshot.id,
+        {
+          status: RoleQuarantineSnapshotStatus.ABANDONED,
+          metadata: {
+            ...this.metadataToRecord(activeSnapshot.metadata),
+            abandoned_at: new Date().toISOString(),
+            abandoned_by: moderator?.id ?? null,
+            abandon_reason: 'membership_replaced_before_new_quarantine',
+            replacement_membership_joined_at: member.joinedAt.toISOString(),
+          } as unknown as Prisma.JsonValue,
+        },
+        verificationEvent.id,
+        attemptFence
+      );
+      if (!abandonedSnapshot) {
+        throw new Error(
+          `Failed to abandon stale role quarantine snapshot for case ${verificationEvent.id}`
+        );
+      }
+      activeSnapshot = null;
+    }
 
     if (activeSnapshot && purpose === RoleQuarantineSnapshotPurpose.STANDARD_CASE) {
       return this.resultFromActiveSnapshot(activeSnapshot, mode, currentRoleIds);
@@ -588,9 +619,11 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       );
     const newlyPlannedRoleIds = removableRoles.map((role) => role.id);
     const continuingCompromisedSnapshot =
-      activeSnapshot?.purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT;
+      activeSnapshot?.purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT
+        ? activeSnapshot
+        : null;
     const originalRoleIds = continuingCompromisedSnapshot
-      ? activeSnapshot.original_role_ids
+      ? continuingCompromisedSnapshot.original_role_ids
       : this.uniqueStrings([...(activeSnapshot?.original_role_ids ?? []), ...currentRoleIds]);
     const plannedRoleIds = this.uniqueStrings([
       ...(activeSnapshot?.planned_role_ids ?? []),
@@ -613,7 +646,8 @@ export class RoleQuarantineService implements IRoleQuarantineService {
 
     const privilegedRoleIds = continuingCompromisedSnapshot
       ? this.readStringArray(
-          this.metadataToRecord(activeSnapshot.metadata).privileged_role_ids_at_snapshot
+          this.metadataToRecord(continuingCompromisedSnapshot.metadata)
+            .privileged_role_ids_at_snapshot
         )
       : removableRoles
           .filter((role) => this.hasPrivilegedPermissions(role, policy.privilegedPermissions))

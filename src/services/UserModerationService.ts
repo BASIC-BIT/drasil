@@ -580,25 +580,20 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     return verificationEvents.filter((event) => event.status === VerificationStatus.PENDING);
   }
 
-  private async claimParkedTerminalActions(
-    events: readonly VerificationEvent[]
-  ): Promise<{ events: VerificationEvent[]; attemptId: string | null }> {
+  private async claimPendingTerminalActions(events: readonly VerificationEvent[]): Promise<{
+    events: VerificationEvent[];
+    originalEvents: VerificationEvent[];
+    attemptId: string | null;
+  }> {
     this.assertNoQuarantineInProgress(events);
-    const parkedEvents = events.filter(
-      (event) =>
-        event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-        event.attention_state === CaseAttentionState.PARKED &&
-        event.containment_status === CaseContainmentStatus.CONTAINED &&
-        event.quarantine_attempt_id === null
-    );
-    if (parkedEvents.length === 0) {
-      return { events: [...events], attemptId: null };
+    if (events.length === 0) {
+      return { events: [], originalEvents: [], attemptId: null };
     }
 
-    const firstEvent = parkedEvents[0];
+    const firstEvent = events[0];
     const attemptId = `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${randomUUID()}`;
     const claimedEvents = await this.verificationEventRepository.claimTerminalActions(
-      parkedEvents.map((event) => event.id),
+      events.map((event) => event.id),
       firstEvent.server_id,
       firstEvent.user_id,
       attemptId
@@ -609,14 +604,14 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       );
     }
 
-    const claimedById = new Map(claimedEvents.map((event) => [event.id, event]));
     return {
-      events: events.map((event) => claimedById.get(event.id) ?? event),
+      events: claimedEvents,
+      originalEvents: [...events],
       attemptId,
     };
   }
 
-  private async rollbackParkedTerminalActions(
+  private async rollbackPendingTerminalActions(
     events: readonly VerificationEvent[],
     attemptId: string | null
   ): Promise<void> {
@@ -624,17 +619,15 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       return;
     }
     await Promise.allSettled(
-      events
-        .filter((event) => event.quarantine_attempt_id === attemptId)
-        .map((event) =>
-          this.verificationEventRepository.updateQuarantineAttempt(event.id, attemptId, {
-            case_kind: CaseKind.COMPROMISED_ACCOUNT,
-            attention_state: CaseAttentionState.PARKED,
-            containment_status: CaseContainmentStatus.CONTAINED,
-            parked_at: event.parked_at,
-            parked_by: event.parked_by,
-          })
-        )
+      events.map((event) =>
+        this.verificationEventRepository.updateQuarantineAttempt(event.id, attemptId, {
+          case_kind: event.case_kind,
+          attention_state: event.attention_state,
+          containment_status: event.containment_status,
+          parked_at: event.parked_at,
+          parked_by: event.parked_by,
+        })
+      )
     );
   }
 
@@ -1249,12 +1242,15 @@ export class UserModerationService implements IUserModerationService, ICombinedB
 
   public async performDiscordMemberBan(member: GuildMember, reason: string): Promise<void> {
     const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
-    const terminalClaim = await this.claimParkedTerminalActions(pendingVerificationEvents);
+    const terminalClaim = await this.claimPendingTerminalActions(pendingVerificationEvents);
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
     try {
       await member.ban({ reason: auditReason || 'Moderator-requested ban' });
     } catch (error) {
-      await this.rollbackParkedTerminalActions(terminalClaim.events, terminalClaim.attemptId);
+      await this.rollbackPendingTerminalActions(
+        terminalClaim.originalEvents,
+        terminalClaim.attemptId
+      );
       throw error;
     }
     console.log(`Banned user ${member.user.tag}. Reason: ${reason}`);
@@ -1265,14 +1261,17 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       userId,
       guild.id
     );
-    const terminalClaim = await this.claimParkedTerminalActions(
+    const terminalClaim = await this.claimPendingTerminalActions(
       verificationEvents.filter((event) => event.status === VerificationStatus.PENDING)
     );
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
     try {
       await guild.bans.create(userId, { reason: auditReason || 'Moderator-requested ban' });
     } catch (error) {
-      await this.rollbackParkedTerminalActions(terminalClaim.events, terminalClaim.attemptId);
+      await this.rollbackPendingTerminalActions(
+        terminalClaim.originalEvents,
+        terminalClaim.attemptId
+      );
       throw error;
     }
     console.log(`Banned user ${userId} for combined message cleanup. Reason: ${reason}`);
@@ -1525,7 +1524,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   ): Promise<boolean> {
     try {
       const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
-      const terminalClaim = await this.claimParkedTerminalActions(pendingVerificationEvents);
+      const terminalClaim = await this.claimPendingTerminalActions(pendingVerificationEvents);
       const claimedVerificationEvents = terminalClaim.events;
       const verificationEvent =
         claimedVerificationEvents.length > 0 ? claimedVerificationEvents[0] : null;
@@ -1534,8 +1533,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       try {
         await member.kick(reason);
       } catch (error) {
-        await this.rollbackParkedTerminalActions(
-          claimedVerificationEvents,
+        await this.rollbackPendingTerminalActions(
+          terminalClaim.originalEvents,
           terminalClaim.attemptId
         );
         throw error;
@@ -1635,7 +1634,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       const pendingVerificationEvents = verificationEvents.filter(
         (event) => event.status === VerificationStatus.PENDING
       );
-      const terminalClaim = await this.claimParkedTerminalActions(pendingVerificationEvents);
+      const terminalClaim = await this.claimPendingTerminalActions(pendingVerificationEvents);
       const claimedVerificationEvents = terminalClaim.events;
       const resolvedAt = new Date();
       let resolvedEvents: Array<{
@@ -1646,8 +1645,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       try {
         await guild.bans.create(targetUser ?? userId, { reason });
       } catch (banError) {
-        await this.rollbackParkedTerminalActions(
-          claimedVerificationEvents,
+        await this.rollbackPendingTerminalActions(
+          terminalClaim.originalEvents,
           terminalClaim.attemptId
         );
         throw banError;

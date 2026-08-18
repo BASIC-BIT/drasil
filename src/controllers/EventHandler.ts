@@ -1008,24 +1008,53 @@ export class EventHandler implements IEventHandler {
         if (!claimed) {
           return;
         }
+        let attentionDelivered = false;
         try {
-          await Promise.allSettled([
-            this.moderationQueueService?.recordQuarantineBreachAttention(claimed, message),
+          const [queueResult, directResult] = await Promise.allSettled([
+            this.moderationQueueService?.recordQuarantineBreachAttention(claimed, message) ??
+              Promise.resolve(false),
             this.notificationManager.notifyAccountQuarantineAttention(
               claimed,
               'containment_breach',
               message
             ),
           ]);
+          if (queueResult.status === 'rejected') {
+            console.warn(
+              `Failed to queue quarantine breach attention for case ${claimed.id}:`,
+              queueResult.reason
+            );
+          }
+          if (directResult.status === 'rejected') {
+            console.warn(
+              `Failed to send direct quarantine breach attention for case ${claimed.id}:`,
+              directResult.reason
+            );
+          }
+          const queueDelivered = queueResult.status === 'fulfilled' && queueResult.value === true;
+          const directDelivered =
+            directResult.status === 'fulfilled' && directResult.value === true;
+          attentionDelivered = queueDelivered || directDelivered;
         } finally {
           await this.verificationEventRepository.updateQuarantineAttempt(
             claimed.id,
             attentionAttemptId,
             {
-              attention_state: CaseAttentionState.PARKED,
-              containment_status: CaseContainmentStatus.CONTAINED,
-              parked_at: claimed.parked_at,
-              parked_by: claimed.parked_by,
+              attention_state: attentionDelivered
+                ? CaseAttentionState.PARKED
+                : CaseAttentionState.REVIEW_REQUIRED,
+              containment_status: attentionDelivered
+                ? CaseContainmentStatus.CONTAINED
+                : CaseContainmentStatus.INCOMPLETE,
+              parked_at: attentionDelivered ? claimed.parked_at : null,
+              parked_by: attentionDelivered ? claimed.parked_by : null,
+              metadata: attentionDelivered
+                ? undefined
+                : {
+                    ...this.metadataToRecord(claimed.metadata),
+                    breach_attention_delivery_failed_at: new Date().toISOString(),
+                    breach_attention_message_id: message.id,
+                  },
             }
           );
         }
@@ -1061,6 +1090,13 @@ export class EventHandler implements IEventHandler {
         event.attention_state === CaseAttentionState.PARKED
     );
     return parkedCase ?? newestActive;
+  }
+
+  private metadataToRecord(metadata: unknown): Record<string, unknown> {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return {};
+    }
+    return { ...(metadata as Record<string, unknown>) };
   }
 
   private async getCachedParkedQuarantineUserIds(serverId: string): Promise<ReadonlySet<string>> {

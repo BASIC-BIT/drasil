@@ -792,9 +792,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
           event.server_id === serverId &&
           event.user_id === userId &&
           event.status === VerificationStatus.PENDING &&
-          event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-          event.attention_state === CaseAttentionState.PARKED &&
-          event.containment_status === CaseContainmentStatus.CONTAINED &&
+          event.containment_status !== CaseContainmentStatus.IN_PROGRESS &&
           event.quarantine_attempt_id === null
       )
     );

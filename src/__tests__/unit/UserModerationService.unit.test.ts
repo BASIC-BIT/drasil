@@ -611,6 +611,61 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
+  it('claims terminal ownership before kicking a review-required compromised account', async () => {
+    const guildId = 'guild-kick-review-required-claim';
+    const userId = 'user-kick-review-required-claim';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+    (member.kick as jest.Mock).mockImplementation(async () => {
+      const claimed = await verificationEventRepository.findById(verificationEvent.id);
+      expect(claimed?.quarantine_attempt_id).toEqual(
+        expect.stringMatching(`^${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}`)
+      );
+      await expect(
+        verificationEventRepository.claimQuarantineAttempt(
+          verificationEvent.id,
+          guildId,
+          userId,
+          'competing-quarantine',
+          new Date(0)
+        )
+      ).resolves.toBeNull();
+    });
+
+    await expect(
+      service.kickUser(member, 'terminal kick', { id: 'moderator-kick' } as User)
+    ).resolves.toBe(true);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.KICKED,
+        quarantine_attempt_id: null,
+      })
+    );
+  });
+
   it('claims terminal ownership before banning a parked account', async () => {
     const guildId = 'guild-ban-terminal-claim';
     const userId = 'user-ban-terminal-claim';

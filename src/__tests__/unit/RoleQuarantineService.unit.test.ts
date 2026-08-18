@@ -548,6 +548,47 @@ describe('RoleQuarantineService (unit)', () => {
     expect(snapshot?.original_role_ids).toEqual(['older-role', 'current-role']);
   });
 
+  it('starts a fresh snapshot when the member rejoined after the active snapshot was created', async () => {
+    const currentRole = createRole({ id: 'current-role' });
+    const member = createMember([currentRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const staleSnapshot = await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'older-case',
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+      originalRoleIds: ['older-role'],
+      plannedRoleIds: ['older-role'],
+      removedRoleIds: ['older-role'],
+    });
+    Object.assign(member, {
+      joinedAt: new Date(staleSnapshot.created_at!.getTime() + 1_000),
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      snapshots
+    );
+    const verificationEvent = {
+      ...createVerificationEvent(),
+      id: 'current-case',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    };
+
+    await service.quarantineCompromisedAccount(
+      member,
+      verificationEvent,
+      { id: 'moderator-1' } as User,
+      { attemptId: 'attempt-1', assertOwner: async () => undefined }
+    );
+
+    const activeSnapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+    expect(activeSnapshot?.id).not.toBe(staleSnapshot.id);
+    expect(activeSnapshot?.verification_event_id).toBe('current-case');
+    expect(activeSnapshot?.original_role_ids).toEqual(['current-role']);
+    expect(activeSnapshot?.removed_role_ids).toEqual(['current-role']);
+  });
+
   it('does not add late-granted roles to the restoration set', async () => {
     const originalRole = createRole({ id: 'original-role' });
     const latePrivilegedRole = createRole({

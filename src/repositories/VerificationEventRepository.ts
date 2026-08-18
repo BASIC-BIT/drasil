@@ -352,9 +352,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             server_id: serverId,
             user_id: userId,
             status: VerificationStatus.PENDING,
-            case_kind: CaseKind.COMPROMISED_ACCOUNT,
-            attention_state: CaseAttentionState.PARKED,
-            containment_status: CaseContainmentStatus.CONTAINED,
+            containment_status: { not: CaseContainmentStatus.IN_PROGRESS },
             quarantine_attempt_id: null,
           },
           data: {

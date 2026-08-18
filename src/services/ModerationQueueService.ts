@@ -83,7 +83,7 @@ export interface IModerationQueueService {
   recordQuarantineBreachAttention(
     verificationEvent: VerificationEvent,
     message: Message
-  ): Promise<void>;
+  ): Promise<boolean>;
   recordReportThreadAttention(reportIntake: ReportIntake, message: Message): Promise<void>;
   deleteReportThreadAttention(reportIntakeId: string): Promise<void>;
   acknowledgeAttentionItem(itemId: string, serverId: string, actorId: string): Promise<boolean>;
@@ -413,16 +413,17 @@ export class ModerationQueueService implements IModerationQueueService {
   public async recordQuarantineBreachAttention(
     verificationEvent: VerificationEvent,
     message: Message
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (
       verificationEvent.status !== VerificationStatus.PENDING ||
       verificationEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT
     ) {
-      return;
+      return false;
     }
 
+    let delivered = false;
     await this.runAttentionSerialized(`quarantine-breach:${verificationEvent.id}`, async () => {
-      await this.upsertAttentionItem({
+      delivered = await this.upsertAttentionItem({
         itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
         serverId: verificationEvent.server_id,
         userId: verificationEvent.user_id,
@@ -435,6 +436,7 @@ export class ModerationQueueService implements IModerationQueueService {
         subjectFieldValue: `\`${verificationEvent.id}\``,
       });
     });
+    return delivered;
   }
 
   public async recordReportThreadAttention(

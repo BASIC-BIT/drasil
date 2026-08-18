@@ -556,6 +556,7 @@ describe('IntegrityAuditService (unit)', () => {
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       attention_state: CaseAttentionState.PARKED,
       containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_case_role_id: 'persisted-case-role',
       created_at: baseDate,
       updated_at: baseDate,
       resolved_at: null,
@@ -636,11 +637,16 @@ describe('IntegrityAuditService (unit)', () => {
     );
     const report = await service.auditGuild(guild, { scope: 'cases' });
 
-    expect(caseRoleLockdownService.auditGuild).toHaveBeenCalledWith(guild, null);
+    expect(caseRoleLockdownService.auditGuild).toHaveBeenCalledWith(
+      guild,
+      null,
+      'persisted-case-role'
+    );
     expect(caseRoleLockdownService.auditMemberBypasses).toHaveBeenCalledWith(
       member,
       new Set(),
-      null
+      null,
+      'persisted-case-role'
     );
     expect(report.findings.map((finding) => finding.code)).toEqual(
       expect.arrayContaining([

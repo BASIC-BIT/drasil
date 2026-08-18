@@ -253,17 +253,18 @@ export class IntegrityAuditService implements IIntegrityAuditService {
         );
       }
       const liveMember = liveUsers.get(verificationEvent.user_id)?.member;
+      const effectiveCaseRoleId = verificationEvent.quarantine_case_role_id ?? caseRoleId;
       if (
-        !caseRoleId ||
+        !effectiveCaseRoleId ||
         liveMember?.status !== 'found' ||
-        !liveMember.value.roles.cache.has(caseRoleId)
+        !liveMember.value.roles.cache.has(effectiveCaseRoleId)
       ) {
         findings.push(
           this.buildCaseFinding(
             'error',
             'parked_quarantine_case_role_missing',
             verificationEvent,
-            'Parked account quarantine is missing the configured case role in Discord.'
+            'Parked account quarantine is missing its assigned case role in Discord.'
           )
         );
       }
@@ -272,12 +273,14 @@ export class IntegrityAuditService implements IIntegrityAuditService {
           const [lockdownAudit, memberAudit] = await Promise.all([
             this.caseRoleLockdownService.auditGuild(
               liveMember.value.guild,
-              verificationEvent.thread_id
+              verificationEvent.thread_id,
+              effectiveCaseRoleId
             ),
             this.caseRoleLockdownService.auditMemberBypasses(
               liveMember.value,
               new Set(),
-              verificationEvent.thread_id
+              verificationEvent.thread_id,
+              effectiveCaseRoleId
             ),
           ]);
           if (
