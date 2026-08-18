@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fixtureModerationInboxItems } from './inboxFixtures';
 import {
+  findAccountQuarantineActionRequests,
   findInboxActionRequest,
   findMessageCleanupActionRequest,
   hasActiveInboxActionRequests,
@@ -112,6 +113,24 @@ describe('inboxActionReceipts', () => {
 
     expect(findMessageCleanupActionRequest([request], job)?.id).toBe(request.id);
     expect(findMessageCleanupActionRequest([request], { ...job, id: 'other-job' })).toBeNull();
+  });
+
+  it('keeps account-quarantine preview and execution receipts distinct', () => {
+    const preview = buildRequest({
+      actionType: 'preview_account_quarantine',
+      id: 'preview-1',
+      verificationEventId: 'case-1',
+    });
+    const execute = buildRequest({
+      actionType: 'quarantine_compromised_account',
+      id: 'execute-1',
+      verificationEventId: 'case-1',
+    });
+
+    expect(findAccountQuarantineActionRequests([execute, preview], 'case-1')).toEqual({
+      execute,
+      preview,
+    });
   });
 
   it('reports only queued and processing requests as active', () => {

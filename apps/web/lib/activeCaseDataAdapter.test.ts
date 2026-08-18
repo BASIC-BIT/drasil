@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildCaseActionIdempotencyKey,
   FixtureActiveCaseDataAdapter,
   parseCaseSummaryRow,
   resolveCaseActionQueueStatus,
@@ -40,6 +41,28 @@ const baseRow = {
 };
 
 describe('activeCaseDataAdapter', () => {
+  it('binds account-quarantine execution idempotency to its completed preview', () => {
+    const base = {
+      action: 'quarantine_compromised_account' as const,
+      adminId: 'moderator-1',
+      attemptId: 'attempt-1',
+      caseId: 'ver-1',
+      guildId: 'guild-1',
+      quarantinePhase: 'preview' as const,
+    };
+
+    expect(buildCaseActionIdempotencyKey(base)).toBe(
+      'web:case-action:quarantine_compromised_account:guild-1:ver-1:preview:attempt-1'
+    );
+    expect(
+      buildCaseActionIdempotencyKey({
+        ...base,
+        quarantinePhase: 'execute',
+        previewRequestId: 'preview-1',
+      })
+    ).toBe('web:case-action:quarantine_compromised_account:guild-1:ver-1:execute:preview-1');
+  });
+
   it('preserves failed queue receipts for inline action feedback', () => {
     expect(resolveCaseActionQueueStatus('queued')).toBe('queued');
     expect(resolveCaseActionQueueStatus('processing')).toBe('queued');
@@ -91,6 +114,115 @@ describe('activeCaseDataAdapter', () => {
         }),
       ])
     );
+  });
+
+  it('offers account quarantine only when the server feature is enabled', () => {
+    const summary = parseCaseSummaryRow(
+      { ...baseRow, server_settings: { account_quarantine_enabled: true } },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.allowedActions).toContain('quarantine_compromised_account');
+  });
+
+  it('parses parked quarantine effects and keeps the case outside normal review actions', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        case_kind: 'compromised_account',
+        attention_state: 'parked',
+        containment_status: 'contained',
+        parked_at: new Date('2026-06-02T12:00:00.000Z'),
+        parked_by: 'moderator-1',
+        server_settings: { account_quarantine_enabled: true },
+        metadata: {
+          account_quarantine: {
+            removed_role_ids: ['role-1', 'role-2'],
+            retained_roles: [{ role_id: 'managed-role' }],
+            failed_removals: [],
+            member_bypasses: [],
+          },
+        },
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary).toEqual(
+      expect.objectContaining({
+        caseKind: 'compromised_account',
+        attentionState: 'parked',
+        containmentStatus: 'contained',
+        parkedBy: 'moderator-1',
+        quarantineEffects: {
+          removedRoleCount: 2,
+          retainedRoleCount: 1,
+          failedRoleCount: 0,
+          memberBypassCount: 0,
+        },
+      })
+    );
+    expect(summary.allowedActions).toEqual([
+      'view_history',
+      'verify_user',
+      'kick_user',
+      'ban_user',
+      'refresh_notification',
+    ]);
+  });
+
+  it('does not expose close-no-action when a parked user has left the server', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        case_kind: 'compromised_account',
+        attention_state: 'parked',
+        containment_status: 'contained',
+        latest_outcome_type: 'member_left',
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.presenceState).toBe('left_or_removed');
+    expect(summary.allowedActions).toEqual(['view_history', 'ban_by_id', 'refresh_notification']);
+  });
+
+  it('does not expose close-no-action for an incomplete compromised quarantine', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        case_kind: 'compromised_account',
+        attention_state: 'review_required',
+        containment_status: 'incomplete',
+        server_settings: { account_quarantine_enabled: true },
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.allowedActions).not.toContain('close_no_action');
+    expect(summary.allowedActions).toEqual(
+      expect.arrayContaining([
+        'verify_user',
+        'kick_user',
+        'ban_user',
+        'quarantine_compromised_account',
+        'repair_thread',
+      ])
+    );
+  });
+
+  it('does not expose close-no-action when an incomplete quarantined user has left', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        case_kind: 'compromised_account',
+        attention_state: 'review_required',
+        containment_status: 'incomplete',
+        latest_outcome_type: 'member_left',
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.allowedActions).toEqual(['view_history', 'ban_by_id', 'refresh_notification']);
   });
 
   it('falls back to the admin channel when notification channel is missing', () => {
@@ -300,6 +432,18 @@ describe('activeCaseDataAdapter', () => {
       expect.objectContaining({
         id: 'case-resolved-verified',
         allowedActions: ['view_history', 'reopen_case'],
+      }),
+    ]);
+  });
+
+  it('provides a representative parked fixture outside the review queue', async () => {
+    const adapter = new FixtureActiveCaseDataAdapter();
+
+    await expect(adapter.listParkedCases()).resolves.toEqual([
+      expect.objectContaining({
+        attentionState: 'parked',
+        caseKind: 'compromised_account',
+        containmentStatus: 'contained',
       }),
     ]);
   });

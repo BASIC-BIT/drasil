@@ -1,6 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { CaseQueueView } from './CaseQueueView';
-import { fixtureCaseSummaries, fixtureResolvedCaseSummaries } from '@/lib/caseFixtures';
+import {
+  fixtureCaseSummaries,
+  fixtureParkedCaseSummaries,
+  fixtureResolvedCaseSummaries,
+} from '@/lib/caseFixtures';
 
 const meta = {
   title: 'Active Triage/Case Queue',
@@ -19,6 +23,7 @@ const meta = {
     resolvedCaseCount: fixtureResolvedCaseSummaries().length,
     sessionUsername: 'Fixture Admin',
     cases: fixtureCaseSummaries(),
+    parkedCases: fixtureParkedCaseSummaries(),
   },
 } satisfies Meta<typeof CaseQueueView>;
 
@@ -31,5 +36,6 @@ export const MixedQueue: Story = {};
 export const EmptyQueue: Story = {
   args: {
     cases: [],
+    parkedCases: [],
   },
 };

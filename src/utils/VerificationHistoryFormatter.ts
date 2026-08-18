@@ -81,6 +81,9 @@ export class VerificationHistoryFormatter {
       case AdminActionType.LIFT_RESTRICTION:
         output = `🔓 Case role removed by ${adminMention}`;
         break;
+      case AdminActionType.QUARANTINE_COMPROMISED_ACCOUNT:
+        output = `🔒 Compromised account quarantined by ${adminMention}`;
+        break;
       case AdminActionType.DISMISS:
         output = `Dismissed by ${adminMention}`;
         break;

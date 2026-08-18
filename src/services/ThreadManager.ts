@@ -981,6 +981,7 @@ export class ThreadManager implements IThreadManager {
           guildId: member.guild.id,
           verificationEventId: verificationEvent.id,
           verificationStatus: verificationEvent.status,
+          caseKind: verificationEvent.case_kind,
         }),
       });
 
@@ -1063,6 +1064,7 @@ export class ThreadManager implements IThreadManager {
           guildId: member.guild.id,
           verificationEventId: verificationEvent.id,
           verificationStatus: verificationEvent.status,
+          caseKind: verificationEvent.case_kind,
         }),
       });
 

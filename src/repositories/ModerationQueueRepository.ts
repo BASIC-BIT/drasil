@@ -8,6 +8,7 @@ export interface IModerationQueueRepository {
   findById(id: string): Promise<ModerationQueueItem | null>;
   findByCase(verificationEventId: string): Promise<ModerationQueueItem | null>;
   listByCase(verificationEventId: string): Promise<ModerationQueueItem[]>;
+  listByVerificationEvent(verificationEventId: string): Promise<ModerationQueueItem[]>;
   findByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem | null>;
   listByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem[]>;
   listByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]>;
@@ -18,6 +19,10 @@ export interface IModerationQueueRepository {
   findAttentionByThread(
     itemType: ModerationQueueItemType,
     sourceThreadId: string
+  ): Promise<ModerationQueueItem | null>;
+  findAttentionByVerificationEvent(
+    itemType: ModerationQueueItemType,
+    verificationEventId: string
   ): Promise<ModerationQueueItem | null>;
   listByServer(serverId: string): Promise<ModerationQueueItem[]>;
   listByServerAndTypes(
@@ -86,6 +91,17 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
       return items as ModerationQueueItem[];
     } catch (error) {
       this.handleError(error, 'listModerationQueueItemsByCase');
+    }
+  }
+
+  async listByVerificationEvent(verificationEventId: string): Promise<ModerationQueueItem[]> {
+    try {
+      const items = await this.prisma.moderation_queue_items.findMany({
+        where: { verification_event_id: verificationEventId },
+      });
+      return items as ModerationQueueItem[];
+    } catch (error) {
+      this.handleError(error, 'listModerationQueueItemsByVerificationEvent');
     }
   }
 
@@ -163,6 +179,23 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
     }
   }
 
+  async findAttentionByVerificationEvent(
+    itemType: ModerationQueueItemType,
+    verificationEventId: string
+  ): Promise<ModerationQueueItem | null> {
+    try {
+      const item = await this.prisma.moderation_queue_items.findFirst({
+        where: {
+          item_type: itemType as moderation_queue_item_type,
+          verification_event_id: verificationEventId,
+        },
+      });
+      return item as ModerationQueueItem | null;
+    } catch (error) {
+      this.handleError(error, 'findModerationQueueAttentionByVerificationEvent');
+    }
+  }
+
   async listByServer(serverId: string): Promise<ModerationQueueItem[]> {
     try {
       const items = await this.prisma.moderation_queue_items.findMany({
@@ -195,6 +228,12 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
 
   async upsert(data: ModerationQueueItemUpsert): Promise<ModerationQueueItem> {
     try {
+      if (
+        data.itemType === ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION &&
+        data.verificationEventId
+      ) {
+        return await this.upsertQuarantineBreach(data);
+      }
       const existing = await this.findExistingItem(data);
       const writeData = this.toPrismaWriteData(data);
       if (existing) {
@@ -269,8 +308,74 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
     ) {
       return this.findAttentionByThread(data.itemType, data.sourceThreadId);
     }
+    if (
+      data.itemType === ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION &&
+      data.verificationEventId
+    ) {
+      return this.findAttentionByVerificationEvent(data.itemType, data.verificationEventId);
+    }
 
     return null;
+  }
+
+  private async upsertQuarantineBreach(
+    data: ModerationQueueItemUpsert
+  ): Promise<ModerationQueueItem> {
+    if (!data.verificationEventId || !data.sourceThreadId) {
+      throw new Error('Quarantine breach attention requires a case and source channel.');
+    }
+    const metadata = JSON.stringify(data.metadata ?? {});
+    const rows = await this.prisma.$queryRaw<ModerationQueueItem[]>(Prisma.sql`
+      INSERT INTO "moderation_queue_items" (
+        "server_id",
+        "user_id",
+        "item_type",
+        "verification_event_id",
+        "source_thread_id",
+        "queue_channel_id",
+        "queue_message_id",
+        "last_source_message_id",
+        "last_notified_at",
+        "metadata"
+      ) VALUES (
+        ${data.serverId},
+        ${data.userId},
+        ${data.itemType}::"moderation_queue_item_type",
+        ${data.verificationEventId}::uuid,
+        ${data.sourceThreadId},
+        ${data.queueChannelId ?? null},
+        ${data.queueMessageId ?? null},
+        ${data.lastSourceMessageId ?? null},
+        ${data.lastNotifiedAt ?? null},
+        ${metadata}::jsonb
+      )
+      ON CONFLICT ("item_type", "verification_event_id")
+        WHERE "verification_event_id" IS NOT NULL
+      DO UPDATE SET
+        "server_id" = EXCLUDED."server_id",
+        "user_id" = EXCLUDED."user_id",
+        "source_thread_id" = EXCLUDED."source_thread_id",
+        "queue_channel_id" = COALESCE(
+          EXCLUDED."queue_channel_id",
+          "moderation_queue_items"."queue_channel_id"
+        ),
+        "queue_message_id" = COALESCE(
+          EXCLUDED."queue_message_id",
+          "moderation_queue_items"."queue_message_id"
+        ),
+        "last_source_message_id" = EXCLUDED."last_source_message_id",
+        "last_notified_at" = COALESCE(
+          "moderation_queue_items"."last_notified_at",
+          EXCLUDED."last_notified_at"
+        ),
+        "metadata" = EXCLUDED."metadata",
+        "updated_at" = now()
+      RETURNING *
+    `);
+    if (!rows[0]) {
+      throw new Error('Quarantine breach attention upsert returned no row.');
+    }
+    return rows[0];
   }
 
   private toPrismaWriteData(

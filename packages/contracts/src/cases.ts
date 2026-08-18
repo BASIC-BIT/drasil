@@ -11,6 +11,7 @@ export const casePresenceStateSchema = z.enum([
 export const caseActionSchema = z.enum([
   'view_history',
   'verify_user',
+  'quarantine_compromised_account',
   'kick_user',
   'ban_user',
   'ban_by_id',
@@ -57,6 +58,22 @@ export const caseSummarySchema = z.object({
   userIdentity: caseUserIdentitySchema,
   createdAt: z.string(),
   updatedAt: z.string(),
+  caseKind: z.enum(['standard', 'compromised_account']).optional(),
+  attentionState: z.enum(['review_required', 'parked']).optional(),
+  containmentStatus: z
+    .enum(['not_applicable', 'in_progress', 'contained', 'incomplete'])
+    .optional(),
+  parkedAt: z.string().nullable().optional(),
+  parkedBy: z.string().nullable().optional(),
+  quarantineEffects: z
+    .object({
+      removedRoleCount: z.number().int().min(0),
+      retainedRoleCount: z.number().int().min(0),
+      failedRoleCount: z.number().int().min(0),
+      memberBypassCount: z.number().int().min(0),
+    })
+    .nullable()
+    .optional(),
   stale: z.boolean(),
   staleHours: z.number().int().min(0),
   presenceState: casePresenceStateSchema,

@@ -9,6 +9,8 @@ import { readOptionalEnv, isProduction } from './env';
 import {
   fixtureCaseDetails,
   fixtureCaseSummaries,
+  fixtureParkedCaseDetails,
+  fixtureParkedCaseSummaries,
   fixtureResolvedCaseDetails,
   fixtureResolvedCaseSummaries,
 } from './caseFixtures';
@@ -292,6 +294,7 @@ function applyFixtureServerSettingsUpdate(
   setIfDefined(settings, 'honeypot_role_response_mode', update.honeypotRoleResponseMode);
   setIfDefined(settings, 'role_quarantine_mode', update.roleQuarantineMode);
   setIfDefined(settings, 'role_quarantine_exempt_role_ids', update.roleQuarantineExemptRoleIds);
+  setIfDefined(settings, 'account_quarantine_enabled', update.accountQuarantineEnabled);
   setIfDefined(
     settings,
     'verification_ai_thread_analysis_enabled',
@@ -378,6 +381,10 @@ export function fixtureActiveCaseSummaries(): CaseSummary[] {
   return fixtureCaseSummaries();
 }
 
+export function fixtureParkedActiveCaseSummaries(): CaseSummary[] {
+  return fixtureParkedCaseSummaries();
+}
+
 export function fixtureResolvedCaseSummariesForHistory(): CaseSummary[] {
   return fixtureResolvedCaseSummaries();
 }
@@ -389,6 +396,7 @@ export function fixtureResolvedCaseCount(): number {
 export function fixtureActiveCaseDetail(caseId: string): CaseDetail | null {
   return (
     fixtureCaseDetails.find((item) => item.id === caseId) ??
+    fixtureParkedCaseDetails.find((item) => item.id === caseId) ??
     fixtureResolvedCaseDetails.find((item) => item.id === caseId) ??
     null
   );

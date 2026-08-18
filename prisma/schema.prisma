@@ -215,27 +215,28 @@ model message_deletion_items {
 }
 
 model role_quarantine_snapshots {
-  id                    String                          @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  id                    String                           @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
   server_id             String
   user_id               String
-  verification_event_id String?                         @db.Uuid
-  status                role_quarantine_snapshot_status @default(active)
-  mode                  String                          @default("automatic")
-  original_role_ids     String[]                        @default([])
-  planned_role_ids      String[]                        @default([])
-  removed_role_ids      String[]                        @default([])
-  restored_role_ids     String[]                        @default([])
-  skipped_roles         Json?                           @default("[]")
-  failed_removals       Json?                           @default("[]")
-  failed_restores       Json?                           @default("[]")
-  created_at            DateTime?                       @default(now()) @db.Timestamptz(6)
-  updated_at            DateTime?                       @default(now()) @db.Timestamptz(6)
-  restored_at           DateTime?                       @db.Timestamptz(6)
+  verification_event_id String?                          @db.Uuid
+  status                role_quarantine_snapshot_status  @default(active)
+  mode                  String                           @default("automatic")
+  purpose               role_quarantine_snapshot_purpose @default(standard_case)
+  original_role_ids     String[]                         @default([])
+  planned_role_ids      String[]                         @default([])
+  removed_role_ids      String[]                         @default([])
+  restored_role_ids     String[]                         @default([])
+  skipped_roles         Json?                            @default("[]")
+  failed_removals       Json?                            @default("[]")
+  failed_restores       Json?                            @default("[]")
+  created_at            DateTime?                        @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime?                        @default(now()) @db.Timestamptz(6)
+  restored_at           DateTime?                        @db.Timestamptz(6)
   restored_by           String?
-  metadata              Json?                           @default("{}")
-  servers               servers                         @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
-  users                 users                           @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
-  verification_events   verification_events?            @relation(fields: [verification_event_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  metadata              Json?                            @default("{}")
+  servers               servers                          @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
+  users                 users                            @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
+  verification_events   verification_events?             @relation(fields: [verification_event_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([server_id], map: "idx_role_quarantine_snapshots_server")
   @@index([status], map: "idx_role_quarantine_snapshots_status")
@@ -441,6 +442,15 @@ model verification_events {
   notification_channel_id                                                             String?
   notification_message_id                                                             String?
   status                                                                              verification_status          @default(pending)
+  case_kind                                                                           case_kind                    @default(standard)
+  attention_state                                                                     case_attention_state         @default(review_required)
+  containment_status                                                                  case_containment_status      @default(not_applicable)
+  quarantine_attempt_id                                                               String?
+  quarantine_lease_renewed_at                                                         DateTime?                    @db.Timestamptz(6)
+  quarantine_case_role_id                                                             String?
+  parked_at                                                                           DateTime?                    @db.Timestamptz(6)
+  parked_by                                                                           String?
+  review_after                                                                        DateTime?                    @db.Timestamptz(6)
   created_at                                                                          DateTime?                    @default(now()) @db.Timestamptz(6)
   updated_at                                                                          DateTime?                    @default(now()) @db.Timestamptz(6)
   resolved_at                                                                         DateTime?                    @db.Timestamptz(6)
@@ -463,6 +473,7 @@ model verification_events {
   @@index([notification_channel_id], map: "idx_verification_events_notification_channel")
   @@index([private_evidence_thread_id], map: "idx_verification_events_private_evidence_thread")
   @@index([server_id], map: "idx_verification_events_server")
+  @@index([server_id, status, attention_state], map: "idx_verification_events_server_status_attention")
   @@index([status], map: "idx_verification_events_status")
   @@index([thread_id], map: "idx_verification_events_thread")
   @@index([user_id], map: "idx_verification_events_user")
@@ -484,6 +495,7 @@ enum admin_action_type {
   false_positive
   undo_observed_action
   role_gate_cleanup
+  quarantine_compromised_account
 }
 
 enum detection_type {
@@ -515,12 +527,14 @@ enum moderation_outcome_type {
   kicked
   closed_no_action
   member_left
+  account_quarantined
 }
 
 enum moderation_queue_item_type {
   case_mirror
   observed_alert_mirror
   support_thread_attention
+  quarantine_breach_attention
   report_thread_attention
   pending_screening_member
 }
@@ -540,6 +554,8 @@ enum moderation_action_request_type {
   ignore_detection_accounting
   restore_detection_accounting
   verify_case_user
+  preview_account_quarantine
+  quarantine_compromised_account
   close_case_no_action
   kick_case_user
   ban_case_user
@@ -638,6 +654,28 @@ enum role_quarantine_snapshot_status {
   active
   restored
   abandoned
+}
+
+enum role_quarantine_snapshot_purpose {
+  standard_case
+  compromised_account
+}
+
+enum case_kind {
+  standard
+  compromised_account
+}
+
+enum case_attention_state {
+  review_required
+  parked
+}
+
+enum case_containment_status {
+  not_applicable
+  in_progress
+  contained
+  incomplete
 }
 
 enum report_intake_status {

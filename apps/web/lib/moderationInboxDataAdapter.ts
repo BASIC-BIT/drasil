@@ -58,6 +58,7 @@ const queueKindByType: Record<string, ModerationInboxItemKind> = {
   pending_screening_member: 'pending_screening',
   report_thread_attention: 'report_attention',
   support_thread_attention: 'support_attention',
+  quarantine_breach_attention: 'support_attention',
 };
 
 const caseActionMap: Record<CaseAction, ModerationInboxAction> = {
@@ -71,6 +72,7 @@ const caseActionMap: Record<CaseAction, ModerationInboxAction> = {
   refresh_notification: 'refresh_notification',
   sync_existing_ban: 'sync_existing_ban',
   verify_user: 'verify_user',
+  quarantine_compromised_account: 'quarantine_compromised_account',
   view_history: 'view_history',
 };
 
@@ -187,8 +189,10 @@ function subjectFromQueueRow(row: ModerationQueueRow): ModerationInboxItem['subj
   };
 }
 
-function queueTitle(kind: ModerationInboxItemKind): string {
-  return queueTitleByKind[kind];
+function queueTitle(kind: ModerationInboxItemKind, itemType: string): string {
+  return itemType === 'quarantine_breach_attention'
+    ? 'Quarantine containment breach'
+    : queueTitleByKind[kind];
 }
 
 function queueStatusLabel(kind: ModerationInboxItemKind, row: ModerationQueueRow): string {
@@ -245,6 +249,7 @@ export function caseSummaryToInboxItem(item: CaseSummary): ModerationInboxItem {
     updatedAt: item.updatedAt,
     stale: item.stale,
     staleHours,
+    caseKind: item.caseKind,
     detailHref: `/admin/guild/${item.guildId}/cases/${item.id}`,
     links: item.surfaces.map((surface) => ({ label: surface.label, url: surface.url })),
     allowedActions: ['view_case', ...item.allowedActions.map((action) => caseActionMap[action])],
@@ -351,7 +356,7 @@ export function parseModerationQueueRow(
     sourceId,
     queueItemId: row.id,
     subject: subjectFromQueueRow(row),
-    title: queueTitle(kind),
+    title: queueTitle(kind, row.item_type),
     summary,
     statusLabel: queueStatusLabel(kind, row),
     signalLabel: confidenceSignal(row.detection_confidence),

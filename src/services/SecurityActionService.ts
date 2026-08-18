@@ -308,6 +308,7 @@ export interface ActiveCaseRepairResult extends VerificationThreadRepairResult {
   repaired: boolean;
   message: string;
   verificationEventId?: string;
+  notificationReady?: boolean;
 }
 
 export interface CaseNotificationRefreshResult {
@@ -2814,6 +2815,7 @@ export class SecurityActionService implements ISecurityActionService {
       return {
         repaired: false,
         message: `No active verification case found for ${member.user.tag}.`,
+        notificationReady: false,
         threadId: null,
         threadCreated: false,
         userAdded: false,
@@ -2827,6 +2829,7 @@ export class SecurityActionService implements ISecurityActionService {
         repaired: false,
         message:
           'Active case uses a moderator-only report review thread; no user-facing verification thread repair was attempted.',
+        notificationReady: false,
         verificationEventId: activeCase.id,
         threadId: activeCase.thread_id,
         threadCreated: false,
@@ -2861,6 +2864,7 @@ export class SecurityActionService implements ISecurityActionService {
       return {
         repaired: false,
         message: `Could not create or repair the verification thread for ${member.user.tag}: ${this.formatActionFailureMessage(error)}`,
+        notificationReady: false,
         verificationEventId: repairCase.id,
         threadId: null,
         threadCreated: false,
@@ -2891,6 +2895,7 @@ export class SecurityActionService implements ISecurityActionService {
         ...threadRepair,
         repaired: false,
         message: error.message,
+        notificationReady: false,
         verificationEventId: repairCase.id,
       };
     }
@@ -2898,11 +2903,13 @@ export class SecurityActionService implements ISecurityActionService {
     repairCase = await this.clearResolvedVerificationActionFailures(repairCase, ['thread']);
 
     let notificationUpdateMessage = '';
+    let notificationReady = false;
     try {
       await this.notificationManager.updateNotificationButtons(
         repairCase,
         VerificationStatus.PENDING
       );
+      notificationReady = true;
     } catch (error) {
       notificationUpdateMessage = ' Notification buttons could not be updated automatically.';
       console.error(
@@ -2915,6 +2922,7 @@ export class SecurityActionService implements ISecurityActionService {
       ...threadRepair,
       repaired: true,
       message: `Repaired active verification case for ${member.user.tag}.${notificationUpdateMessage}`,
+      notificationReady,
       verificationEventId: repairCase.id,
     };
   }

@@ -22,6 +22,7 @@ import { TYPES } from '../di/symbols';
 import { DetectionResult } from './DetectionOrchestrator';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import {
+  CaseKind,
   DetectionEvent,
   DetectionType,
   VerificationStatus,
@@ -50,6 +51,12 @@ interface MirroredThreadImageFileResult {
   readonly files: NonNullable<MessageCreateOptions['files']>;
   readonly copiedAttachmentIds: Set<string>;
 }
+
+export type AccountQuarantineAttentionReason =
+  | 'containment_breach'
+  | 'containment_incomplete'
+  | 'attention_delivery_incomplete'
+  | 'role_restoration_incomplete';
 
 /**
  * Interface for NotificationManager service
@@ -125,6 +132,12 @@ export interface INotificationManager {
   notifyVerificationThreadUserResponse(
     verificationEvent: VerificationEvent,
     message: Message
+  ): Promise<boolean>;
+
+  notifyAccountQuarantineAttention(
+    verificationEvent: VerificationEvent,
+    reason: AccountQuarantineAttentionReason,
+    sourceMessage?: Message
   ): Promise<boolean>;
 
   upsertObservedDetectionNotification(
@@ -216,11 +229,14 @@ export class NotificationManager implements INotificationManager {
         detectionEvents,
         sourceMessage
       );
+      this.presentationBuilder.upsertAccountQuarantinePresentation(embed, verificationEvent);
       const actionRows = this.presentationBuilder.createAdminNotificationActionRows(member.id, {
         guildId: member.guild.id,
         verificationEventId: verificationEvent.id,
         verificationStatus: verificationEvent.status,
+        caseKind: verificationEvent.case_kind,
         caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
+        caseAttentionState: verificationEvent.attention_state,
         includeBanAction: responseSettings.moderatorBanActionEnabled,
       });
 
@@ -553,8 +569,12 @@ export class NotificationManager implements INotificationManager {
       }
 
       const notificationRoleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
+      const responseLabel =
+        verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT
+          ? 'Quarantined user reports account recovery. Verify before releasing quarantine.'
+          : 'Support-check reply needs review.';
       const lines = [
-        `${this.presentationBuilder.formatRoleMentions(notificationRoleIds)} Support-check reply needs review.`.trim(),
+        `${this.presentationBuilder.formatRoleMentions(notificationRoleIds)} ${responseLabel}`.trim(),
         `User: <@${verificationEvent.user_id}> (\`${verificationEvent.user_id}\`)`,
         `Case: \`${verificationEvent.id}\``,
         `Support thread: <#${message.channelId}>`,
@@ -572,6 +592,51 @@ export class NotificationManager implements INotificationManager {
     } catch (error) {
       console.warn(
         `Failed to notify admins about support-check reply for verification event ${verificationEvent.id}:`,
+        error
+      );
+      return false;
+    }
+  }
+
+  public async notifyAccountQuarantineAttention(
+    verificationEvent: VerificationEvent,
+    reason: AccountQuarantineAttentionReason,
+    sourceMessage?: Message
+  ): Promise<boolean> {
+    try {
+      const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
+      const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
+      if (!adminChannel) {
+        return false;
+      }
+
+      const notificationRoleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
+      const summary =
+        reason === 'containment_breach'
+          ? 'Quarantine containment breach detected. Review immediately.'
+          : reason === 'attention_delivery_incomplete'
+            ? 'A quarantine alert may not have been delivered before recovery. Review immediately.'
+            : reason === 'role_restoration_incomplete'
+              ? 'Account verification completed, but quarantined roles still need restoration.'
+              : 'Quarantine containment could not be confirmed. Review immediately.';
+      const lines = [
+        `${this.presentationBuilder.formatRoleMentions(notificationRoleIds)} ${summary}`.trim(),
+        `User: <@${verificationEvent.user_id}> (\`${verificationEvent.user_id}\`)`,
+        `Case: \`${verificationEvent.id}\``,
+        verificationEvent.thread_id ? `Support thread: <#${verificationEvent.thread_id}>` : null,
+        verificationEvent.private_evidence_thread_id
+          ? `Evidence thread: <#${verificationEvent.private_evidence_thread_id}>`
+          : null,
+        sourceMessage ? `Source message: ${sourceMessage.url}` : null,
+      ].filter((line): line is string => Boolean(line));
+      await adminChannel.send({
+        content: lines.join('\n'),
+        allowedMentions: this.presentationBuilder.createAdminAllowedMentions(notificationRoleIds),
+      });
+      return true;
+    } catch (error) {
+      console.warn(
+        `Failed to notify admins about account quarantine attention for case ${verificationEvent.id}:`,
         error
       );
       return false;
@@ -832,14 +897,18 @@ export class NotificationManager implements INotificationManager {
           PermissionFlagsBits.CreatePrivateThreads,
         ],
       },
-      // Case role - can view and send messages, but not read history
+      // Case role - can use its private thread without posting in the shared parent channel.
       {
         id: caseRoleId,
         allow: [
           PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessages,
           PermissionFlagsBits.ReadMessageHistory, // TODO: Check if users need to be granted this to see history of private thread
           PermissionFlagsBits.SendMessagesInThreads,
+        ],
+        deny: [
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.CreatePublicThreads,
+          PermissionFlagsBits.CreatePrivateThreads,
         ],
       },
     ];
@@ -1053,6 +1122,7 @@ export class NotificationManager implements INotificationManager {
         updatedEmbed,
         verificationEvent
       );
+      this.presentationBuilder.upsertAccountQuarantinePresentation(updatedEmbed, verificationEvent);
     }
 
     const serverConfig = await this.configService
@@ -1070,7 +1140,9 @@ export class NotificationManager implements INotificationManager {
           guildId: verificationEvent.server_id,
           verificationEventId: verificationEvent.id,
           verificationStatus: newStatus,
+          caseKind: verificationEvent.case_kind,
           caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
+          caseAttentionState: verificationEvent.attention_state,
           includeBanAction: responseSettings?.moderatorBanActionEnabled ?? true,
         }
       ),

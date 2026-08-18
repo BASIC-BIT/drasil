@@ -1,5 +1,5 @@
 import { Client, Guild, GuildBan, GuildMember } from 'discord.js';
-import { inject, injectable } from 'inversify';
+import { inject, injectable, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import {
@@ -11,6 +11,9 @@ import {
 import {
   ModerationOutcomeSource,
   ModerationQueueItemType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   RoleQuarantineSnapshot,
   ServerMember,
   VerificationStatus,
@@ -30,6 +33,7 @@ import {
   normalizeIntegrityAuditScope,
 } from '../utils/integrityAuditSettings';
 import { getModerationQueueSettings } from '../utils/moderationQueueSettings';
+import { ICaseRoleLockdownService } from './CaseRoleLockdownService';
 import {
   getResolutionAdminActionType,
   getResolutionModerationOutcomeType,
@@ -118,7 +122,10 @@ export class IntegrityAuditService implements IIntegrityAuditService {
     @inject(TYPES.DiscordClient) private readonly client: Client,
     @inject(TYPES.ConfigService) private readonly configService: IConfigService,
     @inject(TYPES.IntegrityAuditRepository)
-    private readonly integrityAuditRepository: IIntegrityAuditRepository
+    private readonly integrityAuditRepository: IIntegrityAuditRepository,
+    @inject(TYPES.CaseRoleLockdownService)
+    @optional()
+    private readonly caseRoleLockdownService?: ICaseRoleLockdownService
   ) {}
 
   public async auditGuild(
@@ -149,6 +156,14 @@ export class IntegrityAuditService implements IIntegrityAuditService {
         serverConfig.case_role_id,
         caseRoleMemberIds,
         !this.includesCaseRoleChecks(scope),
+        findings
+      );
+      await this.auditParkedCases(
+        candidates.pendingVerificationEvents,
+        candidates.activeRoleQuarantineSnapshots,
+        candidates.moderationQueueItems,
+        liveUsers,
+        serverConfig.case_role_id,
         findings
       );
       this.auditResolvedCases(candidates.recentResolvedVerificationEvents, liveUsers, findings);
@@ -188,6 +203,154 @@ export class IntegrityAuditService implements IIntegrityAuditService {
       },
       findings,
     };
+  }
+
+  private async auditParkedCases(
+    cases: IntegrityAuditVerificationEvent[],
+    snapshots: RoleQuarantineSnapshot[],
+    queueItems: IntegrityAuditModerationQueueItem[],
+    liveUsers: Map<string, LiveUserState>,
+    caseRoleId: string | null,
+    findings: IntegrityAuditFinding[]
+  ): Promise<void> {
+    const activeSnapshotCaseIds = new Set(
+      snapshots
+        .map((snapshot) => snapshot.verification_event_id)
+        .filter((id): id is string => Boolean(id))
+    );
+    const mirroredCaseIds = new Set(
+      queueItems
+        .filter((item) => item.item_type === ModerationQueueItemType.CASE_MIRROR)
+        .map((item) => item.verification_event_id)
+        .filter((id): id is string => Boolean(id))
+    );
+
+    for (const verificationEvent of cases) {
+      if (
+        verificationEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT ||
+        verificationEvent.attention_state !== CaseAttentionState.PARKED
+      ) {
+        continue;
+      }
+      if (verificationEvent.containment_status !== CaseContainmentStatus.CONTAINED) {
+        findings.push(
+          this.buildCaseFinding(
+            'error',
+            'parked_quarantine_not_contained',
+            verificationEvent,
+            'Parked account quarantine is not marked fully contained.'
+          )
+        );
+      }
+      if (!activeSnapshotCaseIds.has(verificationEvent.id)) {
+        findings.push(
+          this.buildCaseFinding(
+            'error',
+            'parked_quarantine_snapshot_missing',
+            verificationEvent,
+            'Parked account quarantine has no active role snapshot for release.'
+          )
+        );
+      }
+      const liveMember = liveUsers.get(verificationEvent.user_id)?.member;
+      const effectiveCaseRoleId = verificationEvent.quarantine_case_role_id ?? caseRoleId;
+      if (
+        !effectiveCaseRoleId ||
+        liveMember?.status !== 'found' ||
+        !liveMember.value.roles.cache.has(effectiveCaseRoleId)
+      ) {
+        findings.push(
+          this.buildCaseFinding(
+            'error',
+            'parked_quarantine_case_role_missing',
+            verificationEvent,
+            'Parked account quarantine is missing its assigned case role in Discord.'
+          )
+        );
+      }
+      if (liveMember?.status === 'found' && this.caseRoleLockdownService) {
+        try {
+          const [lockdownAudit, memberAudit] = await Promise.all([
+            this.caseRoleLockdownService.auditGuild(
+              liveMember.value.guild,
+              verificationEvent.thread_id,
+              effectiveCaseRoleId
+            ),
+            this.caseRoleLockdownService.auditMemberBypasses(
+              liveMember.value,
+              new Set(),
+              verificationEvent.thread_id,
+              effectiveCaseRoleId
+            ),
+          ]);
+          if (
+            lockdownAudit.errorCount > 0 ||
+            lockdownAudit.warningCount > 0 ||
+            lockdownAudit.plannedActions.length > 0
+          ) {
+            findings.push(
+              this.buildCaseFinding(
+                lockdownAudit.errorCount > 0 || lockdownAudit.plannedActions.length > 0
+                  ? 'error'
+                  : 'warning',
+                'parked_quarantine_lockdown_drift',
+                verificationEvent,
+                `Parked account quarantine has ${lockdownAudit.errorCount} lockdown error(s), ${lockdownAudit.warningCount} warning(s), and ${lockdownAudit.plannedActions.length} unapplied lockdown action(s).`
+              )
+            );
+          }
+          if (memberAudit.bypasses.length > 0) {
+            findings.push(
+              this.buildCaseFinding(
+                'error',
+                'parked_quarantine_permission_bypass',
+                verificationEvent,
+                `Parked account quarantine has ${memberAudit.bypasses.length} live channel permission bypass(es).`
+              )
+            );
+          }
+          if (memberAudit.retainedPrivilegedRoleIds.length > 0) {
+            findings.push(
+              this.buildCaseFinding(
+                'error',
+                'parked_quarantine_privileged_role',
+                verificationEvent,
+                `Parked account quarantine retains privileged role(s): ${memberAudit.retainedPrivilegedRoleIds.join(', ')}.`
+              )
+            );
+          }
+          if (memberAudit.unremovablePrivilegeReasons.length > 0) {
+            findings.push(
+              this.buildCaseFinding(
+                'error',
+                'parked_quarantine_unremovable_privilege',
+                verificationEvent,
+                `Parked account quarantine has unremovable privilege blocker(s): ${memberAudit.unremovablePrivilegeReasons.join(', ')}.`
+              )
+            );
+          }
+        } catch (error) {
+          findings.push(
+            this.buildCaseFinding(
+              'error',
+              'parked_quarantine_live_audit_failed',
+              verificationEvent,
+              `Could not audit live quarantine bypasses: ${formatDiscordFetchError(error, ERROR_DETAIL_MAX_LENGTH)}`
+            )
+          );
+        }
+      }
+      if (mirroredCaseIds.has(verificationEvent.id)) {
+        findings.push(
+          this.buildCaseFinding(
+            'warning',
+            'parked_quarantine_case_mirror_stale',
+            verificationEvent,
+            'Parked account quarantine still has a normal case-queue mirror.'
+          )
+        );
+      }
+    }
   }
 
   private async auditPendingCases(

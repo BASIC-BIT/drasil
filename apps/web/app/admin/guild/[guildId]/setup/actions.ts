@@ -337,6 +337,7 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
     honeypotRoleResponseMode: readMode(formData, 'honeypotRoleResponseMode'),
     roleQuarantineMode: readOptionalFormValue(formData, 'roleQuarantineMode'),
     roleQuarantineExemptRoleIds: readFormStringArray(formData, 'roleQuarantineExemptRoleIds'),
+    accountQuarantineEnabled: formData.get('accountQuarantineEnabled') === 'on',
     manualIntakeEnabled: formData.get('manualIntakeEnabled') === 'on',
     manualIntakeRoleId: readOptionalFormString(formData, 'manualIntakeRoleId'),
     manualIntakeGracePeriodSeconds: readOptionalIntegerFormValue(

@@ -1,8 +1,42 @@
 import { injectable, inject } from 'inversify';
-import { Prisma, PrismaClient, verification_status } from '../db/prisma';
+import {
+  case_attention_state,
+  case_containment_status,
+  case_kind,
+  Prisma,
+  PrismaClient,
+  verification_status,
+} from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository';
-import { VerificationEvent, VerificationStatus } from './types'; // Use local enum
+import {
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
+  VerificationEvent,
+  VerificationStatus,
+} from './types'; // Use local enum
+import {
+  CASE_ATTENTION_ATTEMPT_PREFIX,
+  CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
+  CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
+  CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
+} from '../utils/caseRoleRelease';
+
+export interface VerificationReleaseCompletion {
+  id: string;
+  metadata: VerificationEvent['metadata'];
+  requiresCaseRoleReleaseClaim: boolean;
+}
+
+export interface TerminalActionCompletion {
+  id: string;
+  metadata: VerificationEvent['metadata'];
+  requiresTerminalActionClaim: boolean;
+}
+
+class VerificationReleaseConflictError extends Error {}
+class TerminalActionClaimConflictError extends Error {}
 
 export interface IVerificationEventRepository {
   findByUserAndServer(
@@ -13,6 +47,14 @@ export interface IVerificationEventRepository {
   findActiveByUserAndServer(userId: string, serverId: string): Promise<VerificationEvent | null>;
   findByDetectionEvent(detectionEventId: string): Promise<VerificationEvent[]>;
   findPendingByServer(serverId: string): Promise<VerificationEvent[]>;
+  findReviewablePendingByServer(serverId: string): Promise<VerificationEvent[]>;
+  findParkedByServer(serverId: string): Promise<VerificationEvent[]>;
+  findExpiredCaseRoleReleases(staleBefore: Date): Promise<VerificationEvent[]>;
+  findExpiredQuarantineAttempts(staleBefore: Date): Promise<VerificationEvent[]>;
+  markParkedContainmentIncomplete(
+    id: string,
+    metadata: VerificationEvent['metadata']
+  ): Promise<VerificationEvent | null>;
   findResolvedWithThreadsByServer(
     serverId: string,
     options?: { days?: number | null; limit?: number | null; userId?: string | null }
@@ -26,10 +68,84 @@ export interface IVerificationEventRepository {
   getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]>;
   findById(id: string): Promise<VerificationEvent | null>;
   findByThreadId(threadId: string): Promise<VerificationEvent | null>;
+  claimQuarantineAttempt(
+    id: string,
+    serverId: string,
+    userId: string,
+    attemptId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null>;
+  claimCaseRoleRelease(
+    id: string,
+    serverId: string,
+    userId: string,
+    attemptId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null>;
+  claimAccountQuarantineAttention(
+    id: string,
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent | null>;
+  claimTerminalActions(
+    ids: readonly string[],
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent[] | null>;
+  completeTerminalActions(
+    completions: readonly TerminalActionCompletion[],
+    attemptId: string | null,
+    status: VerificationStatus.BANNED | VerificationStatus.KICKED,
+    resolvedBy: string,
+    resolvedAt: Date,
+    notes: string
+  ): Promise<VerificationEvent[] | null>;
+  completeCaseRoleRelease(
+    id: string,
+    attemptId: string,
+    resolvedBy: string,
+    resolvedAt: Date,
+    metadata: VerificationEvent['metadata']
+  ): Promise<VerificationEvent | null>;
+  completeVerificationRelease(
+    completions: readonly VerificationReleaseCompletion[],
+    attemptId: string,
+    resolvedBy: string,
+    resolvedAt: Date
+  ): Promise<VerificationEvent[] | null>;
+  rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null>;
+  renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean>;
+  recordQuarantineCaseRole(id: string, attemptId: string, roleId: string): Promise<boolean>;
+  recoverExpiredQuarantineAttempt(
+    id: string,
+    attemptId: string,
+    staleBefore: Date,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null>;
+  updateQuarantineAttempt(
+    id: string,
+    attemptId: string,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null>;
+  updatePendingAfterMemberLeft(
+    id: string,
+    expectedQuarantineAttemptId: string | null,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null>;
   update(
     id: string,
     data: Partial<VerificationEvent>,
-    options?: { touchUpdatedAt?: boolean }
+    options?: {
+      touchUpdatedAt?: boolean;
+      /** Only for persisting a Discord ban or kick that has already succeeded. */
+      allowQuarantineOverride?: boolean;
+      /** Only for rolling back a failed Discord action to an exact prior pending state. */
+      preservePendingCaseState?: boolean;
+      /** Requires an exact terminal-action claim before persisting a Discord side effect. */
+      expectedQuarantineAttemptId?: string;
+    }
   ): Promise<VerificationEvent | null>; // Return null if not found
 }
 
@@ -78,6 +194,564 @@ export class VerificationEventRepository implements IVerificationEventRepository
       return event as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'findByThreadId');
+    }
+  }
+
+  async claimQuarantineAttempt(
+    id: string,
+    serverId: string,
+    userId: string,
+    attemptId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const claimed = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            server_id: serverId,
+            user_id: userId,
+            status: VerificationStatus.PENDING,
+            attention_state: CaseAttentionState.REVIEW_REQUIRED,
+            OR: [
+              { containment_status: { not: CaseContainmentStatus.IN_PROGRESS } },
+              { quarantine_lease_renewed_at: null },
+              { quarantine_lease_renewed_at: { lte: staleBefore } },
+            ],
+          },
+          data: {
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+            quarantine_lease_renewed_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
+        if (claimed.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'claimQuarantineAttempt');
+    }
+  }
+
+  async claimCaseRoleRelease(
+    id: string,
+    serverId: string,
+    userId: string,
+    attemptId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const claimed = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            server_id: serverId,
+            user_id: userId,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            OR: [
+              {
+                attention_state: CaseAttentionState.PARKED,
+                containment_status: CaseContainmentStatus.CONTAINED,
+                quarantine_attempt_id: null,
+              },
+              {
+                attention_state: CaseAttentionState.REVIEW_REQUIRED,
+                containment_status: CaseContainmentStatus.INCOMPLETE,
+                quarantine_attempt_id: null,
+              },
+              {
+                attention_state: {
+                  in: [CaseAttentionState.PARKED, CaseAttentionState.REVIEW_REQUIRED],
+                },
+                containment_status: CaseContainmentStatus.IN_PROGRESS,
+                AND: [
+                  {
+                    OR: [
+                      { quarantine_attempt_id: { startsWith: CASE_ROLE_RELEASE_ATTEMPT_PREFIX } },
+                      {
+                        quarantine_attempt_id: {
+                          startsWith: CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
+                        },
+                      },
+                    ],
+                  },
+                  {
+                    OR: [
+                      { quarantine_lease_renewed_at: null },
+                      { quarantine_lease_renewed_at: { lte: staleBefore } },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+          data: {
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+            quarantine_lease_renewed_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
+        if (claimed.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'claimCaseRoleRelease');
+    }
+  }
+
+  async claimAccountQuarantineAttention(
+    id: string,
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent | null> {
+    if (!attemptId.startsWith(CASE_ATTENTION_ATTEMPT_PREFIX)) {
+      throw new RepositoryError(
+        'Account-quarantine attention claims require an attention attempt ID.'
+      );
+    }
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const claimed = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            server_id: serverId,
+            user_id: userId,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            attention_state: {
+              in: [CaseAttentionState.PARKED, CaseAttentionState.REVIEW_REQUIRED],
+            },
+            containment_status: {
+              in: [CaseContainmentStatus.CONTAINED, CaseContainmentStatus.INCOMPLETE],
+            },
+            quarantine_attempt_id: null,
+          },
+          data: {
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+            quarantine_lease_renewed_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
+        if (claimed.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'claimAccountQuarantineAttention');
+    }
+  }
+
+  async claimTerminalActions(
+    ids: readonly string[],
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent[] | null> {
+    if (!attemptId.startsWith(CASE_TERMINAL_ACTION_ATTEMPT_PREFIX) || ids.length === 0) {
+      throw new RepositoryError(
+        'Terminal-action claims require case IDs and a terminal attempt ID.'
+      );
+    }
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const claimed = await transaction.verification_events.updateMany({
+          where: {
+            id: { in: [...ids] },
+            server_id: serverId,
+            user_id: userId,
+            status: VerificationStatus.PENDING,
+            containment_status: { not: CaseContainmentStatus.IN_PROGRESS },
+            quarantine_attempt_id: null,
+          },
+          data: {
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+            quarantine_lease_renewed_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
+        if (claimed.count !== ids.length) {
+          throw new TerminalActionClaimConflictError();
+        }
+        const events = await transaction.verification_events.findMany({
+          where: { id: { in: [...ids] } },
+        });
+        const byId = new Map(events.map((event) => [event.id, event]));
+        return ids.map((id) => byId.get(id) as VerificationEvent);
+      })) as VerificationEvent[];
+    } catch (error) {
+      if (error instanceof TerminalActionClaimConflictError) {
+        return null;
+      }
+      this.handleError(error, 'claimTerminalActions');
+    }
+  }
+
+  async completeTerminalActions(
+    completions: readonly TerminalActionCompletion[],
+    attemptId: string | null,
+    status: VerificationStatus.BANNED | VerificationStatus.KICKED,
+    resolvedBy: string,
+    resolvedAt: Date,
+    notes: string
+  ): Promise<VerificationEvent[] | null> {
+    if (completions.length === 0) {
+      return [];
+    }
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        for (const completion of completions) {
+          if (completion.requiresTerminalActionClaim && !attemptId) {
+            throw new TerminalActionClaimConflictError();
+          }
+          const completed = await transaction.verification_events.updateMany({
+            where: {
+              id: completion.id,
+              status: VerificationStatus.PENDING,
+              ...(completion.requiresTerminalActionClaim
+                ? {
+                    containment_status: CaseContainmentStatus.IN_PROGRESS,
+                    quarantine_attempt_id: attemptId as string,
+                  }
+                : {
+                    containment_status: { not: CaseContainmentStatus.IN_PROGRESS },
+                  }),
+            },
+            data: {
+              status,
+              resolved_by: resolvedBy,
+              resolved_at: resolvedAt,
+              notes,
+              attention_state: CaseAttentionState.REVIEW_REQUIRED,
+              containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+              quarantine_attempt_id: null,
+              quarantine_lease_renewed_at: null,
+              parked_at: null,
+              parked_by: null,
+              metadata: completion.metadata as Prisma.InputJsonValue,
+              updated_at: new Date(),
+            },
+          });
+          if (completed.count !== 1) {
+            throw new TerminalActionClaimConflictError();
+          }
+        }
+
+        const completedEvents = await transaction.verification_events.findMany({
+          where: { id: { in: completions.map((completion) => completion.id) } },
+        });
+        const byId = new Map(completedEvents.map((event) => [event.id, event]));
+        return completions.map((completion) => byId.get(completion.id) as VerificationEvent);
+      })) as VerificationEvent[];
+    } catch (error) {
+      if (error instanceof TerminalActionClaimConflictError) {
+        return null;
+      }
+      this.handleError(error, 'completeTerminalActions');
+    }
+  }
+
+  async completeCaseRoleRelease(
+    id: string,
+    attemptId: string,
+    resolvedBy: string,
+    resolvedAt: Date,
+    metadata: VerificationEvent['metadata']
+  ): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const completed = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            attention_state: CaseAttentionState.PARKED,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+          },
+          data: {
+            status: VerificationStatus.VERIFIED,
+            resolved_by: resolvedBy,
+            resolved_at: resolvedAt,
+            attention_state: CaseAttentionState.REVIEW_REQUIRED,
+            containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+            quarantine_attempt_id: null,
+            quarantine_lease_renewed_at: null,
+            parked_at: null,
+            parked_by: null,
+            metadata: metadata as Prisma.InputJsonValue,
+            updated_at: new Date(),
+          },
+        });
+        if (completed.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'completeCaseRoleRelease');
+    }
+  }
+
+  async completeVerificationRelease(
+    completions: readonly VerificationReleaseCompletion[],
+    attemptId: string,
+    resolvedBy: string,
+    resolvedAt: Date
+  ): Promise<VerificationEvent[] | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        for (const completion of completions) {
+          const completed = await transaction.verification_events.updateMany({
+            where: {
+              id: completion.id,
+              status: VerificationStatus.PENDING,
+              ...(completion.requiresCaseRoleReleaseClaim
+                ? {
+                    case_kind: CaseKind.COMPROMISED_ACCOUNT,
+                    containment_status: CaseContainmentStatus.IN_PROGRESS,
+                    quarantine_attempt_id: attemptId,
+                  }
+                : {
+                    containment_status: { not: CaseContainmentStatus.IN_PROGRESS },
+                  }),
+            },
+            data: {
+              status: VerificationStatus.VERIFIED,
+              resolved_by: resolvedBy,
+              resolved_at: resolvedAt,
+              attention_state: CaseAttentionState.REVIEW_REQUIRED,
+              containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+              quarantine_attempt_id: null,
+              quarantine_lease_renewed_at: null,
+              parked_at: null,
+              parked_by: null,
+              metadata: completion.metadata as Prisma.InputJsonValue,
+              updated_at: new Date(),
+            },
+          });
+          if (completed.count !== 1) {
+            throw new VerificationReleaseConflictError();
+          }
+        }
+
+        const completedEvents = await transaction.verification_events.findMany({
+          where: { id: { in: completions.map((completion) => completion.id) } },
+        });
+        const completedById = new Map(completedEvents.map((event) => [event.id, event]));
+        return completions.map(
+          (completion) => completedById.get(completion.id) as VerificationEvent
+        );
+      })) as VerificationEvent[];
+    } catch (error) {
+      if (error instanceof VerificationReleaseConflictError) {
+        return null;
+      }
+      this.handleError(error, 'completeVerificationRelease');
+    }
+  }
+
+  async rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const claimedEvent = await transaction.verification_events.findFirst({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+          },
+        });
+        if (!claimedEvent) {
+          return null;
+        }
+        const containmentStatus =
+          claimedEvent.attention_state === CaseAttentionState.PARKED
+            ? CaseContainmentStatus.CONTAINED
+            : CaseContainmentStatus.INCOMPLETE;
+        const rolledBack = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            attention_state: claimedEvent.attention_state,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+          },
+          data: {
+            containment_status: containmentStatus,
+            quarantine_attempt_id: null,
+            quarantine_lease_renewed_at: null,
+            updated_at: new Date(),
+          },
+        });
+        if (rolledBack.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'rollbackCaseRoleRelease');
+    }
+  }
+
+  async renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean> {
+    try {
+      const renewed = await this.prisma.verification_events.updateMany({
+        where: {
+          id,
+          status: VerificationStatus.PENDING,
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: attemptId,
+        },
+        data: { quarantine_lease_renewed_at: new Date() },
+      });
+      return renewed.count === 1;
+    } catch (error) {
+      this.handleError(error, 'renewQuarantineAttempt');
+    }
+  }
+
+  async recordQuarantineCaseRole(id: string, attemptId: string, roleId: string): Promise<boolean> {
+    try {
+      const updated = await this.prisma.verification_events.updateMany({
+        where: {
+          id,
+          status: VerificationStatus.PENDING,
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: attemptId,
+        },
+        data: {
+          quarantine_case_role_id: roleId,
+          quarantine_lease_renewed_at: new Date(),
+          updated_at: new Date(),
+        },
+      });
+      return updated.count === 1;
+    } catch (error) {
+      this.handleError(error, 'recordQuarantineCaseRole');
+    }
+  }
+
+  async recoverExpiredQuarantineAttempt(
+    id: string,
+    attemptId: string,
+    staleBefore: Date,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const recovered = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+            OR: [
+              { quarantine_lease_renewed_at: null },
+              { quarantine_lease_renewed_at: { lte: staleBefore } },
+            ],
+          },
+          data: {
+            attention_state: data.attention_state as case_attention_state | undefined,
+            containment_status: data.containment_status as case_containment_status | undefined,
+            quarantine_attempt_id: null,
+            quarantine_lease_renewed_at: null,
+            parked_at: data.parked_at,
+            parked_by: data.parked_by,
+            metadata: data.metadata as Prisma.InputJsonValue | undefined,
+            updated_at: new Date(),
+          },
+        });
+        if (recovered.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'recoverExpiredQuarantineAttempt');
+    }
+  }
+
+  async updateQuarantineAttempt(
+    id: string,
+    attemptId: string,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const updated = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+          },
+          data: {
+            case_kind: data.case_kind as case_kind | undefined,
+            attention_state: data.attention_state as case_attention_state | undefined,
+            containment_status: data.containment_status as case_containment_status | undefined,
+            quarantine_attempt_id: null,
+            quarantine_lease_renewed_at: null,
+            parked_at: data.parked_at,
+            parked_by: data.parked_by,
+            quarantine_case_role_id: data.quarantine_case_role_id,
+            metadata: data.metadata as Prisma.InputJsonValue | undefined,
+            updated_at: new Date(),
+          },
+        });
+        if (updated.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'updateQuarantineAttempt');
+    }
+  }
+
+  async updatePendingAfterMemberLeft(
+    id: string,
+    expectedQuarantineAttemptId: string | null,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null> {
+    try {
+      const updated = await this.prisma.verification_events.updateMany({
+        where: {
+          id,
+          status: VerificationStatus.PENDING,
+          quarantine_attempt_id: expectedQuarantineAttemptId,
+        },
+        data: {
+          attention_state: data.attention_state as case_attention_state | undefined,
+          containment_status: data.containment_status as case_containment_status | undefined,
+          quarantine_attempt_id: data.quarantine_attempt_id,
+          quarantine_lease_renewed_at: data.quarantine_lease_renewed_at,
+          parked_at: data.parked_at,
+          parked_by: data.parked_by,
+          metadata: data.metadata as Prisma.InputJsonValue | undefined,
+        },
+      });
+      if (updated.count !== 1) {
+        return null;
+      }
+      return (await this.prisma.verification_events.findUnique({
+        where: { id },
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'updatePendingAfterMemberLeft');
     }
   }
 
@@ -147,6 +821,136 @@ export class VerificationEventRepository implements IVerificationEventRepository
       return events as VerificationEvent[];
     } catch (error) {
       this.handleError(error, 'findPendingByServer');
+    }
+  }
+
+  async findReviewablePendingByServer(serverId: string): Promise<VerificationEvent[]> {
+    try {
+      const events = await this.prisma.verification_events.findMany({
+        where: {
+          server_id: serverId,
+          status: VerificationStatus.PENDING,
+          attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        },
+        orderBy: { updated_at: 'asc' },
+      });
+      return events as VerificationEvent[];
+    } catch (error) {
+      this.handleError(error, 'findReviewablePendingByServer');
+    }
+  }
+
+  async findParkedByServer(serverId: string): Promise<VerificationEvent[]> {
+    try {
+      const events = await this.prisma.verification_events.findMany({
+        where: {
+          server_id: serverId,
+          status: VerificationStatus.PENDING,
+          attention_state: CaseAttentionState.PARKED,
+        },
+        orderBy: { parked_at: 'desc' },
+      });
+      return events as VerificationEvent[];
+    } catch (error) {
+      this.handleError(error, 'findParkedByServer');
+    }
+  }
+
+  async findExpiredCaseRoleReleases(staleBefore: Date): Promise<VerificationEvent[]> {
+    try {
+      return (await this.prisma.verification_events.findMany({
+        where: {
+          status: VerificationStatus.PENDING,
+          case_kind: CaseKind.COMPROMISED_ACCOUNT,
+          attention_state: {
+            in: [CaseAttentionState.PARKED, CaseAttentionState.REVIEW_REQUIRED],
+          },
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          AND: [
+            {
+              OR: [
+                { quarantine_attempt_id: { startsWith: CASE_ROLE_RELEASE_ATTEMPT_PREFIX } },
+                {
+                  quarantine_attempt_id: {
+                    startsWith: CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
+                  },
+                },
+              ],
+            },
+            {
+              OR: [
+                { quarantine_lease_renewed_at: null },
+                { quarantine_lease_renewed_at: { lte: staleBefore } },
+              ],
+            },
+          ],
+        },
+        orderBy: { updated_at: 'asc' },
+      })) as VerificationEvent[];
+    } catch (error) {
+      this.handleError(error, 'findExpiredCaseRoleReleases');
+    }
+  }
+
+  async findExpiredQuarantineAttempts(staleBefore: Date): Promise<VerificationEvent[]> {
+    try {
+      return (await this.prisma.verification_events.findMany({
+        where: {
+          status: VerificationStatus.PENDING,
+          case_kind: CaseKind.COMPROMISED_ACCOUNT,
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: { not: null },
+          OR: [
+            { quarantine_lease_renewed_at: null },
+            { quarantine_lease_renewed_at: { lte: staleBefore } },
+          ],
+          NOT: [
+            { quarantine_attempt_id: { startsWith: CASE_ROLE_RELEASE_ATTEMPT_PREFIX } },
+            {
+              quarantine_attempt_id: {
+                startsWith: CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
+              },
+            },
+          ],
+        },
+        orderBy: { updated_at: 'asc' },
+      })) as VerificationEvent[];
+    } catch (error) {
+      this.handleError(error, 'findExpiredQuarantineAttempts');
+    }
+  }
+
+  async markParkedContainmentIncomplete(
+    id: string,
+    metadata: VerificationEvent['metadata']
+  ): Promise<VerificationEvent | null> {
+    try {
+      const updated = await this.prisma.verification_events.updateMany({
+        where: {
+          id,
+          status: VerificationStatus.PENDING,
+          case_kind: CaseKind.COMPROMISED_ACCOUNT,
+          attention_state: CaseAttentionState.PARKED,
+          containment_status: CaseContainmentStatus.CONTAINED,
+          quarantine_attempt_id: null,
+        },
+        data: {
+          attention_state: CaseAttentionState.REVIEW_REQUIRED,
+          containment_status: CaseContainmentStatus.INCOMPLETE,
+          parked_at: null,
+          parked_by: null,
+          metadata: metadata as Prisma.InputJsonValue,
+          updated_at: new Date(),
+        },
+      });
+      if (updated.count !== 1) {
+        return null;
+      }
+      return (await this.prisma.verification_events.findUnique({
+        where: { id },
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'markParkedContainmentIncomplete');
     }
   }
 
@@ -243,7 +1047,12 @@ export class VerificationEventRepository implements IVerificationEventRepository
   async update(
     id: string,
     data: Partial<VerificationEvent>,
-    options: { touchUpdatedAt?: boolean } = {}
+    options: {
+      touchUpdatedAt?: boolean;
+      allowQuarantineOverride?: boolean;
+      preservePendingCaseState?: boolean;
+      expectedQuarantineAttemptId?: string;
+    } = {}
   ): Promise<VerificationEvent | null> {
     try {
       const now = new Date();
@@ -254,6 +1063,15 @@ export class VerificationEventRepository implements IVerificationEventRepository
         private_evidence_thread_id: data.private_evidence_thread_id,
         notification_channel_id: data.notification_channel_id,
         notification_message_id: data.notification_message_id,
+        case_kind: data.case_kind as case_kind | undefined,
+        attention_state: data.attention_state as case_attention_state | undefined,
+        containment_status: data.containment_status as case_containment_status | undefined,
+        quarantine_attempt_id: data.quarantine_attempt_id,
+        quarantine_lease_renewed_at: data.quarantine_lease_renewed_at,
+        quarantine_case_role_id: data.quarantine_case_role_id,
+        parked_at: data.parked_at,
+        parked_by: data.parked_by,
+        review_after: data.review_after,
         notes: data.notes,
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- data.metadata can be null or undefined
         metadata: (data.metadata as Prisma.InputJsonValue) ?? undefined, // Handle potential null/undefined
@@ -273,12 +1091,66 @@ export class VerificationEventRepository implements IVerificationEventRepository
           // Set resolution fields if status is resolved
           updateData.resolved_at = data.resolved_at instanceof Date ? data.resolved_at : now; // Use provided date or now
           updateData.resolved_by = data.resolved_by; // Use provided admin ID
+          updateData.attention_state = CaseAttentionState.REVIEW_REQUIRED;
+          updateData.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
+          updateData.quarantine_attempt_id = null;
+          updateData.quarantine_lease_renewed_at = null;
+          updateData.parked_at = null;
+          updateData.parked_by = null;
           // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- This check is necessary
         } else if (data.status === VerificationStatus.PENDING) {
           // Nullify resolution fields if status is pending
           updateData.resolved_at = null;
           updateData.resolved_by = null;
+          if (options.preservePendingCaseState !== true) {
+            updateData.case_kind = CaseKind.STANDARD;
+            updateData.attention_state = CaseAttentionState.REVIEW_REQUIRED;
+            updateData.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
+            updateData.quarantine_attempt_id = null;
+            updateData.quarantine_lease_renewed_at = null;
+            updateData.quarantine_case_role_id = null;
+            updateData.parked_at = null;
+            updateData.parked_by = null;
+          }
         }
+      }
+
+      const isResolution =
+        data.status === VerificationStatus.VERIFIED ||
+        data.status === VerificationStatus.BANNED ||
+        data.status === VerificationStatus.KICKED ||
+        data.status === VerificationStatus.CLOSED_NO_ACTION;
+      if (isResolution && options.expectedQuarantineAttemptId) {
+        const updated = await this.prisma.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: options.expectedQuarantineAttemptId,
+          },
+          data: updateData,
+        });
+        if (updated.count !== 1) {
+          return null;
+        }
+        return (await this.prisma.verification_events.findUnique({
+          where: { id },
+        })) as VerificationEvent | null;
+      }
+      if (isResolution && options.allowQuarantineOverride !== true) {
+        const updated = await this.prisma.verification_events.updateMany({
+          where: {
+            id,
+            containment_status: { not: CaseContainmentStatus.IN_PROGRESS },
+          },
+          data: updateData,
+        });
+        if (updated.count !== 1) {
+          return null;
+        }
+        return (await this.prisma.verification_events.findUnique({
+          where: { id },
+        })) as VerificationEvent | null;
       }
 
       const updatedEvent = await this.prisma.verification_events.update({

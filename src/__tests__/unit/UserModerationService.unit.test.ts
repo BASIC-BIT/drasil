@@ -4,6 +4,9 @@ import { AdminActionService } from '../../services/AdminActionService';
 import { ModerationOutcomeService } from '../../services/ModerationOutcomeService';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   DetectionType,
   ModerationOutcomeSource,
   ModerationOutcomeType,
@@ -23,6 +26,11 @@ import { IRoleManager } from '../../services/RoleManager';
 import { IThreadManager } from '../../services/ThreadManager';
 import type { IModerationQueueService } from '../../services/ModerationQueueService';
 import type { IRoleQuarantineService } from '../../services/RoleQuarantineService';
+import {
+  CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
+  CASE_ROLE_RELEASE_LEASE_MS,
+  CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
+} from '../../utils/caseRoleRelease';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -34,6 +42,7 @@ const buildMember = (guildId: string, userId: string): GuildMember =>
       tag: 'test-user#0001',
     } as User,
     roles: {
+      cache: new Map(),
       add: jest.fn().mockResolvedValue(undefined),
       remove: jest.fn().mockResolvedValue(undefined),
     },
@@ -114,6 +123,7 @@ describe('UserModerationService (unit)', () => {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
       notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue({} as any),
       markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
@@ -212,12 +222,663 @@ describe('UserModerationService (unit)', () => {
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
   });
 
+  it('does not resolve a case while account containment is in progress', async () => {
+    const guildId = 'guild-quarantine-in-progress';
+    const userId = 'user-quarantine-in-progress';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    const moderator = { id: 'moderator-1' } as User;
+    await expect(service.verifyUser(member, moderator)).rejects.toThrow(
+      'Account quarantine is currently in progress'
+    );
+    await expect(service.kickUser(member, 'Kick requested', moderator)).rejects.toThrow(
+      'Account quarantine is currently in progress'
+    );
+    await expect(service.banUser(member, 'Ban requested', moderator)).rejects.toThrow(
+      'Account quarantine is currently in progress'
+    );
+    await expect(
+      service.closeCaseNoAction(buildGuildWithMember(guildId, member), userId, moderator)
+    ).rejects.toThrow('Account quarantine is currently in progress');
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+      })
+    );
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
+    expect(member.kick).not.toHaveBeenCalled();
+    expect(member.ban).not.toHaveBeenCalled();
+  });
+
+  it('keeps a parked quarantine pending when case-role removal fails during verification', async () => {
+    const guildId = 'guild-verify-case-role-failure';
+    const userId = 'user-verify-case-role-failure';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    roleManager.removeCaseRole.mockResolvedValue(false);
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
+      'Failed to remove case role'
+    );
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+        parked_by: 'moderator-parked',
+      })
+    );
+    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+  });
+
+  it('claims a parked quarantine before removing the case role for verification', async () => {
+    const guildId = 'guild-verify-release-claim';
+    const userId = 'user-verify-release-claim';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    roleManager.removeCaseRole.mockImplementation(async () => {
+      const claimedEvent = await verificationEventRepository.findById(verificationEvent.id);
+      expect(claimedEvent?.quarantine_attempt_id).toEqual(
+        expect.stringMatching(`^${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}`)
+      );
+      return true;
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).resolves.toBe(
+      true
+    );
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.VERIFIED,
+        quarantine_attempt_id: null,
+      })
+    );
+  });
+
+  it('claims an incomplete quarantine before removing the case role for verification', async () => {
+    const guildId = 'guild-verify-incomplete-release-claim';
+    const userId = 'user-verify-incomplete-release-claim';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+    });
+    roleManager.removeCaseRole.mockImplementation(async () => {
+      const claimedEvent = await verificationEventRepository.findById(verificationEvent.id);
+      expect(claimedEvent?.quarantine_attempt_id).toEqual(
+        expect.stringMatching(`^${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}`)
+      );
+      return true;
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).resolves.toBe(
+      true
+    );
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.VERIFIED,
+        quarantine_attempt_id: null,
+      })
+    );
+  });
+
+  it('removes the persisted quarantine role after the configured role changes', async () => {
+    const guildId = 'guild-verify-persisted-role';
+    const userId = 'user-verify-persisted-role';
+    const member = buildMember(guildId, userId);
+    member.roles.cache.set('original-case-role', { id: 'original-case-role' } as any);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_case_role_id: 'original-case-role',
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).resolves.toBe(
+      true
+    );
+
+    expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member, 'original-case-role');
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalledWith(member);
+  });
+
+  it('restores containment without partially resolving duplicate cases when persistence fails', async () => {
+    const guildId = 'guild-verify-persistence-failure';
+    const userId = 'user-verify-persistence-failure';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const duplicateEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const parkedAt = new Date('2026-08-18T09:00:00.000Z');
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: parkedAt,
+      parked_by: 'moderator-parked',
+    });
+    jest.spyOn(verificationEventRepository, 'completeVerificationRelease').mockResolvedValue(null);
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
+      'Failed to atomically update verification events'
+    );
+
+    expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+        quarantine_attempt_id: null,
+        parked_at: parkedAt,
+        parked_by: 'moderator-parked',
+      })
+    );
+    await expect(verificationEventRepository.findById(duplicateEvent.id)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.PENDING })
+    );
+  });
+
+  it('does not clear another moderator release claim', async () => {
+    const guildId = 'guild-verify-concurrent-release';
+    const userId = 'user-verify-concurrent-release';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    await verificationEventRepository.claimCaseRoleRelease(
+      verificationEvent.id,
+      guildId,
+      userId,
+      `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}other-moderator`,
+      new Date(Date.now() - CASE_ROLE_RELEASE_LEASE_MS)
+    );
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
+      'Account quarantine is currently in progress'
+    );
+
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        quarantine_attempt_id: `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}other-moderator`,
+      })
+    );
+  });
+
+  it('blocks a kick while verification owns the release claim', async () => {
+    const guildId = 'guild-verify-release-fence';
+    const userId = 'user-verify-release-fence';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+    roleManager.removeCaseRole.mockImplementation(async () => {
+      await expect(
+        service.kickUser(member, 'concurrent kick', { id: 'moderator-kick' } as User)
+      ).rejects.toThrow('Account quarantine is currently in progress');
+      return true;
+    });
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).resolves.toBe(
+      true
+    );
+
+    expect(member.kick).not.toHaveBeenCalled();
+  });
+
+  it('claims terminal ownership before kicking a parked account', async () => {
+    const guildId = 'guild-kick-terminal-claim';
+    const userId = 'user-kick-terminal-claim';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+    (member.kick as jest.Mock).mockImplementation(async () => {
+      const claimed = await verificationEventRepository.findById(verificationEvent.id);
+      expect(claimed?.quarantine_attempt_id).toEqual(
+        expect.stringMatching(`^${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}`)
+      );
+      await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
+        'Account quarantine is currently in progress'
+      );
+    });
+
+    await expect(
+      service.kickUser(member, 'terminal kick', { id: 'moderator-kick' } as User)
+    ).resolves.toBe(true);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.KICKED,
+        quarantine_attempt_id: null,
+      })
+    );
+  });
+
+  it('claims terminal ownership before kicking a review-required compromised account', async () => {
+    const guildId = 'guild-kick-review-required-claim';
+    const userId = 'user-kick-review-required-claim';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+    (member.kick as jest.Mock).mockImplementation(async () => {
+      const claimed = await verificationEventRepository.findById(verificationEvent.id);
+      expect(claimed?.quarantine_attempt_id).toEqual(
+        expect.stringMatching(`^${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}`)
+      );
+      await expect(
+        verificationEventRepository.claimQuarantineAttempt(
+          verificationEvent.id,
+          guildId,
+          userId,
+          'competing-quarantine',
+          new Date(0)
+        )
+      ).resolves.toBeNull();
+    });
+
+    await expect(
+      service.kickUser(member, 'terminal kick', { id: 'moderator-kick' } as User)
+    ).resolves.toBe(true);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.KICKED,
+        quarantine_attempt_id: null,
+      })
+    );
+  });
+
+  it('claims terminal ownership before banning a parked account', async () => {
+    const guildId = 'guild-ban-terminal-claim';
+    const userId = 'user-ban-terminal-claim';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+    (member.ban as jest.Mock).mockImplementation(async () => {
+      const claimed = await verificationEventRepository.findById(verificationEvent.id);
+      expect(claimed?.quarantine_attempt_id).toEqual(
+        expect.stringMatching(`^${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}`)
+      );
+      await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
+        'Account quarantine is currently in progress'
+      );
+    });
+
+    await expect(
+      service.banUser(member, 'terminal ban', { id: 'moderator-ban' } as User)
+    ).resolves.toBe(true);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.BANNED,
+        quarantine_attempt_id: null,
+      })
+    );
+  });
+
+  it('does not overwrite a terminal outcome that wins the release race', async () => {
+    const guildId = 'guild-verify-terminal-race';
+    const userId = 'user-verify-terminal-race';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    roleManager.removeCaseRole.mockImplementation(async () => {
+      await verificationEventRepository.update(
+        verificationEvent.id,
+        {
+          status: VerificationStatus.BANNED,
+          resolved_by: 'moderator-ban',
+          resolved_at: new Date(),
+        },
+        { allowQuarantineOverride: true }
+      );
+      return true;
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
+      'Failed to atomically update verification events'
+    );
+
+    expect(roleManager.assignCaseRole).not.toHaveBeenCalled();
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.BANNED,
+        resolved_by: 'moderator-ban',
+      })
+    );
+  });
+
+  it('reclaims an expired release lease after a crashed verification attempt', async () => {
+    const guildId = 'guild-verify-expired-release';
+    const userId = 'user-verify-expired-release';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    const staleLease = new Date(Date.now() - CASE_ROLE_RELEASE_LEASE_MS - 1);
+    await verificationEventRepository.claimCaseRoleRelease(
+      verificationEvent.id,
+      guildId,
+      userId,
+      `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}crashed-moderator`,
+      new Date(0)
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      quarantine_lease_renewed_at: staleLease,
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-retry' } as User)).resolves.toBe(true);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.VERIFIED,
+        quarantine_attempt_id: null,
+        quarantine_lease_renewed_at: null,
+      })
+    );
+  });
+
   it('restores quarantined roles when verifying a user', async () => {
     const guildId = 'guild-verify-restore-roles';
     const userId = 'user-verify-restore-roles';
     const moderator = { id: 'mod-verify-restore' } as User;
     const member = buildMember(guildId, userId);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
       quarantineMember: jest.fn(),
       enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn().mockResolvedValue({
@@ -314,6 +975,7 @@ describe('UserModerationService (unit)', () => {
     );
     const moderationQueueService = {
       deleteCaseMirror: jest.fn().mockRejectedValue(new Error('queue unavailable')),
+      deleteCaseAttention: jest.fn().mockRejectedValue(new Error('attention unavailable')),
     } as unknown as IModerationQueueService;
     const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     const service = new UserModerationService(
@@ -334,6 +996,10 @@ describe('UserModerationService (unit)', () => {
         expect.stringContaining(`Failed to delete case ${verificationEvent.id}`),
         expect.any(Error)
       );
+      expect(consoleWarn).toHaveBeenCalledWith(
+        expect.stringContaining(`Failed to delete case attention for ${verificationEvent.id}`),
+        expect.any(Error)
+      );
     } finally {
       consoleWarn.mockRestore();
     }
@@ -344,6 +1010,7 @@ describe('UserModerationService (unit)', () => {
     expect(adminActions).toHaveLength(1);
     expect(adminActions[0].action_type).toBe(AdminActionType.VERIFY);
     expect(moderationQueueService.deleteCaseMirror).toHaveBeenCalledWith(verificationEvent.id);
+    expect(moderationQueueService.deleteCaseAttention).toHaveBeenCalledWith(verificationEvent.id);
   });
 
   it('closes a pending case with no action and removes existing restriction', async () => {
@@ -451,6 +1118,85 @@ describe('UserModerationService (unit)', () => {
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
   });
 
+  it('rejects close-no-action when the current case is a parked account quarantine', async () => {
+    const guildId = 'guild-close-parked';
+    const userId = 'user-close-parked';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.closeCaseNoAction(buildGuildWithMember(guildId, member), userId, {
+        id: 'moderator-close',
+      } as User)
+    ).rejects.toThrow(
+      'An account quarantine can only be released with Verify User, Kick User, or Ban User.'
+    );
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
+  });
+
+  it('rejects close-no-action when compromised-account containment is incomplete', async () => {
+    const guildId = 'guild-close-incomplete';
+    const userId = 'user-close-incomplete';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+      quarantine_case_role_id: 'persisted-quarantine-role',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.closeCaseNoAction(buildGuildWithMember(guildId, member), userId, {
+        id: 'moderator-close',
+      } as User)
+    ).rejects.toThrow(
+      'An account quarantine can only be released with Verify User, Kick User, or Ban User.'
+    );
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
+  });
+
   it('retries no-action case role cleanup after case events are already closed', async () => {
     const guildId = 'guild-close-retry';
     const userId = 'user-close-retry';
@@ -515,6 +1261,8 @@ describe('UserModerationService (unit)', () => {
     const moderator = { id: 'mod-close-absent' } as User;
     const guild = buildGuildWithoutMember(guildId);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
       quarantineMember: jest.fn(),
       enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn(),
@@ -580,6 +1328,8 @@ describe('UserModerationService (unit)', () => {
     const moderator = { id: 'mod-close-absent-retry' } as User;
     const guild = buildGuildWithoutMember(guildId);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
       quarantineMember: jest.fn(),
       enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn(),
@@ -642,6 +1392,8 @@ describe('UserModerationService (unit)', () => {
     const moderator = { id: 'mod-ban' } as User;
     const member = buildMember(guildId, userId);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
       quarantineMember: jest.fn(),
       enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn(),
@@ -1228,7 +1980,9 @@ describe('UserModerationService (unit)', () => {
       userId,
       VerificationStatus.PENDING
     );
-    jest.spyOn(verificationEventRepository, 'update').mockRejectedValueOnce(new Error('DB down'));
+    jest
+      .spyOn(verificationEventRepository, 'completeTerminalActions')
+      .mockRejectedValueOnce(new Error('DB down'));
 
     const service = new UserModerationService(
       serverMemberRepository,
@@ -1581,6 +2335,154 @@ describe('UserModerationService (unit)', () => {
     expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
   });
 
+  it('preserves incomplete containment when a compromised-account member leaves', async () => {
+    const guildId = 'guild-quarantined-member-left';
+    const userId = 'user-quarantined-member-left';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: 'attempt-1',
+      parked_at: new Date(),
+      parked_by: 'moderator-1',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(service.recordMemberLeftGuild(member)).resolves.toBe(1);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        quarantine_attempt_id: null,
+        parked_at: null,
+        parked_by: null,
+      })
+    );
+  });
+
+  it('preserves a terminal-action claim when guildMemberRemove arrives first', async () => {
+    const guildId = 'guild-terminal-member-remove';
+    const userId = 'user-terminal-member-remove';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const terminalAttemptId = 'case-terminal-action:attempt-1';
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: terminalAttemptId,
+      quarantine_lease_renewed_at: new Date(),
+      parked_at: new Date(),
+      parked_by: 'moderator-1',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(service.recordMemberLeftGuild(member)).resolves.toBe(1);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: terminalAttemptId,
+      })
+    );
+  });
+
+  it('does not revive a terminal resolution that completes before the member-left write', async () => {
+    const guildId = 'guild-terminal-completes-first';
+    const userId = 'user-terminal-completes-first';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const terminalAttemptId = 'case-terminal-action:attempt-completes-first';
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: terminalAttemptId,
+      quarantine_lease_renewed_at: new Date(),
+    });
+    const updatePendingAfterMemberLeft =
+      verificationEventRepository.updatePendingAfterMemberLeft.bind(verificationEventRepository);
+    jest
+      .spyOn(verificationEventRepository, 'updatePendingAfterMemberLeft')
+      .mockImplementationOnce(async (id, expectedAttemptId, data) => {
+        await verificationEventRepository.completeTerminalActions(
+          [
+            {
+              id,
+              metadata: { terminal_completed: true },
+              requiresTerminalActionClaim: true,
+            },
+          ],
+          expectedAttemptId,
+          VerificationStatus.KICKED,
+          'moderator-1',
+          new Date(),
+          'Terminal kick completed.'
+        );
+        return updatePendingAfterMemberLeft(id, expectedAttemptId, data);
+      });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(service.recordMemberLeftGuild(member)).resolves.toBe(0);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.KICKED,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        quarantine_attempt_id: null,
+        metadata: { terminal_completed: true },
+      })
+    );
+  });
+
   it('returns success when post-ban notification updates fail', async () => {
     const guildId = 'guild-ban-post-update-fails';
     const userId = 'user-ban-post-update-fails';
@@ -1665,7 +2567,7 @@ describe('UserModerationService (unit)', () => {
     notificationManager.logActionToMessage.mockResolvedValue(false);
     (guild.bans.create as jest.Mock).mockImplementation(async () => {
       const updatedBeforeBan = await verificationEventRepository.findById(verificationEvent.id);
-      expect(updatedBeforeBan?.status).toBe(VerificationStatus.BANNED);
+      expect(updatedBeforeBan?.status).toBe(VerificationStatus.PENDING);
       return {};
     });
 
@@ -1701,6 +2603,59 @@ describe('UserModerationService (unit)', () => {
         source: ModerationOutcomeSource.DRASIL,
         verification_event_id: verificationEvent.id,
         detection_event_id: detectionEvent.id,
+      })
+    );
+  });
+
+  it('preserves a parked quarantine when a ban by ID fails', async () => {
+    const guildId = 'guild-ban-by-id-rollback';
+    const userId = 'user-ban-by-id-rollback';
+    const moderator = { id: 'mod-ban' } as User;
+    const guild = {
+      id: guildId,
+      client: { users: { fetch: jest.fn().mockRejectedValue(new Error('Unknown user')) } },
+      bans: { create: jest.fn().mockRejectedValue(new Error('Missing permissions')) },
+    } as unknown as Guild;
+    const parkedAt = new Date('2026-08-18T07:00:00Z');
+
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'left-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: parkedAt,
+      parked_by: moderator.id,
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.banUserById(guild, userId, 'banned after leave', moderator)
+    ).rejects.toThrow('Missing permissions');
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+        parked_at: parkedAt,
+        parked_by: moderator.id,
       })
     );
   });

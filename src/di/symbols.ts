@@ -30,11 +30,14 @@ export const TYPES = {
   ModerationQueueService: Symbol.for('ModerationQueueService'),
   ModerationActionRequestService: Symbol.for('ModerationActionRequestService'),
   RoleQuarantineService: Symbol.for('RoleQuarantineService'),
+  AccountQuarantineService: Symbol.for('AccountQuarantineService'),
+  ActiveAccountQuarantineCache: Symbol.for('ActiveAccountQuarantineCache'),
   IntegrityAuditService: Symbol.for('IntegrityAuditService'),
   RoleGateService: Symbol.for('RoleGateService'),
   MessageDeletionService: Symbol.for('MessageDeletionService'),
   MessageCleanupService: Symbol.for('MessageCleanupService'),
   CaseThreadClosureSweepService: Symbol.for('CaseThreadClosureSweepService'),
+  CaseRoleReleaseReconciliationService: Symbol.for('CaseRoleReleaseReconciliationService'),
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),

@@ -98,6 +98,7 @@ describe('SecurityActionService (unit)', () => {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
       notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest
         .fn()
         .mockResolvedValue({ id: 'observe-1' } as Message),
@@ -957,6 +958,7 @@ describe('SecurityActionService (unit)', () => {
     );
     expect(result).toMatchObject({
       repaired: true,
+      notificationReady: true,
       verificationEventId: verificationEvent.id,
       threadId: 'thread-1',
       userAdded: true,
@@ -1055,6 +1057,7 @@ describe('SecurityActionService (unit)', () => {
       );
       expect(result).toMatchObject({
         repaired: true,
+        notificationReady: false,
         verificationEventId: verificationEvent.id,
         threadId: 'thread-1',
         userAdded: true,

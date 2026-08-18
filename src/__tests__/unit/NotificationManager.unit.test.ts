@@ -5,6 +5,7 @@ import {
   Guild,
   GuildMember,
   Message,
+  PermissionFlagsBits,
   TextChannel,
   User,
 } from 'discord.js';
@@ -14,6 +15,9 @@ import { DetectionResult } from '../../services/DetectionOrchestrator';
 import { GPT_PROFILE_MODEL, GPT_PROFILE_PROMPT_VERSION } from '../../services/GPTService';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   DetectionType,
   VerificationEvent,
   VerificationStatus,
@@ -216,6 +220,43 @@ describe('NotificationManager (unit)', () => {
       'close_user-1',
       'admin_actions:m:c:user-1',
     ]);
+  });
+
+  it('preserves parked quarantine presentation when rebuilding a notification', async () => {
+    const member = buildMember('guild-1', 'user-1');
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'free discord nitro',
+    };
+    adminChannel.send.mockResolvedValue({ id: 'message-1', edit: jest.fn() });
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = {
+      ...buildVerificationEvent({
+        metadata: {
+          account_quarantine: {
+            result: 'contained',
+            removed_role_ids: ['role-1'],
+            retained_roles: [],
+            failed_removals: [],
+            member_bypasses: [],
+          },
+        },
+      }),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    } as VerificationEvent;
+
+    await manager.upsertSuspiciousUserNotification(member, detectionResult, verificationEvent);
+
+    const sendArgs = adminChannel.send.mock.calls[0][0] as { embeds: EmbedBuilder[] };
+    expect(sendArgs.embeds[0].data.title).toBe('Account Quarantine Parked');
+    expect(
+      sendArgs.embeds[0].data.fields?.find((field) => field.name === 'Account Quarantine')?.value
+    ).toContain('Contained and parked');
   });
 
   it('adds a web case button to suspicious user notifications when configured', async () => {
@@ -1267,6 +1308,23 @@ describe('NotificationManager (unit)', () => {
       ]),
       'Sync Drasil verification channel permissions'
     );
+    const caseRoleOverwrite = overwriteSet.mock.calls[0][0].find(
+      (overwrite: { id: string }) => overwrite.id === 'case-role-1'
+    );
+    expect(caseRoleOverwrite).toEqual(
+      expect.objectContaining({
+        allow: expect.arrayContaining([
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessagesInThreads,
+        ]),
+        deny: expect.arrayContaining([
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.CreatePublicThreads,
+          PermissionFlagsBits.CreatePrivateThreads,
+        ]),
+      })
+    );
+    expect(caseRoleOverwrite.allow).not.toContain(PermissionFlagsBits.SendMessages);
     expect(createChannel).not.toHaveBeenCalled();
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       verification_channel_id: 'verification-channel-1',

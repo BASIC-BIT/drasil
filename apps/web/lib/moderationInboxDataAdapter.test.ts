@@ -98,11 +98,12 @@ const baseQueueRow: ModerationQueueRow = {
 
 describe('moderationInboxDataAdapter', () => {
   it('converts active case summaries into inbox case items', () => {
-    const item = caseSummaryToInboxItem(baseCase);
+    const item = caseSummaryToInboxItem({ ...baseCase, caseKind: 'compromised_account' });
 
     expect(item).toEqual(
       expect.objectContaining({
         id: 'case:case-1',
+        caseKind: 'compromised_account',
         kind: 'case',
         sourceId: 'case-1',
         title: 'Pending moderation case',
@@ -197,5 +198,31 @@ describe('moderationInboxDataAdapter', () => {
       'ban_user',
       'open_discord',
     ]);
+  });
+
+  it('shows quarantine breach attention as an acknowledgeable urgent inbox item', () => {
+    const item = parseModerationQueueRow(
+      {
+        ...baseQueueRow,
+        item_type: 'quarantine_breach_attention',
+        verification_event_id: 'case-quarantined-1',
+        detection_event_id: null,
+        source_thread_id: 'general-channel',
+        metadata: {
+          latest_message_url:
+            'https://discord.com/channels/guild-1/general-channel/breach-message-1',
+        },
+      },
+      new Date('2026-06-03T02:00:00.000Z')
+    );
+
+    expect(item).toEqual(
+      expect.objectContaining({
+        kind: 'support_attention',
+        sourceId: 'case-quarantined-1',
+        title: 'Quarantine containment breach',
+        allowedActions: ['acknowledge', 'open_discord'],
+      })
+    );
   });
 });

@@ -205,4 +205,57 @@ describe('moderationActionRequestDataAdapter', () => {
     expect(request.messageDeletionJobId).toBe('job-1');
     expect(request.resultSummary).toBe('Preserved 4; deleted 3; changed 1; failed 1.');
   });
+
+  it('parses the live account-quarantine preview used for confirmation', () => {
+    const request = parseModerationActionRequestRow({
+      id: 'request-quarantine-preview',
+      action_type: 'preview_account_quarantine',
+      actor_surface: 'web',
+      completed_at: new Date('2026-08-18T12:05:00.000Z'),
+      failed_at: null,
+      last_error: null,
+      requested_at: new Date('2026-08-18T12:04:00.000Z'),
+      result: {
+        action_type: 'preview_account_quarantine',
+        admin_notification_ready: true,
+        can_contain: false,
+        case_role_ready: true,
+        enabled: true,
+        lockdown_error_count: 1,
+        lockdown_issues: [{ code: 'lockdown-gap' }],
+        lockdown_planned_actions: 2,
+        member_bypasses: [{ channel_id: 'channel-1' }],
+        planned_roles: [{ role_id: 'role-1', role_name: 'Member' }],
+        previewed_at: '2026-08-18T12:05:00.000Z',
+        privileged_roles: [{ role_id: 'role-2', role_name: 'Moderator' }],
+        recovery_thread_ready: true,
+        retained_roles: [
+          { role_id: 'role-managed', role_name: 'Managed', reason: 'managed by integration' },
+        ],
+        unremovable_privilege_reasons: ['guild_owner'],
+      },
+      status: 'completed',
+      target_user_id: 'user-1',
+      updated_at: new Date('2026-08-18T12:05:00.000Z'),
+      verification_event_id: 'case-1',
+    });
+
+    expect(request.resultSummary).toBe('Live preview: remove 1 role; retain 1; bypasses 1.');
+    expect(request.accountQuarantinePreview).toEqual(
+      expect.objectContaining({
+        adminNotificationReady: true,
+        canContain: false,
+        lockdownPlannedActionCount: 2,
+        memberBypassCount: 1,
+        plannedRoles: [{ roleId: 'role-1', roleName: 'Member', reason: null }],
+        retainedRoles: [
+          {
+            roleId: 'role-managed',
+            roleName: 'Managed',
+            reason: 'managed by integration',
+          },
+        ],
+      })
+    );
+  });
 });

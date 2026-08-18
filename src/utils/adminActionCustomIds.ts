@@ -20,6 +20,7 @@ const ACTION_TO_CODE: Record<string, string> = {
   observed_ban: 'ob',
   observed_kick: 'ok',
   verify: 'v',
+  quarantine: 'q',
   restrict_user: 'ru',
   lift_restriction: 'lr',
   close_no_action: 'cna',
@@ -33,6 +34,7 @@ const ACTION_TO_CODE: Record<string, string> = {
   observed_false_positive: 'ofp',
   observed_undo_dismiss: 'oud',
   confirm_verify: 'cv',
+  confirm_quarantine: 'cq',
   confirm_restrict_user: 'cru',
   confirm_lift_restriction: 'clr',
   confirm_close_no_action: 'ccna',
@@ -89,18 +91,25 @@ export function buildAdminActionCustomId(
   action: string,
   surface: AdminActionSurface,
   userId: string,
-  detectionEventId?: string
+  detectionEventId?: string,
+  verificationEventId?: string,
+  confirmationFingerprint?: string
 ): string {
+  const optionalParts = confirmationFingerprint
+    ? [detectionEventId ?? '_', verificationEventId ?? '_', confirmationFingerprint]
+    : verificationEventId
+      ? [detectionEventId ?? '_', verificationEventId]
+      : detectionEventId
+        ? [detectionEventId]
+        : [];
   return assertCustomIdLength(
     [
       ADMIN_ACTION_CUSTOM_ID_PREFIX,
       ACTION_TO_CODE[action] ?? action,
       SURFACE_TO_CODE[surface],
       userId,
-      detectionEventId,
-    ]
-      .filter((part): part is string => Boolean(part))
-      .join(':')
+      ...optionalParts,
+    ].join(':')
   );
 }
 
@@ -109,10 +118,20 @@ export interface ParsedAdminActionCustomId {
   readonly surface: AdminActionSurface;
   readonly userId: string;
   readonly detectionEventId?: string;
+  readonly verificationEventId?: string;
+  readonly confirmationFingerprint?: string;
 }
 
 export function parseAdminActionCustomId(customId: string): ParsedAdminActionCustomId | null {
-  const [prefix, actionCode, surfaceCode, userId, detectionEventId] = customId.split(':');
+  const [
+    prefix,
+    actionCode,
+    surfaceCode,
+    userId,
+    detectionEventId,
+    verificationEventId,
+    confirmationFingerprint,
+  ] = customId.split(':');
   if (prefix !== ADMIN_ACTION_CUSTOM_ID_PREFIX || !actionCode || !surfaceCode || !userId) {
     return null;
   }
@@ -126,6 +145,8 @@ export function parseAdminActionCustomId(customId: string): ParsedAdminActionCus
     action,
     surface,
     userId,
-    ...(detectionEventId ? { detectionEventId } : {}),
+    ...(detectionEventId && detectionEventId !== '_' ? { detectionEventId } : {}),
+    ...(verificationEventId && verificationEventId !== '_' ? { verificationEventId } : {}),
+    ...(confirmationFingerprint ? { confirmationFingerprint } : {}),
   };
 }

@@ -22,6 +22,7 @@ interface CaseQueueViewProps {
   readonly resolvedCaseCount: number;
   readonly sessionUsername: string;
   readonly cases: readonly CaseSummary[];
+  readonly parkedCases: readonly CaseSummary[];
 }
 
 function SurfaceLinks({ item }: { readonly item: CaseSummary }) {
@@ -82,6 +83,46 @@ function MemberStateNotice({ item }: { readonly item: CaseSummary }) {
     <div className="member-warning neutral-warning">
       <strong>Member State Unknown</strong>
       <span>Check Discord before taking moderator action.</span>
+    </div>
+  );
+}
+
+function QuarantineStateNotice({ item }: { readonly item: CaseSummary }) {
+  if (item.containmentStatus === 'in_progress') {
+    return (
+      <div className="member-warning neutral-warning">
+        <strong>Account Quarantine In Progress</strong>
+        <span>Drasil is running containment now; duplicate attempts will be rejected.</span>
+      </div>
+    );
+  }
+
+  if (item.containmentStatus === 'incomplete') {
+    const effects = item.quarantineEffects;
+    return (
+      <div className="member-warning">
+        <strong>Account Quarantine Incomplete</strong>
+        <span>
+          The account is not parked. Review blockers before retrying in Discord. Removed roles:{' '}
+          {effects?.removedRoleCount ?? 0}; retained roles: {effects?.retainedRoleCount ?? 0};
+          failed removals: {effects?.failedRoleCount ?? 0}; permission bypasses:{' '}
+          {effects?.memberBypassCount ?? 0}.
+        </span>
+      </div>
+    );
+  }
+
+  if (item.attentionState !== 'parked') {
+    return null;
+  }
+
+  return (
+    <div className="member-warning neutral-warning">
+      <strong>Parked Account Quarantine</strong>
+      <span>
+        The user remains contained while their verification thread stays open for a recovery report.
+        Release requires moderator verification.
+      </span>
     </div>
   );
 }
@@ -172,6 +213,7 @@ function CaseCard({ guildId, item }: { readonly guildId: string; readonly item: 
       </div>
 
       <MemberStateNotice item={item} />
+      <QuarantineStateNotice item={item} />
 
       <SurfaceLinks item={item} />
       <ActionPills actions={item.allowedActions} itemId={item.id} />
@@ -185,6 +227,7 @@ export function CaseQueueView({
   resolvedCaseCount,
   sessionUsername,
   cases,
+  parkedCases,
 }: CaseQueueViewProps) {
   const staleCount = cases.filter((item) => item.stale).length;
 
@@ -230,6 +273,10 @@ export function CaseQueueView({
             <strong>{cases.length}</strong>
           </div>
           <div>
+            <span className="muted">Parked quarantines</span>
+            <strong>{parkedCases.length}</strong>
+          </div>
+          <div>
             <span className="muted">Stale</span>
             <strong>{staleCount}</strong>
           </div>
@@ -250,19 +297,40 @@ export function CaseQueueView({
 
       {cases.length === 0 ? (
         <section className="panel stack">
-          <h2>No pending cases</h2>
+          <h2>No cases need review</h2>
           <p className="muted">
-            Drasil has no active verification events for this server. {resolvedCaseCount} case
-            {resolvedCaseCount === 1 ? '' : 's'} already resolved.
+            {parkedCases.length > 0
+              ? 'Contained account quarantines are parked below.'
+              : 'Drasil has no active verification events for this server.'}{' '}
+            {resolvedCaseCount} case{resolvedCaseCount === 1 ? '' : 's'} already resolved.
           </p>
         </section>
       ) : (
-        <section className="case-list" aria-label="Active cases">
-          {cases.map((item) => (
-            <CaseCard guildId={guildId} item={item} key={item.id} />
-          ))}
+        <section className="stack" aria-label="Cases needing review">
+          <div className="section-heading compact-heading">
+            <h2>Needs Review</h2>
+          </div>
+          <div className="case-list">
+            {cases.map((item) => (
+              <CaseCard guildId={guildId} item={item} key={item.id} />
+            ))}
+          </div>
         </section>
       )}
+
+      {parkedCases.length > 0 ? (
+        <section className="stack" aria-label="Parked account quarantines">
+          <div className="section-heading compact-heading">
+            <h2>Parked Quarantines</h2>
+            <p className="muted">Contained accounts waiting for the user to report recovery.</p>
+          </div>
+          <div className="case-list">
+            {parkedCases.map((item) => (
+              <CaseCard guildId={guildId} item={item} key={item.id} />
+            ))}
+          </div>
+        </section>
+      ) : null}
     </main>
   );
 }

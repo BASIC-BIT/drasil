@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { caseDetailSchema, type CaseSummary, sortCaseSummariesForQueue } from './cases';
+import {
+  caseActionSchema,
+  caseDetailSchema,
+  type CaseSummary,
+  sortCaseSummariesForQueue,
+} from './cases';
 
 const buildCase = (id: string, stale: boolean, updatedAt: string): CaseSummary => ({
   id,
@@ -29,6 +34,12 @@ const buildCase = (id: string, stale: boolean, updatedAt: string): CaseSummary =
 });
 
 describe('case contracts', () => {
+  it('accepts the compromised-account quarantine action', () => {
+    expect(caseActionSchema.parse('quarantine_compromised_account')).toBe(
+      'quarantine_compromised_account'
+    );
+  });
+
   it('sorts queue summaries with stale cases first and oldest movement first', () => {
     const sorted = sortCaseSummariesForQueue([
       buildCase('fresh-old', false, '2026-06-01T00:00:00.000Z'),

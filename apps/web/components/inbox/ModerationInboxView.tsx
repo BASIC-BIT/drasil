@@ -20,7 +20,10 @@ import { InboxActionForm, type InboxStateAction } from './InboxActionForm';
 import { InboxActionRequestPollingProvider } from './InboxActionRequestPoller';
 import { formatDetectionType, formatUtc, freshnessStatusClass } from '@/lib/casePresentation';
 import type { InboxActionState } from '@/lib/inboxActionState';
-import { findInboxActionRequest } from '@/lib/inboxActionReceipts';
+import {
+  findAccountQuarantineActionRequests,
+  findInboxActionRequest,
+} from '@/lib/inboxActionReceipts';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
 import {
   buildModerationInboxExportText,
@@ -140,6 +143,7 @@ const actionLabels: Record<ModerationInboxAction, string> = {
   create_thread: 'Create Thread',
   dismiss_no_action: 'Dismiss No Action',
   kick_user: 'Kick User',
+  quarantine_compromised_account: 'Quarantine Compromised Account',
   mark_actioned: 'Mark Actioned',
   mark_false_positive: 'False Positive',
   open_case: 'Open Case',
@@ -432,6 +436,10 @@ function InboxActions({
       findInboxActionRequest(recentActionRequests, item, action),
     ])
   ) as Partial<Record<WebCaseAction, ModerationActionRequestSummary | null>>;
+  const accountQuarantineRequests =
+    item.kind === 'case'
+      ? findAccountQuarantineActionRequests(recentActionRequests, item.sourceId)
+      : undefined;
 
   return (
     <div className="pill-list action-form-list" aria-label={`Actions for ${item.title}`}>
@@ -644,6 +652,7 @@ function InboxActions({
       {caseActions.length > 0 ? (
         <CaseActionControls
           actions={caseActions}
+          accountQuarantineRequests={accountQuarantineRequests}
           actionRequestsByAction={actionRequestsByAction}
           canQueueCaseActions={canQueueCaseActions}
           caseId={item.sourceId}
@@ -651,6 +660,7 @@ function InboxActions({
           messageCleanup={messageCleanup}
           queueCaseAction={queueCaseAction}
           queueInboxCaseAction={queueInboxCaseAction}
+          requiresVerificationReleaseConfirmation={item.caseKind === 'compromised_account'}
         />
       ) : null}
     </div>

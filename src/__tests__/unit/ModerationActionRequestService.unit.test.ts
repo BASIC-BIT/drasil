@@ -14,6 +14,7 @@ import {
   type MessageDeletionJobWithItems,
 } from '../../repositories/types';
 import type { IModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
+import { buildAccountQuarantinePreviewFingerprint } from '../../utils/accountQuarantinePreview';
 
 const baseRequest: ModerationActionRequest = {
   id: 'request-1',
@@ -108,6 +109,87 @@ const verifyRequest: ModerationActionRequest = {
   idempotency_key: 'web:case-action:verify_user:guild-1:ver-1',
   report_intake_id: null,
   verification_event_id: 'ver-1',
+};
+
+const accountQuarantinePreviewRequest: ModerationActionRequest = {
+  ...verifyRequest,
+  action_type: ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE,
+  id: 'account-quarantine-preview-request-1',
+  idempotency_key: 'web:case-action:quarantine_compromised_account:guild-1:ver-1:preview:attempt-1',
+  metadata: {
+    case_action: 'quarantine_compromised_account',
+    quarantine_phase: 'preview',
+  },
+};
+
+const defaultAccountQuarantinePreview = {
+  canContain: true,
+  caseRoleId: 'case-role-1',
+  enabled: true,
+  lockdown: {
+    enabled: true,
+    errorCount: 0,
+    issues: [],
+    plannedActions: [],
+  },
+  memberAudit: {
+    bypasses: [],
+    retainedAdministratorRoleIds: [],
+    retainedPrivilegedRoleIds: [],
+    unremovablePrivilegeReasons: [],
+  },
+  rolePreview: {
+    plannedRoleIds: ['role-1', 'role-privileged'],
+    privilegedRoleIds: ['role-privileged'],
+    skippedRoles: [],
+  },
+} as any;
+
+const completedAccountQuarantinePreviewRequest: ModerationActionRequest = {
+  ...accountQuarantinePreviewRequest,
+  completed_at: new Date(),
+  result: {
+    containment_fingerprint: buildAccountQuarantinePreviewFingerprint(
+      defaultAccountQuarantinePreview,
+      {
+        adminNotificationReady: true,
+        recoveryThreadId: 'thread-1',
+        recoveryThreadReady: true,
+      }
+    ),
+  },
+  status: ModerationActionRequestStatus.COMPLETED,
+};
+
+describe('account-quarantine preview fingerprint', () => {
+  it('changes when the persisted recovery thread changes', () => {
+    const first = buildAccountQuarantinePreviewFingerprint(defaultAccountQuarantinePreview, {
+      adminNotificationReady: true,
+      recoveryThreadId: 'thread-1',
+      recoveryThreadReady: true,
+    });
+    const second = buildAccountQuarantinePreviewFingerprint(defaultAccountQuarantinePreview, {
+      adminNotificationReady: true,
+      recoveryThreadId: 'thread-2',
+      recoveryThreadReady: true,
+    });
+
+    expect(second).not.toBe(first);
+  });
+});
+
+const accountQuarantineExecuteRequest: ModerationActionRequest = {
+  ...verifyRequest,
+  action_type: ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT,
+  id: 'account-quarantine-execute-request-1',
+  idempotency_key:
+    'web:case-action:quarantine_compromised_account:guild-1:ver-1:execute:account-quarantine-preview-request-1',
+  metadata: {
+    case_action: 'quarantine_compromised_account',
+    preview_request_id: 'account-quarantine-preview-request-1',
+    quarantine_phase: 'execute',
+    reason: 'Account owner reported compromise.',
+  },
 };
 
 const openAdminCaseRequest: ModerationActionRequest = {
@@ -402,6 +484,7 @@ const upsertReportInstructionsRequest: ModerationActionRequest = {
 };
 
 class FakeModerationActionRequestRepository implements IModerationActionRequestRepository {
+  public byId = new Map<string, ModerationActionRequest>();
   public requests: ModerationActionRequest[] = [];
   public completed: Array<{ id: string; result: unknown }> = [];
   public failed: Array<{ error: string; id: string }> = [];
@@ -409,6 +492,10 @@ class FakeModerationActionRequestRepository implements IModerationActionRequestR
 
   public async enqueue(): Promise<ModerationActionRequest> {
     throw new Error('not used');
+  }
+
+  public async findById(id: string): Promise<ModerationActionRequest | null> {
+    return this.byId.get(id) ?? null;
   }
 
   public async claimNext(): Promise<ModerationActionRequest | null> {
@@ -440,6 +527,20 @@ describe('ModerationActionRequestService', () => {
   ) {
     const repository = new FakeModerationActionRequestRepository();
     repository.requests = requests.map((request) => ({ ...request }));
+    for (const request of repository.requests) {
+      repository.byId.set(request.id, request);
+    }
+    if (
+      requests.some(
+        (request) =>
+          request.action_type === ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT
+      )
+    ) {
+      repository.byId.set(
+        completedAccountQuarantinePreviewRequest.id,
+        completedAccountQuarantinePreviewRequest
+      );
+    }
     const moderator = { id: 'moderator-1' };
     const targetUser = { id: 'user-1', tag: 'target#0001', username: 'target' };
     const guild = {
@@ -488,6 +589,11 @@ describe('ModerationActionRequestService', () => {
     const adminChannel = {
       guildId: 'guild-1',
       id: 'admin-channel-1',
+      messages: {
+        fetch: jest.fn(async (id: string) =>
+          id === 'admin-message-1' ? { id: 'admin-message-1' } : null
+        ),
+      },
       send: jest.fn(async () => ({ id: 'admin-message-1' })),
       type: ChannelType.GuildText,
     };
@@ -495,6 +601,13 @@ describe('ModerationActionRequestService', () => {
       guildId: 'guild-1',
       id: 'verification-channel-1',
       type: ChannelType.GuildText,
+    };
+    const verificationThread = {
+      archived: false,
+      guildId: 'guild-1',
+      id: 'thread-1',
+      isThread: jest.fn(() => true),
+      locked: false,
     };
     const reportIntakeThread = {
       archived: false,
@@ -517,6 +630,10 @@ describe('ModerationActionRequestService', () => {
     });
     guild.members.fetchMe.mockResolvedValue(guild.members.me);
     (guild as any).roles = {
+      cache: new Map([
+        ['role-1', { id: 'role-1', name: 'Member' }],
+        ['role-privileged', { id: 'role-privileged', name: 'Moderator' }],
+      ]),
       fetch: jest.fn(async (id: string) => (id === role.id ? role : null)),
     };
     const client = {
@@ -536,6 +653,9 @@ describe('ModerationActionRequestService', () => {
           }
           if (id === reportIntakeThread.id) {
             return reportIntakeThread;
+          }
+          if (id === verificationThread.id) {
+            return verificationThread;
           }
           return null;
         }),
@@ -604,7 +724,9 @@ describe('ModerationActionRequestService', () => {
       openObservedDetectionCase: jest.fn(async () => true),
       repairActiveCase: jest.fn(async () => ({
         message: 'Case repaired.',
+        notificationReady: true,
         repaired: true,
+        threadId: 'thread-1',
         threadCreated: true,
         verificationEventId: 'ver-1',
       })),
@@ -742,15 +864,37 @@ describe('ModerationActionRequestService', () => {
       })),
       previewJob: jest.fn(async () => messageCleanupJob),
     };
+    const verificationEventRepository = {
+      findById: jest.fn(async () => ({
+        id: 'ver-1',
+        notification_channel_id: 'admin-channel-1',
+        notification_message_id: 'admin-message-1',
+        server_id: 'guild-1',
+        thread_id: 'thread-1',
+        user_id: 'user-1',
+      })),
+      findActiveByUserAndServer: jest.fn(async () => ({
+        id: 'ver-1',
+        notification_channel_id: 'admin-channel-1',
+        notification_message_id: 'admin-message-1',
+        server_id: 'guild-1',
+        thread_id: 'thread-1',
+        user_id: 'user-1',
+      })),
+    };
+    const accountQuarantineService = {
+      preview: jest.fn(async () => defaultAccountQuarantinePreview),
+      quarantine: jest.fn(async () => ({
+        lockdown: { plannedActions: [] },
+        memberAudit: { bypasses: [] },
+        roleResult: { failedRemovals: [], skippedRoles: [] },
+        status: 'parked',
+        verificationEvent: { containment_status: 'contained' },
+      })),
+    };
     const service = new ModerationActionRequestService(
       repository,
-      {
-        findById: jest.fn(async () => ({
-          id: 'ver-1',
-          server_id: 'guild-1',
-          user_id: 'user-1',
-        })),
-      } as any,
+      verificationEventRepository as any,
       client as any,
       threadManager as any,
       reportIntakeService as any,
@@ -764,10 +908,12 @@ describe('ModerationActionRequestService', () => {
       productAnalyticsService as any,
       setupDiagnosticsService as any,
       messageDeletionJobs as any,
-      messageCleanupService as any
+      messageCleanupService as any,
+      accountQuarantineService as any
     );
 
     return {
+      accountQuarantineService,
       adminChannel,
       client,
       guild,
@@ -797,6 +943,7 @@ describe('ModerationActionRequestService', () => {
       messageCleanupService,
       messageDeletionJobs,
       userModerationService,
+      verificationEventRepository,
     };
   }
 
@@ -1303,6 +1450,330 @@ describe('ModerationActionRequestService', () => {
       },
     ]);
     expect(repository.failed).toEqual([]);
+  });
+
+  it('produces a read-only live account-quarantine preview for the web flow', async () => {
+    const { accountQuarantineService, member, repository, service } = buildService([
+      accountQuarantinePreviewRequest,
+    ]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(accountQuarantineService.preview).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ id: 'ver-1' })
+    );
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([
+      {
+        id: accountQuarantinePreviewRequest.id,
+        result: expect.objectContaining({
+          action_type: ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE,
+          admin_notification_ready: true,
+          can_contain: true,
+          case_role_ready: true,
+          planned_roles: [
+            { role_id: 'role-1', role_name: 'Member' },
+            { role_id: 'role-privileged', role_name: 'Moderator' },
+          ],
+          privileged_roles: [{ role_id: 'role-privileged', role_name: 'Moderator' }],
+          recovery_thread_ready: true,
+          verification_event_id: 'ver-1',
+        }),
+      },
+    ]);
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('reports a configured case role as unready while lockdown repair is still planned', async () => {
+    const { accountQuarantineService, repository, service } = buildService([
+      accountQuarantinePreviewRequest,
+    ]);
+    accountQuarantineService.preview.mockResolvedValueOnce({
+      canContain: false,
+      caseRoleId: 'case-role-1',
+      enabled: true,
+      lockdown: {
+        enabled: true,
+        errorCount: 0,
+        issues: [],
+        plannedActions: [{ channelId: 'channel-1', channelName: 'general', scope: 'channel' }],
+      },
+      memberAudit: {
+        bypasses: [],
+        retainedAdministratorRoleIds: [],
+        retainedPrivilegedRoleIds: [],
+        unremovablePrivilegeReasons: [],
+      },
+      rolePreview: {
+        plannedRoleIds: [],
+        privilegedRoleIds: [],
+        skippedRoles: [],
+      },
+    } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(repository.completed[0]).toEqual({
+      id: accountQuarantinePreviewRequest.id,
+      result: expect.objectContaining({ case_role_ready: false }),
+    });
+  });
+
+  it('rejects account-quarantine preview after the moderator loses authority', async () => {
+    const { accountQuarantineService, reporterMember, repository, service } = buildService([
+      accountQuarantinePreviewRequest,
+    ]);
+    reporterMember.permissions.has.mockReturnValue(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(accountQuarantineService.preview).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        error: 'Account quarantine requires current moderation permission.',
+        id: accountQuarantinePreviewRequest.id,
+      },
+    ]);
+  });
+
+  it('executes web account quarantine only after the matching live preview', async () => {
+    const {
+      accountQuarantineService,
+      member,
+      moderator,
+      repository,
+      securityActionService,
+      service,
+    } = buildService([accountQuarantineExecuteRequest]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(securityActionService.repairActiveCase).toHaveBeenCalledWith(member);
+    expect(accountQuarantineService.quarantine).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ id: 'ver-1' }),
+      moderator,
+      'Account owner reported compromise.',
+      { moderationActionRequestId: accountQuarantineExecuteRequest.id }
+    );
+    expect(repository.completed).toEqual([
+      {
+        id: accountQuarantineExecuteRequest.id,
+        result: expect.objectContaining({
+          action_type: ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT,
+          parked: true,
+          preview_request_id: completedAccountQuarantinePreviewRequest.id,
+          verification_event_id: 'ver-1',
+        }),
+      },
+    ]);
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('rejects web account quarantine when the preview is stale', async () => {
+    const { accountQuarantineService, repository, service } = buildService([
+      accountQuarantineExecuteRequest,
+    ]);
+    repository.byId.set(completedAccountQuarantinePreviewRequest.id, {
+      ...completedAccountQuarantinePreviewRequest,
+      completed_at: new Date(Date.now() - 11 * 60 * 1000),
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        error: 'The live account-quarantine preview is missing, stale, or mismatched.',
+        id: accountQuarantineExecuteRequest.id,
+      },
+    ]);
+  });
+
+  it('rejects web account quarantine when live containment state changed after preview', async () => {
+    const { accountQuarantineService, repository, securityActionService, service } = buildService([
+      accountQuarantineExecuteRequest,
+    ]);
+    accountQuarantineService.preview.mockResolvedValueOnce({
+      ...defaultAccountQuarantinePreview,
+      caseRoleId: 'replacement-case-role',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(securityActionService.repairActiveCase).not.toHaveBeenCalled();
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        error: 'The live account-quarantine containment state changed; run a new preview.',
+        id: accountQuarantineExecuteRequest.id,
+      },
+    ]);
+  });
+
+  it('rejects web account quarantine when case repair changes the previewed containment state', async () => {
+    const { accountQuarantineService, repository, securityActionService, service } = buildService([
+      accountQuarantineExecuteRequest,
+    ]);
+    accountQuarantineService.preview
+      .mockResolvedValueOnce(defaultAccountQuarantinePreview)
+      .mockResolvedValueOnce({
+        ...defaultAccountQuarantinePreview,
+        caseRoleId: 'repaired-case-role',
+      });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(securityActionService.repairActiveCase).toHaveBeenCalled();
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        error: 'The live account-quarantine containment state changed; run a new preview.',
+        id: accountQuarantineExecuteRequest.id,
+      },
+    ]);
+  });
+
+  it('recovers a committed quarantine receipt after a worker interruption', async () => {
+    const {
+      accountQuarantineService,
+      repository,
+      securityActionService,
+      service,
+      verificationEventRepository,
+    } = buildService([accountQuarantineExecuteRequest]);
+    verificationEventRepository.findById.mockResolvedValueOnce({
+      attention_state: 'parked',
+      case_kind: 'compromised_account',
+      containment_status: 'contained',
+      id: 'ver-1',
+      metadata: {
+        account_quarantine: {
+          failed_removals: [],
+          member_bypasses: [],
+          moderation_action_request_id: accountQuarantineExecuteRequest.id,
+          result: 'contained',
+          retained_roles: [{ role_id: 'managed-role' }],
+        },
+      },
+      quarantine_attempt_id: null,
+      server_id: 'guild-1',
+      user_id: 'user-1',
+    } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(accountQuarantineService.preview).not.toHaveBeenCalled();
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(securityActionService.repairActiveCase).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([
+      {
+        id: accountQuarantineExecuteRequest.id,
+        result: expect.objectContaining({
+          containment_status: 'contained',
+          parked: true,
+          recovered_after_worker_interruption: true,
+          retained_roles: 1,
+        }),
+      },
+    ]);
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('recovers an explicitly committed incomplete quarantine after a worker interruption', async () => {
+    const {
+      accountQuarantineService,
+      repository,
+      securityActionService,
+      service,
+      verificationEventRepository,
+    } = buildService([accountQuarantineExecuteRequest]);
+    verificationEventRepository.findById.mockResolvedValueOnce({
+      attention_state: 'review_required',
+      case_kind: 'compromised_account',
+      containment_status: 'incomplete',
+      id: 'ver-1',
+      metadata: {
+        account_quarantine: {
+          failed_removals: [{ role_id: 'role-failed' }],
+          member_bypasses: [],
+          moderation_action_request_id: accountQuarantineExecuteRequest.id,
+          result: 'incomplete',
+          retained_roles: [],
+        },
+      },
+      quarantine_attempt_id: null,
+      server_id: 'guild-1',
+      user_id: 'user-1',
+    } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(accountQuarantineService.preview).not.toHaveBeenCalled();
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(securityActionService.repairActiveCase).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([
+      {
+        id: accountQuarantineExecuteRequest.id,
+        result: expect.objectContaining({
+          containment_status: 'incomplete',
+          failed_role_removals: 1,
+          parked: false,
+          recovered_after_worker_interruption: true,
+        }),
+      },
+    ]);
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('does not recover a failed quarantine attempt as a committed receipt', async () => {
+    const { accountQuarantineService, repository, service, verificationEventRepository } =
+      buildService([accountQuarantineExecuteRequest]);
+    verificationEventRepository.findById.mockResolvedValueOnce({
+      attention_state: 'review_required',
+      case_kind: 'compromised_account',
+      containment_status: 'incomplete',
+      id: 'ver-1',
+      metadata: {
+        account_quarantine: {
+          failure_stage: 'role_removal',
+          moderation_action_request_id: accountQuarantineExecuteRequest.id,
+          result: 'failed',
+        },
+      },
+      quarantine_attempt_id: null,
+      server_id: 'guild-1',
+      user_id: 'user-1',
+    } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(accountQuarantineService.preview).toHaveBeenCalledTimes(2);
+    expect(accountQuarantineService.quarantine).toHaveBeenCalledTimes(1);
+    expect(repository.completed).toEqual([
+      {
+        id: accountQuarantineExecuteRequest.id,
+        result: expect.not.objectContaining({ recovered_after_worker_interruption: true }),
+      },
+    ]);
+  });
+
+  it('rejects account-quarantine execution after the moderator loses authority', async () => {
+    const { accountQuarantineService, reporterMember, repository, service } = buildService([
+      accountQuarantineExecuteRequest,
+    ]);
+    reporterMember.permissions.has.mockReturnValue(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        error: 'Account quarantine requires current moderation permission.',
+        id: accountQuarantineExecuteRequest.id,
+      },
+    ]);
   });
 
   it('closes cases with no action through the logged-in bot Discord client', async () => {

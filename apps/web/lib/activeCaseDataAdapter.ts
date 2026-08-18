@@ -13,9 +13,11 @@ import {
   type CaseSurfaceLink,
   type CaseUserIdentity,
 } from '@drasil/contracts';
+import { z } from 'zod';
 import {
   fixtureActiveCaseDetail,
   fixtureActiveCaseSummaries,
+  fixtureParkedActiveCaseSummaries,
   fixtureResolvedCaseCount,
   fixtureResolvedCaseSummariesForHistory,
   isWebE2eFixtureMode,
@@ -31,6 +33,7 @@ import {
 export type WebCaseAction = Extract<
   CaseAction,
   | 'verify_user'
+  | 'quarantine_compromised_account'
   | 'kick_user'
   | 'ban_user'
   | 'ban_by_id'
@@ -56,20 +59,26 @@ export interface CaseActionQueueResult {
   readonly status: CaseActionQueueStatus;
 }
 
+export interface QueueCaseActionInput {
+  readonly action: WebCaseAction;
+  readonly adminId: string;
+  readonly attemptId?: string | null;
+  readonly caseId: string;
+  readonly guildId: string;
+  readonly quarantinePhase?: 'preview' | 'execute' | null;
+  readonly previewRequestId?: string | null;
+  readonly reason?: string | null;
+}
+
 export interface ActiveCaseDataAdapter {
   canQueueCaseActions(): boolean;
   listActiveCases(guildId: string): Promise<CaseSummary[]>;
+  listParkedCases(guildId: string): Promise<CaseSummary[]>;
   listResolvedCases(guildId: string, limit?: number): Promise<CaseSummary[]>;
   listCasesForMember(guildId: string, userId: string, limit?: number): Promise<CaseSummary[]>;
   countResolvedCases(guildId: string): Promise<number>;
   getCaseDetail(guildId: string, caseId: string): Promise<CaseDetail | null>;
-  queueCaseAction(input: {
-    action: WebCaseAction;
-    adminId: string;
-    caseId: string;
-    guildId: string;
-    reason?: string | null;
-  }): Promise<CaseActionQueueResult>;
+  queueCaseAction(input: QueueCaseActionInput): Promise<CaseActionQueueResult>;
 }
 
 export function resolveCaseActionQueueStatus(
@@ -91,11 +100,17 @@ interface CaseSummaryRow {
   notification_channel_id: string | null;
   notification_message_id: string | null;
   status: string;
+  case_kind?: 'standard' | 'compromised_account';
+  attention_state?: 'review_required' | 'parked';
+  containment_status?: 'not_applicable' | 'in_progress' | 'contained' | 'incomplete';
+  parked_at?: unknown;
+  parked_by?: string | null;
   created_at: unknown;
   updated_at: unknown;
   notes: string | null;
   metadata: unknown;
   admin_channel_id: string | null;
+  server_settings?: unknown;
   latest_detection_type: string | null;
   latest_confidence: number | null;
   latest_detection_at: unknown;
@@ -166,6 +181,23 @@ const ACTIONS_BY_PRESENCE_STATE: Partial<Record<CasePresenceState, CaseAction[]>
   unknown: ['view_history', 'ban_by_id', 'close_no_action'],
 };
 
+const PENDING_IN_SERVER_ACTIONS = [
+  ['view_history', 'verify_user', 'kick_user', 'ban_user', 'close_no_action'],
+  ['view_history', 'verify_user', 'kick_user', 'ban_user'],
+] as const satisfies readonly (readonly CaseAction[])[];
+
+const ACCOUNT_QUARANTINE_ACTIONS_BY_STATE = [
+  [[], ['quarantine_compromised_account']],
+  [[], []],
+] as const satisfies readonly (readonly (readonly CaseAction[])[])[];
+
+const THREAD_REPAIR_ACTIONS_BY_STATE = [
+  [['create_thread'], ['repair_thread']],
+  [[], []],
+] as const satisfies readonly (readonly (readonly CaseAction[])[])[];
+
+const uuidSchema = z.string().uuid();
+
 const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActionType> = {
   ban_by_id: 'ban_case_user_by_id',
   ban_user: 'ban_case_user',
@@ -177,7 +209,28 @@ const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActi
   reopen_case: 'reopen_case',
   sync_existing_ban: 'sync_existing_ban',
   verify_user: 'verify_case_user',
+  quarantine_compromised_account: 'quarantine_compromised_account',
 };
+
+function resolveCaseActionRequestType(
+  input: QueueCaseActionInput
+): ModerationActionRequestActionType {
+  if (input.action === 'quarantine_compromised_account' && input.quarantinePhase === 'preview') {
+    return 'preview_account_quarantine';
+  }
+  return requestTypeByCaseAction[input.action];
+}
+
+export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): string {
+  const base = `web:case-action:${input.action}:${input.guildId}:${input.caseId}`;
+  if (input.action !== 'quarantine_compromised_account') {
+    return base;
+  }
+  if (input.quarantinePhase === 'preview') {
+    return `${base}:preview:${input.attemptId ?? 'missing-attempt'}`;
+  }
+  return `${base}:execute:${input.previewRequestId ?? 'missing-preview'}`;
+}
 
 function sortCaseSummariesForHistory(cases: readonly CaseSummary[]): CaseSummary[] {
   return [...cases].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
@@ -209,6 +262,10 @@ function metadataToRecord(metadata: unknown): Record<string, unknown> {
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null;
+}
+
+function readArrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
 }
 
 function firstString(...values: Array<unknown>): string | null {
@@ -298,12 +355,6 @@ function resolveUserIdentity(row: CaseSummaryRow): CaseUserIdentity {
   };
 }
 
-function pushSurface(surfaces: CaseSurfaceLink[], surface: CaseSurfaceLink | null): void {
-  if (surface) {
-    surfaces.push(surface);
-  }
-}
-
 function createChannelSurface(
   kind: CaseSurfaceKind,
   label: string,
@@ -327,58 +378,45 @@ function createMessageSurface(
 
 function buildSurfaces(row: CaseSummaryRow): CaseSurfaceLink[] {
   const metadata = metadataToRecord(row.metadata);
-  const surfaces: CaseSurfaceLink[] = [];
   const notificationChannelId = row.notification_channel_id ?? row.admin_channel_id;
-
-  pushSurface(
-    surfaces,
+  const reportIntakeThreadId = readString(metadata.report_intake_thread_id);
+  const sourceChannelId = readString(metadata.source_channel_id) ?? row.source_channel_id;
+  const sourceMessageId = readString(metadata.source_message_id) ?? row.source_message_id;
+  const surfaces = [
     createMessageSurface(
       'admin_notification',
       'Admin notification',
       row.server_id,
       notificationChannelId,
       row.notification_message_id
-    )
-  );
-  pushSurface(
-    surfaces,
+    ),
     createChannelSurface(
       'admin_evidence_thread',
       'Admin evidence',
       row.server_id,
       row.private_evidence_thread_id
-    )
-  );
-  pushSurface(
-    surfaces,
-    createChannelSurface('verification_thread', 'Verification thread', row.server_id, row.thread_id)
-  );
-
-  const reportIntakeThreadId = readString(metadata.report_intake_thread_id);
-  pushSurface(
-    surfaces,
+    ),
+    createChannelSurface(
+      'verification_thread',
+      'Verification thread',
+      row.server_id,
+      row.thread_id
+    ),
     createChannelSurface(
       'report_intake_thread',
       'Report intake',
       row.server_id,
       reportIntakeThreadId
-    )
-  );
-
-  const sourceChannelId = readString(metadata.source_channel_id) ?? row.source_channel_id;
-  const sourceMessageId = readString(metadata.source_message_id) ?? row.source_message_id;
-  pushSurface(
-    surfaces,
+    ),
     createMessageSurface(
       'source_message',
       'Source message',
       row.server_id,
       sourceChannelId,
       sourceMessageId
-    )
-  );
-
-  return surfaces;
+    ),
+  ];
+  return surfaces.filter((surface): surface is CaseSurfaceLink => surface !== null);
 }
 
 function resolvePresenceState(row: CaseSummaryRow): CasePresenceState {
@@ -411,27 +449,37 @@ function resolveAllowedActions(
     return appendRefreshNotificationAction(row, actions);
   }
 
-  const presenceActions = ACTIONS_BY_PRESENCE_STATE[presenceState];
-  if (presenceActions) {
-    return appendRefreshNotificationAction(row, presenceActions);
+  if (row.attention_state === 'parked') {
+    const actions: CaseAction[] =
+      presenceState === 'in_server'
+        ? ['view_history', 'verify_user', 'kick_user', 'ban_user']
+        : ['view_history', 'ban_by_id'];
+    return appendRefreshNotificationAction(row, actions);
   }
 
-  const actions: CaseAction[] = [
-    'view_history',
-    'verify_user',
-    'kick_user',
-    'ban_user',
-    'close_no_action',
-  ];
-  if (row.notification_message_id) {
-    actions.push('refresh_notification');
+  const presenceActions = ACTIONS_BY_PRESENCE_STATE[presenceState];
+  if (presenceActions) {
+    return appendRefreshNotificationAction(row, resolveCaseKindActions(row, presenceActions));
   }
-  if (row.thread_id) {
-    actions.push('repair_thread');
-  } else {
-    actions.push('create_thread');
-  }
-  return actions;
+
+  const parkedIndex = 0;
+  const quarantineEnabledIndex = Number(
+    metadataToRecord(row.server_settings).account_quarantine_enabled === true
+  ) as 0 | 1;
+  const actions = resolveCaseKindActions(row, [
+    ...PENDING_IN_SERVER_ACTIONS[parkedIndex],
+    ...ACCOUNT_QUARANTINE_ACTIONS_BY_STATE[parkedIndex][quarantineEnabledIndex],
+  ]);
+  const actionsWithNotification = appendRefreshNotificationAction(row, actions);
+  const threadPresentIndex = Number(Boolean(row.thread_id)) as 0 | 1;
+  actionsWithNotification.push(...THREAD_REPAIR_ACTIONS_BY_STATE[parkedIndex][threadPresentIndex]);
+  return actionsWithNotification;
+}
+
+function resolveCaseKindActions(row: CaseSummaryRow, actions: readonly CaseAction[]): CaseAction[] {
+  return row.case_kind === 'compromised_account'
+    ? actions.filter((action) => action !== 'close_no_action')
+    : [...actions];
 }
 
 function appendRefreshNotificationAction(
@@ -449,6 +497,16 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
   const updatedAt = new Date(toIsoString(row.updated_at));
   const staleHours = Math.max(0, Math.floor((now.getTime() - updatedAt.getTime()) / 3_600_000));
   const presenceState = resolvePresenceState(row);
+  const quarantine = readNestedRecord(metadataToRecord(row.metadata), 'account_quarantine');
+  const quarantineEffects =
+    row.case_kind === 'compromised_account'
+      ? {
+          removedRoleCount: readArrayLength(quarantine.removed_role_ids),
+          retainedRoleCount: readArrayLength(quarantine.retained_roles),
+          failedRoleCount: readArrayLength(quarantine.failed_removals),
+          memberBypassCount: readArrayLength(quarantine.member_bypasses),
+        }
+      : null;
 
   return caseSummarySchema.parse({
     id: row.id,
@@ -457,6 +515,12 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
     userIdentity: resolveUserIdentity(row),
     createdAt: toIsoString(row.created_at),
     updatedAt: updatedAt.toISOString(),
+    caseKind: row.case_kind ?? 'standard',
+    attentionState: row.attention_state ?? 'review_required',
+    containmentStatus: row.containment_status ?? 'not_applicable',
+    parkedAt: toNullableIsoString(row.parked_at),
+    parkedBy: row.parked_by ?? null,
+    quarantineEffects,
     stale: staleHours >= DEFAULT_STALE_HOURS,
     staleHours,
     presenceState,
@@ -543,11 +607,17 @@ const SUMMARY_QUERY = `
     ve.notification_channel_id,
     ve.notification_message_id,
     ve.status,
+    ve.case_kind,
+    ve.attention_state,
+    ve.containment_status,
+    ve.parked_at,
+    ve.parked_by,
     ve.created_at,
     ve.updated_at,
     ve.notes,
     ve.metadata,
     s.admin_channel_id,
+    s.settings as server_settings,
     de.detection_type as latest_detection_type,
     de.confidence as latest_confidence,
     de.detected_at as latest_detection_at,
@@ -599,11 +669,27 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
   public async listActiveCases(guildId: string): Promise<CaseSummary[]> {
     const result = await getPostgresPool().query<CaseSummaryRow>(
       `${SUMMARY_QUERY}
-       where ve.server_id = $1 and ve.status = 'pending' and ve.user_id is not null
+       where ve.server_id = $1
+         and ve.status = 'pending'
+         and ve.attention_state = 'review_required'
+         and ve.user_id is not null
        order by ve.updated_at asc`,
       [guildId]
     );
     return sortCaseSummariesForQueue(result.rows.map((row) => parseCaseSummaryRow(row)));
+  }
+
+  public async listParkedCases(guildId: string): Promise<CaseSummary[]> {
+    const result = await getPostgresPool().query<CaseSummaryRow>(
+      `${SUMMARY_QUERY}
+       where ve.server_id = $1
+         and ve.status = 'pending'
+         and ve.attention_state = 'parked'
+         and ve.user_id is not null
+       order by ve.parked_at desc nulls last, ve.updated_at desc`,
+      [guildId]
+    );
+    return result.rows.map((row) => parseCaseSummaryRow(row));
   }
 
   public async listResolvedCases(guildId: string, limit = 50): Promise<CaseSummary[]> {
@@ -720,13 +806,7 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
     });
   }
 
-  public async queueCaseAction(input: {
-    action: WebCaseAction;
-    adminId: string;
-    caseId: string;
-    guildId: string;
-    reason?: string | null;
-  }): Promise<CaseActionQueueResult> {
+  public async queueCaseAction(input: QueueCaseActionInput): Promise<CaseActionQueueResult> {
     const detail = await this.getCaseDetail(input.guildId, input.caseId);
     if (!detail) {
       return {
@@ -740,13 +820,37 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
     }
 
+    if (
+      input.action === 'quarantine_compromised_account' &&
+      input.quarantinePhase !== 'preview' &&
+      input.quarantinePhase !== 'execute'
+    ) {
+      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
+    }
+    if (
+      input.action === 'quarantine_compromised_account' &&
+      input.quarantinePhase === 'preview' &&
+      !input.attemptId
+    ) {
+      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
+    }
+    if (
+      input.action === 'quarantine_compromised_account' &&
+      input.quarantinePhase === 'execute' &&
+      !(await this.isValidAccountQuarantinePreview(input, detail.userId))
+    ) {
+      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
+    }
+
     const receipt = await queueModerationActionRequestWithReceipt({
-      actionType: requestTypeByCaseAction[input.action],
+      actionType: resolveCaseActionRequestType(input),
       actorId: input.adminId,
       actorSurface: 'web',
-      idempotencyKey: `web:case-action:${input.action}:${input.guildId}:${input.caseId}`,
+      idempotencyKey: buildCaseActionIdempotencyKey(input),
       metadata: {
         case_action: input.action,
+        ...(input.quarantinePhase ? { quarantine_phase: input.quarantinePhase } : {}),
+        ...(input.previewRequestId ? { preview_request_id: input.previewRequestId } : {}),
         ...(input.reason ? { reason: input.reason } : {}),
         requested_surface: 'web',
       },
@@ -762,6 +866,30 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       status: resolveCaseActionQueueStatus(receipt.status),
     };
   }
+
+  private async isValidAccountQuarantinePreview(
+    input: QueueCaseActionInput,
+    targetUserId: string
+  ): Promise<boolean> {
+    if (!input.previewRequestId || !uuidSchema.safeParse(input.previewRequestId).success) {
+      return false;
+    }
+    const result = await getPostgresPool().query<{ readonly id: string }>(
+      `select id::text
+       from moderation_action_requests
+       where id = $1::uuid
+         and server_id = $2
+         and actor_id = $3
+         and target_user_id = $4
+         and verification_event_id = $5::uuid
+         and action_type = 'preview_account_quarantine'
+         and status = 'completed'
+         and completed_at > now() - interval '10 minutes'
+       limit 1`,
+      [input.previewRequestId, input.guildId, input.adminId, targetUserId, input.caseId]
+    );
+    return result.rows.length === 1;
+  }
 }
 
 export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
@@ -771,6 +899,10 @@ export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
 
   public async listActiveCases(): Promise<CaseSummary[]> {
     return sortCaseSummariesForQueue(fixtureActiveCaseSummaries());
+  }
+
+  public async listParkedCases(): Promise<CaseSummary[]> {
+    return fixtureParkedActiveCaseSummaries();
   }
 
   public async listResolvedCases(_guildId: string): Promise<CaseSummary[]> {
@@ -793,13 +925,7 @@ export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
     return fixtureActiveCaseDetail(caseId);
   }
 
-  public async queueCaseAction(input: {
-    action: WebCaseAction;
-    adminId: string;
-    caseId: string;
-    guildId: string;
-    reason?: string | null;
-  }): Promise<CaseActionQueueResult> {
+  public async queueCaseAction(input: QueueCaseActionInput): Promise<CaseActionQueueResult> {
     const detail = fixtureActiveCaseDetail(input.caseId);
     if (!detail) {
       return {

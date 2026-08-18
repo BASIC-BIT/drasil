@@ -139,6 +139,7 @@ export class PostgresOperationsIntegrityDataAdapter implements OperationsIntegri
                  'case_mirror'::moderation_queue_item_type,
                  'observed_alert_mirror'::moderation_queue_item_type,
                  'support_thread_attention'::moderation_queue_item_type,
+                 'quarantine_breach_attention'::moderation_queue_item_type,
                  'report_thread_attention'::moderation_queue_item_type,
                  'pending_screening_member'::moderation_queue_item_type
                )
@@ -302,6 +303,57 @@ export class PostgresOperationsIntegrityDataAdapter implements OperationsIntegri
            where mqi.server_id = $1
              and mqi.item_type = 'case_mirror'::moderation_queue_item_type
              and coalesce(ve.status::text, 'missing') <> 'pending'
+           union all
+           select
+             'error' as severity,
+             'parked_quarantine_snapshot_missing' as code,
+             'case ' || ve.id::text as subject,
+             'Parked account quarantine has no active role snapshot for release.' as detail,
+             ve.user_id,
+             ve.id as verification_event_id,
+             coalesce(ve.parked_at, ve.updated_at, ve.created_at) as sort_at,
+             1 as severity_rank
+           from verification_events ve
+           where ve.server_id = $1
+             and ve.status = 'pending'::verification_status
+             and ve.case_kind = 'compromised_account'::case_kind
+             and ve.attention_state = 'parked'::case_attention_state
+             and not exists (
+               select 1
+               from role_quarantine_snapshots rqs
+               where rqs.verification_event_id = ve.id
+                 and rqs.status = 'active'::role_quarantine_snapshot_status
+             )
+           union all
+           select
+             'error' as severity,
+             'parked_quarantine_not_contained' as code,
+             'case ' || ve.id::text as subject,
+             'Parked account quarantine is not marked fully contained.' as detail,
+             ve.user_id,
+             ve.id as verification_event_id,
+             coalesce(ve.parked_at, ve.updated_at, ve.created_at) as sort_at,
+             1 as severity_rank
+           from verification_events ve
+           where ve.server_id = $1
+             and ve.status = 'pending'::verification_status
+             and ve.attention_state = 'parked'::case_attention_state
+             and ve.containment_status <> 'contained'::case_containment_status
+           union all
+           select
+             'warning' as severity,
+             'parked_quarantine_case_mirror_stale' as code,
+             'queue item ' || mqi.id::text as subject,
+             'Parked account quarantine still has a normal case-queue mirror.' as detail,
+             mqi.user_id,
+             mqi.verification_event_id,
+             coalesce(mqi.updated_at, mqi.created_at) as sort_at,
+             2 as severity_rank
+           from moderation_queue_items mqi
+           join verification_events ve on ve.id = mqi.verification_event_id
+           where mqi.server_id = $1
+             and mqi.item_type = 'case_mirror'::moderation_queue_item_type
+             and ve.attention_state = 'parked'::case_attention_state
            union all
            select
              'warning' as severity,

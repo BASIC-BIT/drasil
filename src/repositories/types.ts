@@ -26,6 +26,7 @@ export interface Server {
  * Flexible server settings stored as JSON
  */
 export interface ServerSettings {
+  account_quarantine_enabled?: boolean;
   min_confidence_threshold?: number; // Minimum confidence for GPT detection
   use_gpt_on_join?: boolean; // Whether to use GPT for join verification
   gpt_message_check_count?: number; // Number of messages to check with GPT
@@ -199,6 +200,23 @@ export enum VerificationStatus {
   CLOSED_NO_ACTION = 'closed_no_action',
 }
 
+export enum CaseKind {
+  STANDARD = 'standard',
+  COMPROMISED_ACCOUNT = 'compromised_account',
+}
+
+export enum CaseAttentionState {
+  REVIEW_REQUIRED = 'review_required',
+  PARKED = 'parked',
+}
+
+export enum CaseContainmentStatus {
+  NOT_APPLICABLE = 'not_applicable',
+  IN_PROGRESS = 'in_progress',
+  CONTAINED = 'contained',
+  INCOMPLETE = 'incomplete',
+}
+
 export enum AdminActionType {
   VERIFY = 'verify',
   REJECT = 'reject',
@@ -214,6 +232,7 @@ export enum AdminActionType {
   FALSE_POSITIVE = 'false_positive',
   UNDO_OBSERVED_ACTION = 'undo_observed_action',
   ROLE_GATE_CLEANUP = 'role_gate_cleanup',
+  QUARANTINE_COMPROMISED_ACCOUNT = 'quarantine_compromised_account',
 }
 
 export enum ModerationOutcomeSource {
@@ -231,12 +250,14 @@ export enum ModerationOutcomeType {
   KICKED = 'kicked',
   CLOSED_NO_ACTION = 'closed_no_action',
   MEMBER_LEFT = 'member_left',
+  ACCOUNT_QUARANTINED = 'account_quarantined',
 }
 
 export enum ModerationQueueItemType {
   CASE_MIRROR = 'case_mirror',
   OBSERVED_ALERT_MIRROR = 'observed_alert_mirror',
   SUPPORT_THREAD_ATTENTION = 'support_thread_attention',
+  QUARANTINE_BREACH_ATTENTION = 'quarantine_breach_attention',
   REPORT_THREAD_ATTENTION = 'report_thread_attention',
   PENDING_SCREENING_MEMBER = 'pending_screening_member',
 }
@@ -256,6 +277,8 @@ export enum ModerationActionRequestType {
   IGNORE_DETECTION_ACCOUNTING = 'ignore_detection_accounting',
   RESTORE_DETECTION_ACCOUNTING = 'restore_detection_accounting',
   VERIFY_CASE_USER = 'verify_case_user',
+  PREVIEW_ACCOUNT_QUARANTINE = 'preview_account_quarantine',
+  QUARANTINE_COMPROMISED_ACCOUNT = 'quarantine_compromised_account',
   CLOSE_CASE_NO_ACTION = 'close_case_no_action',
   KICK_CASE_USER = 'kick_case_user',
   BAN_CASE_USER = 'ban_case_user',
@@ -356,6 +379,11 @@ export enum RoleQuarantineSnapshotStatus {
   ABANDONED = 'abandoned',
 }
 
+export enum RoleQuarantineSnapshotPurpose {
+  STANDARD_CASE = 'standard_case',
+  COMPROMISED_ACCOUNT = 'compromised_account',
+}
+
 export interface RoleQuarantineRoleDetail {
   role_id: string;
   role_name?: string;
@@ -369,6 +397,7 @@ export interface RoleQuarantineSnapshot {
   verification_event_id: string | null;
   status: RoleQuarantineSnapshotStatus;
   mode: string;
+  purpose?: RoleQuarantineSnapshotPurpose;
   original_role_ids: string[];
   planned_role_ids: string[];
   removed_role_ids: string[];
@@ -388,6 +417,7 @@ export interface RoleQuarantineSnapshotCreate {
   userId: string;
   verificationEventId?: string | null;
   mode: string;
+  purpose?: RoleQuarantineSnapshotPurpose;
   originalRoleIds: string[];
   plannedRoleIds: string[];
   removedRoleIds?: string[];
@@ -399,7 +429,11 @@ export interface RoleQuarantineSnapshotCreate {
 }
 
 export interface RoleQuarantineSnapshotUpdate {
+  verificationEventId?: string | null;
   status?: RoleQuarantineSnapshotStatus;
+  purpose?: RoleQuarantineSnapshotPurpose;
+  originalRoleIds?: string[];
+  plannedRoleIds?: string[];
   removedRoleIds?: string[];
   restoredRoleIds?: string[];
   skippedRoles?: Prisma.JsonValue | null;
@@ -420,6 +454,15 @@ export interface VerificationEvent {
   notification_channel_id: string | null;
   notification_message_id: string | null;
   status: VerificationStatus;
+  case_kind?: CaseKind;
+  attention_state?: CaseAttentionState;
+  containment_status?: CaseContainmentStatus;
+  quarantine_attempt_id?: string | null;
+  quarantine_lease_renewed_at?: Date | null;
+  quarantine_case_role_id?: string | null;
+  parked_at?: Date | null;
+  parked_by?: string | null;
+  review_after?: Date | null;
   created_at: Date; // Use Date type
   updated_at: Date; // Use Date type
   resolved_at: Date | null; // Use Date type

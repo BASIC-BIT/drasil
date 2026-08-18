@@ -10,6 +10,8 @@ import {
   PermissionsBitField,
   OverwriteType,
   Role,
+  TextChannel,
+  ThreadChannel,
 } from 'discord.js';
 import { inject, injectable } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
@@ -19,6 +21,7 @@ import {
   getCaseRoleLockdownSettings,
   CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY,
 } from '../utils/caseRoleLockdownSettings';
+import { COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS } from '../utils/privilegedRolePermissions';
 
 export type CaseRoleLockdownSeverity = 'error' | 'warning';
 export type CaseRoleLockdownActionScope = 'category' | 'channel';
@@ -43,6 +46,10 @@ export interface CaseRoleLockdownApplyOptions {
   readonly unsyncAllowedChannels?: boolean;
 }
 
+export interface CaseRoleLockdownAuditContext {
+  readonly siblingThreadsByParentId: Map<string, Promise<readonly ThreadChannel[]>>;
+}
+
 export interface CaseRoleLockdownReport {
   readonly guildId: string;
   readonly checkedAt: Date;
@@ -60,8 +67,35 @@ export interface CaseRoleLockdownReport {
   readonly warningCount: number;
 }
 
+export interface CaseRoleLockdownMemberBypass {
+  readonly channelId: string;
+  readonly channelName: string;
+  readonly subjectType: 'member' | 'role';
+  readonly subjectId: string;
+  readonly permissions: readonly string[];
+}
+
+export interface CaseRoleLockdownMemberAudit {
+  readonly memberId: string;
+  readonly bypasses: readonly CaseRoleLockdownMemberBypass[];
+  readonly retainedPrivilegedRoleIds: readonly string[];
+  readonly retainedAdministratorRoleIds: readonly string[];
+  readonly unremovablePrivilegeReasons: readonly string[];
+}
+
 export interface ICaseRoleLockdownService {
-  auditGuild(guild: Guild): Promise<CaseRoleLockdownReport>;
+  auditGuild(
+    guild: Guild,
+    recoveryThreadId?: string | null,
+    caseRoleId?: string | null
+  ): Promise<CaseRoleLockdownReport>;
+  auditMemberBypasses(
+    member: GuildMember,
+    ignoredRoleIds?: ReadonlySet<string>,
+    allowedThreadId?: string | null,
+    caseRoleId?: string | null,
+    context?: CaseRoleLockdownAuditContext
+  ): Promise<CaseRoleLockdownMemberAudit>;
   applyGuild(
     guild: Guild,
     actorId: string,
@@ -114,8 +148,80 @@ const LOCKDOWN_PERMISSION_OPTIONS = LOCKDOWN_PERMISSIONS.reduce<PermissionOverwr
   {}
 );
 
-const HIGH_RISK_RESTRICTED_ROLE_PERMISSIONS: readonly PermissionLabel[] = [
+const RECOVERY_PARENT_BLOCKED_PERMISSIONS: readonly LockdownPermission[] = [
+  {
+    flag: PermissionFlagsBits.CreateInstantInvite,
+    option: 'CreateInstantInvite',
+    label: 'Create Instant Invite',
+  },
+  {
+    flag: PermissionFlagsBits.MentionEveryone,
+    option: 'MentionEveryone',
+    label: 'Mention Everyone',
+  },
+  { flag: PermissionFlagsBits.SendMessages, option: 'SendMessages', label: 'Send Messages' },
+  {
+    flag: PermissionFlagsBits.CreatePublicThreads,
+    option: 'CreatePublicThreads',
+    label: 'Create Public Threads',
+  },
+  {
+    flag: PermissionFlagsBits.CreatePrivateThreads,
+    option: 'CreatePrivateThreads',
+    label: 'Create Private Threads',
+  },
+];
+
+const RECOVERY_PARENT_REQUIRED_PERMISSIONS: readonly LockdownPermission[] = [
+  { flag: PermissionFlagsBits.ViewChannel, option: 'ViewChannel', label: 'View Channel' },
+  {
+    flag: PermissionFlagsBits.ReadMessageHistory,
+    option: 'ReadMessageHistory',
+    label: 'Read Message History',
+  },
+  {
+    flag: PermissionFlagsBits.SendMessagesInThreads,
+    option: 'SendMessagesInThreads',
+    label: 'Send Messages in Threads',
+  },
+];
+
+const RECOVERY_PARENT_PERMISSION_OPTIONS: PermissionOverwriteOptions = {
+  ViewChannel: true,
+  ReadMessageHistory: true,
+  CreateInstantInvite: false,
+  MentionEveryone: false,
+  SendMessages: false,
+  SendMessagesInThreads: true,
+  CreatePublicThreads: false,
+  CreatePrivateThreads: false,
+};
+
+const COMPROMISED_ACCOUNT_PERMISSION_LABELS: readonly PermissionLabel[] = [
   { flag: PermissionFlagsBits.Administrator, label: 'Administrator' },
+  { flag: PermissionFlagsBits.ManageRoles, label: 'Manage Roles' },
+  { flag: PermissionFlagsBits.ManageGuild, label: 'Manage Server' },
+  { flag: PermissionFlagsBits.ModerateMembers, label: 'Moderate Members' },
+  { flag: PermissionFlagsBits.ManageChannels, label: 'Manage Channels' },
+  { flag: PermissionFlagsBits.KickMembers, label: 'Kick Members' },
+  { flag: PermissionFlagsBits.BanMembers, label: 'Ban Members' },
+  { flag: PermissionFlagsBits.ManageMessages, label: 'Manage Messages' },
+  { flag: PermissionFlagsBits.ManageThreads, label: 'Manage Threads' },
+  { flag: PermissionFlagsBits.ManageWebhooks, label: 'Manage Webhooks' },
+  { flag: PermissionFlagsBits.CreateInstantInvite, label: 'Create Invite' },
+  { flag: PermissionFlagsBits.MuteMembers, label: 'Mute Members' },
+  { flag: PermissionFlagsBits.DeafenMembers, label: 'Deafen Members' },
+  { flag: PermissionFlagsBits.MoveMembers, label: 'Move Members' },
+  { flag: PermissionFlagsBits.ManageNicknames, label: 'Manage Nicknames' },
+  { flag: PermissionFlagsBits.ManageGuildExpressions, label: 'Manage Expressions' },
+  { flag: PermissionFlagsBits.CreateGuildExpressions, label: 'Create Expressions' },
+  { flag: PermissionFlagsBits.ManageEvents, label: 'Manage Events' },
+  { flag: PermissionFlagsBits.CreateEvents, label: 'Create Events' },
+  { flag: PermissionFlagsBits.MentionEveryone, label: 'Mention Everyone' },
+];
+
+const HIGH_RISK_RESTRICTED_ROLE_PERMISSIONS: readonly PermissionLabel[] = [
+  ...COMPROMISED_ACCOUNT_PERMISSION_LABELS,
   ...LOCKDOWN_PERMISSIONS,
 ];
 
@@ -128,8 +234,156 @@ const LOCKDOWN_POSTING_PERMISSIONS: readonly PermissionLabel[] = [
 export class CaseRoleLockdownService implements ICaseRoleLockdownService {
   constructor(@inject(TYPES.ConfigService) private readonly configService: IConfigService) {}
 
-  public async auditGuild(guild: Guild): Promise<CaseRoleLockdownReport> {
-    return this.buildReport(guild, false);
+  public async auditGuild(
+    guild: Guild,
+    recoveryThreadId?: string | null,
+    caseRoleId?: string | null
+  ): Promise<CaseRoleLockdownReport> {
+    const recoveryParent = await this.resolveRecoveryParent(guild, recoveryThreadId);
+    return this.buildReport(guild, false, new Set(), recoveryParent?.id, caseRoleId);
+  }
+
+  public async auditMemberBypasses(
+    member: GuildMember,
+    ignoredRoleIds: ReadonlySet<string> = new Set(),
+    allowedThreadId?: string | null,
+    caseRoleId?: string | null,
+    context?: CaseRoleLockdownAuditContext
+  ): Promise<CaseRoleLockdownMemberAudit> {
+    const serverConfig = await this.configService.getServerConfig(member.guild.id);
+    const effectiveCaseRoleId = caseRoleId === undefined ? serverConfig.case_role_id : caseRoleId;
+    const settings = getCaseRoleLockdownSettings(serverConfig.settings);
+    let recoveryParent = await this.resolveRecoveryParent(member.guild, allowedThreadId);
+    const recoveryParentId = recoveryParent?.id ?? serverConfig.verification_channel_id;
+    const allowedChannelIds = new Set(settings.allowedChannelIds);
+    if (serverConfig.verification_channel_id) {
+      allowedChannelIds.add(serverConfig.verification_channel_id);
+    }
+    if (recoveryParentId) {
+      allowedChannelIds.add(recoveryParentId);
+    }
+    const allowedCategoryIds = new Set(settings.allowedCategoryIds);
+    const reportInstructionsChannelId = serverConfig.settings.report_instructions_channel_id;
+    const retainedRoleIds = new Set(
+      [...member.roles.cache.keys()].filter(
+        (roleId) =>
+          roleId !== member.guild.id &&
+          roleId !== effectiveCaseRoleId &&
+          !ignoredRoleIds.has(roleId)
+      )
+    );
+    const retainedAdministratorRoleIds = [...retainedRoleIds].filter((roleId) =>
+      member.guild.roles.cache.get(roleId)?.permissions.has(PermissionFlagsBits.Administrator)
+    );
+    const retainedPrivilegedRoleIds = [...retainedRoleIds].filter((roleId) => {
+      const role = member.guild.roles.cache.get(roleId);
+      return (
+        role !== undefined &&
+        COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS.some((permission) =>
+          role.permissions.has(permission)
+        )
+      );
+    });
+    const unremovablePrivilegeReasons: string[] = [];
+    if (member.id === member.guild.ownerId) {
+      unremovablePrivilegeReasons.push('guild_owner');
+    }
+    const everyoneRole = member.guild.roles.cache.get(member.guild.id);
+    const everyonePrivileges = COMPROMISED_ACCOUNT_PERMISSION_LABELS.filter((permission) =>
+      everyoneRole?.permissions.has(permission.flag)
+    ).map((permission) => permission.label);
+    if (everyonePrivileges.length > 0) {
+      unremovablePrivilegeReasons.push(
+        `everyone_privileged_permissions:${everyonePrivileges.join(', ')}`
+      );
+    }
+    const bypasses: CaseRoleLockdownMemberBypass[] = [];
+    let configuredRecoveryParent: TextChannel | null = null;
+
+    for (const channel of await this.fetchLockdownChannels(member.guild)) {
+      if (
+        channel.id === reportInstructionsChannelId &&
+        !settings.allowedChannelIds.includes(channel.id) &&
+        !(channel.parentId && allowedCategoryIds.has(channel.parentId))
+      ) {
+        this.recordPostingSurfaceMemberBypass(channel, member, bypasses);
+      }
+      if (allowedChannelIds.has(channel.id) || allowedCategoryIds.has(channel.id)) {
+        if (
+          channel.id === serverConfig.verification_channel_id &&
+          channel.type === ChannelType.GuildText
+        ) {
+          configuredRecoveryParent = channel;
+        }
+        if (channel.id === recoveryParentId) {
+          this.recordRecoveryParentMemberBypass(channel, member, bypasses);
+          if (channel.type === ChannelType.GuildText) {
+            recoveryParent = channel;
+          }
+        }
+        continue;
+      }
+      if (channel.parentId && allowedCategoryIds.has(channel.parentId)) {
+        continue;
+      }
+
+      for (const overwrite of channel.permissionOverwrites.cache.values()) {
+        const subjectType = overwrite.type === OverwriteType.Member ? 'member' : 'role';
+        const targetsMember = subjectType === 'member' && overwrite.id === member.id;
+        const targetsRetainedRole = subjectType === 'role' && retainedRoleIds.has(overwrite.id);
+        if (!targetsMember && !targetsRetainedRole) {
+          continue;
+        }
+
+        const permissions = LOCKDOWN_PERMISSIONS.filter((permission) =>
+          overwrite.allow.has(permission.flag)
+        ).map((permission) => permission.label);
+        if (permissions.length > 0) {
+          bypasses.push({
+            channelId: channel.id,
+            channelName: channel.name,
+            subjectType,
+            subjectId: overwrite.id,
+            permissions,
+          });
+        }
+      }
+    }
+
+    if (recoveryParentId) {
+      await this.recordRecoverySiblingThreadBypasses(
+        member,
+        recoveryParentId,
+        recoveryParent,
+        allowedThreadId,
+        bypasses,
+        context
+      );
+    }
+    if (
+      serverConfig.verification_channel_id &&
+      serverConfig.verification_channel_id !== recoveryParentId
+    ) {
+      await this.recordRecoverySiblingThreadBypasses(
+        member,
+        serverConfig.verification_channel_id,
+        configuredRecoveryParent,
+        allowedThreadId,
+        bypasses,
+        context
+      );
+    }
+    if (allowedThreadId) {
+      await this.recordRecoveryThreadAccessBypasses(member, allowedThreadId, bypasses);
+    }
+
+    return {
+      memberId: member.id,
+      bypasses,
+      retainedPrivilegedRoleIds,
+      retainedAdministratorRoleIds,
+      unremovablePrivilegeReasons,
+    };
   }
 
   public async applyGuild(
@@ -228,7 +482,9 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
       try {
         await channel.permissionOverwrites.edit(
           serverConfig.case_role_id,
-          LOCKDOWN_PERMISSION_OPTIONS,
+          action.channelId === serverConfig.verification_channel_id
+            ? RECOVERY_PARENT_PERMISSION_OPTIONS
+            : LOCKDOWN_PERMISSION_OPTIONS,
           {
             reason: `Drasil case-role lockdown applied by ${actorId}`,
           }
@@ -272,18 +528,22 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
   private async buildReport(
     guild: Guild,
     skipSetupChecks: boolean,
-    recentlyUnsyncedAllowedChannelIds: ReadonlySet<string> = new Set()
+    recentlyUnsyncedAllowedChannelIds: ReadonlySet<string> = new Set(),
+    recoveryParentId?: string | null,
+    caseRoleId?: string | null
   ): Promise<CaseRoleLockdownReport> {
     const serverConfig = await this.configService.getServerConfig(guild.id);
     const settings = getCaseRoleLockdownSettings(serverConfig.settings);
     const autoAllowedChannelIds = this.getAutoAllowedChannelIds(serverConfig.settings, [
       serverConfig.verification_channel_id,
+      recoveryParentId,
     ]);
     const issues: CaseRoleLockdownIssue[] = [];
     const plannedActions: CaseRoleLockdownPlannedAction[] = [];
     const syncedAllowedChannels: CaseRoleLockdownPlannedAction[] = [];
     const botMember = await this.getBotMember(guild);
-    const caseRole = await this.getCaseRole(guild, serverConfig.case_role_id);
+    const effectiveCaseRoleId = caseRoleId === undefined ? serverConfig.case_role_id : caseRoleId;
+    const caseRole = await this.getCaseRole(guild, effectiveCaseRoleId);
 
     if (!skipSetupChecks) {
       this.checkBotPermissions(botMember, issues);
@@ -352,6 +612,12 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
             code: 'lockdown-allowed-channel-synced-under-denied-category',
             message: `Allowed channel ${this.formatChannel(channel)} is synced under a denied category. Move it, allow the category, or rerun apply with \`unsync-allowed:true\` to copy current parent permissions before applying lockdown.`,
           });
+        }
+        if (
+          channel.id === serverConfig.verification_channel_id ||
+          channel.id === recoveryParentId
+        ) {
+          this.checkRecoveryParentLockdown(channel, caseRole.id, issues, plannedActions);
         }
         continue;
       }
@@ -632,7 +898,11 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
 
       try {
         await channel.permissionOverwrites.set(
-          this.buildUnsyncedAllowedChannelOverwrites(parent, caseRole.id),
+          this.buildUnsyncedAllowedChannelOverwrites(
+            parent,
+            caseRole.id,
+            action.channelId === serverConfig.verification_channel_id
+          ),
           `Drasil case-role lockdown unsynced allowed channel by ${actorId}`
         );
         unsyncedActions.push(action);
@@ -649,7 +919,8 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
 
   private buildUnsyncedAllowedChannelOverwrites(
     parent: LockdownChannel,
-    caseRoleId: string
+    caseRoleId: string,
+    isRecoveryParent: boolean
   ): OverwriteResolvable[] {
     const copiedParentOverwrites: OverwriteResolvable[] = [
       ...parent.permissionOverwrites.cache.values(),
@@ -662,13 +933,12 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
         deny: overwrite.deny.bitfield,
       }));
 
-    const caseRoleOptions = LOCKDOWN_PERMISSIONS.reduce<PermissionOverwriteOptions>(
-      (options, permission) => {
-        options[permission.option] = true;
-        return options;
-      },
-      {}
-    );
+    const caseRoleOptions = isRecoveryParent
+      ? RECOVERY_PARENT_PERMISSION_OPTIONS
+      : LOCKDOWN_PERMISSIONS.reduce<PermissionOverwriteOptions>((options, permission) => {
+          options[permission.option] = true;
+          return options;
+        }, {});
 
     return [
       ...copiedParentOverwrites,
@@ -678,6 +948,211 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
         ...caseRoleOptions,
       },
     ];
+  }
+
+  private checkRecoveryParentLockdown(
+    channel: LockdownChannel,
+    caseRoleId: string,
+    issues: CaseRoleLockdownIssue[],
+    plannedActions: CaseRoleLockdownPlannedAction[]
+  ): void {
+    const overwrite = channel.permissionOverwrites.cache.get(caseRoleId);
+    const missingDenies = RECOVERY_PARENT_BLOCKED_PERMISSIONS.filter(
+      (permission) => !overwrite?.deny.has(permission.flag)
+    );
+    const missingAllows = RECOVERY_PARENT_REQUIRED_PERMISSIONS.filter(
+      (permission) => !overwrite?.allow.has(permission.flag)
+    );
+    if (missingDenies.length === 0 && missingAllows.length === 0) {
+      return;
+    }
+    const requirements = [
+      missingDenies.length > 0
+        ? `deny ${missingDenies.map((permission) => permission.label).join(', ')}`
+        : null,
+      missingAllows.length > 0
+        ? `allow ${missingAllows.map((permission) => permission.label).join(', ')}`
+        : null,
+    ].filter((requirement): requirement is string => requirement !== null);
+    issues.push({
+      severity: 'warning',
+      code: 'lockdown-recovery-parent-permissions-invalid',
+      message: `Recovery parent ${this.formatChannel(channel)} must ${requirements.join(' and ')} for the case role so the user can read and reply only in the private recovery thread.`,
+    });
+    plannedActions.push(this.toPlannedAction(channel, 'channel'));
+  }
+
+  private recordRecoveryParentMemberBypass(
+    channel: LockdownChannel,
+    member: GuildMember,
+    bypasses: CaseRoleLockdownMemberBypass[]
+  ): void {
+    const effectivePermissions = channel.permissionsFor(member);
+    const blockedPermissions = RECOVERY_PARENT_BLOCKED_PERMISSIONS.filter((permission) =>
+      effectivePermissions.has(permission.flag)
+    ).map((permission) => permission.label);
+    const missingPermissions = RECOVERY_PARENT_REQUIRED_PERMISSIONS.filter(
+      (permission) => !effectivePermissions.has(permission.flag)
+    ).map((permission) => `Missing ${permission.label}`);
+    const permissions = [...blockedPermissions, ...missingPermissions];
+    if (permissions.length === 0) {
+      return;
+    }
+    bypasses.push({
+      channelId: channel.id,
+      channelName: channel.name,
+      subjectType: 'member',
+      subjectId: member.id,
+      permissions,
+    });
+  }
+
+  private recordPostingSurfaceMemberBypass(
+    channel: LockdownChannel,
+    member: GuildMember,
+    bypasses: CaseRoleLockdownMemberBypass[]
+  ): void {
+    const effectivePermissions = channel.permissionsFor(member);
+    const permissions = LOCKDOWN_POSTING_PERMISSIONS.filter((permission) =>
+      effectivePermissions.has(permission.flag)
+    ).map((permission) => permission.label);
+    if (permissions.length === 0) {
+      return;
+    }
+    bypasses.push({
+      channelId: channel.id,
+      channelName: channel.name,
+      subjectType: 'member',
+      subjectId: member.id,
+      permissions,
+    });
+  }
+
+  private async recordRecoverySiblingThreadBypasses(
+    member: GuildMember,
+    recoveryParentId: string,
+    recoveryParent: TextChannel | null,
+    allowedThreadId: string | null | undefined,
+    bypasses: CaseRoleLockdownMemberBypass[],
+    context?: CaseRoleLockdownAuditContext
+  ): Promise<void> {
+    const cacheKey = `${member.guild.id}:${recoveryParentId}`;
+    let siblingThreadsPromise = context?.siblingThreadsByParentId.get(cacheKey);
+    if (!siblingThreadsPromise) {
+      siblingThreadsPromise = this.fetchRecoverySiblingThreads(member, recoveryParent);
+      context?.siblingThreadsByParentId.set(cacheKey, siblingThreadsPromise);
+    }
+    const siblingThreads = await siblingThreadsPromise;
+
+    for (const thread of siblingThreads) {
+      if (thread.parentId !== recoveryParentId || thread.id === allowedThreadId) {
+        continue;
+      }
+      if (thread.archived === true && thread.locked === true) {
+        continue;
+      }
+
+      if (thread.type === ChannelType.PrivateThread) {
+        const threadMembers = thread.members.cache.has(member.id)
+          ? thread.members.cache
+          : await thread.members.fetch();
+        if (!threadMembers.has(member.id)) {
+          continue;
+        }
+      }
+
+      bypasses.push({
+        channelId: thread.id,
+        channelName: thread.name,
+        subjectType: 'member',
+        subjectId: member.id,
+        permissions: ['Send Messages in Threads'],
+      });
+    }
+  }
+
+  private async fetchRecoverySiblingThreads(
+    member: GuildMember,
+    recoveryParent: TextChannel | null
+  ): Promise<readonly ThreadChannel[]> {
+    const activeThreads = await member.guild.channels.fetchActiveThreads();
+    const siblingThreads = new Map(activeThreads.threads);
+    if (recoveryParent) {
+      const [archivedPublicThreads, archivedPrivateThreads] = await Promise.all([
+        recoveryParent.threads.fetchArchived({ type: 'public', fetchAll: true }),
+        recoveryParent.threads.fetchArchived({ type: 'private', fetchAll: true }),
+      ]);
+      for (const thread of [
+        ...archivedPublicThreads.threads.values(),
+        ...archivedPrivateThreads.threads.values(),
+      ]) {
+        siblingThreads.set(thread.id, thread);
+      }
+    }
+    return [...siblingThreads.values()];
+  }
+
+  private async recordRecoveryThreadAccessBypasses(
+    member: GuildMember,
+    recoveryThreadId: string,
+    bypasses: CaseRoleLockdownMemberBypass[]
+  ): Promise<void> {
+    const thread = await member.guild.channels.fetch(recoveryThreadId);
+    if (!thread?.isThread()) {
+      throw new Error(`Recovery thread ${recoveryThreadId} could not be audited.`);
+    }
+
+    const accessFailures: string[] = [];
+    if (thread.archived) {
+      accessFailures.push('Recovery thread archived');
+    }
+    if (thread.locked) {
+      accessFailures.push('Recovery thread locked');
+    }
+    const permissions = thread.permissionsFor(member);
+    if (!permissions.has(PermissionFlagsBits.ViewChannel)) {
+      accessFailures.push('Missing View Channel');
+    }
+    if (!permissions.has(PermissionFlagsBits.SendMessagesInThreads)) {
+      accessFailures.push('Missing Send Messages in Threads');
+    }
+    if (permissions.has(PermissionFlagsBits.MentionEveryone)) {
+      accessFailures.push('Mention Everyone');
+    }
+    if (thread.type === ChannelType.PrivateThread) {
+      const threadMembers = await thread.members.fetch();
+      if (!threadMembers.has(member.id)) {
+        accessFailures.push('Missing private thread membership');
+      }
+    }
+    if (accessFailures.length === 0) {
+      return;
+    }
+    bypasses.push({
+      channelId: thread.id,
+      channelName: thread.name,
+      subjectType: 'member',
+      subjectId: member.id,
+      permissions: accessFailures,
+    });
+  }
+
+  private async resolveRecoveryParent(
+    guild: Guild,
+    recoveryThreadId: string | null | undefined
+  ): Promise<TextChannel | null> {
+    if (!recoveryThreadId) {
+      return null;
+    }
+    const thread = await guild.channels.fetch(recoveryThreadId);
+    if (!thread?.isThread() || !thread.parentId) {
+      throw new Error(`Recovery thread ${recoveryThreadId} could not be resolved.`);
+    }
+    const parent = await guild.channels.fetch(thread.parentId);
+    if (!parent || parent.type !== ChannelType.GuildText || !this.isLockdownChannel(parent)) {
+      throw new Error(`Recovery thread parent ${thread.parentId} could not be audited.`);
+    }
+    return parent as TextChannel;
   }
 
   private isLockdownChannel(

@@ -12,14 +12,14 @@ export interface IRoleManager {
    * @param member The guild member receiving the case role
    * @returns Promise resolving to true if successful, false if the role couldn't be assigned
    */
-  assignCaseRole(member: GuildMember): Promise<boolean>;
+  assignCaseRole(member: GuildMember, roleId?: string): Promise<boolean>;
 
   /**
    * Removes the case role from a guild member
    * @param member The guild member losing the case role
    * @returns Promise resolving to true if successful, false if the role couldn't be removed
    */
-  removeCaseRole(member: GuildMember): Promise<boolean>;
+  removeCaseRole(member: GuildMember, roleId?: string): Promise<boolean>;
 }
 
 /**
@@ -39,8 +39,8 @@ export class RoleManager implements IRoleManager {
    * @param member The guild member receiving the case role
    * @returns Promise resolving to true if successful, false if the role couldn't be assigned
    */
-  public async assignCaseRole(member: GuildMember): Promise<boolean> {
-    const caseRole = await this.configService.getCaseRole(member.guild.id);
+  public async assignCaseRole(member: GuildMember, roleId?: string): Promise<boolean> {
+    const caseRole = roleId ?? (await this.configService.getCaseRole(member.guild.id));
     if (!caseRole) {
       console.error('No case role ID configured');
       return false;
@@ -56,8 +56,8 @@ export class RoleManager implements IRoleManager {
    * @param member The guild member losing the case role
    * @returns Promise resolving to true if successful, false if the role couldn't be removed
    */
-  public async removeCaseRole(member: GuildMember): Promise<boolean> {
-    const caseRole = await this.configService.getCaseRole(member.guild.id);
+  public async removeCaseRole(member: GuildMember, roleId?: string): Promise<boolean> {
+    const caseRole = roleId ?? (await this.configService.getCaseRole(member.guild.id));
     if (!caseRole) {
       console.error('No case role ID configured');
       return false;

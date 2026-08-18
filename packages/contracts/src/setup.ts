@@ -221,6 +221,7 @@ export const serverSettingsSchema = z
     honeypot_role_response_mode: detectionResponseModeSchema.optional(),
     role_quarantine_mode: roleQuarantineModeSchema.optional(),
     role_quarantine_exempt_role_ids: z.array(z.string()).optional(),
+    account_quarantine_enabled: z.boolean().optional(),
     verification_ai_thread_analysis_enabled: z.boolean().optional(),
     verification_ai_thread_analysis_message_limit: z
       .number()
@@ -398,6 +399,7 @@ export const guildSetupUpdateSchema = z
     honeypotRoleResponseMode: detectionResponseModeSchema.optional(),
     roleQuarantineMode: roleQuarantineModeSchema.optional(),
     roleQuarantineExemptRoleIds: z.array(z.string()).optional(),
+    accountQuarantineEnabled: z.boolean().optional(),
     verificationAnalysisEnabled: z.boolean().optional(),
     verificationAnalysisMessageLimit: z
       .number()

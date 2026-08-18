@@ -22,6 +22,7 @@ import type {
   CaseDiscordSnapshot,
   CaseDiscordThreadSnapshot,
 } from '@/lib/caseDiscordContent';
+import type { AccountQuarantineActionRequests } from '@/lib/inboxActionReceipts';
 import {
   confidenceStatusClass,
   formatCaseAction,
@@ -37,6 +38,7 @@ import {
 } from '@/lib/casePresentation';
 
 interface CaseDetailViewProps {
+  readonly accountQuarantineRequests?: AccountQuarantineActionRequests;
   readonly canQueueCaseActions: boolean;
   readonly guildId: string;
   readonly guildName: string;
@@ -125,6 +127,34 @@ function SummaryPanel({
         </div>
       ) : null}
 
+      {detail.containmentStatus === 'in_progress' ? (
+        <div className="member-warning neutral-warning">
+          <strong>Account Quarantine In Progress</strong>
+          <span>Drasil is running containment now; duplicate attempts will be rejected.</span>
+        </div>
+      ) : null}
+      {detail.containmentStatus === 'incomplete' ? (
+        <div className="member-warning">
+          <strong>Account Quarantine Incomplete</strong>
+          <span>
+            The account is not parked. Retry from Discord after repairing blockers. Removed roles:{' '}
+            {detail.quarantineEffects?.removedRoleCount ?? 0}; retained roles:{' '}
+            {detail.quarantineEffects?.retainedRoleCount ?? 0}; failed removals:{' '}
+            {detail.quarantineEffects?.failedRoleCount ?? 0}; permission bypasses:{' '}
+            {detail.quarantineEffects?.memberBypassCount ?? 0}.
+          </span>
+        </div>
+      ) : null}
+      {detail.attentionState === 'parked' ? (
+        <div className="member-warning neutral-warning">
+          <strong>Parked Account Quarantine</strong>
+          <span>
+            The verification thread remains open for a recovery report. Release requires moderator
+            verification, kick, or ban.
+          </span>
+        </div>
+      ) : null}
+
       {detail.notes ? <p>{detail.notes}</p> : <p className="muted">No moderator notes recorded.</p>}
     </section>
   );
@@ -167,12 +197,14 @@ function ActionPills({ actions }: { readonly actions: readonly CaseAction[] }) {
 }
 
 function DiscordSurfaces({
+  accountQuarantineRequests,
   canQueueCaseActions,
   detail,
   guildId,
   messageCleanup,
   queueCaseAction,
 }: {
+  readonly accountQuarantineRequests?: AccountQuarantineActionRequests;
   readonly canQueueCaseActions: boolean;
   readonly detail: CaseDetail;
   readonly guildId: string;
@@ -204,11 +236,13 @@ function DiscordSurfaces({
       )}
       <CaseActionControls
         actions={detail.allowedActions}
+        accountQuarantineRequests={accountQuarantineRequests}
         canQueueCaseActions={canQueueCaseActions}
         caseId={detail.id}
         guildId={guildId}
         messageCleanup={messageCleanup}
         queueCaseAction={queueCaseAction}
+        requiresVerificationReleaseConfirmation={detail.caseKind === 'compromised_account'}
       />
       <ActionPills actions={detail.allowedActions} />
     </section>
@@ -487,6 +521,7 @@ function ModerationOutcomes({ outcomes }: { readonly outcomes: readonly CaseMode
 }
 
 export function CaseDetailView({
+  accountQuarantineRequests,
   canQueueCaseActions,
   guildId,
   guildName,
@@ -524,6 +559,7 @@ export function CaseDetailView({
       <p className="muted">{guildName} Case Detail</p>
       <SummaryPanel detail={detail} guildId={guildId} />
       <DiscordSurfaces
+        accountQuarantineRequests={accountQuarantineRequests}
         canQueueCaseActions={canQueueCaseActions}
         detail={detail}
         guildId={guildId}

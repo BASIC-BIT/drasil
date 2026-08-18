@@ -13,6 +13,7 @@ import {
   User,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
+import { randomUUID } from 'node:crypto';
 import { injectable, inject, optional } from 'inversify';
 import { UserProfileData } from '../services/GPTService';
 import { DetectionResult, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
@@ -35,10 +36,15 @@ import {
 import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { REPORT_INTAKE_THREAD_NAME_PREFIX } from '../services/ThreadManager';
 import {
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   DetectionType,
+  VerificationStatus,
   type GlobalMessageWatchlistEntry,
   type Server,
   type ServerSettings,
+  type VerificationEvent,
 } from '../repositories/types';
 import {
   ISetupDiagnosticsService,
@@ -66,12 +72,23 @@ import {
   ObservedDiscordKickOptions,
 } from '../services/UserModerationService';
 import { ModerationOutcomeSource } from '../services/ModerationOutcomeService';
-import { IModerationQueueService } from '../services/ModerationQueueService';
+import {
+  IModerationQueueService,
+  ModerationQueueAttentionResult,
+} from '../services/ModerationQueueService';
+import { ICaseRoleReleaseReconciliationService } from '../services/CaseRoleReleaseReconciliationService';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { IRoleQuarantineService } from '../services/RoleQuarantineService';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import type { IGlobalMessageWatchlistRepository } from '../repositories/GlobalMessageWatchlistRepository';
+import { getAccountQuarantineSettings } from '../utils/accountQuarantineSettings';
+import { getCaseRoleLockdownSettings } from '../utils/caseRoleLockdownSettings';
+import { CASE_ATTENTION_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
+import {
+  ActiveAccountQuarantineCache,
+  IActiveAccountQuarantineCache,
+} from '../services/ActiveAccountQuarantineCache';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -133,6 +150,7 @@ export class EventHandler implements IEventHandler {
   private messageContextRepository?: IMessageContextRepository;
   private userModerationService?: IUserModerationService;
   private moderationQueueService?: IModerationQueueService;
+  private caseRoleReleaseReconciliationService?: ICaseRoleReleaseReconciliationService;
   private roleQuarantineService?: IRoleQuarantineService;
   private verificationEventRepository?: IVerificationEventRepository;
   private globalMessageWatchlistRepository?: IGlobalMessageWatchlistRepository;
@@ -144,6 +162,7 @@ export class EventHandler implements IEventHandler {
   private globalMessageWatchlistLoadedAt = 0;
   private globalMessageWatchlistRetryAfter = 0;
   private globalMessageWatchlistHasLoaded = false;
+  private activeQuarantineCache: IActiveAccountQuarantineCache;
   private globalMessageWatchlistLoadPromise: Promise<
     readonly GlobalMessageWatchlistEntry[]
   > | null = null;
@@ -190,7 +209,13 @@ export class EventHandler implements IEventHandler {
     verificationEventRepository?: IVerificationEventRepository,
     @inject(TYPES.GlobalMessageWatchlistRepository)
     @optional()
-    globalMessageWatchlistRepository?: IGlobalMessageWatchlistRepository
+    globalMessageWatchlistRepository?: IGlobalMessageWatchlistRepository,
+    @inject(TYPES.CaseRoleReleaseReconciliationService)
+    @optional()
+    caseRoleReleaseReconciliationService?: ICaseRoleReleaseReconciliationService,
+    @inject(TYPES.ActiveAccountQuarantineCache)
+    @optional()
+    activeQuarantineCache?: IActiveAccountQuarantineCache
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -211,6 +236,8 @@ export class EventHandler implements IEventHandler {
     this.roleQuarantineService = roleQuarantineService;
     this.verificationEventRepository = verificationEventRepository;
     this.globalMessageWatchlistRepository = globalMessageWatchlistRepository;
+    this.caseRoleReleaseReconciliationService = caseRoleReleaseReconciliationService;
+    this.activeQuarantineCache = activeQuarantineCache ?? new ActiveAccountQuarantineCache();
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -286,6 +313,7 @@ export class EventHandler implements IEventHandler {
     await this.commandHandler.registerCommands();
     this.moderationQueueService?.start();
     this.caseReviewReminderService?.start();
+    this.caseRoleReleaseReconciliationService?.start();
   }
 
   private async handleInteraction(interaction: Interaction): Promise<void> {
@@ -341,6 +369,8 @@ export class EventHandler implements IEventHandler {
     // Ignore messages from bots (including self)
     if (message.author.bot) return;
     if (!message.guild || !message.member) return;
+
+    await this.recordParkedQuarantineBreach(message);
 
     if (message.channel.isThread()) {
       try {
@@ -860,25 +890,37 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    if (!serverConfig.case_role_id || !this.memberHasRole(newMember, serverConfig.case_role_id)) {
+    const verificationEvent = await this.findEnforcedActiveCase(newMember.id, newMember.guild.id);
+    if (!verificationEvent) {
+      return;
+    }
+    if (verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT) {
+      this.activeQuarantineCache.noteActive(newMember.guild.id, newMember.id);
+    }
+    const activeCaseRoleId =
+      verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT
+        ? (verificationEvent.quarantine_case_role_id ?? serverConfig.case_role_id)
+        : serverConfig.case_role_id;
+    const compromisedAccountCase = verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT;
+    if (!activeCaseRoleId && !compromisedAccountCase) {
       return;
     }
 
+    const hasCaseRole = activeCaseRoleId ? this.memberHasRole(newMember, activeCaseRoleId) : false;
+    const caseRoleRemoved = activeCaseRoleId
+      ? this.memberHasRole(oldMember, activeCaseRoleId) && !hasCaseRole
+      : false;
     const gainedRole = [...newMember.roles.cache.values()].some(
       (role) =>
         role.id !== newMember.guild.id &&
-        role.id !== serverConfig.case_role_id &&
+        (!activeCaseRoleId || role.id !== activeCaseRoleId) &&
         !oldMember.roles.cache.has(role.id)
     );
-    if (!gainedRole) {
+    if (!gainedRole && !caseRoleRemoved) {
       return;
     }
 
-    const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
-      newMember.id,
-      newMember.guild.id
-    );
-    if (!verificationEvent) {
+    if (!hasCaseRole && !compromisedAccountCase) {
       return;
     }
 
@@ -892,6 +934,208 @@ export class EventHandler implements IEventHandler {
         `Active-case role quarantine processed ${result.addedRoleIds.length} role(s) for ${newMember.user.tag}: removed ${result.removedRoleIds.length}, failed ${result.failedRemovals.length}.`
       );
     }
+    if (
+      verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+      (result.containmentRegressed === true ||
+        result.skippedRoles.length > 0 ||
+        result.failedRemovals.length > 0)
+    ) {
+      const updated = await this.verificationEventRepository.findById(verificationEvent.id);
+      if (
+        updated &&
+        (updated.attention_state !== CaseAttentionState.PARKED ||
+          updated.containment_status !== CaseContainmentStatus.CONTAINED)
+      ) {
+        await this.notificationManager
+          .updateNotificationButtons(updated, updated.status)
+          .catch((error) => {
+            console.warn(`Failed to refresh regressed quarantine ${updated.id}:`, error);
+          });
+        await this.moderationQueueService?.upsertCaseMirror(updated);
+      }
+    }
+  }
+
+  private async recordParkedQuarantineBreach(message: Message): Promise<void> {
+    if (!this.verificationEventRepository || !message.guild) {
+      return;
+    }
+
+    try {
+      await this.ensureConfigInitialized();
+      const cachedConfig = this.configService.getCachedServerConfig(message.guild.id);
+      if (!cachedConfig) {
+        return;
+      }
+
+      const quarantinedUserIds = await this.getCachedActiveQuarantineUserIds(message.guild.id);
+      const quarantineEntryEnabled = getAccountQuarantineSettings(cachedConfig.settings).enabled;
+      const hasConfiguredCaseRole = Boolean(
+        cachedConfig.case_role_id && message.member?.roles.cache.has(cachedConfig.case_role_id)
+      );
+      if (
+        !quarantinedUserIds.has(message.author.id) &&
+        (!quarantineEntryEnabled || !hasConfiguredCaseRole)
+      ) {
+        return;
+      }
+
+      const lockdownSettings = getCaseRoleLockdownSettings(cachedConfig.settings);
+      const isThread = message.channel.isThread();
+      const parentChannelId = isThread ? message.channel.parentId : null;
+      const categoryId = isThread
+        ? message.channel.parent?.parentId
+        : 'parentId' in message.channel
+          ? message.channel.parentId
+          : null;
+      if (
+        lockdownSettings.allowedChannelIds.includes(message.channelId) ||
+        (parentChannelId !== null &&
+          lockdownSettings.allowedChannelIds.includes(parentChannelId)) ||
+        (categoryId !== null &&
+          categoryId !== undefined &&
+          lockdownSettings.allowedCategoryIds.includes(categoryId))
+      ) {
+        return;
+      }
+
+      const activeCase = await this.findEnforcedActiveCase(message.author.id, message.guild.id);
+      if (
+        this.isEnforcedCompromisedAccountCase(activeCase) &&
+        activeCase.quarantine_attempt_id === null &&
+        (!activeCase.thread_id || activeCase.thread_id !== message.channelId)
+      ) {
+        const wasParked =
+          activeCase.attention_state === CaseAttentionState.PARKED &&
+          activeCase.containment_status === CaseContainmentStatus.CONTAINED;
+        const attentionAttemptId = `${CASE_ATTENTION_ATTEMPT_PREFIX}${randomUUID()}`;
+        const claimed = await this.verificationEventRepository.claimAccountQuarantineAttention(
+          activeCase.id,
+          message.guild.id,
+          message.author.id,
+          attentionAttemptId
+        );
+        if (!claimed) {
+          return;
+        }
+        let attentionDelivered = false;
+        let directDelivered = false;
+        try {
+          let queueAttention: ModerationQueueAttentionResult = {
+            delivered: false,
+            created: false,
+          };
+          try {
+            queueAttention =
+              (await this.moderationQueueService?.recordQuarantineBreachAttention(
+                claimed,
+                message
+              )) ?? queueAttention;
+          } catch (error) {
+            console.warn(
+              `Failed to queue quarantine breach attention for case ${claimed.id}:`,
+              error
+            );
+          }
+
+          const claimedMetadata = this.metadataToRecord(claimed.metadata);
+          const directAlreadyNotified =
+            typeof claimedMetadata.breach_attention_direct_notified_at === 'string';
+          if (queueAttention.created || !directAlreadyNotified) {
+            try {
+              directDelivered = await this.notificationManager.notifyAccountQuarantineAttention(
+                claimed,
+                'containment_breach',
+                message
+              );
+            } catch (error) {
+              console.warn(
+                `Failed to send direct quarantine breach attention for case ${claimed.id}:`,
+                error
+              );
+            }
+          }
+          attentionDelivered = queueAttention.delivered || directDelivered || directAlreadyNotified;
+        } finally {
+          const shouldRemainParked = attentionDelivered && wasParked;
+          const completedAt = new Date().toISOString();
+          await this.verificationEventRepository.updateQuarantineAttempt(
+            claimed.id,
+            attentionAttemptId,
+            {
+              attention_state: shouldRemainParked
+                ? CaseAttentionState.PARKED
+                : CaseAttentionState.REVIEW_REQUIRED,
+              containment_status: shouldRemainParked
+                ? CaseContainmentStatus.CONTAINED
+                : CaseContainmentStatus.INCOMPLETE,
+              parked_at: shouldRemainParked ? claimed.parked_at : null,
+              parked_by: shouldRemainParked ? claimed.parked_by : null,
+              metadata: directDelivered
+                ? {
+                    ...this.metadataToRecord(claimed.metadata),
+                    breach_attention_direct_notified_at: completedAt,
+                    breach_attention_direct_message_id: message.id,
+                  }
+                : attentionDelivered
+                  ? undefined
+                  : {
+                      ...this.metadataToRecord(claimed.metadata),
+                      breach_attention_delivery_failed_at: completedAt,
+                      breach_attention_message_id: message.id,
+                    },
+            }
+          );
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to record parked quarantine breach attention:', error);
+    }
+  }
+
+  private async findEnforcedActiveCase(
+    userId: string,
+    serverId: string
+  ): Promise<VerificationEvent | null> {
+    if (!this.verificationEventRepository) {
+      return null;
+    }
+    const newestActive = await this.verificationEventRepository.findActiveByUserAndServer(
+      userId,
+      serverId
+    );
+    if (this.isEnforcedCompromisedAccountCase(newestActive)) {
+      return newestActive;
+    }
+    const compromisedCase = (
+      await this.verificationEventRepository.findByUserAndServer(userId, serverId)
+    ).find((event) => this.isEnforcedCompromisedAccountCase(event));
+    return compromisedCase ?? newestActive;
+  }
+
+  private isEnforcedCompromisedAccountCase(
+    verificationEvent: VerificationEvent | null | undefined
+  ): verificationEvent is VerificationEvent {
+    return Boolean(
+      verificationEvent &&
+      verificationEvent.status === VerificationStatus.PENDING &&
+      verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+      verificationEvent.containment_status !== CaseContainmentStatus.NOT_APPLICABLE
+    );
+  }
+
+  private metadataToRecord(metadata: unknown): Record<string, unknown> {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return {};
+    }
+    return { ...(metadata as Record<string, unknown>) };
+  }
+
+  private async getCachedActiveQuarantineUserIds(serverId: string): Promise<ReadonlySet<string>> {
+    return this.activeQuarantineCache.getActiveUserIds(
+      serverId,
+      async () => (await this.verificationEventRepository?.findPendingByServer(serverId)) ?? []
+    );
   }
 
   private async handleDiscordPendingStateChange(

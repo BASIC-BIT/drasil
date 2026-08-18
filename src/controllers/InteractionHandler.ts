@@ -21,6 +21,8 @@ import { INotificationManager } from '../services/NotificationManager';
 import { TYPES } from '../di/symbols';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseKind,
   DetectionType,
   VerificationStatus,
   type VerificationEvent,
@@ -83,6 +85,13 @@ import {
 } from '../services/ModerationQueueService';
 import { IRoleGateService, RoleGateResolutionResult } from '../services/RoleGateService';
 import {
+  type AccountQuarantinePreview,
+  IAccountQuarantineService,
+} from '../services/AccountQuarantineService';
+import { getAccountQuarantineSettings } from '../utils/accountQuarantineSettings';
+import { truncatePreview } from '../utils/textPreview';
+import { buildAccountQuarantinePreviewFingerprint as fingerprintAccountQuarantinePreview } from '../utils/accountQuarantinePreview';
+import {
   MODERATION_ACTION_REASON_FIELD_ID,
   MODERATOR_ACTION_BAN_DEFAULT_REASON,
   MODERATOR_ACTION_KICK_DEFAULT_REASON,
@@ -99,12 +108,16 @@ const OBSERVED_KICK_DEFAULT_REASON = 'Kicked from observed suspicious notificati
 const VERIFICATION_BAN_MODAL_PREFIX = 'verification:ban_modal';
 const VERIFICATION_BAN_NOTES_FIELD_ID = 'verification_ban_notes';
 const VERIFICATION_BAN_DEFAULT_REASON = 'Banned by moderator during verification';
+const ACCOUNT_QUARANTINE_MODAL_PREFIX = 'verification:qa';
+const ACCOUNT_QUARANTINE_REASON_FIELD_ID = 'account_quarantine_reason';
+const ACCOUNT_QUARANTINE_CONFIRMATION_FINGERPRINT_LENGTH = 20;
 const VERIFICATION_KICK_MODAL_PREFIX = 'verification:kick_modal';
 const VERIFICATION_KICK_DEFAULT_REASON = 'Kicked by moderator during verification';
 const OBSERVED_KICK_MODAL_PREFIX = 'observed:kick_modal';
 const MODERATION_ACTION_CONFIRMATION_PREFIX = 'moderation_action_confirm';
 const MODERATION_ACTION_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const CASE_REVIEW_DIGEST_PAGE_SIZE = 25;
+const ACCOUNT_QUARANTINE_CONFIRMATION_MAX_LENGTH = 1900;
 
 interface PendingModerationActionConfirmation {
   readonly action: ModeratorUserAction;
@@ -148,6 +161,7 @@ export class InteractionHandler implements IInteractionHandler {
   private moderationQueueService?: IModerationQueueService;
   private roleGateService?: IRoleGateService;
   private detectionEventsRepository?: IDetectionEventsRepository;
+  private accountQuarantineService?: IAccountQuarantineService;
   private moderationActionConfirmationCounter = 0;
   private readonly pendingModerationActionConfirmations = new Map<
     string,
@@ -184,7 +198,10 @@ export class InteractionHandler implements IInteractionHandler {
     roleGateService?: IRoleGateService,
     @inject(TYPES.DetectionEventsRepository)
     @optional()
-    detectionEventsRepository?: IDetectionEventsRepository
+    detectionEventsRepository?: IDetectionEventsRepository,
+    @inject(TYPES.AccountQuarantineService)
+    @optional()
+    accountQuarantineService?: IAccountQuarantineService
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -198,6 +215,7 @@ export class InteractionHandler implements IInteractionHandler {
     this.moderationQueueService = moderationQueueService;
     this.roleGateService = roleGateService;
     this.detectionEventsRepository = detectionEventsRepository;
+    this.accountQuarantineService = accountQuarantineService;
     const reportSubmissionService = new ReportSubmissionService(
       this.configService,
       this.securityActionService
@@ -601,6 +619,8 @@ export class InteractionHandler implements IInteractionHandler {
       parsed.userId,
       guildId
     );
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    const accountQuarantineEnabled = getAccountQuarantineSettings(serverConfig.settings).enabled;
     const history = await this.verificationEventRepository.findByUserAndServer(
       parsed.userId,
       guildId
@@ -637,7 +657,7 @@ export class InteractionHandler implements IInteractionHandler {
             this.adminActionButton(parsed, 'ban', 'Ban by ID...', ButtonStyle.Danger)
           );
         }
-        if (hasModerationPermission) {
+        if (hasModerationPermission && activeCase.case_kind !== CaseKind.COMPROMISED_ACCOUNT) {
           actionButtons.push(
             this.adminActionButton(
               parsed,
@@ -652,16 +672,40 @@ export class InteractionHandler implements IInteractionHandler {
           this.adminActionButton(parsed, 'verify', 'Verify User', ButtonStyle.Success),
           ...(canKick
             ? [this.adminActionButton(parsed, 'kick', 'Kick User', ButtonStyle.Danger)]
-            : []),
-          this.adminActionButton(
-            parsed,
-            'close_no_action',
-            'Close No Action',
-            ButtonStyle.Secondary
-          ),
-          this.adminActionButton(parsed, 'repair', 'Repair Active Case', ButtonStyle.Primary)
+            : [])
         );
-        if (!activeCase.thread_id) {
+        if (activeCase.attention_state !== CaseAttentionState.PARKED) {
+          if (activeCase.case_kind !== CaseKind.COMPROMISED_ACCOUNT) {
+            actionButtons.push(
+              this.adminActionButton(
+                parsed,
+                'close_no_action',
+                'Close No Action',
+                ButtonStyle.Secondary
+              )
+            );
+          }
+          actionButtons.push(
+            this.adminActionButton(parsed, 'repair', 'Repair Active Case', ButtonStyle.Primary)
+          );
+        }
+        if (
+          this.accountQuarantineService &&
+          accountQuarantineEnabled &&
+          activeCase.attention_state === CaseAttentionState.REVIEW_REQUIRED
+        ) {
+          actionButtons.push(
+            this.adminActionButton(
+              parsed,
+              'quarantine',
+              activeCase.case_kind === CaseKind.COMPROMISED_ACCOUNT
+                ? 'Retry Account Quarantine'
+                : 'Quarantine Compromised Account...',
+              ButtonStyle.Danger
+            )
+          );
+        }
+        if (!activeCase.thread_id && activeCase.attention_state !== CaseAttentionState.PARKED) {
           actionButtons.push(
             this.adminActionButton(parsed, 'thread', 'Create Thread', ButtonStyle.Primary)
           );
@@ -936,7 +980,8 @@ export class InteractionHandler implements IInteractionHandler {
     page: number,
     options: { update: boolean }
   ): Promise<void> {
-    const pendingCases = await this.verificationEventRepository.findPendingByServer(guildId);
+    const pendingCases =
+      await this.verificationEventRepository.findReviewablePendingByServer(guildId);
     if (pendingCases.length === 0) {
       const response = {
         content: 'There are no pending cases for this server.',
@@ -1165,7 +1210,14 @@ export class InteractionHandler implements IInteractionHandler {
   ): ButtonBuilder {
     return new ButtonBuilder()
       .setCustomId(
-        buildAdminActionCustomId(action, parsed.surface, parsed.userId, parsed.detectionEventId)
+        buildAdminActionCustomId(
+          action,
+          parsed.surface,
+          parsed.userId,
+          parsed.detectionEventId,
+          parsed.verificationEventId,
+          parsed.confirmationFingerprint
+        )
       )
       .setLabel(label)
       .setStyle(style);
@@ -1197,6 +1249,12 @@ export class InteractionHandler implements IInteractionHandler {
           label: 'Confirm Verify',
           message: `Verify ${target} and remove the case role?`,
           style: ButtonStyle.Success,
+        };
+      case 'quarantine':
+        return {
+          label: 'Continue',
+          message: `Prepare to quarantine ${target} as a compromised account?`,
+          style: ButtonStyle.Danger,
         };
       case 'close_no_action':
         return {
@@ -1282,18 +1340,44 @@ export class InteractionHandler implements IInteractionHandler {
     options?: { update?: boolean }
   ): Promise<void> {
     const confirmAction = `confirm_${parsed.action}`;
-    const components = [
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        this.adminActionButton(parsed, confirmAction, confirmation.label, confirmation.style),
-        this.adminActionButton(parsed, 'cancel', 'Cancel', ButtonStyle.Secondary)
-      ),
+    const quarantinePreview =
+      parsed.surface === 'case' && parsed.action === 'quarantine'
+        ? await this.buildAccountQuarantineConfirmationMessage(
+            interaction,
+            parsed,
+            confirmation.message
+          )
+        : null;
+    const confirmationParsed =
+      quarantinePreview?.verificationEventId && quarantinePreview.confirmationFingerprint
+        ? {
+            ...parsed,
+            verificationEventId: quarantinePreview.verificationEventId,
+            confirmationFingerprint: quarantinePreview.confirmationFingerprint,
+          }
+        : parsed;
+    const canContinue =
+      quarantinePreview === null ||
+      (quarantinePreview.verificationEventId !== null &&
+        quarantinePreview.confirmationFingerprint !== null);
+    const buttons = [
+      ...(canContinue
+        ? [
+            this.adminActionButton(
+              confirmationParsed,
+              confirmAction,
+              confirmation.label,
+              confirmation.style
+            ),
+          ]
+        : []),
+      this.adminActionButton(parsed, 'cancel', 'Cancel', ButtonStyle.Secondary),
     ];
+    const components = [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
     const response = {
-      content: await this.buildAdminActionConfirmationMessage(
-        interaction,
-        parsed,
-        confirmation.message
-      ),
+      content:
+        quarantinePreview?.message ??
+        (await this.buildAdminActionConfirmationMessage(interaction, parsed, confirmation.message)),
       allowedMentions: { parse: [] },
       components,
     };
@@ -1311,6 +1395,16 @@ export class InteractionHandler implements IInteractionHandler {
     parsed: ParsedAdminActionCustomId,
     baseMessage: string
   ): Promise<string> {
+    if (parsed.surface === 'case' && parsed.action === 'verify') {
+      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        parsed.userId,
+        interaction.guildId ?? ''
+      );
+      if (activeCase?.case_kind === CaseKind.COMPROMISED_ACCOUNT) {
+        baseMessage = `${baseMessage}\n\nThis releases the parked account quarantine, restores eligible snapshotted roles, and closes the user verification thread.`;
+      }
+    }
+
     if (
       !this.roleGateService ||
       parsed.surface !== 'case' ||
@@ -1328,6 +1422,71 @@ export class InteractionHandler implements IInteractionHandler {
     const preview = await roleGateService.previewResolution(member).catch(() => null);
     const roleGateMessage = preview ? roleGateService.formatResolutionConfirmation(preview) : null;
     return roleGateMessage ? `${baseMessage}\n\n${roleGateMessage}` : baseMessage;
+  }
+
+  private async buildAccountQuarantineConfirmationMessage(
+    interaction: ButtonInteraction,
+    parsed: ParsedAdminActionCustomId,
+    baseMessage: string
+  ): Promise<{
+    readonly message: string;
+    readonly verificationEventId: string | null;
+    readonly confirmationFingerprint: string | null;
+  }> {
+    const member = await interaction.guild?.members.fetch(parsed.userId).catch(() => null);
+    const activeCase = interaction.guildId
+      ? await this.verificationEventRepository.findActiveByUserAndServer(
+          parsed.userId,
+          interaction.guildId
+        )
+      : null;
+    if (!member || !activeCase || !this.accountQuarantineService) {
+      return {
+        message: `${baseMessage}\n\nA live containment preview is unavailable; cancel and retry from the active case.`,
+        verificationEventId: null,
+        confirmationFingerprint: null,
+      };
+    }
+
+    const preview = await this.accountQuarantineService
+      .preview(member, activeCase)
+      .catch(() => null);
+    if (!preview) {
+      return {
+        message: `${baseMessage}\n\nDrasil could not produce a live containment preview. Cancel and retry after repairing the active case.`,
+        verificationEventId: null,
+        confirmationFingerprint: null,
+      };
+    }
+
+    const retained = preview.rolePreview.skippedRoles.map(
+      (role) => `<@&${role.role_id}> (${role.reason})`
+    );
+    const lines = [
+      baseMessage,
+      '',
+      `Roles to remove: ${preview.rolePreview.plannedRoleIds.length}`,
+      `Privileged roles to remove: ${preview.rolePreview.privilegedRoleIds.length}`,
+      `Roles Drasil cannot remove: ${retained.length}`,
+      `Member/channel bypasses: ${preview.memberAudit.bypasses.length}`,
+      `Unremovable privilege blockers: ${preview.memberAudit.unremovablePrivilegeReasons.length}`,
+      `Lockdown changes still required: ${preview.lockdown.plannedActions.length}`,
+      preview.canContain
+        ? 'Containment check: ready. Submitting the next form will park this case.'
+        : 'Containment check: incomplete. The action will contain what it can, keep the case in review, and report every blocker.',
+      '',
+      'The user stays in the server. Their verification thread remains open so they can report recovery. No Discord timeout is applied.',
+    ];
+    if (retained.length > 0) {
+      lines.push('', `Unmanageable roles: ${retained.join(', ')}`);
+    }
+    return {
+      message: truncatePreview(lines.join('\n'), ACCOUNT_QUARANTINE_CONFIRMATION_MAX_LENGTH),
+      verificationEventId: activeCase.id,
+      confirmationFingerprint: (
+        await this.buildAccountQuarantinePreviewFingerprint(preview, activeCase)
+      ).slice(0, ACCOUNT_QUARANTINE_CONFIRMATION_FINGERPRINT_LENGTH),
+    };
   }
 
   private async showLegacyAdminActionConfirmation(
@@ -1389,6 +1548,30 @@ export class InteractionHandler implements IInteractionHandler {
   ): Promise<void> {
     const action = parsed.action.slice('confirm_'.length);
     const moderationPermissions = this.getModerationPermissions();
+
+    if (action === 'quarantine') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to quarantine a compromised account.'
+        );
+        return;
+      }
+      if (!parsed.verificationEventId || !parsed.confirmationFingerprint) {
+        await interaction.reply({
+          content: 'The live containment preview expired. Return to the active case and retry.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      await this.showAccountQuarantineModal(
+        interaction,
+        parsed.userId,
+        parsed.verificationEventId,
+        parsed.confirmationFingerprint
+      );
+      return;
+    }
 
     if (action === 'verify') {
       if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
@@ -1570,6 +1753,18 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
+      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        userId,
+        guildId
+      );
+      if (activeCase?.attention_state === CaseAttentionState.PARKED) {
+        await interaction.followUp({
+          content:
+            'A parked account quarantine can only be released with Verify User, Kick User, or Ban User.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
       const guild = await this.client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId).catch(() => null);
       if (!member) {
@@ -1589,6 +1784,28 @@ export class InteractionHandler implements IInteractionHandler {
         flags: MessageFlags.Ephemeral,
       });
     }
+  }
+
+  private async showAccountQuarantineModal(
+    interaction: ButtonInteraction,
+    userId: string,
+    verificationEventId: string,
+    previewFingerprint: string
+  ): Promise<void> {
+    const modal = new ModalBuilder()
+      .setCustomId(
+        `${ACCOUNT_QUARANTINE_MODAL_PREFIX}:${userId}:${verificationEventId}:${previewFingerprint}`
+      )
+      .setTitle('Quarantine Compromised Account');
+    const reasonInput = new TextInputBuilder()
+      .setCustomId(ACCOUNT_QUARANTINE_REASON_FIELD_ID)
+      .setLabel('Why is this account being quarantined?')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true)
+      .setMaxLength(500)
+      .setPlaceholder('Required for the moderation audit log.');
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
+    await interaction.showModal(modal);
   }
 
   private async refreshActiveCaseNotification(guildId: string, userId: string): Promise<void> {
@@ -1673,6 +1890,18 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
+      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        userId,
+        guildId
+      );
+      if (activeCase?.case_kind === CaseKind.COMPROMISED_ACCOUNT) {
+        await interaction.followUp({
+          content:
+            'An account quarantine can only be released with Verify User, Kick User, or Ban User.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
       const guild = await this.client.guilds.fetch(guildId);
       const member = await guild.members.fetch(userId).catch(() => null);
       const roleGatePreview =
@@ -1976,6 +2205,10 @@ export class InteractionHandler implements IInteractionHandler {
         await this.setupVerificationModalHandler.handleSetupVerificationModalSubmit(interaction);
         return;
       default:
+        if (interaction.customId.startsWith(`${ACCOUNT_QUARANTINE_MODAL_PREFIX}:`)) {
+          await this.handleAccountQuarantineModalSubmit(interaction);
+          return;
+        }
         if (interaction.customId.startsWith(`${VERIFICATION_BAN_MODAL_PREFIX}:`)) {
           await this.handleVerificationBanModalSubmit(interaction);
           return;
@@ -2543,6 +2776,170 @@ export class InteractionHandler implements IInteractionHandler {
         content: 'An error occurred while banning the user.',
       });
     }
+  }
+
+  private async handleAccountQuarantineModalSubmit(
+    interaction: ModalSubmitInteraction
+  ): Promise<void> {
+    if (!interaction.guildId || !this.accountQuarantineService) {
+      await interaction.reply({
+        content: 'Compromised-account quarantine is unavailable here.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    if (
+      !(await this.hasAnyPermission(
+        interaction,
+        interaction.guildId,
+        this.getModerationPermissions()
+      ))
+    ) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need moderation permissions to quarantine a compromised account.'
+      );
+      return;
+    }
+
+    const [userId, previewedCaseId, previewedFingerprint] = interaction.customId
+      .slice(`${ACCOUNT_QUARANTINE_MODAL_PREFIX}:`.length)
+      .split(':');
+    const reason = interaction.fields.getTextInputValue(ACCOUNT_QUARANTINE_REASON_FIELD_ID).trim();
+    if (!userId || !previewedCaseId || !previewedFingerprint || !reason) {
+      await interaction.reply({
+        content: 'A target user and quarantine reason are required.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const guild = await this.client.guilds.fetch(interaction.guildId);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) {
+        throw new Error('The target is no longer a member of this server.');
+      }
+
+      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        userId,
+        interaction.guildId
+      );
+      if (!activeCase || activeCase.id !== previewedCaseId) {
+        throw new Error('The active case changed after preview. Return to the case and retry.');
+      }
+      const livePreview = await this.accountQuarantineService.preview(member, activeCase);
+      const liveFingerprint = (
+        await this.buildAccountQuarantinePreviewFingerprint(livePreview, activeCase)
+      ).slice(0, ACCOUNT_QUARANTINE_CONFIRMATION_FINGERPRINT_LENGTH);
+      if (liveFingerprint !== previewedFingerprint) {
+        throw new Error(
+          'The live account-quarantine containment state changed. Return to the case and run a new preview.'
+        );
+      }
+      const repair = await this.securityActionService.repairActiveCase(member);
+      if (repair.verificationEventId !== activeCase.id || !repair.threadId) {
+        throw new Error(
+          'A usable user verification thread is required before this account can be quarantined.'
+        );
+      }
+      if (repair.notificationReady !== true) {
+        throw new Error(
+          'A usable persistent admin notification is required before this account can be quarantined.'
+        );
+      }
+
+      const repairedCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        userId,
+        interaction.guildId
+      );
+      if (!repairedCase || repairedCase.id !== activeCase.id) {
+        throw new Error('The active case changed after repair. Return to the case and retry.');
+      }
+      const repairedPreview = await this.accountQuarantineService.preview(member, repairedCase);
+      const repairedFingerprint = (
+        await this.buildAccountQuarantinePreviewFingerprint(repairedPreview, repairedCase)
+      ).slice(0, ACCOUNT_QUARANTINE_CONFIRMATION_FINGERPRINT_LENGTH);
+      if (repairedFingerprint !== previewedFingerprint) {
+        throw new Error(
+          'The live account-quarantine containment state changed. Return to the case and run a new preview.'
+        );
+      }
+
+      const result = await this.accountQuarantineService.quarantine(
+        member,
+        repairedCase,
+        interaction.user,
+        reason
+      );
+      if (result.status === 'parked') {
+        await interaction.editReply({
+          content: `Quarantined <@${userId}> and parked the case. The user remains in the server and can reply in their open verification thread when they recover the account.`,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      await interaction.editReply({
+        content: [
+          `Containment for <@${userId}> is incomplete, so the case remains in review.`,
+          `Failed role removals: ${result.roleResult.failedRemovals.length}.`,
+          `Retained/unmanageable roles: ${result.roleResult.skippedRoles.length}.`,
+          `Member/channel bypasses: ${result.memberAudit.bypasses.length}.`,
+          `Lockdown changes still required: ${result.lockdown.plannedActions.length}.`,
+        ].join('\n'),
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Error quarantining compromised account:', error);
+      await interaction.editReply({
+        content:
+          error instanceof Error
+            ? `Could not quarantine the compromised account: ${error.message}`
+            : 'Could not quarantine the compromised account.',
+      });
+    }
+  }
+
+  private async buildAccountQuarantinePreviewFingerprint(
+    preview: AccountQuarantinePreview,
+    event: VerificationEvent
+  ): Promise<string> {
+    const [recoveryThreadReady, adminNotificationReady] = await Promise.all([
+      this.isAccountQuarantineRecoveryThreadReady(event.thread_id),
+      this.isAccountQuarantineNotificationReady(
+        event.notification_channel_id,
+        event.notification_message_id
+      ),
+    ]);
+    return fingerprintAccountQuarantinePreview(preview, {
+      adminNotificationReady,
+      recoveryThreadId: event.thread_id,
+      recoveryThreadReady,
+    });
+  }
+
+  private async isAccountQuarantineRecoveryThreadReady(threadId: string | null): Promise<boolean> {
+    if (!threadId) {
+      return false;
+    }
+    const channel = await this.client.channels.fetch(threadId).catch(() => null);
+    return Boolean(channel?.isThread() && channel.archived !== true && channel.locked !== true);
+  }
+
+  private async isAccountQuarantineNotificationReady(
+    channelId: string | null,
+    messageId: string | null
+  ): Promise<boolean> {
+    if (!channelId || !messageId) {
+      return false;
+    }
+    const channel = await this.client.channels.fetch(channelId).catch(() => null);
+    if (!channel?.isTextBased()) {
+      return false;
+    }
+    return Boolean(await channel.messages.fetch(messageId).catch(() => null));
   }
 
   private async handleVerificationKickModalSubmit(

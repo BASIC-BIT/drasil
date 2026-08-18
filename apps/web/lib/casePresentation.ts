@@ -6,6 +6,7 @@ const actionLabels: Record<CaseAction, string> = {
   close_no_action: 'Close No Action',
   create_thread: 'Create Thread',
   kick_user: 'Kick User',
+  quarantine_compromised_account: 'Quarantine Compromised Account',
   repair_thread: 'Repair Thread',
   reopen_case: 'Reopen Case',
   refresh_notification: 'Refresh Notification',

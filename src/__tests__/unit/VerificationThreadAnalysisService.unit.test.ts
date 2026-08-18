@@ -4,7 +4,14 @@ import {
   InMemoryVerificationEventRepository,
 } from '../fakes/inMemoryRepositories';
 import { VerificationThreadAnalysisService } from '../../services/VerificationThreadAnalysisService';
-import { DetectionType, VerificationStatus } from '../../repositories/types';
+import {
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
+  DetectionType,
+  VerificationStatus,
+} from '../../repositories/types';
+import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../../utils/caseRoleRelease';
 
 describe('VerificationThreadAnalysisService (unit)', () => {
   const messageCreatedTimestamp = Date.parse('2026-06-03T12:00:00.000Z');
@@ -154,7 +161,374 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
   });
 
-  it('does not send the first-response admin ping when support reminder metadata fails to persist', async () => {
+  it('re-alerts moderators when a parked recovery queue item is recreated', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      metadata: {
+        support_thread_reminder: {
+          userRespondedAt: '2026-06-03T11:00:00.000Z',
+        },
+      },
+    });
+    const moderationQueueService = {
+      recordSupportThreadAttention: jest.fn().mockResolvedValue({ delivered: true, created: true }),
+    };
+    const notificationManager = {
+      updateVerificationThreadAnalysis: jest.fn(),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn(),
+    };
+    const gptService = { analyzeVerificationThreadResponses: jest.fn() };
+    const service = new VerificationThreadAnalysisService(
+      { getServerConfig: jest.fn() } as any,
+      gptService as any,
+      notificationManager as any,
+      verificationRepo,
+      detectionRepo,
+      moderationQueueService as any
+    );
+
+    const { message } = buildMessage({ id: 'recovery-msg-2', content: 'I have my account back.' });
+    await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+
+    expect(moderationQueueService.recordSupportThreadAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      message
+    );
+    expect(notificationManager.notifyVerificationThreadUserResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      message
+    );
+    expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
+    expect((await verificationRepo.findById(verificationEvent.id))?.status).toBe(
+      VerificationStatus.PENDING
+    );
+  });
+
+  it('does not repeat the direct recovery alert while queue attention remains open', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      metadata: {
+        support_thread_reminder: {
+          userRespondedAt: '2026-06-03T11:00:00.000Z',
+        },
+      },
+    });
+    const moderationQueueService = {
+      recordSupportThreadAttention: jest
+        .fn()
+        .mockResolvedValue({ delivered: true, created: false }),
+    };
+    const notificationManager = {
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
+    };
+    const service = new VerificationThreadAnalysisService(
+      { getServerConfig: jest.fn() } as any,
+      { analyzeVerificationThreadResponses: jest.fn() } as any,
+      notificationManager as any,
+      verificationRepo,
+      new InMemoryDetectionEventsRepository(),
+      moderationQueueService as any
+    );
+    const { message } = buildMessage({ id: 'recovery-repeat', content: 'One more detail.' });
+
+    await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+
+    expect(notificationManager.notifyVerificationThreadUserResponse).not.toHaveBeenCalled();
+    await expect(verificationRepo.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+      })
+    );
+  });
+
+  it('still sends direct recovery attention when the queue write fails', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    });
+    const moderationQueueService = {
+      recordSupportThreadAttention: jest.fn().mockRejectedValue(new Error('queue unavailable')),
+    };
+    const notificationManager = {
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
+    };
+    const service = new VerificationThreadAnalysisService(
+      { getServerConfig: jest.fn() } as any,
+      { analyzeVerificationThreadResponses: jest.fn() } as any,
+      notificationManager as any,
+      verificationRepo,
+      new InMemoryDetectionEventsRepository(),
+      moderationQueueService as any
+    );
+    const { message } = buildMessage({ id: 'recovery-direct', content: 'I am back.' });
+
+    await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+
+    expect(notificationManager.notifyVerificationThreadUserResponse).toHaveBeenCalled();
+    await expect(verificationRepo.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+      })
+    );
+  });
+
+  it('still sends direct parked recovery attention when response metadata fails to persist', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    });
+    jest.spyOn(verificationRepo, 'update').mockRejectedValueOnce(new Error('db unavailable'));
+    const notificationManager = {
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
+    };
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const service = new VerificationThreadAnalysisService(
+      { getServerConfig: jest.fn() } as any,
+      { analyzeVerificationThreadResponses: jest.fn() } as any,
+      notificationManager as any,
+      verificationRepo,
+      new InMemoryDetectionEventsRepository()
+    );
+    const { message } = buildMessage({ id: 'recovery-persist-failed', content: 'I am back.' });
+
+    try {
+      await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    expect(notificationManager.notifyVerificationThreadUserResponse).toHaveBeenCalled();
+    await expect(verificationRepo.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+      })
+    );
+  });
+
+  it('returns a parked case to review when no recovery attention delivery succeeds', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date(),
+      parked_by: 'moderator-1',
+    });
+    const moderationQueueService = {
+      recordSupportThreadAttention: jest.fn().mockRejectedValue(new Error('queue unavailable')),
+    };
+    const notificationManager = {
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(false),
+    };
+    const service = new VerificationThreadAnalysisService(
+      { getServerConfig: jest.fn() } as any,
+      { analyzeVerificationThreadResponses: jest.fn() } as any,
+      notificationManager as any,
+      verificationRepo,
+      new InMemoryDetectionEventsRepository(),
+      moderationQueueService as any
+    );
+    const { message } = buildMessage({ id: 'recovery-undelivered', content: 'I am back.' });
+
+    await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+
+    await expect(verificationRepo.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        parked_at: null,
+        parked_by: null,
+        metadata: expect.objectContaining({
+          recovery_attention_message_id: 'recovery-undelivered',
+        }),
+      })
+    );
+  });
+
+  it('uses the persisted thread id when a recovery thread has been renamed', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    });
+    const moderationQueueService = {
+      recordSupportThreadAttention: jest.fn().mockResolvedValue({ delivered: true, created: true }),
+    };
+    const notificationManager = {
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
+    };
+    const service = new VerificationThreadAnalysisService(
+      { getServerConfig: jest.fn() } as any,
+      { analyzeVerificationThreadResponses: jest.fn() } as any,
+      notificationManager as any,
+      verificationRepo,
+      detectionRepo,
+      moderationQueueService as any
+    );
+    const { message } = buildMessage({
+      channel: {
+        name: 'Account recovery for runner',
+        isThread: () => true,
+        messages: { fetch: jest.fn() },
+      },
+    });
+
+    await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+
+    expect(moderationQueueService.recordSupportThreadAttention).toHaveBeenCalled();
+    expect(notificationManager.notifyVerificationThreadUserResponse).toHaveBeenCalled();
+  });
+
+  it('suppresses recovery attention while a verification release lease is active', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}verify-1`,
+      quarantine_lease_renewed_at: new Date(),
+    });
+    const moderationQueueService = {
+      recordSupportThreadAttention: jest.fn(),
+    };
+    const notificationManager = {
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn(),
+      notifyVerificationThreadUserResponse: jest.fn(),
+    };
+    const service = new VerificationThreadAnalysisService(
+      { getServerConfig: jest.fn() } as any,
+      { analyzeVerificationThreadResponses: jest.fn() } as any,
+      notificationManager as any,
+      verificationRepo,
+      detectionRepo,
+      moderationQueueService as any
+    );
+    const { message } = buildMessage({ content: 'I have my account back.' });
+
+    await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+
+    expect(moderationQueueService.recordSupportThreadAttention).not.toHaveBeenCalled();
+    expect(notificationManager.notifyVerificationThreadUserResponse).not.toHaveBeenCalled();
+  });
+
+  it('does not recreate recovery attention when release wins after the initial case read', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    });
+    const claimSpy = jest
+      .spyOn(verificationRepo, 'claimAccountQuarantineAttention')
+      .mockResolvedValueOnce(null);
+    const moderationQueueService = { recordSupportThreadAttention: jest.fn() };
+    const notificationManager = {
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn(),
+      notifyVerificationThreadUserResponse: jest.fn(),
+    };
+    const service = new VerificationThreadAnalysisService(
+      { getServerConfig: jest.fn() } as any,
+      { analyzeVerificationThreadResponses: jest.fn() } as any,
+      notificationManager as any,
+      verificationRepo,
+      detectionRepo,
+      moderationQueueService as any
+    );
+    const { message } = buildMessage({ content: 'I have my account back.' });
+
+    await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+
+    expect(claimSpy).toHaveBeenCalledWith(
+      verificationEvent.id,
+      'guild-1',
+      'user-1',
+      expect.stringMatching(/^case-attention:/)
+    );
+    expect(moderationQueueService.recordSupportThreadAttention).not.toHaveBeenCalled();
+    expect(notificationManager.notifyVerificationThreadUserResponse).not.toHaveBeenCalled();
+  });
+
+  it('still sends the first-response admin ping when support reminder metadata fails to persist', async () => {
     const verificationRepo = new InMemoryVerificationEventRepository();
     const detectionRepo = new InMemoryDetectionEventsRepository();
     const verificationEvent = await verificationRepo.createFromDetection(
@@ -204,7 +578,10 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       expect(
         notificationManager.mirrorVerificationThreadMessageToEvidenceThread
       ).toHaveBeenCalledWith(expect.objectContaining({ id: verificationEvent.id }), message);
-      expect(notificationManager.notifyVerificationThreadUserResponse).not.toHaveBeenCalled();
+      expect(notificationManager.notifyVerificationThreadUserResponse).toHaveBeenCalledWith(
+        expect.objectContaining({ id: verificationEvent.id }),
+        message
+      );
       expect(updateSpy).toHaveBeenCalledTimes(1);
       expect(warnSpy).toHaveBeenCalledWith(
         `[VerificationThreadAnalysis] Failed to persist support-thread response metadata for verification event ${verificationEvent.id}`,
@@ -215,7 +592,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     }
   });
 
-  it('ignores non-verification threads before hitting the repository', async () => {
+  it('ignores threads that are not persisted as verification threads', async () => {
     const verificationRepo = {
       findByThreadId: jest.fn(),
     } as any;
@@ -240,7 +617,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     });
 
     await expect(service.handleThreadMessage(message as any)).resolves.toBe(false);
-    expect(verificationRepo.findByThreadId).not.toHaveBeenCalled();
+    expect(verificationRepo.findByThreadId).toHaveBeenCalledWith('thread-1');
   });
 
   it('consumes admin replies in verification threads without running AI analysis', async () => {

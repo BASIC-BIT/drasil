@@ -208,6 +208,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
   const honeypotRoleResponseMode = server?.settings.honeypot_role_response_mode ?? 'restrict';
   const roleQuarantineMode = server?.settings.role_quarantine_mode ?? 'off';
   const roleQuarantineExemptRoleIds = server?.settings.role_quarantine_exempt_role_ids ?? [];
+  const accountQuarantineEnabled = server?.settings.account_quarantine_enabled ?? false;
   const caseResponderRoleIds = server?.settings.case_responder_role_ids ?? [];
   const caseResponderRoutingMode = server?.settings.case_responder_routing_mode ?? 'off';
   const caseResponderThreadMemberCap =
@@ -820,6 +821,17 @@ export default async function GuildSetupPage({ params }: PageProps) {
           </p>
         </div>
         <div className="form-grid">
+          <label className="checkbox-field">
+            <input
+              defaultChecked={accountQuarantineEnabled}
+              name="accountQuarantineEnabled"
+              type="checkbox"
+            />
+            <span>
+              Enable compromised-account quarantine (manual action; keeps the user and recovery
+              thread in the server)
+            </span>
+          </label>
           <div className="field">
             <label htmlFor="roleQuarantineMode">Quarantine mode</label>
             <select

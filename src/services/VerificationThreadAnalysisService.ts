@@ -1,12 +1,20 @@
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import type { Message } from 'discord.js';
+import { randomUUID } from 'node:crypto';
 import { TYPES } from '../di/symbols';
 import type { IConfigService } from '../config/ConfigService';
 import type { IGPTService, VerificationThreadAnalysisResult } from './GPTService';
 import type { INotificationManager } from './NotificationManager';
 import type { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import type { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
-import { VerificationEvent, VerificationStatus } from '../repositories/types';
+import {
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
+  VerificationEvent,
+  VerificationStatus,
+} from '../repositories/types';
+import type { IModerationQueueService } from './ModerationQueueService';
 import {
   getVerificationThreadAnalysisSettings,
   VERIFICATION_THREAD_ANALYSIS_FETCH_LIMIT,
@@ -15,6 +23,10 @@ import {
   getSupportThreadReminderState,
   markSupportThreadReminderUserResponded,
 } from '../utils/supportThreadReminderState';
+import {
+  CASE_ATTENTION_ATTEMPT_PREFIX,
+  isCaseRoleReleaseLeaseActive,
+} from '../utils/caseRoleRelease';
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds: string[];
@@ -31,8 +43,6 @@ interface ThreadAnalysisMetadata {
   };
 }
 
-const VERIFICATION_THREAD_NAME_PREFIX = 'Verification:';
-
 export interface IVerificationThreadAnalysisService {
   handleThreadMessage(message: Message): Promise<boolean>;
 }
@@ -48,15 +58,14 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     @inject(TYPES.VerificationEventRepository)
     private verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.DetectionEventsRepository)
-    private detectionEventsRepository: IDetectionEventsRepository
+    private detectionEventsRepository: IDetectionEventsRepository,
+    @inject(TYPES.ModerationQueueService)
+    @optional()
+    private moderationQueueService?: IModerationQueueService
   ) {}
 
   public async handleThreadMessage(message: Message): Promise<boolean> {
     if (!message.guildId || !message.channel.isThread()) {
-      return false;
-    }
-
-    if (!message.channel.name.startsWith(VERIFICATION_THREAD_NAME_PREFIX)) {
       return false;
     }
 
@@ -83,7 +92,104 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     verificationEventId: string
   ): Promise<void> {
     let verificationEvent = await this.verificationEventRepository.findById(verificationEventId);
-    if (!verificationEvent || verificationEvent.status !== VerificationStatus.PENDING) {
+    if (
+      !verificationEvent ||
+      verificationEvent.status !== VerificationStatus.PENDING ||
+      isCaseRoleReleaseLeaseActive(
+        verificationEvent.quarantine_attempt_id,
+        verificationEvent.quarantine_lease_renewed_at
+      )
+    ) {
+      return;
+    }
+
+    const parkedAccountRecovery =
+      verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+      verificationEvent.attention_state === CaseAttentionState.PARKED;
+    if (parkedAccountRecovery) {
+      const attentionAttemptId = `${CASE_ATTENTION_ATTEMPT_PREFIX}${randomUUID()}`;
+      const claimed = await this.verificationEventRepository.claimAccountQuarantineAttention(
+        verificationEvent.id,
+        verificationEvent.server_id,
+        verificationEvent.user_id,
+        attentionAttemptId
+      );
+      if (!claimed) {
+        return;
+      }
+      let responseEvent = claimed;
+      let attentionDelivered = false;
+      try {
+        const responseState = await this.markSupportThreadReminderResponded(claimed, message);
+        responseEvent = responseState.verificationEvent;
+        const queuePromise = this.moderationQueueService
+          ? this.moderationQueueService.recordSupportThreadAttention(responseEvent, message)
+          : null;
+        const [mirrorResult, queueResult] = await Promise.allSettled([
+          this.notificationManager.mirrorVerificationThreadMessageToEvidenceThread(
+            responseEvent,
+            message
+          ),
+          queuePromise ?? Promise.resolve({ delivered: false, created: false }),
+        ]);
+        if (mirrorResult.status === 'rejected') {
+          console.warn(
+            `[VerificationThreadAnalysis] Failed to mirror parked recovery reply for verification event ${claimed.id}:`,
+            mirrorResult.reason
+          );
+        }
+        if (queueResult.status === 'rejected') {
+          console.warn(
+            `[VerificationThreadAnalysis] Failed to queue parked recovery attention for verification event ${claimed.id}:`,
+            queueResult.reason
+          );
+        }
+        const queueDelivered =
+          queueResult.status === 'fulfilled' && queueResult.value.delivered === true;
+        const shouldNotifyDirectly =
+          responseState.firstResponse ||
+          (queueResult.status === 'fulfilled' && queueResult.value.created === true);
+        let directDelivered = false;
+        if (shouldNotifyDirectly) {
+          try {
+            directDelivered =
+              (await this.notificationManager.notifyVerificationThreadUserResponse(
+                responseEvent,
+                message
+              )) === true;
+          } catch (error) {
+            console.warn(
+              `[VerificationThreadAnalysis] Failed to send parked recovery alert for verification event ${claimed.id}:`,
+              error
+            );
+          }
+        }
+        attentionDelivered = queueDelivered || directDelivered || !responseState.firstResponse;
+      } finally {
+        await this.verificationEventRepository.updateQuarantineAttempt(
+          claimed.id,
+          attentionAttemptId,
+          {
+            attention_state: attentionDelivered
+              ? CaseAttentionState.PARKED
+              : CaseAttentionState.REVIEW_REQUIRED,
+            containment_status: attentionDelivered
+              ? claimed.containment_status === CaseContainmentStatus.IN_PROGRESS
+                ? CaseContainmentStatus.CONTAINED
+                : claimed.containment_status
+              : CaseContainmentStatus.INCOMPLETE,
+            parked_at: attentionDelivered ? claimed.parked_at : null,
+            parked_by: attentionDelivered ? claimed.parked_by : null,
+            metadata: attentionDelivered
+              ? undefined
+              : {
+                  ...(this.asObject(responseEvent.metadata) ?? {}),
+                  recovery_attention_delivery_failed_at: new Date().toISOString(),
+                  recovery_attention_message_id: message.id,
+                },
+          }
+        );
+      }
       return;
     }
 
@@ -99,6 +205,10 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
         verificationEvent,
         message
       );
+    }
+
+    if (verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT) {
+      return;
     }
 
     const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
@@ -202,7 +312,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
         `[VerificationThreadAnalysis] Failed to persist support-thread response metadata for verification event ${verificationEvent.id}`,
         error
       );
-      return { verificationEvent: { ...verificationEvent, metadata }, firstResponse: false };
+      return { verificationEvent: { ...verificationEvent, metadata }, firstResponse: true };
     }
   }
 

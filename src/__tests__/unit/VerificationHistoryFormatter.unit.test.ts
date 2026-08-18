@@ -90,6 +90,13 @@ describe('VerificationHistoryFormatter (unit)', () => {
         new_status: null,
         notes: null,
       }),
+      buildAction({
+        id: 'action-quarantine',
+        action_type: AdminActionType.QUARANTINE_COMPROMISED_ACCOUNT,
+        previous_status: VerificationStatus.PENDING,
+        new_status: VerificationStatus.PENDING,
+        notes: null,
+      }),
     ];
     const event = buildEvent({}, actions);
 
@@ -99,6 +106,7 @@ describe('VerificationHistoryFormatter (unit)', () => {
     expect(output).toContain('Case role applied by <@admin-1>');
     expect(output).toContain('Dismissed by <@admin-1>');
     expect(output).toContain('Marked false positive by <@admin-1>');
+    expect(output).toContain('Compromised account quarantined by <@admin-1>');
     expect(output).not.toContain('Status changed');
   });
 });

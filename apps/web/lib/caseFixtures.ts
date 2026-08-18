@@ -251,6 +251,46 @@ export const fixtureCaseDetails: CaseDetail[] = [
   },
 ];
 
+export const fixtureParkedCaseDetails: CaseDetail[] = [
+  {
+    ...fixtureCaseDetails[0],
+    id: 'case-parked',
+    userId: 'user-parked',
+    userIdentity: {
+      id: 'user-parked',
+      username: 'recovering.member',
+      globalName: 'Recovering Member',
+      nickname: null,
+      displayName: 'Recovering Member',
+      avatarUrl: fixtureAvatarUrl,
+      displayLabel: 'Recovering Member',
+    },
+    createdAt: '2026-06-05T09:00:00.000Z',
+    updatedAt: '2026-06-05T10:00:00.000Z',
+    stale: false,
+    staleHours: 2,
+    caseKind: 'compromised_account',
+    attentionState: 'parked',
+    containmentStatus: 'contained',
+    parkedAt: '2026-06-05T10:00:00.000Z',
+    parkedBy: 'moderator-1',
+    quarantineEffects: {
+      removedRoleCount: 3,
+      retainedRoleCount: 0,
+      failedRoleCount: 0,
+      memberBypassCount: 0,
+    },
+    allowedActions: [
+      'view_history',
+      'verify_user',
+      'kick_user',
+      'ban_user',
+      'refresh_notification',
+    ],
+    notes: 'Contained while the member recovers the account.',
+  },
+];
+
 export const fixtureResolvedCaseDetails: CaseDetail[] = [
   {
     id: 'case-resolved-ban',
@@ -385,11 +425,21 @@ function summarizeCaseDetail(detail: CaseDetail): CaseSummary {
     lastActionAt: detail.lastActionAt,
     surfaces: detail.surfaces,
     allowedActions: detail.allowedActions,
+    caseKind: detail.caseKind,
+    attentionState: detail.attentionState,
+    containmentStatus: detail.containmentStatus,
+    parkedAt: detail.parkedAt,
+    parkedBy: detail.parkedBy,
+    quarantineEffects: detail.quarantineEffects,
   };
 }
 
 export function fixtureCaseSummaries(): CaseSummary[] {
   return fixtureCaseDetails.map(summarizeCaseDetail);
+}
+
+export function fixtureParkedCaseSummaries(): CaseSummary[] {
+  return fixtureParkedCaseDetails.map(summarizeCaseDetail);
 }
 
 export function fixtureResolvedCaseSummaries(): CaseSummary[] {

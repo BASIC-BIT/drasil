@@ -1,8 +1,19 @@
 import { GuildMember, PermissionFlagsBits, Role, User } from 'discord.js';
-import { RoleQuarantineService } from '../../services/RoleQuarantineService';
+import {
+  RoleQuarantineApplyError,
+  RoleQuarantineService,
+} from '../../services/RoleQuarantineService';
+import {
+  CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
+  CASE_ROLE_RELEASE_LEASE_MS,
+} from '../../utils/caseRoleRelease';
 import { InMemoryRoleQuarantineSnapshotRepository } from '../fakes/inMemoryRepositories';
 import { IConfigService } from '../../config/ConfigService';
 import {
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
+  RoleQuarantineSnapshotPurpose,
   RoleQuarantineSnapshotStatus,
   VerificationEvent,
   VerificationStatus,
@@ -183,6 +194,171 @@ describe('RoleQuarantineService (unit)', () => {
     expect(member.roles.cache.has(communityRole.id)).toBe(false);
   });
 
+  it('preserves the standard quarantine privilege policy for moderation permissions', async () => {
+    const removableRoles = [
+      createRole({ id: 'channel-role', permissions: [PermissionFlagsBits.ManageChannels] }),
+      createRole({ id: 'kick-role', permissions: [PermissionFlagsBits.KickMembers] }),
+      createRole({ id: 'ban-role', permissions: [PermissionFlagsBits.BanMembers] }),
+      createRole({ id: 'message-role', permissions: [PermissionFlagsBits.ManageMessages] }),
+      createRole({ id: 'thread-role', permissions: [PermissionFlagsBits.ManageThreads] }),
+      createRole({ id: 'webhook-role', permissions: [PermissionFlagsBits.ManageWebhooks] }),
+      createRole({ id: 'invite-role', permissions: [PermissionFlagsBits.CreateInstantInvite] }),
+      createRole({ id: 'mute-role', permissions: [PermissionFlagsBits.MuteMembers] }),
+      createRole({ id: 'deafen-role', permissions: [PermissionFlagsBits.DeafenMembers] }),
+      createRole({ id: 'move-role', permissions: [PermissionFlagsBits.MoveMembers] }),
+      createRole({ id: 'nickname-role', permissions: [PermissionFlagsBits.ManageNicknames] }),
+      createRole({
+        id: 'expression-role',
+        permissions: [PermissionFlagsBits.ManageGuildExpressions],
+      }),
+      createRole({
+        id: 'create-expression-role',
+        permissions: [PermissionFlagsBits.CreateGuildExpressions],
+      }),
+      createRole({ id: 'event-role', permissions: [PermissionFlagsBits.ManageEvents] }),
+      createRole({ id: 'create-event-role', permissions: [PermissionFlagsBits.CreateEvents] }),
+      createRole({ id: 'mention-role', permissions: [PermissionFlagsBits.MentionEveryone] }),
+    ];
+    const member = createMember(removableRoles);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'on' }),
+      snapshots
+    );
+
+    const result = await service.quarantineMember(member, createVerificationEvent());
+
+    expect(result.removedRoleIds).toEqual([
+      'channel-role',
+      'kick-role',
+      'ban-role',
+      'message-role',
+      'thread-role',
+      'webhook-role',
+      'invite-role',
+      'mute-role',
+      'deafen-role',
+      'move-role',
+      'nickname-role',
+      'expression-role',
+      'create-expression-role',
+      'event-role',
+      'create-event-role',
+      'mention-role',
+    ]);
+    expect(result.skippedRoles).toEqual([]);
+  });
+
+  it('removes privileged and normally exempt roles for a compromised account', async () => {
+    const privilegedRoles = [
+      createRole({ id: 'mute-role', permissions: [PermissionFlagsBits.MuteMembers] }),
+      createRole({ id: 'deafen-role', permissions: [PermissionFlagsBits.DeafenMembers] }),
+      createRole({ id: 'move-role', permissions: [PermissionFlagsBits.MoveMembers] }),
+      createRole({ id: 'nickname-role', permissions: [PermissionFlagsBits.ManageNicknames] }),
+      createRole({
+        id: 'expression-role',
+        permissions: [PermissionFlagsBits.ManageGuildExpressions],
+      }),
+      createRole({
+        id: 'create-expression-role',
+        permissions: [PermissionFlagsBits.CreateGuildExpressions],
+      }),
+      createRole({ id: 'event-role', permissions: [PermissionFlagsBits.ManageEvents] }),
+      createRole({ id: 'create-event-role', permissions: [PermissionFlagsBits.CreateEvents] }),
+      createRole({ id: 'mention-role', permissions: [PermissionFlagsBits.MentionEveryone] }),
+      createRole({ id: 'invite-role', permissions: [PermissionFlagsBits.CreateInstantInvite] }),
+    ];
+    const exemptRole = createRole({ id: '100000000000000005' });
+    const manualRole = createRole({ id: '100000000000000010' });
+    const member = createMember([...privilegedRoles, exemptRole, manualRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const service = new RoleQuarantineService(
+      createConfigService({
+        role_quarantine_mode: 'off',
+        role_quarantine_exempt_role_ids: [exemptRole.id],
+        manual_intake_enabled: true,
+        manual_intake_role_id: manualRole.id,
+      }),
+      snapshots
+    );
+    const verificationEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    };
+
+    const result = await service.quarantineCompromisedAccount(
+      member,
+      verificationEvent,
+      { id: 'moderator-1' } as User,
+      { attemptId: 'attempt-1', assertOwner: async () => undefined }
+    );
+
+    expect(result.purpose).toBe(RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT);
+    expect(result.removedRoleIds).toEqual([
+      'mute-role',
+      'deafen-role',
+      'move-role',
+      'nickname-role',
+      'expression-role',
+      'create-expression-role',
+      'event-role',
+      'create-event-role',
+      'mention-role',
+      'invite-role',
+      '100000000000000005',
+      '100000000000000010',
+    ]);
+    expect(result.failedRemovals).toEqual([]);
+    await expect(snapshots.findActiveByServerAndUser('guild-1', 'user-1')).resolves.toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          privileged_role_ids_at_snapshot: [
+            'mute-role',
+            'deafen-role',
+            'move-role',
+            'nickname-role',
+            'expression-role',
+            'create-expression-role',
+            'event-role',
+            'create-event-role',
+            'mention-role',
+            'invite-role',
+          ],
+        }),
+      })
+    );
+  });
+
+  it('restores a privileged role that was privileged when account quarantine began', async () => {
+    const privilegedRole = createRole({
+      id: 'privileged-role',
+      permissions: [PermissionFlagsBits.Administrator],
+    });
+    const member = createMember([], [privilegedRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'verification-1',
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+      originalRoleIds: [privilegedRole.id],
+      plannedRoleIds: [privilegedRole.id],
+      removedRoleIds: [privilegedRole.id],
+      metadata: { privileged_role_ids_at_snapshot: [privilegedRole.id] },
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      snapshots
+    );
+
+    const result = await service.restoreMemberRoles(member, { id: 'moderator-1' } as User);
+
+    expect(result.status).toBe('restored');
+    expect(result.restoredRoleIds).toEqual([privilegedRole.id]);
+    expect(member.roles.cache.has(privilegedRole.id)).toBe(true);
+  });
+
   it('does not restore a manual intake trigger role from an older active quarantine snapshot', async () => {
     const manualRole = createRole({ id: '100000000000000010', name: 'Manual Intake' });
     const communityRole = createRole({ id: 'community-role', name: 'Community' });
@@ -229,8 +405,18 @@ describe('RoleQuarantineService (unit)', () => {
       .mockRejectedValueOnce(new Error('Database unavailable'));
 
     try {
-      await expect(service.quarantineMember(member, createVerificationEvent())).rejects.toThrow(
-        'Database unavailable'
+      const failure = await service
+        .quarantineMember(member, createVerificationEvent())
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(RoleQuarantineApplyError);
+      expect(failure).toEqual(
+        expect.objectContaining({
+          message: expect.stringContaining('Database unavailable'),
+          result: expect.objectContaining({
+            removedRoleIds: ['safe-role'],
+            snapshotId: expect.any(String),
+          }),
+        })
       );
       const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
       expect(snapshot?.removed_role_ids).toEqual(['safe-role']);
@@ -238,6 +424,40 @@ describe('RoleQuarantineService (unit)', () => {
     } finally {
       updateSnapshot.mockRestore();
     }
+  });
+
+  it('does not let a superseded compromised-account attempt overwrite the active snapshot', async () => {
+    const safeRole = createRole({ id: 'safe-role' });
+    const member = createMember([safeRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      snapshots
+    );
+    const assertAttemptOwner = jest.fn(async () => undefined);
+    jest.spyOn(snapshots, 'updateForQuarantineAttempt').mockImplementationOnce(async (id) => {
+      const active = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+      if (!active) {
+        throw new Error('Expected active snapshot');
+      }
+      await snapshots.update(active.id, { removedRoleIds: ['new-owner-role'] });
+      expect(id).toBe(active.id);
+      return null;
+    });
+
+    const failure = await service
+      .quarantineCompromisedAccount(
+        member,
+        { ...createVerificationEvent(), case_kind: CaseKind.COMPROMISED_ACCOUNT },
+        { id: 'moderator-1' } as User,
+        { attemptId: 'attempt-1', assertOwner: assertAttemptOwner }
+      )
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(RoleQuarantineApplyError);
+    expect(assertAttemptOwner).toHaveBeenCalledTimes(3);
+    const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+    expect(snapshot?.removed_role_ids).toEqual(['new-owner-role']);
   });
 
   it('records only successfully removed role ids after failed removals are known', async () => {
@@ -265,6 +485,165 @@ describe('RoleQuarantineService (unit)', () => {
     ]);
     const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
     expect(snapshot?.removed_role_ids).toEqual(['safe-role']);
+  });
+
+  it('clears a transient removal failure after a compromised-account retry succeeds', async () => {
+    const role = createRole({ id: 'retry-role' });
+    const member = createMember([role]);
+    (member.roles.remove as jest.Mock).mockRejectedValueOnce(new Error('Discord unavailable'));
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      snapshots
+    );
+    const verificationEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    };
+
+    const first = await service.quarantineCompromisedAccount(
+      member,
+      verificationEvent,
+      { id: 'moderator-1' } as User,
+      { attemptId: 'attempt-1', assertOwner: async () => undefined }
+    );
+    const second = await service.quarantineCompromisedAccount(
+      member,
+      verificationEvent,
+      { id: 'moderator-1' } as User,
+      { attemptId: 'attempt-2', assertOwner: async () => undefined }
+    );
+
+    expect(first.failedRemovals).toEqual([
+      expect.objectContaining({ role_id: role.id, reason: 'Discord unavailable' }),
+    ]);
+    expect(second.failedRemovals).toEqual([]);
+    expect(second.removedRoleIds).toEqual([role.id]);
+    const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+    expect(snapshot?.failed_removals).toEqual([]);
+  });
+
+  it('relinks an upgraded active snapshot to the current compromised-account case', async () => {
+    const role = createRole({ id: 'current-role' });
+    const member = createMember([role]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'older-case',
+      mode: 'on',
+      originalRoleIds: ['older-role'],
+      plannedRoleIds: ['older-role'],
+      removedRoleIds: ['older-role'],
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      snapshots
+    );
+    const verificationEvent = {
+      ...createVerificationEvent(),
+      id: 'current-case',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    };
+
+    await service.quarantineCompromisedAccount(
+      member,
+      verificationEvent,
+      { id: 'moderator-1' } as User,
+      { attemptId: 'attempt-1', assertOwner: async () => undefined }
+    );
+
+    const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+    expect(snapshot?.verification_event_id).toBe('current-case');
+    expect(snapshot?.original_role_ids).toEqual(['older-role', 'current-role']);
+  });
+
+  it('starts a fresh snapshot when the member rejoined after the active snapshot was created', async () => {
+    const currentRole = createRole({ id: 'current-role' });
+    const member = createMember([currentRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const staleSnapshot = await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'older-case',
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+      originalRoleIds: ['older-role'],
+      plannedRoleIds: ['older-role'],
+      removedRoleIds: ['older-role'],
+    });
+    Object.assign(member, {
+      joinedAt: new Date(staleSnapshot.created_at!.getTime() + 1_000),
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      snapshots
+    );
+    const verificationEvent = {
+      ...createVerificationEvent(),
+      id: 'current-case',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    };
+
+    await service.quarantineCompromisedAccount(
+      member,
+      verificationEvent,
+      { id: 'moderator-1' } as User,
+      { attemptId: 'attempt-1', assertOwner: async () => undefined }
+    );
+
+    const activeSnapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+    expect(activeSnapshot?.id).not.toBe(staleSnapshot.id);
+    expect(activeSnapshot?.verification_event_id).toBe('current-case');
+    expect(activeSnapshot?.original_role_ids).toEqual(['current-role']);
+    expect(activeSnapshot?.removed_role_ids).toEqual(['current-role']);
+  });
+
+  it('does not add late-granted roles to the restoration set', async () => {
+    const originalRole = createRole({ id: 'original-role' });
+    const latePrivilegedRole = createRole({
+      id: 'late-privileged-role',
+      permissions: [PermissionFlagsBits.ManageEvents],
+    });
+    const member = createMember([latePrivilegedRole], [originalRole, latePrivilegedRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'verification-1',
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+      originalRoleIds: [originalRole.id],
+      plannedRoleIds: [originalRole.id],
+      removedRoleIds: [originalRole.id],
+      metadata: { privileged_role_ids_at_snapshot: [] },
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      snapshots
+    );
+    const verificationEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    };
+
+    await service.quarantineCompromisedAccount(
+      member,
+      verificationEvent,
+      { id: 'moderator-1' } as User,
+      { attemptId: 'attempt-1', assertOwner: async () => undefined }
+    );
+    const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+    const restore = await service.restoreMemberRoles(member, { id: 'moderator-1' } as User);
+
+    expect(snapshot?.original_role_ids).toEqual([originalRole.id]);
+    expect(snapshot?.removed_role_ids).toEqual([originalRole.id, latePrivilegedRole.id]);
+    expect(snapshot?.metadata).toEqual(
+      expect.objectContaining({ privileged_role_ids_at_snapshot: [] })
+    );
+    expect(restore.attemptedRoleIds).toEqual([originalRole.id]);
+    expect(member.roles.cache.has(originalRole.id)).toBe(true);
+    expect(member.roles.cache.has(latePrivilegedRole.id)).toBe(false);
   });
 
   it('preserves legacy audit-only mode without removing roles', async () => {
@@ -377,6 +756,111 @@ describe('RoleQuarantineService (unit)', () => {
     );
   });
 
+  it('restores the required case role when it is removed from a parked account', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const oldMember = createMember([caseRole], [caseRole]);
+    const newMember = createMember([], [caseRole]);
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }, 'replacement-case-role'),
+      new InMemoryRoleQuarantineSnapshotRepository()
+    );
+    const parkedEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_case_role_id: caseRole.id,
+    } as VerificationEvent;
+
+    const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+
+    expect(newMember.roles.add).toHaveBeenCalledWith(
+      caseRole,
+      `Restore compromised-account quarantine for case ${parkedEvent.id}`
+    );
+    expect(newMember.roles.cache.has(caseRole.id)).toBe(true);
+    expect(result.containmentRegressed).toBe(false);
+  });
+
+  it('does not restore the case role during a claimed verification release', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const oldMember = createMember([caseRole], [caseRole]);
+    const newMember = createMember([], [caseRole]);
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      new InMemoryRoleQuarantineSnapshotRepository()
+    );
+    const parkedEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_attempt_id: `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}attempt-1`,
+      quarantine_lease_renewed_at: new Date(),
+    } as VerificationEvent;
+
+    const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+
+    expect(newMember.roles.add).not.toHaveBeenCalled();
+    expect(result.status).toBe('no_new_roles');
+    expect(result.containmentRegressed).toBe(false);
+  });
+
+  it('restores the case role after a verification release lease expires', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const oldMember = createMember([caseRole], [caseRole]);
+    const newMember = createMember([], [caseRole]);
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      new InMemoryRoleQuarantineSnapshotRepository()
+    );
+    const parkedEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_attempt_id: `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}attempt-1`,
+      quarantine_lease_renewed_at: new Date(Date.now() - CASE_ROLE_RELEASE_LEASE_MS - 1),
+    } as VerificationEvent;
+
+    const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+
+    expect(newMember.roles.add).toHaveBeenCalledWith(
+      caseRole,
+      `Restore compromised-account quarantine for case ${parkedEvent.id}`
+    );
+    expect(result.containmentRegressed).toBe(false);
+  });
+
+  it('returns a parked account to review when the removed case role cannot be restored', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const oldMember = createMember([caseRole], [caseRole]);
+    const newMember = createMember([], [caseRole]);
+    (newMember.roles.add as jest.Mock).mockRejectedValue(new Error('Missing permissions'));
+    const verificationEventRepository = {
+      markParkedContainmentIncomplete: jest.fn().mockResolvedValue(null),
+    };
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      new InMemoryRoleQuarantineSnapshotRepository(),
+      verificationEventRepository as any
+    );
+    const parkedEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    } as VerificationEvent;
+
+    const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+
+    expect(result.containmentRegressed).toBe(true);
+    expect(verificationEventRepository.markParkedContainmentIncomplete).toHaveBeenCalledWith(
+      parkedEvent.id,
+      parkedEvent.metadata
+    );
+  });
+
   it('skips unsafe newly gained roles during active-case enforcement', async () => {
     const caseRole = createRole({ id: 'case-role' });
     const safeRole = createRole({ id: 'safe-role' });
@@ -427,6 +911,101 @@ describe('RoleQuarantineService (unit)', () => {
     expect(newMember.roles.cache.has('safe-role')).toBe(false);
     expect(newMember.roles.cache.has('managed-role')).toBe(true);
     expect(newMember.roles.cache.has('100000000000000005')).toBe(true);
+  });
+
+  it('keeps a compromised account parked when a harmless managed role cannot be removed', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const managedRole = createRole({ id: 'managed-role', managed: true });
+    const oldMember = createMember([caseRole], [caseRole, managedRole]);
+    const newMember = createMember([caseRole, managedRole], [caseRole, managedRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const verificationEventRepository = {
+      markParkedContainmentIncomplete: jest.fn().mockResolvedValue({
+        ...createVerificationEvent(),
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+      }),
+    };
+    const lockdown = {
+      auditMemberBypasses: jest.fn().mockResolvedValue({
+        memberId: 'user-1',
+        bypasses: [],
+        retainedPrivilegedRoleIds: [],
+        retainedAdministratorRoleIds: [],
+        unremovablePrivilegeReasons: [],
+      }),
+    };
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'on' }),
+      snapshots,
+      verificationEventRepository as any,
+      lockdown as any
+    );
+    const parkedEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    } as VerificationEvent;
+
+    const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+
+    expect(result.skippedRoles).toEqual([expect.objectContaining({ role_id: 'managed-role' })]);
+    expect(lockdown.auditMemberBypasses).toHaveBeenCalledWith(
+      newMember,
+      new Set(),
+      null,
+      'case-role'
+    );
+    expect(verificationEventRepository.markParkedContainmentIncomplete).not.toHaveBeenCalled();
+  });
+
+  it('unparks a compromised account when an unremovable role has a live bypass', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const managedRole = createRole({
+      id: 'managed-role',
+      managed: true,
+      permissions: [PermissionFlagsBits.Administrator],
+    });
+    const oldMember = createMember([caseRole], [caseRole, managedRole]);
+    const newMember = createMember([caseRole, managedRole], [caseRole, managedRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const verificationEventRepository = {
+      markParkedContainmentIncomplete: jest.fn().mockImplementation(async (_id, metadata) => ({
+        ...createVerificationEvent(),
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        metadata,
+      })),
+    };
+    const lockdown = {
+      auditMemberBypasses: jest.fn().mockResolvedValue({
+        memberId: 'user-1',
+        bypasses: [],
+        retainedPrivilegedRoleIds: ['managed-role'],
+        retainedAdministratorRoleIds: ['managed-role'],
+        unremovablePrivilegeReasons: [],
+      }),
+    };
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'on' }),
+      snapshots,
+      verificationEventRepository as any,
+      lockdown as any
+    );
+    const parkedEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    } as VerificationEvent;
+
+    await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+
+    expect(verificationEventRepository.markParkedContainmentIncomplete).toHaveBeenCalledWith(
+      parkedEvent.id,
+      parkedEvent.metadata
+    );
   });
 
   it('audits newly gained roles without removing them in audit-only mode', async () => {
@@ -480,9 +1059,7 @@ describe('RoleQuarantineService (unit)', () => {
 
     expect(result.status).toBe('restored');
     expect(result.restoredRoleIds).toEqual(['restored-role']);
-    expect(result.skippedRoles.map((role) => role.role_id)).toEqual(
-      expect.arrayContaining(['missing-role', 'privileged-role'])
-    );
+    expect(result.skippedRoles.map((role) => role.role_id)).toEqual(['privileged-role']);
     expect(member.roles.cache.has('new-role')).toBe(true);
     expect(member.roles.cache.has('restored-role')).toBe(true);
     expect(member.roles.add).toHaveBeenCalledWith(
@@ -492,6 +1069,40 @@ describe('RoleQuarantineService (unit)', () => {
     await expect(snapshots.findActiveByServerAndUser('guild-1', 'user-1')).resolves.toBeNull();
     const updated = await snapshots.update(snapshot.id, {});
     expect(updated?.status).toBe(RoleQuarantineSnapshotStatus.RESTORED);
+  });
+
+  it('abandons an earlier membership snapshot instead of restoring its roles', async () => {
+    const previousMembershipRole = createRole({ id: 'previous-membership-role' });
+    const member = createMember([], [previousMembershipRole]);
+    Object.assign(member, { joinedAt: new Date(Date.now() + 60_000) });
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const snapshot = await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'verification-1',
+      mode: 'on',
+      originalRoleIds: [previousMembershipRole.id],
+      plannedRoleIds: [previousMembershipRole.id],
+      removedRoleIds: [previousMembershipRole.id],
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'on' }),
+      snapshots
+    );
+
+    const result = await service.restoreMemberRoles(member, { id: 'moderator-1' } as User);
+
+    expect(result.status).toBe('abandoned_membership_changed');
+    expect(member.roles.add).not.toHaveBeenCalled();
+    expect(await snapshots.update(snapshot.id, {})).toEqual(
+      expect.objectContaining({
+        status: RoleQuarantineSnapshotStatus.ABANDONED,
+        metadata: expect.objectContaining({
+          abandon_reason: 'membership_replaced_before_role_restoration',
+          abandoned_by: 'moderator-1',
+        }),
+      })
+    );
   });
 
   it('does not restore roles removed after restriction started', async () => {

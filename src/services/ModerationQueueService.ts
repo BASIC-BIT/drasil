@@ -16,6 +16,8 @@ import { IModerationQueueRepository } from '../repositories/ModerationQueueRepos
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import {
+  CaseAttentionState,
+  CaseKind,
   DetectionEvent,
   DetectionType,
   ModerationQueueItem,
@@ -58,6 +60,7 @@ export interface IModerationQueueService {
   clearServerQueue(serverId: string): Promise<number>;
   upsertCaseMirror(verificationEvent: VerificationEvent): Promise<void>;
   deleteCaseMirror(verificationEventId: string): Promise<void>;
+  deleteCaseAttention(verificationEventId: string): Promise<void>;
   upsertObservedAlertMirror(detectionEvent: DetectionEvent): Promise<void>;
   upsertObservedAlertMirrorById(detectionEventId: string): Promise<void>;
   deleteObservedAlertMirror(detectionEventId: string): Promise<void>;
@@ -76,15 +79,25 @@ export interface IModerationQueueService {
   recordSupportThreadAttention(
     verificationEvent: VerificationEvent,
     message: Message
-  ): Promise<void>;
+  ): Promise<ModerationQueueAttentionResult>;
+  recordQuarantineBreachAttention(
+    verificationEvent: VerificationEvent,
+    message: Message
+  ): Promise<ModerationQueueAttentionResult>;
   recordReportThreadAttention(reportIntake: ReportIntake, message: Message): Promise<void>;
   deleteReportThreadAttention(reportIntakeId: string): Promise<void>;
   acknowledgeAttentionItem(itemId: string, serverId: string, actorId: string): Promise<boolean>;
 }
 
+export interface ModerationQueueAttentionResult {
+  readonly delivered: boolean;
+  readonly created: boolean;
+}
+
 @injectable()
 export class ModerationQueueService implements IModerationQueueService {
   private readonly presentationBuilder = new NotificationPresentationBuilder();
+  private readonly attentionChains = new Map<string, Promise<void>>();
   private reconciliationTimer: ReturnType<typeof setInterval> | null = null;
   private reconciliationRunning = false;
 
@@ -144,7 +157,8 @@ export class ModerationQueueService implements IModerationQueueService {
       return;
     }
 
-    const pendingCases = await this.verificationEventRepository.findPendingByServer(serverId);
+    const pendingCases =
+      await this.verificationEventRepository.findReviewablePendingByServer(serverId);
     const observedAlerts =
       await this.detectionEventsRepository.findUnresolvedObservedNotificationsByServer(serverId);
 
@@ -174,7 +188,10 @@ export class ModerationQueueService implements IModerationQueueService {
   }
 
   public async upsertCaseMirror(verificationEvent: VerificationEvent): Promise<void> {
-    if (verificationEvent.status !== VerificationStatus.PENDING) {
+    if (
+      verificationEvent.status !== VerificationStatus.PENDING ||
+      verificationEvent.attention_state === CaseAttentionState.PARKED
+    ) {
       await this.deleteCaseMirror(verificationEvent.id);
       return;
     }
@@ -212,6 +229,17 @@ export class ModerationQueueService implements IModerationQueueService {
   public async deleteCaseMirror(verificationEventId: string): Promise<void> {
     const items = await this.moderationQueueRepository.listByCase(verificationEventId);
     await this.deleteQueueItems(items);
+  }
+
+  public async deleteCaseAttention(verificationEventId: string): Promise<void> {
+    const items = await this.moderationQueueRepository.listByVerificationEvent(verificationEventId);
+    await this.deleteQueueItems(
+      items.filter(
+        (item) =>
+          item.item_type === ModerationQueueItemType.SUPPORT_THREAD_ATTENTION ||
+          item.item_type === ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION
+      )
+    );
   }
 
   public async upsertObservedAlertMirror(detectionEvent: DetectionEvent): Promise<void> {
@@ -362,23 +390,62 @@ export class ModerationQueueService implements IModerationQueueService {
   public async recordSupportThreadAttention(
     verificationEvent: VerificationEvent,
     message: Message
-  ): Promise<void> {
+  ): Promise<ModerationQueueAttentionResult> {
     if (verificationEvent.status !== VerificationStatus.PENDING) {
-      return;
+      return { delivered: false, created: false };
     }
 
-    await this.upsertAttentionItem({
-      itemType: ModerationQueueItemType.SUPPORT_THREAD_ATTENTION,
-      serverId: verificationEvent.server_id,
-      userId: verificationEvent.user_id,
-      verificationEventId: verificationEvent.id,
-      sourceThreadId: message.channelId,
-      message,
-      title: 'Support Check Reply Needs Review',
-      description: `<@${verificationEvent.user_id}> replied in a pending support-check thread.`,
-      subjectFieldName: 'Case',
-      subjectFieldValue: `\`${verificationEvent.id}\``,
+    let result: ModerationQueueAttentionResult = { delivered: false, created: false };
+    await this.runAttentionSerialized(`support-thread:${verificationEvent.id}`, async () => {
+      result = await this.upsertAttentionItem({
+        itemType: ModerationQueueItemType.SUPPORT_THREAD_ATTENTION,
+        serverId: verificationEvent.server_id,
+        userId: verificationEvent.user_id,
+        verificationEventId: verificationEvent.id,
+        sourceThreadId: message.channelId,
+        message,
+        title:
+          verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT
+            ? 'Quarantined User Reports Account Recovery'
+            : 'Support Check Reply Needs Review',
+        description:
+          verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT
+            ? `<@${verificationEvent.user_id}> reports that the account has been recovered. Verify ownership before releasing quarantine.`
+            : `<@${verificationEvent.user_id}> replied in a pending support-check thread.`,
+        subjectFieldName: 'Case',
+        subjectFieldValue: `\`${verificationEvent.id}\``,
+      });
     });
+    return result;
+  }
+
+  public async recordQuarantineBreachAttention(
+    verificationEvent: VerificationEvent,
+    message: Message
+  ): Promise<ModerationQueueAttentionResult> {
+    if (
+      verificationEvent.status !== VerificationStatus.PENDING ||
+      verificationEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT
+    ) {
+      return { delivered: false, created: false };
+    }
+
+    let result: ModerationQueueAttentionResult = { delivered: false, created: false };
+    await this.runAttentionSerialized(`quarantine-breach:${verificationEvent.id}`, async () => {
+      result = await this.upsertAttentionItem({
+        itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
+        serverId: verificationEvent.server_id,
+        userId: verificationEvent.user_id,
+        verificationEventId: verificationEvent.id,
+        sourceThreadId: message.channelId,
+        message,
+        title: 'Quarantine Containment Breach',
+        description: `<@${verificationEvent.user_id}> posted outside the permitted recovery thread while quarantined.`,
+        subjectFieldName: 'Case',
+        subjectFieldValue: `\`${verificationEvent.id}\``,
+      });
+    });
+    return result;
   }
 
   public async recordReportThreadAttention(
@@ -475,9 +542,23 @@ export class ModerationQueueService implements IModerationQueueService {
     }
   }
 
+  private async runAttentionSerialized(key: string, work: () => Promise<void>): Promise<void> {
+    const previous = this.attentionChains.get(key) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(work);
+    this.attentionChains.set(key, current);
+    try {
+      await current;
+    } finally {
+      if (this.attentionChains.get(key) === current) {
+        this.attentionChains.delete(key);
+      }
+    }
+  }
+
   private async upsertAttentionItem(input: {
     itemType:
       | ModerationQueueItemType.SUPPORT_THREAD_ATTENTION
+      | ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION
       | ModerationQueueItemType.REPORT_THREAD_ATTENTION;
     serverId: string;
     userId: string;
@@ -489,19 +570,29 @@ export class ModerationQueueService implements IModerationQueueService {
     description: string;
     subjectFieldName: string;
     subjectFieldValue: string;
-  }): Promise<void> {
+  }): Promise<ModerationQueueAttentionResult> {
     const serverConfig = await this.configService.getServerConfig(input.serverId);
     const queueChannel = await this.getQueueChannel(serverConfig.settings);
     if (!queueChannel) {
-      return;
+      return { delivered: false, created: false };
     }
 
-    const existing = await this.moderationQueueRepository.findAttentionByThread(
-      input.itemType,
-      input.sourceThreadId
-    );
+    const existing =
+      input.itemType === ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION &&
+      input.verificationEventId
+        ? await this.moderationQueueRepository.findAttentionByVerificationEvent(
+            input.itemType,
+            input.verificationEventId
+          )
+        : await this.moderationQueueRepository.findAttentionByThread(
+            input.itemType,
+            input.sourceThreadId
+          );
     if (existing?.last_source_message_id === input.message.id) {
-      return;
+      return {
+        delivered: Boolean(existing.queue_channel_id && existing.queue_message_id),
+        created: false,
+      };
     }
 
     const item = await this.moderationQueueRepository.upsert({
@@ -544,6 +635,7 @@ export class ModerationQueueService implements IModerationQueueService {
         message.id
       );
     }
+    return { delivered: message !== null, created: existing === null };
   }
 
   private buildCaseMirrorPayload(
@@ -607,6 +699,7 @@ export class ModerationQueueService implements IModerationQueueService {
           guildId: verificationEvent.server_id,
           verificationEventId: verificationEvent.id,
           verificationStatus: verificationEvent.status,
+          caseKind: verificationEvent.case_kind,
           caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
           includeBanAction,
         }

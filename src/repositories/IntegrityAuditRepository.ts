@@ -131,6 +131,7 @@ export class IntegrityAuditRepository implements IIntegrityAuditRepository {
                 ModerationQueueItemType.CASE_MIRROR,
                 ModerationQueueItemType.OBSERVED_ALERT_MIRROR,
                 ModerationQueueItemType.SUPPORT_THREAD_ATTENTION,
+                ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
                 ModerationQueueItemType.REPORT_THREAD_ATTENTION,
                 ModerationQueueItemType.PENDING_SCREENING_MEMBER,
               ] as moderation_queue_item_type[],
@@ -142,12 +143,36 @@ export class IntegrityAuditRepository implements IIntegrityAuditRepository {
         }),
       ]);
 
+      const parkedCaseIds = pendingVerificationEvents
+        .filter((event) => event.attention_state === 'parked')
+        .map((event) => event.id);
+      const loadedSnapshotCaseIds = new Set(
+        activeRoleQuarantineSnapshots
+          .map((snapshot) => snapshot.verification_event_id)
+          .filter((id): id is string => id !== null)
+      );
+      const missingParkedCaseIds = parkedCaseIds.filter(
+        (caseId) => !loadedSnapshotCaseIds.has(caseId)
+      );
+      const parkedCaseSnapshots =
+        missingParkedCaseIds.length > 0
+          ? await this.prisma.role_quarantine_snapshots.findMany({
+              where: {
+                verification_event_id: { in: missingParkedCaseIds },
+                status: RoleQuarantineSnapshotStatus.ACTIVE as role_quarantine_snapshot_status,
+              },
+            })
+          : [];
+
       return {
         pendingVerificationEvents: pendingVerificationEvents as IntegrityAuditVerificationEvent[],
         recentResolvedVerificationEvents:
           recentResolvedVerificationEvents as IntegrityAuditVerificationEvent[],
         caseRoleMembers: caseRoleMembers as ServerMember[],
-        activeRoleQuarantineSnapshots: activeRoleQuarantineSnapshots as RoleQuarantineSnapshot[],
+        activeRoleQuarantineSnapshots: [
+          ...(activeRoleQuarantineSnapshots as RoleQuarantineSnapshot[]),
+          ...(parkedCaseSnapshots as RoleQuarantineSnapshot[]),
+        ],
         moderationQueueItems: (moderationQueueItems as ModerationQueueItemWithVerification[]).map(
           (item) => ({
             ...item,

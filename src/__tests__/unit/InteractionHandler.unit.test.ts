@@ -2,6 +2,7 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonInteraction,
+  ButtonStyle,
   ChannelType,
   Client,
   Guild,
@@ -23,8 +24,12 @@ import { IThreadManager } from '../../services/ThreadManager';
 import { IAdminActionRepository } from '../../repositories/AdminActionRepository';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   DetectionType,
   ReportIntakeStatus,
+  RoleQuarantineSnapshotPurpose,
   VerificationEvent,
   VerificationStatus,
 } from '../../repositories/types';
@@ -51,6 +56,8 @@ import {
   buildOpenCaseMessageContextModalCustomId,
 } from '../../controllers/CaseCommandHandler';
 import { buildReportIntakeAdminActionsCustomId } from '../../utils/reportIntakeAdminActions';
+import { buildAccountQuarantinePreviewFingerprint } from '../../utils/accountQuarantinePreview';
+import type { AccountQuarantinePreview } from '../../services/AccountQuarantineService';
 
 const buildMember = (guildId: string, userId: string, displayName = 'test-user'): GuildMember =>
   ({
@@ -207,6 +214,54 @@ const buildVerificationEvent = (
   metadata: null,
 });
 
+const readyAccountQuarantinePreview: AccountQuarantinePreview = {
+  enabled: true,
+  caseRoleId: 'case-role-1',
+  canContain: true,
+  rolePreview: {
+    purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+    originalRoleIds: ['role-1'],
+    plannedRoleIds: ['role-1'],
+    privilegedRoleIds: [],
+    skippedRoles: [],
+  },
+  lockdown: {
+    guildId: 'guild-1',
+    checkedAt: new Date('2026-08-18T12:00:00.000Z'),
+    enabled: true,
+    allowedChannelIds: [],
+    allowedCategoryIds: [],
+    autoAllowedChannelIds: [],
+    issues: [],
+    plannedActions: [],
+    appliedActions: [],
+    failedActions: [],
+    syncedAllowedChannels: [],
+    unsyncedAllowedChannels: [],
+    errorCount: 0,
+    warningCount: 0,
+  },
+  memberAudit: {
+    memberId: 'user-1',
+    bypasses: [],
+    retainedPrivilegedRoleIds: [],
+    retainedAdministratorRoleIds: [],
+    unremovablePrivilegeReasons: [],
+  },
+};
+
+const buildAccountQuarantineModalCustomId = (
+  event: VerificationEvent,
+  preview: AccountQuarantinePreview = readyAccountQuarantinePreview
+): string => {
+  const fingerprint = buildAccountQuarantinePreviewFingerprint(preview, {
+    adminNotificationReady: false,
+    recoveryThreadId: event.thread_id,
+    recoveryThreadReady: false,
+  }).slice(0, 20);
+  return `verification:qa:${event.user_id}:${event.id}:${fingerprint}`;
+};
+
 describe('InteractionHandler (unit)', () => {
   const originalDrasilWebPublicUrl = process.env.DRASIL_WEB_PUBLIC_URL;
   const originalNextPublicAppUrl = process.env.NEXT_PUBLIC_APP_URL;
@@ -223,6 +278,7 @@ describe('InteractionHandler (unit)', () => {
     delete process.env.DRASIL_WEB_PUBLIC_URL;
     delete process.env.NEXT_PUBLIC_APP_URL;
     client = {
+      channels: { fetch: jest.fn().mockResolvedValue(null) },
       guilds: {
         fetch: jest.fn().mockResolvedValue({
           members: {
@@ -299,6 +355,7 @@ describe('InteractionHandler (unit)', () => {
       updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
       notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue(null),
       markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
@@ -323,11 +380,29 @@ describe('InteractionHandler (unit)', () => {
       findByUserAndServer: jest.fn(),
       findByDetectionEvent: jest.fn(),
       findPendingByServer: jest.fn(),
+      findReviewablePendingByServer: jest.fn(),
+      findParkedByServer: jest.fn(),
+      findExpiredCaseRoleReleases: jest.fn(),
+      findExpiredQuarantineAttempts: jest.fn(),
+      markParkedContainmentIncomplete: jest.fn(),
       findResolvedWithThreadsByServer: jest.fn(),
       createFromDetection: jest.fn(),
       getVerificationHistory: jest.fn(),
       findById: jest.fn(),
       findByThreadId: jest.fn(),
+      claimQuarantineAttempt: jest.fn(),
+      claimCaseRoleRelease: jest.fn(),
+      claimAccountQuarantineAttention: jest.fn(),
+      claimTerminalActions: jest.fn(),
+      completeTerminalActions: jest.fn(),
+      completeCaseRoleRelease: jest.fn(),
+      completeVerificationRelease: jest.fn(),
+      rollbackCaseRoleRelease: jest.fn(),
+      renewQuarantineAttempt: jest.fn(),
+      recordQuarantineCaseRole: jest.fn(),
+      recoverExpiredQuarantineAttempt: jest.fn(),
+      updateQuarantineAttempt: jest.fn(),
+      updatePendingAfterMemberLeft: jest.fn(),
       update: jest.fn(),
     };
     threadManager = {
@@ -823,6 +898,40 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('rejects a stale close-no-action confirmation for an account quarantine', async () => {
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue({
+      ...buildVerificationEvent('ver-parked', 'user-1'),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const interaction = buildInteraction(
+      'admin_actions:confirm_close_no_action:case:user-1',
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(userModerationService.closeCaseNoAction).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content:
+        'An account quarantine can only be released with Verify User, Kick User, or Ban User.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('closes with no action when role gate preview fails', async () => {
     const roleGateService = {
       previewResolution: jest.fn().mockRejectedValue(new Error('role gate unavailable')),
@@ -965,7 +1074,7 @@ describe('InteractionHandler (unit)', () => {
     const pendingCases = Array.from({ length: 26 }, (_, index) =>
       buildVerificationEvent(`ver-${index + 1}`, `user-${index + 1}`)
     );
-    verificationEventRepository.findPendingByServer.mockResolvedValue(pendingCases);
+    verificationEventRepository.findReviewablePendingByServer.mockResolvedValue(pendingCases);
     const handler = new InteractionHandler(
       client,
       notificationManager,
@@ -1367,6 +1476,119 @@ describe('InteractionHandler (unit)', () => {
     expect(renderedComponents).toContain('Close No Action');
     expect(renderedComponents).not.toContain('Verify User');
     expect(renderedComponents).not.toContain('Restrict User');
+  });
+
+  it('does not offer close-no-action for a departed incomplete account quarantine', async () => {
+    const verificationEvent = {
+      ...buildVerificationEvent('ver-left-compromised', 'user-1'),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+      metadata: { membership_state: 'left_or_removed' },
+    };
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      bans: { fetch: jest.fn().mockRejectedValue({ code: 10026 }) },
+      members: {
+        me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'admin-1')),
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      buildNoIssueSetupDiagnosticsService()
+    );
+    const interaction = buildInteraction('admin_actions:menu:case:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
+    const renderedComponents = JSON.stringify(reply.components);
+    expect(reply.content).toContain('Membership: left or removed');
+    expect(renderedComponents).toContain('Ban by ID');
+    expect(renderedComponents).not.toContain('Close No Action');
+    expect(renderedComponents).not.toContain('Verify User');
+  });
+
+  it('does not offer close-no-action or repair for a parked account quarantine', async () => {
+    const verificationEvent = {
+      ...buildVerificationEvent('ver-parked', 'user-1'),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    };
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      buildNoIssueSetupDiagnosticsService()
+    );
+    const interaction = buildInteraction('admin_actions:menu:case:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
+    const renderedComponents = JSON.stringify(reply.components);
+    expect(renderedComponents).toContain('Verify User');
+    expect(renderedComponents).not.toContain('Close No Action');
+    expect(renderedComponents).not.toContain('Repair Active Case');
+    expect(renderedComponents).not.toContain('Create Thread');
+  });
+
+  it('does not offer close-no-action for an incomplete account quarantine', async () => {
+    const verificationEvent = {
+      ...buildVerificationEvent('ver-incomplete', 'user-1'),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+    };
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      buildNoIssueSetupDiagnosticsService()
+    );
+    const interaction = buildInteraction('admin_actions:menu:case:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
+    const renderedComponents = JSON.stringify(reply.components);
+    expect(renderedComponents).toContain('Verify User');
+    expect(renderedComponents).toContain('Repair Active Case');
+    expect(renderedComponents).not.toContain('Close No Action');
   });
 
   it('handles thread button and creates a verification thread', async () => {
@@ -2746,6 +2968,536 @@ describe('InteractionHandler (unit)', () => {
       content: 'Please provide a valid case role ID or role mention (for example `<@&123...>`).',
       flags: MessageFlags.Ephemeral,
     });
+  });
+
+  it('submits a compromised-account quarantine without closing the recovery thread', async () => {
+    const verificationEvent = {
+      ...buildVerificationEvent('ver-quarantine', 'user-1'),
+      thread_id: 'thread-1',
+      case_kind: CaseKind.STANDARD,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+    };
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    securityActionService.repairActiveCase.mockResolvedValue({
+      repaired: true,
+      notificationReady: true,
+      threadCreated: false,
+      threadId: 'thread-1',
+      verificationEventId: verificationEvent.id,
+      userAdded: true,
+      promptSent: false,
+      promptAlreadyPresent: true,
+      message: 'Active case ready.',
+    });
+    const accountQuarantineService = {
+      preview: jest.fn().mockResolvedValue(readyAccountQuarantinePreview),
+      quarantine: jest.fn().mockResolvedValue({
+        status: 'parked',
+        verificationEvent: {
+          ...verificationEvent,
+          case_kind: CaseKind.COMPROMISED_ACCOUNT,
+          attention_state: CaseAttentionState.PARKED,
+          containment_status: CaseContainmentStatus.CONTAINED,
+        },
+        roleResult: {
+          status: 'quarantined',
+          mode: 'on',
+          purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+          snapshotId: 'snapshot-1',
+          originalRoleIds: [],
+          plannedRoleIds: [],
+          removedRoleIds: [],
+          skippedRoles: [],
+          failedRemovals: [],
+        },
+        lockdown: { plannedActions: [] },
+        memberAudit: {
+          memberId: 'user-1',
+          bypasses: [],
+          retainedPrivilegedRoleIds: [],
+          retainedAdministratorRoleIds: [],
+          unremovablePrivilegeReasons: [],
+        },
+      }),
+    };
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accountQuarantineService as any
+    );
+    const interaction = {
+      customId: buildAccountQuarantineModalCustomId(verificationEvent),
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      fields: { getTextInputValue: jest.fn().mockReturnValue('Reported compromise') },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.repairActiveCase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' })
+    );
+    expect(accountQuarantineService.quarantine).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      verificationEvent,
+      interaction.user,
+      'Reported compromise'
+    );
+    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining('parked the case') })
+    );
+  });
+
+  it('rejects a quarantine when live containment changes after the modal preview', async () => {
+    const verificationEvent = buildVerificationEvent('ver-quarantine-drift', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    const changedPreview: AccountQuarantinePreview = {
+      ...readyAccountQuarantinePreview,
+      rolePreview: {
+        ...readyAccountQuarantinePreview.rolePreview,
+        originalRoleIds: ['role-1', 'late-role'],
+        plannedRoleIds: ['role-1', 'late-role'],
+      },
+    };
+    const accountQuarantineService = {
+      preview: jest.fn().mockResolvedValue(changedPreview),
+      quarantine: jest.fn(),
+    };
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accountQuarantineService as any
+    );
+    const interaction = {
+      customId: buildAccountQuarantineModalCustomId(verificationEvent),
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      fields: { getTextInputValue: jest.fn().mockReturnValue('Reported compromise') },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.repairActiveCase).not.toHaveBeenCalled();
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('containment state changed'),
+    });
+  });
+
+  it('rejects a quarantine when case repair changes the previewed containment state', async () => {
+    const verificationEvent = buildVerificationEvent('ver-quarantine-repair-drift', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    securityActionService.repairActiveCase.mockResolvedValue({
+      repaired: true,
+      notificationReady: true,
+      threadCreated: false,
+      threadId: 'thread-1',
+      verificationEventId: verificationEvent.id,
+      userAdded: true,
+      promptSent: false,
+      promptAlreadyPresent: true,
+      message: 'Active case repaired.',
+    });
+    const changedPreview: AccountQuarantinePreview = {
+      ...readyAccountQuarantinePreview,
+      rolePreview: {
+        ...readyAccountQuarantinePreview.rolePreview,
+        originalRoleIds: ['role-1', 'repaired-role'],
+        plannedRoleIds: ['role-1', 'repaired-role'],
+      },
+    };
+    const accountQuarantineService = {
+      preview: jest
+        .fn()
+        .mockResolvedValueOnce(readyAccountQuarantinePreview)
+        .mockResolvedValueOnce(changedPreview),
+      quarantine: jest.fn(),
+    };
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accountQuarantineService as any
+    );
+    const interaction = {
+      customId: buildAccountQuarantineModalCustomId(verificationEvent),
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      fields: { getTextInputValue: jest.fn().mockReturnValue('Reported compromise') },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.repairActiveCase).toHaveBeenCalled();
+    expect(accountQuarantineService.preview).toHaveBeenCalledTimes(2);
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('containment state changed'),
+    });
+  });
+
+  it('binds modal submission to the containment preview shown before Continue', async () => {
+    const verificationEvent = buildVerificationEvent('ver-quarantine-confirmation-drift', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    const changedPreview: AccountQuarantinePreview = {
+      ...readyAccountQuarantinePreview,
+      rolePreview: {
+        ...readyAccountQuarantinePreview.rolePreview,
+        originalRoleIds: ['role-1', 'late-role'],
+        plannedRoleIds: ['role-1', 'late-role'],
+      },
+    };
+    const accountQuarantineService = {
+      preview: jest
+        .fn()
+        .mockResolvedValueOnce(readyAccountQuarantinePreview)
+        .mockResolvedValueOnce(changedPreview),
+      quarantine: jest.fn(),
+    };
+    const member = buildMember('guild-1', 'user-1');
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(member) },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accountQuarantineService as any
+    );
+    const previewInteraction = buildInteraction('admin_actions:q:c:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    Object.assign(previewInteraction, {
+      guild: { members: { fetch: jest.fn().mockResolvedValue(member) } },
+    });
+
+    await (handler as any).showAdminActionConfirmation(
+      previewInteraction,
+      { action: 'quarantine', surface: 'case', userId: 'user-1' },
+      { label: 'Continue', message: 'Confirm quarantine', style: ButtonStyle.Danger }
+    );
+
+    const previewResponse = (previewInteraction.update as jest.Mock).mock.calls[0][0];
+    const continueCustomId = previewResponse.components[0].toJSON().components[0].custom_id;
+    const continueInteraction = buildInteraction(continueCustomId, 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantOnlyModerationPermission(continueInteraction);
+    await handler.handleButtonInteraction(continueInteraction);
+
+    expect(accountQuarantineService.preview).toHaveBeenCalledTimes(1);
+    const modal = (continueInteraction.showModal as jest.Mock).mock.calls[0][0];
+    const submitInteraction = {
+      customId: modal.toJSON().custom_id,
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      fields: { getTextInputValue: jest.fn().mockReturnValue('Reported compromise') },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(submitInteraction);
+
+    expect(accountQuarantineService.preview).toHaveBeenCalledTimes(2);
+    expect(securityActionService.repairActiveCase).not.toHaveBeenCalled();
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(submitInteraction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('containment state changed'),
+    });
+  });
+
+  it('does not offer Continue when the live quarantine preview fails', async () => {
+    const accountQuarantineService = {
+      preview: jest.fn().mockRejectedValue(new Error('Preview unavailable')),
+    };
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accountQuarantineService as any
+    );
+    const interaction = buildInteraction('admin_actions:q:c:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    Object.assign(interaction, {
+      guild: { members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) } },
+    });
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(
+      buildVerificationEvent('ver-preview', 'user-1')
+    );
+
+    await (handler as any).showAdminActionConfirmation(
+      interaction,
+      { action: 'quarantine', surface: 'case', userId: 'user-1' },
+      { label: 'Continue', message: 'Confirm quarantine', style: ButtonStyle.Danger }
+    );
+
+    const response = (interaction.update as jest.Mock).mock.calls[0][0];
+    const renderedComponents = JSON.stringify(
+      response.components.map((component: { toJSON: () => unknown }) => component.toJSON())
+    );
+    expect(renderedComponents).toContain('Cancel');
+    expect(renderedComponents).not.toContain('Continue');
+  });
+
+  it('requires a usable recovery thread before applying quarantine', async () => {
+    const verificationEvent = buildVerificationEvent('ver-thread-required', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    securityActionService.repairActiveCase.mockResolvedValue({
+      repaired: false,
+      threadCreated: false,
+      threadId: null,
+      verificationEventId: verificationEvent.id,
+      userAdded: false,
+      promptSent: false,
+      promptAlreadyPresent: false,
+      message: 'Thread unavailable.',
+    });
+    const accountQuarantineService = {
+      preview: jest.fn().mockResolvedValue(readyAccountQuarantinePreview),
+      quarantine: jest.fn(),
+    };
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accountQuarantineService as any
+    );
+    const interaction = {
+      customId: buildAccountQuarantineModalCustomId(verificationEvent),
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      fields: { getTextInputValue: jest.fn().mockReturnValue('Reported compromise') },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('usable user verification thread is required'),
+    });
+  });
+
+  it('requires a usable persistent admin notification before applying quarantine', async () => {
+    const verificationEvent = buildVerificationEvent('ver-notification-required', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    securityActionService.repairActiveCase.mockResolvedValue({
+      repaired: true,
+      notificationReady: false,
+      threadCreated: false,
+      threadId: verificationEvent.thread_id,
+      verificationEventId: verificationEvent.id,
+      userAdded: true,
+      promptSent: false,
+      promptAlreadyPresent: true,
+      message: 'Thread repaired, but notification unavailable.',
+    });
+    const accountQuarantineService = {
+      preview: jest.fn().mockResolvedValue(readyAccountQuarantinePreview),
+      quarantine: jest.fn(),
+    };
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accountQuarantineService as any
+    );
+    const interaction = {
+      customId: buildAccountQuarantineModalCustomId(verificationEvent),
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      fields: { getTextInputValue: jest.fn().mockReturnValue('Reported compromise') },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('usable persistent admin notification is required'),
+    });
+  });
+
+  it('bounds a large compromised-account preview to Discord message limits', async () => {
+    const verificationEvent = buildVerificationEvent('ver-quarantine-preview', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    const member = buildMember('guild-1', 'user-1');
+    const accountQuarantineService = {
+      preview: jest.fn().mockResolvedValue({
+        canContain: false,
+        rolePreview: {
+          plannedRoleIds: [],
+          privilegedRoleIds: [],
+          skippedRoles: Array.from({ length: 100 }, (_, index) => ({
+            role_id: `role-${index}`,
+            reason: `managed role with a long blocker reason ${index}`,
+          })),
+        },
+        memberAudit: { bypasses: [], unremovablePrivilegeReasons: [] },
+        lockdown: { plannedActions: [] },
+      }),
+    };
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accountQuarantineService as any
+    );
+
+    const preview = await (handler as any).buildAccountQuarantineConfirmationMessage(
+      {
+        guildId: 'guild-1',
+        guild: { members: { fetch: jest.fn().mockResolvedValue(member) } },
+      },
+      { userId: 'user-1' },
+      'Confirm quarantine'
+    );
+
+    expect(preview.message.length).toBeLessThanOrEqual(1900);
+    expect(preview.message).toContain('truncated');
+    expect(preview.message).toContain('Roles Drasil cannot remove: 100');
+    expect(preview.verificationEventId).toBe(verificationEvent.id);
   });
 
   it('rejects setup verification modal when submitter is not admin', async () => {

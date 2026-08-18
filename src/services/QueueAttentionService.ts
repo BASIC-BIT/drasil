@@ -1,5 +1,6 @@
 export const queueAttentionItemTypes = [
   'support_thread_attention',
+  'quarantine_breach_attention',
   'report_thread_attention',
 ] as const;
 
