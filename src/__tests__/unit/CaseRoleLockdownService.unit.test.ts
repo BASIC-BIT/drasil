@@ -17,6 +17,21 @@ describe('CaseRoleLockdownService (unit)', () => {
     PermissionFlagsBits.CreatePublicThreads,
     PermissionFlagsBits.CreatePrivateThreads,
   ];
+  const recoveryParentAllowedPermissions = [
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.ReadMessageHistory,
+    PermissionFlagsBits.SendMessagesInThreads,
+  ];
+  const permissionFlagsByOption = {
+    ViewChannel: PermissionFlagsBits.ViewChannel,
+    ReadMessageHistory: PermissionFlagsBits.ReadMessageHistory,
+    SendMessages: PermissionFlagsBits.SendMessages,
+    SendMessagesInThreads: PermissionFlagsBits.SendMessagesInThreads,
+    CreatePublicThreads: PermissionFlagsBits.CreatePublicThreads,
+    CreatePrivateThreads: PermissionFlagsBits.CreatePrivateThreads,
+    Connect: PermissionFlagsBits.Connect,
+    Speak: PermissionFlagsBits.Speak,
+  } as const;
 
   const createOverwrite = (
     options: {
@@ -35,6 +50,11 @@ describe('CaseRoleLockdownService (unit)', () => {
       deny: { has: jest.fn((permission: bigint) => denyFlags.has(permission)), bitfield: 0n },
       setDeny(permission: bigint): void {
         denyFlags.add(permission);
+        allowFlags.delete(permission);
+      },
+      setAllow(permission: bigint): void {
+        allowFlags.add(permission);
+        denyFlags.delete(permission);
       },
     };
   };
@@ -54,6 +74,8 @@ describe('CaseRoleLockdownService (unit)', () => {
     const caseRoleOverwrite =
       options.caseRoleOverwrite ??
       createOverwrite({
+        allow:
+          options.id === 'verification-channel-1' ? recoveryParentAllowedPermissions : undefined,
         deny: options.id === 'verification-channel-1' ? recoveryParentDeniedPermissions : undefined,
       });
     const cache = new Map([
@@ -68,10 +90,16 @@ describe('CaseRoleLockdownService (unit)', () => {
       permissionsLocked: options.permissionsLocked ?? null,
       permissionOverwrites: {
         cache,
-        edit: jest.fn().mockImplementation((targetRoleId: string) => {
+        edit: jest.fn().mockImplementation((targetRoleId: string, permissionOptions: object) => {
           const overwrite = cache.get(targetRoleId) ?? createOverwrite();
-          for (const permission of lockdownDenyPermissions) {
-            overwrite.setDeny(permission);
+          for (const [option, value] of Object.entries(permissionOptions)) {
+            const permission =
+              permissionFlagsByOption[option as keyof typeof permissionFlagsByOption];
+            if (value === true) {
+              overwrite.setAllow(permission);
+            } else if (value === false) {
+              overwrite.setDeny(permission);
+            }
           }
           cache.set(targetRoleId, overwrite);
           return Promise.resolve(undefined);
@@ -196,7 +224,7 @@ describe('CaseRoleLockdownService (unit)', () => {
     const preview = await service.auditGuild(guild);
     expect(preview.issues).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: 'lockdown-recovery-parent-posting-enabled' }),
+        expect.objectContaining({ code: 'lockdown-recovery-parent-permissions-invalid' }),
       ])
     );
     expect(preview.plannedActions.map((action) => action.channelId)).toEqual([
@@ -216,6 +244,33 @@ describe('CaseRoleLockdownService (unit)', () => {
       expect.any(Object)
     );
     expect(applied.plannedActions).toEqual([]);
+  });
+
+  it('repairs a recovery parent that blocks posting but cannot support recovery-thread replies', async () => {
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+      caseRoleOverwrite: createOverwrite({ deny: recoveryParentDeniedPermissions }),
+    });
+    const guild = createGuild([verificationChannel]);
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const preview = await service.auditGuild(guild);
+
+    expect(preview.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'lockdown-recovery-parent-permissions-invalid',
+          message: expect.stringContaining(
+            'allow View Channel, Read Message History, Send Messages in Threads'
+          ),
+        }),
+      ])
+    );
+    expect(preview.plannedActions.map((action) => action.channelId)).toEqual([
+      'verification-channel-1',
+    ]);
   });
 
   it('reports effective member posting access in the recovery parent as a bypass', async () => {

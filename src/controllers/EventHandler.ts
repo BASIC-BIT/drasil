@@ -75,6 +75,8 @@ import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { IRoleQuarantineService } from '../services/RoleQuarantineService';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import type { IGlobalMessageWatchlistRepository } from '../repositories/GlobalMessageWatchlistRepository';
+import { getAccountQuarantineSettings } from '../utils/accountQuarantineSettings';
+import { getCaseRoleLockdownSettings } from '../utils/caseRoleLockdownSettings';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -931,6 +933,29 @@ export class EventHandler implements IEventHandler {
 
   private async recordParkedQuarantineBreach(message: Message): Promise<void> {
     if (!this.moderationQueueService || !this.verificationEventRepository || !message.guild) {
+      return;
+    }
+
+    const cachedConfig = this.configService.getCachedServerConfig(message.guild.id);
+    if (!cachedConfig || !getAccountQuarantineSettings(cachedConfig.settings).enabled) {
+      return;
+    }
+
+    const lockdownSettings = getCaseRoleLockdownSettings(cachedConfig.settings);
+    const isThread = message.channel.isThread();
+    const parentChannelId = isThread ? message.channel.parentId : null;
+    const categoryId = isThread
+      ? message.channel.parent?.parentId
+      : 'parentId' in message.channel
+        ? message.channel.parentId
+        : null;
+    if (
+      lockdownSettings.allowedChannelIds.includes(message.channelId) ||
+      (parentChannelId !== null && lockdownSettings.allowedChannelIds.includes(parentChannelId)) ||
+      (categoryId !== null &&
+        categoryId !== undefined &&
+        lockdownSettings.allowedCategoryIds.includes(categoryId))
+    ) {
       return;
     }
 

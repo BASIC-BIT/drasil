@@ -149,6 +149,20 @@ const RECOVERY_PARENT_BLOCKED_PERMISSIONS: readonly LockdownPermission[] = [
   },
 ];
 
+const RECOVERY_PARENT_REQUIRED_PERMISSIONS: readonly LockdownPermission[] = [
+  { flag: PermissionFlagsBits.ViewChannel, option: 'ViewChannel', label: 'View Channel' },
+  {
+    flag: PermissionFlagsBits.ReadMessageHistory,
+    option: 'ReadMessageHistory',
+    label: 'Read Message History',
+  },
+  {
+    flag: PermissionFlagsBits.SendMessagesInThreads,
+    option: 'SendMessagesInThreads',
+    label: 'Send Messages in Threads',
+  },
+];
+
 const RECOVERY_PARENT_PERMISSION_OPTIONS: PermissionOverwriteOptions = {
   ViewChannel: true,
   ReadMessageHistory: true,
@@ -845,13 +859,24 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
     const missingDenies = RECOVERY_PARENT_BLOCKED_PERMISSIONS.filter(
       (permission) => !overwrite?.deny.has(permission.flag)
     );
-    if (missingDenies.length === 0) {
+    const missingAllows = RECOVERY_PARENT_REQUIRED_PERMISSIONS.filter(
+      (permission) => !overwrite?.allow.has(permission.flag)
+    );
+    if (missingDenies.length === 0 && missingAllows.length === 0) {
       return;
     }
+    const requirements = [
+      missingDenies.length > 0
+        ? `deny ${missingDenies.map((permission) => permission.label).join(', ')}`
+        : null,
+      missingAllows.length > 0
+        ? `allow ${missingAllows.map((permission) => permission.label).join(', ')}`
+        : null,
+    ].filter((requirement): requirement is string => requirement !== null);
     issues.push({
       severity: 'warning',
-      code: 'lockdown-recovery-parent-posting-enabled',
-      message: `Recovery parent ${this.formatChannel(channel)} must deny the case role ${missingDenies.map((permission) => permission.label).join(', ')} while preserving private-thread replies.`,
+      code: 'lockdown-recovery-parent-permissions-invalid',
+      message: `Recovery parent ${this.formatChannel(channel)} must ${requirements.join(' and ')} for the case role so the user can read and reply only in the private recovery thread.`,
     });
     plannedActions.push(this.toPlannedAction(channel, 'channel'));
   }

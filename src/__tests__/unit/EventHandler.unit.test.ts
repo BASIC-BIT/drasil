@@ -160,6 +160,26 @@ describe('EventHandler (unit)', () => {
     };
   }
 
+  function buildQuarantineConfigService(settings: Record<string, unknown> = {}) {
+    const serverConfig = {
+      case_role_id: 'case-role-1',
+      verification_channel_id: '999999999999999999',
+      settings: {
+        account_quarantine_enabled: true,
+        detection_response_mode: 'notify_only',
+        min_confidence_threshold: 70,
+        ...settings,
+      },
+    };
+    return {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue(serverConfig),
+      getServerConfig: jest.fn().mockResolvedValue(serverConfig),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+  }
+
   function buildMessage(permissions: PermissionsBitField): Message {
     const member = {
       ...buildMember(permissions),
@@ -1219,6 +1239,7 @@ describe('EventHandler (unit)', () => {
     const reportIntakeAgentService = { scheduleAnalysisForThreadMessage: jest.fn() };
     const detectionOrchestrator = { detectMessage: jest.fn(), detectNewJoin: jest.fn() };
     const handler = buildHandler({
+      configService: buildQuarantineConfigService(),
       moderationQueueService,
       verificationEventRepository,
       reportIntakeService,
@@ -1253,12 +1274,75 @@ describe('EventHandler (unit)', () => {
     const verificationEventRepository = {
       findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),
     };
-    const handler = buildHandler({ moderationQueueService, verificationEventRepository });
+    const handler = buildHandler({
+      configService: buildQuarantineConfigService(),
+      moderationQueueService,
+      verificationEventRepository,
+    });
     const message = buildMessage(new PermissionsBitField()) as any;
     message.channelId = 'recovery-thread';
 
     await (handler as any).recordParkedQuarantineBreach(message);
 
+    expect(moderationQueueService.recordQuarantineBreachAttention).not.toHaveBeenCalled();
+  });
+
+  it('does not query active cases when account quarantine is disabled in the config cache', async () => {
+    const moderationQueueService = {
+      recordQuarantineBreachAttention: jest.fn().mockResolvedValue(undefined),
+    };
+    const verificationEventRepository = {
+      findActiveByUserAndServer: jest.fn(),
+    };
+    const handler = buildHandler({ moderationQueueService, verificationEventRepository });
+
+    await (handler as any).recordParkedQuarantineBreach(buildMessage(new PermissionsBitField()));
+
+    expect(verificationEventRepository.findActiveByUserAndServer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'channel',
+      settings: { case_role_lockdown_allowed_channel_ids: ['111111111111111111'] },
+      channelId: '111111111111111111',
+      channel: { isThread: (): boolean => false, parentId: '333333333333333333' },
+    },
+    {
+      name: 'parent channel',
+      settings: { case_role_lockdown_allowed_channel_ids: ['222222222222222222'] },
+      channelId: '444444444444444444',
+      channel: {
+        isThread: (): boolean => true,
+        parentId: '222222222222222222',
+        parent: { parentId: '333333333333333333' },
+      },
+    },
+    {
+      name: 'category',
+      settings: { case_role_lockdown_allowed_category_ids: ['333333333333333333'] },
+      channelId: '111111111111111111',
+      channel: { isThread: (): boolean => false, parentId: '333333333333333333' },
+    },
+  ])('does not report messages in an allowed lockdown $name as breaches', async (surface) => {
+    const moderationQueueService = {
+      recordQuarantineBreachAttention: jest.fn().mockResolvedValue(undefined),
+    };
+    const verificationEventRepository = {
+      findActiveByUserAndServer: jest.fn(),
+    };
+    const handler = buildHandler({
+      configService: buildQuarantineConfigService(surface.settings),
+      moderationQueueService,
+      verificationEventRepository,
+    });
+    const message = buildMessage(new PermissionsBitField()) as any;
+    message.channelId = surface.channelId;
+    message.channel = surface.channel;
+
+    await (handler as any).recordParkedQuarantineBreach(message);
+
+    expect(verificationEventRepository.findActiveByUserAndServer).not.toHaveBeenCalled();
     expect(moderationQueueService.recordQuarantineBreachAttention).not.toHaveBeenCalled();
   });
 
@@ -1387,6 +1471,7 @@ describe('EventHandler (unit)', () => {
       detectNewJoin: jest.fn(),
     };
     const handler = buildHandler({
+      configService: buildQuarantineConfigService(),
       moderationQueueService,
       verificationEventRepository,
       detectionOrchestrator,
