@@ -29,3 +29,9 @@ ALTER TABLE "moderation_queue_items"
     ("item_type" IN ('support_thread_attention', 'report_thread_attention') AND "source_thread_id" IS NOT NULL) OR
     ("item_type" = 'quarantine_breach_attention' AND "verification_event_id" IS NOT NULL AND "source_thread_id" IS NOT NULL)
   );
+
+DROP INDEX "moderation_queue_items_type_thread_key";
+CREATE UNIQUE INDEX "moderation_queue_items_type_thread_key"
+  ON "moderation_queue_items"("item_type", "source_thread_id")
+  WHERE "source_thread_id" IS NOT NULL
+    AND "item_type" IN ('support_thread_attention', 'report_thread_attention');

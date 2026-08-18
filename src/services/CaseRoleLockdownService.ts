@@ -135,6 +135,29 @@ const LOCKDOWN_PERMISSION_OPTIONS = LOCKDOWN_PERMISSIONS.reduce<PermissionOverwr
   {}
 );
 
+const RECOVERY_PARENT_BLOCKED_PERMISSIONS: readonly LockdownPermission[] = [
+  { flag: PermissionFlagsBits.SendMessages, option: 'SendMessages', label: 'Send Messages' },
+  {
+    flag: PermissionFlagsBits.CreatePublicThreads,
+    option: 'CreatePublicThreads',
+    label: 'Create Public Threads',
+  },
+  {
+    flag: PermissionFlagsBits.CreatePrivateThreads,
+    option: 'CreatePrivateThreads',
+    label: 'Create Private Threads',
+  },
+];
+
+const RECOVERY_PARENT_PERMISSION_OPTIONS: PermissionOverwriteOptions = {
+  ViewChannel: true,
+  ReadMessageHistory: true,
+  SendMessages: false,
+  SendMessagesInThreads: true,
+  CreatePublicThreads: false,
+  CreatePrivateThreads: false,
+};
+
 const COMPROMISED_ACCOUNT_PERMISSION_LABELS: readonly PermissionLabel[] = [
   { flag: PermissionFlagsBits.Administrator, label: 'Administrator' },
   { flag: PermissionFlagsBits.ManageRoles, label: 'Manage Roles' },
@@ -214,6 +237,9 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
 
     for (const channel of await this.fetchLockdownChannels(member.guild)) {
       if (allowedChannelIds.has(channel.id) || allowedCategoryIds.has(channel.id)) {
+        if (channel.id === serverConfig.verification_channel_id) {
+          this.recordRecoveryParentMemberBypass(channel, member, bypasses);
+        }
         continue;
       }
       if (channel.parentId && allowedCategoryIds.has(channel.parentId)) {
@@ -348,7 +374,9 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
       try {
         await channel.permissionOverwrites.edit(
           serverConfig.case_role_id,
-          LOCKDOWN_PERMISSION_OPTIONS,
+          action.channelId === serverConfig.verification_channel_id
+            ? RECOVERY_PARENT_PERMISSION_OPTIONS
+            : LOCKDOWN_PERMISSION_OPTIONS,
           {
             reason: `Drasil case-role lockdown applied by ${actorId}`,
           }
@@ -472,6 +500,9 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
             code: 'lockdown-allowed-channel-synced-under-denied-category',
             message: `Allowed channel ${this.formatChannel(channel)} is synced under a denied category. Move it, allow the category, or rerun apply with \`unsync-allowed:true\` to copy current parent permissions before applying lockdown.`,
           });
+        }
+        if (channel.id === serverConfig.verification_channel_id) {
+          this.checkRecoveryParentLockdown(channel, caseRole.id, issues, plannedActions);
         }
         continue;
       }
@@ -752,7 +783,11 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
 
       try {
         await channel.permissionOverwrites.set(
-          this.buildUnsyncedAllowedChannelOverwrites(parent, caseRole.id),
+          this.buildUnsyncedAllowedChannelOverwrites(
+            parent,
+            caseRole.id,
+            action.channelId === serverConfig.verification_channel_id
+          ),
           `Drasil case-role lockdown unsynced allowed channel by ${actorId}`
         );
         unsyncedActions.push(action);
@@ -769,7 +804,8 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
 
   private buildUnsyncedAllowedChannelOverwrites(
     parent: LockdownChannel,
-    caseRoleId: string
+    caseRoleId: string,
+    isRecoveryParent: boolean
   ): OverwriteResolvable[] {
     const copiedParentOverwrites: OverwriteResolvable[] = [
       ...parent.permissionOverwrites.cache.values(),
@@ -782,13 +818,12 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
         deny: overwrite.deny.bitfield,
       }));
 
-    const caseRoleOptions = LOCKDOWN_PERMISSIONS.reduce<PermissionOverwriteOptions>(
-      (options, permission) => {
-        options[permission.option] = true;
-        return options;
-      },
-      {}
-    );
+    const caseRoleOptions = isRecoveryParent
+      ? RECOVERY_PARENT_PERMISSION_OPTIONS
+      : LOCKDOWN_PERMISSIONS.reduce<PermissionOverwriteOptions>((options, permission) => {
+          options[permission.option] = true;
+          return options;
+        }, {});
 
     return [
       ...copiedParentOverwrites,
@@ -798,6 +833,48 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
         ...caseRoleOptions,
       },
     ];
+  }
+
+  private checkRecoveryParentLockdown(
+    channel: LockdownChannel,
+    caseRoleId: string,
+    issues: CaseRoleLockdownIssue[],
+    plannedActions: CaseRoleLockdownPlannedAction[]
+  ): void {
+    const overwrite = channel.permissionOverwrites.cache.get(caseRoleId);
+    const missingDenies = RECOVERY_PARENT_BLOCKED_PERMISSIONS.filter(
+      (permission) => !overwrite?.deny.has(permission.flag)
+    );
+    if (missingDenies.length === 0) {
+      return;
+    }
+    issues.push({
+      severity: 'warning',
+      code: 'lockdown-recovery-parent-posting-enabled',
+      message: `Recovery parent ${this.formatChannel(channel)} must deny the case role ${missingDenies.map((permission) => permission.label).join(', ')} while preserving private-thread replies.`,
+    });
+    plannedActions.push(this.toPlannedAction(channel, 'channel'));
+  }
+
+  private recordRecoveryParentMemberBypass(
+    channel: LockdownChannel,
+    member: GuildMember,
+    bypasses: CaseRoleLockdownMemberBypass[]
+  ): void {
+    const effectivePermissions = channel.permissionsFor(member);
+    const permissions = RECOVERY_PARENT_BLOCKED_PERMISSIONS.filter((permission) =>
+      effectivePermissions.has(permission.flag)
+    ).map((permission) => permission.label);
+    if (permissions.length === 0) {
+      return;
+    }
+    bypasses.push({
+      channelId: channel.id,
+      channelName: channel.name,
+      subjectType: 'member',
+      subjectId: member.id,
+      permissions,
+    });
   }
 
   private isLockdownChannel(

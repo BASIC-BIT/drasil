@@ -839,14 +839,18 @@ export class NotificationManager implements INotificationManager {
           PermissionFlagsBits.CreatePrivateThreads,
         ],
       },
-      // Case role - can view and send messages, but not read history
+      // Case role - can use its private thread without posting in the shared parent channel.
       {
         id: caseRoleId,
         allow: [
           PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessages,
           PermissionFlagsBits.ReadMessageHistory, // TODO: Check if users need to be granted this to see history of private thread
           PermissionFlagsBits.SendMessagesInThreads,
+        ],
+        deny: [
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.CreatePublicThreads,
+          PermissionFlagsBits.CreatePrivateThreads,
         ],
       },
     ];

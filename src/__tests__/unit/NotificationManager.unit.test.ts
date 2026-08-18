@@ -5,6 +5,7 @@ import {
   Guild,
   GuildMember,
   Message,
+  PermissionFlagsBits,
   TextChannel,
   User,
 } from 'discord.js';
@@ -1307,6 +1308,23 @@ describe('NotificationManager (unit)', () => {
       ]),
       'Sync Drasil verification channel permissions'
     );
+    const caseRoleOverwrite = overwriteSet.mock.calls[0][0].find(
+      (overwrite: { id: string }) => overwrite.id === 'case-role-1'
+    );
+    expect(caseRoleOverwrite).toEqual(
+      expect.objectContaining({
+        allow: expect.arrayContaining([
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessagesInThreads,
+        ]),
+        deny: expect.arrayContaining([
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.CreatePublicThreads,
+          PermissionFlagsBits.CreatePrivateThreads,
+        ]),
+      })
+    );
+    expect(caseRoleOverwrite.allow).not.toContain(PermissionFlagsBits.SendMessages);
     expect(createChannel).not.toHaveBeenCalled();
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       verification_channel_id: 'verification-channel-1',

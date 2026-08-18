@@ -2191,6 +2191,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
             ? {
                 attention_state: CaseAttentionState.REVIEW_REQUIRED,
                 containment_status: CaseContainmentStatus.INCOMPLETE,
+                quarantine_attempt_id: null,
                 parked_at: null,
                 parked_by: null,
               }
@@ -2203,7 +2204,10 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         const updatedEvent = await this.verificationEventRepository.update(
           pendingEvent.id,
           eventToUpdate,
-          { touchUpdatedAt: false }
+          {
+            touchUpdatedAt: false,
+            preservePendingCaseState: pendingEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT,
+          }
         );
         const markedEvent = updatedEvent ?? eventToUpdate;
         markedEvents.push(markedEvent);

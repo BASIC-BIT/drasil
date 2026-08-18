@@ -1644,6 +1644,50 @@ describe('UserModerationService (unit)', () => {
     expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
   });
 
+  it('preserves incomplete containment when a compromised-account member leaves', async () => {
+    const guildId = 'guild-quarantined-member-left';
+    const userId = 'user-quarantined-member-left';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: 'attempt-1',
+      parked_at: new Date(),
+      parked_by: 'moderator-1',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(service.recordMemberLeftGuild(member)).resolves.toBe(1);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        quarantine_attempt_id: null,
+        parked_at: null,
+        parked_by: null,
+      })
+    );
+  });
+
   it('returns success when post-ban notification updates fail', async () => {
     const guildId = 'guild-ban-post-update-fails';
     const userId = 'user-ban-post-update-fails';

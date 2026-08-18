@@ -12,6 +12,11 @@ describe('CaseRoleLockdownService (unit)', () => {
     PermissionFlagsBits.Connect,
     PermissionFlagsBits.Speak,
   ];
+  const recoveryParentDeniedPermissions = [
+    PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.CreatePublicThreads,
+    PermissionFlagsBits.CreatePrivateThreads,
+  ];
 
   const createOverwrite = (
     options: {
@@ -42,10 +47,15 @@ describe('CaseRoleLockdownService (unit)', () => {
     permissionsLocked?: boolean | null;
     caseRoleOverwrite?: ReturnType<typeof createOverwrite>;
     extraOverwrites?: readonly ReturnType<typeof createOverwrite>[];
+    effectiveMemberPermissions?: readonly bigint[];
     keepPermissionsLockedAfterSet?: boolean;
     overwriteSetError?: Error;
   }) => {
-    const caseRoleOverwrite = options.caseRoleOverwrite ?? createOverwrite();
+    const caseRoleOverwrite =
+      options.caseRoleOverwrite ??
+      createOverwrite({
+        deny: options.id === 'verification-channel-1' ? recoveryParentDeniedPermissions : undefined,
+      });
     const cache = new Map([
       [caseRoleId, caseRoleOverwrite],
       ...(options.extraOverwrites ?? []).map((overwrite) => [overwrite.id, overwrite] as const),
@@ -76,7 +86,11 @@ describe('CaseRoleLockdownService (unit)', () => {
           return Promise.resolve(undefined);
         }),
       },
-      permissionsFor: jest.fn().mockReturnValue({ has: jest.fn().mockReturnValue(true) }),
+      permissionsFor: jest.fn().mockReturnValue({
+        has: jest.fn((permission: bigint) =>
+          (options.effectiveMemberPermissions ?? []).includes(permission)
+        ),
+      }),
     };
 
     return channel;
@@ -169,6 +183,67 @@ describe('CaseRoleLockdownService (unit)', () => {
     );
   });
 
+  it('repairs a writable recovery parent while preserving private-thread replies', async () => {
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+      caseRoleOverwrite: createOverwrite(),
+    });
+    const guild = createGuild([verificationChannel]);
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const preview = await service.auditGuild(guild);
+    expect(preview.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'lockdown-recovery-parent-posting-enabled' }),
+      ])
+    );
+    expect(preview.plannedActions.map((action) => action.channelId)).toEqual([
+      'verification-channel-1',
+    ]);
+
+    const applied = await service.applyGuild(guild, 'admin-1');
+    expect(verificationChannel.permissionOverwrites.edit).toHaveBeenCalledWith(
+      caseRoleId,
+      expect.objectContaining({
+        ViewChannel: true,
+        SendMessages: false,
+        SendMessagesInThreads: true,
+        CreatePublicThreads: false,
+        CreatePrivateThreads: false,
+      }),
+      expect.any(Object)
+    );
+    expect(applied.plannedActions).toEqual([]);
+  });
+
+  it('reports effective member posting access in the recovery parent as a bypass', async () => {
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+      effectiveMemberPermissions: [PermissionFlagsBits.SendMessages],
+    });
+    const guild = createGuild([verificationChannel]);
+    const member = {
+      id: 'user-1',
+      guild,
+      roles: { cache: new Map([[caseRoleId, { id: caseRoleId }]]) },
+    } as any;
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const audit = await service.auditMemberBypasses(member);
+
+    expect(audit.bypasses).toEqual([
+      expect.objectContaining({
+        channelId: 'verification-channel-1',
+        subjectId: 'user-1',
+        permissions: ['Send Messages'],
+      }),
+    ]);
+  });
+
   it('blocks apply when an allowed channel is synced under a denied category', async () => {
     const category = createChannel({
       id: 'category-1',
@@ -240,7 +315,12 @@ describe('CaseRoleLockdownService (unit)', () => {
 
     expect(verificationChannel.permissionOverwrites.set).toHaveBeenCalledWith(
       expect.arrayContaining([
-        expect.objectContaining({ id: caseRoleId, ViewChannel: true, SendMessages: true }),
+        expect.objectContaining({
+          id: caseRoleId,
+          ViewChannel: true,
+          SendMessages: false,
+          SendMessagesInThreads: true,
+        }),
       ]),
       expect.stringContaining('admin-1')
     );

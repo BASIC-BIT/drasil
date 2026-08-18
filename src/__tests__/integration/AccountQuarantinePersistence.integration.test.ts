@@ -2,6 +2,7 @@ import { PrismaClient } from '../../db/prisma';
 import { AdminActionRepository } from '../../repositories/AdminActionRepository';
 import { DetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import { ModerationOutcomeRepository } from '../../repositories/ModerationOutcomeRepository';
+import { ModerationQueueRepository } from '../../repositories/ModerationQueueRepository';
 import { RoleQuarantineSnapshotRepository } from '../../repositories/RoleQuarantineSnapshotRepository';
 import { ServerRepository } from '../../repositories/ServerRepository';
 import { UserRepository } from '../../repositories/UserRepository';
@@ -14,6 +15,7 @@ import {
   DetectionType,
   ModerationOutcomeSource,
   ModerationOutcomeType,
+  ModerationQueueItemType,
   RoleQuarantineSnapshotPurpose,
   VerificationStatus,
 } from '../../repositories/types';
@@ -272,6 +274,51 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
         parked_at: null,
         parked_by: null,
       })
+    );
+  });
+
+  it('stores same-channel quarantine breaches separately for each case', async () => {
+    const serverId = 'guild-quarantine-breach-attention';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    const queue = new ModerationQueueRepository(prisma);
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser('user-breach-1', 'target-1');
+    await users.getOrCreateUser('user-breach-2', 'target-2');
+    const firstCase = await verifications.createFromDetection(
+      null,
+      serverId,
+      'user-breach-1',
+      VerificationStatus.PENDING
+    );
+    const secondCase = await verifications.createFromDetection(
+      null,
+      serverId,
+      'user-breach-2',
+      VerificationStatus.PENDING
+    );
+
+    await queue.upsert({
+      serverId,
+      userId: 'user-breach-1',
+      itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
+      verificationEventId: firstCase.id,
+      sourceThreadId: 'general-channel',
+    });
+    await queue.upsert({
+      serverId,
+      userId: 'user-breach-2',
+      itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
+      verificationEventId: secondCase.id,
+      sourceThreadId: 'general-channel',
+    });
+
+    await expect(queue.listByServer(serverId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ verification_event_id: firstCase.id }),
+        expect.objectContaining({ verification_event_id: secondCase.id }),
+      ])
     );
   });
 });
