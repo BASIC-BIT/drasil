@@ -1,11 +1,15 @@
 import { PermissionFlagsBits } from 'discord.js';
 
-export const PRIVILEGED_ROLE_PERMISSIONS = [
+export const STANDARD_QUARANTINE_PRIVILEGED_ROLE_PERMISSIONS = [
   PermissionFlagsBits.Administrator,
   PermissionFlagsBits.ManageRoles,
   PermissionFlagsBits.ManageGuild,
-  PermissionFlagsBits.ManageChannels,
   PermissionFlagsBits.ModerateMembers,
+] as const;
+
+export const COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS = [
+  ...STANDARD_QUARANTINE_PRIVILEGED_ROLE_PERMISSIONS,
+  PermissionFlagsBits.ManageChannels,
   PermissionFlagsBits.KickMembers,
   PermissionFlagsBits.BanMembers,
   PermissionFlagsBits.ManageMessages,

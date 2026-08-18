@@ -19,7 +19,7 @@ import {
   getCaseRoleLockdownSettings,
   CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY,
 } from '../utils/caseRoleLockdownSettings';
-import { PRIVILEGED_ROLE_PERMISSIONS } from '../utils/privilegedRolePermissions';
+import { COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS } from '../utils/privilegedRolePermissions';
 
 export type CaseRoleLockdownSeverity = 'error' | 'warning';
 export type CaseRoleLockdownActionScope = 'category' | 'channel';
@@ -179,7 +179,9 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
       const role = member.guild.roles.cache.get(roleId);
       return (
         role !== undefined &&
-        PRIVILEGED_ROLE_PERMISSIONS.some((permission) => role.permissions.has(permission))
+        COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS.some((permission) =>
+          role.permissions.has(permission)
+        )
       );
     });
     const unremovablePrivilegeReasons: string[] = [];

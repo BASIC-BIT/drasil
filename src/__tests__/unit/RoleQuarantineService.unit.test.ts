@@ -185,10 +185,37 @@ describe('RoleQuarantineService (unit)', () => {
     expect(member.roles.cache.has(communityRole.id)).toBe(false);
   });
 
+  it('preserves the standard quarantine privilege policy for moderation permissions', async () => {
+    const removableRoles = [
+      createRole({ id: 'channel-role', permissions: [PermissionFlagsBits.ManageChannels] }),
+      createRole({ id: 'kick-role', permissions: [PermissionFlagsBits.KickMembers] }),
+      createRole({ id: 'ban-role', permissions: [PermissionFlagsBits.BanMembers] }),
+      createRole({ id: 'message-role', permissions: [PermissionFlagsBits.ManageMessages] }),
+      createRole({ id: 'webhook-role', permissions: [PermissionFlagsBits.ManageWebhooks] }),
+    ];
+    const member = createMember(removableRoles);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'on' }),
+      snapshots
+    );
+
+    const result = await service.quarantineMember(member, createVerificationEvent());
+
+    expect(result.removedRoleIds).toEqual([
+      'channel-role',
+      'kick-role',
+      'ban-role',
+      'message-role',
+      'webhook-role',
+    ]);
+    expect(result.skippedRoles).toEqual([]);
+  });
+
   it('removes privileged and normally exempt roles for a compromised account', async () => {
     const privilegedRole = createRole({
       id: 'privileged-role',
-      permissions: [PermissionFlagsBits.Administrator],
+      permissions: [PermissionFlagsBits.KickMembers],
     });
     const exemptRole = createRole({ id: '100000000000000005' });
     const manualRole = createRole({ id: '100000000000000010' });

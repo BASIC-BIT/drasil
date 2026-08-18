@@ -19,7 +19,10 @@ import {
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { getRoleQuarantineSettings, RoleQuarantineMode } from '../utils/roleQuarantineSettings';
-import { PRIVILEGED_ROLE_PERMISSIONS } from '../utils/privilegedRolePermissions';
+import {
+  COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS,
+  STANDARD_QUARANTINE_PRIVILEGED_ROLE_PERMISSIONS,
+} from '../utils/privilegedRolePermissions';
 
 export type RoleQuarantineApplyStatus = 'off' | 'audit_only' | 'already_active' | 'quarantined';
 export type RoleQuarantineRestoreStatus = 'no_active_snapshot' | 'partially_restored' | 'restored';
@@ -120,6 +123,7 @@ interface ClassifiedRole {
 interface QuarantinePolicy {
   readonly purpose: RoleQuarantineSnapshotPurpose;
   readonly exemptRoleIds: ReadonlySet<string>;
+  readonly privilegedPermissions: readonly bigint[];
   readonly skipPrivilegedRoles: boolean;
 }
 
@@ -170,7 +174,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
         .filter((role) => role.skipReason !== undefined)
         .map(({ role, skipReason }) => this.toRoleDetail(role, skipReason ?? 'skipped')),
       privilegedRoleIds: removableRoles
-        .filter(({ role }) => this.hasPrivilegedPermissions(role))
+        .filter(({ role }) => this.hasPrivilegedPermissions(role, policy.privilegedPermissions))
         .map(({ role }) => role.id),
     };
   }
@@ -222,6 +226,10 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     const privilegedRoleIdsAtSnapshot = new Set(
       this.readStringArray(this.metadataToRecord(snapshot.metadata).privileged_role_ids_at_snapshot)
     );
+    const privilegedPermissions =
+      snapshot.purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT
+        ? COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS
+        : STANDARD_QUARANTINE_PRIVILEGED_ROLE_PERMISSIONS;
     const attemptedRoleIds = [...snapshot.removed_role_ids];
     const restoredRoleIds: string[] = [];
     const skippedRoles: RoleQuarantineRoleDetail[] = [];
@@ -238,7 +246,8 @@ export class RoleQuarantineService implements IRoleQuarantineService {
         role,
         botMember,
         policyManagedRestoreSkips,
-        privilegedRoleIdsAtSnapshot
+        privilegedRoleIdsAtSnapshot,
+        privilegedPermissions
       );
       if (restoreSkipReason) {
         skippedRoles.push(this.toRoleDetail(role, restoreSkipReason));
@@ -475,7 +484,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
         this.metadataToRecord(activeSnapshot?.metadata).privileged_role_ids_at_snapshot
       ),
       ...removableRoles
-        .filter((role) => this.hasPrivilegedPermissions(role))
+        .filter((role) => this.hasPrivilegedPermissions(role, policy.privilegedPermissions))
         .map((role) => role.id),
     ]);
     const snapshotMetadata = {
@@ -562,7 +571,12 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     settings: ServerSettings
   ): QuarantinePolicy {
     if (purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT) {
-      return { purpose, exemptRoleIds: new Set(), skipPrivilegedRoles: false };
+      return {
+        purpose,
+        exemptRoleIds: new Set(),
+        privilegedPermissions: COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS,
+        skipPrivilegedRoles: false,
+      };
     }
 
     const quarantineSettings = getRoleQuarantineSettings(settings);
@@ -571,7 +585,12 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     if (manualIntakeSettings.enabled && manualIntakeSettings.roleId) {
       exemptRoleIds.add(manualIntakeSettings.roleId);
     }
-    return { purpose, exemptRoleIds, skipPrivilegedRoles: true };
+    return {
+      purpose,
+      exemptRoleIds,
+      privilegedPermissions: STANDARD_QUARANTINE_PRIVILEGED_ROLE_PERMISSIONS,
+      skipPrivilegedRoles: true,
+    };
   }
 
   private async classifyMemberRoles(
@@ -632,7 +651,10 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     if (role.managed) {
       return 'managed role';
     }
-    if (policy.skipPrivilegedRoles && this.hasPrivilegedPermissions(role)) {
+    if (
+      policy.skipPrivilegedRoles &&
+      this.hasPrivilegedPermissions(role, policy.privilegedPermissions)
+    ) {
       return 'privileged role';
     }
     if (!botMember) {
@@ -649,7 +671,8 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     role: Role,
     botMember: GuildMember | null,
     policyManagedRestoreSkips: ReadonlySet<string>,
-    privilegedRoleIdsAtSnapshot: ReadonlySet<string>
+    privilegedRoleIdsAtSnapshot: ReadonlySet<string>,
+    privilegedPermissions: readonly bigint[]
   ): string | undefined {
     if (policyManagedRestoreSkips.has(role.id)) {
       return 'policy-managed role gate role';
@@ -660,7 +683,10 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     if (role.managed) {
       return 'managed role';
     }
-    if (this.hasPrivilegedPermissions(role) && !privilegedRoleIdsAtSnapshot.has(role.id)) {
+    if (
+      this.hasPrivilegedPermissions(role, privilegedPermissions) &&
+      !privilegedRoleIdsAtSnapshot.has(role.id)
+    ) {
       return 'role became privileged';
     }
     if (!botMember) {
@@ -685,8 +711,8 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       : 'Drasil role quarantine restore rollback';
   }
 
-  private hasPrivilegedPermissions(role: Role): boolean {
-    return PRIVILEGED_ROLE_PERMISSIONS.some((permission) => role.permissions.has(permission));
+  private hasPrivilegedPermissions(role: Role, permissions: readonly bigint[]): boolean {
+    return permissions.some((permission) => role.permissions.has(permission));
   }
 
   private isBotRole(role: Role): boolean {
