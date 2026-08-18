@@ -20,6 +20,7 @@ import {
   VerificationStatus,
 } from '../../repositories/types';
 import { getPrismaClient } from '../testDb';
+import { CASE_ROLE_RELEASE_LEASE_MS } from '../../utils/caseRoleRelease';
 
 const describeIntegration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 
@@ -278,7 +279,7 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     );
   });
 
-  it('atomically claims a parked case-role release', async () => {
+  it('atomically claims and reclaims an expired parked case-role release', async () => {
     const serverId = 'guild-case-role-release-claim';
     const userId = 'user-case-role-release-claim';
     const servers = new ServerRepository(prisma);
@@ -301,18 +302,51 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       parked_by: 'moderator-1',
     });
 
+    const staleBefore = new Date(Date.now() - CASE_ROLE_RELEASE_LEASE_MS);
     await expect(
-      verifications.claimCaseRoleRelease(verification.id, serverId, userId, 'case-role-release:1')
+      verifications.claimCaseRoleRelease(
+        verification.id,
+        serverId,
+        userId,
+        'case-role-release:1',
+        staleBefore
+      )
     ).resolves.toEqual(
       expect.objectContaining({
         attention_state: CaseAttentionState.PARKED,
         containment_status: CaseContainmentStatus.CONTAINED,
         quarantine_attempt_id: 'case-role-release:1',
+        quarantine_lease_renewed_at: expect.any(Date),
       })
     );
     await expect(
-      verifications.claimCaseRoleRelease(verification.id, serverId, userId, 'case-role-release:2')
+      verifications.claimCaseRoleRelease(
+        verification.id,
+        serverId,
+        userId,
+        'case-role-release:2',
+        staleBefore
+      )
     ).resolves.toBeNull();
+
+    await prisma.verification_events.update({
+      where: { id: verification.id },
+      data: { quarantine_lease_renewed_at: staleBefore },
+    });
+    await expect(
+      verifications.claimCaseRoleRelease(
+        verification.id,
+        serverId,
+        userId,
+        'case-role-release:2',
+        staleBefore
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({
+        quarantine_attempt_id: 'case-role-release:2',
+        quarantine_lease_renewed_at: expect.any(Date),
+      })
+    );
   });
 
   it('stores same-channel quarantine breaches separately for each case', async () => {

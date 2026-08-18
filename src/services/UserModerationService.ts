@@ -34,7 +34,10 @@ import {
   RoleQuarantineApplyResult,
   RoleQuarantineRestoreResult,
 } from './RoleQuarantineService';
-import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
+import {
+  CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
+  CASE_ROLE_RELEASE_LEASE_MS,
+} from '../utils/caseRoleRelease';
 import { appendVerificationActionFailure } from '../utils/verificationActionFailures';
 import {
   getResolutionAdminActionType,
@@ -869,6 +872,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       }
 
       const releaseAttemptId = `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}${randomUUID()}`;
+      const releaseStaleBefore = new Date(Date.now() - CASE_ROLE_RELEASE_LEASE_MS);
       for (const pendingEvent of pendingVerificationEvents) {
         if (
           pendingEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT ||
@@ -881,7 +885,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           pendingEvent.id,
           member.guild.id,
           member.id,
-          releaseAttemptId
+          releaseAttemptId,
+          releaseStaleBefore
         );
         if (!claimedEvent) {
           throw new Error(`Failed to claim case ${pendingEvent.id} for verification release.`);

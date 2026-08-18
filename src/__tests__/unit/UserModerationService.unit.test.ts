@@ -26,7 +26,10 @@ import { IRoleManager } from '../../services/RoleManager';
 import { IThreadManager } from '../../services/ThreadManager';
 import type { IModerationQueueService } from '../../services/ModerationQueueService';
 import type { IRoleQuarantineService } from '../../services/RoleQuarantineService';
-import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../../utils/caseRoleRelease';
+import {
+  CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
+  CASE_ROLE_RELEASE_LEASE_MS,
+} from '../../utils/caseRoleRelease';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -441,7 +444,8 @@ describe('UserModerationService (unit)', () => {
       verificationEvent.id,
       guildId,
       userId,
-      `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}other-moderator`
+      `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}other-moderator`,
+      new Date(Date.now() - CASE_ROLE_RELEASE_LEASE_MS)
     );
     const service = new UserModerationService(
       serverMemberRepository,
@@ -463,6 +467,58 @@ describe('UserModerationService (unit)', () => {
       expect.objectContaining({
         status: VerificationStatus.PENDING,
         quarantine_attempt_id: `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}other-moderator`,
+      })
+    );
+  });
+
+  it('reclaims an expired release lease after a crashed verification attempt', async () => {
+    const guildId = 'guild-verify-expired-release';
+    const userId = 'user-verify-expired-release';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    const staleLease = new Date(Date.now() - CASE_ROLE_RELEASE_LEASE_MS - 1);
+    await verificationEventRepository.claimCaseRoleRelease(
+      verificationEvent.id,
+      guildId,
+      userId,
+      `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}crashed-moderator`,
+      new Date(0)
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      quarantine_lease_renewed_at: staleLease,
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-retry' } as User)).resolves.toBe(true);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.VERIFIED,
+        quarantine_attempt_id: null,
+        quarantine_lease_renewed_at: null,
       })
     );
   });

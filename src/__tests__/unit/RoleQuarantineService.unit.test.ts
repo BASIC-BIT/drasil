@@ -3,7 +3,10 @@ import {
   RoleQuarantineApplyError,
   RoleQuarantineService,
 } from '../../services/RoleQuarantineService';
-import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../../utils/caseRoleRelease';
+import {
+  CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
+  CASE_ROLE_RELEASE_LEASE_MS,
+} from '../../utils/caseRoleRelease';
 import { InMemoryRoleQuarantineSnapshotRepository } from '../fakes/inMemoryRepositories';
 import { IConfigService } from '../../config/ConfigService';
 import {
@@ -725,12 +728,39 @@ describe('RoleQuarantineService (unit)', () => {
       attention_state: CaseAttentionState.PARKED,
       containment_status: CaseContainmentStatus.CONTAINED,
       quarantine_attempt_id: `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}attempt-1`,
+      quarantine_lease_renewed_at: new Date(),
     } as VerificationEvent;
 
     const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
 
     expect(newMember.roles.add).not.toHaveBeenCalled();
     expect(result.status).toBe('no_new_roles');
+    expect(result.containmentRegressed).toBe(false);
+  });
+
+  it('restores the case role after a verification release lease expires', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const oldMember = createMember([caseRole], [caseRole]);
+    const newMember = createMember([], [caseRole]);
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      new InMemoryRoleQuarantineSnapshotRepository()
+    );
+    const parkedEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_attempt_id: `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}attempt-1`,
+      quarantine_lease_renewed_at: new Date(Date.now() - CASE_ROLE_RELEASE_LEASE_MS - 1),
+    } as VerificationEvent;
+
+    const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+
+    expect(newMember.roles.add).toHaveBeenCalledWith(
+      caseRole,
+      `Restore compromised-account quarantine for case ${parkedEvent.id}`
+    );
     expect(result.containmentRegressed).toBe(false);
   });
 

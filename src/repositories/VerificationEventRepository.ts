@@ -16,6 +16,7 @@ import {
   VerificationEvent,
   VerificationStatus,
 } from './types'; // Use local enum
+import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 
 export interface IVerificationEventRepository {
   findByUserAndServer(
@@ -52,7 +53,8 @@ export interface IVerificationEventRepository {
     id: string,
     serverId: string,
     userId: string,
-    attemptId: string
+    attemptId: string,
+    staleBefore: Date
   ): Promise<VerificationEvent | null>;
   renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean>;
   updateQuarantineAttempt(
@@ -165,7 +167,8 @@ export class VerificationEventRepository implements IVerificationEventRepository
     id: string,
     serverId: string,
     userId: string,
-    attemptId: string
+    attemptId: string,
+    staleBefore: Date
   ): Promise<VerificationEvent | null> {
     try {
       return (await this.prisma.$transaction(async (transaction) => {
@@ -178,10 +181,20 @@ export class VerificationEventRepository implements IVerificationEventRepository
             case_kind: CaseKind.COMPROMISED_ACCOUNT,
             attention_state: CaseAttentionState.PARKED,
             containment_status: CaseContainmentStatus.CONTAINED,
-            quarantine_attempt_id: null,
+            OR: [
+              { quarantine_attempt_id: null },
+              {
+                quarantine_attempt_id: { startsWith: CASE_ROLE_RELEASE_ATTEMPT_PREFIX },
+                OR: [
+                  { quarantine_lease_renewed_at: null },
+                  { quarantine_lease_renewed_at: { lte: staleBefore } },
+                ],
+              },
+            ],
           },
           data: {
             quarantine_attempt_id: attemptId,
+            quarantine_lease_renewed_at: new Date(),
             updated_at: new Date(),
           },
         });

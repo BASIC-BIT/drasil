@@ -51,6 +51,7 @@ import {
   MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY,
   MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY,
 } from '../../utils/detectionResponseSettings';
+import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../../utils/caseRoleRelease';
 import {
   DEFAULT_USER_REPORT_EXTERNAL_RESPONSE_MODE,
   DEFAULT_USER_REPORT_REASON_REQUIRED,
@@ -646,7 +647,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     id: string,
     serverId: string,
     userId: string,
-    attemptId: string
+    attemptId: string,
+    staleBefore: Date
   ): Promise<VerificationEvent | null> {
     const eventIndex = this.events.findIndex(
       (event) =>
@@ -657,7 +659,11 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
         event.attention_state === CaseAttentionState.PARKED &&
         event.containment_status === CaseContainmentStatus.CONTAINED &&
-        event.quarantine_attempt_id === null
+        (event.quarantine_attempt_id === null ||
+          (event.quarantine_attempt_id?.startsWith(CASE_ROLE_RELEASE_ATTEMPT_PREFIX) === true &&
+            (event.quarantine_lease_renewed_at === null ||
+              event.quarantine_lease_renewed_at === undefined ||
+              event.quarantine_lease_renewed_at <= staleBefore)))
     );
     if (eventIndex === -1) {
       return null;
@@ -666,6 +672,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     const claimed = {
       ...this.events[eventIndex],
       quarantine_attempt_id: attemptId,
+      quarantine_lease_renewed_at: new Date(),
       updated_at: new Date(),
     };
     this.events[eventIndex] = claimed;
