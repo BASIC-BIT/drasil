@@ -369,6 +369,53 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
+  it('claims an incomplete quarantine before removing the case role for verification', async () => {
+    const guildId = 'guild-verify-incomplete-release-claim';
+    const userId = 'user-verify-incomplete-release-claim';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+    });
+    roleManager.removeCaseRole.mockImplementation(async () => {
+      const claimedEvent = await verificationEventRepository.findById(verificationEvent.id);
+      expect(claimedEvent?.quarantine_attempt_id).toEqual(
+        expect.stringMatching(`^${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}`)
+      );
+      return true;
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).resolves.toBe(
+      true
+    );
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.VERIFIED,
+        quarantine_attempt_id: null,
+      })
+    );
+  });
+
   it('removes the persisted quarantine role after the configured role changes', async () => {
     const guildId = 'guild-verify-persisted-role';
     const userId = 'user-verify-persisted-role';

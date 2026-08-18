@@ -2850,9 +2850,26 @@ export class InteractionHandler implements IInteractionHandler {
         );
       }
 
+      const repairedCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        userId,
+        interaction.guildId
+      );
+      if (!repairedCase || repairedCase.id !== activeCase.id) {
+        throw new Error('The active case changed after repair. Return to the case and retry.');
+      }
+      const repairedPreview = await this.accountQuarantineService.preview(member, repairedCase);
+      const repairedFingerprint = (
+        await this.buildAccountQuarantinePreviewFingerprint(repairedPreview, repairedCase)
+      ).slice(0, ACCOUNT_QUARANTINE_CONFIRMATION_FINGERPRINT_LENGTH);
+      if (repairedFingerprint !== previewedFingerprint) {
+        throw new Error(
+          'The live account-quarantine containment state changed. Return to the case and run a new preview.'
+        );
+      }
+
       const result = await this.accountQuarantineService.quarantine(
         member,
-        activeCase,
+        repairedCase,
         interaction.user,
         reason
       );

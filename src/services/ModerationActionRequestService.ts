@@ -1027,9 +1027,36 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       );
     }
 
+    const repairedCase = await this.verificationEventRepository.findActiveByUserAndServer(
+      request.target_user_id ?? '',
+      request.server_id
+    );
+    if (!repairedCase || repairedCase.id !== activeCase.id) {
+      throw new Error('The previewed verification case is no longer active.');
+    }
+    const repairedPreview = await accountQuarantineService.preview(member, repairedCase);
+    const [repairedRecoveryThreadReady, repairedAdminNotificationReady] = await Promise.all([
+      this.isRecoveryThreadReady(repairedCase.thread_id),
+      this.isAdminNotificationReady(
+        repairedCase.notification_channel_id,
+        repairedCase.notification_message_id
+      ),
+    ]);
+    const repairedFingerprint = buildAccountQuarantinePreviewFingerprint(repairedPreview, {
+      adminNotificationReady: repairedAdminNotificationReady,
+      recoveryThreadId: repairedCase.thread_id,
+      recoveryThreadReady: repairedRecoveryThreadReady,
+    });
+    if (
+      this.readMetadataString(previewRequest.result, 'containment_fingerprint') !==
+      repairedFingerprint
+    ) {
+      throw new Error('The live account-quarantine containment state changed; run a new preview.');
+    }
+
     const result = await accountQuarantineService.quarantine(
       member,
-      activeCase,
+      repairedCase,
       moderator,
       reason,
       { moderationActionRequestId: request.id }

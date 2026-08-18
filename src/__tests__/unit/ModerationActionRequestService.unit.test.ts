@@ -1612,6 +1612,29 @@ describe('ModerationActionRequestService', () => {
     ]);
   });
 
+  it('rejects web account quarantine when case repair changes the previewed containment state', async () => {
+    const { accountQuarantineService, repository, securityActionService, service } = buildService([
+      accountQuarantineExecuteRequest,
+    ]);
+    accountQuarantineService.preview
+      .mockResolvedValueOnce(defaultAccountQuarantinePreview)
+      .mockResolvedValueOnce({
+        ...defaultAccountQuarantinePreview,
+        caseRoleId: 'repaired-case-role',
+      });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(securityActionService.repairActiveCase).toHaveBeenCalled();
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        error: 'The live account-quarantine containment state changed; run a new preview.',
+        id: accountQuarantineExecuteRequest.id,
+      },
+    ]);
+  });
+
   it('recovers a committed quarantine receipt after a worker interruption', async () => {
     const {
       accountQuarantineService,
@@ -1726,7 +1749,7 @@ describe('ModerationActionRequestService', () => {
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
-    expect(accountQuarantineService.preview).toHaveBeenCalledTimes(1);
+    expect(accountQuarantineService.preview).toHaveBeenCalledTimes(2);
     expect(accountQuarantineService.quarantine).toHaveBeenCalledTimes(1);
     expect(repository.completed).toEqual([
       {

@@ -59,6 +59,7 @@ export const moderationInboxItemSchema = z.object({
   updatedAt: z.string(),
   stale: z.boolean(),
   staleHours: z.number().int().min(0),
+  caseKind: z.enum(['standard', 'compromised_account']).optional(),
   detailHref: z.string().nullable(),
   links: z.array(moderationInboxLinkSchema),
   allowedActions: z.array(moderationInboxActionSchema),

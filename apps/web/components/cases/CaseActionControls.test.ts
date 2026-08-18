@@ -61,6 +61,20 @@ function renderControls(preview: ModerationActionRequestSummary): string {
   );
 }
 
+function renderVerificationControls(useInboxAction: boolean): string {
+  return renderToStaticMarkup(
+    createElement(CaseActionControls, {
+      actions: ['verify_user'],
+      canQueueCaseActions: true,
+      caseId: 'case-1',
+      guildId: 'guild-1',
+      queueCaseAction: queueCaseAction as never,
+      queueInboxCaseAction: useInboxAction ? (queueInboxCaseAction as never) : undefined,
+      requiresVerificationReleaseConfirmation: true,
+    })
+  );
+}
+
 describe('CaseActionControls account quarantine', () => {
   it('allows a completed stale preview to be refreshed', () => {
     const markup = renderControls(completedPreview('2020-01-01T00:00:00.000Z'));
@@ -82,4 +96,19 @@ describe('CaseActionControls account quarantine', () => {
       'The user stays in the server, their verification thread remains open, and no Discord timeout is applied.'
     );
   });
+
+  it.each([false, true])(
+    'requires confirmation before releasing account quarantine (inbox action: %s)',
+    (useInboxAction) => {
+      const markup = renderVerificationControls(useInboxAction);
+
+      expect(markup).toContain('Verify User');
+      expect(markup).toContain('Confirm Verify User');
+      expect(markup).toContain('name="confirmAction"');
+      expect(markup).toContain('required=""');
+      expect(markup).toContain(
+        'This releases the account quarantine, restores eligible snapshotted roles, and resolves the open verification case.'
+      );
+    }
+  );
 });

@@ -1000,10 +1000,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
 
       const releaseStaleBefore = new Date(Date.now() - CASE_ROLE_RELEASE_LEASE_MS);
       for (const pendingEvent of pendingVerificationEvents) {
-        if (
-          pendingEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT ||
-          pendingEvent.attention_state !== CaseAttentionState.PARKED
-        ) {
+        if (pendingEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT) {
           continue;
         }
 

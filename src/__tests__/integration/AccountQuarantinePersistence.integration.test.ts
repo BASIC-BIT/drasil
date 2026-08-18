@@ -567,6 +567,82 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     );
   });
 
+  it('fences verification release for incomplete compromised-account cases', async () => {
+    const serverId = 'guild-incomplete-release-claim';
+    const userId = 'user-incomplete-release-claim';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser(userId, 'target');
+    const verification = await verifications.createFromDetection(
+      null,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verifications.update(verification.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+    });
+
+    const firstAttemptId = 'case-role-release:incomplete-1';
+    await expect(
+      verifications.claimCaseRoleRelease(
+        verification.id,
+        serverId,
+        userId,
+        firstAttemptId,
+        new Date(0)
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: firstAttemptId,
+      })
+    );
+    await expect(
+      verifications.rollbackCaseRoleRelease(verification.id, firstAttemptId)
+    ).resolves.toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        quarantine_attempt_id: null,
+      })
+    );
+
+    const secondAttemptId = 'case-role-release:incomplete-2';
+    const claimed = await verifications.claimCaseRoleRelease(
+      verification.id,
+      serverId,
+      userId,
+      secondAttemptId,
+      new Date(0)
+    );
+    await expect(
+      verifications.completeVerificationRelease(
+        [
+          {
+            id: verification.id,
+            metadata: claimed?.metadata ?? verification.metadata,
+            requiresCaseRoleReleaseClaim: true,
+          },
+        ],
+        secondAttemptId,
+        'moderator-verify',
+        new Date()
+      )
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: verification.id,
+        status: VerificationStatus.VERIFIED,
+        quarantine_attempt_id: null,
+      }),
+    ]);
+  });
+
   it('claims moderator attention for an incomplete compromised quarantine', async () => {
     const serverId = 'guild-incomplete-attention-claim';
     const userId = 'user-incomplete-attention-claim';

@@ -98,11 +98,12 @@ const baseQueueRow: ModerationQueueRow = {
 
 describe('moderationInboxDataAdapter', () => {
   it('converts active case summaries into inbox case items', () => {
-    const item = caseSummaryToInboxItem(baseCase);
+    const item = caseSummaryToInboxItem({ ...baseCase, caseKind: 'compromised_account' });
 
     expect(item).toEqual(
       expect.objectContaining({
         id: 'case:case-1',
+        caseKind: 'compromised_account',
         kind: 'case',
         sourceId: 'case-1',
         title: 'Pending moderation case',

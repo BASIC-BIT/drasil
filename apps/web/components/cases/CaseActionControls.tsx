@@ -263,6 +263,7 @@ export function CaseActionControls({
   messageCleanup,
   queueCaseAction,
   queueInboxCaseAction,
+  requiresVerificationReleaseConfirmation = false,
 }: {
   readonly actions: readonly CaseAction[];
   readonly accountQuarantineRequests?: AccountQuarantineActionRequests;
@@ -275,6 +276,7 @@ export function CaseActionControls({
   readonly messageCleanup?: CaseMessageCleanupIntegration;
   readonly queueCaseAction: QueueCaseAction;
   readonly queueInboxCaseAction?: QueueInboxCaseAction;
+  readonly requiresVerificationReleaseConfirmation?: boolean;
 }) {
   const executableActions = executableCaseActions.filter((action) => actions.includes(action));
   const hasAccountQuarantine = executableActions.includes('quarantine_compromised_account');
@@ -286,10 +288,14 @@ export function CaseActionControls({
   }
 
   const standardActions = ordinaryExecutableActions.filter(
-    (action) => !destructiveCaseActionSet.has(action)
+    (action) =>
+      !destructiveCaseActionSet.has(action) &&
+      !(action === 'verify_user' && requiresVerificationReleaseConfirmation)
   );
-  const destructiveActions = ordinaryExecutableActions.filter((action) =>
-    destructiveCaseActionSet.has(action)
+  const confirmationActions = ordinaryExecutableActions.filter(
+    (action) =>
+      destructiveCaseActionSet.has(action) ||
+      (action === 'verify_user' && requiresVerificationReleaseConfirmation)
   );
 
   return (
@@ -339,7 +345,7 @@ export function CaseActionControls({
             </button>
           )
         )}
-        {destructiveActions.map((action) =>
+        {confirmationActions.map((action) =>
           canQueueCaseActions && (action === 'ban_user' || action === 'ban_by_id') ? (
             <CaseBanActionControl
               banActionLabel={formatCaseAction(action)}
@@ -384,12 +390,18 @@ export function CaseActionControls({
                   formClassName="destructive-action-panel"
                   requestBaseHref={`/admin/guild/${guildId}/operations`}
                 >
+                  {action === 'verify_user' ? (
+                    <p className="muted">
+                      This releases the account quarantine, restores eligible snapshotted roles,
+                      and resolves the open verification case.
+                    </p>
+                  ) : null}
                   <label className="field destructive-reason">
                     <span>Reason</span>
                     <textarea name="reason" rows={3} />
                   </label>
                   <label className="checkbox-field destructive-confirm">
-                    <input name="confirmAction" type="checkbox" />
+                    <input name="confirmAction" required type="checkbox" />
                     <span>Confirm {formatCaseAction(action)}</span>
                   </label>
                 </InboxActionForm>
@@ -398,12 +410,18 @@ export function CaseActionControls({
                   action={queueCaseAction.bind(null, guildId, caseId, action)}
                   className="destructive-action-panel"
                 >
+                  {action === 'verify_user' ? (
+                    <p className="muted">
+                      This releases the account quarantine, restores eligible snapshotted roles,
+                      and resolves the open verification case.
+                    </p>
+                  ) : null}
                   <label className="field destructive-reason">
                     <span>Reason</span>
                     <textarea name="reason" rows={3} />
                   </label>
                   <label className="checkbox-field destructive-confirm">
-                    <input name="confirmAction" type="checkbox" />
+                    <input name="confirmAction" required type="checkbox" />
                     <span>Confirm {formatCaseAction(action)}</span>
                   </label>
                   <button className="button compact-button danger-button" type="submit">

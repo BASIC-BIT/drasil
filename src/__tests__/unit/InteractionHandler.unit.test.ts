@@ -3127,6 +3127,78 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  it('rejects a quarantine when case repair changes the previewed containment state', async () => {
+    const verificationEvent = buildVerificationEvent('ver-quarantine-repair-drift', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    securityActionService.repairActiveCase.mockResolvedValue({
+      repaired: true,
+      notificationReady: true,
+      threadCreated: false,
+      threadId: 'thread-1',
+      verificationEventId: verificationEvent.id,
+      userAdded: true,
+      promptSent: false,
+      promptAlreadyPresent: true,
+      message: 'Active case repaired.',
+    });
+    const changedPreview: AccountQuarantinePreview = {
+      ...readyAccountQuarantinePreview,
+      rolePreview: {
+        ...readyAccountQuarantinePreview.rolePreview,
+        originalRoleIds: ['role-1', 'repaired-role'],
+        plannedRoleIds: ['role-1', 'repaired-role'],
+      },
+    };
+    const accountQuarantineService = {
+      preview: jest
+        .fn()
+        .mockResolvedValueOnce(readyAccountQuarantinePreview)
+        .mockResolvedValueOnce(changedPreview),
+      quarantine: jest.fn(),
+    };
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      id: 'guild-1',
+      members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      accountQuarantineService as any
+    );
+    const interaction = {
+      customId: buildAccountQuarantineModalCustomId(verificationEvent),
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      fields: { getTextInputValue: jest.fn().mockReturnValue('Reported compromise') },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(securityActionService.repairActiveCase).toHaveBeenCalled();
+    expect(accountQuarantineService.preview).toHaveBeenCalledTimes(2);
+    expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining('containment state changed'),
+    });
+  });
+
   it('binds modal submission to the containment preview shown before Continue', async () => {
     const verificationEvent = buildVerificationEvent('ver-quarantine-confirmation-drift', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);

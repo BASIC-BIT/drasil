@@ -253,13 +253,21 @@ export class VerificationEventRepository implements IVerificationEventRepository
             user_id: userId,
             status: VerificationStatus.PENDING,
             case_kind: CaseKind.COMPROMISED_ACCOUNT,
-            attention_state: CaseAttentionState.PARKED,
             OR: [
               {
+                attention_state: CaseAttentionState.PARKED,
                 containment_status: CaseContainmentStatus.CONTAINED,
                 quarantine_attempt_id: null,
               },
               {
+                attention_state: CaseAttentionState.REVIEW_REQUIRED,
+                containment_status: CaseContainmentStatus.INCOMPLETE,
+                quarantine_attempt_id: null,
+              },
+              {
+                attention_state: {
+                  in: [CaseAttentionState.PARKED, CaseAttentionState.REVIEW_REQUIRED],
+                },
                 containment_status: CaseContainmentStatus.IN_PROGRESS,
                 AND: [
                   {
@@ -512,7 +520,6 @@ export class VerificationEventRepository implements IVerificationEventRepository
               ...(completion.requiresCaseRoleReleaseClaim
                 ? {
                     case_kind: CaseKind.COMPROMISED_ACCOUNT,
-                    attention_state: CaseAttentionState.PARKED,
                     containment_status: CaseContainmentStatus.IN_PROGRESS,
                     quarantine_attempt_id: attemptId,
                   }
@@ -558,17 +565,33 @@ export class VerificationEventRepository implements IVerificationEventRepository
   async rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null> {
     try {
       return (await this.prisma.$transaction(async (transaction) => {
+        const claimedEvent = await transaction.verification_events.findFirst({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+          },
+        });
+        if (!claimedEvent) {
+          return null;
+        }
+        const containmentStatus =
+          claimedEvent.attention_state === CaseAttentionState.PARKED
+            ? CaseContainmentStatus.CONTAINED
+            : CaseContainmentStatus.INCOMPLETE;
         const rolledBack = await transaction.verification_events.updateMany({
           where: {
             id,
             status: VerificationStatus.PENDING,
             case_kind: CaseKind.COMPROMISED_ACCOUNT,
-            attention_state: CaseAttentionState.PARKED,
+            attention_state: claimedEvent.attention_state,
             containment_status: CaseContainmentStatus.IN_PROGRESS,
             quarantine_attempt_id: attemptId,
           },
           data: {
-            containment_status: CaseContainmentStatus.CONTAINED,
+            containment_status: containmentStatus,
             quarantine_attempt_id: null,
             quarantine_lease_renewed_at: null,
             updated_at: new Date(),
@@ -839,7 +862,9 @@ export class VerificationEventRepository implements IVerificationEventRepository
         where: {
           status: VerificationStatus.PENDING,
           case_kind: CaseKind.COMPROMISED_ACCOUNT,
-          attention_state: CaseAttentionState.PARKED,
+          attention_state: {
+            in: [CaseAttentionState.PARKED, CaseAttentionState.REVIEW_REQUIRED],
+          },
           containment_status: CaseContainmentStatus.IN_PROGRESS,
           AND: [
             {

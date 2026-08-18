@@ -539,7 +539,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         (event) =>
           event.status === VerificationStatus.PENDING &&
           event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-          event.attention_state === CaseAttentionState.PARKED &&
+          (event.attention_state === CaseAttentionState.PARKED ||
+            event.attention_state === CaseAttentionState.REVIEW_REQUIRED) &&
           event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
           isCaseRoleReleaseRecoveryAttempt(event.quarantine_attempt_id) &&
           (event.quarantine_lease_renewed_at === null ||
@@ -719,19 +720,23 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
   ): Promise<VerificationEvent | null> {
     const eventIndex = this.events.findIndex(
       (event) =>
-        event.id === id &&
-        event.server_id === serverId &&
-        event.user_id === userId &&
-        event.status === VerificationStatus.PENDING &&
-        event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-        event.attention_state === CaseAttentionState.PARKED &&
-        ((event.containment_status === CaseContainmentStatus.CONTAINED &&
+        (event.id === id &&
+          event.server_id === serverId &&
+          event.user_id === userId &&
+          event.status === VerificationStatus.PENDING &&
+          event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+          ((event.attention_state === CaseAttentionState.PARKED &&
+            event.containment_status === CaseContainmentStatus.CONTAINED) ||
+            (event.attention_state === CaseAttentionState.REVIEW_REQUIRED &&
+              event.containment_status === CaseContainmentStatus.INCOMPLETE)) &&
           event.quarantine_attempt_id === null) ||
-          (event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
-            isCaseRoleReleaseRecoveryAttempt(event.quarantine_attempt_id) &&
-            (event.quarantine_lease_renewed_at === null ||
-              event.quarantine_lease_renewed_at === undefined ||
-              event.quarantine_lease_renewed_at <= staleBefore)))
+        (event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+          (event.attention_state === CaseAttentionState.PARKED ||
+            event.attention_state === CaseAttentionState.REVIEW_REQUIRED) &&
+          isCaseRoleReleaseRecoveryAttempt(event.quarantine_attempt_id) &&
+          (event.quarantine_lease_renewed_at === null ||
+            event.quarantine_lease_renewed_at === undefined ||
+            event.quarantine_lease_renewed_at <= staleBefore))
     );
     if (eventIndex === -1) {
       return null;
@@ -911,7 +916,6 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
           event.status === VerificationStatus.PENDING &&
           (completion.requiresCaseRoleReleaseClaim
             ? event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-              event.attention_state === CaseAttentionState.PARKED &&
               event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
               event.quarantine_attempt_id === attemptId
             : event.containment_status !== CaseContainmentStatus.IN_PROGRESS)
@@ -949,7 +953,6 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         event.id === id &&
         event.status === VerificationStatus.PENDING &&
         event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-        event.attention_state === CaseAttentionState.PARKED &&
         event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
         event.quarantine_attempt_id === attemptId
     );
@@ -959,7 +962,10 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
 
     const rolledBack = {
       ...this.events[eventIndex],
-      containment_status: CaseContainmentStatus.CONTAINED,
+      containment_status:
+        this.events[eventIndex].attention_state === CaseAttentionState.PARKED
+          ? CaseContainmentStatus.CONTAINED
+          : CaseContainmentStatus.INCOMPLETE,
       quarantine_attempt_id: null,
       quarantine_lease_renewed_at: null,
       updated_at: new Date(),

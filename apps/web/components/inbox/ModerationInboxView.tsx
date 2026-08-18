@@ -660,6 +660,7 @@ function InboxActions({
           messageCleanup={messageCleanup}
           queueCaseAction={queueCaseAction}
           queueInboxCaseAction={queueInboxCaseAction}
+          requiresVerificationReleaseConfirmation={item.caseKind === 'compromised_account'}
         />
       ) : null}
     </div>

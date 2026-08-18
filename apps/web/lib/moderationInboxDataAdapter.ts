@@ -249,6 +249,7 @@ export function caseSummaryToInboxItem(item: CaseSummary): ModerationInboxItem {
     updatedAt: item.updatedAt,
     stale: item.stale,
     staleHours,
+    caseKind: item.caseKind,
     detailHref: `/admin/guild/${item.guildId}/cases/${item.id}`,
     links: item.surfaces.map((surface) => ({ label: surface.label, url: surface.url })),
     allowedActions: ['view_case', ...item.allowedActions.map((action) => caseActionMap[action])],

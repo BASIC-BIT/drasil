@@ -176,9 +176,17 @@ async function assertBotCanRunDestructiveAction(
 async function assertCanQueueCaseAction(
   action: WebCaseAction,
   guild: { readonly id: string; readonly owner: boolean; readonly permissions: string },
+  caseId: string,
   formData: FormData | undefined
 ): Promise<CaseActionOptions> {
   assertActorPermission(action, guild);
+
+  if (action === 'verify_user') {
+    const activeCase = await createActiveCaseDataAdapter().getCaseDetail(guild.id, caseId);
+    if (activeCase?.caseKind === 'compromised_account' && formData?.get('confirmAction') !== 'on') {
+      throw new Error('Confirm the account-quarantine release before queueing verification.');
+    }
+  }
 
   if (action === 'quarantine_compromised_account') {
     const quarantinePhase = readFormString(formData, 'quarantinePhase');
@@ -266,7 +274,12 @@ async function performQueueCaseAction(
 
   const setupService = createSetupDashboardService();
   const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
-  const options = await assertCanQueueCaseAction(parsedAction as WebCaseAction, guild, formData);
+  const options = await assertCanQueueCaseAction(
+    parsedAction as WebCaseAction,
+    guild,
+    caseId,
+    formData
+  );
   const result = await createActiveCaseDataAdapter().queueCaseAction({
     action: parsedAction as WebCaseAction,
     adminId: session.userId,

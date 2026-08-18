@@ -242,6 +242,7 @@ function DiscordSurfaces({
         guildId={guildId}
         messageCleanup={messageCleanup}
         queueCaseAction={queueCaseAction}
+        requiresVerificationReleaseConfirmation={detail.caseKind === 'compromised_account'}
       />
       <ActionPills actions={detail.allowedActions} />
     </section>

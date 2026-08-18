@@ -218,10 +218,15 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
         attemptId,
         {
           case_kind: CaseKind.COMPROMISED_ACCOUNT,
-          attention_state: CaseAttentionState.PARKED,
-          containment_status: CaseContainmentStatus.CONTAINED,
-          parked_at: claimed.parked_at,
-          parked_by: claimed.parked_by,
+          attention_state: claimed.attention_state,
+          containment_status:
+            claimed.attention_state === CaseAttentionState.PARKED
+              ? CaseContainmentStatus.CONTAINED
+              : CaseContainmentStatus.INCOMPLETE,
+          parked_at:
+            claimed.attention_state === CaseAttentionState.PARKED ? claimed.parked_at : null,
+          parked_by:
+            claimed.attention_state === CaseAttentionState.PARKED ? claimed.parked_by : null,
         }
       );
       if (!completed) {

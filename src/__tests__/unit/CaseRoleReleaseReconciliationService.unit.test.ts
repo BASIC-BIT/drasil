@@ -143,6 +143,58 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
     );
   });
 
+  it('returns an expired incomplete-case release to incomplete review', async () => {
+    const now = new Date('2026-08-18T12:00:00.000Z');
+    const staleBefore = new Date(now.getTime() - CASE_ROLE_RELEASE_LEASE_MS);
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+      thread_id: 'thread-1',
+    });
+    await verificationEvents.claimCaseRoleRelease(
+      verificationEvent.id,
+      'guild-1',
+      'user-1',
+      `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}crashed`,
+      new Date(0)
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      quarantine_lease_renewed_at: staleBefore,
+    });
+    const member = { id: 'user-1', roles: { cache: new Map() } };
+    const guild = { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue(member) } };
+    const roleManager = {
+      assignCaseRole: jest.fn().mockResolvedValue(true),
+      removeCaseRole: jest.fn(),
+    };
+    const service = buildService({
+      client: { guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() } },
+      verificationEvents,
+      roleManager,
+    });
+
+    await service.runOnce(now);
+
+    expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
+    await expect(verificationEvents.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        quarantine_attempt_id: null,
+        quarantine_lease_renewed_at: null,
+      })
+    );
+  });
+
   it('immediately surfaces a failed expired-release reconciliation', async () => {
     const now = new Date('2026-08-18T12:00:00.000Z');
     const staleBefore = new Date(now.getTime() - CASE_ROLE_RELEASE_LEASE_MS);
