@@ -116,7 +116,10 @@ describe('CaseRoleLockdownService (unit)', () => {
       },
       permissionsFor: jest.fn().mockReturnValue({
         has: jest.fn((permission: bigint) =>
-          (options.effectiveMemberPermissions ?? []).includes(permission)
+          (
+            options.effectiveMemberPermissions ??
+            (options.id === 'verification-channel-1' ? recoveryParentAllowedPermissions : [])
+          ).includes(permission)
         ),
       }),
       threads: {
@@ -282,7 +285,10 @@ describe('CaseRoleLockdownService (unit)', () => {
       id: 'verification-channel-1',
       name: 'verification',
       type: ChannelType.GuildText,
-      effectiveMemberPermissions: [PermissionFlagsBits.SendMessages],
+      effectiveMemberPermissions: [
+        ...recoveryParentAllowedPermissions,
+        PermissionFlagsBits.SendMessages,
+      ],
     });
     const guild = createGuild([verificationChannel]);
     const member = {
@@ -351,6 +357,71 @@ describe('CaseRoleLockdownService (unit)', () => {
         }),
       ])
     );
+  });
+
+  it('blocks containment when the auto-allowed report surface remains writable', async () => {
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+    });
+    const reportChannel = createChannel({
+      id: 'report-channel-1',
+      name: 'report',
+      type: ChannelType.GuildText,
+      effectiveMemberPermissions: [
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.SendMessagesInThreads,
+      ],
+    });
+    const guild = createGuild([verificationChannel, reportChannel]);
+    const member = {
+      id: 'user-1',
+      guild,
+      roles: { cache: new Map([[caseRoleId, { id: caseRoleId }]]) },
+    } as any;
+    const service = new CaseRoleLockdownService(
+      createConfigService({ report_instructions_channel_id: 'report-channel-1' }) as any
+    );
+
+    const audit = await service.auditMemberBypasses(member, new Set(), 'recovery-thread-1');
+
+    expect(audit.bypasses).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channelId: 'report-channel-1',
+          permissions: ['Send Messages', 'Send Messages in Threads'],
+        }),
+      ])
+    );
+  });
+
+  it('blocks containment when effective recovery permissions are missing', async () => {
+    const verificationChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'verification',
+      type: ChannelType.GuildText,
+      effectiveMemberPermissions: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessagesInThreads,
+      ],
+    });
+    const guild = createGuild([verificationChannel]);
+    const member = {
+      id: 'user-1',
+      guild,
+      roles: { cache: new Map([[caseRoleId, { id: caseRoleId }]]) },
+    } as any;
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const audit = await service.auditMemberBypasses(member, new Set(), 'recovery-thread-1');
+
+    expect(audit.bypasses).toEqual([
+      expect.objectContaining({
+        channelId: 'verification-channel-1',
+        permissions: ['Missing Read Message History'],
+      }),
+    ]);
   });
 
   it('blocks containment when the recovery parent has an active public sibling thread', async () => {

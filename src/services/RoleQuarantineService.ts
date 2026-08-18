@@ -258,7 +258,10 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       snapshot.purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT
         ? COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS
         : STANDARD_QUARANTINE_PRIVILEGED_ROLE_PERMISSIONS;
-    const attemptedRoleIds = [...snapshot.removed_role_ids];
+    const originalRoleIds = new Set(snapshot.original_role_ids);
+    const attemptedRoleIds = snapshot.removed_role_ids.filter((roleId) =>
+      originalRoleIds.has(roleId)
+    );
     const restoredRoleIds: string[] = [];
     const skippedRoles: RoleQuarantineRoleDetail[] = [];
     const failedRestores: RoleQuarantineRoleDetail[] = [];
@@ -548,10 +551,11 @@ export class RoleQuarantineService implements IRoleQuarantineService {
         this.toRoleDetail(classifiedRole.role, classifiedRole.skipReason ?? 'skipped')
       );
     const newlyPlannedRoleIds = removableRoles.map((role) => role.id);
-    const originalRoleIds = this.uniqueStrings([
-      ...(activeSnapshot?.original_role_ids ?? []),
-      ...currentRoleIds,
-    ]);
+    const continuingCompromisedSnapshot =
+      activeSnapshot?.purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT;
+    const originalRoleIds = continuingCompromisedSnapshot
+      ? activeSnapshot.original_role_ids
+      : this.uniqueStrings([...(activeSnapshot?.original_role_ids ?? []), ...currentRoleIds]);
     const plannedRoleIds = this.uniqueStrings([
       ...(activeSnapshot?.planned_role_ids ?? []),
       ...newlyPlannedRoleIds,
@@ -571,14 +575,13 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       };
     }
 
-    const privilegedRoleIds = this.uniqueStrings([
-      ...this.readStringArray(
-        this.metadataToRecord(activeSnapshot?.metadata).privileged_role_ids_at_snapshot
-      ),
-      ...removableRoles
-        .filter((role) => this.hasPrivilegedPermissions(role, policy.privilegedPermissions))
-        .map((role) => role.id),
-    ]);
+    const privilegedRoleIds = continuingCompromisedSnapshot
+      ? this.readStringArray(
+          this.metadataToRecord(activeSnapshot.metadata).privileged_role_ids_at_snapshot
+        )
+      : removableRoles
+          .filter((role) => this.hasPrivilegedPermissions(role, policy.privilegedPermissions))
+          .map((role) => role.id);
     const snapshotMetadata = {
       ...this.metadataToRecord(activeSnapshot?.metadata),
       created_by:

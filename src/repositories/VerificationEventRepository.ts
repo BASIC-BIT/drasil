@@ -139,13 +139,15 @@ export class VerificationEventRepository implements IVerificationEventRepository
             attention_state: CaseAttentionState.REVIEW_REQUIRED,
             OR: [
               { containment_status: { not: CaseContainmentStatus.IN_PROGRESS } },
-              { updated_at: { lte: staleBefore } },
+              { quarantine_lease_renewed_at: null },
+              { quarantine_lease_renewed_at: { lte: staleBefore } },
             ],
           },
           data: {
             case_kind: CaseKind.COMPROMISED_ACCOUNT,
             containment_status: CaseContainmentStatus.IN_PROGRESS,
             quarantine_attempt_id: attemptId,
+            quarantine_lease_renewed_at: new Date(),
             updated_at: new Date(),
           },
         });
@@ -202,7 +204,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
           containment_status: CaseContainmentStatus.IN_PROGRESS,
           quarantine_attempt_id: attemptId,
         },
-        data: { updated_at: new Date() },
+        data: { quarantine_lease_renewed_at: new Date() },
       });
       return renewed.count === 1;
     } catch (error) {
@@ -229,6 +231,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             attention_state: data.attention_state as case_attention_state | undefined,
             containment_status: data.containment_status as case_containment_status | undefined,
             quarantine_attempt_id: null,
+            quarantine_lease_renewed_at: null,
             parked_at: data.parked_at,
             parked_by: data.parked_by,
             metadata: data.metadata as Prisma.InputJsonValue | undefined,
@@ -458,6 +461,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
         attention_state: data.attention_state as case_attention_state | undefined,
         containment_status: data.containment_status as case_containment_status | undefined,
         quarantine_attempt_id: data.quarantine_attempt_id,
+        quarantine_lease_renewed_at: data.quarantine_lease_renewed_at,
         parked_at: data.parked_at,
         parked_by: data.parked_by,
         review_after: data.review_after,
@@ -483,6 +487,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
           updateData.attention_state = CaseAttentionState.REVIEW_REQUIRED;
           updateData.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
           updateData.quarantine_attempt_id = null;
+          updateData.quarantine_lease_renewed_at = null;
           updateData.parked_at = null;
           updateData.parked_by = null;
           // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- This check is necessary
@@ -491,9 +496,11 @@ export class VerificationEventRepository implements IVerificationEventRepository
           updateData.resolved_at = null;
           updateData.resolved_by = null;
           if (options.preservePendingCaseState !== true) {
+            updateData.case_kind = CaseKind.STANDARD;
             updateData.attention_state = CaseAttentionState.REVIEW_REQUIRED;
             updateData.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
             updateData.quarantine_attempt_id = null;
+            updateData.quarantine_lease_renewed_at = null;
             updateData.parked_at = null;
             updateData.parked_by = null;
           }

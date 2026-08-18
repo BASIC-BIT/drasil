@@ -941,12 +941,13 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    const cachedConfig = this.configService.getCachedServerConfig(message.guild.id);
-    if (!cachedConfig) {
-      return;
-    }
-
     try {
+      await this.ensureConfigInitialized();
+      const cachedConfig = this.configService.getCachedServerConfig(message.guild.id);
+      if (!cachedConfig) {
+        return;
+      }
+
       if (!getAccountQuarantineSettings(cachedConfig.settings).enabled) {
         const parkedUserIds = await this.getCachedParkedQuarantineUserIds(message.guild.id);
         if (!parkedUserIds.has(message.author.id)) {

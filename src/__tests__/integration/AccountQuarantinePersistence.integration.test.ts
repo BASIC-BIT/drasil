@@ -155,6 +155,7 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
         case_kind: CaseKind.COMPROMISED_ACCOUNT,
         containment_status: CaseContainmentStatus.IN_PROGRESS,
         quarantine_attempt_id: 'attempt-1',
+        quarantine_lease_renewed_at: expect.any(Date),
       })
     );
     await expect(
@@ -190,11 +191,9 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       verifications.update(verification.id, { status: VerificationStatus.VERIFIED })
     ).resolves.toBeNull();
 
-    await verifications.update(
-      verification.id,
-      { updated_at: new Date('2026-01-01T00:00:00.000Z') },
-      { touchUpdatedAt: false }
-    );
+    await verifications.update(verification.id, {
+      quarantine_lease_renewed_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
     await expect(
       verifications.claimQuarantineAttempt(
         verification.id,
@@ -269,8 +268,10 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     expect(reopened).toEqual(
       expect.objectContaining({
         status: VerificationStatus.PENDING,
+        case_kind: CaseKind.STANDARD,
         attention_state: CaseAttentionState.REVIEW_REQUIRED,
         containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        quarantine_lease_renewed_at: null,
         parked_at: null,
         parked_by: null,
       })

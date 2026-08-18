@@ -445,7 +445,8 @@ model verification_events {
   case_kind                                                                           case_kind                    @default(standard)
   attention_state                                                                     case_attention_state         @default(review_required)
   containment_status                                                                  case_containment_status      @default(not_applicable)
-  quarantine_attempt_id                                                              String?
+  quarantine_attempt_id                                                               String?
+  quarantine_lease_renewed_at                                                         DateTime?                    @db.Timestamptz(6)
   parked_at                                                                           DateTime?                    @db.Timestamptz(6)
   parked_by                                                                           String?
   review_after                                                                        DateTime?                    @db.Timestamptz(6)

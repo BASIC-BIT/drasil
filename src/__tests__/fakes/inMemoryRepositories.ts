@@ -570,6 +570,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       attention_state: CaseAttentionState.REVIEW_REQUIRED,
       containment_status: CaseContainmentStatus.NOT_APPLICABLE,
       quarantine_attempt_id: null,
+      quarantine_lease_renewed_at: null,
       parked_at: null,
       parked_by: null,
       review_after: null,
@@ -621,7 +622,9 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         event.status === VerificationStatus.PENDING &&
         event.attention_state === CaseAttentionState.REVIEW_REQUIRED &&
         (event.containment_status !== CaseContainmentStatus.IN_PROGRESS ||
-          event.updated_at <= staleBefore)
+          event.quarantine_lease_renewed_at === null ||
+          event.quarantine_lease_renewed_at === undefined ||
+          event.quarantine_lease_renewed_at <= staleBefore)
     );
     if (eventIndex === -1) {
       return null;
@@ -632,6 +635,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       containment_status: CaseContainmentStatus.IN_PROGRESS,
       quarantine_attempt_id: attemptId,
+      quarantine_lease_renewed_at: new Date(),
       updated_at: new Date(),
     };
     this.events[eventIndex] = claimed;
@@ -679,7 +683,10 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     if (eventIndex === -1) {
       return false;
     }
-    this.events[eventIndex] = { ...this.events[eventIndex], updated_at: new Date() };
+    this.events[eventIndex] = {
+      ...this.events[eventIndex],
+      quarantine_lease_renewed_at: new Date(),
+    };
     return true;
   }
 
@@ -702,6 +709,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       ...this.events[eventIndex],
       ...data,
       quarantine_attempt_id: null,
+      quarantine_lease_renewed_at: null,
       updated_at: new Date(),
     };
     this.events[eventIndex] = updated;
@@ -745,6 +753,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     if (data.containment_status !== undefined) updated.containment_status = data.containment_status;
     if (data.quarantine_attempt_id !== undefined)
       updated.quarantine_attempt_id = data.quarantine_attempt_id;
+    if (data.quarantine_lease_renewed_at !== undefined)
+      updated.quarantine_lease_renewed_at = data.quarantine_lease_renewed_at;
     if (data.parked_at !== undefined) updated.parked_at = data.parked_at;
     if (data.parked_by !== undefined) updated.parked_by = data.parked_by;
     if (data.review_after !== undefined) updated.review_after = data.review_after;
@@ -766,6 +776,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         updated.attention_state = CaseAttentionState.REVIEW_REQUIRED;
         updated.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
         updated.quarantine_attempt_id = null;
+        updated.quarantine_lease_renewed_at = null;
         updated.parked_at = null;
         updated.parked_by = null;
       }
@@ -773,9 +784,11 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         updated.resolved_at = null;
         updated.resolved_by = null;
         if (options.preservePendingCaseState !== true) {
+          updated.case_kind = CaseKind.STANDARD;
           updated.attention_state = CaseAttentionState.REVIEW_REQUIRED;
           updated.containment_status = CaseContainmentStatus.NOT_APPLICABLE;
           updated.quarantine_attempt_id = null;
+          updated.quarantine_lease_renewed_at = null;
           updated.parked_at = null;
           updated.parked_by = null;
         }

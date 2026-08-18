@@ -218,11 +218,12 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
   ): Promise<CaseRoleLockdownMemberAudit> {
     const serverConfig = await this.configService.getServerConfig(member.guild.id);
     const settings = getCaseRoleLockdownSettings(serverConfig.settings);
-    const autoAllowedChannelIds = this.getAutoAllowedChannelIds(serverConfig.settings, [
-      serverConfig.verification_channel_id,
-    ]);
-    const allowedChannelIds = new Set([...settings.allowedChannelIds, ...autoAllowedChannelIds]);
+    const allowedChannelIds = new Set(settings.allowedChannelIds);
+    if (serverConfig.verification_channel_id) {
+      allowedChannelIds.add(serverConfig.verification_channel_id);
+    }
     const allowedCategoryIds = new Set(settings.allowedCategoryIds);
+    const reportInstructionsChannelId = serverConfig.settings.report_instructions_channel_id;
     const retainedRoleIds = new Set(
       [...member.roles.cache.keys()].filter(
         (roleId) =>
@@ -260,6 +261,13 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
     let recoveryParent: TextChannel | null = null;
 
     for (const channel of await this.fetchLockdownChannels(member.guild)) {
+      if (
+        channel.id === reportInstructionsChannelId &&
+        !settings.allowedChannelIds.includes(channel.id) &&
+        !(channel.parentId && allowedCategoryIds.has(channel.parentId))
+      ) {
+        this.recordPostingSurfaceMemberBypass(channel, member, bypasses);
+      }
       if (allowedChannelIds.has(channel.id) || allowedCategoryIds.has(channel.id)) {
         if (channel.id === serverConfig.verification_channel_id) {
           this.recordRecoveryParentMemberBypass(channel, member, bypasses);
@@ -910,7 +918,32 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
     bypasses: CaseRoleLockdownMemberBypass[]
   ): void {
     const effectivePermissions = channel.permissionsFor(member);
-    const permissions = RECOVERY_PARENT_BLOCKED_PERMISSIONS.filter((permission) =>
+    const blockedPermissions = RECOVERY_PARENT_BLOCKED_PERMISSIONS.filter((permission) =>
+      effectivePermissions.has(permission.flag)
+    ).map((permission) => permission.label);
+    const missingPermissions = RECOVERY_PARENT_REQUIRED_PERMISSIONS.filter(
+      (permission) => !effectivePermissions.has(permission.flag)
+    ).map((permission) => `Missing ${permission.label}`);
+    const permissions = [...blockedPermissions, ...missingPermissions];
+    if (permissions.length === 0) {
+      return;
+    }
+    bypasses.push({
+      channelId: channel.id,
+      channelName: channel.name,
+      subjectType: 'member',
+      subjectId: member.id,
+      permissions,
+    });
+  }
+
+  private recordPostingSurfaceMemberBypass(
+    channel: LockdownChannel,
+    member: GuildMember,
+    bypasses: CaseRoleLockdownMemberBypass[]
+  ): void {
+    const effectivePermissions = channel.permissionsFor(member);
+    const permissions = LOCKDOWN_POSTING_PERMISSIONS.filter((permission) =>
       effectivePermissions.has(permission.flag)
     ).map((permission) => permission.label);
     if (permissions.length === 0) {

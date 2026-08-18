@@ -526,6 +526,54 @@ describe('RoleQuarantineService (unit)', () => {
 
     const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
     expect(snapshot?.verification_event_id).toBe('current-case');
+    expect(snapshot?.original_role_ids).toEqual(['older-role', 'current-role']);
+  });
+
+  it('does not add late-granted roles to the restoration set', async () => {
+    const originalRole = createRole({ id: 'original-role' });
+    const latePrivilegedRole = createRole({
+      id: 'late-privileged-role',
+      permissions: [PermissionFlagsBits.ManageEvents],
+    });
+    const member = createMember([latePrivilegedRole], [originalRole, latePrivilegedRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'verification-1',
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+      originalRoleIds: [originalRole.id],
+      plannedRoleIds: [originalRole.id],
+      removedRoleIds: [originalRole.id],
+      metadata: { privileged_role_ids_at_snapshot: [] },
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      snapshots
+    );
+    const verificationEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    };
+
+    await service.quarantineCompromisedAccount(
+      member,
+      verificationEvent,
+      { id: 'moderator-1' } as User,
+      { attemptId: 'attempt-1', assertOwner: async () => undefined }
+    );
+    const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+    const restore = await service.restoreMemberRoles(member, { id: 'moderator-1' } as User);
+
+    expect(snapshot?.original_role_ids).toEqual([originalRole.id]);
+    expect(snapshot?.removed_role_ids).toEqual([originalRole.id, latePrivilegedRole.id]);
+    expect(snapshot?.metadata).toEqual(
+      expect.objectContaining({ privileged_role_ids_at_snapshot: [] })
+    );
+    expect(restore.attemptedRoleIds).toEqual([originalRole.id]);
+    expect(member.roles.cache.has(originalRole.id)).toBe(true);
+    expect(member.roles.cache.has(latePrivilegedRole.id)).toBe(false);
   });
 
   it('preserves legacy audit-only mode without removing roles', async () => {
@@ -915,9 +963,7 @@ describe('RoleQuarantineService (unit)', () => {
 
     expect(result.status).toBe('restored');
     expect(result.restoredRoleIds).toEqual(['restored-role']);
-    expect(result.skippedRoles.map((role) => role.role_id)).toEqual(
-      expect.arrayContaining(['missing-role', 'privileged-role'])
-    );
+    expect(result.skippedRoles.map((role) => role.role_id)).toEqual(['privileged-role']);
     expect(member.roles.cache.has('new-role')).toBe(true);
     expect(member.roles.cache.has('restored-role')).toBe(true);
     expect(member.roles.add).toHaveBeenCalledWith(

@@ -1262,6 +1262,53 @@ describe('EventHandler (unit)', () => {
     expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
   });
 
+  it('waits for configuration initialization before evaluating a parked breach', async () => {
+    const activeCase = {
+      id: 'verification-1',
+      thread_id: 'recovery-thread',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+    };
+    const serverConfig = {
+      case_role_id: 'case-role-1',
+      verification_channel_id: '999999999999999999',
+      settings: { account_quarantine_enabled: true },
+    };
+    let initialized = false;
+    const configService = {
+      initialize: jest.fn().mockImplementation(async () => {
+        initialized = true;
+      }),
+      getCachedServerConfig: jest
+        .fn()
+        .mockImplementation(() => (initialized ? serverConfig : undefined)),
+      getServerConfig: jest.fn().mockResolvedValue(serverConfig),
+      updateServerConfig: jest.fn(),
+      updateServerSettings: jest.fn(),
+    };
+    const moderationQueueService = {
+      recordQuarantineBreachAttention: jest.fn().mockResolvedValue(undefined),
+    };
+    const verificationEventRepository = {
+      findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),
+    };
+    const handler = buildHandler({
+      configService,
+      moderationQueueService,
+      verificationEventRepository,
+    });
+    const message = buildMessage(new PermissionsBitField());
+
+    await (handler as any).recordParkedQuarantineBreach(message);
+
+    expect(configService.initialize).toHaveBeenCalledTimes(1);
+    expect(configService.getCachedServerConfig).toHaveBeenCalledWith('guild-1');
+    expect(moderationQueueService.recordQuarantineBreachAttention).toHaveBeenCalledWith(
+      activeCase,
+      message
+    );
+  });
+
   it('does not treat a recovery-thread reply as a quarantine breach', async () => {
     const activeCase = {
       id: 'verification-1',
@@ -1293,6 +1340,7 @@ describe('EventHandler (unit)', () => {
       recordQuarantineBreachAttention: jest.fn().mockResolvedValue(undefined),
     };
     const verificationEventRepository = {
+      findParkedByServer: jest.fn().mockResolvedValue([]),
       findActiveByUserAndServer: jest.fn(),
     };
     const handler = buildHandler({ moderationQueueService, verificationEventRepository });
