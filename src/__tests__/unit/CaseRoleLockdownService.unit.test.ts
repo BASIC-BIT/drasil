@@ -202,7 +202,7 @@ describe('CaseRoleLockdownService (unit)', () => {
       id: caseRoleId,
       managed: false,
       permissions: {
-        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ManageWebhooks),
+        has: jest.fn((permission: bigint) => permission === PermissionFlagsBits.ManageThreads),
       },
     });
     const service = new CaseRoleLockdownService(createConfigService() as any);
@@ -213,7 +213,7 @@ describe('CaseRoleLockdownService (unit)', () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: 'lockdown-case-role-global-permissions',
-          message: expect.stringContaining('Manage Webhooks'),
+          message: expect.stringContaining('Manage Threads'),
         }),
       ])
     );

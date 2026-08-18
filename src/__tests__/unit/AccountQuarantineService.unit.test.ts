@@ -244,6 +244,26 @@ describe('AccountQuarantineService', () => {
     expect(harness.lockdown.auditMemberBypasses).toHaveBeenCalledTimes(2);
   });
 
+  it('passes a live attempt-ownership guard into every compromised role sweep', async () => {
+    const harness = buildHarness();
+    harness.roleQuarantine.quarantineCompromisedAccount.mockImplementation(
+      async (_member, _event, _moderator, assertAttemptOwner) => {
+        await assertAttemptOwner();
+        return roleResult;
+      }
+    );
+
+    await harness.service.quarantine(
+      harness.member,
+      event,
+      { id: 'moderator-1' } as User,
+      'Compromise report'
+    );
+
+    expect(harness.roleQuarantine.quarantineCompromisedAccount).toHaveBeenCalledTimes(2);
+    expect(harness.verificationEvents.renewQuarantineAttempt).toHaveBeenCalled();
+  });
+
   it('captures a role added during containment in the final role sweep', async () => {
     const harness = buildHarness();
     harness.roleQuarantine.quarantineCompromisedAccount

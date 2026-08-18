@@ -88,6 +88,7 @@ export interface RoleQuarantineActiveCaseUpdateResult {
   readonly removedRoleIds: readonly string[];
   readonly skippedRoles: readonly RoleQuarantineRoleDetail[];
   readonly failedRemovals: readonly RoleQuarantineRoleDetail[];
+  readonly containmentRegressed?: boolean;
 }
 
 interface ActiveCaseRoleUpdateMetadata {
@@ -99,6 +100,9 @@ interface ActiveCaseRoleUpdateMetadata {
   readonly removed_role_ids: readonly string[];
   readonly skipped_roles: readonly RoleQuarantineRoleDetail[];
   readonly failed_removals: readonly RoleQuarantineRoleDetail[];
+  readonly case_role_removed?: boolean;
+  readonly case_role_restored?: boolean;
+  readonly case_role_restore_error?: string | null;
 }
 
 export interface IRoleQuarantineService {
@@ -106,7 +110,8 @@ export interface IRoleQuarantineService {
   quarantineCompromisedAccount(
     member: GuildMember,
     verificationEvent: VerificationEvent,
-    moderator: User
+    moderator: User,
+    assertAttemptOwner: () => Promise<void>
   ): Promise<RoleQuarantineApplyResult>;
   quarantineMember(
     member: GuildMember,
@@ -197,13 +202,15 @@ export class RoleQuarantineService implements IRoleQuarantineService {
   public async quarantineCompromisedAccount(
     member: GuildMember,
     verificationEvent: VerificationEvent,
-    moderator: User
+    moderator: User,
+    assertAttemptOwner: () => Promise<void>
   ): Promise<RoleQuarantineApplyResult> {
     return this.applyQuarantine(
       member,
       verificationEvent,
       moderator,
-      RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT
+      RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+      assertAttemptOwner
     );
   }
 
@@ -332,12 +339,38 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     const policy = this.buildPolicy(purpose, serverConfig.settings);
     const addedRoles = this.getAddedRoles(oldMember, newMember, serverConfig.case_role_id);
     const addedRoleIds = addedRoles.map((role) => role.id);
+    const caseRoleRemoved =
+      purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT &&
+      serverConfig.case_role_id !== null &&
+      oldMember.roles.cache.has(serverConfig.case_role_id) &&
+      !newMember.roles.cache.has(serverConfig.case_role_id);
+    let caseRoleRestored = false;
+    let caseRoleRestoreError: string | null = null;
+
+    if (caseRoleRemoved && serverConfig.case_role_id) {
+      try {
+        const caseRole =
+          oldMember.roles.cache.get(serverConfig.case_role_id) ??
+          newMember.guild.roles.cache.get(serverConfig.case_role_id) ??
+          (await newMember.guild.roles.fetch(serverConfig.case_role_id));
+        if (!caseRole) {
+          throw new Error('Configured case role no longer exists.');
+        }
+        await newMember.roles.add(
+          caseRole,
+          `Restore compromised-account quarantine for case ${verificationEvent.id}`
+        );
+        caseRoleRestored = true;
+      } catch (error) {
+        caseRoleRestoreError = this.formatError(error);
+      }
+    }
 
     if (mode === 'off') {
       return this.activeCaseUpdateResult(mode, 'off', null, addedRoleIds);
     }
 
-    if (addedRoles.length === 0) {
+    if (addedRoles.length === 0 && !caseRoleRemoved) {
       return this.activeCaseUpdateResult(mode, 'no_new_roles', null, addedRoleIds);
     }
 
@@ -381,9 +414,12 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       removed_role_ids: removedRoleIds,
       skipped_roles: skippedRoles,
       failed_removals: failedRemovals,
+      case_role_removed: caseRoleRemoved,
+      case_role_restored: caseRoleRestored,
+      case_role_restore_error: caseRoleRestoreError,
     });
 
-    let containmentBlocked = failedRemovals.length > 0;
+    let containmentBlocked = caseRoleRestoreError !== null || failedRemovals.length > 0;
     if (
       purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT &&
       skippedRoles.length > 0 &&
@@ -429,7 +465,8 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       plannedRoleIds,
       removedRoleIds,
       skippedRoles,
-      failedRemovals
+      failedRemovals,
+      containmentBlocked
     );
   }
 
@@ -461,7 +498,8 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     member: GuildMember,
     verificationEvent: VerificationEvent,
     moderator: User | undefined,
-    purpose: RoleQuarantineSnapshotPurpose
+    purpose: RoleQuarantineSnapshotPurpose,
+    assertAttemptOwner?: () => Promise<void>
   ): Promise<RoleQuarantineApplyResult> {
     const serverConfig = await this.configService.getServerConfig(member.guild.id);
     const settings = getRoleQuarantineSettings(serverConfig.settings);
@@ -542,6 +580,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       ...previouslyRemovedRoleIds,
       ...newlyPlannedRoleIds,
     ]);
+    await assertAttemptOwner?.();
     const snapshot = activeSnapshot
       ? await this.snapshotRepository.update(activeSnapshot.id, {
           verificationEventId: verificationEvent.id,
@@ -574,6 +613,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     const removedRoleIds: string[] = [];
     const failedRemovals: RoleQuarantineRoleDetail[] = [];
     for (const role of removableRoles) {
+      await assertAttemptOwner?.();
       try {
         await member.roles.remove(role, `Drasil role quarantine for case ${verificationEvent.id}`);
         removedRoleIds.push(role.id);
@@ -596,6 +636,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       failedRemovals: allFailedRemovals,
     };
     try {
+      await assertAttemptOwner?.();
       const updatedSnapshot = await this.snapshotRepository.update(snapshot.id, {
         purpose,
         originalRoleIds,
@@ -837,7 +878,8 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     plannedRoleIds: readonly string[] = [],
     removedRoleIds: readonly string[] = [],
     skippedRoles: readonly RoleQuarantineRoleDetail[] = [],
-    failedRemovals: readonly RoleQuarantineRoleDetail[] = []
+    failedRemovals: readonly RoleQuarantineRoleDetail[] = [],
+    containmentRegressed = false
   ): RoleQuarantineActiveCaseUpdateResult {
     return {
       status,
@@ -848,6 +890,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       removedRoleIds,
       skippedRoles,
       failedRemovals,
+      containmentRegressed,
     };
   }
 

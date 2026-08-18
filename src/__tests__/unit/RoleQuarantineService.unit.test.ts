@@ -196,6 +196,7 @@ describe('RoleQuarantineService (unit)', () => {
       createRole({ id: 'kick-role', permissions: [PermissionFlagsBits.KickMembers] }),
       createRole({ id: 'ban-role', permissions: [PermissionFlagsBits.BanMembers] }),
       createRole({ id: 'message-role', permissions: [PermissionFlagsBits.ManageMessages] }),
+      createRole({ id: 'thread-role', permissions: [PermissionFlagsBits.ManageThreads] }),
       createRole({ id: 'webhook-role', permissions: [PermissionFlagsBits.ManageWebhooks] }),
     ];
     const member = createMember(removableRoles);
@@ -212,6 +213,7 @@ describe('RoleQuarantineService (unit)', () => {
       'kick-role',
       'ban-role',
       'message-role',
+      'thread-role',
       'webhook-role',
     ]);
     expect(result.skippedRoles).toEqual([]);
@@ -220,7 +222,7 @@ describe('RoleQuarantineService (unit)', () => {
   it('removes privileged and normally exempt roles for a compromised account', async () => {
     const privilegedRole = createRole({
       id: 'privileged-role',
-      permissions: [PermissionFlagsBits.KickMembers],
+      permissions: [PermissionFlagsBits.ManageThreads],
     });
     const exemptRole = createRole({ id: '100000000000000005' });
     const manualRole = createRole({ id: '100000000000000010' });
@@ -240,9 +242,12 @@ describe('RoleQuarantineService (unit)', () => {
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
     };
 
-    const result = await service.quarantineCompromisedAccount(member, verificationEvent, {
-      id: 'moderator-1',
-    } as User);
+    const result = await service.quarantineCompromisedAccount(
+      member,
+      verificationEvent,
+      { id: 'moderator-1' } as User,
+      async () => undefined
+    );
 
     expect(result.purpose).toBe(RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT);
     expect(result.removedRoleIds).toEqual([
@@ -350,6 +355,43 @@ describe('RoleQuarantineService (unit)', () => {
     }
   });
 
+  it('does not let a superseded compromised-account attempt overwrite the active snapshot', async () => {
+    const safeRole = createRole({ id: 'safe-role' });
+    const member = createMember([safeRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      snapshots
+    );
+    let guardCalls = 0;
+    const assertAttemptOwner = jest.fn(async () => {
+      guardCalls += 1;
+      if (guardCalls !== 3) {
+        return;
+      }
+      const active = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+      if (!active) {
+        throw new Error('Expected active snapshot');
+      }
+      await snapshots.update(active.id, { removedRoleIds: ['new-owner-role'] });
+      throw new Error('Attempt superseded');
+    });
+
+    const failure = await service
+      .quarantineCompromisedAccount(
+        member,
+        { ...createVerificationEvent(), case_kind: CaseKind.COMPROMISED_ACCOUNT },
+        { id: 'moderator-1' } as User,
+        assertAttemptOwner
+      )
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(RoleQuarantineApplyError);
+    expect(assertAttemptOwner).toHaveBeenCalledTimes(3);
+    const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
+    expect(snapshot?.removed_role_ids).toEqual(['new-owner-role']);
+  });
+
   it('records only successfully removed role ids after failed removals are known', async () => {
     const safeRole = createRole({ id: 'safe-role' });
     const failedRole = createRole({ id: 'failed-role' });
@@ -391,12 +433,18 @@ describe('RoleQuarantineService (unit)', () => {
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
     };
 
-    const first = await service.quarantineCompromisedAccount(member, verificationEvent, {
-      id: 'moderator-1',
-    } as User);
-    const second = await service.quarantineCompromisedAccount(member, verificationEvent, {
-      id: 'moderator-1',
-    } as User);
+    const first = await service.quarantineCompromisedAccount(
+      member,
+      verificationEvent,
+      { id: 'moderator-1' } as User,
+      async () => undefined
+    );
+    const second = await service.quarantineCompromisedAccount(
+      member,
+      verificationEvent,
+      { id: 'moderator-1' } as User,
+      async () => undefined
+    );
 
     expect(first.failedRemovals).toEqual([
       expect.objectContaining({ role_id: role.id, reason: 'Discord unavailable' }),
@@ -430,9 +478,12 @@ describe('RoleQuarantineService (unit)', () => {
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
     };
 
-    await service.quarantineCompromisedAccount(member, verificationEvent, {
-      id: 'moderator-1',
-    } as User);
+    await service.quarantineCompromisedAccount(
+      member,
+      verificationEvent,
+      { id: 'moderator-1' } as User,
+      async () => undefined
+    );
 
     const snapshot = await snapshots.findActiveByServerAndUser('guild-1', 'user-1');
     expect(snapshot?.verification_event_id).toBe('current-case');
@@ -546,6 +597,62 @@ describe('RoleQuarantineService (unit)', () => {
       },
       { touchUpdatedAt: false }
     );
+  });
+
+  it('restores the required case role when it is removed from a parked account', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const oldMember = createMember([caseRole], [caseRole]);
+    const newMember = createMember([], [caseRole]);
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      new InMemoryRoleQuarantineSnapshotRepository()
+    );
+    const parkedEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    } as VerificationEvent;
+
+    const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+
+    expect(newMember.roles.add).toHaveBeenCalledWith(
+      caseRole,
+      `Restore compromised-account quarantine for case ${parkedEvent.id}`
+    );
+    expect(newMember.roles.cache.has(caseRole.id)).toBe(true);
+    expect(result.containmentRegressed).toBe(false);
+  });
+
+  it('returns a parked account to review when the removed case role cannot be restored', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const oldMember = createMember([caseRole], [caseRole]);
+    const newMember = createMember([], [caseRole]);
+    (newMember.roles.add as jest.Mock).mockRejectedValue(new Error('Missing permissions'));
+    const verificationEventRepository = {
+      update: jest.fn().mockResolvedValue(createVerificationEvent()),
+    };
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      new InMemoryRoleQuarantineSnapshotRepository(),
+      verificationEventRepository as any
+    );
+    const parkedEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    } as VerificationEvent;
+
+    const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+
+    expect(result.containmentRegressed).toBe(true);
+    expect(verificationEventRepository.update).toHaveBeenCalledWith(parkedEvent.id, {
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+      parked_at: null,
+      parked_by: null,
+    });
   });
 
   it('skips unsafe newly gained roles during active-case enforcement', async () => {

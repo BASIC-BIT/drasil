@@ -144,6 +144,7 @@ const COMPROMISED_ACCOUNT_PERMISSION_LABELS: readonly PermissionLabel[] = [
   { flag: PermissionFlagsBits.KickMembers, label: 'Kick Members' },
   { flag: PermissionFlagsBits.BanMembers, label: 'Ban Members' },
   { flag: PermissionFlagsBits.ManageMessages, label: 'Manage Messages' },
+  { flag: PermissionFlagsBits.ManageThreads, label: 'Manage Threads' },
   { flag: PermissionFlagsBits.ManageWebhooks, label: 'Manage Webhooks' },
 ];
 

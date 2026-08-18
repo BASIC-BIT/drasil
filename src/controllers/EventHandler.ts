@@ -865,7 +865,14 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    if (!serverConfig.case_role_id || !this.memberHasRole(newMember, serverConfig.case_role_id)) {
+    if (!serverConfig.case_role_id) {
+      return;
+    }
+
+    const hasCaseRole = this.memberHasRole(newMember, serverConfig.case_role_id);
+    const caseRoleRemoved =
+      this.memberHasRole(oldMember, serverConfig.case_role_id) && !hasCaseRole;
+    if (!hasCaseRole && !caseRoleRemoved) {
       return;
     }
 
@@ -875,7 +882,7 @@ export class EventHandler implements IEventHandler {
         role.id !== serverConfig.case_role_id &&
         !oldMember.roles.cache.has(role.id)
     );
-    if (!gainedRole) {
+    if (!gainedRole && !caseRoleRemoved) {
       return;
     }
 
@@ -884,6 +891,9 @@ export class EventHandler implements IEventHandler {
       newMember.guild.id
     );
     if (!verificationEvent) {
+      return;
+    }
+    if (!hasCaseRole && verificationEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT) {
       return;
     }
 
@@ -899,7 +909,9 @@ export class EventHandler implements IEventHandler {
     }
     if (
       verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-      (result.skippedRoles.length > 0 || result.failedRemovals.length > 0)
+      (result.containmentRegressed === true ||
+        result.skippedRoles.length > 0 ||
+        result.failedRemovals.length > 0)
     ) {
       const updated = await this.verificationEventRepository.findById(verificationEvent.id);
       if (

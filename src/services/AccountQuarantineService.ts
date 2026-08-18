@@ -138,7 +138,8 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       roleResult = await this.roleQuarantine.quarantineCompromisedAccount(
         member,
         claimedEvent,
-        moderator
+        moderator,
+        () => this.assertAttemptOwner(claimedEvent.id, attemptId)
       );
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'case_role_assignment';
@@ -154,7 +155,8 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       roleResult = await this.roleQuarantine.quarantineCompromisedAccount(
         member,
         claimedEvent,
-        moderator
+        moderator,
+        () => this.assertAttemptOwner(claimedEvent.id, attemptId)
       );
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'final_containment_audit';

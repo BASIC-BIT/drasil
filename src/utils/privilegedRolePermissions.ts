@@ -13,5 +13,6 @@ export const COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS = [
   PermissionFlagsBits.KickMembers,
   PermissionFlagsBits.BanMembers,
   PermissionFlagsBits.ManageMessages,
+  PermissionFlagsBits.ManageThreads,
   PermissionFlagsBits.ManageWebhooks,
 ] as const;

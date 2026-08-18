@@ -925,6 +925,50 @@ describe('EventHandler (unit)', () => {
     expect(roleQuarantineService.enforceActiveCaseRoleUpdate).not.toHaveBeenCalled();
   });
 
+  it('handles removal of the required case role from a parked compromised account', async () => {
+    const caseRole = { id: 'case-role' };
+    const oldMember = {
+      id: 'user-1',
+      user: { tag: 'test-user#0001' },
+      guild: { id: 'guild-1' },
+      roles: { cache: new Map([[caseRole.id, caseRole]]) },
+    };
+    const newMember = {
+      ...oldMember,
+      roles: { cache: new Map() },
+    };
+    const activeCase = {
+      id: 'verification-1',
+      status: VerificationStatus.PENDING,
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    };
+    const roleQuarantineService = {
+      enforceActiveCaseRoleUpdate: jest.fn().mockResolvedValue({
+        addedRoleIds: [],
+        removedRoleIds: [],
+        skippedRoles: [],
+        failedRemovals: [],
+        containmentRegressed: false,
+      }),
+    };
+    const verificationEventRepository = {
+      findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),
+    };
+    const handler = buildHandler({ roleQuarantineService, verificationEventRepository });
+
+    await (handler as any).enforceActiveCaseRoleQuarantine(oldMember, newMember, {
+      case_role_id: caseRole.id,
+    });
+
+    expect(roleQuarantineService.enforceActiveCaseRoleUpdate).toHaveBeenCalledWith(
+      oldMember,
+      newMember,
+      activeCase
+    );
+  });
+
   it('does not refresh parked surfaces for a harmless retained managed role', async () => {
     const caseRole = { id: 'case-role' };
     const managedRole = { id: 'managed-role' };
