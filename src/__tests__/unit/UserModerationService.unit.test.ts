@@ -29,6 +29,7 @@ import type { IRoleQuarantineService } from '../../services/RoleQuarantineServic
 import {
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
+  CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
 } from '../../utils/caseRoleRelease';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
@@ -557,6 +558,108 @@ describe('UserModerationService (unit)', () => {
     );
 
     expect(member.kick).not.toHaveBeenCalled();
+  });
+
+  it('claims terminal ownership before kicking a parked account', async () => {
+    const guildId = 'guild-kick-terminal-claim';
+    const userId = 'user-kick-terminal-claim';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+    (member.kick as jest.Mock).mockImplementation(async () => {
+      const claimed = await verificationEventRepository.findById(verificationEvent.id);
+      expect(claimed?.quarantine_attempt_id).toEqual(
+        expect.stringMatching(`^${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}`)
+      );
+      await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
+        'Account quarantine is currently in progress'
+      );
+    });
+
+    await expect(
+      service.kickUser(member, 'terminal kick', { id: 'moderator-kick' } as User)
+    ).resolves.toBe(true);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.KICKED,
+        quarantine_attempt_id: null,
+      })
+    );
+  });
+
+  it('claims terminal ownership before banning a parked account', async () => {
+    const guildId = 'guild-ban-terminal-claim';
+    const userId = 'user-ban-terminal-claim';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+    (member.ban as jest.Mock).mockImplementation(async () => {
+      const claimed = await verificationEventRepository.findById(verificationEvent.id);
+      expect(claimed?.quarantine_attempt_id).toEqual(
+        expect.stringMatching(`^${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}`)
+      );
+      await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
+        'Account quarantine is currently in progress'
+      );
+    });
+
+    await expect(
+      service.banUser(member, 'terminal ban', { id: 'moderator-ban' } as User)
+    ).resolves.toBe(true);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.BANNED,
+        quarantine_attempt_id: null,
+      })
+    );
   });
 
   it('does not overwrite a terminal outcome that wins the release race', async () => {

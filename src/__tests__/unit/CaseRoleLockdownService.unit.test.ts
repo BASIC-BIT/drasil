@@ -13,6 +13,7 @@ describe('CaseRoleLockdownService (unit)', () => {
     PermissionFlagsBits.Speak,
   ];
   const recoveryParentDeniedPermissions = [
+    PermissionFlagsBits.CreateInstantInvite,
     PermissionFlagsBits.SendMessages,
     PermissionFlagsBits.CreatePublicThreads,
     PermissionFlagsBits.CreatePrivateThreads,
@@ -23,6 +24,7 @@ describe('CaseRoleLockdownService (unit)', () => {
     PermissionFlagsBits.SendMessagesInThreads,
   ];
   const permissionFlagsByOption = {
+    CreateInstantInvite: PermissionFlagsBits.CreateInstantInvite,
     ViewChannel: PermissionFlagsBits.ViewChannel,
     ReadMessageHistory: PermissionFlagsBits.ReadMessageHistory,
     SendMessages: PermissionFlagsBits.SendMessages,
@@ -269,6 +271,7 @@ describe('CaseRoleLockdownService (unit)', () => {
     expect(verificationChannel.permissionOverwrites.edit).toHaveBeenCalledWith(
       caseRoleId,
       expect.objectContaining({
+        CreateInstantInvite: false,
         ViewChannel: true,
         SendMessages: false,
         SendMessagesInThreads: true,

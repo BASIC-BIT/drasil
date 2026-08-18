@@ -23,6 +23,7 @@ import { getPrismaClient } from '../testDb';
 import {
   CASE_ATTENTION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
+  CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
 } from '../../utils/caseRoleRelease';
 
 const describeIntegration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
@@ -724,6 +725,71 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
         verification_event_id: null,
         detection_event_id: null,
         source_thread_id: null,
+      })
+    );
+  });
+
+  it('atomically fences a parked case through terminal-action completion', async () => {
+    const serverId = 'guild-terminal-action-claim';
+    const userId = 'user-terminal-action-claim';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser(userId, 'terminal-target');
+    const verification = await verifications.createFromDetection(
+      null,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verifications.update(verification.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T12:00:00.000Z'),
+      parked_by: 'moderator-1',
+    });
+    const attemptId = `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}integration`;
+
+    const claimed = await verifications.claimTerminalActions(
+      [verification.id],
+      serverId,
+      userId,
+      attemptId
+    );
+
+    expect(claimed).toEqual([
+      expect.objectContaining({
+        id: verification.id,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: attemptId,
+      }),
+    ]);
+    await expect(
+      verifications.claimCaseRoleRelease(
+        verification.id,
+        serverId,
+        userId,
+        'case-role-release:competing',
+        new Date(0)
+      )
+    ).resolves.toBeNull();
+
+    const completed = await verifications.update(
+      verification.id,
+      {
+        status: VerificationStatus.KICKED,
+        resolved_by: 'moderator-1',
+        resolved_at: new Date('2026-08-18T12:01:00.000Z'),
+      },
+      { expectedQuarantineAttemptId: attemptId }
+    );
+    expect(completed).toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.KICKED,
+        quarantine_attempt_id: null,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
       })
     );
   });

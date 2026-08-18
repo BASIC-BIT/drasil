@@ -37,7 +37,9 @@ import {
 import {
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
+  CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
   isCaseRoleReleaseLeaseActive,
+  isCaseTerminalActionAttempt,
 } from '../utils/caseRoleRelease';
 import { appendVerificationActionFailure } from '../utils/verificationActionFailures';
 import {
@@ -576,6 +578,72 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       member.guild.id
     );
     return verificationEvents.filter((event) => event.status === VerificationStatus.PENDING);
+  }
+
+  private async claimParkedTerminalActions(
+    events: readonly VerificationEvent[]
+  ): Promise<{ events: VerificationEvent[]; attemptId: string | null }> {
+    this.assertNoQuarantineInProgress(events);
+    const parkedEvents = events.filter(
+      (event) =>
+        event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+        event.attention_state === CaseAttentionState.PARKED &&
+        event.containment_status === CaseContainmentStatus.CONTAINED &&
+        event.quarantine_attempt_id === null
+    );
+    if (parkedEvents.length === 0) {
+      return { events: [...events], attemptId: null };
+    }
+
+    const firstEvent = parkedEvents[0];
+    const attemptId = `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${randomUUID()}`;
+    const claimedEvents = await this.verificationEventRepository.claimTerminalActions(
+      parkedEvents.map((event) => event.id),
+      firstEvent.server_id,
+      firstEvent.user_id,
+      attemptId
+    );
+    if (!claimedEvents) {
+      throw new Error(
+        'Account quarantine attention or release started before the terminal action could claim the case.'
+      );
+    }
+
+    const claimedById = new Map(claimedEvents.map((event) => [event.id, event]));
+    return {
+      events: events.map((event) => claimedById.get(event.id) ?? event),
+      attemptId,
+    };
+  }
+
+  private async rollbackParkedTerminalActions(
+    events: readonly VerificationEvent[],
+    attemptId: string | null
+  ): Promise<void> {
+    if (!attemptId) {
+      return;
+    }
+    await Promise.allSettled(
+      events
+        .filter((event) => event.quarantine_attempt_id === attemptId)
+        .map((event) =>
+          this.verificationEventRepository.updateQuarantineAttempt(event.id, attemptId, {
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            attention_state: CaseAttentionState.PARKED,
+            containment_status: CaseContainmentStatus.CONTAINED,
+            parked_at: event.parked_at,
+            parked_by: event.parked_by,
+          })
+        )
+    );
+  }
+
+  private terminalResolutionOptions(
+    event: VerificationEvent
+  ): { expectedQuarantineAttemptId: string } | undefined {
+    return isCaseTerminalActionAttempt(event.quarantine_attempt_id)
+      ? { expectedQuarantineAttemptId: event.quarantine_attempt_id as string }
+      : undefined;
   }
 
   private assertNoQuarantineInProgress(
@@ -1146,9 +1214,14 @@ export class UserModerationService implements IUserModerationService, ICombinedB
 
   public async performDiscordMemberBan(member: GuildMember, reason: string): Promise<void> {
     const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
-    this.assertNoQuarantineInProgress(pendingVerificationEvents);
+    const terminalClaim = await this.claimParkedTerminalActions(pendingVerificationEvents);
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
-    await member.ban({ reason: auditReason || 'Moderator-requested ban' });
+    try {
+      await member.ban({ reason: auditReason || 'Moderator-requested ban' });
+    } catch (error) {
+      await this.rollbackParkedTerminalActions(terminalClaim.events, terminalClaim.attemptId);
+      throw error;
+    }
     console.log(`Banned user ${member.user.tag}. Reason: ${reason}`);
   }
 
@@ -1157,11 +1230,16 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       userId,
       guild.id
     );
-    this.assertNoQuarantineInProgress(
+    const terminalClaim = await this.claimParkedTerminalActions(
       verificationEvents.filter((event) => event.status === VerificationStatus.PENDING)
     );
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
-    await guild.bans.create(userId, { reason: auditReason || 'Moderator-requested ban' });
+    try {
+      await guild.bans.create(userId, { reason: auditReason || 'Moderator-requested ban' });
+    } catch (error) {
+      await this.rollbackParkedTerminalActions(terminalClaim.events, terminalClaim.attemptId);
+      throw error;
+    }
     console.log(`Banned user ${userId} for combined message cleanup. Reason: ${reason}`);
   }
 
@@ -1196,7 +1274,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         const updatedEvent = await this.verificationEventRepository.update(
           pendingEvent.id,
           eventToUpdate,
-          { allowQuarantineOverride: true }
+          this.terminalResolutionOptions(pendingEvent)
         );
         if (!updatedEvent) {
           throw new Error(
@@ -1321,7 +1399,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       const updatedEvent = await this.verificationEventRepository.update(
         pendingEvent.id,
         eventToUpdate,
-        { allowQuarantineOverride: true }
+        this.terminalResolutionOptions(pendingEvent)
       );
       if (!updatedEvent) {
         throw new Error(`Failed to finalize verification event ${pendingEvent.id}.`);
@@ -1439,12 +1517,21 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   ): Promise<boolean> {
     try {
       const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
-      this.assertNoQuarantineInProgress(pendingVerificationEvents);
+      const terminalClaim = await this.claimParkedTerminalActions(pendingVerificationEvents);
+      const claimedVerificationEvents = terminalClaim.events;
       const verificationEvent =
-        pendingVerificationEvents.length > 0 ? pendingVerificationEvents[0] : null;
+        claimedVerificationEvents.length > 0 ? claimedVerificationEvents[0] : null;
       const resolvedAt = new Date();
 
-      await member.kick(reason);
+      try {
+        await member.kick(reason);
+      } catch (error) {
+        await this.rollbackParkedTerminalActions(
+          claimedVerificationEvents,
+          terminalClaim.attemptId
+        );
+        throw error;
+      }
       console.log(`Kicked user ${member.user.tag}. Reason: ${reason}`);
       const resolvedEvents: Array<{
         event: VerificationEvent;
@@ -1452,7 +1539,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       }> = [];
 
       try {
-        for (const pendingEvent of pendingVerificationEvents) {
+        for (const pendingEvent of claimedVerificationEvents) {
           const previousStatus = pendingEvent.status;
           const eventToUpdate = {
             ...pendingEvent,
@@ -1465,7 +1552,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           const updatedEvent = await this.verificationEventRepository.update(
             pendingEvent.id,
             eventToUpdate,
-            { allowQuarantineOverride: true }
+            this.terminalResolutionOptions(pendingEvent)
           );
           if (!updatedEvent) {
             throw new Error(

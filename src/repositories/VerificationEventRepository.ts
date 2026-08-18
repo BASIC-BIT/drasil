@@ -20,6 +20,7 @@ import {
   CASE_ATTENTION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
+  CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
 } from '../utils/caseRoleRelease';
 
 export interface VerificationReleaseCompletion {
@@ -29,6 +30,7 @@ export interface VerificationReleaseCompletion {
 }
 
 class VerificationReleaseConflictError extends Error {}
+class TerminalActionClaimConflictError extends Error {}
 
 export interface IVerificationEventRepository {
   findByUserAndServer(
@@ -80,6 +82,12 @@ export interface IVerificationEventRepository {
     userId: string,
     attemptId: string
   ): Promise<VerificationEvent | null>;
+  claimTerminalActions(
+    ids: readonly string[],
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent[] | null>;
   completeCaseRoleRelease(
     id: string,
     attemptId: string,
@@ -116,6 +124,8 @@ export interface IVerificationEventRepository {
       allowQuarantineOverride?: boolean;
       /** Only for rolling back a failed Discord action to an exact prior pending state. */
       preservePendingCaseState?: boolean;
+      /** Requires an exact terminal-action claim before persisting a Discord side effect. */
+      expectedQuarantineAttemptId?: string;
     }
   ): Promise<VerificationEvent | null>; // Return null if not found
 }
@@ -306,6 +316,54 @@ export class VerificationEventRepository implements IVerificationEventRepository
       })) as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'claimParkedAttention');
+    }
+  }
+
+  async claimTerminalActions(
+    ids: readonly string[],
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent[] | null> {
+    if (!attemptId.startsWith(CASE_TERMINAL_ACTION_ATTEMPT_PREFIX) || ids.length === 0) {
+      throw new RepositoryError(
+        'Terminal-action claims require case IDs and a terminal attempt ID.'
+      );
+    }
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const claimed = await transaction.verification_events.updateMany({
+          where: {
+            id: { in: [...ids] },
+            server_id: serverId,
+            user_id: userId,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            attention_state: CaseAttentionState.PARKED,
+            containment_status: CaseContainmentStatus.CONTAINED,
+            quarantine_attempt_id: null,
+          },
+          data: {
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+            quarantine_lease_renewed_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
+        if (claimed.count !== ids.length) {
+          throw new TerminalActionClaimConflictError();
+        }
+        const events = await transaction.verification_events.findMany({
+          where: { id: { in: [...ids] } },
+        });
+        const byId = new Map(events.map((event) => [event.id, event]));
+        return ids.map((id) => byId.get(id) as VerificationEvent);
+      })) as VerificationEvent[];
+    } catch (error) {
+      if (error instanceof TerminalActionClaimConflictError) {
+        return null;
+      }
+      this.handleError(error, 'claimTerminalActions');
     }
   }
 
@@ -848,6 +906,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
       touchUpdatedAt?: boolean;
       allowQuarantineOverride?: boolean;
       preservePendingCaseState?: boolean;
+      expectedQuarantineAttemptId?: string;
     } = {}
   ): Promise<VerificationEvent | null> {
     try {
@@ -916,6 +975,23 @@ export class VerificationEventRepository implements IVerificationEventRepository
         data.status === VerificationStatus.BANNED ||
         data.status === VerificationStatus.KICKED ||
         data.status === VerificationStatus.CLOSED_NO_ACTION;
+      if (isResolution && options.expectedQuarantineAttemptId) {
+        const updated = await this.prisma.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: options.expectedQuarantineAttemptId,
+          },
+          data: updateData,
+        });
+        if (updated.count !== 1) {
+          return null;
+        }
+        return (await this.prisma.verification_events.findUnique({
+          where: { id },
+        })) as VerificationEvent | null;
+      }
       if (isResolution && options.allowQuarantineOverride !== true) {
         const updated = await this.prisma.verification_events.updateMany({
           where: {

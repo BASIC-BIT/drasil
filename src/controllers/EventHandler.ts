@@ -884,27 +884,6 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    if (!serverConfig.case_role_id) {
-      return;
-    }
-
-    const hasCaseRole = this.memberHasRole(newMember, serverConfig.case_role_id);
-    const caseRoleRemoved =
-      this.memberHasRole(oldMember, serverConfig.case_role_id) && !hasCaseRole;
-    if (!hasCaseRole && !caseRoleRemoved) {
-      return;
-    }
-
-    const gainedRole = [...newMember.roles.cache.values()].some(
-      (role) =>
-        role.id !== newMember.guild.id &&
-        role.id !== serverConfig.case_role_id &&
-        !oldMember.roles.cache.has(role.id)
-    );
-    if (!gainedRole && !caseRoleRemoved) {
-      return;
-    }
-
     const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
       newMember.id,
       newMember.guild.id
@@ -912,6 +891,30 @@ export class EventHandler implements IEventHandler {
     if (!verificationEvent) {
       return;
     }
+    const activeCaseRoleId =
+      verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT
+        ? (verificationEvent.quarantine_case_role_id ?? serverConfig.case_role_id)
+        : serverConfig.case_role_id;
+    if (!activeCaseRoleId) {
+      return;
+    }
+
+    const hasCaseRole = this.memberHasRole(newMember, activeCaseRoleId);
+    const caseRoleRemoved = this.memberHasRole(oldMember, activeCaseRoleId) && !hasCaseRole;
+    if (!hasCaseRole && !caseRoleRemoved) {
+      return;
+    }
+
+    const gainedRole = [...newMember.roles.cache.values()].some(
+      (role) =>
+        role.id !== newMember.guild.id &&
+        role.id !== activeCaseRoleId &&
+        !oldMember.roles.cache.has(role.id)
+    );
+    if (!gainedRole && !caseRoleRemoved) {
+      return;
+    }
+
     if (!hasCaseRole && verificationEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT) {
       return;
     }
@@ -1010,12 +1013,14 @@ export class EventHandler implements IEventHandler {
           return;
         }
         try {
-          await this.moderationQueueService?.recordQuarantineBreachAttention(claimed, message);
-          await this.notificationManager.notifyAccountQuarantineAttention(
-            claimed,
-            'containment_breach',
-            message
-          );
+          await Promise.allSettled([
+            this.moderationQueueService?.recordQuarantineBreachAttention(claimed, message),
+            this.notificationManager.notifyAccountQuarantineAttention(
+              claimed,
+              'containment_breach',
+              message
+            ),
+          ]);
         } finally {
           await this.verificationEventRepository.updateQuarantineAttempt(
             claimed.id,

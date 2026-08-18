@@ -17,6 +17,7 @@ import {
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
   isCaseAttentionAttempt,
+  isCaseTerminalActionAttempt,
 } from '../utils/caseRoleRelease';
 import { ICaseRoleLockdownService } from './CaseRoleLockdownService';
 import { IModerationQueueService } from './ModerationQueueService';
@@ -123,17 +124,35 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
       return;
     }
     if (isCaseAttentionAttempt(attemptId)) {
-      await this.verificationEventRepository.recoverExpiredQuarantineAttempt(
+      const metadata = {
+        ...this.metadataToRecord(verificationEvent.metadata),
+        account_quarantine_reconciliation: {
+          checked_at: now.toISOString(),
+          result: 'incomplete',
+          detail: 'Expired attention delivery was returned to moderator review.',
+        },
+      } as unknown as VerificationEvent['metadata'];
+      const recovered = await this.verificationEventRepository.recoverExpiredQuarantineAttempt(
         verificationEvent.id,
         attemptId,
         staleBefore,
         {
-          attention_state: CaseAttentionState.PARKED,
-          containment_status: CaseContainmentStatus.CONTAINED,
-          parked_at: verificationEvent.parked_at,
-          parked_by: verificationEvent.parked_by,
+          attention_state: CaseAttentionState.REVIEW_REQUIRED,
+          containment_status: CaseContainmentStatus.INCOMPLETE,
+          parked_at: null,
+          parked_by: null,
+          metadata,
         }
       );
+      if (recovered) {
+        await Promise.allSettled([
+          this.notificationManager.notifyAccountQuarantineAttention(
+            recovered,
+            'attention_delivery_incomplete'
+          ),
+          this.moderationQueueService.upsertCaseMirror(recovered),
+        ]);
+      }
       return;
     }
 
@@ -142,7 +161,9 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
       account_quarantine_reconciliation: {
         checked_at: now.toISOString(),
         result: 'incomplete',
-        detail: 'Expired quarantine-entry attempt was returned to moderator review.',
+        detail: isCaseTerminalActionAttempt(attemptId)
+          ? 'Expired terminal-action claim was returned to moderator review.'
+          : 'Expired quarantine-entry attempt was returned to moderator review.',
       },
     } as unknown as VerificationEvent['metadata'];
     const recovered = await this.verificationEventRepository.recoverExpiredQuarantineAttempt(
@@ -247,6 +268,19 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
 
     try {
       const member = await this.fetchMember(snapshot.server_id, snapshot.user_id);
+      if (
+        snapshot.created_at &&
+        member.joinedAt &&
+        member.joinedAt.getTime() > snapshot.created_at.getTime()
+      ) {
+        await this.roleQuarantineService.abandonActiveSnapshot(
+          snapshot.server_id,
+          snapshot.user_id,
+          'membership_replaced_before_role_restoration'
+        );
+        this.roleRestorationAlertedSnapshotIds.delete(snapshot.id);
+        return;
+      }
       const result = await this.roleQuarantineService.restoreMemberRoles(member);
       if (result.status === 'restored' || result.status === 'no_active_snapshot') {
         this.roleRestorationAlertedSnapshotIds.delete(snapshot.id);
@@ -254,21 +288,25 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
       }
     } catch (error) {
       if (!this.roleRestorationAlertedSnapshotIds.has(snapshot.id)) {
-        await this.notificationManager.notifyAccountQuarantineAttention(
+        const notified = await this.notificationManager.notifyAccountQuarantineAttention(
           verificationEvent,
           'role_restoration_incomplete'
         );
-        this.roleRestorationAlertedSnapshotIds.add(snapshot.id);
+        if (notified) {
+          this.roleRestorationAlertedSnapshotIds.add(snapshot.id);
+        }
       }
       throw error;
     }
 
     if (!this.roleRestorationAlertedSnapshotIds.has(snapshot.id)) {
-      await this.notificationManager.notifyAccountQuarantineAttention(
+      const notified = await this.notificationManager.notifyAccountQuarantineAttention(
         verificationEvent,
         'role_restoration_incomplete'
       );
-      this.roleRestorationAlertedSnapshotIds.add(snapshot.id);
+      if (notified) {
+        this.roleRestorationAlertedSnapshotIds.add(snapshot.id);
+      }
     }
   }
 

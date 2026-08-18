@@ -1,10 +1,15 @@
 export const CASE_ROLE_RELEASE_ATTEMPT_PREFIX = 'case-role-release:';
 export const CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX = 'case-role-release-reconciliation:';
 export const CASE_ATTENTION_ATTEMPT_PREFIX = 'case-attention:';
+export const CASE_TERMINAL_ACTION_ATTEMPT_PREFIX = 'case-terminal-action:';
 export const CASE_ROLE_RELEASE_LEASE_MS = 5 * 60 * 1000;
 
 export function isCaseAttentionAttempt(attemptId: string | null | undefined): boolean {
   return attemptId?.startsWith(CASE_ATTENTION_ATTEMPT_PREFIX) === true;
+}
+
+export function isCaseTerminalActionAttempt(attemptId: string | null | undefined): boolean {
+  return attemptId?.startsWith(CASE_TERMINAL_ACTION_ATTEMPT_PREFIX) === true;
 }
 
 export function isCaseRoleReleaseRecoveryAttempt(attemptId: string | null | undefined): boolean {

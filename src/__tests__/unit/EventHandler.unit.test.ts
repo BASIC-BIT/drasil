@@ -976,7 +976,10 @@ describe('EventHandler (unit)', () => {
 
     await updateHandler?.(oldMember as any, newMember as any);
 
-    expect(verificationEventRepository.findActiveByUserAndServer).not.toHaveBeenCalled();
+    expect(verificationEventRepository.findActiveByUserAndServer).toHaveBeenCalledWith(
+      'user-1',
+      'guild-1'
+    );
     expect(roleQuarantineService.enforceActiveCaseRoleUpdate).not.toHaveBeenCalled();
   });
 
@@ -998,6 +1001,7 @@ describe('EventHandler (unit)', () => {
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       attention_state: CaseAttentionState.PARKED,
       containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_case_role_id: caseRole.id,
     };
     const roleQuarantineService = {
       enforceActiveCaseRoleUpdate: jest.fn().mockResolvedValue({
@@ -1014,7 +1018,7 @@ describe('EventHandler (unit)', () => {
     const handler = buildHandler({ roleQuarantineService, verificationEventRepository });
 
     await (handler as any).enforceActiveCaseRoleQuarantine(oldMember, newMember, {
-      case_role_id: caseRole.id,
+      case_role_id: 'replacement-case-role',
     });
 
     expect(roleQuarantineService.enforceActiveCaseRoleUpdate).toHaveBeenCalledWith(
@@ -1310,6 +1314,43 @@ describe('EventHandler (unit)', () => {
     const handler = buildHandler({
       configService: buildQuarantineConfigService(),
       notificationManager,
+      verificationEventRepository: {
+        findParkedByServer: jest.fn().mockResolvedValue([activeCase]),
+        findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),
+      },
+    });
+    const message = buildMessage(new PermissionsBitField());
+
+    await (handler as any).recordParkedQuarantineBreach(message);
+
+    expect(notificationManager.notifyAccountQuarantineAttention).toHaveBeenCalledWith(
+      activeCase,
+      'containment_breach',
+      message
+    );
+  });
+
+  it('directly notifies admins when the optional breach queue write fails', async () => {
+    const activeCase = {
+      id: 'verification-1',
+      user_id: 'user-1',
+      server_id: 'guild-1',
+      thread_id: 'recovery-thread',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_attempt_id: null,
+    };
+    const notificationManager = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    };
+    const moderationQueueService = {
+      recordQuarantineBreachAttention: jest.fn().mockRejectedValue(new Error('Queue unavailable')),
+    };
+    const handler = buildHandler({
+      configService: buildQuarantineConfigService(),
+      notificationManager,
+      moderationQueueService,
       verificationEventRepository: {
         findParkedByServer: jest.fn().mockResolvedValue([activeCase]),
         findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),

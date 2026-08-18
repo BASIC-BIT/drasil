@@ -151,11 +151,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       );
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'case_role_assignment';
-      caseRoleAssigned = assignedCaseRoleId
-        ? await this.roleManager.assignCaseRole(member, assignedCaseRoleId)
-        : false;
       if (
-        caseRoleAssigned &&
         assignedCaseRoleId &&
         !(await this.verificationEvents.recordQuarantineCaseRole(
           claimedEvent.id,
@@ -163,8 +159,11 @@ export class AccountQuarantineService implements IAccountQuarantineService {
           assignedCaseRoleId
         ))
       ) {
-        throw new Error('The quarantine case-role assignment could not be durably recorded.');
+        throw new Error('The intended quarantine case role could not be durably recorded.');
       }
+      caseRoleAssigned = assignedCaseRoleId
+        ? await this.roleManager.assignCaseRole(member, assignedCaseRoleId)
+        : false;
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'containment_audit';
       [lockdown, memberAudit] = await Promise.all([

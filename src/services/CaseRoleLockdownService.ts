@@ -138,6 +138,11 @@ const LOCKDOWN_PERMISSION_OPTIONS = LOCKDOWN_PERMISSIONS.reduce<PermissionOverwr
 );
 
 const RECOVERY_PARENT_BLOCKED_PERMISSIONS: readonly LockdownPermission[] = [
+  {
+    flag: PermissionFlagsBits.CreateInstantInvite,
+    option: 'CreateInstantInvite',
+    label: 'Create Instant Invite',
+  },
   { flag: PermissionFlagsBits.SendMessages, option: 'SendMessages', label: 'Send Messages' },
   {
     flag: PermissionFlagsBits.CreatePublicThreads,
@@ -168,6 +173,7 @@ const RECOVERY_PARENT_REQUIRED_PERMISSIONS: readonly LockdownPermission[] = [
 const RECOVERY_PARENT_PERMISSION_OPTIONS: PermissionOverwriteOptions = {
   ViewChannel: true,
   ReadMessageHistory: true,
+  CreateInstantInvite: false,
   SendMessages: false,
   SendMessagesInThreads: true,
   CreatePublicThreads: false,

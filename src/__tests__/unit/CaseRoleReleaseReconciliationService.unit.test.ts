@@ -233,7 +233,7 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
     expect(queue.upsertCaseMirror).toHaveBeenCalledWith(recovered);
   });
 
-  it('releases an expired attention lease back to the parked state', async () => {
+  it('returns an expired attention lease to durable moderator review', async () => {
     const now = new Date('2026-08-18T12:00:00.000Z');
     const verificationEvents = new InMemoryVerificationEventRepository();
     const verificationEvent = await verificationEvents.createFromDetection(
@@ -251,19 +251,34 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
       parked_at: new Date('2026-08-18T10:00:00.000Z'),
       parked_by: 'moderator-1',
     });
+    const notifications = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    };
+    const queue = { upsertCaseMirror: jest.fn().mockResolvedValue(undefined) };
     const service = buildService({
       client: { guilds: { cache: new Map(), fetch: jest.fn() } },
       verificationEvents,
+      notifications,
+      queue,
     });
 
     await service.runOnce(now);
 
     await expect(verificationEvents.findById(verificationEvent.id)).resolves.toEqual(
       expect.objectContaining({
-        attention_state: CaseAttentionState.PARKED,
-        containment_status: CaseContainmentStatus.CONTAINED,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
         quarantine_attempt_id: null,
+        parked_at: null,
+        parked_by: null,
       })
+    );
+    expect(notifications.notifyAccountQuarantineAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      'attention_delivery_incomplete'
+    );
+    expect(queue.upsertCaseMirror).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id })
     );
   });
 
@@ -418,5 +433,119 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
     await service.runOnce();
 
     expect(roleQuarantine.restoreMemberRoles).toHaveBeenCalledWith(member);
+  });
+
+  it('does not restore a prior membership snapshot after the user rejoins', async () => {
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      status: VerificationStatus.VERIFIED,
+      resolved_by: 'moderator-1',
+      resolved_at: new Date(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    });
+    const snapshot = {
+      id: 'snapshot-rejoined',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      verification_event_id: verificationEvent.id,
+      status: RoleQuarantineSnapshotStatus.ACTIVE,
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+      original_role_ids: ['role-1'],
+      planned_role_ids: ['role-1'],
+      removed_role_ids: ['role-1'],
+      restored_role_ids: [],
+      skipped_roles: [],
+      failed_removals: [],
+      failed_restores: [],
+      created_at: new Date('2026-08-18T10:00:00.000Z'),
+      updated_at: new Date(),
+      restored_at: null,
+      restored_by: null,
+      metadata: {},
+    };
+    const member = { id: 'user-1', joinedAt: new Date('2026-08-18T11:00:00.000Z') };
+    const guild = { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue(member) } };
+    const roleQuarantine = {
+      restoreMemberRoles: jest.fn(),
+      abandonActiveSnapshot: jest.fn().mockResolvedValue({ status: 'abandoned' }),
+    };
+    const service = buildService({
+      client: { guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() } },
+      verificationEvents,
+      snapshots: { findActiveCompletedCompromised: jest.fn().mockResolvedValue([snapshot]) },
+      roleQuarantine,
+    });
+
+    await service.runOnce();
+
+    expect(roleQuarantine.restoreMemberRoles).not.toHaveBeenCalled();
+    expect(roleQuarantine.abandonActiveSnapshot).toHaveBeenCalledWith(
+      'guild-1',
+      'user-1',
+      'membership_replaced_before_role_restoration'
+    );
+  });
+
+  it('retries an incomplete restoration alert when delivery returns false', async () => {
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      status: VerificationStatus.VERIFIED,
+      resolved_by: 'moderator-1',
+      resolved_at: new Date(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    });
+    const snapshot = {
+      id: 'snapshot-alert-retry',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      verification_event_id: verificationEvent.id,
+      status: RoleQuarantineSnapshotStatus.ACTIVE,
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+      original_role_ids: ['role-1'],
+      planned_role_ids: ['role-1'],
+      removed_role_ids: ['role-1'],
+      restored_role_ids: [],
+      skipped_roles: [],
+      failed_removals: [],
+      failed_restores: [],
+      created_at: new Date('2026-08-18T10:00:00.000Z'),
+      updated_at: new Date(),
+      restored_at: null,
+      restored_by: null,
+      metadata: {},
+    };
+    const member = { id: 'user-1', joinedAt: new Date('2026-08-18T09:00:00.000Z') };
+    const guild = { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue(member) } };
+    const notifications = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(false),
+    };
+    const service = buildService({
+      client: { guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() } },
+      verificationEvents,
+      snapshots: { findActiveCompletedCompromised: jest.fn().mockResolvedValue([snapshot]) },
+      roleQuarantine: {
+        restoreMemberRoles: jest.fn().mockResolvedValue({ status: 'partially_restored' }),
+      },
+      notifications,
+    });
+
+    await service.runOnce();
+    await service.runOnce();
+
+    expect(notifications.notifyAccountQuarantineAttention).toHaveBeenCalledTimes(2);
   });
 });

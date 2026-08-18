@@ -710,7 +710,7 @@ describe('RoleQuarantineService (unit)', () => {
     const oldMember = createMember([caseRole], [caseRole]);
     const newMember = createMember([], [caseRole]);
     const service = new RoleQuarantineService(
-      createConfigService({ role_quarantine_mode: 'off' }),
+      createConfigService({ role_quarantine_mode: 'off' }, 'replacement-case-role'),
       new InMemoryRoleQuarantineSnapshotRepository()
     );
     const parkedEvent = {
@@ -718,6 +718,7 @@ describe('RoleQuarantineService (unit)', () => {
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       attention_state: CaseAttentionState.PARKED,
       containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_case_role_id: caseRole.id,
     } as VerificationEvent;
 
     const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);

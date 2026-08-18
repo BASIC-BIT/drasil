@@ -778,6 +778,42 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return { ...claimed };
   }
 
+  async claimTerminalActions(
+    ids: readonly string[],
+    serverId: string,
+    userId: string,
+    attemptId: string
+  ): Promise<VerificationEvent[] | null> {
+    const eventIndexes = ids.map((id) =>
+      this.events.findIndex(
+        (event) =>
+          event.id === id &&
+          event.server_id === serverId &&
+          event.user_id === userId &&
+          event.status === VerificationStatus.PENDING &&
+          event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+          event.attention_state === CaseAttentionState.PARKED &&
+          event.containment_status === CaseContainmentStatus.CONTAINED &&
+          event.quarantine_attempt_id === null
+      )
+    );
+    if (eventIndexes.length === 0 || eventIndexes.some((eventIndex) => eventIndex === -1)) {
+      return null;
+    }
+    const claimedAt = new Date();
+    return eventIndexes.map((eventIndex) => {
+      const claimed = {
+        ...this.events[eventIndex],
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: attemptId,
+        quarantine_lease_renewed_at: claimedAt,
+        updated_at: claimedAt,
+      };
+      this.events[eventIndex] = claimed;
+      return { ...claimed };
+    });
+  }
+
   async completeCaseRoleRelease(
     id: string,
     attemptId: string,
@@ -987,6 +1023,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       touchUpdatedAt?: boolean;
       allowQuarantineOverride?: boolean;
       preservePendingCaseState?: boolean;
+      expectedQuarantineAttemptId?: string;
     } = {}
   ): Promise<VerificationEvent | null> {
     const eventIndex = this.events.findIndex((item) => item.id === id);
@@ -996,9 +1033,18 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
 
     const existing = this.events[eventIndex];
     if (
+      options.expectedQuarantineAttemptId !== undefined &&
+      (existing.status !== VerificationStatus.PENDING ||
+        existing.containment_status !== CaseContainmentStatus.IN_PROGRESS ||
+        existing.quarantine_attempt_id !== options.expectedQuarantineAttemptId)
+    ) {
+      return null;
+    }
+    if (
       data.status !== undefined &&
       data.status !== VerificationStatus.PENDING &&
       existing.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+      options.expectedQuarantineAttemptId === undefined &&
       options.allowQuarantineOverride !== true
     ) {
       return null;

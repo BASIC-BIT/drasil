@@ -55,6 +55,7 @@ interface MirroredThreadImageFileResult {
 export type AccountQuarantineAttentionReason =
   | 'containment_breach'
   | 'containment_incomplete'
+  | 'attention_delivery_incomplete'
   | 'role_restoration_incomplete';
 
 /**
@@ -612,9 +613,11 @@ export class NotificationManager implements INotificationManager {
       const summary =
         reason === 'containment_breach'
           ? 'Quarantine containment breach detected. Review immediately.'
-          : reason === 'role_restoration_incomplete'
-            ? 'Account verification completed, but quarantined roles still need restoration.'
-            : 'Quarantine containment could not be confirmed. Review immediately.';
+          : reason === 'attention_delivery_incomplete'
+            ? 'A quarantine alert may not have been delivered before recovery. Review immediately.'
+            : reason === 'role_restoration_incomplete'
+              ? 'Account verification completed, but quarantined roles still need restoration.'
+              : 'Quarantine containment could not be confirmed. Review immediately.';
       const lines = [
         `${this.presentationBuilder.formatRoleMentions(notificationRoleIds)} ${summary}`.trim(),
         `User: <@${verificationEvent.user_id}> (\`${verificationEvent.user_id}\`)`,

@@ -346,13 +346,17 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     const mode: RoleQuarantineMode =
       purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT ? 'on' : settings.mode;
     const policy = this.buildPolicy(purpose, serverConfig.settings);
-    const addedRoles = this.getAddedRoles(oldMember, newMember, serverConfig.case_role_id);
+    const activeCaseRoleId =
+      purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT
+        ? (verificationEvent.quarantine_case_role_id ?? serverConfig.case_role_id)
+        : serverConfig.case_role_id;
+    const addedRoles = this.getAddedRoles(oldMember, newMember, activeCaseRoleId);
     const addedRoleIds = addedRoles.map((role) => role.id);
     const caseRoleRemoved =
       purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT &&
-      serverConfig.case_role_id !== null &&
-      oldMember.roles.cache.has(serverConfig.case_role_id) &&
-      !newMember.roles.cache.has(serverConfig.case_role_id);
+      activeCaseRoleId !== null &&
+      oldMember.roles.cache.has(activeCaseRoleId) &&
+      !newMember.roles.cache.has(activeCaseRoleId);
     const authorizedCaseRoleRelease =
       caseRoleRemoved &&
       isCaseRoleReleaseLeaseActive(
@@ -362,14 +366,14 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     let caseRoleRestored = false;
     let caseRoleRestoreError: string | null = null;
 
-    if (caseRoleRemoved && !authorizedCaseRoleRelease && serverConfig.case_role_id) {
+    if (caseRoleRemoved && !authorizedCaseRoleRelease && activeCaseRoleId) {
       try {
         const caseRole =
-          oldMember.roles.cache.get(serverConfig.case_role_id) ??
-          newMember.guild.roles.cache.get(serverConfig.case_role_id) ??
-          (await newMember.guild.roles.fetch(serverConfig.case_role_id));
+          oldMember.roles.cache.get(activeCaseRoleId) ??
+          newMember.guild.roles.cache.get(activeCaseRoleId) ??
+          (await newMember.guild.roles.fetch(activeCaseRoleId));
         if (!caseRole) {
-          throw new Error('Configured case role no longer exists.');
+          throw new Error('Assigned case role no longer exists.');
         }
         await newMember.roles.add(
           caseRole,

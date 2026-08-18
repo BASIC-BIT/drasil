@@ -238,6 +238,9 @@ describe('AccountQuarantineService', () => {
       expect.any(String),
       'case-role'
     );
+    expect(
+      harness.verificationEvents.recordQuarantineCaseRole.mock.invocationCallOrder[0]
+    ).toBeLessThan(harness.roleManager.assignCaseRole.mock.invocationCallOrder[0]);
     expect(harness.adminActions.recordAction).toHaveBeenCalledTimes(1);
     expect(harness.moderationOutcomes.recordOutcome).toHaveBeenCalledTimes(1);
     expect(harness.notificationManager.logActionToMessage).toHaveBeenCalled();
