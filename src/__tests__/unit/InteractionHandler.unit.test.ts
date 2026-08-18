@@ -337,6 +337,8 @@ describe('InteractionHandler (unit)', () => {
       findByThreadId: jest.fn(),
       claimQuarantineAttempt: jest.fn(),
       claimCaseRoleRelease: jest.fn(),
+      completeCaseRoleRelease: jest.fn(),
+      rollbackCaseRoleRelease: jest.fn(),
       renewQuarantineAttempt: jest.fn(),
       updateQuarantineAttempt: jest.fn(),
       update: jest.fn(),

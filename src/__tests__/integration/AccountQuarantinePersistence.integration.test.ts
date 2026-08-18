@@ -314,7 +314,7 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     ).resolves.toEqual(
       expect.objectContaining({
         attention_state: CaseAttentionState.PARKED,
-        containment_status: CaseContainmentStatus.CONTAINED,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
         quarantine_attempt_id: 'case-role-release:1',
         quarantine_lease_renewed_at: expect.any(Date),
       })
@@ -333,18 +333,55 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       where: { id: verification.id },
       data: { quarantine_lease_renewed_at: staleBefore },
     });
-    await expect(
-      verifications.claimCaseRoleRelease(
-        verification.id,
-        serverId,
-        userId,
-        'case-role-release:2',
-        staleBefore
-      )
-    ).resolves.toEqual(
+    const reclaimed = await verifications.claimCaseRoleRelease(
+      verification.id,
+      serverId,
+      userId,
+      'case-role-release:2',
+      staleBefore
+    );
+    expect(reclaimed).toEqual(
       expect.objectContaining({
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
         quarantine_attempt_id: 'case-role-release:2',
         quarantine_lease_renewed_at: expect.any(Date),
+      })
+    );
+    await expect(
+      verifications.completeCaseRoleRelease(
+        verification.id,
+        'case-role-release:wrong',
+        'moderator-verify',
+        new Date(),
+        reclaimed?.metadata ?? {}
+      )
+    ).resolves.toBeNull();
+
+    await verifications.update(
+      verification.id,
+      {
+        status: VerificationStatus.BANNED,
+        resolved_by: 'moderator-ban',
+        resolved_at: new Date(),
+      },
+      { allowQuarantineOverride: true }
+    );
+    await expect(
+      verifications.completeCaseRoleRelease(
+        verification.id,
+        'case-role-release:2',
+        'moderator-verify',
+        new Date(),
+        reclaimed?.metadata ?? {}
+      )
+    ).resolves.toBeNull();
+    await expect(
+      verifications.rollbackCaseRoleRelease(verification.id, 'case-role-release:2')
+    ).resolves.toBeNull();
+    await expect(verifications.findById(verification.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.BANNED,
+        resolved_by: 'moderator-ban',
       })
     );
   });

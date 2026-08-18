@@ -37,6 +37,7 @@ import {
 import {
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
+  isCaseRoleReleaseLeaseActive,
 } from '../utils/caseRoleRelease';
 import { appendVerificationActionFailure } from '../utils/verificationActionFailures';
 import {
@@ -577,8 +578,24 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     return verificationEvents.filter((event) => event.status === VerificationStatus.PENDING);
   }
 
-  private assertNoQuarantineInProgress(events: readonly VerificationEvent[]): void {
-    if (events.some((event) => event.containment_status === CaseContainmentStatus.IN_PROGRESS)) {
+  private assertNoQuarantineInProgress(
+    events: readonly VerificationEvent[],
+    allowExpiredCaseRoleRelease = false
+  ): void {
+    if (
+      events.some(
+        (event) =>
+          event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+          !(
+            allowExpiredCaseRoleRelease &&
+            event.quarantine_attempt_id?.startsWith(CASE_ROLE_RELEASE_ATTEMPT_PREFIX) === true &&
+            !isCaseRoleReleaseLeaseActive(
+              event.quarantine_attempt_id,
+              event.quarantine_lease_renewed_at
+            )
+          )
+      )
+    ) {
       throw new Error(
         'Account quarantine is currently in progress. Wait for containment to finish before resolving this case.'
       );
@@ -859,11 +876,13 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   public async verifyUser(member: GuildMember, moderator: User): Promise<boolean> {
     let pendingVerificationEvents: VerificationEvent[] = [];
     const eventsToRollback = new Map<string, VerificationEvent>();
+    const releaseClaimedEventIds = new Set<string>();
+    const releaseAttemptId = `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}${randomUUID()}`;
     let roleRemoved = false;
     let releaseCommitted = false;
     try {
       pendingVerificationEvents = await this.getPendingVerificationEvents(member);
-      this.assertNoQuarantineInProgress(pendingVerificationEvents);
+      this.assertNoQuarantineInProgress(pendingVerificationEvents, true);
       const verificationEvent =
         pendingVerificationEvents.length > 0 ? pendingVerificationEvents[0] : null;
 
@@ -871,7 +890,6 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         throw new Error('No active verification event found to verify');
       }
 
-      const releaseAttemptId = `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}${randomUUID()}`;
       const releaseStaleBefore = new Date(Date.now() - CASE_ROLE_RELEASE_LEASE_MS);
       for (const pendingEvent of pendingVerificationEvents) {
         if (
@@ -891,6 +909,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         if (!claimedEvent) {
           throw new Error(`Failed to claim case ${pendingEvent.id} for verification release.`);
         }
+        releaseClaimedEventIds.add(pendingEvent.id);
         eventsToRollback.set(pendingEvent.id, pendingEvent);
       }
 
@@ -914,10 +933,15 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           resolved_at: resolvedAt,
           metadata: this.withUserSnapshot(pendingEvent.metadata, member.user, member),
         };
-        const updatedEvent = await this.verificationEventRepository.update(
-          pendingEvent.id,
-          eventToUpdate
-        );
+        const updatedEvent = releaseClaimedEventIds.has(pendingEvent.id)
+          ? await this.verificationEventRepository.completeCaseRoleRelease(
+              pendingEvent.id,
+              releaseAttemptId,
+              moderator.id,
+              resolvedAt,
+              eventToUpdate.metadata
+            )
+          : await this.verificationEventRepository.update(pendingEvent.id, eventToUpdate);
 
         if (!updatedEvent) {
           throw new Error(
@@ -995,7 +1019,31 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       );
       return true; // Verification process completed successfully
     } catch (error) {
-      if (!releaseCommitted && roleRemoved) {
+      let releaseClaimRolledBack = releaseClaimedEventIds.size === 0;
+      if (!releaseCommitted) {
+        for (const pendingEvent of eventsToRollback.values()) {
+          try {
+            if (releaseClaimedEventIds.has(pendingEvent.id)) {
+              const rolledBack = await this.verificationEventRepository.rollbackCaseRoleRelease(
+                pendingEvent.id,
+                releaseAttemptId
+              );
+              releaseClaimRolledBack ||= rolledBack !== null;
+            } else {
+              await this.verificationEventRepository.update(pendingEvent.id, pendingEvent, {
+                touchUpdatedAt: false,
+                preservePendingCaseState: true,
+              });
+            }
+          } catch (rollbackError) {
+            console.warn(
+              `Failed to roll back case ${pendingEvent.id} after verification failed:`,
+              rollbackError
+            );
+          }
+        }
+      }
+      if (!releaseCommitted && roleRemoved && releaseClaimRolledBack) {
         try {
           const roleRestored = await this.roleManager.assignCaseRole(member);
           if (!roleRestored) {
@@ -1008,21 +1056,6 @@ export class UserModerationService implements IUserModerationService, ICombinedB
             `Failed to restore case role for ${member.user.tag} after verification failed:`,
             restoreError
           );
-        }
-      }
-      if (!releaseCommitted) {
-        for (const pendingEvent of eventsToRollback.values()) {
-          await this.verificationEventRepository
-            .update(pendingEvent.id, pendingEvent, {
-              touchUpdatedAt: false,
-              preservePendingCaseState: true,
-            })
-            .catch((rollbackError) => {
-              console.warn(
-                `Failed to roll back case ${pendingEvent.id} after verification failed:`,
-                rollbackError
-              );
-            });
         }
       }
       console.error(`Failed to verify user ${member.user.tag}:`, error);

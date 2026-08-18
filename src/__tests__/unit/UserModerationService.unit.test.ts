@@ -386,13 +386,7 @@ describe('UserModerationService (unit)', () => {
       parked_at: parkedAt,
       parked_by: 'moderator-parked',
     });
-    const repositoryUpdate = verificationEventRepository.update.bind(verificationEventRepository);
-    jest.spyOn(verificationEventRepository, 'update').mockImplementation((id, data, options) => {
-      if (data.status === VerificationStatus.VERIFIED) {
-        return Promise.resolve(null);
-      }
-      return repositoryUpdate(id, data, options);
-    });
+    jest.spyOn(verificationEventRepository, 'completeCaseRoleRelease').mockResolvedValue(null);
     const service = new UserModerationService(
       serverMemberRepository,
       notificationManager,
@@ -459,7 +453,7 @@ describe('UserModerationService (unit)', () => {
     );
 
     await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
-      'Failed to claim case'
+      'Account quarantine is currently in progress'
     );
 
     expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
@@ -467,6 +461,104 @@ describe('UserModerationService (unit)', () => {
       expect.objectContaining({
         status: VerificationStatus.PENDING,
         quarantine_attempt_id: `${CASE_ROLE_RELEASE_ATTEMPT_PREFIX}other-moderator`,
+      })
+    );
+  });
+
+  it('blocks a kick while verification owns the release claim', async () => {
+    const guildId = 'guild-verify-release-fence';
+    const userId = 'user-verify-release-fence';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+    roleManager.removeCaseRole.mockImplementation(async () => {
+      await expect(
+        service.kickUser(member, 'concurrent kick', { id: 'moderator-kick' } as User)
+      ).rejects.toThrow('Account quarantine is currently in progress');
+      return true;
+    });
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).resolves.toBe(
+      true
+    );
+
+    expect(member.kick).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite a terminal outcome that wins the release race', async () => {
+    const guildId = 'guild-verify-terminal-race';
+    const userId = 'user-verify-terminal-race';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date('2026-08-18T09:00:00.000Z'),
+      parked_by: 'moderator-parked',
+    });
+    roleManager.removeCaseRole.mockImplementation(async () => {
+      await verificationEventRepository.update(
+        verificationEvent.id,
+        {
+          status: VerificationStatus.BANNED,
+          resolved_by: 'moderator-ban',
+          resolved_at: new Date(),
+        },
+        { allowQuarantineOverride: true }
+      );
+      return true;
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
+      'Failed to update verification event'
+    );
+
+    expect(roleManager.assignCaseRole).not.toHaveBeenCalled();
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.BANNED,
+        resolved_by: 'moderator-ban',
       })
     );
   });

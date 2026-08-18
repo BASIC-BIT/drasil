@@ -658,12 +658,13 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         event.status === VerificationStatus.PENDING &&
         event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
         event.attention_state === CaseAttentionState.PARKED &&
-        event.containment_status === CaseContainmentStatus.CONTAINED &&
-        (event.quarantine_attempt_id === null ||
-          (event.quarantine_attempt_id?.startsWith(CASE_ROLE_RELEASE_ATTEMPT_PREFIX) === true &&
-            (event.quarantine_lease_renewed_at === null ||
-              event.quarantine_lease_renewed_at === undefined ||
-              event.quarantine_lease_renewed_at <= staleBefore)))
+        ((event.containment_status === CaseContainmentStatus.CONTAINED &&
+          event.quarantine_attempt_id === null) ||
+          (event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+            event.quarantine_attempt_id?.startsWith(CASE_ROLE_RELEASE_ATTEMPT_PREFIX) === true &&
+            event.quarantine_lease_renewed_at !== null &&
+            event.quarantine_lease_renewed_at !== undefined &&
+            event.quarantine_lease_renewed_at <= staleBefore))
     );
     if (eventIndex === -1) {
       return null;
@@ -671,12 +672,76 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
 
     const claimed = {
       ...this.events[eventIndex],
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
       quarantine_attempt_id: attemptId,
       quarantine_lease_renewed_at: new Date(),
       updated_at: new Date(),
     };
     this.events[eventIndex] = claimed;
     return { ...claimed };
+  }
+
+  async completeCaseRoleRelease(
+    id: string,
+    attemptId: string,
+    resolvedBy: string,
+    resolvedAt: Date,
+    metadata: VerificationEvent['metadata']
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.status === VerificationStatus.PENDING &&
+        event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+        event.attention_state === CaseAttentionState.PARKED &&
+        event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id === attemptId
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+
+    const completed: VerificationEvent = {
+      ...this.events[eventIndex],
+      status: VerificationStatus.VERIFIED,
+      resolved_by: resolvedBy,
+      resolved_at: resolvedAt,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+      quarantine_attempt_id: null,
+      quarantine_lease_renewed_at: null,
+      parked_at: null,
+      parked_by: null,
+      metadata,
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = completed;
+    return { ...completed };
+  }
+
+  async rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.status === VerificationStatus.PENDING &&
+        event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+        event.attention_state === CaseAttentionState.PARKED &&
+        event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id === attemptId
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+
+    const rolledBack = {
+      ...this.events[eventIndex],
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_attempt_id: null,
+      quarantine_lease_renewed_at: null,
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = rolledBack;
+    return { ...rolledBack };
   }
 
   async renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean> {

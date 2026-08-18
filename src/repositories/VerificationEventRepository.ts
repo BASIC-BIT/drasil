@@ -56,6 +56,14 @@ export interface IVerificationEventRepository {
     attemptId: string,
     staleBefore: Date
   ): Promise<VerificationEvent | null>;
+  completeCaseRoleRelease(
+    id: string,
+    attemptId: string,
+    resolvedBy: string,
+    resolvedAt: Date,
+    metadata: VerificationEvent['metadata']
+  ): Promise<VerificationEvent | null>;
+  rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null>;
   renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean>;
   updateQuarantineAttempt(
     id: string,
@@ -180,19 +188,20 @@ export class VerificationEventRepository implements IVerificationEventRepository
             status: VerificationStatus.PENDING,
             case_kind: CaseKind.COMPROMISED_ACCOUNT,
             attention_state: CaseAttentionState.PARKED,
-            containment_status: CaseContainmentStatus.CONTAINED,
             OR: [
-              { quarantine_attempt_id: null },
               {
+                containment_status: CaseContainmentStatus.CONTAINED,
+                quarantine_attempt_id: null,
+              },
+              {
+                containment_status: CaseContainmentStatus.IN_PROGRESS,
                 quarantine_attempt_id: { startsWith: CASE_ROLE_RELEASE_ATTEMPT_PREFIX },
-                OR: [
-                  { quarantine_lease_renewed_at: null },
-                  { quarantine_lease_renewed_at: { lte: staleBefore } },
-                ],
+                quarantine_lease_renewed_at: { lte: staleBefore },
               },
             ],
           },
           data: {
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
             quarantine_attempt_id: attemptId,
             quarantine_lease_renewed_at: new Date(),
             updated_at: new Date(),
@@ -205,6 +214,77 @@ export class VerificationEventRepository implements IVerificationEventRepository
       })) as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'claimCaseRoleRelease');
+    }
+  }
+
+  async completeCaseRoleRelease(
+    id: string,
+    attemptId: string,
+    resolvedBy: string,
+    resolvedAt: Date,
+    metadata: VerificationEvent['metadata']
+  ): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const completed = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            attention_state: CaseAttentionState.PARKED,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+          },
+          data: {
+            status: VerificationStatus.VERIFIED,
+            resolved_by: resolvedBy,
+            resolved_at: resolvedAt,
+            attention_state: CaseAttentionState.REVIEW_REQUIRED,
+            containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+            quarantine_attempt_id: null,
+            quarantine_lease_renewed_at: null,
+            parked_at: null,
+            parked_by: null,
+            metadata: metadata as Prisma.InputJsonValue,
+            updated_at: new Date(),
+          },
+        });
+        if (completed.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'completeCaseRoleRelease');
+    }
+  }
+
+  async rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const rolledBack = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            attention_state: CaseAttentionState.PARKED,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+          },
+          data: {
+            containment_status: CaseContainmentStatus.CONTAINED,
+            quarantine_attempt_id: null,
+            quarantine_lease_renewed_at: null,
+            updated_at: new Date(),
+          },
+        });
+        if (rolledBack.count !== 1) {
+          return null;
+        }
+        return await transaction.verification_events.findUnique({ where: { id } });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'rollbackCaseRoleRelease');
     }
   }
 
