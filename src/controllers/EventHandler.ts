@@ -72,7 +72,10 @@ import {
   ObservedDiscordKickOptions,
 } from '../services/UserModerationService';
 import { ModerationOutcomeSource } from '../services/ModerationOutcomeService';
-import { IModerationQueueService } from '../services/ModerationQueueService';
+import {
+  IModerationQueueService,
+  ModerationQueueAttentionResult,
+} from '../services/ModerationQueueService';
 import { ICaseRoleReleaseReconciliationService } from '../services/CaseRoleReleaseReconciliationService';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
@@ -82,11 +85,14 @@ import type { IGlobalMessageWatchlistRepository } from '../repositories/GlobalMe
 import { getAccountQuarantineSettings } from '../utils/accountQuarantineSettings';
 import { getCaseRoleLockdownSettings } from '../utils/caseRoleLockdownSettings';
 import { CASE_ATTENTION_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
+import {
+  ActiveAccountQuarantineCache,
+  IActiveAccountQuarantineCache,
+} from '../services/ActiveAccountQuarantineCache';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const GLOBAL_MESSAGE_WATCHLIST_CACHE_TTL_MS = 30_000;
-const ACTIVE_QUARANTINE_CACHE_TTL_MS = 30_000;
 const GLOBAL_MESSAGE_WATCHLIST_INITIAL_FAILURE_RETRY_MS = 5_000;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
@@ -156,10 +162,7 @@ export class EventHandler implements IEventHandler {
   private globalMessageWatchlistLoadedAt = 0;
   private globalMessageWatchlistRetryAfter = 0;
   private globalMessageWatchlistHasLoaded = false;
-  private activeQuarantineUsersCache = new Map<
-    string,
-    { readonly userIds: ReadonlySet<string>; readonly expiresAt: number }
-  >();
+  private activeQuarantineCache: IActiveAccountQuarantineCache;
   private globalMessageWatchlistLoadPromise: Promise<
     readonly GlobalMessageWatchlistEntry[]
   > | null = null;
@@ -209,7 +212,10 @@ export class EventHandler implements IEventHandler {
     globalMessageWatchlistRepository?: IGlobalMessageWatchlistRepository,
     @inject(TYPES.CaseRoleReleaseReconciliationService)
     @optional()
-    caseRoleReleaseReconciliationService?: ICaseRoleReleaseReconciliationService
+    caseRoleReleaseReconciliationService?: ICaseRoleReleaseReconciliationService,
+    @inject(TYPES.ActiveAccountQuarantineCache)
+    @optional()
+    activeQuarantineCache?: IActiveAccountQuarantineCache
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -231,6 +237,7 @@ export class EventHandler implements IEventHandler {
     this.verificationEventRepository = verificationEventRepository;
     this.globalMessageWatchlistRepository = globalMessageWatchlistRepository;
     this.caseRoleReleaseReconciliationService = caseRoleReleaseReconciliationService;
+    this.activeQuarantineCache = activeQuarantineCache ?? new ActiveAccountQuarantineCache();
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -887,27 +894,33 @@ export class EventHandler implements IEventHandler {
     if (!verificationEvent) {
       return;
     }
+    if (verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT) {
+      this.activeQuarantineCache.noteActive(newMember.guild.id, newMember.id);
+    }
     const activeCaseRoleId =
       verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT
         ? (verificationEvent.quarantine_case_role_id ?? serverConfig.case_role_id)
         : serverConfig.case_role_id;
-    if (!activeCaseRoleId) {
+    const compromisedAccountCase = verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT;
+    if (!activeCaseRoleId && !compromisedAccountCase) {
       return;
     }
 
-    const hasCaseRole = this.memberHasRole(newMember, activeCaseRoleId);
-    const caseRoleRemoved = this.memberHasRole(oldMember, activeCaseRoleId) && !hasCaseRole;
+    const hasCaseRole = activeCaseRoleId ? this.memberHasRole(newMember, activeCaseRoleId) : false;
+    const caseRoleRemoved = activeCaseRoleId
+      ? this.memberHasRole(oldMember, activeCaseRoleId) && !hasCaseRole
+      : false;
     const gainedRole = [...newMember.roles.cache.values()].some(
       (role) =>
         role.id !== newMember.guild.id &&
-        role.id !== activeCaseRoleId &&
+        (!activeCaseRoleId || role.id !== activeCaseRoleId) &&
         !oldMember.roles.cache.has(role.id)
     );
     if (!gainedRole && !caseRoleRemoved) {
       return;
     }
 
-    if (!hasCaseRole && verificationEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT) {
+    if (!hasCaseRole && !compromisedAccountCase) {
       return;
     }
 
@@ -1006,34 +1019,46 @@ export class EventHandler implements IEventHandler {
           return;
         }
         let attentionDelivered = false;
+        let directDelivered = false;
         try {
-          const [queueResult, directResult] = await Promise.allSettled([
-            this.moderationQueueService?.recordQuarantineBreachAttention(claimed, message) ??
-              Promise.resolve(false),
-            this.notificationManager.notifyAccountQuarantineAttention(
-              claimed,
-              'containment_breach',
-              message
-            ),
-          ]);
-          if (queueResult.status === 'rejected') {
+          let queueAttention: ModerationQueueAttentionResult = {
+            delivered: false,
+            created: false,
+          };
+          try {
+            queueAttention =
+              (await this.moderationQueueService?.recordQuarantineBreachAttention(
+                claimed,
+                message
+              )) ?? queueAttention;
+          } catch (error) {
             console.warn(
               `Failed to queue quarantine breach attention for case ${claimed.id}:`,
-              queueResult.reason
+              error
             );
           }
-          if (directResult.status === 'rejected') {
-            console.warn(
-              `Failed to send direct quarantine breach attention for case ${claimed.id}:`,
-              directResult.reason
-            );
+
+          const claimedMetadata = this.metadataToRecord(claimed.metadata);
+          const directAlreadyNotified =
+            typeof claimedMetadata.breach_attention_direct_notified_at === 'string';
+          if (queueAttention.created || !directAlreadyNotified) {
+            try {
+              directDelivered = await this.notificationManager.notifyAccountQuarantineAttention(
+                claimed,
+                'containment_breach',
+                message
+              );
+            } catch (error) {
+              console.warn(
+                `Failed to send direct quarantine breach attention for case ${claimed.id}:`,
+                error
+              );
+            }
           }
-          const queueDelivered = queueResult.status === 'fulfilled' && queueResult.value === true;
-          const directDelivered =
-            directResult.status === 'fulfilled' && directResult.value === true;
-          attentionDelivered = queueDelivered || directDelivered;
+          attentionDelivered = queueAttention.delivered || directDelivered || directAlreadyNotified;
         } finally {
           const shouldRemainParked = attentionDelivered && wasParked;
+          const completedAt = new Date().toISOString();
           await this.verificationEventRepository.updateQuarantineAttempt(
             claimed.id,
             attentionAttemptId,
@@ -1046,13 +1071,19 @@ export class EventHandler implements IEventHandler {
                 : CaseContainmentStatus.INCOMPLETE,
               parked_at: shouldRemainParked ? claimed.parked_at : null,
               parked_by: shouldRemainParked ? claimed.parked_by : null,
-              metadata: attentionDelivered
-                ? undefined
-                : {
+              metadata: directDelivered
+                ? {
                     ...this.metadataToRecord(claimed.metadata),
-                    breach_attention_delivery_failed_at: new Date().toISOString(),
-                    breach_attention_message_id: message.id,
-                  },
+                    breach_attention_direct_notified_at: completedAt,
+                    breach_attention_direct_message_id: message.id,
+                  }
+                : attentionDelivered
+                  ? undefined
+                  : {
+                      ...this.metadataToRecord(claimed.metadata),
+                      breach_attention_delivery_failed_at: completedAt,
+                      breach_attention_message_id: message.id,
+                    },
             }
           );
         }
@@ -1101,27 +1132,10 @@ export class EventHandler implements IEventHandler {
   }
 
   private async getCachedActiveQuarantineUserIds(serverId: string): Promise<ReadonlySet<string>> {
-    const now = Date.now();
-    const cached = this.activeQuarantineUsersCache.get(serverId);
-    if (cached && cached.expiresAt > now) {
-      return cached.userIds;
-    }
-
-    const pendingCases = await this.verificationEventRepository?.findPendingByServer(serverId);
-    const userIds = new Set(
-      (pendingCases ?? [])
-        .filter(
-          (event) =>
-            event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-            event.containment_status !== CaseContainmentStatus.NOT_APPLICABLE
-        )
-        .map((event) => event.user_id)
+    return this.activeQuarantineCache.getActiveUserIds(
+      serverId,
+      async () => (await this.verificationEventRepository?.findPendingByServer(serverId)) ?? []
     );
-    this.activeQuarantineUsersCache.set(serverId, {
-      userIds,
-      expiresAt: now + ACTIVE_QUARANTINE_CACHE_TTL_MS,
-    });
-    return userIds;
   }
 
   private async handleDiscordPendingStateChange(

@@ -459,7 +459,12 @@ function resolveAllowedActions(
 
   const presenceActions = ACTIONS_BY_PRESENCE_STATE[presenceState];
   if (presenceActions) {
-    return appendRefreshNotificationAction(row, presenceActions);
+    return appendRefreshNotificationAction(
+      row,
+      row.case_kind === 'compromised_account'
+        ? presenceActions.filter((action) => action !== 'close_no_action')
+        : presenceActions
+    );
   }
 
   const parkedIndex = 0;
@@ -470,6 +475,12 @@ function resolveAllowedActions(
     ...PENDING_IN_SERVER_ACTIONS[parkedIndex],
     ...ACCOUNT_QUARANTINE_ACTIONS_BY_STATE[parkedIndex][quarantineEnabledIndex],
   ];
+  if (row.case_kind === 'compromised_account') {
+    const closeNoActionIndex = actions.indexOf('close_no_action');
+    if (closeNoActionIndex >= 0) {
+      actions.splice(closeNoActionIndex, 1);
+    }
+  }
   if (row.notification_message_id) {
     actions.push('refresh_notification');
   }

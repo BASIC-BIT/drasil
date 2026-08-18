@@ -10,6 +10,10 @@ import {
 } from 'discord.js';
 import { EventHandler } from '../../controllers/EventHandler';
 import {
+  ActiveAccountQuarantineCache,
+  IActiveAccountQuarantineCache,
+} from '../../services/ActiveAccountQuarantineCache';
+import {
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
@@ -46,6 +50,7 @@ describe('EventHandler (unit)', () => {
     verificationEventRepository?: Record<string, jest.Mock>;
     globalMessageWatchlistRepository?: Record<string, jest.Mock>;
     caseRoleReleaseReconciliationService?: Record<string, jest.Mock>;
+    activeQuarantineCache?: IActiveAccountQuarantineCache;
     interactionHandler?: Record<string, jest.Mock>;
   }): EventHandler {
     const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
@@ -163,7 +168,8 @@ describe('EventHandler (unit)', () => {
       (overrides?.globalMessageWatchlistRepository ?? {
         findEnabled: jest.fn().mockResolvedValue([]),
       }) as any,
-      overrides?.caseRoleReleaseReconciliationService as any
+      overrides?.caseRoleReleaseReconciliationService as any,
+      overrides?.activeQuarantineCache
     );
   }
 
@@ -1088,6 +1094,52 @@ describe('EventHandler (unit)', () => {
     );
   });
 
+  it('enforces gained roles when an incomplete compromised case has no case-role identity', async () => {
+    const gainedRole = { id: 'privileged-role' };
+    const oldMember = {
+      id: 'user-1',
+      user: { tag: 'test-user#0001' },
+      guild: { id: 'guild-1' },
+      roles: { cache: new Map() },
+    };
+    const newMember = {
+      ...oldMember,
+      roles: { cache: new Map([[gainedRole.id, gainedRole]]) },
+    };
+    const activeCase = {
+      id: 'verification-no-case-role',
+      status: VerificationStatus.PENDING,
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+      quarantine_case_role_id: null,
+    };
+    const roleQuarantineService = {
+      enforceActiveCaseRoleUpdate: jest.fn().mockResolvedValue({
+        addedRoleIds: [gainedRole.id],
+        removedRoleIds: [gainedRole.id],
+        skippedRoles: [],
+        failedRemovals: [],
+      }),
+    };
+    const handler = buildHandler({
+      roleQuarantineService,
+      verificationEventRepository: {
+        findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),
+      },
+    });
+
+    await (handler as any).enforceActiveCaseRoleQuarantine(oldMember, newMember, {
+      case_role_id: null,
+    });
+
+    expect(roleQuarantineService.enforceActiveCaseRoleUpdate).toHaveBeenCalledWith(
+      oldMember,
+      newMember,
+      activeCase
+    );
+  });
+
   it('enforces an older parked quarantine when the newest pending case is standard', async () => {
     const persistedCaseRole = { id: 'persisted-case-role' };
     const oldMember = {
@@ -1509,6 +1561,72 @@ describe('EventHandler (unit)', () => {
     );
   });
 
+  it('deduplicates direct breach notifications while the queue attention item remains open', async () => {
+    let currentCase: any = {
+      id: 'verification-deduped-breach',
+      status: VerificationStatus.PENDING,
+      user_id: 'user-1',
+      server_id: 'guild-1',
+      thread_id: 'recovery-thread',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      quarantine_attempt_id: null,
+      parked_at: new Date('2026-08-18T12:00:00.000Z'),
+      parked_by: 'moderator-1',
+      metadata: {},
+    };
+    const notificationManager = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    };
+    const moderationQueueService = {
+      recordQuarantineBreachAttention: jest
+        .fn()
+        .mockResolvedValueOnce({ delivered: true, created: true })
+        .mockResolvedValueOnce({ delivered: true, created: false }),
+    };
+    const handler = buildHandler({
+      configService: buildQuarantineConfigService(),
+      notificationManager,
+      moderationQueueService,
+      verificationEventRepository: {
+        findPendingByServer: jest.fn().mockImplementation(async () => [currentCase]),
+        findActiveByUserAndServer: jest.fn().mockImplementation(async () => currentCase),
+        claimAccountQuarantineAttention: jest
+          .fn()
+          .mockImplementation(async (_id, _serverId, _userId, attemptId) => ({
+            ...currentCase,
+            containment_status: CaseContainmentStatus.IN_PROGRESS,
+            quarantine_attempt_id: attemptId,
+          })),
+        updateQuarantineAttempt: jest.fn().mockImplementation(async (_id, _attemptId, data) => {
+          currentCase = {
+            ...currentCase,
+            ...data,
+            metadata: data.metadata ?? currentCase.metadata,
+            quarantine_attempt_id: null,
+          };
+          return currentCase;
+        }),
+      },
+    });
+    const firstMessage = buildMessage(new PermissionsBitField());
+    (firstMessage as any).id = 'message-1';
+    const secondMessage = { ...firstMessage, id: 'message-2' };
+
+    await (handler as any).recordParkedQuarantineBreach(firstMessage);
+    await (handler as any).recordParkedQuarantineBreach(secondMessage);
+
+    expect(moderationQueueService.recordQuarantineBreachAttention).toHaveBeenCalledTimes(2);
+    expect(notificationManager.notifyAccountQuarantineAttention).toHaveBeenCalledTimes(1);
+    expect(currentCase.metadata).toEqual(
+      expect.objectContaining({
+        breach_attention_direct_notified_at: expect.any(String),
+        breach_attention_direct_message_id: firstMessage.id,
+      })
+    );
+  });
+
   it('returns a breach to durable review when every attention delivery path fails', async () => {
     const activeCase = {
       id: 'verification-1',
@@ -1780,6 +1898,50 @@ describe('EventHandler (unit)', () => {
 
     expect(verificationEventRepository.findPendingByServer).toHaveBeenCalledWith('guild-1');
     expect(verificationEventRepository.findActiveByUserAndServer).not.toHaveBeenCalled();
+  });
+
+  it('immediately monitors a newly active quarantine after a cached negative lookup', async () => {
+    const activeQuarantineCache = new ActiveAccountQuarantineCache();
+    let activeCase: any = null;
+    const moderationQueueService = {
+      recordQuarantineBreachAttention: jest
+        .fn()
+        .mockResolvedValue({ delivered: true, created: true }),
+    };
+    const verificationEventRepository = {
+      findPendingByServer: jest.fn().mockResolvedValue([]),
+      findActiveByUserAndServer: jest.fn().mockImplementation(async () => activeCase),
+    };
+    const handler = buildHandler({
+      configService: buildQuarantineConfigService(),
+      moderationQueueService,
+      verificationEventRepository,
+      activeQuarantineCache,
+    });
+    const message = buildMessage(new PermissionsBitField());
+
+    await (handler as any).recordParkedQuarantineBreach(message);
+    expect(verificationEventRepository.findActiveByUserAndServer).not.toHaveBeenCalled();
+
+    activeCase = {
+      id: 'verification-newly-incomplete',
+      status: VerificationStatus.PENDING,
+      user_id: 'user-1',
+      server_id: 'guild-1',
+      thread_id: 'recovery-thread',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+      quarantine_attempt_id: null,
+      metadata: {},
+    };
+    activeQuarantineCache.noteActive('guild-1', 'user-1');
+
+    await (handler as any).recordParkedQuarantineBreach(message);
+
+    expect(verificationEventRepository.findPendingByServer).toHaveBeenCalledTimes(1);
+    expect(verificationEventRepository.findActiveByUserAndServer).toHaveBeenCalled();
+    expect(moderationQueueService.recordQuarantineBreachAttention).toHaveBeenCalled();
   });
 
   it('checks an uncached member who still has the configured case role', async () => {

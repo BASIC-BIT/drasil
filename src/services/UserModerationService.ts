@@ -2373,8 +2373,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'member_left');
 
       for (const pendingEvent of pendingVerificationEvents) {
-        const eventToUpdate = {
-          ...pendingEvent,
+        const updateData: Partial<VerificationEvent> = {
           ...(pendingEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
           !isCaseTerminalActionAttempt(pendingEvent.quarantine_attempt_id)
             ? {
@@ -2390,18 +2389,17 @@ export class UserModerationService implements IUserModerationService, ICombinedB
             ...outcomeMetadata,
           } as VerificationEvent['metadata'],
         };
-        const updatedEvent = await this.verificationEventRepository.update(
+        const updatedEvent = await this.verificationEventRepository.updatePendingAfterMemberLeft(
           pendingEvent.id,
-          eventToUpdate,
-          {
-            touchUpdatedAt: false,
-            preservePendingCaseState: pendingEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT,
-          }
+          pendingEvent.quarantine_attempt_id ?? null,
+          updateData
         );
-        const markedEvent = updatedEvent ?? eventToUpdate;
-        markedEvents.push(markedEvent);
-        await this.refreshCaseNotification(markedEvent);
-        await this.refreshLiveQueueCaseMirror(markedEvent);
+        if (!updatedEvent) {
+          continue;
+        }
+        markedEvents.push(updatedEvent);
+        await this.refreshCaseNotification(updatedEvent);
+        await this.refreshLiveQueueCaseMirror(updatedEvent);
       }
 
       await this.tryRecordModerationOutcomes(

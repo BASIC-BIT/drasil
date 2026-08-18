@@ -958,4 +958,59 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       }),
     ]);
   });
+
+  it('rejects a stale member-left write after terminal completion', async () => {
+    const serverId = 'guild-terminal-member-left-cas';
+    const userId = 'user-terminal-member-left-cas';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser(userId, 'terminal-target');
+    const verification = await verifications.createFromDetection(
+      null,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verifications.update(verification.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+    });
+    const attemptId = `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}member-left-cas`;
+    await expect(
+      verifications.claimTerminalActions([verification.id], serverId, userId, attemptId)
+    ).resolves.not.toBeNull();
+    await expect(
+      verifications.completeTerminalActions(
+        [
+          {
+            id: verification.id,
+            metadata: { terminal_completed: true },
+            requiresTerminalActionClaim: true,
+          },
+        ],
+        attemptId,
+        VerificationStatus.KICKED,
+        'moderator-1',
+        new Date('2026-08-18T12:01:00.000Z'),
+        'terminal action'
+      )
+    ).resolves.not.toBeNull();
+
+    await expect(
+      verifications.updatePendingAfterMemberLeft(verification.id, attemptId, {
+        metadata: { membership_state: 'left_or_removed' },
+      })
+    ).resolves.toBeNull();
+    await expect(verifications.findById(verification.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.KICKED,
+        quarantine_attempt_id: null,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        metadata: { terminal_completed: true },
+      })
+    );
+  });
 });

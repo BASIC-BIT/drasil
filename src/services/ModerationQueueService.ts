@@ -83,7 +83,7 @@ export interface IModerationQueueService {
   recordQuarantineBreachAttention(
     verificationEvent: VerificationEvent,
     message: Message
-  ): Promise<boolean>;
+  ): Promise<ModerationQueueAttentionResult>;
   recordReportThreadAttention(reportIntake: ReportIntake, message: Message): Promise<void>;
   deleteReportThreadAttention(reportIntakeId: string): Promise<void>;
   acknowledgeAttentionItem(itemId: string, serverId: string, actorId: string): Promise<boolean>;
@@ -422,32 +422,30 @@ export class ModerationQueueService implements IModerationQueueService {
   public async recordQuarantineBreachAttention(
     verificationEvent: VerificationEvent,
     message: Message
-  ): Promise<boolean> {
+  ): Promise<ModerationQueueAttentionResult> {
     if (
       verificationEvent.status !== VerificationStatus.PENDING ||
       verificationEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT
     ) {
-      return false;
+      return { delivered: false, created: false };
     }
 
-    let delivered = false;
+    let result: ModerationQueueAttentionResult = { delivered: false, created: false };
     await this.runAttentionSerialized(`quarantine-breach:${verificationEvent.id}`, async () => {
-      delivered = (
-        await this.upsertAttentionItem({
-          itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
-          serverId: verificationEvent.server_id,
-          userId: verificationEvent.user_id,
-          verificationEventId: verificationEvent.id,
-          sourceThreadId: message.channelId,
-          message,
-          title: 'Quarantine Containment Breach',
-          description: `<@${verificationEvent.user_id}> posted outside the permitted recovery thread while quarantined.`,
-          subjectFieldName: 'Case',
-          subjectFieldValue: `\`${verificationEvent.id}\``,
-        })
-      ).delivered;
+      result = await this.upsertAttentionItem({
+        itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
+        serverId: verificationEvent.server_id,
+        userId: verificationEvent.user_id,
+        verificationEventId: verificationEvent.id,
+        sourceThreadId: message.channelId,
+        message,
+        title: 'Quarantine Containment Breach',
+        description: `<@${verificationEvent.user_id}> posted outside the permitted recovery thread while quarantined.`,
+        subjectFieldName: 'Case',
+        subjectFieldValue: `\`${verificationEvent.id}\``,
+      });
     });
-    return delivered;
+    return result;
   }
 
   public async recordReportThreadAttention(

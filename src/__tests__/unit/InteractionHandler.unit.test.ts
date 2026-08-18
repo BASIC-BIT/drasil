@@ -402,6 +402,7 @@ describe('InteractionHandler (unit)', () => {
       recordQuarantineCaseRole: jest.fn(),
       recoverExpiredQuarantineAttempt: jest.fn(),
       updateQuarantineAttempt: jest.fn(),
+      updatePendingAfterMemberLeft: jest.fn(),
       update: jest.fn(),
     };
     threadManager = {
@@ -1477,6 +1478,50 @@ describe('InteractionHandler (unit)', () => {
     expect(renderedComponents).not.toContain('Restrict User');
   });
 
+  it('does not offer close-no-action for a departed incomplete account quarantine', async () => {
+    const verificationEvent = {
+      ...buildVerificationEvent('ver-left-compromised', 'user-1'),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+      metadata: { membership_state: 'left_or_removed' },
+    };
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      bans: { fetch: jest.fn().mockRejectedValue({ code: 10026 }) },
+      members: {
+        me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'admin-1')),
+      },
+    });
+
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      buildNoIssueSetupDiagnosticsService()
+    );
+    const interaction = buildInteraction('admin_actions:menu:case:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantInteractionPermissions(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
+    const renderedComponents = JSON.stringify(reply.components);
+    expect(reply.content).toContain('Membership: left or removed');
+    expect(renderedComponents).toContain('Ban by ID');
+    expect(renderedComponents).not.toContain('Close No Action');
+    expect(renderedComponents).not.toContain('Verify User');
+  });
+
   it('does not offer close-no-action or repair for a parked account quarantine', async () => {
     const verificationEvent = {
       ...buildVerificationEvent('ver-parked', 'user-1'),
@@ -1510,6 +1555,40 @@ describe('InteractionHandler (unit)', () => {
     expect(renderedComponents).not.toContain('Close No Action');
     expect(renderedComponents).not.toContain('Repair Active Case');
     expect(renderedComponents).not.toContain('Create Thread');
+  });
+
+  it('does not offer close-no-action for an incomplete account quarantine', async () => {
+    const verificationEvent = {
+      ...buildVerificationEvent('ver-incomplete', 'user-1'),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+    };
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      buildNoIssueSetupDiagnosticsService()
+    );
+    const interaction = buildInteraction('admin_actions:menu:case:user-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
+    const renderedComponents = JSON.stringify(reply.components);
+    expect(renderedComponents).toContain('Verify User');
+    expect(renderedComponents).toContain('Repair Active Case');
+    expect(renderedComponents).not.toContain('Close No Action');
   });
 
   it('handles thread button and creates a verification thread', async () => {

@@ -186,6 +186,45 @@ describe('activeCaseDataAdapter', () => {
     expect(summary.allowedActions).toEqual(['view_history', 'ban_by_id', 'refresh_notification']);
   });
 
+  it('does not expose close-no-action for an incomplete compromised quarantine', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        case_kind: 'compromised_account',
+        attention_state: 'review_required',
+        containment_status: 'incomplete',
+        server_settings: { account_quarantine_enabled: true },
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.allowedActions).not.toContain('close_no_action');
+    expect(summary.allowedActions).toEqual(
+      expect.arrayContaining([
+        'verify_user',
+        'kick_user',
+        'ban_user',
+        'quarantine_compromised_account',
+        'repair_thread',
+      ])
+    );
+  });
+
+  it('does not expose close-no-action when an incomplete quarantined user has left', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        case_kind: 'compromised_account',
+        attention_state: 'review_required',
+        containment_status: 'incomplete',
+        latest_outcome_type: 'member_left',
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.allowedActions).toEqual(['view_history', 'ban_by_id', 'refresh_notification']);
+  });
+
   it('falls back to the admin channel when notification channel is missing', () => {
     const summary = parseCaseSummaryRow(
       { ...baseRow, notification_channel_id: null },

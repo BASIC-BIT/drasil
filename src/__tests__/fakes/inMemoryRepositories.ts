@@ -1062,6 +1062,28 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return { ...updated };
   }
 
+  async updatePendingAfterMemberLeft(
+    id: string,
+    expectedQuarantineAttemptId: string | null,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.status === VerificationStatus.PENDING &&
+        event.quarantine_attempt_id === expectedQuarantineAttemptId
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+    const updated = {
+      ...this.events[eventIndex],
+      ...data,
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
   async update(
     id: string,
     data: Partial<VerificationEvent>,

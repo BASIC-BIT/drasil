@@ -121,6 +121,10 @@ import {
   AccountQuarantineService,
   IAccountQuarantineService,
 } from '../services/AccountQuarantineService';
+import {
+  ActiveAccountQuarantineCache,
+  IActiveAccountQuarantineCache,
+} from '../services/ActiveAccountQuarantineCache';
 import { IIntegrityAuditService, IntegrityAuditService } from '../services/IntegrityAuditService';
 import {
   CaseRoleReleaseReconciliationService,
@@ -367,6 +371,10 @@ function configureServices(container: Container): void {
   container
     .bind<IAccountQuarantineService>(TYPES.AccountQuarantineService)
     .to(AccountQuarantineService)
+    .inSingletonScope();
+  container
+    .bind<IActiveAccountQuarantineCache>(TYPES.ActiveAccountQuarantineCache)
+    .to(ActiveAccountQuarantineCache)
     .inSingletonScope();
 
   container

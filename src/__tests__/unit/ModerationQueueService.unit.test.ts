@@ -643,11 +643,15 @@ describe('ModerationQueueService', () => {
       createdTimestamp: Date.parse('2026-06-13T12:00:01Z'),
     } as unknown as Message;
 
-    await Promise.all([
+    const results = await Promise.all([
       service.recordQuarantineBreachAttention(verificationEvent, firstMessage),
       service.recordQuarantineBreachAttention(verificationEvent, secondMessage),
     ]);
 
+    expect(results).toEqual([
+      { delivered: true, created: true },
+      { delivered: true, created: false },
+    ]);
     expect(channel.send).toHaveBeenCalledTimes(1);
     expect(channel.sentMessages[0].edit).toHaveBeenCalledTimes(1);
     expect(queueRepository.items).toHaveLength(1);

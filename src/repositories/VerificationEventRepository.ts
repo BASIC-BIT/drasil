@@ -129,6 +129,11 @@ export interface IVerificationEventRepository {
     attemptId: string,
     data: Partial<VerificationEvent>
   ): Promise<VerificationEvent | null>;
+  updatePendingAfterMemberLeft(
+    id: string,
+    expectedQuarantineAttemptId: string | null,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null>;
   update(
     id: string,
     data: Partial<VerificationEvent>,
@@ -691,6 +696,39 @@ export class VerificationEventRepository implements IVerificationEventRepository
       })) as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'updateQuarantineAttempt');
+    }
+  }
+
+  async updatePendingAfterMemberLeft(
+    id: string,
+    expectedQuarantineAttemptId: string | null,
+    data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null> {
+    try {
+      const updated = await this.prisma.verification_events.updateMany({
+        where: {
+          id,
+          status: VerificationStatus.PENDING,
+          quarantine_attempt_id: expectedQuarantineAttemptId,
+        },
+        data: {
+          attention_state: data.attention_state as case_attention_state | undefined,
+          containment_status: data.containment_status as case_containment_status | undefined,
+          quarantine_attempt_id: data.quarantine_attempt_id,
+          quarantine_lease_renewed_at: data.quarantine_lease_renewed_at,
+          parked_at: data.parked_at,
+          parked_by: data.parked_by,
+          metadata: data.metadata as Prisma.InputJsonValue | undefined,
+        },
+      });
+      if (updated.count !== 1) {
+        return null;
+      }
+      return (await this.prisma.verification_events.findUnique({
+        where: { id },
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'updatePendingAfterMemberLeft');
     }
   }
 

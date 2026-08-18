@@ -31,6 +31,7 @@ export const TYPES = {
   ModerationActionRequestService: Symbol.for('ModerationActionRequestService'),
   RoleQuarantineService: Symbol.for('RoleQuarantineService'),
   AccountQuarantineService: Symbol.for('AccountQuarantineService'),
+  ActiveAccountQuarantineCache: Symbol.for('ActiveAccountQuarantineCache'),
   IntegrityAuditService: Symbol.for('IntegrityAuditService'),
   RoleGateService: Symbol.for('RoleGateService'),
   MessageDeletionService: Symbol.for('MessageDeletionService'),

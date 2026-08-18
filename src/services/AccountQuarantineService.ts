@@ -1,6 +1,6 @@
 import { GuildMember, User } from 'discord.js';
 import { randomUUID } from 'node:crypto';
-import { inject, injectable } from 'inversify';
+import { inject, injectable, optional } from 'inversify';
 import { Prisma } from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { IConfigService } from '../config/ConfigService';
@@ -26,6 +26,10 @@ import { IModerationOutcomeService } from './ModerationOutcomeService';
 import { IModerationQueueService } from './ModerationQueueService';
 import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
+import {
+  ActiveAccountQuarantineCache,
+  IActiveAccountQuarantineCache,
+} from './ActiveAccountQuarantineCache';
 import {
   IRoleQuarantineService,
   RoleQuarantineApplyError,
@@ -69,6 +73,8 @@ export interface IAccountQuarantineService {
 
 @injectable()
 export class AccountQuarantineService implements IAccountQuarantineService {
+  private readonly activeQuarantineCache: IActiveAccountQuarantineCache;
+
   public constructor(
     @inject(TYPES.ConfigService) private readonly configService: IConfigService,
     @inject(TYPES.VerificationEventRepository)
@@ -84,8 +90,13 @@ export class AccountQuarantineService implements IAccountQuarantineService {
     @inject(TYPES.ModerationQueueService)
     private readonly moderationQueue: IModerationQueueService,
     @inject(TYPES.NotificationManager)
-    private readonly notificationManager: INotificationManager
-  ) {}
+    private readonly notificationManager: INotificationManager,
+    @inject(TYPES.ActiveAccountQuarantineCache)
+    @optional()
+    activeQuarantineCache?: IActiveAccountQuarantineCache
+  ) {
+    this.activeQuarantineCache = activeQuarantineCache ?? new ActiveAccountQuarantineCache();
+  }
 
   public async preview(
     member: GuildMember,
@@ -296,6 +307,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       });
       throw stateError;
     }
+    this.activeQuarantineCache.noteActive(member.guild.id, member.id);
 
     await this.adminActions
       .recordAction({
@@ -450,6 +462,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
     if (!updated) {
       return;
     }
+    this.activeQuarantineCache.noteActive(input.member.guild.id, input.member.id);
     await this.refreshPersistentNotification(updated, input.moderator, false);
     await this.moderationQueue.upsertCaseMirror(updated).catch((error) => {
       console.error(`Failed to refresh quarantine case ${input.claimedEvent.id}:`, error);

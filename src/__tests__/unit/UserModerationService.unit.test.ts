@@ -2374,6 +2374,68 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
+  it('does not revive a terminal resolution that completes before the member-left write', async () => {
+    const guildId = 'guild-terminal-completes-first';
+    const userId = 'user-terminal-completes-first';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const terminalAttemptId = 'case-terminal-action:attempt-completes-first';
+    await verificationEventRepository.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: terminalAttemptId,
+      quarantine_lease_renewed_at: new Date(),
+    });
+    const updatePendingAfterMemberLeft =
+      verificationEventRepository.updatePendingAfterMemberLeft.bind(verificationEventRepository);
+    jest
+      .spyOn(verificationEventRepository, 'updatePendingAfterMemberLeft')
+      .mockImplementationOnce(async (id, expectedAttemptId, data) => {
+        await verificationEventRepository.completeTerminalActions(
+          [
+            {
+              id,
+              metadata: { terminal_completed: true },
+              requiresTerminalActionClaim: true,
+            },
+          ],
+          expectedAttemptId,
+          VerificationStatus.KICKED,
+          'moderator-1',
+          new Date(),
+          'Terminal kick completed.'
+        );
+        return updatePendingAfterMemberLeft(id, expectedAttemptId, data);
+      });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(service.recordMemberLeftGuild(member)).resolves.toBe(0);
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.KICKED,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        quarantine_attempt_id: null,
+        metadata: { terminal_completed: true },
+      })
+    );
+  });
+
   it('returns success when post-ban notification updates fail', async () => {
     const guildId = 'guild-ban-post-update-fails';
     const userId = 'user-ban-post-update-fails';

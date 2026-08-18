@@ -657,7 +657,7 @@ export class InteractionHandler implements IInteractionHandler {
             this.adminActionButton(parsed, 'ban', 'Ban by ID...', ButtonStyle.Danger)
           );
         }
-        if (hasModerationPermission) {
+        if (hasModerationPermission && activeCase.case_kind !== CaseKind.COMPROMISED_ACCOUNT) {
           actionButtons.push(
             this.adminActionButton(
               parsed,
@@ -675,13 +675,17 @@ export class InteractionHandler implements IInteractionHandler {
             : [])
         );
         if (activeCase.attention_state !== CaseAttentionState.PARKED) {
+          if (activeCase.case_kind !== CaseKind.COMPROMISED_ACCOUNT) {
+            actionButtons.push(
+              this.adminActionButton(
+                parsed,
+                'close_no_action',
+                'Close No Action',
+                ButtonStyle.Secondary
+              )
+            );
+          }
           actionButtons.push(
-            this.adminActionButton(
-              parsed,
-              'close_no_action',
-              'Close No Action',
-              ButtonStyle.Secondary
-            ),
             this.adminActionButton(parsed, 'repair', 'Repair Active Case', ButtonStyle.Primary)
           );
         }

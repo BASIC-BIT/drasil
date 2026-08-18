@@ -10,6 +10,7 @@ import {
   VerificationStatus,
 } from '../../repositories/types';
 import { AccountQuarantineService } from '../../services/AccountQuarantineService';
+import { IActiveAccountQuarantineCache } from '../../services/ActiveAccountQuarantineCache';
 import { IAdminActionService } from '../../services/AdminActionService';
 import {
   CaseRoleLockdownMemberAudit,
@@ -167,6 +168,10 @@ function buildHarness(
     logActionToMessage: jest.fn().mockResolvedValue(true),
     updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
   } as unknown as jest.Mocked<INotificationManager>;
+  const activeQuarantineCache = {
+    getActiveUserIds: jest.fn(),
+    noteActive: jest.fn(),
+  } as unknown as jest.Mocked<IActiveAccountQuarantineCache>;
   const service = new AccountQuarantineService(
     {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -181,11 +186,13 @@ function buildHarness(
     adminActions,
     moderationOutcomes,
     moderationQueue,
-    notificationManager
+    notificationManager,
+    activeQuarantineCache
   );
 
   return {
     adminActions,
+    activeQuarantineCache,
     lockdown,
     member,
     moderationOutcomes,
@@ -333,6 +340,7 @@ describe('AccountQuarantineService', () => {
     );
 
     expect(result.status).toBe('incomplete');
+    expect(harness.activeQuarantineCache.noteActive).toHaveBeenCalledWith('guild-1', 'user-1');
     expect(harness.moderationOutcomes.recordOutcome).not.toHaveBeenCalled();
     expect(harness.moderationQueue.deleteCaseMirror).not.toHaveBeenCalled();
     expect(harness.moderationQueue.upsertCaseMirror).toHaveBeenCalled();
