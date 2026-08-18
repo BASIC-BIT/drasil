@@ -27,6 +27,7 @@ ALTER TABLE "moderation_queue_items"
     ("item_type" = 'case_mirror' AND "verification_event_id" IS NOT NULL) OR
     ("item_type" = 'observed_alert_mirror' AND "detection_event_id" IS NOT NULL) OR
     ("item_type" IN ('support_thread_attention', 'report_thread_attention') AND "source_thread_id" IS NOT NULL) OR
+    ("item_type" = 'pending_screening_member') OR
     ("item_type" = 'quarantine_breach_attention' AND "verification_event_id" IS NOT NULL AND "source_thread_id" IS NOT NULL)
   );
 

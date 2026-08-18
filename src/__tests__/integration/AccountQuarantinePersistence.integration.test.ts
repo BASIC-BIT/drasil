@@ -321,4 +321,29 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       ])
     );
   });
+
+  it('preserves pending-screening queue items without a case, detection, or thread identity', async () => {
+    const serverId = 'guild-pending-screening-identity';
+    const userId = 'user-pending-screening-identity';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const queue = new ModerationQueueRepository(prisma);
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser(userId, 'pending-target');
+
+    await expect(
+      queue.upsert({
+        serverId,
+        userId,
+        itemType: ModerationQueueItemType.PENDING_SCREENING_MEMBER,
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        item_type: ModerationQueueItemType.PENDING_SCREENING_MEMBER,
+        verification_event_id: null,
+        detection_event_id: null,
+        source_thread_id: null,
+      })
+    );
+  });
 });
