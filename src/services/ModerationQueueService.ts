@@ -92,6 +92,7 @@ export interface IModerationQueueService {
 @injectable()
 export class ModerationQueueService implements IModerationQueueService {
   private readonly presentationBuilder = new NotificationPresentationBuilder();
+  private readonly attentionChains = new Map<string, Promise<void>>();
   private reconciliationTimer: ReturnType<typeof setInterval> | null = null;
   private reconciliationRunning = false;
 
@@ -420,18 +421,20 @@ export class ModerationQueueService implements IModerationQueueService {
       return;
     }
 
-    await this.upsertAttentionItem({
-      itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
-      serverId: verificationEvent.server_id,
-      userId: verificationEvent.user_id,
-      verificationEventId: verificationEvent.id,
-      sourceThreadId: message.channelId,
-      message,
-      title: 'Quarantine Containment Breach',
-      description: `<@${verificationEvent.user_id}> posted outside the permitted recovery thread while quarantined.`,
-      subjectFieldName: 'Case',
-      subjectFieldValue: `\`${verificationEvent.id}\``,
-    });
+    await this.runAttentionSerialized(`quarantine-breach:${verificationEvent.id}`, () =>
+      this.upsertAttentionItem({
+        itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
+        serverId: verificationEvent.server_id,
+        userId: verificationEvent.user_id,
+        verificationEventId: verificationEvent.id,
+        sourceThreadId: message.channelId,
+        message,
+        title: 'Quarantine Containment Breach',
+        description: `<@${verificationEvent.user_id}> posted outside the permitted recovery thread while quarantined.`,
+        subjectFieldName: 'Case',
+        subjectFieldValue: `\`${verificationEvent.id}\``,
+      })
+    );
   }
 
   public async recordReportThreadAttention(
@@ -525,6 +528,19 @@ export class ModerationQueueService implements IModerationQueueService {
       console.warn('Failed to reconcile live moderation queues:', error);
     } finally {
       this.reconciliationRunning = false;
+    }
+  }
+
+  private async runAttentionSerialized(key: string, work: () => Promise<void>): Promise<void> {
+    const previous = this.attentionChains.get(key) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(work);
+    this.attentionChains.set(key, current);
+    try {
+      await current;
+    } finally {
+      if (this.attentionChains.get(key) === current) {
+        this.attentionChains.delete(key);
+      }
     }
   }
 

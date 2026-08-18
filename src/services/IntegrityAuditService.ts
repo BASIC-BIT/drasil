@@ -270,7 +270,10 @@ export class IntegrityAuditService implements IIntegrityAuditService {
       if (liveMember?.status === 'found' && this.caseRoleLockdownService) {
         try {
           const [lockdownAudit, memberAudit] = await Promise.all([
-            this.caseRoleLockdownService.auditGuild(liveMember.value.guild),
+            this.caseRoleLockdownService.auditGuild(
+              liveMember.value.guild,
+              verificationEvent.thread_id
+            ),
             this.caseRoleLockdownService.auditMemberBypasses(
               liveMember.value,
               new Set(),

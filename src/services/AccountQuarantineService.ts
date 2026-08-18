@@ -89,7 +89,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
     const serverConfig = await this.configService.getServerConfig(member.guild.id);
     const rolePreview = await this.roleQuarantine.previewCompromisedAccount(member);
     const [lockdown, memberAudit] = await Promise.all([
-      this.lockdown.auditGuild(member.guild),
+      this.lockdown.auditGuild(member.guild, event.thread_id),
       this.lockdown.auditMemberBypasses(
         member,
         new Set(rolePreview.plannedRoleIds),
@@ -154,7 +154,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'containment_audit';
       [lockdown, memberAudit] = await Promise.all([
-        this.lockdown.auditGuild(member.guild),
+        this.lockdown.auditGuild(member.guild, claimedEvent.thread_id),
         this.lockdown.auditMemberBypasses(member, new Set(), claimedEvent.thread_id),
       ]);
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
@@ -171,7 +171,7 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       await this.assertAttemptOwner(claimedEvent.id, attemptId);
       failureStage = 'final_containment_audit';
       [lockdown, memberAudit] = await Promise.all([
-        this.lockdown.auditGuild(member.guild),
+        this.lockdown.auditGuild(member.guild, claimedEvent.thread_id),
         this.lockdown.auditMemberBypasses(member, new Set(), claimedEvent.thread_id),
       ]);
       await this.assertAttemptOwner(claimedEvent.id, attemptId);

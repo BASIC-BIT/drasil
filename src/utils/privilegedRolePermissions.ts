@@ -20,5 +20,7 @@ export const COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS = [
   PermissionFlagsBits.MoveMembers,
   PermissionFlagsBits.ManageNicknames,
   PermissionFlagsBits.ManageGuildExpressions,
+  PermissionFlagsBits.CreateGuildExpressions,
   PermissionFlagsBits.ManageEvents,
+  PermissionFlagsBits.CreateEvents,
 ] as const;

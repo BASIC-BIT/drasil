@@ -567,6 +567,51 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     );
   });
 
+  it('atomically coalesces concurrent quarantine breaches for one case', async () => {
+    const serverId = 'guild-concurrent-quarantine-breach';
+    const userId = 'user-concurrent-quarantine-breach';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    const queue = new ModerationQueueRepository(prisma);
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser(userId, 'concurrent-target');
+    const verification = await verifications.createFromDetection(
+      null,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+
+    const results = await Promise.all([
+      queue.upsert({
+        serverId,
+        userId,
+        itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
+        verificationEventId: verification.id,
+        sourceThreadId: 'general-channel-1',
+        lastSourceMessageId: 'message-1',
+      }),
+      queue.upsert({
+        serverId,
+        userId,
+        itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
+        verificationEventId: verification.id,
+        sourceThreadId: 'general-channel-2',
+        lastSourceMessageId: 'message-2',
+      }),
+    ]);
+
+    expect(results[0].id).toBe(results[1].id);
+    const breachItems = (await queue.listByServer(serverId)).filter(
+      (item) => item.item_type === ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION
+    );
+    expect(breachItems).toHaveLength(1);
+    expect(breachItems[0]).toEqual(
+      expect.objectContaining({ verification_event_id: verification.id })
+    );
+  });
+
   it('preserves pending-screening queue items without a case, detection, or thread identity', async () => {
     const serverId = 'guild-pending-screening-identity';
     const userId = 'user-pending-screening-identity';

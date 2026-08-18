@@ -612,6 +612,39 @@ describe('ModerationQueueService', () => {
     ]);
   });
 
+  it('serializes concurrent breach alerts for the same quarantined case', async () => {
+    const { channel, queueRepository, service } = buildService();
+    const verificationEvent = {
+      ...buildVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+    };
+    const firstMessage = {
+      id: 'outside-reply-1',
+      channelId: 'general-channel',
+      content: 'Unexpected message outside quarantine.',
+      url: 'https://discord.com/channels/guild-1/general-channel/outside-reply-1',
+      createdTimestamp: Date.parse('2026-06-13T12:00:00Z'),
+      author: { id: 'user-1' },
+    } as unknown as Message;
+    const secondMessage = {
+      ...firstMessage,
+      id: 'outside-reply-2',
+      url: 'https://discord.com/channels/guild-1/general-channel/outside-reply-2',
+      createdTimestamp: Date.parse('2026-06-13T12:00:01Z'),
+    } as unknown as Message;
+
+    await Promise.all([
+      service.recordQuarantineBreachAttention(verificationEvent, firstMessage),
+      service.recordQuarantineBreachAttention(verificationEvent, secondMessage),
+    ]);
+
+    expect(channel.send).toHaveBeenCalledTimes(1);
+    expect(channel.sentMessages[0].edit).toHaveBeenCalledTimes(1);
+    expect(queueRepository.items).toHaveLength(1);
+    expect(queueRepository.items[0].last_source_message_id).toBe('outside-reply-2');
+  });
+
   it('does not acknowledge attention items from another server', async () => {
     const { channel, queueRepository, service } = buildService();
     await service.recordSupportThreadAttention(buildVerificationEvent(), {

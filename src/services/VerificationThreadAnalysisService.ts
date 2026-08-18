@@ -21,6 +21,7 @@ import {
   getSupportThreadReminderState,
   markSupportThreadReminderUserResponded,
 } from '../utils/supportThreadReminderState';
+import { isCaseRoleReleaseLeaseActive } from '../utils/caseRoleRelease';
 
 interface ThreadAnalysisMetadata {
   analyzedMessageIds: string[];
@@ -36,8 +37,6 @@ interface ThreadAnalysisMetadata {
     analyzedMessageCount: number;
   };
 }
-
-const VERIFICATION_THREAD_NAME_PREFIX = 'Verification:';
 
 export interface IVerificationThreadAnalysisService {
   handleThreadMessage(message: Message): Promise<boolean>;
@@ -65,10 +64,6 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       return false;
     }
 
-    if (!message.channel.name.startsWith(VERIFICATION_THREAD_NAME_PREFIX)) {
-      return false;
-    }
-
     const verificationEvent = await this.verificationEventRepository.findByThreadId(
       message.channelId
     );
@@ -92,7 +87,14 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     verificationEventId: string
   ): Promise<void> {
     let verificationEvent = await this.verificationEventRepository.findById(verificationEventId);
-    if (!verificationEvent || verificationEvent.status !== VerificationStatus.PENDING) {
+    if (
+      !verificationEvent ||
+      verificationEvent.status !== VerificationStatus.PENDING ||
+      isCaseRoleReleaseLeaseActive(
+        verificationEvent.quarantine_attempt_id,
+        verificationEvent.quarantine_lease_renewed_at
+      )
+    ) {
       return;
     }
 
@@ -103,9 +105,26 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       verificationEvent,
       message
     );
-    const parkedAccountRecovery =
+    let parkedAccountRecovery =
       verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
       verificationEvent.attention_state === CaseAttentionState.PARKED;
+    if (parkedAccountRecovery) {
+      const latest = await this.verificationEventRepository.findById(verificationEvent.id);
+      if (
+        !latest ||
+        latest.status !== VerificationStatus.PENDING ||
+        isCaseRoleReleaseLeaseActive(
+          latest.quarantine_attempt_id,
+          latest.quarantine_lease_renewed_at
+        )
+      ) {
+        return;
+      }
+      verificationEvent = latest;
+      parkedAccountRecovery =
+        verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+        verificationEvent.attention_state === CaseAttentionState.PARKED;
+    }
     if (parkedAccountRecovery) {
       await this.moderationQueueService?.recordSupportThreadAttention(verificationEvent, message);
     }

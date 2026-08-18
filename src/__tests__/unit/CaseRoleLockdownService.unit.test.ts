@@ -131,6 +131,7 @@ describe('CaseRoleLockdownService (unit)', () => {
   };
 
   const createGuild = (channels: readonly ReturnType<typeof createChannel>[]) => {
+    const channelMap = new Map(channels.map((channel) => [channel.id, channel]));
     const botMember = {
       permissions: {
         has: jest.fn().mockReturnValue(true),
@@ -160,9 +161,19 @@ describe('CaseRoleLockdownService (unit)', () => {
         fetch: jest.fn().mockResolvedValue(caseRole),
       },
       channels: {
-        fetch: jest
-          .fn()
-          .mockResolvedValue(new Map(channels.map((channel) => [channel.id, channel]))),
+        fetch: jest.fn().mockImplementation((channelId?: string) =>
+          Promise.resolve(
+            channelId
+              ? channelId === 'recovery-thread-1'
+                ? {
+                    id: channelId,
+                    parentId: 'verification-channel-1',
+                    isThread: () => true,
+                  }
+                : (channelMap.get(channelId) ?? null)
+              : channelMap
+          )
+        ),
         fetchActiveThreads: jest.fn().mockResolvedValue({ threads: new Map() }),
       },
     } as any;
@@ -422,6 +433,83 @@ describe('CaseRoleLockdownService (unit)', () => {
         permissions: ['Missing Read Message History'],
       }),
     ]);
+  });
+
+  it('audits the persisted recovery thread parent instead of the current configured channel', async () => {
+    const configuredChannel = createChannel({
+      id: 'verification-channel-1',
+      name: 'new-verification',
+      type: ChannelType.GuildText,
+    });
+    const actualParent = createChannel({
+      id: 'admin-fallback-channel',
+      name: 'admin-fallback',
+      type: ChannelType.GuildText,
+      effectiveMemberPermissions: [PermissionFlagsBits.ViewChannel],
+    });
+    const guild = createGuild([configuredChannel, actualParent]);
+    guild.channels.fetch.mockImplementation((channelId?: string) => {
+      if (!channelId) {
+        return Promise.resolve(
+          new Map([
+            [configuredChannel.id, configuredChannel],
+            [actualParent.id, actualParent],
+          ])
+        );
+      }
+      if (channelId === 'recovery-thread-1') {
+        return Promise.resolve({
+          id: channelId,
+          parentId: actualParent.id,
+          isThread: () => true,
+        });
+      }
+      return Promise.resolve(channelId === actualParent.id ? actualParent : configuredChannel);
+    });
+    guild.channels.fetchActiveThreads.mockResolvedValue({
+      threads: new Map([
+        [
+          'configured-parent-sibling',
+          {
+            id: 'configured-parent-sibling',
+            name: 'configured-parent-sibling',
+            parentId: configuredChannel.id,
+            type: ChannelType.PublicThread,
+          },
+        ],
+      ]),
+    });
+    const member = {
+      id: 'user-1',
+      guild,
+      roles: { cache: new Map([[caseRoleId, { id: caseRoleId }]]) },
+    } as any;
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const [guildAudit, memberAudit] = await Promise.all([
+      service.auditGuild(guild, 'recovery-thread-1'),
+      service.auditMemberBypasses(member, new Set(), 'recovery-thread-1'),
+    ]);
+
+    expect(guildAudit.autoAllowedChannelIds).toContain(actualParent.id);
+    expect(guildAudit.plannedActions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ channelId: actualParent.id })])
+    );
+    expect(memberAudit.bypasses).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channelId: actualParent.id,
+          permissions: expect.arrayContaining([
+            'Missing Read Message History',
+            'Missing Send Messages in Threads',
+          ]),
+        }),
+        expect.objectContaining({
+          channelId: 'configured-parent-sibling',
+          permissions: ['Send Messages in Threads'],
+        }),
+      ])
+    );
   });
 
   it('blocks containment when the recovery parent has an active public sibling thread', async () => {
@@ -981,6 +1069,32 @@ describe('CaseRoleLockdownService (unit)', () => {
 
     expect(audit.unremovablePrivilegeReasons).toEqual([
       'everyone_privileged_permissions:Manage Webhooks',
+    ]);
+  });
+
+  it('reports granular expression and event creation permissions as containment blockers', async () => {
+    const guild = createGuild([]);
+    guild.roles.cache.set('guild-1', {
+      id: 'guild-1',
+      permissions: {
+        has: jest.fn(
+          (permission: bigint) =>
+            permission === PermissionFlagsBits.CreateGuildExpressions ||
+            permission === PermissionFlagsBits.CreateEvents
+        ),
+      },
+    });
+    const member = {
+      id: 'user-1',
+      guild,
+      roles: { cache: new Map() },
+    } as any;
+    const service = new CaseRoleLockdownService(createConfigService() as any);
+
+    const audit = await service.auditMemberBypasses(member);
+
+    expect(audit.unremovablePrivilegeReasons).toEqual([
+      'everyone_privileged_permissions:Create Expressions, Create Events',
     ]);
   });
 });

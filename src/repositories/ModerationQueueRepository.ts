@@ -228,6 +228,12 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
 
   async upsert(data: ModerationQueueItemUpsert): Promise<ModerationQueueItem> {
     try {
+      if (
+        data.itemType === ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION &&
+        data.verificationEventId
+      ) {
+        return await this.upsertQuarantineBreach(data);
+      }
       const existing = await this.findExistingItem(data);
       const writeData = this.toPrismaWriteData(data);
       if (existing) {
@@ -310,6 +316,66 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
     }
 
     return null;
+  }
+
+  private async upsertQuarantineBreach(
+    data: ModerationQueueItemUpsert
+  ): Promise<ModerationQueueItem> {
+    if (!data.verificationEventId || !data.sourceThreadId) {
+      throw new Error('Quarantine breach attention requires a case and source channel.');
+    }
+    const metadata = JSON.stringify(data.metadata ?? {});
+    const rows = await this.prisma.$queryRaw<ModerationQueueItem[]>(Prisma.sql`
+      INSERT INTO "moderation_queue_items" (
+        "server_id",
+        "user_id",
+        "item_type",
+        "verification_event_id",
+        "source_thread_id",
+        "queue_channel_id",
+        "queue_message_id",
+        "last_source_message_id",
+        "last_notified_at",
+        "metadata"
+      ) VALUES (
+        ${data.serverId},
+        ${data.userId},
+        ${data.itemType}::"moderation_queue_item_type",
+        ${data.verificationEventId}::uuid,
+        ${data.sourceThreadId},
+        ${data.queueChannelId ?? null},
+        ${data.queueMessageId ?? null},
+        ${data.lastSourceMessageId ?? null},
+        ${data.lastNotifiedAt ?? null},
+        ${metadata}::jsonb
+      )
+      ON CONFLICT ("item_type", "verification_event_id")
+        WHERE "verification_event_id" IS NOT NULL
+      DO UPDATE SET
+        "server_id" = EXCLUDED."server_id",
+        "user_id" = EXCLUDED."user_id",
+        "source_thread_id" = EXCLUDED."source_thread_id",
+        "queue_channel_id" = COALESCE(
+          EXCLUDED."queue_channel_id",
+          "moderation_queue_items"."queue_channel_id"
+        ),
+        "queue_message_id" = COALESCE(
+          EXCLUDED."queue_message_id",
+          "moderation_queue_items"."queue_message_id"
+        ),
+        "last_source_message_id" = EXCLUDED."last_source_message_id",
+        "last_notified_at" = COALESCE(
+          "moderation_queue_items"."last_notified_at",
+          EXCLUDED."last_notified_at"
+        ),
+        "metadata" = EXCLUDED."metadata",
+        "updated_at" = now()
+      RETURNING *
+    `);
+    if (!rows[0]) {
+      throw new Error('Quarantine breach attention upsert returned no row.');
+    }
+    return rows[0];
   }
 
   private toPrismaWriteData(

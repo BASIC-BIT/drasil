@@ -244,7 +244,7 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
       caseRolePresent =
         serverConfig.case_role_id !== null && member.roles.cache.has(serverConfig.case_role_id);
       const [lockdown, memberAudit] = await Promise.all([
-        this.lockdownService.auditGuild(guild),
+        this.lockdownService.auditGuild(guild, verificationEvent.thread_id),
         this.lockdownService.auditMemberBypasses(member, new Set(), verificationEvent.thread_id),
       ]);
       const blockingWarning = lockdown.issues.some(

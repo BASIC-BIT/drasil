@@ -210,7 +210,12 @@ describe('RoleQuarantineService (unit)', () => {
         id: 'expression-role',
         permissions: [PermissionFlagsBits.ManageGuildExpressions],
       }),
+      createRole({
+        id: 'create-expression-role',
+        permissions: [PermissionFlagsBits.CreateGuildExpressions],
+      }),
       createRole({ id: 'event-role', permissions: [PermissionFlagsBits.ManageEvents] }),
+      createRole({ id: 'create-event-role', permissions: [PermissionFlagsBits.CreateEvents] }),
     ];
     const member = createMember(removableRoles);
     const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
@@ -233,7 +238,9 @@ describe('RoleQuarantineService (unit)', () => {
       'move-role',
       'nickname-role',
       'expression-role',
+      'create-expression-role',
       'event-role',
+      'create-event-role',
     ]);
     expect(result.skippedRoles).toEqual([]);
   });
@@ -248,7 +255,12 @@ describe('RoleQuarantineService (unit)', () => {
         id: 'expression-role',
         permissions: [PermissionFlagsBits.ManageGuildExpressions],
       }),
+      createRole({
+        id: 'create-expression-role',
+        permissions: [PermissionFlagsBits.CreateGuildExpressions],
+      }),
       createRole({ id: 'event-role', permissions: [PermissionFlagsBits.ManageEvents] }),
+      createRole({ id: 'create-event-role', permissions: [PermissionFlagsBits.CreateEvents] }),
     ];
     const exemptRole = createRole({ id: '100000000000000005' });
     const manualRole = createRole({ id: '100000000000000010' });
@@ -282,7 +294,9 @@ describe('RoleQuarantineService (unit)', () => {
       'move-role',
       'nickname-role',
       'expression-role',
+      'create-expression-role',
       'event-role',
+      'create-event-role',
       '100000000000000005',
       '100000000000000010',
     ]);
@@ -296,7 +310,9 @@ describe('RoleQuarantineService (unit)', () => {
             'move-role',
             'nickname-role',
             'expression-role',
+            'create-expression-role',
             'event-role',
+            'create-event-role',
           ],
         }),
       })

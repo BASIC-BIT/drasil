@@ -636,7 +636,7 @@ describe('IntegrityAuditService (unit)', () => {
     );
     const report = await service.auditGuild(guild, { scope: 'cases' });
 
-    expect(caseRoleLockdownService.auditGuild).toHaveBeenCalledWith(guild);
+    expect(caseRoleLockdownService.auditGuild).toHaveBeenCalledWith(guild, null);
     expect(caseRoleLockdownService.auditMemberBypasses).toHaveBeenCalledWith(
       member,
       new Set(),
