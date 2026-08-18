@@ -29,6 +29,7 @@ export interface IVerificationEventRepository {
   findPendingByServer(serverId: string): Promise<VerificationEvent[]>;
   findReviewablePendingByServer(serverId: string): Promise<VerificationEvent[]>;
   findParkedByServer(serverId: string): Promise<VerificationEvent[]>;
+  findExpiredCaseRoleReleases(staleBefore: Date): Promise<VerificationEvent[]>;
   findResolvedWithThreadsByServer(
     serverId: string,
     options?: { days?: number | null; limit?: number | null; userId?: string | null }
@@ -196,7 +197,10 @@ export class VerificationEventRepository implements IVerificationEventRepository
               {
                 containment_status: CaseContainmentStatus.IN_PROGRESS,
                 quarantine_attempt_id: { startsWith: CASE_ROLE_RELEASE_ATTEMPT_PREFIX },
-                quarantine_lease_renewed_at: { lte: staleBefore },
+                OR: [
+                  { quarantine_lease_renewed_at: null },
+                  { quarantine_lease_renewed_at: { lte: staleBefore } },
+                ],
               },
             ],
           },
@@ -439,6 +443,27 @@ export class VerificationEventRepository implements IVerificationEventRepository
       return events as VerificationEvent[];
     } catch (error) {
       this.handleError(error, 'findParkedByServer');
+    }
+  }
+
+  async findExpiredCaseRoleReleases(staleBefore: Date): Promise<VerificationEvent[]> {
+    try {
+      return (await this.prisma.verification_events.findMany({
+        where: {
+          status: VerificationStatus.PENDING,
+          case_kind: CaseKind.COMPROMISED_ACCOUNT,
+          attention_state: CaseAttentionState.PARKED,
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: { startsWith: CASE_ROLE_RELEASE_ATTEMPT_PREFIX },
+          OR: [
+            { quarantine_lease_renewed_at: null },
+            { quarantine_lease_renewed_at: { lte: staleBefore } },
+          ],
+        },
+        orderBy: { updated_at: 'asc' },
+      })) as VerificationEvent[];
+    } catch (error) {
+      this.handleError(error, 'findExpiredCaseRoleReleases');
     }
   }
 

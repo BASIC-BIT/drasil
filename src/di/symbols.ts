@@ -36,6 +36,7 @@ export const TYPES = {
   MessageDeletionService: Symbol.for('MessageDeletionService'),
   MessageCleanupService: Symbol.for('MessageCleanupService'),
   CaseThreadClosureSweepService: Symbol.for('CaseThreadClosureSweepService'),
+  CaseRoleReleaseReconciliationService: Symbol.for('CaseRoleReleaseReconciliationService'),
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),

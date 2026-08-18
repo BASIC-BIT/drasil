@@ -333,6 +333,9 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       where: { id: verification.id },
       data: { quarantine_lease_renewed_at: staleBefore },
     });
+    await expect(verifications.findExpiredCaseRoleReleases(staleBefore)).resolves.toEqual([
+      expect.objectContaining({ id: verification.id }),
+    ]);
     const reclaimed = await verifications.claimCaseRoleRelease(
       verification.id,
       serverId,

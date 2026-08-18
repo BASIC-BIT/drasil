@@ -70,6 +70,7 @@ import {
 } from '../services/UserModerationService';
 import { ModerationOutcomeSource } from '../services/ModerationOutcomeService';
 import { IModerationQueueService } from '../services/ModerationQueueService';
+import { ICaseRoleReleaseReconciliationService } from '../services/CaseRoleReleaseReconciliationService';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { IRoleQuarantineService } from '../services/RoleQuarantineService';
@@ -139,6 +140,7 @@ export class EventHandler implements IEventHandler {
   private messageContextRepository?: IMessageContextRepository;
   private userModerationService?: IUserModerationService;
   private moderationQueueService?: IModerationQueueService;
+  private caseRoleReleaseReconciliationService?: ICaseRoleReleaseReconciliationService;
   private roleQuarantineService?: IRoleQuarantineService;
   private verificationEventRepository?: IVerificationEventRepository;
   private globalMessageWatchlistRepository?: IGlobalMessageWatchlistRepository;
@@ -200,7 +202,10 @@ export class EventHandler implements IEventHandler {
     verificationEventRepository?: IVerificationEventRepository,
     @inject(TYPES.GlobalMessageWatchlistRepository)
     @optional()
-    globalMessageWatchlistRepository?: IGlobalMessageWatchlistRepository
+    globalMessageWatchlistRepository?: IGlobalMessageWatchlistRepository,
+    @inject(TYPES.CaseRoleReleaseReconciliationService)
+    @optional()
+    caseRoleReleaseReconciliationService?: ICaseRoleReleaseReconciliationService
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -221,6 +226,7 @@ export class EventHandler implements IEventHandler {
     this.roleQuarantineService = roleQuarantineService;
     this.verificationEventRepository = verificationEventRepository;
     this.globalMessageWatchlistRepository = globalMessageWatchlistRepository;
+    this.caseRoleReleaseReconciliationService = caseRoleReleaseReconciliationService;
   }
 
   public async setupEventHandlers(): Promise<void> {
@@ -296,6 +302,7 @@ export class EventHandler implements IEventHandler {
     await this.commandHandler.registerCommands();
     this.moderationQueueService?.start();
     this.caseReviewReminderService?.start();
+    this.caseRoleReleaseReconciliationService?.start();
   }
 
   private async handleInteraction(interaction: Interaction): Promise<void> {

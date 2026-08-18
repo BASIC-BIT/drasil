@@ -103,13 +103,13 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       verificationEvent,
       message
     );
-    if (
+    const parkedAccountRecovery =
       verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
-      verificationEvent.attention_state === CaseAttentionState.PARKED
-    ) {
+      verificationEvent.attention_state === CaseAttentionState.PARKED;
+    if (parkedAccountRecovery) {
       await this.moderationQueueService?.recordSupportThreadAttention(verificationEvent, message);
     }
-    if (responseState.firstResponse) {
+    if (responseState.firstResponse || parkedAccountRecovery) {
       await this.notificationManager.notifyVerificationThreadUserResponse(
         verificationEvent,
         message

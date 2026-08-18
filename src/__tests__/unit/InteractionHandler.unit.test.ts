@@ -330,6 +330,7 @@ describe('InteractionHandler (unit)', () => {
       findPendingByServer: jest.fn(),
       findReviewablePendingByServer: jest.fn(),
       findParkedByServer: jest.fn(),
+      findExpiredCaseRoleReleases: jest.fn(),
       findResolvedWithThreadsByServer: jest.fn(),
       createFromDetection: jest.fn(),
       getVerificationHistory: jest.fn(),

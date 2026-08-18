@@ -45,6 +45,7 @@ describe('EventHandler (unit)', () => {
     roleQuarantineService?: Record<string, jest.Mock>;
     verificationEventRepository?: Record<string, jest.Mock>;
     globalMessageWatchlistRepository?: Record<string, jest.Mock>;
+    caseRoleReleaseReconciliationService?: Record<string, jest.Mock>;
     interactionHandler?: Record<string, jest.Mock>;
   }): EventHandler {
     const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
@@ -130,7 +131,8 @@ describe('EventHandler (unit)', () => {
       overrides?.verificationEventRepository as any,
       (overrides?.globalMessageWatchlistRepository ?? {
         findEnabled: jest.fn().mockResolvedValue([]),
-      }) as any
+      }) as any,
+      overrides?.caseRoleReleaseReconciliationService as any
     );
   }
 
@@ -348,6 +350,18 @@ describe('EventHandler (unit)', () => {
     const readyListener = client.on.mock.calls.find(([event]) => event === Events.ClientReady)?.[1];
 
     await expect(readyListener?.()).rejects.toBe(startupError);
+  });
+
+  it('starts expired release reconciliation after ready-time initialization', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1', tag: 'bot#0001' } };
+    const caseRoleReleaseReconciliationService = { start: jest.fn() };
+    const handler = buildHandler({ client, caseRoleReleaseReconciliationService });
+    await handler.setupEventHandlers();
+    const readyListener = client.on.mock.calls.find(([event]) => event === Events.ClientReady)?.[1];
+
+    await readyListener?.();
+
+    expect(caseRoleReleaseReconciliationService.start).toHaveBeenCalledTimes(1);
   });
 
   it('opens a manual intake case when the configured trigger role remains after the grace period', async () => {

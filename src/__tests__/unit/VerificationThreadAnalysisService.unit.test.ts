@@ -203,7 +203,10 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       expect.objectContaining({ id: verificationEvent.id }),
       message
     );
-    expect(notificationManager.notifyVerificationThreadUserResponse).not.toHaveBeenCalled();
+    expect(notificationManager.notifyVerificationThreadUserResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      message
+    );
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
     expect((await verificationRepo.findById(verificationEvent.id))?.status).toBe(
       VerificationStatus.PENDING

@@ -529,6 +529,22 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       .map((event) => ({ ...event }));
   }
 
+  async findExpiredCaseRoleReleases(staleBefore: Date): Promise<VerificationEvent[]> {
+    return this.events
+      .filter(
+        (event) =>
+          event.status === VerificationStatus.PENDING &&
+          event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+          event.attention_state === CaseAttentionState.PARKED &&
+          event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+          event.quarantine_attempt_id?.startsWith(CASE_ROLE_RELEASE_ATTEMPT_PREFIX) === true &&
+          (event.quarantine_lease_renewed_at === null ||
+            event.quarantine_lease_renewed_at === undefined ||
+            event.quarantine_lease_renewed_at <= staleBefore)
+      )
+      .map((event) => ({ ...event }));
+  }
+
   async findResolvedWithThreadsByServer(
     serverId: string,
     options: { days?: number | null; limit?: number | null; userId?: string | null } = {}
@@ -662,9 +678,9 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
           event.quarantine_attempt_id === null) ||
           (event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
             event.quarantine_attempt_id?.startsWith(CASE_ROLE_RELEASE_ATTEMPT_PREFIX) === true &&
-            event.quarantine_lease_renewed_at !== null &&
-            event.quarantine_lease_renewed_at !== undefined &&
-            event.quarantine_lease_renewed_at <= staleBefore))
+            (event.quarantine_lease_renewed_at === null ||
+              event.quarantine_lease_renewed_at === undefined ||
+              event.quarantine_lease_renewed_at <= staleBefore)))
     );
     if (eventIndex === -1) {
       return null;
