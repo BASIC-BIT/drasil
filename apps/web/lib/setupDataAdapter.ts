@@ -179,6 +179,7 @@ export function buildSetupSettingsPatch(update: GuildSetupUpdate): Record<string
       honeypot_role_response_mode: update.honeypotRoleResponseMode,
       role_quarantine_mode: update.roleQuarantineMode,
       role_quarantine_exempt_role_ids: update.roleQuarantineExemptRoleIds,
+      account_quarantine_enabled: update.accountQuarantineEnabled,
       verification_ai_thread_analysis_enabled: update.verificationAnalysisEnabled,
       verification_ai_thread_analysis_message_limit: update.verificationAnalysisMessageLimit,
       verification_ai_max_action: update.verificationAnalysisMaxAction,

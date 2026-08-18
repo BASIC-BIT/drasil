@@ -991,6 +991,8 @@ export class NotificationPresentationBuilder {
         return 'Undid observed action';
       case AdminActionType.REJECT:
         return 'Rejected';
+      case AdminActionType.QUARANTINE_COMPROMISED_ACCOUNT:
+        return 'Quarantined compromised account';
       default:
         return actionTaken;
     }

@@ -11,6 +11,9 @@ import {
 import {
   ModerationOutcomeSource,
   ModerationQueueItemType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   RoleQuarantineSnapshot,
   ServerMember,
   VerificationStatus,
@@ -151,6 +154,14 @@ export class IntegrityAuditService implements IIntegrityAuditService {
         !this.includesCaseRoleChecks(scope),
         findings
       );
+      this.auditParkedCases(
+        candidates.pendingVerificationEvents,
+        candidates.activeRoleQuarantineSnapshots,
+        candidates.moderationQueueItems,
+        liveUsers,
+        serverConfig.case_role_id,
+        findings
+      );
       this.auditResolvedCases(candidates.recentResolvedVerificationEvents, liveUsers, findings);
     }
 
@@ -188,6 +199,81 @@ export class IntegrityAuditService implements IIntegrityAuditService {
       },
       findings,
     };
+  }
+
+  private auditParkedCases(
+    cases: IntegrityAuditVerificationEvent[],
+    snapshots: RoleQuarantineSnapshot[],
+    queueItems: IntegrityAuditModerationQueueItem[],
+    liveUsers: Map<string, LiveUserState>,
+    caseRoleId: string | null,
+    findings: IntegrityAuditFinding[]
+  ): void {
+    const activeSnapshotCaseIds = new Set(
+      snapshots
+        .map((snapshot) => snapshot.verification_event_id)
+        .filter((id): id is string => Boolean(id))
+    );
+    const mirroredCaseIds = new Set(
+      queueItems
+        .filter((item) => item.item_type === ModerationQueueItemType.CASE_MIRROR)
+        .map((item) => item.verification_event_id)
+        .filter((id): id is string => Boolean(id))
+    );
+
+    for (const verificationEvent of cases) {
+      if (
+        verificationEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT ||
+        verificationEvent.attention_state !== CaseAttentionState.PARKED
+      ) {
+        continue;
+      }
+      if (verificationEvent.containment_status !== CaseContainmentStatus.CONTAINED) {
+        findings.push(
+          this.buildCaseFinding(
+            'error',
+            'parked_quarantine_not_contained',
+            verificationEvent,
+            'Parked account quarantine is not marked fully contained.'
+          )
+        );
+      }
+      if (!activeSnapshotCaseIds.has(verificationEvent.id)) {
+        findings.push(
+          this.buildCaseFinding(
+            'error',
+            'parked_quarantine_snapshot_missing',
+            verificationEvent,
+            'Parked account quarantine has no active role snapshot for release.'
+          )
+        );
+      }
+      const liveMember = liveUsers.get(verificationEvent.user_id)?.member;
+      if (
+        !caseRoleId ||
+        liveMember?.status !== 'found' ||
+        !liveMember.value.roles.cache.has(caseRoleId)
+      ) {
+        findings.push(
+          this.buildCaseFinding(
+            'error',
+            'parked_quarantine_case_role_missing',
+            verificationEvent,
+            'Parked account quarantine is missing the configured case role in Discord.'
+          )
+        );
+      }
+      if (mirroredCaseIds.has(verificationEvent.id)) {
+        findings.push(
+          this.buildCaseFinding(
+            'warning',
+            'parked_quarantine_case_mirror_stale',
+            verificationEvent,
+            'Parked account quarantine still has a normal case-queue mirror.'
+          )
+        );
+      }
+    }
   }
 
   private async auditPendingCases(

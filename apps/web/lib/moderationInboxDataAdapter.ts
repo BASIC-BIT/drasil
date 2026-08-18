@@ -71,6 +71,7 @@ const caseActionMap: Record<CaseAction, ModerationInboxAction> = {
   refresh_notification: 'refresh_notification',
   sync_existing_ban: 'sync_existing_ban',
   verify_user: 'verify_user',
+  quarantine_compromised_account: 'quarantine_compromised_account',
   view_history: 'view_history',
 };
 

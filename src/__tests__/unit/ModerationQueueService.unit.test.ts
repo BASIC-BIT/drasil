@@ -94,6 +94,12 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
       .map((item) => ({ ...item }));
   }
 
+  async listByVerificationEvent(verificationEventId: string): Promise<ModerationQueueItem[]> {
+    return this.items
+      .filter((item) => item.verification_event_id === verificationEventId)
+      .map((item) => ({ ...item }));
+  }
+
   async findByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem | null> {
     return this.clone(
       this.items.find(
@@ -353,6 +359,7 @@ const buildService = (
   } as unknown as IServerRepository;
   const verificationRepository = {
     findPendingByServer: jest.fn(async () => input.pendingCases ?? []),
+    findReviewablePendingByServer: jest.fn(async () => input.pendingCases ?? []),
   } as unknown as IVerificationEventRepository;
   const detectionRepository = {
     findUnresolvedObservedNotificationsByServer: jest.fn(async () => input.observedAlerts ?? []),

@@ -16,6 +16,8 @@ import { IModerationQueueRepository } from '../repositories/ModerationQueueRepos
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import {
+  CaseAttentionState,
+  CaseKind,
   DetectionEvent,
   DetectionType,
   ModerationQueueItem,
@@ -58,6 +60,7 @@ export interface IModerationQueueService {
   clearServerQueue(serverId: string): Promise<number>;
   upsertCaseMirror(verificationEvent: VerificationEvent): Promise<void>;
   deleteCaseMirror(verificationEventId: string): Promise<void>;
+  deleteCaseAttention(verificationEventId: string): Promise<void>;
   upsertObservedAlertMirror(detectionEvent: DetectionEvent): Promise<void>;
   upsertObservedAlertMirrorById(detectionEventId: string): Promise<void>;
   deleteObservedAlertMirror(detectionEventId: string): Promise<void>;
@@ -74,6 +77,10 @@ export interface IModerationQueueService {
   ): Promise<void>;
   deletePendingScreeningMember(serverId: string, userId: string): Promise<void>;
   recordSupportThreadAttention(
+    verificationEvent: VerificationEvent,
+    message: Message
+  ): Promise<void>;
+  recordQuarantineBreachAttention(
     verificationEvent: VerificationEvent,
     message: Message
   ): Promise<void>;
@@ -144,7 +151,8 @@ export class ModerationQueueService implements IModerationQueueService {
       return;
     }
 
-    const pendingCases = await this.verificationEventRepository.findPendingByServer(serverId);
+    const pendingCases =
+      await this.verificationEventRepository.findReviewablePendingByServer(serverId);
     const observedAlerts =
       await this.detectionEventsRepository.findUnresolvedObservedNotificationsByServer(serverId);
 
@@ -174,7 +182,10 @@ export class ModerationQueueService implements IModerationQueueService {
   }
 
   public async upsertCaseMirror(verificationEvent: VerificationEvent): Promise<void> {
-    if (verificationEvent.status !== VerificationStatus.PENDING) {
+    if (
+      verificationEvent.status !== VerificationStatus.PENDING ||
+      verificationEvent.attention_state === CaseAttentionState.PARKED
+    ) {
       await this.deleteCaseMirror(verificationEvent.id);
       return;
     }
@@ -212,6 +223,13 @@ export class ModerationQueueService implements IModerationQueueService {
   public async deleteCaseMirror(verificationEventId: string): Promise<void> {
     const items = await this.moderationQueueRepository.listByCase(verificationEventId);
     await this.deleteQueueItems(items);
+  }
+
+  public async deleteCaseAttention(verificationEventId: string): Promise<void> {
+    const items = await this.moderationQueueRepository.listByVerificationEvent(verificationEventId);
+    await this.deleteQueueItems(
+      items.filter((item) => item.item_type === ModerationQueueItemType.SUPPORT_THREAD_ATTENTION)
+    );
   }
 
   public async upsertObservedAlertMirror(detectionEvent: DetectionEvent): Promise<void> {
@@ -374,8 +392,39 @@ export class ModerationQueueService implements IModerationQueueService {
       verificationEventId: verificationEvent.id,
       sourceThreadId: message.channelId,
       message,
-      title: 'Support Check Reply Needs Review',
-      description: `<@${verificationEvent.user_id}> replied in a pending support-check thread.`,
+      title:
+        verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT
+          ? 'Quarantined User Reports Account Recovery'
+          : 'Support Check Reply Needs Review',
+      description:
+        verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT
+          ? `<@${verificationEvent.user_id}> reports that the account has been recovered. Verify ownership before releasing quarantine.`
+          : `<@${verificationEvent.user_id}> replied in a pending support-check thread.`,
+      subjectFieldName: 'Case',
+      subjectFieldValue: `\`${verificationEvent.id}\``,
+    });
+  }
+
+  public async recordQuarantineBreachAttention(
+    verificationEvent: VerificationEvent,
+    message: Message
+  ): Promise<void> {
+    if (
+      verificationEvent.status !== VerificationStatus.PENDING ||
+      verificationEvent.case_kind !== CaseKind.COMPROMISED_ACCOUNT
+    ) {
+      return;
+    }
+
+    await this.upsertAttentionItem({
+      itemType: ModerationQueueItemType.SUPPORT_THREAD_ATTENTION,
+      serverId: verificationEvent.server_id,
+      userId: verificationEvent.user_id,
+      verificationEventId: verificationEvent.id,
+      sourceThreadId: verificationEvent.thread_id ?? message.channelId,
+      message,
+      title: 'Quarantine Containment Breach',
+      description: `<@${verificationEvent.user_id}> posted outside the permitted recovery thread while quarantined.`,
       subjectFieldName: 'Case',
       subjectFieldValue: `\`${verificationEvent.id}\``,
     });

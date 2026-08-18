@@ -3,6 +3,8 @@ import { RoleQuarantineService } from '../../services/RoleQuarantineService';
 import { InMemoryRoleQuarantineSnapshotRepository } from '../fakes/inMemoryRepositories';
 import { IConfigService } from '../../config/ConfigService';
 import {
+  CaseKind,
+  RoleQuarantineSnapshotPurpose,
   RoleQuarantineSnapshotStatus,
   VerificationEvent,
   VerificationStatus,
@@ -181,6 +183,72 @@ describe('RoleQuarantineService (unit)', () => {
     );
     expect(member.roles.cache.has(manualRole.id)).toBe(true);
     expect(member.roles.cache.has(communityRole.id)).toBe(false);
+  });
+
+  it('removes privileged and normally exempt roles for a compromised account', async () => {
+    const privilegedRole = createRole({
+      id: 'privileged-role',
+      permissions: [PermissionFlagsBits.Administrator],
+    });
+    const exemptRole = createRole({ id: '100000000000000005' });
+    const manualRole = createRole({ id: '100000000000000010' });
+    const member = createMember([privilegedRole, exemptRole, manualRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const service = new RoleQuarantineService(
+      createConfigService({
+        role_quarantine_mode: 'off',
+        role_quarantine_exempt_role_ids: [exemptRole.id],
+        manual_intake_enabled: true,
+        manual_intake_role_id: manualRole.id,
+      }),
+      snapshots
+    );
+    const verificationEvent = {
+      ...createVerificationEvent(),
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+    };
+
+    const result = await service.quarantineCompromisedAccount(member, verificationEvent, {
+      id: 'moderator-1',
+    } as User);
+
+    expect(result.purpose).toBe(RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT);
+    expect(result.removedRoleIds).toEqual([
+      'privileged-role',
+      '100000000000000005',
+      '100000000000000010',
+    ]);
+    expect(result.failedRemovals).toEqual([]);
+  });
+
+  it('restores a privileged role that was privileged when account quarantine began', async () => {
+    const privilegedRole = createRole({
+      id: 'privileged-role',
+      permissions: [PermissionFlagsBits.Administrator],
+    });
+    const member = createMember([], [privilegedRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'verification-1',
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+      originalRoleIds: [privilegedRole.id],
+      plannedRoleIds: [privilegedRole.id],
+      removedRoleIds: [privilegedRole.id],
+      metadata: { privileged_role_ids_at_snapshot: [privilegedRole.id] },
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'off' }),
+      snapshots
+    );
+
+    const result = await service.restoreMemberRoles(member, { id: 'moderator-1' } as User);
+
+    expect(result.status).toBe('restored');
+    expect(result.restoredRoleIds).toEqual([privilegedRole.id]);
+    expect(member.roles.cache.has(privilegedRole.id)).toBe(true);
   });
 
   it('does not restore a manual intake trigger role from an older active quarantine snapshot', async () => {

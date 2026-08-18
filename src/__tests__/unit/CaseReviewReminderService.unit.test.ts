@@ -122,6 +122,7 @@ function buildService(input: {
   } as unknown as jest.Mocked<IServerRepository>;
   const verificationEventRepository = {
     findPendingByServer: jest.fn().mockResolvedValue(input.pendingCases),
+    findReviewablePendingByServer: jest.fn().mockResolvedValue(input.pendingCases),
     update: jest.fn().mockResolvedValue({} as VerificationEvent),
   } as unknown as jest.Mocked<IVerificationEventRepository>;
   const serverMemberRepository = {
@@ -379,7 +380,7 @@ describe('CaseReviewReminderService (unit)', () => {
 
     await service.runOnce(now);
 
-    expect(verificationEventRepository.findPendingByServer).not.toHaveBeenCalled();
+    expect(verificationEventRepository.findReviewablePendingByServer).not.toHaveBeenCalled();
     expect(adminSend).toHaveBeenCalledTimes(1);
     expect(adminSend.mock.calls[0][0].content).toContain('Membership screening');
     expect(adminSend.mock.calls[0][0].content).not.toContain('Case review');

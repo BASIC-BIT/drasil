@@ -10,6 +10,8 @@ import {
 } from 'discord.js';
 import { EventHandler } from '../../controllers/EventHandler';
 import {
+  CaseAttentionState,
+  CaseKind,
   DetectionType,
   ModerationOutcomeSource,
   ModerationOutcomeType,
@@ -1175,6 +1177,42 @@ describe('EventHandler (unit)', () => {
         username: 'test-user',
       })
     );
+  });
+
+  it('routes a parked compromised-account message to moderator attention even if the case role is missing', async () => {
+    const activeCase = {
+      id: 'verification-1',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+    };
+    const moderationQueueService = {
+      recordQuarantineBreachAttention: jest.fn().mockResolvedValue(undefined),
+    };
+    const verificationEventRepository = {
+      findActiveByUserAndServer: jest.fn().mockResolvedValue(activeCase),
+    };
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const handler = buildHandler({
+      moderationQueueService,
+      verificationEventRepository,
+      detectionOrchestrator,
+    });
+    const message = buildMessage(new PermissionsBitField());
+
+    await (handler as any).handleMessage(message);
+
+    expect(verificationEventRepository.findActiveByUserAndServer).toHaveBeenCalledWith(
+      'user-1',
+      'guild-1'
+    );
+    expect(moderationQueueService.recordQuarantineBreachAttention).toHaveBeenCalledWith(
+      activeCase,
+      message
+    );
+    expect(detectionOrchestrator.detectMessage).not.toHaveBeenCalled();
   });
 
   it('uses normal detection when no global watchlist rows are loaded', async () => {

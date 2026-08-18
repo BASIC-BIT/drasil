@@ -35,6 +35,8 @@ import {
 import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { REPORT_INTAKE_THREAD_NAME_PREFIX } from '../services/ThreadManager';
 import {
+  CaseAttentionState,
+  CaseKind,
   DetectionType,
   type GlobalMessageWatchlistEntry,
   type Server,
@@ -387,6 +389,19 @@ export class EventHandler implements IEventHandler {
       }
 
       const serverConfig = await this.configService.getServerConfig(serverId);
+      if (this.moderationQueueService && this.verificationEventRepository) {
+        const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+          userId,
+          serverId
+        );
+        if (
+          activeCase?.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+          activeCase.attention_state === CaseAttentionState.PARKED
+        ) {
+          await this.moderationQueueService.recordQuarantineBreachAttention(activeCase, message);
+          return;
+        }
+      }
       const responseSettings = getDetectionResponseSettings(serverConfig.settings, 'message');
       if (responseSettings.mode === 'off') {
         console.log(
@@ -891,6 +906,15 @@ export class EventHandler implements IEventHandler {
       console.log(
         `Active-case role quarantine processed ${result.addedRoleIds.length} role(s) for ${newMember.user.tag}: removed ${result.removedRoleIds.length}, failed ${result.failedRemovals.length}.`
       );
+    }
+    if (
+      verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+      (result.skippedRoles.length > 0 || result.failedRemovals.length > 0)
+    ) {
+      const updated = await this.verificationEventRepository.findById(verificationEvent.id);
+      if (updated) {
+        await this.moderationQueueService?.upsertCaseMirror(updated);
+      }
     }
   }
 

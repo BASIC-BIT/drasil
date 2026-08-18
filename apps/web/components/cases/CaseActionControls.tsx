@@ -27,6 +27,7 @@ export interface CaseMessageCleanupIntegration {
 export type WebCaseAction = Extract<
   CaseAction,
   | 'verify_user'
+  | 'quarantine_compromised_account'
   | 'kick_user'
   | 'ban_user'
   | 'ban_by_id'
@@ -55,6 +56,7 @@ export type QueueInboxCaseAction = (
 
 export const executableCaseActions: readonly WebCaseAction[] = [
   'verify_user',
+  'quarantine_compromised_account',
   'kick_user',
   'ban_user',
   'ban_by_id',
@@ -67,7 +69,12 @@ export const executableCaseActions: readonly WebCaseAction[] = [
 ];
 
 const executableCaseActionSet = new Set<CaseAction>(executableCaseActions);
-const destructiveCaseActionSet = new Set<WebCaseAction>(['kick_user', 'ban_user', 'ban_by_id']);
+const destructiveCaseActionSet = new Set<WebCaseAction>([
+  'kick_user',
+  'ban_user',
+  'ban_by_id',
+  'quarantine_compromised_account',
+]);
 
 export function isExecutableCaseAction(action: string): action is WebCaseAction {
   return executableCaseActionSet.has(action as CaseAction);
@@ -188,9 +195,20 @@ export function CaseActionControls({
                   formClassName="destructive-action-panel"
                   requestBaseHref={`/admin/guild/${guildId}/operations`}
                 >
+                  {action === 'quarantine_compromised_account' ? (
+                    <p className="muted">
+                      Removes manageable roles, applies the case-role lockdown, and parks the case
+                      only if containment is complete. The user stays in the server and their
+                      verification thread remains open.
+                    </p>
+                  ) : null}
                   <label className="field destructive-reason">
                     <span>Reason</span>
-                    <textarea name="reason" rows={3} />
+                    <textarea
+                      name="reason"
+                      required={action === 'quarantine_compromised_account'}
+                      rows={3}
+                    />
                   </label>
                   <label className="checkbox-field destructive-confirm">
                     <input name="confirmAction" type="checkbox" />
@@ -202,9 +220,20 @@ export function CaseActionControls({
                   action={queueCaseAction.bind(null, guildId, caseId, action)}
                   className="destructive-action-panel"
                 >
+                  {action === 'quarantine_compromised_account' ? (
+                    <p className="muted">
+                      Removes manageable roles, applies the case-role lockdown, and parks the case
+                      only if containment is complete. The user stays in the server and their
+                      verification thread remains open.
+                    </p>
+                  ) : null}
                   <label className="field destructive-reason">
                     <span>Reason</span>
-                    <textarea name="reason" rows={3} />
+                    <textarea
+                      name="reason"
+                      required={action === 'quarantine_compromised_account'}
+                      rows={3}
+                    />
                   </label>
                   <label className="checkbox-field destructive-confirm">
                     <input name="confirmAction" type="checkbox" />

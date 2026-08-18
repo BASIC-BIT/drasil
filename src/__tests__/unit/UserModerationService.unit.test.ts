@@ -218,6 +218,8 @@ describe('UserModerationService (unit)', () => {
     const moderator = { id: 'mod-verify-restore' } as User;
     const member = buildMember(guildId, userId);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
       quarantineMember: jest.fn(),
       enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn().mockResolvedValue({
@@ -314,6 +316,7 @@ describe('UserModerationService (unit)', () => {
     );
     const moderationQueueService = {
       deleteCaseMirror: jest.fn().mockRejectedValue(new Error('queue unavailable')),
+      deleteCaseAttention: jest.fn().mockResolvedValue(undefined),
     } as unknown as IModerationQueueService;
     const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     const service = new UserModerationService(
@@ -515,6 +518,8 @@ describe('UserModerationService (unit)', () => {
     const moderator = { id: 'mod-close-absent' } as User;
     const guild = buildGuildWithoutMember(guildId);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
       quarantineMember: jest.fn(),
       enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn(),
@@ -580,6 +585,8 @@ describe('UserModerationService (unit)', () => {
     const moderator = { id: 'mod-close-absent-retry' } as User;
     const guild = buildGuildWithoutMember(guildId);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
       quarantineMember: jest.fn(),
       enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn(),
@@ -642,6 +649,8 @@ describe('UserModerationService (unit)', () => {
     const moderator = { id: 'mod-ban' } as User;
     const member = buildMember(guildId, userId);
     const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
       quarantineMember: jest.fn(),
       enforceActiveCaseRoleUpdate: jest.fn(),
       restoreMemberRoles: jest.fn(),

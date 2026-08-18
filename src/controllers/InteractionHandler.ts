@@ -21,6 +21,8 @@ import { INotificationManager } from '../services/NotificationManager';
 import { TYPES } from '../di/symbols';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseKind,
   DetectionType,
   VerificationStatus,
   type VerificationEvent,
@@ -82,6 +84,8 @@ import {
   ModerationQueueService,
 } from '../services/ModerationQueueService';
 import { IRoleGateService, RoleGateResolutionResult } from '../services/RoleGateService';
+import { IAccountQuarantineService } from '../services/AccountQuarantineService';
+import { getAccountQuarantineSettings } from '../utils/accountQuarantineSettings';
 import {
   MODERATION_ACTION_REASON_FIELD_ID,
   MODERATOR_ACTION_BAN_DEFAULT_REASON,
@@ -99,6 +103,8 @@ const OBSERVED_KICK_DEFAULT_REASON = 'Kicked from observed suspicious notificati
 const VERIFICATION_BAN_MODAL_PREFIX = 'verification:ban_modal';
 const VERIFICATION_BAN_NOTES_FIELD_ID = 'verification_ban_notes';
 const VERIFICATION_BAN_DEFAULT_REASON = 'Banned by moderator during verification';
+const ACCOUNT_QUARANTINE_MODAL_PREFIX = 'verification:quarantine_modal';
+const ACCOUNT_QUARANTINE_REASON_FIELD_ID = 'account_quarantine_reason';
 const VERIFICATION_KICK_MODAL_PREFIX = 'verification:kick_modal';
 const VERIFICATION_KICK_DEFAULT_REASON = 'Kicked by moderator during verification';
 const OBSERVED_KICK_MODAL_PREFIX = 'observed:kick_modal';
@@ -148,6 +154,7 @@ export class InteractionHandler implements IInteractionHandler {
   private moderationQueueService?: IModerationQueueService;
   private roleGateService?: IRoleGateService;
   private detectionEventsRepository?: IDetectionEventsRepository;
+  private accountQuarantineService?: IAccountQuarantineService;
   private moderationActionConfirmationCounter = 0;
   private readonly pendingModerationActionConfirmations = new Map<
     string,
@@ -184,7 +191,10 @@ export class InteractionHandler implements IInteractionHandler {
     roleGateService?: IRoleGateService,
     @inject(TYPES.DetectionEventsRepository)
     @optional()
-    detectionEventsRepository?: IDetectionEventsRepository
+    detectionEventsRepository?: IDetectionEventsRepository,
+    @inject(TYPES.AccountQuarantineService)
+    @optional()
+    accountQuarantineService?: IAccountQuarantineService
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -198,6 +208,7 @@ export class InteractionHandler implements IInteractionHandler {
     this.moderationQueueService = moderationQueueService;
     this.roleGateService = roleGateService;
     this.detectionEventsRepository = detectionEventsRepository;
+    this.accountQuarantineService = accountQuarantineService;
     const reportSubmissionService = new ReportSubmissionService(
       this.configService,
       this.securityActionService
@@ -601,6 +612,8 @@ export class InteractionHandler implements IInteractionHandler {
       parsed.userId,
       guildId
     );
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    const accountQuarantineEnabled = getAccountQuarantineSettings(serverConfig.settings).enabled;
     const history = await this.verificationEventRepository.findByUserAndServer(
       parsed.userId,
       guildId
@@ -661,6 +674,22 @@ export class InteractionHandler implements IInteractionHandler {
           ),
           this.adminActionButton(parsed, 'repair', 'Repair Active Case', ButtonStyle.Primary)
         );
+        if (
+          this.accountQuarantineService &&
+          accountQuarantineEnabled &&
+          activeCase.attention_state === CaseAttentionState.REVIEW_REQUIRED
+        ) {
+          actionButtons.push(
+            this.adminActionButton(
+              parsed,
+              'quarantine',
+              activeCase.case_kind === CaseKind.COMPROMISED_ACCOUNT
+                ? 'Retry Account Quarantine'
+                : 'Quarantine Compromised Account...',
+              ButtonStyle.Danger
+            )
+          );
+        }
         if (!activeCase.thread_id) {
           actionButtons.push(
             this.adminActionButton(parsed, 'thread', 'Create Thread', ButtonStyle.Primary)
@@ -936,7 +965,8 @@ export class InteractionHandler implements IInteractionHandler {
     page: number,
     options: { update: boolean }
   ): Promise<void> {
-    const pendingCases = await this.verificationEventRepository.findPendingByServer(guildId);
+    const pendingCases =
+      await this.verificationEventRepository.findReviewablePendingByServer(guildId);
     if (pendingCases.length === 0) {
       const response = {
         content: 'There are no pending cases for this server.',
@@ -1198,6 +1228,12 @@ export class InteractionHandler implements IInteractionHandler {
           message: `Verify ${target} and remove the case role?`,
           style: ButtonStyle.Success,
         };
+      case 'quarantine':
+        return {
+          label: 'Continue',
+          message: `Prepare to quarantine ${target} as a compromised account?`,
+          style: ButtonStyle.Danger,
+        };
       case 'close_no_action':
         return {
           label: 'Confirm Close',
@@ -1311,6 +1347,20 @@ export class InteractionHandler implements IInteractionHandler {
     parsed: ParsedAdminActionCustomId,
     baseMessage: string
   ): Promise<string> {
+    if (parsed.surface === 'case' && parsed.action === 'quarantine') {
+      return this.buildAccountQuarantineConfirmationMessage(interaction, parsed, baseMessage);
+    }
+
+    if (parsed.surface === 'case' && parsed.action === 'verify') {
+      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        parsed.userId,
+        interaction.guildId ?? ''
+      );
+      if (activeCase?.case_kind === CaseKind.COMPROMISED_ACCOUNT) {
+        baseMessage = `${baseMessage}\n\nThis releases the parked account quarantine, restores eligible snapshotted roles, and closes the user verification thread.`;
+      }
+    }
+
     if (
       !this.roleGateService ||
       parsed.surface !== 'case' ||
@@ -1328,6 +1378,52 @@ export class InteractionHandler implements IInteractionHandler {
     const preview = await roleGateService.previewResolution(member).catch(() => null);
     const roleGateMessage = preview ? roleGateService.formatResolutionConfirmation(preview) : null;
     return roleGateMessage ? `${baseMessage}\n\n${roleGateMessage}` : baseMessage;
+  }
+
+  private async buildAccountQuarantineConfirmationMessage(
+    interaction: ButtonInteraction,
+    parsed: ParsedAdminActionCustomId,
+    baseMessage: string
+  ): Promise<string> {
+    const member = await interaction.guild?.members.fetch(parsed.userId).catch(() => null);
+    const activeCase = interaction.guildId
+      ? await this.verificationEventRepository.findActiveByUserAndServer(
+          parsed.userId,
+          interaction.guildId
+        )
+      : null;
+    if (!member || !activeCase || !this.accountQuarantineService) {
+      return `${baseMessage}\n\nA live containment preview is unavailable; cancel and retry from the active case.`;
+    }
+
+    const preview = await this.accountQuarantineService
+      .preview(member, activeCase)
+      .catch(() => null);
+    if (!preview) {
+      return `${baseMessage}\n\nDrasil could not produce a live containment preview. Cancel and retry after repairing the active case.`;
+    }
+
+    const retained = preview.rolePreview.skippedRoles.map(
+      (role) => `<@&${role.role_id}> (${role.reason})`
+    );
+    const lines = [
+      baseMessage,
+      '',
+      `Roles to remove: ${preview.rolePreview.plannedRoleIds.length}`,
+      `Privileged roles to remove: ${preview.rolePreview.privilegedRoleIds.length}`,
+      `Roles Drasil cannot remove: ${retained.length}`,
+      `Member/channel bypasses: ${preview.memberAudit.bypasses.length}`,
+      `Lockdown changes still required: ${preview.lockdown.plannedActions.length}`,
+      preview.canContain
+        ? 'Containment check: ready. Submitting the next form will park this case.'
+        : 'Containment check: incomplete. The action will contain what it can, keep the case in review, and report every blocker.',
+      '',
+      'The user stays in the server. Their verification thread remains open so they can report recovery. No Discord timeout is applied.',
+    ];
+    if (retained.length > 0) {
+      lines.push('', `Unmanageable roles: ${retained.join(', ')}`);
+    }
+    return lines.join('\n');
   }
 
   private async showLegacyAdminActionConfirmation(
@@ -1389,6 +1485,18 @@ export class InteractionHandler implements IInteractionHandler {
   ): Promise<void> {
     const action = parsed.action.slice('confirm_'.length);
     const moderationPermissions = this.getModerationPermissions();
+
+    if (action === 'quarantine') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to quarantine a compromised account.'
+        );
+        return;
+      }
+      await this.showAccountQuarantineModal(interaction, parsed.userId);
+      return;
+    }
 
     if (action === 'verify') {
       if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
@@ -1589,6 +1697,24 @@ export class InteractionHandler implements IInteractionHandler {
         flags: MessageFlags.Ephemeral,
       });
     }
+  }
+
+  private async showAccountQuarantineModal(
+    interaction: ButtonInteraction,
+    userId: string
+  ): Promise<void> {
+    const modal = new ModalBuilder()
+      .setCustomId(`${ACCOUNT_QUARANTINE_MODAL_PREFIX}:${userId}`)
+      .setTitle('Quarantine Compromised Account');
+    const reasonInput = new TextInputBuilder()
+      .setCustomId(ACCOUNT_QUARANTINE_REASON_FIELD_ID)
+      .setLabel('Why is this account being quarantined?')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true)
+      .setMaxLength(500)
+      .setPlaceholder('Required for the moderation audit log.');
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
+    await interaction.showModal(modal);
   }
 
   private async refreshActiveCaseNotification(guildId: string, userId: string): Promise<void> {
@@ -1976,6 +2102,10 @@ export class InteractionHandler implements IInteractionHandler {
         await this.setupVerificationModalHandler.handleSetupVerificationModalSubmit(interaction);
         return;
       default:
+        if (interaction.customId.startsWith(`${ACCOUNT_QUARANTINE_MODAL_PREFIX}:`)) {
+          await this.handleAccountQuarantineModalSubmit(interaction);
+          return;
+        }
         if (interaction.customId.startsWith(`${VERIFICATION_BAN_MODAL_PREFIX}:`)) {
           await this.handleVerificationBanModalSubmit(interaction);
           return;
@@ -2541,6 +2671,92 @@ export class InteractionHandler implements IInteractionHandler {
       console.error('Error banning user:', error);
       await interaction.editReply({
         content: 'An error occurred while banning the user.',
+      });
+    }
+  }
+
+  private async handleAccountQuarantineModalSubmit(
+    interaction: ModalSubmitInteraction
+  ): Promise<void> {
+    if (!interaction.guildId || !this.accountQuarantineService) {
+      await interaction.reply({
+        content: 'Compromised-account quarantine is unavailable here.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    if (
+      !(await this.hasAnyPermission(
+        interaction,
+        interaction.guildId,
+        this.getModerationPermissions()
+      ))
+    ) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need moderation permissions to quarantine a compromised account.'
+      );
+      return;
+    }
+
+    const userId = interaction.customId.slice(`${ACCOUNT_QUARANTINE_MODAL_PREFIX}:`.length);
+    const reason = interaction.fields.getTextInputValue(ACCOUNT_QUARANTINE_REASON_FIELD_ID).trim();
+    if (!userId || !reason) {
+      await interaction.reply({
+        content: 'A target user and quarantine reason are required.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const guild = await this.client.guilds.fetch(interaction.guildId);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) {
+        throw new Error('The target is no longer a member of this server.');
+      }
+
+      await this.securityActionService.repairActiveCase(member);
+      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
+        userId,
+        interaction.guildId
+      );
+      if (!activeCase) {
+        throw new Error('No active verification case was found.');
+      }
+
+      const result = await this.accountQuarantineService.quarantine(
+        member,
+        activeCase,
+        interaction.user,
+        reason
+      );
+      if (result.status === 'parked') {
+        await interaction.editReply({
+          content: `Quarantined <@${userId}> and parked the case. The user remains in the server and can reply in their open verification thread when they recover the account.`,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      await interaction.editReply({
+        content: [
+          `Containment for <@${userId}> is incomplete, so the case remains in review.`,
+          `Failed role removals: ${result.roleResult.failedRemovals.length}.`,
+          `Retained/unmanageable roles: ${result.roleResult.skippedRoles.length}.`,
+          `Member/channel bypasses: ${result.memberAudit.bypasses.length}.`,
+          `Lockdown changes still required: ${result.lockdown.plannedActions.length}.`,
+        ].join('\n'),
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      console.error('Error quarantining compromised account:', error);
+      await interaction.editReply({
+        content:
+          error instanceof Error
+            ? `Could not quarantine the compromised account: ${error.message}`
+            : 'Could not quarantine the compromised account.',
       });
     }
   }

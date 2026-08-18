@@ -292,6 +292,7 @@ function applyFixtureServerSettingsUpdate(
   setIfDefined(settings, 'honeypot_role_response_mode', update.honeypotRoleResponseMode);
   setIfDefined(settings, 'role_quarantine_mode', update.roleQuarantineMode);
   setIfDefined(settings, 'role_quarantine_exempt_role_ids', update.roleQuarantineExemptRoleIds);
+  setIfDefined(settings, 'account_quarantine_enabled', update.accountQuarantineEnabled);
   setIfDefined(
     settings,
     'verification_ai_thread_analysis_enabled',

@@ -19,6 +19,7 @@ const meta = {
     resolvedCaseCount: fixtureResolvedCaseSummaries().length,
     sessionUsername: 'Fixture Admin',
     cases: fixtureCaseSummaries(),
+    parkedCases: [],
   },
 } satisfies Meta<typeof CaseQueueView>;
 
@@ -31,5 +32,6 @@ export const MixedQueue: Story = {};
 export const EmptyQueue: Story = {
   args: {
     cases: [],
+    parkedCases: [],
   },
 };

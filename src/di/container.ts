@@ -117,6 +117,10 @@ import {
   RoleQuarantineSnapshotRepository,
 } from '../repositories/RoleQuarantineSnapshotRepository';
 import { IRoleQuarantineService, RoleQuarantineService } from '../services/RoleQuarantineService';
+import {
+  AccountQuarantineService,
+  IAccountQuarantineService,
+} from '../services/AccountQuarantineService';
 import { IIntegrityAuditService, IntegrityAuditService } from '../services/IntegrityAuditService';
 import { IRoleGateService, RoleGateService } from '../services/RoleGateService';
 import {
@@ -355,6 +359,10 @@ function configureServices(container: Container): void {
   container
     .bind<IRoleQuarantineService>(TYPES.RoleQuarantineService)
     .to(RoleQuarantineService)
+    .inSingletonScope();
+  container
+    .bind<IAccountQuarantineService>(TYPES.AccountQuarantineService)
+    .to(AccountQuarantineService)
     .inSingletonScope();
 
   container

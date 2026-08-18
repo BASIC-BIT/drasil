@@ -8,6 +8,9 @@ import { IRoleManager } from './RoleManager';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   ModerationOutcome,
   VerificationEvent,
   VerificationStatus,
@@ -706,6 +709,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
 
     await this.deleteLiveQueueCaseMirror(verificationEvent.id);
+    await this.moderationQueueService?.deleteCaseAttention(verificationEvent.id);
   }
 
   private async finalizeResolvedVerificationEvent(
@@ -762,6 +766,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     });
 
     await this.deleteLiveQueueCaseMirror(verificationEvent.id);
+    await this.moderationQueueService?.deleteCaseAttention(verificationEvent.id);
   }
 
   /**
@@ -2124,6 +2129,14 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       for (const pendingEvent of pendingVerificationEvents) {
         const eventToUpdate = {
           ...pendingEvent,
+          ...(pendingEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT
+            ? {
+                attention_state: CaseAttentionState.REVIEW_REQUIRED,
+                containment_status: CaseContainmentStatus.INCOMPLETE,
+                parked_at: null,
+                parked_by: null,
+              }
+            : {}),
           metadata: {
             ...this.metadataToRecord(pendingEvent.metadata),
             ...outcomeMetadata,

@@ -1,4 +1,4 @@
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import type { Message } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import type { IConfigService } from '../config/ConfigService';
@@ -6,7 +6,13 @@ import type { IGPTService, VerificationThreadAnalysisResult } from './GPTService
 import type { INotificationManager } from './NotificationManager';
 import type { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import type { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
-import { VerificationEvent, VerificationStatus } from '../repositories/types';
+import {
+  CaseAttentionState,
+  CaseKind,
+  VerificationEvent,
+  VerificationStatus,
+} from '../repositories/types';
+import type { IModerationQueueService } from './ModerationQueueService';
 import {
   getVerificationThreadAnalysisSettings,
   VERIFICATION_THREAD_ANALYSIS_FETCH_LIMIT,
@@ -48,7 +54,10 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     @inject(TYPES.VerificationEventRepository)
     private verificationEventRepository: IVerificationEventRepository,
     @inject(TYPES.DetectionEventsRepository)
-    private detectionEventsRepository: IDetectionEventsRepository
+    private detectionEventsRepository: IDetectionEventsRepository,
+    @inject(TYPES.ModerationQueueService)
+    @optional()
+    private moderationQueueService?: IModerationQueueService
   ) {}
 
   public async handleThreadMessage(message: Message): Promise<boolean> {
@@ -94,11 +103,21 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       verificationEvent,
       message
     );
+    if (
+      verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+      verificationEvent.attention_state === CaseAttentionState.PARKED
+    ) {
+      await this.moderationQueueService?.recordSupportThreadAttention(verificationEvent, message);
+    }
     if (responseState.firstResponse) {
       await this.notificationManager.notifyVerificationThreadUserResponse(
         verificationEvent,
         message
       );
+    }
+
+    if (verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT) {
+      return;
     }
 
     const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);

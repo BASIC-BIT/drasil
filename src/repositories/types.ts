@@ -26,6 +26,7 @@ export interface Server {
  * Flexible server settings stored as JSON
  */
 export interface ServerSettings {
+  account_quarantine_enabled?: boolean;
   min_confidence_threshold?: number; // Minimum confidence for GPT detection
   use_gpt_on_join?: boolean; // Whether to use GPT for join verification
   gpt_message_check_count?: number; // Number of messages to check with GPT
@@ -199,6 +200,22 @@ export enum VerificationStatus {
   CLOSED_NO_ACTION = 'closed_no_action',
 }
 
+export enum CaseKind {
+  STANDARD = 'standard',
+  COMPROMISED_ACCOUNT = 'compromised_account',
+}
+
+export enum CaseAttentionState {
+  REVIEW_REQUIRED = 'review_required',
+  PARKED = 'parked',
+}
+
+export enum CaseContainmentStatus {
+  NOT_APPLICABLE = 'not_applicable',
+  CONTAINED = 'contained',
+  INCOMPLETE = 'incomplete',
+}
+
 export enum AdminActionType {
   VERIFY = 'verify',
   REJECT = 'reject',
@@ -214,6 +231,7 @@ export enum AdminActionType {
   FALSE_POSITIVE = 'false_positive',
   UNDO_OBSERVED_ACTION = 'undo_observed_action',
   ROLE_GATE_CLEANUP = 'role_gate_cleanup',
+  QUARANTINE_COMPROMISED_ACCOUNT = 'quarantine_compromised_account',
 }
 
 export enum ModerationOutcomeSource {
@@ -231,6 +249,7 @@ export enum ModerationOutcomeType {
   KICKED = 'kicked',
   CLOSED_NO_ACTION = 'closed_no_action',
   MEMBER_LEFT = 'member_left',
+  ACCOUNT_QUARANTINED = 'account_quarantined',
 }
 
 export enum ModerationQueueItemType {
@@ -275,6 +294,7 @@ export enum ModerationActionRequestType {
   PREVIEW_CASE_MESSAGE_DELETION = 'preview_case_message_deletion',
   EXECUTE_CASE_MESSAGE_DELETION = 'execute_case_message_deletion',
   BAN_CASE_USER_WITH_MESSAGE_CLEANUP = 'ban_case_user_with_message_cleanup',
+  QUARANTINE_COMPROMISED_ACCOUNT = 'quarantine_compromised_account',
 }
 
 export enum ModerationActionRequestStatus {
@@ -356,6 +376,11 @@ export enum RoleQuarantineSnapshotStatus {
   ABANDONED = 'abandoned',
 }
 
+export enum RoleQuarantineSnapshotPurpose {
+  STANDARD_CASE = 'standard_case',
+  COMPROMISED_ACCOUNT = 'compromised_account',
+}
+
 export interface RoleQuarantineRoleDetail {
   role_id: string;
   role_name?: string;
@@ -369,6 +394,7 @@ export interface RoleQuarantineSnapshot {
   verification_event_id: string | null;
   status: RoleQuarantineSnapshotStatus;
   mode: string;
+  purpose?: RoleQuarantineSnapshotPurpose;
   original_role_ids: string[];
   planned_role_ids: string[];
   removed_role_ids: string[];
@@ -388,6 +414,7 @@ export interface RoleQuarantineSnapshotCreate {
   userId: string;
   verificationEventId?: string | null;
   mode: string;
+  purpose?: RoleQuarantineSnapshotPurpose;
   originalRoleIds: string[];
   plannedRoleIds: string[];
   removedRoleIds?: string[];
@@ -400,6 +427,9 @@ export interface RoleQuarantineSnapshotCreate {
 
 export interface RoleQuarantineSnapshotUpdate {
   status?: RoleQuarantineSnapshotStatus;
+  purpose?: RoleQuarantineSnapshotPurpose;
+  originalRoleIds?: string[];
+  plannedRoleIds?: string[];
   removedRoleIds?: string[];
   restoredRoleIds?: string[];
   skippedRoles?: Prisma.JsonValue | null;
@@ -420,6 +450,12 @@ export interface VerificationEvent {
   notification_channel_id: string | null;
   notification_message_id: string | null;
   status: VerificationStatus;
+  case_kind?: CaseKind;
+  attention_state?: CaseAttentionState;
+  containment_status?: CaseContainmentStatus;
+  parked_at?: Date | null;
+  parked_by?: string | null;
+  review_after?: Date | null;
   created_at: Date; // Use Date type
   updated_at: Date; // Use Date type
   resolved_at: Date | null; // Use Date type

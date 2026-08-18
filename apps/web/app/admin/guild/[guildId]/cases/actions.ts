@@ -26,6 +26,7 @@ import {
 
 const queuedCaseActions = new Set<CaseAction>([
   'verify_user',
+  'quarantine_compromised_account',
   'kick_user',
   'ban_user',
   'ban_by_id',
@@ -174,6 +175,21 @@ async function assertCanQueueCaseAction(
   formData: FormData | undefined
 ): Promise<DestructiveActionOptions> {
   assertActorPermission(action, guild);
+
+  if (action === 'quarantine_compromised_account') {
+    if (formData?.get('confirmAction') !== 'on') {
+      throw new Error('Confirm the account quarantine before queueing it.');
+    }
+    const server = await createSetupDataAdapter().getServer(guild.id);
+    if (server?.settings.account_quarantine_enabled !== true) {
+      throw new Error('Compromised-account quarantine is disabled for this server.');
+    }
+    const reason = readFormString(formData, 'reason');
+    if (!reason) {
+      throw new Error('Account quarantine reason is required.');
+    }
+    return { reason };
+  }
 
   const destructiveContext = destructiveActionContext(action);
   if (!destructiveContext) {

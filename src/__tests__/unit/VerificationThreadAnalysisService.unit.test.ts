@@ -4,7 +4,12 @@ import {
   InMemoryVerificationEventRepository,
 } from '../fakes/inMemoryRepositories';
 import { VerificationThreadAnalysisService } from '../../services/VerificationThreadAnalysisService';
-import { DetectionType, VerificationStatus } from '../../repositories/types';
+import {
+  CaseAttentionState,
+  CaseKind,
+  DetectionType,
+  VerificationStatus,
+} from '../../repositories/types';
 
 describe('VerificationThreadAnalysisService (unit)', () => {
   const messageCreatedTimestamp = Date.parse('2026-06-03T12:00:00.000Z');
@@ -152,6 +157,57 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     expect(notificationManager.notifyVerificationThreadUserResponse).not.toHaveBeenCalled();
     expect(updateSpy).not.toHaveBeenCalled();
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
+  });
+
+  it('routes every parked account recovery reply to moderator attention without auto-release', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const verificationEvent = await verificationRepo.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      metadata: {
+        support_thread_reminder: {
+          userRespondedAt: '2026-06-03T11:00:00.000Z',
+        },
+      },
+    });
+    const moderationQueueService = {
+      recordSupportThreadAttention: jest.fn().mockResolvedValue(undefined),
+    };
+    const notificationManager = {
+      updateVerificationThreadAnalysis: jest.fn(),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn(),
+    };
+    const gptService = { analyzeVerificationThreadResponses: jest.fn() };
+    const service = new VerificationThreadAnalysisService(
+      { getServerConfig: jest.fn() } as any,
+      gptService as any,
+      notificationManager as any,
+      verificationRepo,
+      detectionRepo,
+      moderationQueueService as any
+    );
+
+    const { message } = buildMessage({ id: 'recovery-msg-2', content: 'I have my account back.' });
+    await expect(service.handleThreadMessage(message as any)).resolves.toBe(true);
+
+    expect(moderationQueueService.recordSupportThreadAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      message
+    );
+    expect(notificationManager.notifyVerificationThreadUserResponse).not.toHaveBeenCalled();
+    expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
+    expect((await verificationRepo.findById(verificationEvent.id))?.status).toBe(
+      VerificationStatus.PENDING
+    );
   });
 
   it('does not send the first-response admin ping when support reminder metadata fails to persist', async () => {

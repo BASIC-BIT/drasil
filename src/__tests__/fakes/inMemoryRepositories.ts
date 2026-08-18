@@ -11,6 +11,9 @@ import { verification_status } from '../../db/prisma';
 import {
   AdminAction,
   AdminActionCreate,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   DetectionEvent,
   ModerationOutcome,
   ModerationOutcomeCreate,
@@ -23,6 +26,7 @@ import {
   ReportIntakeUpdate,
   RoleQuarantineSnapshot,
   RoleQuarantineSnapshotCreate,
+  RoleQuarantineSnapshotPurpose,
   RoleQuarantineSnapshotStatus,
   RoleQuarantineSnapshotUpdate,
   Server,
@@ -500,6 +504,30 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       .map((event) => ({ ...event }));
   }
 
+  async findReviewablePendingByServer(serverId: string): Promise<VerificationEvent[]> {
+    return this.events
+      .filter(
+        (event) =>
+          event.server_id === serverId &&
+          event.status === VerificationStatus.PENDING &&
+          event.attention_state === CaseAttentionState.REVIEW_REQUIRED
+      )
+      .sort((a, b) => a.updated_at.getTime() - b.updated_at.getTime())
+      .map((event) => ({ ...event }));
+  }
+
+  async findParkedByServer(serverId: string): Promise<VerificationEvent[]> {
+    return this.events
+      .filter(
+        (event) =>
+          event.server_id === serverId &&
+          event.status === VerificationStatus.PENDING &&
+          event.attention_state === CaseAttentionState.PARKED
+      )
+      .sort((a, b) => (b.parked_at?.getTime() ?? 0) - (a.parked_at?.getTime() ?? 0))
+      .map((event) => ({ ...event }));
+  }
+
   async findResolvedWithThreadsByServer(
     serverId: string,
     options: { days?: number | null; limit?: number | null; userId?: string | null } = {}
@@ -538,6 +566,12 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       notification_channel_id: null,
       notification_message_id: null,
       status,
+      case_kind: CaseKind.STANDARD,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+      parked_at: null,
+      parked_by: null,
+      review_after: null,
       created_at: now,
       updated_at: now,
       resolved_at: null,
@@ -591,6 +625,12 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       updated.notification_channel_id = data.notification_channel_id;
     if (data.notification_message_id !== undefined)
       updated.notification_message_id = data.notification_message_id;
+    if (data.case_kind !== undefined) updated.case_kind = data.case_kind;
+    if (data.attention_state !== undefined) updated.attention_state = data.attention_state;
+    if (data.containment_status !== undefined) updated.containment_status = data.containment_status;
+    if (data.parked_at !== undefined) updated.parked_at = data.parked_at;
+    if (data.parked_by !== undefined) updated.parked_by = data.parked_by;
+    if (data.review_after !== undefined) updated.review_after = data.review_after;
     if (data.notes !== undefined) updated.notes = data.notes;
     if (data.metadata !== undefined) updated.metadata = data.metadata;
     if (data.resolved_at !== undefined) updated.resolved_at = data.resolved_at;
@@ -1402,6 +1442,7 @@ export class InMemoryRoleQuarantineSnapshotRepository implements IRoleQuarantine
       verification_event_id: data.verificationEventId ?? null,
       status: RoleQuarantineSnapshotStatus.ACTIVE,
       mode: data.mode,
+      purpose: data.purpose ?? RoleQuarantineSnapshotPurpose.STANDARD_CASE,
       original_role_ids: [...data.originalRoleIds],
       planned_role_ids: [...data.plannedRoleIds],
       removed_role_ids: [...(data.removedRoleIds ?? [])],
@@ -1451,6 +1492,11 @@ export class InMemoryRoleQuarantineSnapshotRepository implements IRoleQuarantine
     const updated: RoleQuarantineSnapshot = {
       ...existing,
       status: data.status ?? existing.status,
+      purpose: data.purpose ?? existing.purpose,
+      original_role_ids: data.originalRoleIds
+        ? [...data.originalRoleIds]
+        : existing.original_role_ids,
+      planned_role_ids: data.plannedRoleIds ? [...data.plannedRoleIds] : existing.planned_role_ids,
       removed_role_ids: data.removedRoleIds ? [...data.removedRoleIds] : existing.removed_role_ids,
       restored_role_ids: data.restoredRoleIds
         ? [...data.restoredRoleIds]

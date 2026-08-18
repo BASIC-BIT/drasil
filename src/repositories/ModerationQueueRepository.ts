@@ -8,6 +8,7 @@ export interface IModerationQueueRepository {
   findById(id: string): Promise<ModerationQueueItem | null>;
   findByCase(verificationEventId: string): Promise<ModerationQueueItem | null>;
   listByCase(verificationEventId: string): Promise<ModerationQueueItem[]>;
+  listByVerificationEvent(verificationEventId: string): Promise<ModerationQueueItem[]>;
   findByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem | null>;
   listByObservedAlert(detectionEventId: string): Promise<ModerationQueueItem[]>;
   listByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]>;
@@ -86,6 +87,17 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
       return items as ModerationQueueItem[];
     } catch (error) {
       this.handleError(error, 'listModerationQueueItemsByCase');
+    }
+  }
+
+  async listByVerificationEvent(verificationEventId: string): Promise<ModerationQueueItem[]> {
+    try {
+      const items = await this.prisma.moderation_queue_items.findMany({
+        where: { verification_event_id: verificationEventId },
+      });
+      return items as ModerationQueueItem[];
+    } catch (error) {
+      this.handleError(error, 'listModerationQueueItemsByVerificationEvent');
     }
   }
 

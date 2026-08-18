@@ -31,6 +31,7 @@ import {
 export type WebCaseAction = Extract<
   CaseAction,
   | 'verify_user'
+  | 'quarantine_compromised_account'
   | 'kick_user'
   | 'ban_user'
   | 'ban_by_id'
@@ -59,6 +60,7 @@ export interface CaseActionQueueResult {
 export interface ActiveCaseDataAdapter {
   canQueueCaseActions(): boolean;
   listActiveCases(guildId: string): Promise<CaseSummary[]>;
+  listParkedCases(guildId: string): Promise<CaseSummary[]>;
   listResolvedCases(guildId: string, limit?: number): Promise<CaseSummary[]>;
   listCasesForMember(guildId: string, userId: string, limit?: number): Promise<CaseSummary[]>;
   countResolvedCases(guildId: string): Promise<number>;
@@ -91,11 +93,17 @@ interface CaseSummaryRow {
   notification_channel_id: string | null;
   notification_message_id: string | null;
   status: string;
+  case_kind?: 'standard' | 'compromised_account';
+  attention_state?: 'review_required' | 'parked';
+  containment_status?: 'not_applicable' | 'contained' | 'incomplete';
+  parked_at?: unknown;
+  parked_by?: string | null;
   created_at: unknown;
   updated_at: unknown;
   notes: string | null;
   metadata: unknown;
   admin_channel_id: string | null;
+  server_settings?: unknown;
   latest_detection_type: string | null;
   latest_confidence: number | null;
   latest_detection_at: unknown;
@@ -177,6 +185,7 @@ const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActi
   reopen_case: 'reopen_case',
   sync_existing_ban: 'sync_existing_ban',
   verify_user: 'verify_case_user',
+  quarantine_compromised_account: 'quarantine_compromised_account',
 };
 
 function sortCaseSummariesForHistory(cases: readonly CaseSummary[]): CaseSummary[] {
@@ -209,6 +218,10 @@ function metadataToRecord(metadata: unknown): Record<string, unknown> {
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null;
+}
+
+function readArrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
 }
 
 function firstString(...values: Array<unknown>): string | null {
@@ -423,6 +436,17 @@ function resolveAllowedActions(
     'ban_user',
     'close_no_action',
   ];
+  if (row.attention_state === 'parked') {
+    return appendRefreshNotificationAction(row, [
+      'view_history',
+      'verify_user',
+      'kick_user',
+      'ban_user',
+    ]);
+  }
+  if (metadataToRecord(row.server_settings).account_quarantine_enabled === true) {
+    actions.push('quarantine_compromised_account');
+  }
   if (row.notification_message_id) {
     actions.push('refresh_notification');
   }
@@ -449,6 +473,16 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
   const updatedAt = new Date(toIsoString(row.updated_at));
   const staleHours = Math.max(0, Math.floor((now.getTime() - updatedAt.getTime()) / 3_600_000));
   const presenceState = resolvePresenceState(row);
+  const quarantine = readNestedRecord(metadataToRecord(row.metadata), 'account_quarantine');
+  const quarantineEffects =
+    row.case_kind === 'compromised_account'
+      ? {
+          removedRoleCount: readArrayLength(quarantine.removed_role_ids),
+          retainedRoleCount: readArrayLength(quarantine.retained_roles),
+          failedRoleCount: readArrayLength(quarantine.failed_removals),
+          memberBypassCount: readArrayLength(quarantine.member_bypasses),
+        }
+      : null;
 
   return caseSummarySchema.parse({
     id: row.id,
@@ -457,6 +491,12 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
     userIdentity: resolveUserIdentity(row),
     createdAt: toIsoString(row.created_at),
     updatedAt: updatedAt.toISOString(),
+    caseKind: row.case_kind ?? 'standard',
+    attentionState: row.attention_state ?? 'review_required',
+    containmentStatus: row.containment_status ?? 'not_applicable',
+    parkedAt: toNullableIsoString(row.parked_at),
+    parkedBy: row.parked_by ?? null,
+    quarantineEffects,
     stale: staleHours >= DEFAULT_STALE_HOURS,
     staleHours,
     presenceState,
@@ -543,11 +583,17 @@ const SUMMARY_QUERY = `
     ve.notification_channel_id,
     ve.notification_message_id,
     ve.status,
+    ve.case_kind,
+    ve.attention_state,
+    ve.containment_status,
+    ve.parked_at,
+    ve.parked_by,
     ve.created_at,
     ve.updated_at,
     ve.notes,
     ve.metadata,
     s.admin_channel_id,
+    s.settings as server_settings,
     de.detection_type as latest_detection_type,
     de.confidence as latest_confidence,
     de.detected_at as latest_detection_at,
@@ -599,11 +645,27 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
   public async listActiveCases(guildId: string): Promise<CaseSummary[]> {
     const result = await getPostgresPool().query<CaseSummaryRow>(
       `${SUMMARY_QUERY}
-       where ve.server_id = $1 and ve.status = 'pending' and ve.user_id is not null
+       where ve.server_id = $1
+         and ve.status = 'pending'
+         and ve.attention_state = 'review_required'
+         and ve.user_id is not null
        order by ve.updated_at asc`,
       [guildId]
     );
     return sortCaseSummariesForQueue(result.rows.map((row) => parseCaseSummaryRow(row)));
+  }
+
+  public async listParkedCases(guildId: string): Promise<CaseSummary[]> {
+    const result = await getPostgresPool().query<CaseSummaryRow>(
+      `${SUMMARY_QUERY}
+       where ve.server_id = $1
+         and ve.status = 'pending'
+         and ve.attention_state = 'parked'
+         and ve.user_id is not null
+       order by ve.parked_at desc nulls last, ve.updated_at desc`,
+      [guildId]
+    );
+    return result.rows.map((row) => parseCaseSummaryRow(row));
   }
 
   public async listResolvedCases(guildId: string, limit = 50): Promise<CaseSummary[]> {
@@ -771,6 +833,10 @@ export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
 
   public async listActiveCases(): Promise<CaseSummary[]> {
     return sortCaseSummariesForQueue(fixtureActiveCaseSummaries());
+  }
+
+  public async listParkedCases(): Promise<CaseSummary[]> {
+    return fixtureActiveCaseSummaries().filter((item) => item.attentionState === 'parked');
   }
 
   public async listResolvedCases(_guildId: string): Promise<CaseSummary[]> {

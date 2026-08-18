@@ -15,6 +15,7 @@ export const moderationInboxActionSchema = z.enum([
   'view_history',
   'open_case',
   'verify_user',
+  'quarantine_compromised_account',
   'kick_user',
   'ban_user',
   'ban_by_id',

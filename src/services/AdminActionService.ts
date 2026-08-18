@@ -103,6 +103,9 @@ export class AdminActionService implements IAdminActionService {
       case AdminActionType.ROLE_GATE_CLEANUP:
         summary = `Role gate cleanup by ${adminMention}`;
         break;
+      case AdminActionType.QUARANTINE_COMPROMISED_ACCOUNT:
+        summary = `Compromised account quarantined by ${adminMention}`;
+        break;
       default:
         summary = `Action taken by ${adminMention}`;
     }

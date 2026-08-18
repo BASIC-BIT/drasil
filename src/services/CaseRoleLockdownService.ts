@@ -19,6 +19,7 @@ import {
   getCaseRoleLockdownSettings,
   CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY,
 } from '../utils/caseRoleLockdownSettings';
+import { PRIVILEGED_ROLE_PERMISSIONS } from '../utils/privilegedRolePermissions';
 
 export type CaseRoleLockdownSeverity = 'error' | 'warning';
 export type CaseRoleLockdownActionScope = 'category' | 'channel';
@@ -60,8 +61,27 @@ export interface CaseRoleLockdownReport {
   readonly warningCount: number;
 }
 
+export interface CaseRoleLockdownMemberBypass {
+  readonly channelId: string;
+  readonly channelName: string;
+  readonly subjectType: 'member' | 'role';
+  readonly subjectId: string;
+  readonly permissions: readonly string[];
+}
+
+export interface CaseRoleLockdownMemberAudit {
+  readonly memberId: string;
+  readonly bypasses: readonly CaseRoleLockdownMemberBypass[];
+  readonly retainedPrivilegedRoleIds: readonly string[];
+  readonly retainedAdministratorRoleIds: readonly string[];
+}
+
 export interface ICaseRoleLockdownService {
   auditGuild(guild: Guild): Promise<CaseRoleLockdownReport>;
+  auditMemberBypasses(
+    member: GuildMember,
+    ignoredRoleIds?: ReadonlySet<string>
+  ): Promise<CaseRoleLockdownMemberAudit>;
   applyGuild(
     guild: Guild,
     actorId: string,
@@ -130,6 +150,76 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
 
   public async auditGuild(guild: Guild): Promise<CaseRoleLockdownReport> {
     return this.buildReport(guild, false);
+  }
+
+  public async auditMemberBypasses(
+    member: GuildMember,
+    ignoredRoleIds: ReadonlySet<string> = new Set()
+  ): Promise<CaseRoleLockdownMemberAudit> {
+    const serverConfig = await this.configService.getServerConfig(member.guild.id);
+    const settings = getCaseRoleLockdownSettings(serverConfig.settings);
+    const autoAllowedChannelIds = this.getAutoAllowedChannelIds(serverConfig.settings, [
+      serverConfig.verification_channel_id,
+    ]);
+    const allowedChannelIds = new Set([...settings.allowedChannelIds, ...autoAllowedChannelIds]);
+    const allowedCategoryIds = new Set(settings.allowedCategoryIds);
+    const retainedRoleIds = new Set(
+      [...member.roles.cache.keys()].filter(
+        (roleId) =>
+          roleId !== member.guild.id &&
+          roleId !== serverConfig.case_role_id &&
+          !ignoredRoleIds.has(roleId)
+      )
+    );
+    const retainedAdministratorRoleIds = [...retainedRoleIds].filter((roleId) =>
+      member.guild.roles.cache.get(roleId)?.permissions.has(PermissionFlagsBits.Administrator)
+    );
+    const retainedPrivilegedRoleIds = [...retainedRoleIds].filter((roleId) => {
+      const role = member.guild.roles.cache.get(roleId);
+      return (
+        role !== undefined &&
+        PRIVILEGED_ROLE_PERMISSIONS.some((permission) => role.permissions.has(permission))
+      );
+    });
+    const bypasses: CaseRoleLockdownMemberBypass[] = [];
+
+    for (const channel of await this.fetchLockdownChannels(member.guild)) {
+      if (allowedChannelIds.has(channel.id) || allowedCategoryIds.has(channel.id)) {
+        continue;
+      }
+      if (channel.parentId && allowedCategoryIds.has(channel.parentId)) {
+        continue;
+      }
+
+      for (const overwrite of channel.permissionOverwrites.cache.values()) {
+        const subjectType = overwrite.type === OverwriteType.Member ? 'member' : 'role';
+        const targetsMember = subjectType === 'member' && overwrite.id === member.id;
+        const targetsRetainedRole = subjectType === 'role' && retainedRoleIds.has(overwrite.id);
+        if (!targetsMember && !targetsRetainedRole) {
+          continue;
+        }
+
+        const permissions = LOCKDOWN_PERMISSIONS.filter((permission) =>
+          overwrite.allow.has(permission.flag)
+        ).map((permission) => permission.label);
+        if (permissions.length > 0) {
+          bypasses.push({
+            channelId: channel.id,
+            channelName: channel.name,
+            subjectType,
+            subjectId: overwrite.id,
+            permissions,
+          });
+        }
+      }
+    }
+
+    return {
+      memberId: member.id,
+      bypasses,
+      retainedPrivilegedRoleIds,
+      retainedAdministratorRoleIds,
+    };
   }
 
   public async applyGuild(

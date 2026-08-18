@@ -114,7 +114,7 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     const pendingScreeningDigest = await this.collectLongPendingScreeningMembers(server, now);
     const settings = getCaseReviewReminderSettings(server.settings);
     const pendingCases = settings.enabled
-      ? await this.verificationEventRepository.findPendingByServer(server.guild_id)
+      ? await this.verificationEventRepository.findReviewablePendingByServer(server.guild_id)
       : [];
     const lastCaseReviewDigestAt = this.parseDate(
       server.settings[CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]

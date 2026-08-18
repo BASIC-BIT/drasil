@@ -1,8 +1,15 @@
 import { injectable, inject } from 'inversify';
-import { Prisma, PrismaClient, verification_status } from '../db/prisma';
+import {
+  case_attention_state,
+  case_containment_status,
+  case_kind,
+  Prisma,
+  PrismaClient,
+  verification_status,
+} from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository';
-import { VerificationEvent, VerificationStatus } from './types'; // Use local enum
+import { CaseAttentionState, VerificationEvent, VerificationStatus } from './types'; // Use local enum
 
 export interface IVerificationEventRepository {
   findByUserAndServer(
@@ -13,6 +20,8 @@ export interface IVerificationEventRepository {
   findActiveByUserAndServer(userId: string, serverId: string): Promise<VerificationEvent | null>;
   findByDetectionEvent(detectionEventId: string): Promise<VerificationEvent[]>;
   findPendingByServer(serverId: string): Promise<VerificationEvent[]>;
+  findReviewablePendingByServer(serverId: string): Promise<VerificationEvent[]>;
+  findParkedByServer(serverId: string): Promise<VerificationEvent[]>;
   findResolvedWithThreadsByServer(
     serverId: string,
     options?: { days?: number | null; limit?: number | null; userId?: string | null }
@@ -150,6 +159,38 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
+  async findReviewablePendingByServer(serverId: string): Promise<VerificationEvent[]> {
+    try {
+      const events = await this.prisma.verification_events.findMany({
+        where: {
+          server_id: serverId,
+          status: VerificationStatus.PENDING,
+          attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        },
+        orderBy: { updated_at: 'asc' },
+      });
+      return events as VerificationEvent[];
+    } catch (error) {
+      this.handleError(error, 'findReviewablePendingByServer');
+    }
+  }
+
+  async findParkedByServer(serverId: string): Promise<VerificationEvent[]> {
+    try {
+      const events = await this.prisma.verification_events.findMany({
+        where: {
+          server_id: serverId,
+          status: VerificationStatus.PENDING,
+          attention_state: CaseAttentionState.PARKED,
+        },
+        orderBy: { parked_at: 'desc' },
+      });
+      return events as VerificationEvent[];
+    } catch (error) {
+      this.handleError(error, 'findParkedByServer');
+    }
+  }
+
   async findResolvedWithThreadsByServer(
     serverId: string,
     options: { days?: number | null; limit?: number | null; userId?: string | null } = {}
@@ -254,6 +295,12 @@ export class VerificationEventRepository implements IVerificationEventRepository
         private_evidence_thread_id: data.private_evidence_thread_id,
         notification_channel_id: data.notification_channel_id,
         notification_message_id: data.notification_message_id,
+        case_kind: data.case_kind as case_kind | undefined,
+        attention_state: data.attention_state as case_attention_state | undefined,
+        containment_status: data.containment_status as case_containment_status | undefined,
+        parked_at: data.parked_at,
+        parked_by: data.parked_by,
+        review_after: data.review_after,
         notes: data.notes,
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- data.metadata can be null or undefined
         metadata: (data.metadata as Prisma.InputJsonValue) ?? undefined, // Handle potential null/undefined

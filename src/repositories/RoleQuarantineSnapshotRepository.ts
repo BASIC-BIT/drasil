@@ -1,5 +1,10 @@
 import { inject, injectable } from 'inversify';
-import { Prisma, PrismaClient, role_quarantine_snapshot_status } from '../db/prisma';
+import {
+  Prisma,
+  PrismaClient,
+  role_quarantine_snapshot_purpose,
+  role_quarantine_snapshot_status,
+} from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository';
 import {
@@ -30,6 +35,7 @@ export class RoleQuarantineSnapshotRepository implements IRoleQuarantineSnapshot
           user_id: data.userId,
           verification_event_id: data.verificationEventId ?? null,
           mode: data.mode,
+          purpose: data.purpose as role_quarantine_snapshot_purpose | undefined,
           original_role_ids: data.originalRoleIds,
           planned_role_ids: data.plannedRoleIds,
           removed_role_ids: data.removedRoleIds ?? [],
@@ -76,6 +82,9 @@ export class RoleQuarantineSnapshotRepository implements IRoleQuarantineSnapshot
         where: { id },
         data: {
           status: data.status as role_quarantine_snapshot_status | undefined,
+          purpose: data.purpose as role_quarantine_snapshot_purpose | undefined,
+          original_role_ids: data.originalRoleIds,
+          planned_role_ids: data.plannedRoleIds,
           removed_role_ids: data.removedRoleIds,
           restored_role_ids: data.restoredRoleIds,
           skipped_roles:

@@ -22,6 +22,7 @@ import { TYPES } from '../di/symbols';
 import { DetectionResult } from './DetectionOrchestrator';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import {
+  CaseKind,
   DetectionEvent,
   DetectionType,
   VerificationStatus,
@@ -553,8 +554,12 @@ export class NotificationManager implements INotificationManager {
       }
 
       const notificationRoleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
+      const responseLabel =
+        verificationEvent.case_kind === CaseKind.COMPROMISED_ACCOUNT
+          ? 'Quarantined user reports account recovery. Verify before releasing quarantine.'
+          : 'Support-check reply needs review.';
       const lines = [
-        `${this.presentationBuilder.formatRoleMentions(notificationRoleIds)} Support-check reply needs review.`.trim(),
+        `${this.presentationBuilder.formatRoleMentions(notificationRoleIds)} ${responseLabel}`.trim(),
         `User: <@${verificationEvent.user_id}> (\`${verificationEvent.user_id}\`)`,
         `Case: \`${verificationEvent.id}\``,
         `Support thread: <#${message.channelId}>`,

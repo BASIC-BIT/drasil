@@ -140,6 +140,7 @@ const actionLabels: Record<ModerationInboxAction, string> = {
   create_thread: 'Create Thread',
   dismiss_no_action: 'Dismiss No Action',
   kick_user: 'Kick User',
+  quarantine_compromised_account: 'Quarantine Compromised Account',
   mark_actioned: 'Mark Actioned',
   mark_false_positive: 'False Positive',
   open_case: 'Open Case',
