@@ -15,7 +15,9 @@ async function gotoStory(page: Page, storyId: string): Promise<void> {
 async function expectVisualSchemes(page: Page, name: string): Promise<void> {
   for (const scheme of visualSchemes) {
     await page.emulateMedia({ colorScheme: scheme });
-    await expect(page).toHaveScreenshot(platformSnapshotName(name, scheme), { fullPage: true });
+    await expect
+      .soft(page)
+      .toHaveScreenshot(platformSnapshotName(name, scheme), { fullPage: true });
   }
 }
 
@@ -29,7 +31,7 @@ test('case queue mixed story visual baseline @storybook-visual', async ({ page }
 test('case queue empty story visual baseline @storybook-visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await gotoStory(page, 'active-triage-case-queue--empty-queue');
-  await expect(page.getByRole('heading', { name: /no pending cases/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /no cases need review/i })).toBeVisible();
   await expectVisualSchemes(page, 'storybook-case-queue-empty');
 });
 
