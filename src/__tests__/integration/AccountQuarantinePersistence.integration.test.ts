@@ -389,6 +389,80 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     );
   });
 
+  it('rolls back every case when an atomic verification release conflicts', async () => {
+    const serverId = 'guild-atomic-verification-release';
+    const userId = 'user-atomic-verification-release';
+    const servers = new ServerRepository(prisma);
+    const users = new UserRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    await servers.getOrCreateServer(serverId);
+    await users.getOrCreateUser(userId, 'target');
+    const parkedCase = await verifications.createFromDetection(
+      null,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const conflictingCase = await verifications.createFromDetection(
+      null,
+      serverId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verifications.update(parkedCase.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date(),
+      parked_by: 'moderator-parked',
+    });
+    await verifications.claimCaseRoleRelease(
+      parkedCase.id,
+      serverId,
+      userId,
+      'case-role-release:atomic',
+      new Date(0)
+    );
+    await verifications.update(conflictingCase.id, {
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: 'quarantine:concurrent',
+      quarantine_lease_renewed_at: new Date(),
+    });
+
+    await expect(
+      verifications.completeVerificationRelease(
+        [
+          {
+            id: parkedCase.id,
+            metadata: parkedCase.metadata,
+            requiresCaseRoleReleaseClaim: true,
+          },
+          {
+            id: conflictingCase.id,
+            metadata: conflictingCase.metadata,
+            requiresCaseRoleReleaseClaim: false,
+          },
+        ],
+        'case-role-release:atomic',
+        'moderator-verify',
+        new Date()
+      )
+    ).resolves.toBeNull();
+    await expect(verifications.findById(parkedCase.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: 'case-role-release:atomic',
+      })
+    );
+    await expect(verifications.findById(conflictingCase.id)).resolves.toEqual(
+      expect.objectContaining({
+        status: VerificationStatus.PENDING,
+        quarantine_attempt_id: 'quarantine:concurrent',
+      })
+    );
+  });
+
   it('stores same-channel quarantine breaches separately for each case', async () => {
     const serverId = 'guild-quarantine-breach-attention';
     const servers = new ServerRepository(prisma);

@@ -18,6 +18,14 @@ import {
 } from './types'; // Use local enum
 import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 
+export interface VerificationReleaseCompletion {
+  id: string;
+  metadata: VerificationEvent['metadata'];
+  requiresCaseRoleReleaseClaim: boolean;
+}
+
+class VerificationReleaseConflictError extends Error {}
+
 export interface IVerificationEventRepository {
   findByUserAndServer(
     userId: string,
@@ -64,6 +72,12 @@ export interface IVerificationEventRepository {
     resolvedAt: Date,
     metadata: VerificationEvent['metadata']
   ): Promise<VerificationEvent | null>;
+  completeVerificationRelease(
+    completions: readonly VerificationReleaseCompletion[],
+    attemptId: string,
+    resolvedBy: string,
+    resolvedAt: Date
+  ): Promise<VerificationEvent[] | null>;
   rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null>;
   renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean>;
   updateQuarantineAttempt(
@@ -260,6 +274,65 @@ export class VerificationEventRepository implements IVerificationEventRepository
       })) as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'completeCaseRoleRelease');
+    }
+  }
+
+  async completeVerificationRelease(
+    completions: readonly VerificationReleaseCompletion[],
+    attemptId: string,
+    resolvedBy: string,
+    resolvedAt: Date
+  ): Promise<VerificationEvent[] | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        for (const completion of completions) {
+          const completed = await transaction.verification_events.updateMany({
+            where: {
+              id: completion.id,
+              status: VerificationStatus.PENDING,
+              ...(completion.requiresCaseRoleReleaseClaim
+                ? {
+                    case_kind: CaseKind.COMPROMISED_ACCOUNT,
+                    attention_state: CaseAttentionState.PARKED,
+                    containment_status: CaseContainmentStatus.IN_PROGRESS,
+                    quarantine_attempt_id: attemptId,
+                  }
+                : {
+                    containment_status: { not: CaseContainmentStatus.IN_PROGRESS },
+                  }),
+            },
+            data: {
+              status: VerificationStatus.VERIFIED,
+              resolved_by: resolvedBy,
+              resolved_at: resolvedAt,
+              attention_state: CaseAttentionState.REVIEW_REQUIRED,
+              containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+              quarantine_attempt_id: null,
+              quarantine_lease_renewed_at: null,
+              parked_at: null,
+              parked_by: null,
+              metadata: completion.metadata as Prisma.InputJsonValue,
+              updated_at: new Date(),
+            },
+          });
+          if (completed.count !== 1) {
+            throw new VerificationReleaseConflictError();
+          }
+        }
+
+        const completedEvents = await transaction.verification_events.findMany({
+          where: { id: { in: completions.map((completion) => completion.id) } },
+        });
+        const completedById = new Map(completedEvents.map((event) => [event.id, event]));
+        return completions.map(
+          (completion) => completedById.get(completion.id) as VerificationEvent
+        );
+      })) as VerificationEvent[];
+    } catch (error) {
+      if (error instanceof VerificationReleaseConflictError) {
+        return null;
+      }
+      this.handleError(error, 'completeVerificationRelease');
     }
   }
 

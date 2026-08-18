@@ -919,39 +919,24 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       }
 
       const resolvedAt = new Date();
-      const resolvedEvents: Array<{
-        event: VerificationEvent;
-        previousStatus: VerificationStatus;
-      }> = [];
-
-      for (const pendingEvent of pendingVerificationEvents) {
-        const previousStatus = pendingEvent.status;
-        const eventToUpdate = {
-          ...pendingEvent,
-          status: VerificationStatus.VERIFIED,
-          resolved_by: moderator.id,
-          resolved_at: resolvedAt,
+      const completedEvents = await this.verificationEventRepository.completeVerificationRelease(
+        pendingVerificationEvents.map((pendingEvent) => ({
+          id: pendingEvent.id,
           metadata: this.withUserSnapshot(pendingEvent.metadata, member.user, member),
-        };
-        const updatedEvent = releaseClaimedEventIds.has(pendingEvent.id)
-          ? await this.verificationEventRepository.completeCaseRoleRelease(
-              pendingEvent.id,
-              releaseAttemptId,
-              moderator.id,
-              resolvedAt,
-              eventToUpdate.metadata
-            )
-          : await this.verificationEventRepository.update(pendingEvent.id, eventToUpdate);
-
-        if (!updatedEvent) {
-          throw new Error(
-            `Failed to update verification event ${pendingEvent.id} status to VERIFIED.`
-          );
-        }
-
-        resolvedEvents.push({ event: updatedEvent, previousStatus });
-        eventsToRollback.set(pendingEvent.id, pendingEvent);
+          requiresCaseRoleReleaseClaim: releaseClaimedEventIds.has(pendingEvent.id),
+        })),
+        releaseAttemptId,
+        moderator.id,
+        resolvedAt
+      );
+      if (!completedEvents) {
+        throw new Error('Failed to atomically update verification events to VERIFIED.');
       }
+      const completedEventsById = new Map(completedEvents.map((event) => [event.id, event]));
+      const resolvedEvents = pendingVerificationEvents.map((pendingEvent) => ({
+        event: completedEventsById.get(pendingEvent.id) as VerificationEvent,
+        previousStatus: pendingEvent.status,
+      }));
       releaseCommitted = true;
 
       const restoreResult = await this.tryRestoreRoleQuarantine(

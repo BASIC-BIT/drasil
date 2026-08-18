@@ -984,6 +984,9 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
       if (thread.parentId !== recoveryParentId || thread.id === allowedThreadId) {
         continue;
       }
+      if (thread.archived === true && thread.locked === true) {
+        continue;
+      }
 
       if (thread.type === ChannelType.PrivateThread) {
         const threadMembers = thread.members.cache.has(member.id)

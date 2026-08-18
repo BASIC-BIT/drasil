@@ -3,7 +3,10 @@ import type { IDetectionEventsRepository } from '../../repositories/DetectionEve
 import type { IServerMemberRepository } from '../../repositories/ServerMemberRepository';
 import type { IServerRepository } from '../../repositories/ServerRepository';
 import type { IUserRepository } from '../../repositories/UserRepository';
-import type { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
+import type {
+  IVerificationEventRepository,
+  VerificationReleaseCompletion,
+} from '../../repositories/VerificationEventRepository';
 import type { IReportIntakeRepository } from '../../repositories/ReportIntakeRepository';
 import type { IModerationOutcomeRepository } from '../../repositories/ModerationOutcomeRepository';
 import type { IRoleQuarantineSnapshotRepository } from '../../repositories/RoleQuarantineSnapshotRepository';
@@ -733,6 +736,51 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     };
     this.events[eventIndex] = completed;
     return { ...completed };
+  }
+
+  async completeVerificationRelease(
+    completions: readonly VerificationReleaseCompletion[],
+    attemptId: string,
+    resolvedBy: string,
+    resolvedAt: Date
+  ): Promise<VerificationEvent[] | null> {
+    const eventIndexes = completions.map((completion) =>
+      this.events.findIndex(
+        (event) =>
+          event.id === completion.id &&
+          event.status === VerificationStatus.PENDING &&
+          (completion.requiresCaseRoleReleaseClaim
+            ? event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+              event.attention_state === CaseAttentionState.PARKED &&
+              event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+              event.quarantine_attempt_id === attemptId
+            : event.containment_status !== CaseContainmentStatus.IN_PROGRESS)
+      )
+    );
+    if (eventIndexes.some((eventIndex) => eventIndex === -1)) {
+      return null;
+    }
+
+    const completedEvents = completions.map((completion, completionIndex) => {
+      const eventIndex = eventIndexes[completionIndex];
+      const completed: VerificationEvent = {
+        ...this.events[eventIndex],
+        status: VerificationStatus.VERIFIED,
+        resolved_by: resolvedBy,
+        resolved_at: resolvedAt,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        quarantine_attempt_id: null,
+        quarantine_lease_renewed_at: null,
+        parked_at: null,
+        parked_by: null,
+        metadata: completion.metadata,
+        updated_at: new Date(),
+      };
+      this.events[eventIndex] = completed;
+      return { ...completed };
+    });
+    return completedEvents;
   }
 
   async rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null> {

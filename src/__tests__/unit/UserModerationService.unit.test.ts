@@ -366,13 +366,19 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
-  it('restores the case role and parked state when verification persistence fails', async () => {
+  it('restores containment without partially resolving duplicate cases when persistence fails', async () => {
     const guildId = 'guild-verify-persistence-failure';
     const userId = 'user-verify-persistence-failure';
     const member = buildMember(guildId, userId);
     await serverRepository.getOrCreateServer(guildId);
     await userRepository.getOrCreateUser(userId, 'test-user');
     const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const duplicateEvent = await verificationEventRepository.createFromDetection(
       null,
       guildId,
       userId,
@@ -386,7 +392,7 @@ describe('UserModerationService (unit)', () => {
       parked_at: parkedAt,
       parked_by: 'moderator-parked',
     });
-    jest.spyOn(verificationEventRepository, 'completeCaseRoleRelease').mockResolvedValue(null);
+    jest.spyOn(verificationEventRepository, 'completeVerificationRelease').mockResolvedValue(null);
     const service = new UserModerationService(
       serverMemberRepository,
       notificationManager,
@@ -399,7 +405,7 @@ describe('UserModerationService (unit)', () => {
     );
 
     await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
-      'Failed to update verification event'
+      'Failed to atomically update verification events'
     );
 
     expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
@@ -412,6 +418,9 @@ describe('UserModerationService (unit)', () => {
         parked_at: parkedAt,
         parked_by: 'moderator-parked',
       })
+    );
+    await expect(verificationEventRepository.findById(duplicateEvent.id)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.PENDING })
     );
   });
 
@@ -551,7 +560,7 @@ describe('UserModerationService (unit)', () => {
     );
 
     await expect(service.verifyUser(member, { id: 'moderator-verify' } as User)).rejects.toThrow(
-      'Failed to update verification event'
+      'Failed to atomically update verification events'
     );
 
     expect(roleManager.assignCaseRole).not.toHaveBeenCalled();

@@ -508,6 +508,19 @@ describe('CaseRoleLockdownService (unit)', () => {
                     name: 'archived-public',
                     parentId: 'verification-channel-1',
                     type: ChannelType.PublicThread,
+                    archived: true,
+                    locked: false,
+                  },
+                ],
+                [
+                  'locked-archived-public-sibling',
+                  {
+                    id: 'locked-archived-public-sibling',
+                    name: 'locked-archived-public',
+                    parentId: 'verification-channel-1',
+                    type: ChannelType.PublicThread,
+                    archived: true,
+                    locked: true,
                   },
                 ],
               ])
@@ -519,6 +532,20 @@ describe('CaseRoleLockdownService (unit)', () => {
                     name: 'archived-private',
                     parentId: 'verification-channel-1',
                     type: ChannelType.PrivateThread,
+                    archived: true,
+                    locked: false,
+                    members: { cache: privateMembers, fetch: jest.fn() },
+                  },
+                ],
+                [
+                  'locked-archived-private-sibling',
+                  {
+                    id: 'locked-archived-private-sibling',
+                    name: 'locked-archived-private',
+                    parentId: 'verification-channel-1',
+                    type: ChannelType.PrivateThread,
+                    archived: true,
+                    locked: true,
                     members: { cache: privateMembers, fetch: jest.fn() },
                   },
                 ],
@@ -547,6 +574,12 @@ describe('CaseRoleLockdownService (unit)', () => {
       expect.arrayContaining([
         expect.objectContaining({ channelId: 'archived-public-sibling' }),
         expect.objectContaining({ channelId: 'archived-private-sibling' }),
+      ])
+    );
+    expect(audit.bypasses).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ channelId: 'locked-archived-public-sibling' }),
+        expect.objectContaining({ channelId: 'locked-archived-private-sibling' }),
       ])
     );
   });
