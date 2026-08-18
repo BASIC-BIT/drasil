@@ -254,6 +254,23 @@ describe('AccountQuarantineService', () => {
     expect(harness.lockdown.auditMemberBypasses).toHaveBeenCalledTimes(2);
   });
 
+  it('returns the committed parked result when queue cleanup fails', async () => {
+    const harness = buildHarness();
+    harness.moderationQueue.deleteCaseMirror.mockRejectedValue(new Error('Queue unavailable'));
+
+    const result = await harness.service.quarantine(
+      harness.member,
+      event,
+      { id: 'moderator-1' } as User,
+      'Compromise report'
+    );
+
+    expect(result.status).toBe('parked');
+    expect(result.verificationEvent).toEqual(
+      expect.objectContaining({ attention_state: CaseAttentionState.PARKED })
+    );
+  });
+
   it('passes a live attempt-ownership guard into every compromised role sweep', async () => {
     const harness = buildHarness();
     harness.roleQuarantine.quarantineCompromisedAccount.mockImplementation(
@@ -319,6 +336,23 @@ describe('AccountQuarantineService', () => {
     expect(harness.moderationOutcomes.recordOutcome).not.toHaveBeenCalled();
     expect(harness.moderationQueue.deleteCaseMirror).not.toHaveBeenCalled();
     expect(harness.moderationQueue.upsertCaseMirror).toHaveBeenCalled();
+  });
+
+  it('returns the committed incomplete result when queue mirroring fails', async () => {
+    const harness = buildHarness({ ready: false });
+    harness.moderationQueue.upsertCaseMirror.mockRejectedValue(new Error('Queue unavailable'));
+
+    const result = await harness.service.quarantine(
+      harness.member,
+      event,
+      { id: 'moderator-1' } as User,
+      'Compromise report'
+    );
+
+    expect(result.status).toBe('incomplete');
+    expect(result.verificationEvent).toEqual(
+      expect.objectContaining({ attention_state: CaseAttentionState.REVIEW_REQUIRED })
+    );
   });
 
   it('does not park while an unmanageable privileged role remains', async () => {

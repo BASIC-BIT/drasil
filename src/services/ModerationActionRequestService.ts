@@ -928,6 +928,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     });
     const containmentFingerprint = buildAccountQuarantinePreviewFingerprint(preview, {
       adminNotificationReady,
+      recoveryThreadId: event.thread_id,
       recoveryThreadReady,
     });
 
@@ -1005,6 +1006,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     ]);
     const liveFingerprint = buildAccountQuarantinePreviewFingerprint(livePreview, {
       adminNotificationReady,
+      recoveryThreadId: activeCase.thread_id,
       recoveryThreadReady,
     });
     if (

@@ -3,6 +3,7 @@ import type { AccountQuarantinePreview } from '../services/AccountQuarantineServ
 
 export interface AccountQuarantinePreviewReadiness {
   readonly adminNotificationReady: boolean;
+  readonly recoveryThreadId: string | null;
   readonly recoveryThreadReady: boolean;
 }
 
@@ -40,6 +41,7 @@ export function buildAccountQuarantinePreviewFingerprint(
     enabled: preview.enabled,
     lockdown,
     member_audit: preview.memberAudit,
+    recovery_thread_id: readiness.recoveryThreadId,
     recovery_thread_ready: readiness.recoveryThreadReady,
     role_preview: preview.rolePreview,
   });

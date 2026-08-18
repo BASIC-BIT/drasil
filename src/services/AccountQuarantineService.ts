@@ -337,9 +337,16 @@ export class AccountQuarantineService implements IAccountQuarantineService {
 
     await this.refreshPersistentNotification(updated, moderator);
     if (complete) {
-      await this.moderationQueue.deleteCaseMirror(claimedEvent.id);
+      await this.moderationQueue.deleteCaseMirror(claimedEvent.id).catch((error) => {
+        console.error(
+          `Failed to remove parked quarantine case ${claimedEvent.id} from queue:`,
+          error
+        );
+      });
     } else {
-      await this.moderationQueue.upsertCaseMirror(updated);
+      await this.moderationQueue.upsertCaseMirror(updated).catch((error) => {
+        console.error(`Failed to refresh incomplete quarantine case ${claimedEvent.id}:`, error);
+      });
     }
 
     return {

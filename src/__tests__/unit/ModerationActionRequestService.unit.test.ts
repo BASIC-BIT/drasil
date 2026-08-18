@@ -151,11 +151,32 @@ const completedAccountQuarantinePreviewRequest: ModerationActionRequest = {
   result: {
     containment_fingerprint: buildAccountQuarantinePreviewFingerprint(
       defaultAccountQuarantinePreview,
-      { adminNotificationReady: true, recoveryThreadReady: true }
+      {
+        adminNotificationReady: true,
+        recoveryThreadId: 'thread-1',
+        recoveryThreadReady: true,
+      }
     ),
   },
   status: ModerationActionRequestStatus.COMPLETED,
 };
+
+describe('account-quarantine preview fingerprint', () => {
+  it('changes when the persisted recovery thread changes', () => {
+    const first = buildAccountQuarantinePreviewFingerprint(defaultAccountQuarantinePreview, {
+      adminNotificationReady: true,
+      recoveryThreadId: 'thread-1',
+      recoveryThreadReady: true,
+    });
+    const second = buildAccountQuarantinePreviewFingerprint(defaultAccountQuarantinePreview, {
+      adminNotificationReady: true,
+      recoveryThreadId: 'thread-2',
+      recoveryThreadReady: true,
+    });
+
+    expect(second).not.toBe(first);
+  });
+});
 
 const accountQuarantineExecuteRequest: ModerationActionRequest = {
   ...verifyRequest,

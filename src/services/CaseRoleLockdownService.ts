@@ -11,6 +11,7 @@ import {
   OverwriteType,
   Role,
   TextChannel,
+  ThreadChannel,
 } from 'discord.js';
 import { inject, injectable } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
@@ -43,6 +44,10 @@ export interface CaseRoleLockdownApplyFailure extends CaseRoleLockdownPlannedAct
 
 export interface CaseRoleLockdownApplyOptions {
   readonly unsyncAllowedChannels?: boolean;
+}
+
+export interface CaseRoleLockdownAuditContext {
+  readonly siblingThreadsByParentId: Map<string, Promise<readonly ThreadChannel[]>>;
 }
 
 export interface CaseRoleLockdownReport {
@@ -88,7 +93,8 @@ export interface ICaseRoleLockdownService {
     member: GuildMember,
     ignoredRoleIds?: ReadonlySet<string>,
     allowedThreadId?: string | null,
-    caseRoleId?: string | null
+    caseRoleId?: string | null,
+    context?: CaseRoleLockdownAuditContext
   ): Promise<CaseRoleLockdownMemberAudit>;
   applyGuild(
     guild: Guild,
@@ -233,7 +239,8 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
     member: GuildMember,
     ignoredRoleIds: ReadonlySet<string> = new Set(),
     allowedThreadId?: string | null,
-    caseRoleId?: string | null
+    caseRoleId?: string | null,
+    context?: CaseRoleLockdownAuditContext
   ): Promise<CaseRoleLockdownMemberAudit> {
     const serverConfig = await this.configService.getServerConfig(member.guild.id);
     const effectiveCaseRoleId = caseRoleId === undefined ? serverConfig.case_role_id : caseRoleId;
@@ -341,7 +348,8 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
         recoveryParentId,
         recoveryParent,
         allowedThreadId,
-        bypasses
+        bypasses,
+        context
       );
     }
     if (
@@ -353,7 +361,8 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
         serverConfig.verification_channel_id,
         configuredRecoveryParent,
         allowedThreadId,
-        bypasses
+        bypasses,
+        context
       );
     }
     if (allowedThreadId) {
@@ -1016,24 +1025,18 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
     recoveryParentId: string,
     recoveryParent: TextChannel | null,
     allowedThreadId: string | null | undefined,
-    bypasses: CaseRoleLockdownMemberBypass[]
+    bypasses: CaseRoleLockdownMemberBypass[],
+    context?: CaseRoleLockdownAuditContext
   ): Promise<void> {
-    const activeThreads = await member.guild.channels.fetchActiveThreads();
-    const siblingThreads = new Map(activeThreads.threads);
-    if (recoveryParent) {
-      const [archivedPublicThreads, archivedPrivateThreads] = await Promise.all([
-        recoveryParent.threads.fetchArchived({ type: 'public', fetchAll: true }),
-        recoveryParent.threads.fetchArchived({ type: 'private', fetchAll: true }),
-      ]);
-      for (const thread of [
-        ...archivedPublicThreads.threads.values(),
-        ...archivedPrivateThreads.threads.values(),
-      ]) {
-        siblingThreads.set(thread.id, thread);
-      }
+    const cacheKey = `${member.guild.id}:${recoveryParentId}`;
+    let siblingThreadsPromise = context?.siblingThreadsByParentId.get(cacheKey);
+    if (!siblingThreadsPromise) {
+      siblingThreadsPromise = this.fetchRecoverySiblingThreads(member, recoveryParent);
+      context?.siblingThreadsByParentId.set(cacheKey, siblingThreadsPromise);
     }
+    const siblingThreads = await siblingThreadsPromise;
 
-    for (const thread of siblingThreads.values()) {
+    for (const thread of siblingThreads) {
       if (thread.parentId !== recoveryParentId || thread.id === allowedThreadId) {
         continue;
       }
@@ -1058,6 +1061,27 @@ export class CaseRoleLockdownService implements ICaseRoleLockdownService {
         permissions: ['Send Messages in Threads'],
       });
     }
+  }
+
+  private async fetchRecoverySiblingThreads(
+    member: GuildMember,
+    recoveryParent: TextChannel | null
+  ): Promise<readonly ThreadChannel[]> {
+    const activeThreads = await member.guild.channels.fetchActiveThreads();
+    const siblingThreads = new Map(activeThreads.threads);
+    if (recoveryParent) {
+      const [archivedPublicThreads, archivedPrivateThreads] = await Promise.all([
+        recoveryParent.threads.fetchArchived({ type: 'public', fetchAll: true }),
+        recoveryParent.threads.fetchArchived({ type: 'private', fetchAll: true }),
+      ]);
+      for (const thread of [
+        ...archivedPublicThreads.threads.values(),
+        ...archivedPrivateThreads.threads.values(),
+      ]) {
+        siblingThreads.set(thread.id, thread);
+      }
+    }
+    return [...siblingThreads.values()];
   }
 
   private async recordRecoveryThreadAccessBypasses(

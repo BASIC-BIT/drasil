@@ -253,8 +253,9 @@ regained control.
 - Generate the web preview through the bot-side worker, then require a reasoned execution request
   bound to that moderator, case, target, and completed preview. Treat previews older than ten minutes
   as stale and require a fresh one.
-- Bind execution to a fingerprint of the previewed roles, case-role configuration, lockdown state,
-  thread, and notification readiness. Any live drift requires a new preview before mutation.
+- Bind both Discord confirmation and web execution to a fingerprint of the previewed roles,
+  case-role configuration, lockdown state, exact recovery-thread identity, and thread/notification
+  readiness. Any live drift requires a new preview before mutation.
 - Separate `Needs Review` from `Parked Quarantines`.
 - Render containment state, role effects, recovery attention, and terminal actions.
 
@@ -263,6 +264,7 @@ regained control.
 - Audit parked cases that lack an active role snapshot or case role.
 - Audit parked cases whose user is missing from the server.
 - Audit queue mirrors that still reference parked cases.
+- Reuse recovery-parent thread enumeration across every parked case in one reconciliation pass.
 - Reclaim interrupted quarantine execution requests and complete their receipts from the exact
   request id persisted with an already-committed parked or partial containment outcome.
 - Surface incomplete containment as an operational finding.

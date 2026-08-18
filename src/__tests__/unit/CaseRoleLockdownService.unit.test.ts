@@ -483,7 +483,15 @@ describe('CaseRoleLockdownService (unit)', () => {
     } as any;
     const service = new CaseRoleLockdownService(createConfigService() as any);
 
-    const audit = await service.auditMemberBypasses(member, new Set(), 'recovery-thread-1');
+    const context = { siblingThreadsByParentId: new Map() };
+    const audit = await service.auditMemberBypasses(
+      member,
+      new Set(),
+      'recovery-thread-1',
+      undefined,
+      context
+    );
+    await service.auditMemberBypasses(member, new Set(), 'recovery-thread-1', undefined, context);
 
     expect(audit.bypasses).toEqual([
       expect.objectContaining({
@@ -783,6 +791,8 @@ describe('CaseRoleLockdownService (unit)', () => {
       type: 'private',
       fetchAll: true,
     });
+    expect(verificationChannel.threads.fetchArchived).toHaveBeenCalledTimes(2);
+    expect(guild.channels.fetchActiveThreads).toHaveBeenCalledTimes(1);
     expect(audit.bypasses).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ channelId: 'archived-public-sibling' }),

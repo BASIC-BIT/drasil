@@ -19,7 +19,7 @@ import {
   isCaseAttentionAttempt,
   isCaseTerminalActionAttempt,
 } from '../utils/caseRoleRelease';
-import { ICaseRoleLockdownService } from './CaseRoleLockdownService';
+import { CaseRoleLockdownAuditContext, ICaseRoleLockdownService } from './CaseRoleLockdownService';
 import { IModerationQueueService } from './ModerationQueueService';
 import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
@@ -315,6 +315,9 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
   }
 
   private async reconcileParkedContainment(now: Date): Promise<void> {
+    const auditContext: CaseRoleLockdownAuditContext = {
+      siblingThreadsByParentId: new Map(),
+    };
     for (const guild of this.client.guilds.cache.values()) {
       const parkedCases = await this.verificationEventRepository.findParkedByServer(guild.id);
       for (const verificationEvent of parkedCases) {
@@ -325,12 +328,14 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
         ) {
           continue;
         }
-        await this.reconcileParkedCase(guild, verificationEvent, now).catch((error) => {
-          console.error(
-            `Failed to reconcile parked containment for case ${verificationEvent.id}:`,
-            error
-          );
-        });
+        await this.reconcileParkedCase(guild, verificationEvent, now, auditContext).catch(
+          (error) => {
+            console.error(
+              `Failed to reconcile parked containment for case ${verificationEvent.id}:`,
+              error
+            );
+          }
+        );
       }
     }
   }
@@ -338,7 +343,8 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
   private async reconcileParkedCase(
     guild: Guild,
     verificationEvent: VerificationEvent,
-    now: Date
+    now: Date,
+    auditContext: CaseRoleLockdownAuditContext
   ): Promise<void> {
     let member: GuildMember | null = null;
     let caseRolePresent = false;
@@ -358,7 +364,8 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
           member,
           new Set(),
           verificationEvent.thread_id,
-          assignedCaseRoleId
+          assignedCaseRoleId,
+          auditContext
         ),
       ]);
       const blockingWarning = lockdown.issues.some(
