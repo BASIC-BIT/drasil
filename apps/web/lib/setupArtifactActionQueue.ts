@@ -40,6 +40,7 @@ export async function queueCompleteSetupVerificationRequest(input: {
   readonly reportInstructionsChannelId?: string | null;
   readonly verificationChannelId?: string | null;
   readonly submissionId?: string;
+  readonly onboardingWizard?: boolean;
 }): Promise<ModerationActionRequestQueueStatus> {
   return (await queueCompleteSetupVerificationRequestWithReceipt(input)).status;
 }
@@ -54,6 +55,7 @@ export async function queueCompleteSetupVerificationRequestWithReceipt(input: {
   readonly reportInstructionsChannelId?: string | null;
   readonly verificationChannelId?: string | null;
   readonly submissionId?: string;
+  readonly onboardingWizard?: boolean;
 }): Promise<ModerationActionRequestReceipt> {
   if (isWebE2eFixtureMode()) {
     return { id: input.submissionId ?? 'fixture-setup-request', status: 'queued' };
@@ -68,11 +70,15 @@ export async function queueCompleteSetupVerificationRequestWithReceipt(input: {
       admin_channel_id: input.adminChannelId,
       case_role_id: input.caseRoleId,
       case_role_name: input.caseRoleName ?? undefined,
-      detection_response_mode: input.detectionResponseMode ?? 'notify_only',
-      report_instructions_channel_id: input.reportInstructionsChannelId ?? undefined,
+      ...(input.detectionResponseMode
+        ? { detection_response_mode: input.detectionResponseMode }
+        : {}),
+      report_instructions_channel_id: input.reportInstructionsChannelId ?? null,
       requested_surface: 'web',
+      onboarding_wizard: input.onboardingWizard === true,
       setup_action: 'complete_setup_verification',
-      verification_channel_id: input.verificationChannelId ?? undefined,
+      submission_id: input.submissionId ?? undefined,
+      verification_channel_id: input.verificationChannelId ?? null,
     },
     serverId: input.guildId,
   });

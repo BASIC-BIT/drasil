@@ -9,19 +9,12 @@ import type {
 } from '@drasil/contracts';
 import { InboxActionForm, type InboxStateAction } from './inbox/InboxActionForm';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
+import type { OnboardingWizardValues } from '@/lib/onboardingState';
 
 interface Option {
   readonly id: string;
   readonly name: string;
-}
-
-interface WizardValues {
-  readonly adminChannelId: string;
-  readonly caseRoleId: string;
-  readonly caseRoleName: string;
-  readonly verificationChannelId: string;
-  readonly reportInstructionsChannelId: string;
-  readonly detectionResponseMode: DetectionResponseMode;
+  readonly type?: number;
 }
 
 const STEPS = ['Welcome', 'Alerts', 'Case role', 'Verification', 'Reports', 'Protection', 'Review'];
@@ -47,7 +40,7 @@ export function OnboardingWizard({
   readonly durableRequest: ModerationActionRequestSummary | null;
   readonly guildId: string;
   readonly guildName: string;
-  readonly initialValues: WizardValues;
+  readonly initialValues: OnboardingWizardValues;
   readonly initialSubmissionId: string;
   readonly inviteUrl: string | null;
   readonly readiness: SetupReadinessStatus;
@@ -57,7 +50,11 @@ export function OnboardingWizard({
   const [values, setValues] = useState(initialValues);
   const [submissionId] = useState(initialSubmissionId);
   const blockingIssues = checklist.filter((item) => item.status === 'error');
-  const update = <K extends keyof WizardValues>(key: K, value: WizardValues[K]) => {
+  const textChannels = channels.filter((channel) => channel.type === 0);
+  const update = <K extends keyof OnboardingWizardValues>(
+    key: K,
+    value: OnboardingWizardValues[K]
+  ) => {
     setValues((current) => ({ ...current, [key]: value }));
   };
 
@@ -129,7 +126,7 @@ export function OnboardingWizard({
             value={values.adminChannelId}
           >
             <option value="">Choose a text channel</option>
-            {channels.map((channel) => (
+            {textChannels.map((channel) => (
               <option key={channel.id} value={channel.id}>
                 #{channel.name}
               </option>
@@ -179,7 +176,7 @@ export function OnboardingWizard({
             value={values.verificationChannelId}
           >
             <option value="__auto__">Reuse or create #verification</option>
-            {channels.map((channel) => (
+            {textChannels.map((channel) => (
               <option key={channel.id} value={channel.id}>
                 #{channel.name}
               </option>
@@ -197,7 +194,7 @@ export function OnboardingWizard({
             value={values.reportInstructionsChannelId}
           >
             <option value="__none__">Skip for now</option>
-            {channels.map((channel) => (
+            {textChannels.map((channel) => (
               <option key={channel.id} value={channel.id}>
                 #{channel.name}
               </option>

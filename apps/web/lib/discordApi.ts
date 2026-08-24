@@ -5,6 +5,16 @@ const DEFAULT_DISCORD_API_BASE_URL = 'https://discord.com/api/v10';
 const DISCORD_GUILD_PAGE_LIMIT = 200;
 const DISCORD_MESSAGE_PAGE_LIMIT = 100;
 
+export class DiscordApiError extends Error {
+  public constructor(
+    public readonly status: number,
+    detail: string
+  ) {
+    super(`Discord API request failed with ${status}: ${detail.slice(0, 200)}`);
+    this.name = 'DiscordApiError';
+  }
+}
+
 export interface DiscordUser {
   readonly id: string;
   readonly username: string;
@@ -86,7 +96,7 @@ function discordApiBaseUrl(): string {
 async function readDiscordJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new Error(`Discord API request failed with ${response.status}: ${body.slice(0, 200)}`);
+    throw new DiscordApiError(response.status, body);
   }
   return (await response.json()) as T;
 }
@@ -172,6 +182,13 @@ async function fetchBotJson<T>(path: string): Promise<T> {
   return readDiscordJson<T>(response);
 }
 
+export async function fetchDiscordBotUser(): Promise<DiscordUser> {
+  if (isWebE2eFixtureMode()) {
+    return fixtureGuildResources().botUser;
+  }
+  return fetchBotJson<DiscordUser>('/users/@me');
+}
+
 export async function deleteBotMessage(channelId: string, messageId: string): Promise<boolean> {
   const botToken = readOptionalEnv('DRASIL_WEB_BOT_TOKEN') ?? readOptionalEnv('DISCORD_TOKEN');
   if (!botToken) {
@@ -196,12 +213,15 @@ export async function deleteBotMessage(channelId: string, messageId: string): Pr
   return true;
 }
 
-export async function fetchGuildResources(guildId: string): Promise<DiscordGuildResources> {
+export async function fetchGuildResources(
+  guildId: string,
+  knownBotUser?: DiscordUser
+): Promise<DiscordGuildResources> {
   if (isWebE2eFixtureMode()) {
     return fixtureGuildResources();
   }
 
-  const botUser = await fetchBotJson<DiscordUser>('/users/@me');
+  const botUser = knownBotUser ?? (await fetchDiscordBotUser());
   const [botMember, roles, channels] = await Promise.all([
     fetchBotJson<DiscordGuildMember>(`/guilds/${guildId}/members/${botUser.id}`),
     fetchBotJson<DiscordRole[]>(`/guilds/${guildId}/roles`),

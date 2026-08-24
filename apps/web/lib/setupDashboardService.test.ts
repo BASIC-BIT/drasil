@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SetupServerRecord } from '@drasil/contracts';
 import type { DiscordGuildResources, DiscordGuildSummary } from './discordApi';
+import { DiscordApiError } from './discordApi';
 import { DISCORD_PERMISSIONS } from './discordPermissions';
-import { fetchDiscordGuilds, fetchGuildResources } from './discordApi';
+import { fetchDiscordBotUser, fetchDiscordGuilds, fetchGuildResources } from './discordApi';
 import { SetupDashboardService } from './setupDashboardService';
 import type { SetupDataAdapter } from './setupDataAdapter';
 
-vi.mock('./discordApi', () => ({
+vi.mock('./discordApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./discordApi')>()),
   fetchDiscordGuilds: vi.fn(),
+  fetchDiscordBotUser: vi.fn(),
   fetchGuildResources: vi.fn(),
 }));
 
@@ -57,6 +60,7 @@ function createAdapter(server: SetupServerRecord | null): SetupDataAdapter {
 describe('SetupDashboardService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(fetchDiscordBotUser).mockResolvedValue(resources.botUser);
   });
 
   it('marks inactive server records as needing setup', async () => {
@@ -72,13 +76,51 @@ describe('SetupDashboardService', () => {
 
   it('uses live diagnostics for the manageable guild readiness summary', async () => {
     vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
-    vi.mocked(fetchGuildResources).mockRejectedValue(new Error('Unknown Guild'));
+    vi.mocked(fetchGuildResources).mockRejectedValue(new DiscordApiError(404, 'Unknown Guild'));
 
     const service = new SetupDashboardService(createAdapter(null));
 
     await expect(service.listManageableGuilds('access-token')).resolves.toEqual([
       expect.objectContaining({ id: 'guild-1', readiness: 'not_installed' }),
     ]);
+  });
+
+  it('does not report transient Discord failures as not installed', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockRejectedValue(
+      new DiscordApiError(429, 'You are being rate limited.')
+    );
+
+    const service = new SetupDashboardService(createAdapter(null));
+
+    await expect(service.listManageableGuilds('access-token')).resolves.toEqual([
+      expect.objectContaining({ id: 'guild-1', readiness: 'needs_setup' }),
+    ]);
+  });
+
+  it('loads guild readiness with one bot identity lookup and bounded concurrency', async () => {
+    const guilds = Array.from({ length: 7 }, (_, index) => ({
+      ...guild,
+      id: `guild-${index + 1}`,
+      name: `Guild ${index + 1}`,
+    }));
+    let active = 0;
+    let maxActive = 0;
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue(guilds);
+    vi.mocked(fetchGuildResources).mockImplementation(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      active -= 1;
+      return resources;
+    });
+
+    const service = new SetupDashboardService(createAdapter(inactiveServer));
+
+    await expect(service.listManageableGuilds('access-token')).resolves.toHaveLength(7);
+    expect(fetchDiscordBotUser).toHaveBeenCalledTimes(1);
+    expect(fetchGuildResources).toHaveBeenCalledTimes(7);
+    expect(maxActive).toBeLessThanOrEqual(3);
   });
 
   it('checks guild management access without fetching live resources', async () => {

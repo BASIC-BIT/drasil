@@ -189,6 +189,8 @@ export class SetupWorkflowService {
               settings: {
                 ...currentConfig.settings,
                 detection_response_mode: input.detectionResponseMode,
+                message_detection_response_mode: null,
+                join_detection_response_mode: null,
               },
             }
           : {}),

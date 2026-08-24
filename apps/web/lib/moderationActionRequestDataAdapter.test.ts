@@ -177,6 +177,43 @@ describe('moderationActionRequestDataAdapter', () => {
     ).toBe('Core setup saved; verification channel created.');
   });
 
+  it('parses resumable setup selections without exposing arbitrary metadata', () => {
+    const request = parseModerationActionRequestRow({
+      id: 'request-setup',
+      action_type: 'complete_setup_verification',
+      actor_surface: 'web',
+      completed_at: null,
+      failed_at: null,
+      last_error: null,
+      metadata: {
+        admin_channel_id: 'admin-channel-1',
+        case_role_id: null,
+        case_role_name: 'Review Role',
+        detection_response_mode: 'record_only',
+        report_instructions_channel_id: null,
+        submission_id: 'submission-1',
+        verification_channel_id: null,
+        unrelated_private_value: 'not exposed',
+      },
+      requested_at: new Date('2026-08-24T12:00:00.000Z'),
+      result: null,
+      status: 'queued',
+      target_user_id: null,
+      updated_at: new Date('2026-08-24T12:00:00.000Z'),
+    });
+
+    expect(request.setupInput).toEqual({
+      adminChannelId: 'admin-channel-1',
+      caseRoleId: null,
+      caseRoleName: 'Review Role',
+      detectionResponseMode: 'record_only',
+      reportInstructionsChannelId: null,
+      submissionId: 'submission-1',
+      verificationChannelId: null,
+    });
+    expect(request).not.toHaveProperty('metadata');
+  });
+
   it('parses cleanup job receipts and aggregate result summaries', () => {
     const request = parseModerationActionRequestRow({
       id: 'request-cleanup',

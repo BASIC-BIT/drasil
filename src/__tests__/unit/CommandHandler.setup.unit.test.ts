@@ -553,7 +553,11 @@ describe('CommandHandler setup commands (unit)', () => {
       case_role_id: 'role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'verification-channel-1',
-      settings: { detection_response_mode: 'restrict' },
+      settings: {
+        detection_response_mode: 'restrict',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Setup complete.'),
@@ -702,7 +706,11 @@ describe('CommandHandler setup commands (unit)', () => {
       case_role_id: 'created-role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
-      settings: { detection_response_mode: 'notify_only' },
+      settings: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Created case role: <@&created-role-1>'),
@@ -792,7 +800,11 @@ describe('CommandHandler setup commands (unit)', () => {
       case_role_id: 'default-role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
-      settings: { detection_response_mode: 'notify_only' },
+      settings: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Case role: <@&default-role-1>'),
@@ -878,7 +890,11 @@ describe('CommandHandler setup commands (unit)', () => {
       case_role_id: 'named-role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
-      settings: { detection_response_mode: 'notify_only' },
+      settings: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(interaction.editReply.mock.calls[0][0].content).toContain('Case role: <@&named-role-1>');
     expect(interaction.editReply.mock.calls[0][0].content).not.toContain('<@&old-role-1>');
@@ -1087,7 +1103,11 @@ describe('CommandHandler setup commands (unit)', () => {
       case_role_id: 'created-role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
-      settings: { detection_response_mode: 'notify_only' },
+      settings: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(createdChannel.delete).toHaveBeenCalledWith(
       'Rolling back Drasil setup after config save failed'
@@ -1288,7 +1308,11 @@ describe('CommandHandler setup commands (unit)', () => {
       case_role_id: 'role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'verification-channel-1',
-      settings: { detection_response_mode: 'notify_only' },
+      settings: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(reportChannel.send).toHaveBeenCalledTimes(1);
     expect(configService.updateServerSettings).not.toHaveBeenCalled();

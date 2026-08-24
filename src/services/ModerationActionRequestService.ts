@@ -1452,14 +1452,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   }
 
   private async completeSetupVerification(request: ModerationActionRequest): Promise<void> {
-    void this.productAnalyticsService.captureGuildEvent(request.server_id, 'setup wizard opened', {
-      surface: 'web',
-    });
-    void this.productAnalyticsService.captureGuildEvent(
-      request.server_id,
-      'setup wizard apply queued',
-      { surface: 'web' }
-    );
+    const isOnboardingWizard =
+      this.readMetadataBoolean(request.metadata, 'onboarding_wizard') === true;
     const caseRoleId = this.readMetadataString(request.metadata, 'case_role_id');
     const adminChannelId = this.readMetadataString(request.metadata, 'admin_channel_id');
     if (!adminChannelId) {
@@ -1502,20 +1496,22 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     });
 
     if (setupResult.status !== 'completed') {
-      void this.productAnalyticsService.captureGuildEvent(
-        request.server_id,
-        'setup wizard blocked',
-        {
-          diagnostic_codes:
-            'report' in setupResult
-              ? setupResult.report.issues
-                  .filter((issue) => issue.severity === 'error')
-                  .map((issue) => issue.code)
-              : [],
-          reason: setupResult.status,
-          surface: 'web',
-        }
-      );
+      if (isOnboardingWizard) {
+        void this.productAnalyticsService.captureGuildEvent(
+          request.server_id,
+          'setup wizard blocked',
+          {
+            diagnostic_codes:
+              'report' in setupResult
+                ? setupResult.report.issues
+                    .filter((issue) => issue.severity === 'error')
+                    .map((issue) => issue.code)
+                : [],
+            reason: setupResult.status,
+            surface: 'web',
+          }
+        );
+      }
       if (setupResult.status === 'ambiguous_case_role') {
         throw new Error(
           `Multiple roles named ${setupResult.roleName} exist; choose one before retrying.`
@@ -1564,21 +1560,25 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       verification_channel_action: setupResult.verificationChannelAction,
       verification_channel_id: setupResult.verificationChannelId,
     });
-    void this.productAnalyticsService.captureGuildEvent(
-      request.server_id,
-      'setup wizard completed',
-      { surface: 'web' }
-    );
+    if (isOnboardingWizard) {
+      void this.productAnalyticsService.captureGuildEvent(
+        request.server_id,
+        'setup wizard completed',
+        { surface: 'web' }
+      );
+    }
   }
 
-  private readSetupDetectionResponseMode(metadata: Prisma.JsonValue): DetectionResponseMode {
+  private readSetupDetectionResponseMode(
+    metadata: Prisma.JsonValue
+  ): DetectionResponseMode | undefined {
     const value = this.readMetadataString(metadata, 'detection_response_mode');
     return value === 'off' ||
       value === 'record_only' ||
       value === 'notify_only' ||
       value === 'restrict'
       ? value
-      : 'notify_only';
+      : undefined;
   }
 
   private async upsertReportInstructions(request: ModerationActionRequest): Promise<void> {

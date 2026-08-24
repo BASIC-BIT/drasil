@@ -9,9 +9,12 @@ import {
 } from '@drasil/contracts';
 import {
   type DiscordChannel,
+  DiscordApiError,
   type DiscordGuildResources,
   type DiscordGuildSummary,
   type DiscordRole,
+  type DiscordUser,
+  fetchDiscordBotUser,
   fetchDiscordGuilds,
   fetchGuildResources,
 } from './discordApi';
@@ -21,6 +24,7 @@ import {
   computeChannelPermissions,
   computeGuildPermissions,
   hasPermission,
+  parsePermissions,
 } from './discordPermissions';
 import { fixtureTimestampIso, isWebE2eFixtureMode } from './e2eFixtures';
 import { createSetupDataAdapter, type SetupDataAdapter } from './setupDataAdapter';
@@ -63,6 +67,27 @@ interface GuildPermissionChecklistArgs {
 }
 
 const TEXT_CHANNEL_TYPES = new Set([0, 5, 15]);
+const GUILD_READINESS_CONCURRENCY = 3;
+
+async function mapWithConcurrency<T, U>(
+  values: readonly T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<U>
+): Promise<U[]> {
+  const results = new Array<U>(values.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(values[index]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, () => worker()));
+  return results;
+}
 
 const item = (
   key: string,
@@ -459,17 +484,16 @@ export class SetupDashboardService {
     const guilds = (await fetchDiscordGuilds(accessToken)).filter((guild) => {
       return canManageGuild(guild.permissions, guild.owner);
     });
-    return Promise.all(
-      guilds.map(async (guild) => {
-        const { dashboard } = await this.loadDashboard(guild);
-        return {
-          id: guild.id,
-          name: guild.name,
-          icon: guild.icon,
-          readiness: dashboard.readiness,
-        };
-      })
-    );
+    const botUser = await fetchDiscordBotUser().catch(() => null);
+    return mapWithConcurrency(guilds, GUILD_READINESS_CONCURRENCY, async (guild) => {
+      const { dashboard } = await this.loadDashboard(guild, botUser);
+      return {
+        id: guild.id,
+        name: guild.name,
+        icon: guild.icon,
+        readiness: dashboard.readiness,
+      };
+    });
   }
 
   public async assertCanManageGuild(
@@ -492,17 +516,24 @@ export class SetupDashboardService {
   }
 
   private async loadDashboard(
-    manageableGuild: DiscordGuildSummary
+    manageableGuild: DiscordGuildSummary,
+    knownBotUser?: DiscordUser | null
   ): Promise<SetupDashboardContext> {
     const guildId = manageableGuild.id;
 
     const server = await this.adapter.getServer(guildId);
     let resources: DiscordGuildResources | null = null;
     let resourcesError: string | null = null;
+    let installed = true;
     try {
-      resources = await fetchGuildResources(guildId);
+      if (knownBotUser === null) {
+        throw new Error('Unable to load the Drasil bot identity from Discord.');
+      }
+      resources = await fetchGuildResources(guildId, knownBotUser);
     } catch (error) {
       resourcesError = error instanceof Error ? error.message : 'Unable to load Discord resources.';
+      installed =
+        !(error instanceof DiscordApiError) || (error.status !== 403 && error.status !== 404);
     }
 
     const checklist = buildChecklist({
@@ -515,12 +546,15 @@ export class SetupDashboardService {
     return {
       canApplySetup:
         manageableGuild.owner ||
-        hasPermission(BigInt(manageableGuild.permissions), DISCORD_PERMISSIONS.Administrator),
+        hasPermission(
+          parsePermissions(manageableGuild.permissions),
+          DISCORD_PERMISSIONS.Administrator
+        ),
       dashboard: {
         guildId,
         guildName: manageableGuild.name,
         readiness: deriveSetupReadiness({
-          installed: resources !== null,
+          installed,
           coreConfigured: hasCoreConfiguration(server),
           blockingErrorCount: checklist.filter((entry) => entry.status === 'error').length,
         }),

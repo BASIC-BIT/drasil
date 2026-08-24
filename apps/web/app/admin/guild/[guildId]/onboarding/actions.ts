@@ -58,6 +58,7 @@ export async function completeOnboarding(
       caseRoleName: selectedCaseRole === '__create__' ? read(formData, 'caseRoleName') : undefined,
       detectionResponseMode,
       guildId,
+      onboardingWizard: true,
       reportInstructionsChannelId:
         selectedReportChannel === '__none__' ? null : selectedReportChannel,
       submissionId: read(formData, 'submissionId') ?? undefined,

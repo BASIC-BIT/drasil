@@ -464,6 +464,7 @@ const completeSetupVerificationRequest: ModerationActionRequest = {
   metadata: {
     admin_channel_id: 'admin-channel-1',
     case_role_id: 'role-1',
+    onboarding_wizard: true,
     report_instructions_channel_id: 'report-channel-1',
   },
   report_intake_id: null,
@@ -2102,7 +2103,11 @@ describe('ModerationActionRequestService', () => {
       admin_channel_id: 'admin-channel-1',
       case_role_id: 'role-1',
       verification_channel_id: 'created-verification-channel',
-      settings: { detection_response_mode: 'notify_only' },
+      settings: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
       'guild-1',
@@ -2116,18 +2121,18 @@ describe('ModerationActionRequestService', () => {
     );
     expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
       'guild-1',
-      'setup wizard opened',
-      { surface: 'web' }
-    );
-    expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
-      'guild-1',
-      'setup wizard apply queued',
-      { surface: 'web' }
-    );
-    expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
-      'guild-1',
       'setup wizard completed',
       { surface: 'web' }
+    );
+    expect(productAnalyticsService.captureGuildEvent).not.toHaveBeenCalledWith(
+      'guild-1',
+      'setup wizard opened',
+      expect.anything()
+    );
+    expect(productAnalyticsService.captureGuildEvent).not.toHaveBeenCalledWith(
+      'guild-1',
+      'setup wizard apply queued',
+      expect.anything()
     );
     expect(reportInstructionsChannel.send).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2152,6 +2157,33 @@ describe('ModerationActionRequestService', () => {
       },
     ]);
     expect(repository.failed).toEqual([]);
+  });
+
+  it('does not label a full-settings repair as a wizard outcome', async () => {
+    const repairRequest: ModerationActionRequest = {
+      ...completeSetupVerificationRequest,
+      id: 'setup-repair-request-1',
+      idempotency_key: 'web:setup:complete_setup_verification:guild-1:repair-1',
+      metadata: {
+        admin_channel_id: 'admin-channel-1',
+        case_role_id: 'role-1',
+      },
+    };
+    const { productAnalyticsService, repository, service } = buildService([repairRequest]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(repository.completed).toHaveLength(1);
+    expect(productAnalyticsService.captureGuildEvent).not.toHaveBeenCalledWith(
+      'guild-1',
+      'setup wizard completed',
+      expect.anything()
+    );
+    expect(productAnalyticsService.captureGuildEvent).not.toHaveBeenCalledWith(
+      'guild-1',
+      'setup wizard blocked',
+      expect.anything()
+    );
   });
 
   it('repairs report instructions through the logged-in bot Discord client', async () => {

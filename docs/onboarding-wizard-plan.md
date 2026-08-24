@@ -226,8 +226,10 @@ Implementation requirements:
 - Keep the embed free of member data, detection evidence, and private server context beyond the
   recipient's guild name.
 - If the public web URL is absent or invalid, omit the button instead of emitting a broken URL.
-- Capture only bounded product events: wizard opened, setup apply queued, setup completed, and setup
-  blocked. Use diagnostic codes, never channel/role names or message content.
+- Capture only bounded worker outcomes: setup completed and setup blocked. Use diagnostic codes,
+  never channel/role names or message content. Wizard-opened and apply-queued funnel events require
+  web-surface instrumentation and are intentionally deferred rather than misattributed to worker
+  processing time.
 
 ### 5. Documentation and recovery guidance
 

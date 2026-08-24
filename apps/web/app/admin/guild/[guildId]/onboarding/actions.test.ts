@@ -59,6 +59,7 @@ describe('completeOnboarding', () => {
       caseRoleName: 'Drasil Case',
       detectionResponseMode: 'notify_only',
       guildId: 'guild-1',
+      onboardingWizard: true,
       reportInstructionsChannelId: null,
       submissionId: 'submission-1',
       verificationChannelId: null,

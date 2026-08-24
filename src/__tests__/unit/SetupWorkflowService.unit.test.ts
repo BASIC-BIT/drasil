@@ -1,6 +1,92 @@
 import { SetupWorkflowService } from '../../services/SetupWorkflowService';
 
 describe('SetupWorkflowService (unit)', () => {
+  const readyReport = {
+    guildId: 'guild-1',
+    checkedAt: new Date('2026-08-24T12:00:00.000Z'),
+    issues: [],
+    errorCount: 0,
+    warningCount: 0,
+  };
+
+  it('preserves detection settings when a repair omits protection mode', async () => {
+    const configService = {
+      getServerConfig: jest.fn(),
+      updateServerConfig: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const service = new SetupWorkflowService(
+      configService,
+      {} as any,
+      { captureGuildEvent: jest.fn() } as any,
+      { validateSetupCandidate: jest.fn().mockResolvedValue(readyReport) } as any
+    );
+
+    await expect(
+      service.completeSetup({
+        guild: { id: 'guild-1' } as any,
+        caseRole: { id: 'role-1' } as any,
+        adminChannelId: 'admin-channel-1',
+        initialVerificationChannelId: 'verification-channel-1',
+        candidateVerificationChannelId: 'verification-channel-1',
+        reportInstructionsChannelId: null,
+        candidateReport: readyReport,
+      })
+    ).resolves.toMatchObject({ status: 'completed' });
+
+    expect(configService.getServerConfig).not.toHaveBeenCalled();
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      admin_channel_id: 'admin-channel-1',
+      case_role_id: 'role-1',
+      verification_channel_id: 'verification-channel-1',
+    });
+  });
+
+  it('makes an explicit unified protection mode authoritative over per-event overrides', async () => {
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        settings: {
+          detection_response_mode: 'restrict',
+          message_detection_response_mode: 'restrict',
+          join_detection_response_mode: 'record_only',
+          report_enabled: true,
+        },
+      }),
+      updateServerConfig: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const service = new SetupWorkflowService(
+      configService,
+      {} as any,
+      { captureGuildEvent: jest.fn() } as any,
+      { validateSetupCandidate: jest.fn().mockResolvedValue(readyReport) } as any
+    );
+
+    await expect(
+      service.completeSetup({
+        guild: { id: 'guild-1' } as any,
+        caseRole: { id: 'role-1' } as any,
+        adminChannelId: 'admin-channel-1',
+        initialVerificationChannelId: 'verification-channel-1',
+        candidateVerificationChannelId: 'verification-channel-1',
+        reportInstructionsChannelId: null,
+        candidateReport: readyReport,
+        detectionResponseMode: 'off',
+      })
+    ).resolves.toMatchObject({ status: 'completed' });
+
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      admin_channel_id: 'admin-channel-1',
+      case_role_id: 'role-1',
+      verification_channel_id: 'verification-channel-1',
+      settings: {
+        detection_response_mode: 'off',
+        message_detection_response_mode: null,
+        join_detection_response_mode: null,
+        report_enabled: true,
+      },
+    });
+  });
+
   it('restores existing verification channel permissions when final validation fails', async () => {
     const restoreVerificationChannelPermissions = jest.fn().mockResolvedValue(true);
     const notificationManager = {
