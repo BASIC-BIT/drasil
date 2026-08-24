@@ -37,6 +37,18 @@ export interface ProvisionSetupInput {
   readonly captureAnalytics?: boolean;
 }
 
+type CaseRoleCandidate =
+  | { role: Role | null; roleName: string; ambiguousRoleIds: readonly string[] }
+  | { invalidDetail: string };
+
+type VerificationChannelCandidate =
+  | {
+      channelId: string | null;
+      willSyncPermissions: boolean;
+      ambiguousChannelIds: readonly string[];
+    }
+  | { invalidDetail: string };
+
 export class SetupProvisioningService {
   public constructor(
     private readonly configService: IConfigService,
@@ -72,6 +84,14 @@ export class SetupProvisioningService {
       };
     }
 
+    return this.provisionWithCaseRole(input, caseRoleCandidate, detectionResponseMode);
+  }
+
+  private async provisionWithCaseRole(
+    input: ProvisionSetupInput,
+    caseRoleCandidate: Exclude<CaseRoleCandidate, { invalidDetail: string }>,
+    detectionResponseMode: DetectionResponseMode | undefined
+  ): Promise<SetupProvisioningResult> {
     const verificationCandidate = await this.resolveVerificationChannelCandidate(
       input.guild,
       input.verificationChannel ?? null,
@@ -137,10 +157,7 @@ export class SetupProvisioningService {
     explicitCaseRole: Role | null,
     explicitCaseRoleId: string | null,
     requestedRoleName: string | null
-  ): Promise<
-    | { role: Role | null; roleName: string; ambiguousRoleIds: readonly string[] }
-    | { invalidDetail: string }
-  > {
+  ): Promise<CaseRoleCandidate> {
     if (explicitCaseRole) {
       return { role: explicitCaseRole, roleName: explicitCaseRole.name, ambiguousRoleIds: [] };
     }
@@ -176,14 +193,7 @@ export class SetupProvisioningService {
     guild: Guild,
     explicitChannel: TextChannel | null,
     explicitChannelId: string | null
-  ): Promise<
-    | {
-        channelId: string | null;
-        willSyncPermissions: boolean;
-        ambiguousChannelIds: readonly string[];
-      }
-    | { invalidDetail: string }
-  > {
+  ): Promise<VerificationChannelCandidate> {
     if (explicitChannel) {
       return { channelId: explicitChannel.id, willSyncPermissions: true, ambiguousChannelIds: [] };
     }
