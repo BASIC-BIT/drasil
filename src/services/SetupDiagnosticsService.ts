@@ -208,6 +208,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     await this.checkVerificationChannelCandidate(guild, botMember, candidate, issues);
 
     if (candidate.reportInstructionsChannelId) {
+      const reportIssues: SetupDiagnosticIssue[] = [];
       await this.checkConfiguredTextChannel(
         guild,
         botMember,
@@ -215,8 +216,9 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         'report-instructions-channel',
         'Report instructions channel',
         ADMIN_CHANNEL_PERMISSIONS,
-        issues
+        reportIssues
       );
+      issues.push(...reportIssues.map((issue) => ({ ...issue, severity: 'warning' as const })));
     }
 
     return this.toReport(guild.id, issues);

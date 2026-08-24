@@ -289,6 +289,35 @@ describe('SetupDiagnosticsService (unit)', () => {
     expect(report.warningCount).toBe(0);
   });
 
+  it('does not block a setup candidate on optional report channel permissions', async () => {
+    const { guild, channel } = buildConfiguredGuild();
+    const reportChannel = {
+      ...channel,
+      id: 'report-channel-1',
+      permissionsFor: jest.fn().mockReturnValue({
+        has: jest.fn((permission: bigint) => permission !== PermissionFlagsBits.SendMessages),
+      }),
+    };
+    guild.channels.fetch.mockImplementation((channelId: string) =>
+      Promise.resolve(channelId === 'report-channel-1' ? reportChannel : channel)
+    );
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: 'report-channel-1',
+    });
+
+    expect(report.errorCount).toBe(0);
+    expect(
+      report.issues.find((issue) => issue.code === 'report-instructions-channel-send')?.severity
+    ).toBe('warning');
+  });
+
   it('requires Manage Channels when setup will create the verification channel', async () => {
     const { guild, botMember } = buildConfiguredGuild();
     botMember.permissions.has.mockImplementation(
