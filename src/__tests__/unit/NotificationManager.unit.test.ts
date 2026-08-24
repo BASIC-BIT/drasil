@@ -1281,6 +1281,19 @@ describe('NotificationManager (unit)', () => {
               deny: { bitfield: 0n },
             },
           ],
+          [
+            'case-role-1',
+            {
+              id: 'case-role-1',
+              type: 0,
+              allow: {
+                bitfield: PermissionFlagsBits.AttachFiles | PermissionFlagsBits.SendMessages,
+              },
+              deny: {
+                bitfield: PermissionFlagsBits.MentionEveryone | PermissionFlagsBits.ViewChannel,
+              },
+            },
+          ],
         ]),
         set: overwriteSet,
       },
@@ -1326,20 +1339,20 @@ describe('NotificationManager (unit)', () => {
     const caseRoleOverwrite = overwriteSet.mock.calls[0][0].find(
       (overwrite: { id: string }) => overwrite.id === 'case-role-1'
     );
-    expect(caseRoleOverwrite).toEqual(
-      expect.objectContaining({
-        allow: expect.arrayContaining([
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessagesInThreads,
-        ]),
-        deny: expect.arrayContaining([
-          PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.CreatePublicThreads,
-          PermissionFlagsBits.CreatePrivateThreads,
-        ]),
-      })
+    expect(caseRoleOverwrite.allow & PermissionFlagsBits.AttachFiles).toBe(
+      PermissionFlagsBits.AttachFiles
     );
-    expect(caseRoleOverwrite.allow).not.toContain(PermissionFlagsBits.SendMessages);
+    expect(caseRoleOverwrite.allow & PermissionFlagsBits.ViewChannel).toBe(
+      PermissionFlagsBits.ViewChannel
+    );
+    expect(caseRoleOverwrite.allow & PermissionFlagsBits.SendMessages).toBe(0n);
+    expect(caseRoleOverwrite.deny & PermissionFlagsBits.MentionEveryone).toBe(
+      PermissionFlagsBits.MentionEveryone
+    );
+    expect(caseRoleOverwrite.deny & PermissionFlagsBits.SendMessages).toBe(
+      PermissionFlagsBits.SendMessages
+    );
+    expect(caseRoleOverwrite.deny & PermissionFlagsBits.ViewChannel).toBe(0n);
     expect(createChannel).not.toHaveBeenCalled();
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       verification_channel_id: 'verification-channel-1',

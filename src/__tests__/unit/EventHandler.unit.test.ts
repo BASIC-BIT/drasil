@@ -3265,7 +3265,7 @@ describe('EventHandler (unit)', () => {
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
         case_role_id: null,
-        admin_channel_id: null,
+        admin_channel_id: 'admin-channel-1',
         verification_channel_id: null,
         settings: {},
       }),
@@ -3314,6 +3314,9 @@ describe('EventHandler (unit)', () => {
     const setupDm = installer.send.mock.calls[0][0];
     expect(setupDm.components[0].toJSON().components[0].url).toBe(
       'https://drasil.example/admin/guild/guild-1/onboarding'
+    );
+    expect(setupDm.embeds[0].data.footer?.text).toBe(
+      'Setup incomplete - 1 of 3 required steps complete'
     );
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       setup_nudge_last_attempt_at: expect.any(String),

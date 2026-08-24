@@ -1917,7 +1917,7 @@ export class EventHandler implements IEventHandler {
 
     if (recipient) {
       try {
-        await recipient.user.send(this.buildSetupNudgeMessage(guild));
+        await recipient.user.send(this.buildSetupNudgeMessage(guild, config));
         result = 'sent';
       } catch (error) {
         result = 'dm_failed';
@@ -2095,9 +2095,14 @@ export class EventHandler implements IEventHandler {
     }
   }
 
-  private buildSetupNudgeMessage(guild: Guild): MessageCreateOptions {
+  private buildSetupNudgeMessage(guild: Guild, config: Server): MessageCreateOptions {
     const onboardingUrl = buildAdminGuildOnboardingUrl(guild.id);
     const setupGuideUrl = 'https://github.com/BASIC-BIT/drasil/blob/main/docs/onboarding.md';
+    const completedStepCount = [
+      config.admin_channel_id,
+      config.case_role_id,
+      config.verification_channel_id,
+    ].filter(Boolean).length;
     const embed = new EmbedBuilder()
       .setColor(0x4f8cff)
       .setTitle('Welcome to Drasil')
@@ -2117,7 +2122,9 @@ export class EventHandler implements IEventHandler {
           value: 'Run `/config setup admin-channel:<moderator-channel>`, then `/config validate`.',
         }
       )
-      .setFooter({ text: 'Setup incomplete - 0 of 3 required steps complete' });
+      .setFooter({
+        text: `Setup incomplete - ${completedStepCount} of 3 required steps complete`,
+      });
     const buttons = [
       ...(onboardingUrl
         ? [

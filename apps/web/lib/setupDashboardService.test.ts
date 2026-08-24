@@ -74,6 +74,37 @@ describe('SetupDashboardService', () => {
     });
   });
 
+  it('rejects @everyone as the configured case role', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockResolvedValue({
+      ...resources,
+      channels: [
+        { id: 'admin-channel-1', name: 'admin', type: 0 },
+        { id: 'verification-channel-1', name: 'verification', type: 0 },
+      ],
+    });
+    const service = new SetupDashboardService(
+      createAdapter({
+        ...inactiveServer,
+        is_active: true,
+        case_role_id: 'guild-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+      })
+    );
+
+    const result = await service.getDashboard('guild-1', 'access-token');
+
+    expect(result.dashboard.readiness).toBe('needs_setup');
+    expect(result.dashboard.checklist).toContainEqual(
+      expect.objectContaining({
+        key: 'case-role',
+        status: 'error',
+        detail: 'The @everyone role cannot be used as a case role.',
+      })
+    );
+  });
+
   it('uses live diagnostics for the manageable guild readiness summary', async () => {
     vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
     vi.mocked(fetchGuildResources).mockRejectedValue(new DiscordApiError(404, 'Unknown Guild'));

@@ -253,6 +253,10 @@ function buildChecklist(args: BuildChecklistArgs) {
     checklist.push(
       item('case-role', 'Case role', 'error', 'The configured case role no longer exists.')
     );
+  } else if (caseRole.id === guild.id) {
+    checklist.push(
+      item('case-role', 'Case role', 'error', 'The @everyone role cannot be used as a case role.')
+    );
   } else if (caseRole.managed) {
     checklist.push(
       item(
@@ -465,10 +469,11 @@ function buildChecklist(args: BuildChecklistArgs) {
   return checklist;
 }
 
-function hasCoreConfiguration(server: SetupServerRecord | null): boolean {
+function hasCoreConfiguration(server: SetupServerRecord | null, guildId: string): boolean {
   return Boolean(
     server?.is_active &&
     server.case_role_id &&
+    server.case_role_id !== guildId &&
     server.admin_channel_id &&
     server.verification_channel_id
   );
@@ -555,7 +560,7 @@ export class SetupDashboardService {
         guildName: manageableGuild.name,
         readiness: deriveSetupReadiness({
           installed,
-          coreConfigured: hasCoreConfiguration(server),
+          coreConfigured: hasCoreConfiguration(server, guildId),
           blockingErrorCount: checklist.filter((entry) => entry.status === 'error').length,
         }),
         dataProvider: this.adapter.provider,

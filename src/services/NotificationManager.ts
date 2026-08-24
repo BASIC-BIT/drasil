@@ -177,6 +177,12 @@ export interface VerificationPermissionSnapshot {
   readonly entries: readonly VerificationPermissionSnapshotEntry[];
 }
 
+interface VerificationPermissionOverwrite {
+  readonly id: string;
+  readonly allow?: readonly bigint[];
+  readonly deny?: readonly bigint[];
+}
+
 interface ObservedDetectionMetadata {
   observed_notification_channel_id?: string;
   observed_notification_message_id?: string;
@@ -862,19 +868,8 @@ export class NotificationManager implements INotificationManager {
       if (configuredVerificationChannel) {
         const snapshot = this.snapshotPermissionOverwrites(configuredVerificationChannel);
         onPermissionsUpdated?.(snapshot);
-        const desiredIds = new Set(
-          permissionOverwrites.map((overwrite) => overwrite.id.toString())
-        );
-        const preservedOverwrites: OverwriteResolvable[] = snapshot.entries
-          .filter((entry) => !desiredIds.has(entry.id))
-          .map((entry) => ({
-            id: entry.id,
-            type: entry.type,
-            allow: entry.allow,
-            deny: entry.deny,
-          }));
         await configuredVerificationChannel.permissionOverwrites.set(
-          [...preservedOverwrites, ...permissionOverwrites],
+          this.mergeVerificationChannelPermissionOverwrites(snapshot, permissionOverwrites),
           'Sync Drasil verification channel permissions'
         );
 
@@ -962,8 +957,8 @@ export class NotificationManager implements INotificationManager {
   private buildVerificationChannelPermissionOverwrites(
     guild: Guild,
     caseRoleId: string
-  ): OverwriteResolvable[] {
-    const permissionOverwrites: OverwriteResolvable[] = [
+  ): VerificationPermissionOverwrite[] {
+    const permissionOverwrites: VerificationPermissionOverwrite[] = [
       // Default role (everyone) - deny access
       {
         id: guild.roles.everyone.id,
@@ -1026,6 +1021,44 @@ export class NotificationManager implements INotificationManager {
     });
 
     return permissionOverwrites;
+  }
+
+  private mergeVerificationChannelPermissionOverwrites(
+    snapshot: VerificationPermissionSnapshot,
+    desired: readonly VerificationPermissionOverwrite[]
+  ): OverwriteResolvable[] {
+    const desiredIds = new Set(desired.map((overwrite) => overwrite.id));
+    const existingById = new Map(snapshot.entries.map((entry) => [entry.id, entry]));
+    const preserved = snapshot.entries
+      .filter((entry) => !desiredIds.has(entry.id))
+      .map((entry) => ({
+        id: entry.id,
+        type: entry.type,
+        allow: entry.allow,
+        deny: entry.deny,
+      }));
+    const merged = desired.map((overwrite) => {
+      const existing = existingById.get(overwrite.id);
+      if (!existing) {
+        return overwrite;
+      }
+
+      const desiredAllow = this.combinePermissionBits(overwrite.allow);
+      const desiredDeny = this.combinePermissionBits(overwrite.deny);
+      const managedBits = desiredAllow | desiredDeny;
+      return {
+        id: overwrite.id,
+        type: existing.type,
+        allow: (existing.allow & ~managedBits) | desiredAllow,
+        deny: (existing.deny & ~managedBits) | desiredDeny,
+      };
+    });
+
+    return [...preserved, ...merged];
+  }
+
+  private combinePermissionBits(bits: readonly bigint[] | undefined): bigint {
+    return bits?.reduce((combined, bit) => combined | bit, 0n) ?? 0n;
   }
 
   private async findConfiguredVerificationChannel(
