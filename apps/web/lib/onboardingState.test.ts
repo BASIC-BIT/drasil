@@ -22,6 +22,11 @@ const server: SetupServerRecord = {
   is_active: true,
 };
 
+const availableResources = {
+  channelIds: ['admin-old', 'admin-new', 'verification-old', 'report-old'],
+  roleIds: ['role-old'],
+};
+
 function setupRequest(
   status: ModerationActionRequestSummary['status']
 ): ModerationActionRequestSummary {
@@ -58,31 +63,55 @@ describe('resolveOnboardingInitialState', () => {
   it.each(['queued', 'processing', 'failed'] as const)(
     'restores submitted selections for a %s setup request',
     (status) => {
-      expect(resolveOnboardingInitialState(server, setupRequest(status), 'new-submission')).toEqual(
-        {
-          submissionId: 'submission-1',
-          values: {
-            adminChannelId: 'admin-new',
-            caseRoleId: '__create__',
-            caseRoleName: 'Review Role',
-            detectionResponseMode: 'record_only',
-            reportInstructionsChannelId: '__none__',
-            verificationChannelId: '__auto__',
-          },
-        }
-      );
+      expect(
+        resolveOnboardingInitialState(
+          server,
+          setupRequest(status),
+          'new-submission',
+          availableResources
+        )
+      ).toEqual({
+        submissionId: 'submission-1',
+        values: {
+          adminChannelId: 'admin-new',
+          caseRoleId: '__create__',
+          caseRoleName: 'Review Role',
+          detectionResponseMode: 'record_only',
+          reportInstructionsChannelId: '__none__',
+          verificationChannelId: '__auto__',
+        },
+      });
     }
   );
 
   it('uses persisted configuration after setup completes', () => {
     expect(
-      resolveOnboardingInitialState(server, setupRequest('completed'), 'new-submission').values
+      resolveOnboardingInitialState(
+        server,
+        setupRequest('completed'),
+        'new-submission',
+        availableResources
+      ).values
     ).toMatchObject({
       adminChannelId: 'admin-old',
       caseRoleId: 'role-old',
       detectionResponseMode: 'restrict',
       reportInstructionsChannelId: 'report-old',
       verificationChannelId: 'verification-old',
+    });
+  });
+
+  it('replaces deleted persisted resources with safe wizard defaults', () => {
+    expect(
+      resolveOnboardingInitialState(server, null, 'new-submission', {
+        channelIds: [],
+        roleIds: [],
+      }).values
+    ).toMatchObject({
+      adminChannelId: '',
+      caseRoleId: '__create__',
+      reportInstructionsChannelId: '__none__',
+      verificationChannelId: '__auto__',
     });
   });
 });

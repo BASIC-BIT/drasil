@@ -71,4 +71,17 @@ describe('completeOnboarding', () => {
     });
     expect(mocks.revalidatePath).toHaveBeenCalledWith('/admin/guild/guild-1/onboarding');
   });
+
+  it('lets an expired session reach the Discord authentication redirect', async () => {
+    mocks.getCurrentAdminSession.mockResolvedValue(null);
+
+    await expect(
+      completeOnboarding(
+        'guild-1',
+        { message: null, requestId: null, status: 'idle' },
+        new FormData()
+      )
+    ).rejects.toThrow('/api/auth/discord?returnTo=/admin/guild/guild-1/onboarding');
+    expect(mocks.queueSetup).not.toHaveBeenCalled();
+  });
 });

@@ -34,7 +34,12 @@ export default async function OnboardingPage({
       ? null
       : latestSetupRequest;
   const server = dashboard.server;
-  const initialState = resolveOnboardingInitialState(server, durableRequest, randomUUID());
+  const selectableChannels = channels.filter((channel) => channel.type === 0);
+  const selectableRoles = roles.filter((role) => role.id !== guildId && !role.managed);
+  const initialState = resolveOnboardingInitialState(server, durableRequest, randomUUID(), {
+    channelIds: selectableChannels.map((channel) => channel.id),
+    roleIds: selectableRoles.map((role) => role.id),
+  });
   const action = completeOnboarding.bind(null, guildId);
 
   return (
@@ -57,7 +62,7 @@ export default async function OnboardingPage({
         <OnboardingWizard
           action={action}
           canApplySetup={canApplySetup}
-          channels={channels.map((channel) => ({
+          channels={selectableChannels.map((channel) => ({
             id: channel.id,
             name: channel.name,
             type: channel.type,
@@ -70,9 +75,7 @@ export default async function OnboardingPage({
           initialSubmissionId={initialState.submissionId}
           inviteUrl={buildBotInviteUrl('standard', guildId)}
           readiness={dashboard.readiness}
-          roles={roles
-            .filter((role) => role.id !== guildId && !role.managed)
-            .map((role) => ({ id: role.id, name: role.name }))}
+          roles={selectableRoles.map((role) => ({ id: role.id, name: role.name }))}
         />
       </InboxActionRequestPollingProvider>
     </main>

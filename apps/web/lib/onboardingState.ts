@@ -18,6 +18,11 @@ export interface OnboardingInitialState {
   readonly values: OnboardingWizardValues;
 }
 
+export interface OnboardingResourceOptions {
+  readonly channelIds: readonly string[];
+  readonly roleIds: readonly string[];
+}
+
 function valueOr<T>(value: T | null | undefined, fallback: T): T {
   return value ?? fallback;
 }
@@ -61,10 +66,37 @@ function resumedValues(
   };
 }
 
+function normalizeResourceSelections(
+  values: OnboardingWizardValues,
+  options: OnboardingResourceOptions
+): OnboardingWizardValues {
+  const channelIds = new Set(options.channelIds);
+  const roleIds = new Set(options.roleIds);
+
+  return {
+    ...values,
+    adminChannelId: channelIds.has(values.adminChannelId) ? values.adminChannelId : '',
+    caseRoleId:
+      values.caseRoleId === '__create__' || roleIds.has(values.caseRoleId)
+        ? values.caseRoleId
+        : '__create__',
+    verificationChannelId:
+      values.verificationChannelId === '__auto__' || channelIds.has(values.verificationChannelId)
+        ? values.verificationChannelId
+        : '__auto__',
+    reportInstructionsChannelId:
+      values.reportInstructionsChannelId === '__none__' ||
+      channelIds.has(values.reportInstructionsChannelId)
+        ? values.reportInstructionsChannelId
+        : '__none__',
+  };
+}
+
 export function resolveOnboardingInitialState(
   server: SetupServerRecord | null,
   durableRequest: ModerationActionRequestSummary | null,
-  fallbackSubmissionId: string
+  fallbackSubmissionId: string,
+  options: OnboardingResourceOptions
 ): OnboardingInitialState {
   const input =
     durableRequest && durableRequest.status !== 'completed' ? durableRequest.setupInput : null;
@@ -72,6 +104,9 @@ export function resolveOnboardingInitialState(
 
   return {
     submissionId: valueOr(input?.submissionId, durableRequest?.id ?? fallbackSubmissionId),
-    values: input ? resumedValues(input, persisted) : persisted,
+    values: normalizeResourceSelections(
+      input ? resumedValues(input, persisted) : persisted,
+      options
+    ),
   };
 }

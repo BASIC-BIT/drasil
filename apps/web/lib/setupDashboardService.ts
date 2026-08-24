@@ -54,6 +54,16 @@ interface ChannelPermissionCheckArgs {
   readonly required: readonly bigint[];
 }
 
+interface CoreChannelChecklistArgs extends Omit<ChannelPermissionCheckArgs, 'channel'> {
+  readonly checklist: SetupChecklistItem[];
+  readonly channel: DiscordChannel | null;
+  readonly key: string;
+  readonly label: string;
+  readonly missingDetail: string;
+  readonly successDetail: string;
+  readonly permissionErrorDetail: string;
+}
+
 interface BuildChecklistArgs {
   readonly guild: DiscordGuildSummary;
   readonly server: SetupServerRecord | null;
@@ -66,7 +76,8 @@ interface GuildPermissionChecklistArgs {
   readonly guildPermissions: bigint;
 }
 
-const TEXT_CHANNEL_TYPES = new Set([0, 5, 15]);
+const GUILD_TEXT_CHANNEL_TYPE = 0;
+const TEXT_CHANNEL_TYPES = new Set([GUILD_TEXT_CHANNEL_TYPE, 5, 15]);
 const GUILD_READINESS_CONCURRENCY = 3;
 
 async function mapWithConcurrency<T, U>(
@@ -132,6 +143,33 @@ function hasRequiredChannelPermissions(args: ChannelPermissionCheckArgs) {
     overwrites: args.channel.permission_overwrites ?? [],
   });
   return args.required.every((permission) => hasPermission(channelPermissions, permission));
+}
+
+function addCoreChannelChecklistItem(args: CoreChannelChecklistArgs) {
+  const { channel, checklist, key, label } = args;
+  if (!channel) {
+    checklist.push(item(key, label, 'error', args.missingDetail));
+    return;
+  }
+  if (channel.type !== GUILD_TEXT_CHANNEL_TYPE) {
+    checklist.push(
+      item(key, label, 'error', `${formatChannelName(channel)} must be a standard text channel.`)
+    );
+    return;
+  }
+
+  checklist.push(
+    hasRequiredChannelPermissions({
+      guildId: args.guildId,
+      botUserId: args.botUserId,
+      botRoleIds: args.botRoleIds,
+      roles: args.roles,
+      channel,
+      required: args.required,
+    })
+      ? item(key, label, 'ok', `${formatChannelName(channel)} ${args.successDetail}`)
+      : item(key, label, 'error', `${formatChannelName(channel)} ${args.permissionErrorDetail}`)
+  );
 }
 
 function addGuildPermissionChecklistItems(args: GuildPermissionChecklistArgs) {
@@ -304,81 +342,35 @@ function buildChecklist(args: BuildChecklistArgs) {
     DISCORD_PERMISSIONS.SendMessagesInThreads,
   ];
 
-  if (!adminChannel) {
-    checklist.push(
-      item(
-        'admin-channel',
-        'Admin alert channel',
-        'error',
-        'Choose a channel for moderator notifications.'
-      )
-    );
-  } else if (
-    hasRequiredChannelPermissions({
-      guildId: guild.id,
-      botUserId: resources.botUser.id,
-      botRoleIds,
-      roles: resources.roles,
-      channel: adminChannel,
-      required: adminRequired,
-    })
-  ) {
-    checklist.push(
-      item(
-        'admin-channel',
-        'Admin alert channel',
-        'ok',
-        `${formatChannelName(adminChannel)} is reachable.`
-      )
-    );
-  } else {
-    checklist.push(
-      item(
-        'admin-channel',
-        'Admin alert channel',
-        'error',
-        `${formatChannelName(adminChannel)} is missing required bot permissions.`
-      )
-    );
-  }
+  addCoreChannelChecklistItem({
+    checklist,
+    guildId: guild.id,
+    botUserId: resources.botUser.id,
+    botRoleIds,
+    roles: resources.roles,
+    channel: adminChannel,
+    required: adminRequired,
+    key: 'admin-channel',
+    label: 'Admin alert channel',
+    missingDetail: 'Choose a channel for moderator notifications.',
+    successDetail: 'is reachable.',
+    permissionErrorDetail: 'is missing required bot permissions.',
+  });
 
-  if (!verificationChannel) {
-    checklist.push(
-      item(
-        'verification-channel',
-        'Verification channel',
-        'error',
-        'Choose a channel where private verification threads can be opened.'
-      )
-    );
-  } else if (
-    hasRequiredChannelPermissions({
-      guildId: guild.id,
-      botUserId: resources.botUser.id,
-      botRoleIds,
-      roles: resources.roles,
-      channel: verificationChannel,
-      required: verificationRequired,
-    })
-  ) {
-    checklist.push(
-      item(
-        'verification-channel',
-        'Verification channel',
-        'ok',
-        `${formatChannelName(verificationChannel)} can host case threads.`
-      )
-    );
-  } else {
-    checklist.push(
-      item(
-        'verification-channel',
-        'Verification channel',
-        'error',
-        `${formatChannelName(verificationChannel)} is missing thread or message permissions.`
-      )
-    );
-  }
+  addCoreChannelChecklistItem({
+    checklist,
+    guildId: guild.id,
+    botUserId: resources.botUser.id,
+    botRoleIds,
+    roles: resources.roles,
+    channel: verificationChannel,
+    required: verificationRequired,
+    key: 'verification-channel',
+    label: 'Verification channel',
+    missingDetail: 'Choose a channel where private verification threads can be opened.',
+    successDetail: 'can host case threads.',
+    permissionErrorDetail: 'is missing thread or message permissions.',
+  });
 
   checklist.push(
     reportChannel &&

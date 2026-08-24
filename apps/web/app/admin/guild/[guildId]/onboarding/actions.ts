@@ -20,15 +20,12 @@ export async function completeOnboarding(
   _previousState: InboxActionState,
   formData: FormData
 ): Promise<InboxActionState> {
-  try {
-    const [session, token] = await Promise.all([
-      getCurrentAdminSession(),
-      getCurrentDiscordToken(),
-    ]);
-    if (!session || !token) {
-      redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/onboarding`);
-    }
+  const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
+  if (!session || !token) {
+    redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/onboarding`);
+  }
 
+  try {
     const guild = await createSetupDashboardService().assertCanManageGuild(
       guildId,
       token.accessToken

@@ -105,6 +105,70 @@ describe('SetupDashboardService', () => {
     );
   });
 
+  it.each([
+    {
+      label: 'admin alert',
+      invalidChannelId: 'admin-channel-1',
+      invalidChannelType: 5,
+      checklistKey: 'admin-channel',
+    },
+    {
+      label: 'verification',
+      invalidChannelId: 'verification-channel-1',
+      invalidChannelType: 15,
+      checklistKey: 'verification-channel',
+    },
+  ])(
+    'does not report ready when the $label channel is not a standard text channel',
+    async ({ invalidChannelId, invalidChannelType, checklistKey }) => {
+      vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+      vi.mocked(fetchGuildResources).mockResolvedValue({
+        ...resources,
+        roles: [
+          resources.roles[0],
+          {
+            ...resources.roles[1],
+            permissions: DISCORD_PERMISSIONS.Administrator.toString(),
+            position: 2,
+          },
+          { id: 'case-role-1', name: 'Case', permissions: '0', position: 1, managed: false },
+        ],
+        channels: [
+          {
+            id: 'admin-channel-1',
+            name: 'admin',
+            type: invalidChannelId === 'admin-channel-1' ? invalidChannelType : 0,
+          },
+          {
+            id: 'verification-channel-1',
+            name: 'verification',
+            type: invalidChannelId === 'verification-channel-1' ? invalidChannelType : 0,
+          },
+        ],
+      });
+      const service = new SetupDashboardService(
+        createAdapter({
+          ...inactiveServer,
+          is_active: true,
+          case_role_id: 'case-role-1',
+          admin_channel_id: 'admin-channel-1',
+          verification_channel_id: 'verification-channel-1',
+        })
+      );
+
+      const result = await service.getDashboard('guild-1', 'access-token');
+
+      expect(result.dashboard.readiness).toBe('blocked');
+      expect(result.dashboard.checklist).toContainEqual(
+        expect.objectContaining({
+          key: checklistKey,
+          status: 'error',
+          detail: expect.stringContaining('must be a standard text channel'),
+        })
+      );
+    }
+  );
+
   it('uses live diagnostics for the manageable guild readiness summary', async () => {
     vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
     vi.mocked(fetchGuildResources).mockRejectedValue(new DiscordApiError(404, 'Unknown Guild'));
