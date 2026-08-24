@@ -158,15 +158,17 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
 
     if (serverConfig.settings.report_instructions_channel_id) {
+      const reportIssues: SetupDiagnosticIssue[] = [];
       await this.checkConfiguredTextChannel(
         guild,
         botMember,
         serverConfig.settings.report_instructions_channel_id,
         'report-instructions-channel',
         'Report instructions channel',
-        VERIFICATION_CHANNEL_PERMISSIONS,
-        issues
+        ADMIN_CHANNEL_PERMISSIONS,
+        reportIssues
       );
+      issues.push(...reportIssues.map((issue) => ({ ...issue, severity: 'warning' as const })));
     }
 
     await this.checkCaseResponderRoles(guild, serverConfig, issues);
@@ -212,7 +214,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         candidate.reportInstructionsChannelId,
         'report-instructions-channel',
         'Report instructions channel',
-        VERIFICATION_CHANNEL_PERMISSIONS,
+        ADMIN_CHANNEL_PERMISSIONS,
         issues
       );
     }

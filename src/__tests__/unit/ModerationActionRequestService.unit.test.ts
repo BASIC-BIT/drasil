@@ -2102,6 +2102,7 @@ describe('ModerationActionRequestService', () => {
       admin_channel_id: 'admin-channel-1',
       case_role_id: 'role-1',
       verification_channel_id: 'created-verification-channel',
+      settings: { detection_response_mode: 'notify_only' },
     });
     expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
       'guild-1',
@@ -2112,6 +2113,21 @@ describe('ModerationActionRequestService', () => {
         verification_channel_configured: true,
         verification_channel_created: true,
       })
+    );
+    expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
+      'guild-1',
+      'setup wizard opened',
+      { surface: 'web' }
+    );
+    expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
+      'guild-1',
+      'setup wizard apply queued',
+      { surface: 'web' }
+    );
+    expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
+      'guild-1',
+      'setup wizard completed',
+      { surface: 'web' }
     );
     expect(reportInstructionsChannel.send).toHaveBeenCalledWith(
       expect.objectContaining({

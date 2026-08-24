@@ -3296,9 +3296,25 @@ describe('EventHandler (unit)', () => {
       fetchOwner: jest.fn(),
     } as any;
 
-    await (handler as any).handleGuildCreate(guild);
+    const originalPublicUrl = process.env.DRASIL_WEB_PUBLIC_URL;
+    process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasil.example';
+    try {
+      await (handler as any).handleGuildCreate(guild);
+    } finally {
+      if (originalPublicUrl === undefined) {
+        delete process.env.DRASIL_WEB_PUBLIC_URL;
+      } else {
+        process.env.DRASIL_WEB_PUBLIC_URL = originalPublicUrl;
+      }
+    }
 
-    expect(installer.send).toHaveBeenCalledWith(expect.stringContaining('/config setup'));
+    expect(installer.send).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [expect.anything()], embeds: [expect.anything()] })
+    );
+    const setupDm = installer.send.mock.calls[0][0];
+    expect(setupDm.components[0].toJSON().components[0].url).toBe(
+      'https://drasil.example/admin/guild/guild-1/onboarding'
+    );
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       setup_nudge_last_attempt_at: expect.any(String),
       setup_nudge_last_recipient_id: 'installer-1',
@@ -3341,7 +3357,9 @@ describe('EventHandler (unit)', () => {
       warnSpy.mockRestore();
     }
 
-    expect(ownerUser.send).toHaveBeenCalledWith(expect.stringContaining('/config validate'));
+    expect(ownerUser.send).toHaveBeenCalledWith(
+      expect.objectContaining({ embeds: [expect.anything()] })
+    );
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       setup_nudge_last_attempt_at: expect.any(String),
       setup_nudge_last_recipient_id: 'owner-1',
@@ -3439,7 +3457,9 @@ describe('EventHandler (unit)', () => {
       warnSpy.mockRestore();
     }
 
-    expect(installer.send).toHaveBeenCalledWith(expect.stringContaining('/config setup'));
+    expect(installer.send).toHaveBeenCalledWith(
+      expect.objectContaining({ embeds: [expect.anything()] })
+    );
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       setup_nudge_last_attempt_at: expect.any(String),
       setup_nudge_last_recipient_id: 'installer-1',
@@ -3535,6 +3555,64 @@ describe('EventHandler (unit)', () => {
       setup_warning_last_fingerprint: 'case-role-missing',
     });
     expect(installer.send.mock.calls[0][0]).toContain('No message content is included in this DM.');
+  });
+
+  it('downgrades restrictive automatic detection to record-only while setup is incomplete', async () => {
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: null,
+        admin_channel_id: 'admin-1',
+        verification_channel_id: 'verification-1',
+        settings: { setup_nudge_last_attempt_at: new Date().toISOString() },
+      }),
+    };
+    const setupDiagnosticsService = {
+      validateGuildSetup: jest.fn().mockResolvedValue({
+        guildId: 'guild-1',
+        checkedAt: new Date(),
+        issues: [{ severity: 'error', code: 'case-role-missing', message: 'Missing role.' }],
+        errorCount: 1,
+        warningCount: 0,
+      }),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn(),
+      handleSuspiciousJoin: jest.fn(),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+    };
+    const handler = buildHandler({
+      configService,
+      setupDiagnosticsService,
+      securityActionService,
+    });
+    const member = {
+      guild: { id: 'guild-1' },
+      user: { tag: 'test-user#0001' },
+    } as any;
+    const message = {} as any;
+
+    await (handler as any).handleAutomaticDetection(
+      member,
+      {
+        label: 'SUSPICIOUS',
+        confidence: 1,
+        reasons: ['test'],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'test',
+      },
+      { mode: 'restrict' },
+      70,
+      message
+    );
+
+    expect(securityActionService.recordSuspiciousMessage).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ label: 'SUSPICIOUS' }),
+      message
+    );
+    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
+    expect(securityActionService.handleSuspiciousJoin).not.toHaveBeenCalled();
   });
 
   it('skips detection-time setup validation immediately after a warning attempt', async () => {
@@ -3669,7 +3747,9 @@ describe('EventHandler (unit)', () => {
 
     await (handler as any).handleGuildCreate(guild);
 
-    expect(installer.send).toHaveBeenCalledWith(expect.stringContaining('/config setup'));
+    expect(installer.send).toHaveBeenCalledWith(
+      expect.objectContaining({ embeds: [expect.anything()] })
+    );
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       setup_nudge_last_attempt_at: expect.any(String),
       setup_nudge_last_recipient_id: 'installer-2',

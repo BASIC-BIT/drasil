@@ -11,6 +11,9 @@ Initial capabilities:
 - Discord OAuth admin login with `identify` and `guilds` scopes.
 - Guild selection for Discord owners or users with Manage Server.
 - Live setup diagnostics using the bot token where available.
+- Guided first-run onboarding at `/admin/guild/[guildId]/onboarding`, including live readiness,
+  safe role/channel provisioning, protection-mode selection, and durable worker status. Incomplete
+  guilds link here directly from the guild selector.
 - Core setup editing for case role, admin/verification/report/live-queue
   channels, detection response modes, observed-alert thresholds, staff action
   gates, auto-kick policy, heuristic detection thresholds and watch terms,

@@ -1,6 +1,10 @@
 import {
   AuditLogEvent,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   Client,
+  EmbedBuilder,
   GuildBan,
   Message,
   GuildMember,
@@ -11,10 +15,12 @@ import {
   MessageFlags,
   PermissionFlagsBits,
   User,
+  type MessageCreateOptions,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { randomUUID } from 'node:crypto';
 import { injectable, inject, optional } from 'inversify';
+import { deriveSetupReadiness } from '../../packages/contracts/src/setup';
 import { UserProfileData } from '../services/GPTService';
 import { DetectionResult, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { INotificationManager } from '../services/NotificationManager';
@@ -89,6 +95,7 @@ import {
   ActiveAccountQuarantineCache,
   IActiveAccountQuarantineCache,
 } from '../services/ActiveAccountQuarantineCache';
+import { buildAdminGuildOnboardingUrl } from '../utils/publicWebLinks';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -111,7 +118,7 @@ interface SetupNudgeRecipient {
 interface SetupNudgeUser {
   readonly id: string;
   readonly bot?: boolean;
-  send(content: string): Promise<unknown>;
+  send(content: string | MessageCreateOptions): Promise<unknown>;
 }
 
 type CachedMessageChannel = Message['channel'] & {
@@ -695,15 +702,26 @@ export class EventHandler implements IEventHandler {
     }
 
     const confidencePercent = detectionResult.confidence * 100;
+    let effectiveResponseSettings = responseSettings;
     if (responseSettings.mode === 'notify_only' || responseSettings.mode === 'restrict') {
-      void this.maybeSendDetectionSetupWarning(member.guild).catch((error) => {
-        console.warn(`Failed to process setup warning for guild ${member.guild.id}:`, error);
-      });
+      const setupSafety = await this.evaluateAutomaticDetectionSetupSafety(member.guild);
+      if (!setupSafety.ready) {
+        effectiveResponseSettings = { ...responseSettings, mode: 'record_only' };
+        if (setupSafety.config && setupSafety.report) {
+          void this.maybeSendDetectionSetupWarning(
+            member.guild,
+            setupSafety.config,
+            setupSafety.report
+          ).catch((error) => {
+            console.warn(`Failed to process setup warning for guild ${member.guild.id}:`, error);
+          });
+        }
+      }
     }
 
     const routesWithoutCaseHandling =
-      responseSettings.mode === 'record_only' ||
-      responseSettings.mode === 'notify_only' ||
+      effectiveResponseSettings.mode === 'record_only' ||
+      effectiveResponseSettings.mode === 'notify_only' ||
       confidencePercent < actionThreshold;
     if (sourceMessage && !detectionResult.detectionEventId && routesWithoutCaseHandling) {
       detectionResult.detectionEventId = await this.securityActionService.recordSuspiciousMessage(
@@ -713,7 +731,7 @@ export class EventHandler implements IEventHandler {
       );
     }
 
-    switch (responseSettings.mode) {
+    switch (effectiveResponseSettings.mode) {
       case 'record_only':
         console.log(
           `Recorded suspicious detection for ${member.user.tag}; response mode is record_only.`
@@ -724,7 +742,7 @@ export class EventHandler implements IEventHandler {
         await this.notifyObservedDetectionIfEligible(
           member,
           detectionResult,
-          responseSettings,
+          effectiveResponseSettings,
           sourceMessage
         );
         return;
@@ -734,7 +752,7 @@ export class EventHandler implements IEventHandler {
           await this.notifyObservedDetectionIfEligible(
             member,
             detectionResult,
-            responseSettings,
+            effectiveResponseSettings,
             sourceMessage
           );
           return;
@@ -752,6 +770,34 @@ export class EventHandler implements IEventHandler {
 
       case 'off':
         return;
+    }
+  }
+
+  private async evaluateAutomaticDetectionSetupSafety(guild: Guild): Promise<{
+    readonly ready: boolean;
+    readonly config?: Server;
+    readonly report?: SetupDiagnosticReport;
+  }> {
+    if (!this.setupDiagnosticsService) {
+      return { ready: true };
+    }
+
+    try {
+      const config = await this.configService.getServerConfig(guild.id);
+      const report = await this.setupDiagnosticsService.validateGuildSetup(guild);
+      return {
+        ready:
+          deriveSetupReadiness({
+            installed: true,
+            coreConfigured: !this.isSetupIncomplete(config),
+            blockingErrorCount: report.errorCount,
+          }) === 'ready',
+        config,
+        report,
+      };
+    } catch (error) {
+      console.warn(`Could not verify setup readiness for guild ${guild.id}:`, error);
+      return { ready: false };
     }
   }
 
@@ -1891,12 +1937,16 @@ export class EventHandler implements IEventHandler {
     }
   }
 
-  private async maybeSendDetectionSetupWarning(guild: Guild): Promise<void> {
+  private async maybeSendDetectionSetupWarning(
+    guild: Guild,
+    knownConfig?: Server,
+    knownReport?: SetupDiagnosticReport
+  ): Promise<void> {
     if (!this.setupDiagnosticsService) {
       return;
     }
 
-    const config = await this.configService.getServerConfig(guild.id);
+    const config = knownConfig ?? (await this.configService.getServerConfig(guild.id));
     // Detection warnings share setup nudge metadata with guild-join nudges to keep
     // all setup-related DMs under one short burst guard.
     if (
@@ -1908,7 +1958,7 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    const report = await this.setupDiagnosticsService.validateGuildSetup(guild);
+    const report = knownReport ?? (await this.setupDiagnosticsService.validateGuildSetup(guild));
     if (report.errorCount === 0) {
       return;
     }
@@ -2045,14 +2095,43 @@ export class EventHandler implements IEventHandler {
     }
   }
 
-  private buildSetupNudgeMessage(guild: Guild): string {
-    return [
-      `Thanks for installing Drasil in ${guild.name}.`,
-      'Finish setup by running `/config setup admin-channel:<moderator-channel>` in the server.',
-      'Omit `case-role` and `verification-channel` if you want Drasil to create safe defaults.',
-      'Add `report-channel:<channel>` if you want Drasil to create or update report instructions.',
-      'Run `/config validate` afterwards to check permissions, channels, and role hierarchy.',
-    ].join('\n');
+  private buildSetupNudgeMessage(guild: Guild): MessageCreateOptions {
+    const onboardingUrl = buildAdminGuildOnboardingUrl(guild.id);
+    const setupGuideUrl = 'https://github.com/BASIC-BIT/drasil/blob/main/docs/onboarding.md';
+    const embed = new EmbedBuilder()
+      .setColor(0x4f8cff)
+      .setTitle('Welcome to Drasil')
+      .setDescription(`Drasil has joined ${guild.name}. Finish a safe setup in about two minutes.`)
+      .addFields(
+        {
+          name: 'Required setup',
+          value:
+            '1. Choose an admin alerts channel\n2. Choose or create a case role\n3. Choose or create a verification channel',
+        },
+        {
+          name: 'Optional',
+          value: 'Add member reporting when you are ready.',
+        },
+        {
+          name: 'Prefer Discord commands?',
+          value: 'Run `/config setup admin-channel:<moderator-channel>`, then `/config validate`.',
+        }
+      )
+      .setFooter({ text: 'Setup incomplete - 0 of 3 required steps complete' });
+    const buttons = [
+      ...(onboardingUrl
+        ? [
+            new ButtonBuilder()
+              .setStyle(ButtonStyle.Link)
+              .setLabel('Start guided setup')
+              .setURL(onboardingUrl),
+          ]
+        : []),
+      new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Setup guide').setURL(setupGuideUrl),
+    ];
+    const components = [new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons)];
+
+    return { embeds: [embed], components };
   }
 
   private buildDetectionSetupWarningMessage(guild: Guild, report: SetupDiagnosticReport): string {

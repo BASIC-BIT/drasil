@@ -102,8 +102,13 @@ export interface INotificationManager {
     caseRoleId: string,
     persistConfig?: boolean,
     onChannelCreated?: (channelId: string) => void,
-    configuredVerificationChannelId?: string
+    configuredVerificationChannelId?: string,
+    onPermissionsUpdated?: (snapshot: VerificationPermissionSnapshot) => void
   ): Promise<string | null>;
+  restoreVerificationChannelPermissions?(
+    guild: Guild,
+    snapshot: VerificationPermissionSnapshot
+  ): Promise<boolean>;
 
   /**
    * Handle the history button interaction by sending a private ephemeral message with full detection history
@@ -158,6 +163,18 @@ export interface INotificationManager {
     actionDescription: string,
     admin: User
   ): Promise<boolean>;
+}
+
+export interface VerificationPermissionSnapshotEntry {
+  readonly id: string;
+  readonly type: 0 | 1;
+  readonly allow: bigint;
+  readonly deny: bigint;
+}
+
+export interface VerificationPermissionSnapshot {
+  readonly channelId: string;
+  readonly entries: readonly VerificationPermissionSnapshotEntry[];
 }
 
 interface ObservedDetectionMetadata {
@@ -825,7 +842,8 @@ export class NotificationManager implements INotificationManager {
     caseRoleId: string,
     persistConfig = true,
     onChannelCreated?: (channelId: string) => void,
-    configuredVerificationChannelId?: string
+    configuredVerificationChannelId?: string,
+    onPermissionsUpdated?: (snapshot: VerificationPermissionSnapshot) => void
   ): Promise<string | null> {
     if (!caseRoleId) {
       console.error('Case role ID is required to set up verification channel');
@@ -842,8 +860,21 @@ export class NotificationManager implements INotificationManager {
         configuredVerificationChannelId
       );
       if (configuredVerificationChannel) {
+        const snapshot = this.snapshotPermissionOverwrites(configuredVerificationChannel);
+        onPermissionsUpdated?.(snapshot);
+        const desiredIds = new Set(
+          permissionOverwrites.map((overwrite) => overwrite.id.toString())
+        );
+        const preservedOverwrites: OverwriteResolvable[] = snapshot.entries
+          .filter((entry) => !desiredIds.has(entry.id))
+          .map((entry) => ({
+            id: entry.id,
+            type: entry.type,
+            allow: entry.allow,
+            deny: entry.deny,
+          }));
         await configuredVerificationChannel.permissionOverwrites.set(
-          permissionOverwrites,
+          [...preservedOverwrites, ...permissionOverwrites],
           'Sync Drasil verification channel permissions'
         );
 
@@ -879,6 +910,53 @@ export class NotificationManager implements INotificationManager {
       console.error('Failed to set up verification channel:', error);
       return null;
     }
+  }
+
+  public async restoreVerificationChannelPermissions(
+    guild: Guild,
+    snapshot: VerificationPermissionSnapshot
+  ): Promise<boolean> {
+    try {
+      const channel = await guild.channels.fetch(snapshot.channelId).catch(() => null);
+      if (channel?.type !== ChannelType.GuildText) {
+        return false;
+      }
+      await channel.permissionOverwrites.set(
+        snapshot.entries.map((entry) => ({
+          id: entry.id,
+          type: entry.type,
+          allow: entry.allow,
+          deny: entry.deny,
+        })),
+        'Roll back Drasil verification channel permission sync'
+      );
+      return true;
+    } catch (error) {
+      console.error(`Failed to restore verification permissions for ${snapshot.channelId}:`, error);
+      return false;
+    }
+  }
+
+  private snapshotPermissionOverwrites(channel: TextChannel): VerificationPermissionSnapshot {
+    type ExistingOverwrite = {
+      readonly id: string;
+      readonly type: 0 | 1;
+      readonly allow: { readonly bitfield: bigint };
+      readonly deny: { readonly bitfield: bigint };
+    };
+    const cache = channel.permissionOverwrites.cache as
+      | { values?: () => IterableIterator<ExistingOverwrite> }
+      | undefined;
+    const existingOverwrites = typeof cache?.values === 'function' ? [...cache.values()] : [];
+    return {
+      channelId: channel.id,
+      entries: existingOverwrites.map((existing) => ({
+        id: existing.id,
+        type: existing.type,
+        allow: existing.allow.bitfield,
+        deny: existing.deny.bitfield,
+      })),
+    };
   }
 
   private buildVerificationChannelPermissionOverwrites(

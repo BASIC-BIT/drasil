@@ -480,9 +480,11 @@ describe('CommandHandler setup commands (unit)', () => {
       warningCount: 0,
     });
     const updateServerConfig = jest.fn().mockResolvedValue({});
+    const setupVerificationChannel = jest.fn().mockResolvedValue('verification-channel-1');
     const { handler, configService, notificationManager, setupDiagnosticsService } = buildHandler({
       validateSetupCandidate,
       updateServerConfig,
+      setupVerificationChannel,
     });
     const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
     const verificationChannel = {
@@ -520,7 +522,7 @@ describe('CommandHandler setup commands (unit)', () => {
           return null;
         }),
         getRole: jest.fn().mockReturnValue(caseRole),
-        getString: jest.fn().mockReturnValue(null),
+        getString: jest.fn((name: string) => (name === 'protection-mode' ? 'restrict' : null)),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -536,14 +538,22 @@ describe('CommandHandler setup commands (unit)', () => {
       adminChannelId: 'admin-channel-1',
       verificationChannelId: 'verification-channel-1',
       willCreateVerificationChannel: false,
+      willSyncVerificationChannelPermissions: true,
       reportInstructionsChannelId: null,
     });
     expect(guild.roles.create).not.toHaveBeenCalled();
-    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+    expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
+      guild,
+      'role-1',
+      false,
+      expect.any(Function),
+      'verification-channel-1'
+    );
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       case_role_id: 'role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'verification-channel-1',
+      settings: { detection_response_mode: 'restrict' },
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Setup complete.'),
@@ -692,6 +702,7 @@ describe('CommandHandler setup commands (unit)', () => {
       case_role_id: 'created-role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
+      settings: { detection_response_mode: 'notify_only' },
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Created case role: <@&created-role-1>'),
@@ -781,6 +792,7 @@ describe('CommandHandler setup commands (unit)', () => {
       case_role_id: 'default-role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
+      settings: { detection_response_mode: 'notify_only' },
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Case role: <@&default-role-1>'),
@@ -866,6 +878,7 @@ describe('CommandHandler setup commands (unit)', () => {
       case_role_id: 'named-role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
+      settings: { detection_response_mode: 'notify_only' },
     });
     expect(interaction.editReply.mock.calls[0][0].content).toContain('Case role: <@&named-role-1>');
     expect(interaction.editReply.mock.calls[0][0].content).not.toContain('<@&old-role-1>');
@@ -1074,6 +1087,7 @@ describe('CommandHandler setup commands (unit)', () => {
       case_role_id: 'created-role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'created-channel-1',
+      settings: { detection_response_mode: 'notify_only' },
     });
     expect(createdChannel.delete).toHaveBeenCalledWith(
       'Rolling back Drasil setup after config save failed'
@@ -1209,11 +1223,13 @@ describe('CommandHandler setup commands (unit)', () => {
     const updateServerConfig = jest.fn().mockResolvedValue({});
     const updateServerSettings = jest.fn().mockResolvedValue({});
     const getServerConfig = jest.fn().mockResolvedValue({ settings: {} });
+    const setupVerificationChannel = jest.fn().mockResolvedValue('verification-channel-1');
     const { handler, configService } = buildHandler({
       validateSetupCandidate,
       updateServerConfig,
       updateServerSettings,
       getServerConfig,
+      setupVerificationChannel,
     });
     const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
     const verificationChannel = {
@@ -1272,6 +1288,7 @@ describe('CommandHandler setup commands (unit)', () => {
       case_role_id: 'role-1',
       admin_channel_id: 'admin-channel-1',
       verification_channel_id: 'verification-channel-1',
+      settings: { detection_response_mode: 'notify_only' },
     });
     expect(reportChannel.send).toHaveBeenCalledTimes(1);
     expect(configService.updateServerSettings).not.toHaveBeenCalled();

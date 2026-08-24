@@ -8,12 +8,12 @@ import {
   GuildMember,
   Message,
   PermissionFlagsBits,
-  Role,
   TextChannel,
   ThreadChannel,
   User,
 } from 'discord.js';
 import { inject, injectable, optional } from 'inversify';
+import type { DetectionResponseMode } from '../../packages/contracts/src/setup';
 import { IConfigService } from '../config/ConfigService';
 import { ReportInstructionsManager } from '../controllers/ReportInstructionsManager';
 import { Prisma } from '../db/prisma';
@@ -46,6 +46,7 @@ import { IReportIntakeService } from './ReportIntakeService';
 import { ISecurityActionService } from './SecurityActionService';
 import { ISetupDiagnosticsService, SetupDiagnosticReport } from './SetupDiagnosticsService';
 import { SetupWorkflowService } from './SetupWorkflowService';
+import { SetupProvisioningService } from './SetupProvisioningService';
 import { IThreadManager } from './ThreadManager';
 import { ICombinedBanLifecycleService, IUserModerationService } from './UserModerationService';
 import { MessageCleanupService } from './MessageCleanupService';
@@ -1451,10 +1452,18 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   }
 
   private async completeSetupVerification(request: ModerationActionRequest): Promise<void> {
+    void this.productAnalyticsService.captureGuildEvent(request.server_id, 'setup wizard opened', {
+      surface: 'web',
+    });
+    void this.productAnalyticsService.captureGuildEvent(
+      request.server_id,
+      'setup wizard apply queued',
+      { surface: 'web' }
+    );
     const caseRoleId = this.readMetadataString(request.metadata, 'case_role_id');
     const adminChannelId = this.readMetadataString(request.metadata, 'admin_channel_id');
-    if (!caseRoleId || !adminChannelId) {
-      throw new Error('Setup verification request is missing case role or admin channel.');
+    if (!adminChannelId) {
+      throw new Error('Setup verification request is missing the admin channel.');
     }
 
     const verificationChannelId = this.readMetadataString(
@@ -1465,22 +1474,10 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       request.metadata,
       'report_instructions_channel_id'
     );
+    const caseRoleName = this.readMetadataString(request.metadata, 'case_role_name');
+    const detectionResponseMode = this.readSetupDetectionResponseMode(request.metadata);
     const guild = await this.fetchGuild(request.server_id);
-    const [caseRole] = await Promise.all([
-      guild.roles.fetch(caseRoleId).catch(() => null),
-      this.fetchRequestTextChannel(request.server_id, adminChannelId, 'Admin channel'),
-      verificationChannelId
-        ? this.fetchRequestTextChannel(
-            request.server_id,
-            verificationChannelId,
-            'Verification channel'
-          )
-        : Promise.resolve(null),
-    ]);
-
-    if (!caseRole) {
-      throw new Error(`Case role ${caseRoleId} was not found.`);
-    }
+    await this.fetchRequestTextChannel(request.server_id, adminChannelId, 'Admin channel');
 
     const setupWorkflowService = new SetupWorkflowService(
       this.configService,
@@ -1488,17 +1485,48 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       this.productAnalyticsService,
       this.setupDiagnosticsService
     );
-    const setupResult = await setupWorkflowService.completeSetup({
+    const setupResult = await new SetupProvisioningService(
+      this.configService,
+      this.setupDiagnosticsService,
+      setupWorkflowService
+    ).provision({
       adminChannelId,
+      actorLabel: `web administrator ${request.actor_id}`,
       captureAnalytics: true,
-      caseRole: caseRole as Role,
-      candidateVerificationChannelId: verificationChannelId,
+      caseRoleId,
+      caseRoleName,
+      detectionResponseMode,
       guild,
-      initialVerificationChannelId: verificationChannelId,
       reportInstructionsChannelId,
+      verificationChannelId,
     });
 
     if (setupResult.status !== 'completed') {
+      void this.productAnalyticsService.captureGuildEvent(
+        request.server_id,
+        'setup wizard blocked',
+        {
+          diagnostic_codes:
+            'report' in setupResult
+              ? setupResult.report.issues
+                  .filter((issue) => issue.severity === 'error')
+                  .map((issue) => issue.code)
+              : [],
+          reason: setupResult.status,
+          surface: 'web',
+        }
+      );
+      if (setupResult.status === 'ambiguous_case_role') {
+        throw new Error(
+          `Multiple roles named ${setupResult.roleName} exist; choose one before retrying.`
+        );
+      }
+      if (setupResult.status === 'ambiguous_verification_channel') {
+        throw new Error('Multiple verification channels exist; choose one before retrying.');
+      }
+      if (setupResult.status === 'invalid_selection') {
+        throw new Error(setupResult.detail);
+      }
       throw new Error(this.describeSetupWorkflowFailure(setupResult));
     }
 
@@ -1536,6 +1564,21 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       verification_channel_action: setupResult.verificationChannelAction,
       verification_channel_id: setupResult.verificationChannelId,
     });
+    void this.productAnalyticsService.captureGuildEvent(
+      request.server_id,
+      'setup wizard completed',
+      { surface: 'web' }
+    );
+  }
+
+  private readSetupDetectionResponseMode(metadata: Prisma.JsonValue): DetectionResponseMode {
+    const value = this.readMetadataString(metadata, 'detection_response_mode');
+    return value === 'off' ||
+      value === 'record_only' ||
+      value === 'notify_only' ||
+      value === 'restrict'
+      ? value
+      : 'notify_only';
   }
 
   private async upsertReportInstructions(request: ModerationActionRequest): Promise<void> {

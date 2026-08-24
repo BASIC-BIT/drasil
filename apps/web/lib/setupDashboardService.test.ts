@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SetupServerRecord } from '@drasil/contracts';
 import type { DiscordGuildResources, DiscordGuildSummary } from './discordApi';
+import { DISCORD_PERMISSIONS } from './discordPermissions';
 import { fetchDiscordGuilds, fetchGuildResources } from './discordApi';
 import { SetupDashboardService } from './setupDashboardService';
 import type { SetupDataAdapter } from './setupDataAdapter';
@@ -58,15 +59,26 @@ describe('SetupDashboardService', () => {
     vi.clearAllMocks();
   });
 
-  it('does not mark inactive server records as configured', async () => {
+  it('marks inactive server records as needing setup', async () => {
     vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
     vi.mocked(fetchGuildResources).mockResolvedValue(resources);
 
     const service = new SetupDashboardService(createAdapter(inactiveServer));
 
     await expect(service.getDashboard('guild-1', 'access-token')).resolves.toMatchObject({
-      dashboard: { configured: false },
+      dashboard: { readiness: 'needs_setup' },
     });
+  });
+
+  it('uses live diagnostics for the manageable guild readiness summary', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockRejectedValue(new Error('Unknown Guild'));
+
+    const service = new SetupDashboardService(createAdapter(null));
+
+    await expect(service.listManageableGuilds('access-token')).resolves.toEqual([
+      expect.objectContaining({ id: 'guild-1', readiness: 'not_installed' }),
+    ]);
   });
 
   it('checks guild management access without fetching live resources', async () => {
@@ -89,6 +101,33 @@ describe('SetupDashboardService', () => {
 
     await expect(service.getDashboard('guild-1', 'access-token')).resolves.toMatchObject({
       dashboard: { checkedAt: '2026-06-08T01:16:02.000Z' },
+    });
+  });
+
+  it.each([
+    { label: 'server owner', owner: true, permissions: 0n, expected: true },
+    {
+      label: 'Administrator',
+      owner: false,
+      permissions: DISCORD_PERMISSIONS.Administrator,
+      expected: true,
+    },
+    {
+      label: 'Manage Server only',
+      owner: false,
+      permissions: DISCORD_PERMISSIONS.ManageGuild,
+      expected: false,
+    },
+  ])('sets apply authority for a $label', async ({ owner, permissions, expected }) => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([
+      { ...guild, owner, permissions: permissions.toString() },
+    ]);
+    vi.mocked(fetchGuildResources).mockResolvedValue(resources);
+
+    const service = new SetupDashboardService(createAdapter(inactiveServer));
+
+    await expect(service.getDashboard('guild-1', 'access-token')).resolves.toMatchObject({
+      canApplySetup: expected,
     });
   });
 });

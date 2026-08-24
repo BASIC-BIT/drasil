@@ -1,6 +1,7 @@
 import type { Guild, Role } from 'discord.js';
+import type { DetectionResponseMode } from '../../packages/contracts/src/setup';
 import { IConfigService } from '../config/ConfigService';
-import { INotificationManager } from './NotificationManager';
+import { INotificationManager, type VerificationPermissionSnapshot } from './NotificationManager';
 import { IProductAnalyticsService } from './ProductAnalyticsService';
 import { ISetupDiagnosticsService, SetupDiagnosticReport } from './SetupDiagnosticsService';
 
@@ -48,6 +49,7 @@ export interface CompleteSetupWorkflowInput {
   candidateReport?: SetupDiagnosticReport;
   createdCaseRole?: Role | null;
   captureAnalytics?: boolean;
+  detectionResponseMode?: DetectionResponseMode;
 }
 
 export class SetupWorkflowService {
@@ -85,20 +87,35 @@ export class SetupWorkflowService {
     let verificationChannelAction: VerificationChannelSetupAction = verificationChannelId
       ? 'configured'
       : 'created';
-    const createdSetupArtifacts: { verificationChannelId?: string } = {};
+    const setupArtifacts: {
+      verificationChannelId?: string;
+      permissionSnapshot?: VerificationPermissionSnapshot;
+    } = {};
 
     if (!verificationChannelId) {
       const onChannelCreated = (channelId: string): void => {
-        createdSetupArtifacts.verificationChannelId = channelId;
+        setupArtifacts.verificationChannelId = channelId;
+      };
+      const onPermissionsUpdated = (snapshot: VerificationPermissionSnapshot): void => {
+        setupArtifacts.permissionSnapshot = snapshot;
       };
       verificationChannelId = input.candidateVerificationChannelId
-        ? await this.notificationManager.setupVerificationChannel(
-            input.guild,
-            input.caseRole.id,
-            false,
-            onChannelCreated,
-            input.candidateVerificationChannelId
-          )
+        ? typeof this.notificationManager.restoreVerificationChannelPermissions === 'function'
+          ? await this.notificationManager.setupVerificationChannel(
+              input.guild,
+              input.caseRole.id,
+              false,
+              onChannelCreated,
+              input.candidateVerificationChannelId,
+              onPermissionsUpdated
+            )
+          : await this.notificationManager.setupVerificationChannel(
+              input.guild,
+              input.caseRole.id,
+              false,
+              onChannelCreated,
+              input.candidateVerificationChannelId
+            )
         : await this.notificationManager.setupVerificationChannel(
             input.guild,
             input.caseRole.id,
@@ -109,7 +126,8 @@ export class SetupWorkflowService {
       if (!verificationChannelId) {
         const setupFailureDetail = await this.rollbackCreatedArtifacts(
           input.guild,
-          createdSetupArtifacts.verificationChannelId,
+          setupArtifacts.verificationChannelId,
+          setupArtifacts.permissionSnapshot,
           input.createdCaseRole,
           guildId,
           'Verification channel setup failed.',
@@ -119,12 +137,12 @@ export class SetupWorkflowService {
           status: 'verification_channel_failed',
           error: new Error('Failed to create a verification channel during setup.'),
           setupFailureDetail,
-          createdVerificationChannelId: createdSetupArtifacts.verificationChannelId,
+          createdVerificationChannelId: setupArtifacts.verificationChannelId,
         };
       }
 
       verificationChannelAction =
-        input.candidateVerificationChannelId && !createdSetupArtifacts.verificationChannelId
+        input.candidateVerificationChannelId && !setupArtifacts.verificationChannelId
           ? 'synced'
           : 'created';
     }
@@ -143,7 +161,8 @@ export class SetupWorkflowService {
     if (finalCandidateReport.errorCount > 0) {
       const setupFailureDetail = await this.rollbackCreatedArtifacts(
         input.guild,
-        createdSetupArtifacts.verificationChannelId,
+        setupArtifacts.verificationChannelId,
+        setupArtifacts.permissionSnapshot,
         input.createdCaseRole,
         guildId,
         'Final validation failed.',
@@ -153,20 +172,32 @@ export class SetupWorkflowService {
         status: 'final_validation_failed',
         report: finalCandidateReport,
         setupFailureDetail,
-        createdVerificationChannelId: createdSetupArtifacts.verificationChannelId,
+        createdVerificationChannelId: setupArtifacts.verificationChannelId,
       };
     }
 
     try {
+      const currentConfig = input.detectionResponseMode
+        ? await this.configService.getServerConfig(guildId)
+        : null;
       await this.configService.updateServerConfig(guildId, {
         case_role_id: input.caseRole.id,
         admin_channel_id: input.adminChannelId,
         verification_channel_id: verificationChannelId,
+        ...(currentConfig && input.detectionResponseMode
+          ? {
+              settings: {
+                ...currentConfig.settings,
+                detection_response_mode: input.detectionResponseMode,
+              },
+            }
+          : {}),
       });
     } catch (error) {
       const setupFailureDetail = await this.rollbackCreatedArtifacts(
         input.guild,
-        createdSetupArtifacts.verificationChannelId,
+        setupArtifacts.verificationChannelId,
+        setupArtifacts.permissionSnapshot,
         input.createdCaseRole,
         guildId,
         'Configuration could not be saved.',
@@ -176,7 +207,7 @@ export class SetupWorkflowService {
         status: 'config_save_failed',
         error,
         setupFailureDetail,
-        createdVerificationChannelId: createdSetupArtifacts.verificationChannelId,
+        createdVerificationChannelId: setupArtifacts.verificationChannelId,
       };
     }
 
@@ -203,12 +234,27 @@ export class SetupWorkflowService {
   private async rollbackCreatedArtifacts(
     guild: Guild,
     createdVerificationChannelId: string | undefined,
+    permissionSnapshot: VerificationPermissionSnapshot | undefined,
     createdCaseRole: Role | null | undefined,
     guildId: string,
     prefix: string,
     rollbackReason: string
   ): Promise<string> {
     const rollbackDetails = [prefix];
+
+    if (permissionSnapshot) {
+      const rolledBack = this.notificationManager.restoreVerificationChannelPermissions
+        ? await this.notificationManager.restoreVerificationChannelPermissions(
+            guild,
+            permissionSnapshot
+          )
+        : false;
+      rollbackDetails.push(
+        rolledBack
+          ? 'The verification channel permission changes were restored.'
+          : `The permission changes in <#${permissionSnapshot.channelId}> could not be restored; review them before rerunning setup.`
+      );
+    }
 
     if (createdVerificationChannelId) {
       const rolledBack = await this.rollbackCreatedVerificationChannel(

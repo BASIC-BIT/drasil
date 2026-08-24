@@ -1271,6 +1271,17 @@ describe('NotificationManager (unit)', () => {
       name: 'verification',
       type: ChannelType.GuildText,
       permissionOverwrites: {
+        cache: new Map([
+          [
+            'staff-role-1',
+            {
+              id: 'staff-role-1',
+              type: 0,
+              allow: { bitfield: PermissionFlagsBits.ViewChannel },
+              deny: { bitfield: 0n },
+            },
+          ],
+        ]),
         set: overwriteSet,
       },
     };
@@ -1305,6 +1316,10 @@ describe('NotificationManager (unit)', () => {
       expect.arrayContaining([
         expect.objectContaining({ id: 'guild-1' }),
         expect.objectContaining({ id: 'case-role-1' }),
+        expect.objectContaining({
+          id: 'staff-role-1',
+          allow: PermissionFlagsBits.ViewChannel,
+        }),
       ]),
       'Sync Drasil verification channel permissions'
     );

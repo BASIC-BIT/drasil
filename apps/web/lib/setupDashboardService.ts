@@ -1,8 +1,10 @@
 import {
+  deriveSetupReadiness,
   type GuildSetupUpdate,
   type SetupChecklistItem,
   type SetupDashboard,
   type SetupDiagnosticSeverity,
+  type SetupReadinessStatus,
   type SetupServerRecord,
 } from '@drasil/contracts';
 import {
@@ -26,7 +28,7 @@ import { createSetupDataAdapter, type SetupDataAdapter } from './setupDataAdapte
 export interface ManageableGuild {
   readonly id: string;
   readonly name: string;
-  readonly configured: boolean;
+  readonly readiness: SetupReadinessStatus;
   readonly icon: string | null;
 }
 
@@ -34,6 +36,7 @@ export interface SetupDashboardContext {
   readonly dashboard: SetupDashboard;
   readonly channels: readonly DiscordChannel[];
   readonly roles: readonly DiscordRole[];
+  readonly canApplySetup: boolean;
 }
 
 type Clock = () => Date;
@@ -349,19 +352,34 @@ function buildChecklist(args: BuildChecklistArgs) {
   }
 
   checklist.push(
-    reportChannel
+    reportChannel &&
+      hasRequiredChannelPermissions({
+        guildId: guild.id,
+        botUserId: resources.botUser.id,
+        botRoleIds,
+        roles: resources.roles,
+        channel: reportChannel,
+        required: adminRequired,
+      })
       ? item(
           'report-channel',
           'Report instructions channel',
           'ok',
           `${formatChannelName(reportChannel)} is configured for public report instructions.`
         )
-      : item(
-          'report-channel',
-          'Report instructions channel',
-          'warning',
-          'No report instructions channel is configured yet.'
-        )
+      : reportChannel
+        ? item(
+            'report-channel',
+            'Report instructions channel',
+            'warning',
+            `${formatChannelName(reportChannel)} is missing required bot permissions.`
+          )
+        : item(
+            'report-channel',
+            'Report instructions channel',
+            'warning',
+            'No report instructions channel is configured yet.'
+          )
   );
 
   checklist.push(
@@ -422,6 +440,15 @@ function buildChecklist(args: BuildChecklistArgs) {
   return checklist;
 }
 
+function hasCoreConfiguration(server: SetupServerRecord | null): boolean {
+  return Boolean(
+    server?.is_active &&
+    server.case_role_id &&
+    server.admin_channel_id &&
+    server.verification_channel_id
+  );
+}
+
 export class SetupDashboardService {
   public constructor(
     private readonly adapter: SetupDataAdapter = createSetupDataAdapter(),
@@ -432,13 +459,17 @@ export class SetupDashboardService {
     const guilds = (await fetchDiscordGuilds(accessToken)).filter((guild) => {
       return canManageGuild(guild.permissions, guild.owner);
     });
-    const configured = await this.adapter.listConfiguredGuildIds(guilds.map((guild) => guild.id));
-    return guilds.map((guild) => ({
-      id: guild.id,
-      name: guild.name,
-      icon: guild.icon,
-      configured: configured.has(guild.id),
-    }));
+    return Promise.all(
+      guilds.map(async (guild) => {
+        const { dashboard } = await this.loadDashboard(guild);
+        return {
+          id: guild.id,
+          name: guild.name,
+          icon: guild.icon,
+          readiness: dashboard.readiness,
+        };
+      })
+    );
   }
 
   public async assertCanManageGuild(
@@ -457,6 +488,14 @@ export class SetupDashboardService {
   public async getDashboard(guildId: string, accessToken: string): Promise<SetupDashboardContext> {
     const manageableGuild = await this.assertCanManageGuild(guildId, accessToken);
 
+    return this.loadDashboard(manageableGuild);
+  }
+
+  private async loadDashboard(
+    manageableGuild: DiscordGuildSummary
+  ): Promise<SetupDashboardContext> {
+    const guildId = manageableGuild.id;
+
     const server = await this.adapter.getServer(guildId);
     let resources: DiscordGuildResources | null = null;
     let resourcesError: string | null = null;
@@ -466,14 +505,28 @@ export class SetupDashboardService {
       resourcesError = error instanceof Error ? error.message : 'Unable to load Discord resources.';
     }
 
+    const checklist = buildChecklist({
+      guild: manageableGuild,
+      server,
+      resources,
+      resourcesError,
+    });
+
     return {
+      canApplySetup:
+        manageableGuild.owner ||
+        hasPermission(BigInt(manageableGuild.permissions), DISCORD_PERMISSIONS.Administrator),
       dashboard: {
         guildId,
         guildName: manageableGuild.name,
-        configured: Boolean(server?.is_active),
+        readiness: deriveSetupReadiness({
+          installed: resources !== null,
+          coreConfigured: hasCoreConfiguration(server),
+          blockingErrorCount: checklist.filter((entry) => entry.status === 'error').length,
+        }),
         dataProvider: this.adapter.provider,
         checkedAt: this.clock().toISOString(),
-        checklist: buildChecklist({ guild: manageableGuild, server, resources, resourcesError }),
+        checklist,
         server,
       },
       channels: (resources?.channels ?? []).filter((channel) =>

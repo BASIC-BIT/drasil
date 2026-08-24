@@ -264,15 +264,11 @@ What sets our bot apart from existing solutions is our AI-first approach to spam
 
 ## Onboarding Process
 
-The bot provides a streamlined onboarding experience:
-
-1. Introduction and benefits explanation
-2. Configurable case role setup
-3. Configurable admin notification role setup
-4. Optional admin summary channel configuration
-5. Initial full server scan and summarized results
-
-All roles and channels are optionally configurable during onboarding, with clear warnings when optional settings are skipped and automatic creation options available.
+The current onboarding workflow is documented in [Server onboarding](../onboarding.md). It uses a
+private install DM and a guided web wizard, with `/config setup` as the Discord-native fallback.
+Core channels and the case role are required; report instructions are optional. Drasil validates
+live permissions and role hierarchy before enabling the selected automatic response. It does not
+perform an initial full-server member scan.
 
 ## Feature Sets
 

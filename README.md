@@ -70,8 +70,9 @@ High-signal manual and automated test ideas live in `docs/test-cases.md`.
 
 ## Usage
 
-- Invite the bot to your server.
-- Run `/config setup` to configure the case role and channels.
+- Invite the bot to your server, then follow the private guided-setup link or open the server from
+  the web dashboard. See [Server onboarding](docs/onboarding.md).
+- Alternatively, run `/config setup` to configure the case role and channels.
 - Run `/config validate` after permission or channel changes.
 - Update other config as needed (spam thresholds, OpenAI prompts).
 - Let the bot automatically classify new users, or use admin case buttons and commands for manual
@@ -80,6 +81,9 @@ High-signal manual and automated test ideas live in `docs/test-cases.md`.
 ## Setup
 
 ### Server Configuration
+
+The guided web wizard is the recommended first-run path. Until its live diagnostics report
+**Ready**, automatic detections are safely limited to record-only behavior.
 
 1. **Run Unified Setup**:
    - Use `/config setup admin-channel:<channel>`.

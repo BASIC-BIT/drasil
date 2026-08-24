@@ -53,6 +53,57 @@
   --radius-chip: 2px;
 }
 
+.onboarding-wizard {
+  max-width: 760px;
+  margin-inline: auto;
+}
+
+.onboarding-progress {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.onboarding-progress strong {
+  color: var(--text);
+}
+
+.onboarding-issues {
+  padding-block: 0.75rem;
+  border-block: 1px solid var(--line);
+}
+
+.onboarding-issues ul {
+  margin-bottom: 0;
+}
+
+.onboarding-review {
+  margin: 0;
+}
+
+.onboarding-review div {
+  display: grid;
+  grid-template-columns: minmax(9rem, 0.4fr) 1fr;
+  gap: 1rem;
+  padding-block: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.onboarding-review dt {
+  color: var(--muted);
+}
+
+.onboarding-review dd {
+  margin: 0;
+}
+
+.onboarding-navigation {
+  justify-content: space-between;
+}
+
 :root[data-theme='light'] {
   color-scheme: light;
 }

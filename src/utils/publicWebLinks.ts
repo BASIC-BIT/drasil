@@ -42,6 +42,10 @@ export function buildAdminGuildSetupUrl(guildId: string): string | null {
   return buildPublicWebUrl(`/admin/guild/${encodeURIComponent(guildId)}/setup`);
 }
 
+export function buildAdminGuildOnboardingUrl(guildId: string): string | null {
+  return buildPublicWebUrl(`/admin/guild/${encodeURIComponent(guildId)}/onboarding`);
+}
+
 export function buildAdminCaseQueueUrl(guildId: string): string | null {
   return buildPublicWebUrl(`/admin/guild/${encodeURIComponent(guildId)}/cases`);
 }

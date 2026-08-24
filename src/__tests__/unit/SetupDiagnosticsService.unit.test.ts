@@ -147,7 +147,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     expect(report.errorCount).toBeGreaterThanOrEqual(1);
   });
 
-  it('requires thread permissions in configured report instructions channels', async () => {
+  it('does not require private-thread permissions in optional report instructions channels', async () => {
     const { guild } = buildConfiguredGuild({
       channelHas: (permission) => permission !== PermissionFlagsBits.SendMessagesInThreads,
     });
@@ -164,9 +164,31 @@ describe('SetupDiagnosticsService (unit)', () => {
 
     const report = await service.validateGuildSetup(guild);
 
-    expect(report.issues.map((issue) => issue.code)).toContain(
+    expect(report.issues.map((issue) => issue.code)).not.toContain(
       'report-instructions-channel-send-messages-in-threads'
     );
+  });
+
+  it('reports optional report instructions delivery failures as warnings', async () => {
+    const { guild } = buildConfiguredGuild({
+      channelHas: (permission) => permission !== PermissionFlagsBits.SendMessages,
+    });
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: { report_instructions_channel_id: 'report-channel-1' },
+      }),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateGuildSetup(guild);
+
+    expect(
+      report.issues.find((issue) => issue.code === 'report-instructions-channel-send')?.severity
+    ).toBe('warning');
   });
 
   it('requires read message history in configured verification channels', async () => {
