@@ -152,14 +152,9 @@ export class SetupProvisioningService {
         channelIds: verificationCandidate.ambiguousChannelIds,
       };
     }
-    if (
-      verificationCandidate.channelId &&
-      input.adminChannelId === verificationCandidate.channelId
-    ) {
-      return {
-        status: 'invalid_selection',
-        detail: 'The admin alert channel must be separate from the verification channel.',
-      };
+    const channelSelectionError = this.getChannelSelectionError(input, verificationCandidate);
+    if (channelSelectionError) {
+      return { status: 'invalid_selection', detail: channelSelectionError };
     }
     if (
       input.reportInstructionsChannelId &&
@@ -216,6 +211,19 @@ export class SetupProvisioningService {
       previousVerificationChannelId: existingConfig?.verification_channel_id ?? null,
       previousPermissionSyncState: existingConfig?.settings.verification_channel_permission_sync,
     });
+  }
+
+  private getChannelSelectionError(
+    input: ProvisionSetupInput,
+    verificationCandidate: Exclude<VerificationChannelCandidate, { invalidDetail: string }>
+  ): string | null {
+    if (
+      verificationCandidate.channelId &&
+      input.adminChannelId === verificationCandidate.channelId
+    ) {
+      return 'The admin alert channel must be separate from the verification channel.';
+    }
+    return null;
   }
 
   private async resolveCaseRoleCandidate(
