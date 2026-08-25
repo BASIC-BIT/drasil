@@ -1897,6 +1897,11 @@ export class EventHandler implements IEventHandler {
             }
           }
 
+          if (lockedConfig.is_active === false) {
+            await this.configService.updateServerConfig(guild.id, { is_active: true });
+            lockedConfig = { ...lockedConfig, is_active: true };
+          }
+
           return { config: lockedConfig, verificationChannelWasCreated: channelWasCreated };
         }
       );

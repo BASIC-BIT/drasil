@@ -367,4 +367,74 @@ describe('SetupWorkflowService (unit)', () => {
       'old-verification-channel',
     ]);
   });
+
+  it('restores a shipped legacy verification channel before replacing it', async () => {
+    const nextState = {
+      channel_id: 'new-verification-channel',
+      managed_overwrites: [],
+    };
+    const restoreLegacy = jest
+      .fn()
+      .mockImplementation(
+        async (
+          _guild: unknown,
+          channelId: string,
+          _caseRoleId: string,
+          onPermissionsUpdated: jest.Mock
+        ) => {
+          onPermissionsUpdated({ channelId, entries: [] });
+          return true;
+        }
+      );
+    const setupVerificationChannel = jest
+      .fn()
+      .mockImplementation(
+        async (
+          _guild: unknown,
+          _caseRoleId: string,
+          _persistConfig: boolean,
+          _onChannelCreated: unknown,
+          channelId: string,
+          onPermissionsUpdated: jest.Mock
+        ) => {
+          await onPermissionsUpdated({ channelId, entries: [] }, nextState);
+          return channelId;
+        }
+      );
+    const service = new SetupWorkflowService(
+      { updateSetupConfiguration: jest.fn().mockResolvedValue(undefined) } as any,
+      {
+        restoreLegacyVerificationChannelPermissions: restoreLegacy,
+        restoreVerificationChannelPermissions: jest.fn().mockResolvedValue(true),
+        setupVerificationChannel,
+      } as any,
+      { captureGuildEvent: jest.fn() } as any,
+      { validateSetupCandidate: jest.fn().mockResolvedValue(readyReport) } as any
+    );
+
+    await expect(
+      service.completeSetup({
+        guild: { id: 'guild-1' } as any,
+        caseRole: { id: 'new-case-role' } as any,
+        adminChannelId: 'admin-channel-1',
+        initialVerificationChannelId: null,
+        candidateVerificationChannelId: 'new-verification-channel',
+        previousVerificationChannelId: 'legacy-verification-channel',
+        previousCaseRoleId: 'old-case-role',
+        willSyncVerificationChannelPermissions: true,
+        reportInstructionsChannelId: null,
+        candidateReport: readyReport,
+      })
+    ).resolves.toMatchObject({ status: 'completed' });
+
+    expect(restoreLegacy).toHaveBeenCalledWith(
+      expect.anything(),
+      'legacy-verification-channel',
+      'old-case-role',
+      expect.any(Function)
+    );
+    expect(restoreLegacy.mock.invocationCallOrder[0]).toBeLessThan(
+      setupVerificationChannel.mock.invocationCallOrder[0]
+    );
+  });
 });

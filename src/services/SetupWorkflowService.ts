@@ -52,6 +52,8 @@ export interface CompleteSetupWorkflowInput {
   captureAnalytics?: boolean;
   detectionResponseMode?: DetectionResponseMode;
   previousPermissionSyncState?: VerificationChannelPermissionSyncState;
+  previousVerificationChannelId?: string | null;
+  previousCaseRoleId?: string | null;
   candidatePermissionSyncState?: VerificationChannelPermissionSyncState;
   persistPermissionSyncState?: (
     state: VerificationChannelPermissionSyncState,
@@ -121,19 +123,32 @@ export class SetupWorkflowService {
           await input.persistPermissionSyncState(state, input.previousPermissionSyncState);
         }
       };
+      const previousVerificationChannelId =
+        input.previousPermissionSyncState?.channel_id ?? input.previousVerificationChannelId;
       const replacingVerificationChannel = Boolean(
         input.candidateVerificationChannelId &&
-        input.previousPermissionSyncState?.channel_id &&
-        input.candidateVerificationChannelId !== input.previousPermissionSyncState.channel_id
+        previousVerificationChannelId &&
+        input.candidateVerificationChannelId !== previousVerificationChannelId
       );
       if (replacingVerificationChannel) {
-        const restored = this.notificationManager.restoreVerificationChannelManagedPermissions
-          ? await this.notificationManager.restoreVerificationChannelManagedPermissions(
-              input.guild,
-              input.previousPermissionSyncState as VerificationChannelPermissionSyncState,
-              (snapshot) => setupArtifacts.permissionSnapshots.push(snapshot)
-            )
-          : false;
+        const restored = input.previousPermissionSyncState
+          ? this.notificationManager.restoreVerificationChannelManagedPermissions
+            ? await this.notificationManager.restoreVerificationChannelManagedPermissions(
+                input.guild,
+                input.previousPermissionSyncState,
+                (snapshot) => setupArtifacts.permissionSnapshots.push(snapshot)
+              )
+            : false
+          : previousVerificationChannelId &&
+              input.previousCaseRoleId &&
+              this.notificationManager.restoreLegacyVerificationChannelPermissions
+            ? await this.notificationManager.restoreLegacyVerificationChannelPermissions(
+                input.guild,
+                previousVerificationChannelId,
+                input.previousCaseRoleId,
+                (snapshot) => setupArtifacts.permissionSnapshots.push(snapshot)
+              )
+            : false;
         if (!restored) {
           const setupFailureDetail = await this.rollbackCreatedArtifacts(
             input.guild,

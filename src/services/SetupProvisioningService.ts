@@ -229,6 +229,8 @@ export class SetupProvisioningService {
       previousPermissionSyncState:
         input.previousPermissionSyncState ??
         existingConfig.settings.verification_channel_permission_sync,
+      previousVerificationChannelId: existingConfig.verification_channel_id,
+      previousCaseRoleId: existingConfig.case_role_id,
       candidatePermissionSyncState: input.candidatePermissionSyncState,
       persistPermissionSyncState: input.persistPermissionSyncState,
     });

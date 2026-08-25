@@ -3487,6 +3487,47 @@ describe('EventHandler (unit)', () => {
     }
   });
 
+  it('reactivates a configured server record when the bot rejoins', async () => {
+    const previousAutoSetup = globalConfig.getSettings().autoSetupVerificationChannels;
+    globalConfig.updateSettings({ autoSetupVerificationChannels: true });
+    let serverConfig = {
+      guild_id: 'guild-1',
+      case_role_id: 'case-role-1',
+      admin_channel_id: 'admin-channel-1',
+      verification_channel_id: 'verification-channel-1',
+      settings: {},
+      is_active: false,
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn(() => serverConfig),
+      getServerConfig: jest.fn(async () => serverConfig),
+      updateServerConfig: jest.fn(async (_guildId: string, patch: { is_active?: boolean }) => {
+        serverConfig = { ...serverConfig, ...patch };
+        return serverConfig;
+      }),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const notificationManager = {
+      upsertObservedDetectionNotification: jest.fn(),
+      setupVerificationChannel: jest.fn().mockResolvedValue('verification-channel-1'),
+    };
+    const handler = buildHandler({ configService, notificationManager });
+    const guild = { id: 'guild-1', name: 'Test Guild' } as any;
+
+    try {
+      await (handler as any).handleGuildCreate(guild);
+    } finally {
+      globalConfig.updateSettings({ autoSetupVerificationChannels: previousAutoSetup });
+    }
+
+    expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(guild, 'case-role-1');
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      is_active: true,
+    });
+    expect(serverConfig.is_active).toBe(true);
+  });
+
   it('falls back to the guild owner when installer attribution is unavailable', async () => {
     const ownerUser = {
       id: 'owner-1',

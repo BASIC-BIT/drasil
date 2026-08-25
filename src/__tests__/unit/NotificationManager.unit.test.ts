@@ -1865,6 +1865,107 @@ describe('NotificationManager (unit)', () => {
     ).resolves.toBe(true);
   });
 
+  it('removes shipped legacy verification overwrites while preserving unrelated access', async () => {
+    const overwriteSet = jest.fn().mockResolvedValue(undefined);
+    const legacyEveryoneDeny =
+      PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.SendMessages |
+      PermissionFlagsBits.ReadMessageHistory |
+      PermissionFlagsBits.CreatePublicThreads |
+      PermissionFlagsBits.CreatePrivateThreads;
+    const legacyCaseAllow =
+      PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.ReadMessageHistory |
+      PermissionFlagsBits.SendMessagesInThreads;
+    const legacyCaseDeny =
+      PermissionFlagsBits.SendMessages |
+      PermissionFlagsBits.CreatePublicThreads |
+      PermissionFlagsBits.CreatePrivateThreads;
+    const legacyBotAllow =
+      PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.SendMessages |
+      PermissionFlagsBits.ReadMessageHistory |
+      PermissionFlagsBits.ManageChannels |
+      PermissionFlagsBits.ManageThreads |
+      PermissionFlagsBits.CreatePublicThreads |
+      PermissionFlagsBits.CreatePrivateThreads |
+      PermissionFlagsBits.SendMessagesInThreads |
+      PermissionFlagsBits.ModerateMembers;
+    const channel = {
+      id: 'legacy-channel',
+      type: ChannelType.GuildText,
+      permissionOverwrites: {
+        cache: new Map([
+          [
+            'guild-1',
+            {
+              id: 'guild-1',
+              type: 0,
+              allow: { bitfield: 0n },
+              deny: { bitfield: legacyEveryoneDeny },
+            },
+          ],
+          [
+            'old-case-role',
+            {
+              id: 'old-case-role',
+              type: 0,
+              allow: { bitfield: legacyCaseAllow },
+              deny: { bitfield: legacyCaseDeny },
+            },
+          ],
+          [
+            'bot-1',
+            {
+              id: 'bot-1',
+              type: 1,
+              allow: { bitfield: legacyBotAllow },
+              deny: { bitfield: 0n },
+            },
+          ],
+          [
+            'unrelated-role',
+            {
+              id: 'unrelated-role',
+              type: 0,
+              allow: { bitfield: PermissionFlagsBits.AttachFiles },
+              deny: { bitfield: 0n },
+            },
+          ],
+        ]),
+        set: overwriteSet,
+      },
+    };
+    const guild = {
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: { filter: jest.fn().mockReturnValue(new Collection()) },
+      },
+      channels: { fetch: jest.fn().mockResolvedValue(channel) },
+    } as unknown as Guild;
+    const manager = new NotificationManager(
+      { user: { id: 'bot-1' } } as any,
+      configService,
+      detectionRepository
+    );
+
+    await expect(
+      manager.restoreLegacyVerificationChannelPermissions(guild, 'legacy-channel', 'old-case-role')
+    ).resolves.toBe(true);
+
+    expect(overwriteSet).toHaveBeenCalledWith(
+      [
+        {
+          id: 'unrelated-role',
+          type: 0,
+          allow: PermissionFlagsBits.AttachFiles,
+          deny: 0n,
+        },
+      ],
+      'Restore retired Drasil verification channel permissions'
+    );
+  });
+
   it('blocks replacement when fetching the previous verification channel fails', async () => {
     const guild = {
       channels: { fetch: jest.fn().mockRejectedValue(new Error('Discord unavailable')) },

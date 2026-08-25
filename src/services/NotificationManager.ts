@@ -128,6 +128,12 @@ export interface INotificationManager {
     state: VerificationChannelPermissionSyncState,
     onPermissionsUpdated?: (snapshot: VerificationPermissionSnapshot) => void
   ): Promise<boolean>;
+  restoreLegacyVerificationChannelPermissions?(
+    guild: Guild,
+    channelId: string,
+    caseRoleId: string,
+    onPermissionsUpdated?: (snapshot: VerificationPermissionSnapshot) => void
+  ): Promise<boolean>;
 
   /**
    * Handle the history button interaction by sending a private ephemeral message with full detection history
@@ -1035,6 +1041,39 @@ export class NotificationManager implements INotificationManager {
       );
       return false;
     }
+  }
+
+  public async restoreLegacyVerificationChannelPermissions(
+    guild: Guild,
+    channelId: string,
+    caseRoleId: string,
+    onPermissionsUpdated?: (snapshot: VerificationPermissionSnapshot) => void
+  ): Promise<boolean> {
+    // The shipped pre-provenance path replaced the complete overwrite set, so no prior values
+    // can be reconstructed. Treat its deterministic Drasil entries as created and remove only
+    // their managed bits while preserving any unrelated permissions added later.
+    const legacyState: VerificationChannelPermissionSyncState = {
+      channel_id: channelId,
+      managed_overwrites: this.buildVerificationChannelPermissionOverwrites(guild, caseRoleId).map(
+        (overwrite) => ({
+          id: overwrite.id,
+          type: overwrite.type,
+          managed_bits: (
+            this.combinePermissionBits(overwrite.allow) | this.combinePermissionBits(overwrite.deny)
+          ).toString(),
+          original_overwrite: {
+            existed: false,
+            allow: '0',
+            deny: '0',
+          },
+        })
+      ),
+    };
+    return this.restoreVerificationChannelManagedPermissions(
+      guild,
+      legacyState,
+      onPermissionsUpdated
+    );
   }
 
   private snapshotPermissionOverwrites(channel: TextChannel): VerificationPermissionSnapshot {
