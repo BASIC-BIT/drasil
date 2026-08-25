@@ -270,6 +270,7 @@ describe('ConfigService (unit)', () => {
       report_ai_triage_enabled: false,
       report_ai_max_action: 'hints',
     });
+    await serverRepository.setActive('guild-setup', false);
 
     const updated = await service.updateSetupConfiguration('guild-setup', {
       adminChannelId: 'admin-channel-1',
@@ -287,6 +288,7 @@ describe('ConfigService (unit)', () => {
       report_ai_triage_enabled: false,
       report_ai_max_action: 'hints',
     });
+    expect(updated.is_active).toBe(true);
   });
 
   it('does not persist per-event detection overrides in default server settings', async () => {

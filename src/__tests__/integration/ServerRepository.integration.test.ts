@@ -24,6 +24,7 @@ describeIntegration('ServerRepository setup configuration (integration)', () => 
       report_ai_triage_enabled: false,
       report_ai_max_action: 'hints',
     });
+    await repository.setActive('guild-setup-merge', false);
 
     const updated = await repository.upsertSetupConfiguration('guild-setup-merge', {
       adminChannelId: 'admin-channel-1',
@@ -40,6 +41,7 @@ describeIntegration('ServerRepository setup configuration (integration)', () => 
       admin_channel_id: 'admin-channel-1',
       case_role_id: 'case-role-1',
       verification_channel_id: 'verification-channel-1',
+      is_active: true,
       settings: {
         detection_response_mode: 'notify_only',
         message_detection_response_mode: null,

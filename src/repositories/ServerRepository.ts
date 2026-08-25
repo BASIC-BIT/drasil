@@ -182,6 +182,7 @@ export class ServerRepository implements IServerRepository {
           admin_channel_id,
           verification_channel_id,
           settings,
+          is_active,
           updated_at
         ) values (
           ${guildId},
@@ -189,6 +190,7 @@ export class ServerRepository implements IServerRepository {
           ${update.adminChannelId},
           ${update.verificationChannelId},
           ${settingsPatch}::jsonb,
+          true,
           now()
         )
         on conflict (guild_id) do update set
@@ -196,6 +198,7 @@ export class ServerRepository implements IServerRepository {
           admin_channel_id = excluded.admin_channel_id,
           verification_channel_id = excluded.verification_channel_id,
           settings = coalesce(servers.settings, '{}'::jsonb) || excluded.settings,
+          is_active = true,
           updated_at = now()
         returning
           guild_id,

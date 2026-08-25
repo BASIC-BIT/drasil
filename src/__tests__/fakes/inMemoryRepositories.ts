@@ -1408,6 +1408,7 @@ export class InMemoryServerRepository implements IServerRepository {
           admin_channel_id: update.adminChannelId,
           verification_channel_id: update.verificationChannelId,
           settings: { ...existing.settings, ...update.settingsPatch },
+          is_active: true,
           updated_at: new Date().toISOString(),
         }
       : this.buildServer(guildId, {

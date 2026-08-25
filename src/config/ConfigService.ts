@@ -648,6 +648,7 @@ export class ConfigService implements IConfigService {
       admin_channel_id: update.adminChannelId,
       verification_channel_id: update.verificationChannelId,
       settings: { ...currentConfig.settings, ...update.settingsPatch },
+      is_active: true,
       updated_at: new Date().toISOString(),
     };
     this.cacheServerConfig(updatedServer);
