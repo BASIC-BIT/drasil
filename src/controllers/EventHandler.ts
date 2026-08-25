@@ -20,7 +20,7 @@ import {
 import * as dotenv from 'dotenv';
 import { randomUUID } from 'node:crypto';
 import { injectable, inject, optional } from 'inversify';
-import { deriveSetupReadiness } from '../../packages/contracts/src/setup';
+import { deriveSetupReadiness } from '../contracts/setup';
 import { UserProfileData } from '../services/GPTService';
 import { DetectionResult, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { INotificationManager } from '../services/NotificationManager';

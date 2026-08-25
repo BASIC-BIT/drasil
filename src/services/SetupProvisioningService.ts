@@ -1,4 +1,4 @@
-import type { DetectionResponseMode } from '../../packages/contracts/src/setup';
+import type { DetectionResponseMode } from '../contracts/setup';
 import { ChannelType, Guild, Role, TextChannel } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import type { Server, VerificationChannelPermissionSyncState } from '../repositories/types';

@@ -6,7 +6,7 @@ import {
   Role,
   TextChannel,
 } from 'discord.js';
-import type { DetectionResponseMode } from '../../packages/contracts/src/setup';
+import type { DetectionResponseMode } from '../contracts/setup';
 import { IConfigService } from '../config/ConfigService';
 import { INotificationManager } from '../services/NotificationManager';
 import { IProductAnalyticsService } from '../services/ProductAnalyticsService';

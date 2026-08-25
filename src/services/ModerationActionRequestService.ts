@@ -13,7 +13,7 @@ import {
   User,
 } from 'discord.js';
 import { inject, injectable, optional } from 'inversify';
-import type { DetectionResponseMode } from '../../packages/contracts/src/setup';
+import type { DetectionResponseMode } from '../contracts/setup';
 import { IConfigService } from '../config/ConfigService';
 import { ReportInstructionsManager } from '../controllers/ReportInstructionsManager';
 import { Prisma } from '../db/prisma';

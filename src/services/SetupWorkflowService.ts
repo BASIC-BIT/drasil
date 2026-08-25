@@ -1,5 +1,5 @@
 import type { Guild, Role } from 'discord.js';
-import type { DetectionResponseMode } from '../../packages/contracts/src/setup';
+import type { DetectionResponseMode } from '../contracts/setup';
 import { IConfigService } from '../config/ConfigService';
 import type { VerificationChannelPermissionSyncState } from '../repositories/types';
 import { INotificationManager, type VerificationPermissionSnapshot } from './NotificationManager';
