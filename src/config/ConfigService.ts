@@ -105,6 +105,7 @@ export interface HeuristicSettingsUpdate {
 
 export interface GetServerConfigOptions {
   readonly failOnReadError?: boolean;
+  readonly forceRefresh?: boolean;
 }
 
 const CachedServerHeuristicSettingsSchema = z.object({
@@ -546,7 +547,7 @@ export class ConfigService implements IConfigService {
    */
   async getServerConfig(guildId: string, options: GetServerConfigOptions = {}): Promise<Server> {
     const cachedServer = this.serverCache.get(guildId);
-    if (cachedServer && this.isServerConfigCacheFresh(guildId)) {
+    if (!options.forceRefresh && cachedServer && this.isServerConfigCacheFresh(guildId)) {
       return cachedServer;
     }
 
@@ -584,13 +585,13 @@ export class ConfigService implements IConfigService {
         return defaultConfig;
       } catch (error) {
         console.error(`Failed to get server configuration for guild ${guildId}:`, error);
-        if (cachedServer) {
-          return cachedServer;
-        }
         if (options.failOnReadError) {
           throw error instanceof Error
             ? error
             : new Error(`Failed to get server configuration for guild ${guildId}`);
+        }
+        if (cachedServer) {
+          return cachedServer;
         }
       }
     }

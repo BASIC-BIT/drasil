@@ -316,6 +316,7 @@ describe('SetupProvisioningService (unit)', () => {
 
     expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1', {
       failOnReadError: true,
+      forceRefresh: true,
     });
     expect(guild.roles.create).not.toHaveBeenCalled();
     expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();

@@ -112,7 +112,10 @@ export class ModerationActionRequestRepository implements IModerationActionReque
             updated_at = now(),
             last_error = 'Worker interrupted before this action completed.'
         where status = 'processing'::moderation_action_request_status
-          and verification_event_id is not null
+          and (
+            verification_event_id is not null
+            or action_type = 'complete_setup_verification'::moderation_action_request_type
+          )
           and action_type not in (
             'preview_account_quarantine'::moderation_action_request_type,
             'quarantine_compromised_account'::moderation_action_request_type,

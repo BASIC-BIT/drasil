@@ -73,9 +73,11 @@ export async function queueCompleteSetupVerificationRequestWithReceipt(input: {
       case_role_id: input.caseRoleId,
       case_role_name: input.caseRoleName ?? undefined,
       create_case_role: input.createCaseRole ?? false,
-      ...(input.detectionResponseMode
-        ? { detection_response_mode: input.detectionResponseMode }
-        : {}),
+      ...(input.onboardingWizard === true
+        ? { detection_response_mode: input.detectionResponseMode ?? null }
+        : input.detectionResponseMode
+          ? { detection_response_mode: input.detectionResponseMode }
+          : {}),
       report_instructions_channel_id: input.reportInstructionsChannelId ?? null,
       requested_surface: 'web',
       onboarding_wizard: input.onboardingWizard === true,

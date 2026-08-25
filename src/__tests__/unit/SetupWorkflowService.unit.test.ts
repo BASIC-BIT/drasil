@@ -202,7 +202,7 @@ describe('SetupWorkflowService (unit)', () => {
     });
   });
 
-  it('restores the prior verification channel before syncing its replacement', async () => {
+  it('restores the channel recorded by permission provenance before syncing its replacement', async () => {
     const priorState = {
       channel_id: 'old-verification-channel',
       managed_overwrites: [
@@ -269,7 +269,6 @@ describe('SetupWorkflowService (unit)', () => {
         adminChannelId: 'admin-channel-1',
         initialVerificationChannelId: null,
         candidateVerificationChannelId: 'new-verification-channel',
-        previousVerificationChannelId: 'old-verification-channel',
         previousPermissionSyncState: priorState,
         willSyncVerificationChannelPermissions: true,
         reportInstructionsChannelId: null,
@@ -337,7 +336,6 @@ describe('SetupWorkflowService (unit)', () => {
       adminChannelId: 'admin-channel-1',
       initialVerificationChannelId: null,
       candidateVerificationChannelId: 'new-verification-channel',
-      previousVerificationChannelId: 'old-verification-channel',
       previousPermissionSyncState: priorState,
       willSyncVerificationChannelPermissions: true,
       reportInstructionsChannelId: null,

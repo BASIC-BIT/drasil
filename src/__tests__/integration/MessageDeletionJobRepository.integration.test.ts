@@ -324,4 +324,38 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
       last_error: 'Worker interrupted before this action completed.',
     });
   });
+
+  it('fails interrupted setup requests so the same submission can be retried', async () => {
+    const servers = new ServerRepository(prisma);
+    await servers.getOrCreateServer('guild-1');
+    const request = await requests.enqueue({
+      serverId: 'guild-1',
+      actionType: ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION,
+      actorId: 'administrator-1',
+      actorSurface: 'web',
+      idempotencyKey: 'web:setup:complete_setup_verification:guild-1:submission-1',
+    });
+    await requests.claimNext();
+    await prisma.$executeRaw`
+      update moderation_action_requests
+      set updated_at = now() - interval '16 minutes'
+      where id = ${request.id}::uuid
+    `;
+
+    await expect(requests.claimNext()).resolves.toBeNull();
+    await expect(requests.findById(request.id)).resolves.toMatchObject({
+      status: ModerationActionRequestStatus.FAILED,
+      last_error: 'Worker interrupted before this action completed.',
+    });
+
+    await expect(
+      requests.enqueue({
+        serverId: 'guild-1',
+        actionType: ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION,
+        actorId: 'administrator-1',
+        actorSurface: 'web',
+        idempotencyKey: 'web:setup:complete_setup_verification:guild-1:submission-1',
+      })
+    ).resolves.toMatchObject({ status: ModerationActionRequestStatus.QUEUED });
+  });
 });

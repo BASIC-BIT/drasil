@@ -90,6 +90,43 @@ describe('ConfigService (unit)', () => {
     ).rejects.toThrow('database unavailable');
   });
 
+  it('forces a fresh repository read even when the cache is still current', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const service = new ConfigService(serverRepository, buildClient());
+
+    await serverRepository.upsertByGuildId('guild-fresh-read', {
+      admin_notification_role_id: 'old-admin-role',
+    });
+    await service.getServerConfig('guild-fresh-read');
+    await serverRepository.upsertByGuildId('guild-fresh-read', {
+      admin_notification_role_id: 'new-admin-role',
+    });
+
+    await expect(
+      service.getServerConfig('guild-fresh-read', { forceRefresh: true })
+    ).resolves.toMatchObject({ admin_notification_role_id: 'new-admin-role' });
+  });
+
+  it('does not fall back to cached state when a confirmed fresh read fails', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const service = new ConfigService(serverRepository, buildClient());
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await service.getServerConfig('guild-fresh-read-failure');
+    jest
+      .spyOn(serverRepository, 'findByGuildId')
+      .mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(
+      service.getServerConfig('guild-fresh-read-failure', {
+        failOnReadError: true,
+        forceRefresh: true,
+      })
+    ).rejects.toThrow('database unavailable');
+  });
+
   it('returns default heuristic settings when guild is not cached', () => {
     const serverRepository = new InMemoryServerRepository();
     const discordClient = buildClient();

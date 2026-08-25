@@ -62,4 +62,21 @@ describe('queueCompleteSetupVerificationRequestWithReceipt', () => {
       })
     );
   });
+
+  it('clears a prior wizard protection selection when retrying with preserve', async () => {
+    await queueCompleteSetupVerificationRequestWithReceipt({
+      actorId: 'admin-1',
+      adminChannelId: 'admin-channel-1',
+      caseRoleId: 'case-role-1',
+      guildId: 'guild-1',
+      onboardingWizard: true,
+      submissionId: 'submission-1',
+    });
+
+    expect(mocks.queue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ detection_response_mode: null }),
+      })
+    );
+  });
 });

@@ -68,6 +68,7 @@ export class SetupProvisioningService {
   public async provision(input: ProvisionSetupInput): Promise<SetupProvisioningResult> {
     const existingConfig = await this.configService.getServerConfig(input.guild.id, {
       failOnReadError: true,
+      forceRefresh: true,
     });
     const coreSetupIncomplete =
       !existingConfig.case_role_id ||
@@ -196,7 +197,6 @@ export class SetupProvisioningService {
       createdCaseRole,
       captureAnalytics: input.captureAnalytics,
       detectionResponseMode,
-      previousVerificationChannelId: existingConfig.verification_channel_id,
       previousPermissionSyncState: existingConfig.settings.verification_channel_permission_sync,
     });
   }

@@ -51,7 +51,6 @@ export interface CompleteSetupWorkflowInput {
   createdCaseRole?: Role | null;
   captureAnalytics?: boolean;
   detectionResponseMode?: DetectionResponseMode;
-  previousVerificationChannelId?: string | null;
   previousPermissionSyncState?: VerificationChannelPermissionSyncState;
 }
 
@@ -113,9 +112,8 @@ export class SetupWorkflowService {
       };
       const replacingVerificationChannel = Boolean(
         input.candidateVerificationChannelId &&
-        input.previousVerificationChannelId &&
-        input.candidateVerificationChannelId !== input.previousVerificationChannelId &&
-        input.previousPermissionSyncState?.channel_id === input.previousVerificationChannelId
+        input.previousPermissionSyncState?.channel_id &&
+        input.candidateVerificationChannelId !== input.previousPermissionSyncState.channel_id
       );
       if (replacingVerificationChannel) {
         const restored = this.notificationManager.restoreVerificationChannelManagedPermissions
