@@ -1,6 +1,80 @@
 import { SetupProvisioningService } from '../../services/SetupProvisioningService';
 
 describe('SetupProvisioningService (unit)', () => {
+  it('serializes setup execution for the same guild across service instances', async () => {
+    const serverConfig = {
+      admin_channel_id: 'admin-channel-1',
+      case_role_id: 'case-role-1',
+      verification_channel_id: 'verification-channel-1',
+      settings: {},
+    };
+    const firstConfigService = {
+      getServerConfig: jest.fn().mockResolvedValue(serverConfig),
+    } as any;
+    const secondConfigService = {
+      getServerConfig: jest.fn().mockResolvedValue(serverConfig),
+    } as any;
+    const setupDiagnosticsService = {
+      validateSetupCandidate: jest.fn().mockResolvedValue({
+        errorCount: 0,
+        guildId: 'guild-1',
+        issues: [],
+        warningCount: 0,
+      }),
+    } as any;
+    let markFirstWorkflowStarted!: () => void;
+    let releaseFirstWorkflow!: () => void;
+    const firstWorkflowStarted = new Promise<void>((resolve) => {
+      markFirstWorkflowStarted = resolve;
+    });
+    const firstWorkflowReleased = new Promise<void>((resolve) => {
+      releaseFirstWorkflow = resolve;
+    });
+    const firstWorkflowService = {
+      completeSetup: jest.fn(async () => {
+        markFirstWorkflowStarted();
+        await firstWorkflowReleased;
+        return { status: 'completed' };
+      }),
+    } as any;
+    const secondWorkflowService = {
+      completeSetup: jest.fn().mockResolvedValue({ status: 'completed' }),
+    } as any;
+    const firstService = new SetupProvisioningService(
+      firstConfigService,
+      setupDiagnosticsService,
+      firstWorkflowService
+    );
+    const secondService = new SetupProvisioningService(
+      secondConfigService,
+      setupDiagnosticsService,
+      secondWorkflowService
+    );
+    const input = {
+      actorLabel: 'administrator admin-1',
+      adminChannelId: 'admin-channel-1',
+      caseRole: { id: 'case-role-1', name: 'Drasil Case' } as any,
+      guild: { id: 'guild-1' } as any,
+      verificationChannel: { id: 'verification-channel-1' } as any,
+    };
+
+    const firstSetup = firstService.provision(input);
+    await firstWorkflowStarted;
+    const secondSetup = secondService.provision(input);
+    await Promise.resolve();
+
+    expect(secondConfigService.getServerConfig).not.toHaveBeenCalled();
+    expect(secondWorkflowService.completeSetup).not.toHaveBeenCalled();
+
+    releaseFirstWorkflow();
+    await expect(firstSetup).resolves.toEqual({ status: 'completed' });
+    await expect(secondSetup).resolves.toEqual({ status: 'completed' });
+    expect(secondConfigService.getServerConfig).toHaveBeenCalledTimes(1);
+    expect(firstWorkflowService.completeSetup.mock.invocationCallOrder[0]).toBeLessThan(
+      secondWorkflowService.completeSetup.mock.invocationCallOrder[0]
+    );
+  });
+
   it('defaults legacy first setup to notify-only without replacing surface-specific modes', async () => {
     const caseRole = { id: 'case-role', name: 'Drasil Case' };
     const verificationChannel = { id: 'verification-channel-1' };

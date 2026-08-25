@@ -15,6 +15,7 @@ import { SetupWorkflowService, type SetupWorkflowResult } from './SetupWorkflowS
 export const DEFAULT_CASE_ROLE_NAME = 'Drasil Case';
 export const DEFAULT_VERIFICATION_CHANNEL_NAME = 'verification';
 const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10003;
+const setupExecutionChains = new Map<string, Promise<unknown>>();
 
 export type SetupProvisioningResult =
   | SetupWorkflowResult
@@ -72,6 +73,10 @@ export class SetupProvisioningService {
   ) {}
 
   public async provision(input: ProvisionSetupInput): Promise<SetupProvisioningResult> {
+    return this.runSerialized(input.guild.id, () => this.provisionExclusive(input));
+  }
+
+  private async provisionExclusive(input: ProvisionSetupInput): Promise<SetupProvisioningResult> {
     const existingConfig = await this.configService.getServerConfig(input.guild.id, {
       failOnReadError: true,
       forceRefresh: true,
@@ -123,6 +128,22 @@ export class SetupProvisioningService {
       detectionResponseMode,
       existingConfig
     );
+  }
+
+  private async runSerialized<T>(guildId: string, operation: () => Promise<T>): Promise<T> {
+    // Every setup surface executes in the bot runtime, but each may construct its own service.
+    // A module-scoped chain keeps their Discord mutations and final config writes per-guild atomic.
+    const previous = setupExecutionChains.get(guildId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(operation);
+    setupExecutionChains.set(guildId, next);
+
+    try {
+      return await next;
+    } finally {
+      if (setupExecutionChains.get(guildId) === next) {
+        setupExecutionChains.delete(guildId);
+      }
+    }
   }
 
   private async provisionWithCaseRole(
