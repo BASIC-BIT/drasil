@@ -147,6 +147,7 @@ describe('NotificationManager (unit)', () => {
         settings: {},
       } as any),
       updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
     } as unknown as IConfigService;
   });
 
@@ -1378,25 +1379,31 @@ describe('NotificationManager (unit)', () => {
     );
     expect(caseRoleOverwrite.deny & PermissionFlagsBits.ViewChannel).toBe(0n);
     expect(createChannel).not.toHaveBeenCalled();
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      verification_channel_id: 'verification-channel-1',
-      settings: {
-        verification_channel_permission_sync: {
-          channel_id: 'verification-channel-1',
-          managed_overwrites: expect.arrayContaining([
-            expect.objectContaining({
-              id: 'case-role-1',
-              type: 0,
-              original_overwrite: {
-                existed: true,
-                allow: PermissionFlagsBits.AttachFiles.toString(),
-                deny: PermissionFlagsBits.MentionEveryone.toString(),
-              },
-            }),
-          ]),
-        },
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      verification_channel_permission_sync: {
+        channel_id: 'verification-channel-1',
+        managed_overwrites: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'case-role-1',
+            type: 0,
+            original_overwrite: {
+              existed: true,
+              allow: PermissionFlagsBits.AttachFiles.toString(),
+              deny: PermissionFlagsBits.MentionEveryone.toString(),
+            },
+          }),
+        ]),
       },
     });
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      verification_channel_id: 'verification-channel-1',
+    });
+    expect(
+      (configService.updateServerSettings as jest.Mock).mock.invocationCallOrder[0]
+    ).toBeLessThan((configService.updateServerConfig as jest.Mock).mock.invocationCallOrder[0]);
+    expect(
+      (configService.updateServerConfig as jest.Mock).mock.invocationCallOrder[0]
+    ).toBeLessThan(overwriteSet.mock.invocationCallOrder[0]);
   });
 
   it('restores preexisting managed bits when retiring the previous case role', async () => {

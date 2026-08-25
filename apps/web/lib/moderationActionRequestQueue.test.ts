@@ -63,7 +63,12 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
     });
 
     expect(result).toEqual({ id: 'request-2', status: 'queued' });
-    expect(mocks.query.mock.calls[3]?.[0]).toContain('insert into moderation_action_requests');
+    const insertSql = String(mocks.query.mock.calls[3]?.[0]);
+    expect(insertSql).toContain('insert into moderation_action_requests');
+    expect(insertSql).toContain('actor_id = case');
+    expect(insertSql).toContain('else excluded.actor_id');
+    expect(insertSql).toContain('actor_surface = case');
+    expect(insertSql).toContain('else excluded.actor_surface');
     expect(mocks.query).toHaveBeenLastCalledWith('commit');
     expect(mocks.release).toHaveBeenCalledTimes(1);
   });

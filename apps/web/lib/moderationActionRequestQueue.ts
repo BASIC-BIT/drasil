@@ -114,6 +114,16 @@ async function insertModerationActionRequestWithReceipt(
          updated_at = now(),
          failed_at = null,
          last_error = null,
+         actor_id = case
+           when moderation_action_requests.status in ('processing', 'completed')
+             then moderation_action_requests.actor_id
+           else excluded.actor_id
+         end,
+         actor_surface = case
+           when moderation_action_requests.status in ('processing', 'completed')
+             then moderation_action_requests.actor_surface
+           else excluded.actor_surface
+         end,
          metadata = coalesce(moderation_action_requests.metadata, '{}'::jsonb) || excluded.metadata,
          message_deletion_job_id = coalesce(
            moderation_action_requests.message_deletion_job_id,

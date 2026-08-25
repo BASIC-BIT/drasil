@@ -897,6 +897,13 @@ export class NotificationManager implements INotificationManager {
           permissionOverwrites
         );
         await onPermissionsUpdated?.(snapshot, nextSyncState);
+        if (persistConfig) {
+          await this.persistVerificationChannelConfiguration(
+            guild.id,
+            configuredVerificationChannel.id,
+            nextSyncState
+          );
+        }
         await configuredVerificationChannel.permissionOverwrites.set(
           this.mergeVerificationChannelPermissionOverwrites(
             snapshot,
@@ -905,16 +912,6 @@ export class NotificationManager implements INotificationManager {
           ),
           'Sync Drasil verification channel permissions'
         );
-
-        if (persistConfig) {
-          await this.configService.updateServerConfig(guild.id, {
-            verification_channel_id: configuredVerificationChannel.id,
-            settings: {
-              ...serverConfig.settings,
-              verification_channel_permission_sync: nextSyncState,
-            },
-          });
-        }
 
         return configuredVerificationChannel.id;
       }
@@ -937,13 +934,11 @@ export class NotificationManager implements INotificationManager {
       onChannelCreated?.(verificationChannel.id, nextSyncState);
 
       if (persistConfig) {
-        await this.configService.updateServerConfig(guild.id, {
-          verification_channel_id: verificationChannel.id,
-          settings: {
-            ...serverConfig.settings,
-            verification_channel_permission_sync: nextSyncState,
-          },
-        });
+        await this.persistVerificationChannelConfiguration(
+          guild.id,
+          verificationChannel.id,
+          nextSyncState
+        );
       }
 
       return verificationChannel.id;
@@ -951,6 +946,19 @@ export class NotificationManager implements INotificationManager {
       console.error('Failed to set up verification channel:', error);
       return null;
     }
+  }
+
+  private async persistVerificationChannelConfiguration(
+    guildId: string,
+    channelId: string,
+    state: VerificationChannelPermissionSyncState
+  ): Promise<void> {
+    await this.configService.updateServerSettings(guildId, {
+      verification_channel_permission_sync: state,
+    });
+    await this.configService.updateServerConfig(guildId, {
+      verification_channel_id: channelId,
+    });
   }
 
   public async restoreVerificationChannelPermissions(

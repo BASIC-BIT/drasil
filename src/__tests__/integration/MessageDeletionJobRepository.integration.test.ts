@@ -352,11 +352,14 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
       requests.enqueue({
         serverId: 'guild-1',
         actionType: ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION,
-        actorId: 'administrator-1',
+        actorId: 'administrator-2',
         actorSurface: 'web',
         idempotencyKey: 'web:setup:complete_setup_verification:guild-1:submission-1',
       })
-    ).resolves.toMatchObject({ status: ModerationActionRequestStatus.QUEUED });
+    ).resolves.toMatchObject({
+      actor_id: 'administrator-2',
+      status: ModerationActionRequestStatus.QUEUED,
+    });
   });
 
   it('merges prior and candidate setup permission provenance into request metadata', async () => {

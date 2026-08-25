@@ -679,7 +679,7 @@ export class ConfigService implements IConfigService {
       try {
         let server = await this.serverRepository.updateSettings(guildId, settings);
         if (!server) {
-          await this.getServerConfig(guildId, { failOnReadError: true });
+          await this.getServerConfig(guildId, { failOnReadError: true, forceRefresh: true });
           server = await this.serverRepository.updateSettings(guildId, settings);
         }
         if (!server) {

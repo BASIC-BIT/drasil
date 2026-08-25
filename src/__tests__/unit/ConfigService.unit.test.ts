@@ -331,6 +331,34 @@ describe('ConfigService (unit)', () => {
     });
   });
 
+  it('forces a confirmed read when a cached default has no database row', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const service = new ConfigService(serverRepository, buildClient());
+    const originalFind = serverRepository.findByGuildId.bind(serverRepository);
+    const findSpy = jest
+      .spyOn(serverRepository, 'findByGuildId')
+      .mockRejectedValueOnce(new Error('database unavailable'))
+      .mockImplementation(originalFind);
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await expect(service.getServerConfig('guild-recovered-write')).resolves.toMatchObject({
+      guild_id: 'guild-recovered-write',
+    });
+    await expect(
+      service.updateServerSettings('guild-recovered-write', {
+        setup_nudge_last_result: 'sent',
+      })
+    ).resolves.toMatchObject({
+      settings: { setup_nudge_last_result: 'sent' },
+    });
+
+    expect(findSpy).toHaveBeenCalledTimes(3);
+    await expect(serverRepository.findByGuildId('guild-recovered-write')).resolves.toMatchObject({
+      settings: { setup_nudge_last_result: 'sent' },
+    });
+  });
+
   it('refreshes stale cached server configs so web-updated settings propagate', async () => {
     process.env.DATABASE_URL = 'in-memory';
     const serverRepository = new InMemoryServerRepository();
