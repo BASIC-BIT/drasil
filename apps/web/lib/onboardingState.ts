@@ -27,6 +27,14 @@ export interface OnboardingResourceOptions {
   readonly roleIds: readonly string[];
 }
 
+export function resolveOnboardingInitialStep(
+  readiness: SetupReadinessStatus,
+  durableRequest: ModerationActionRequestSummary | null,
+  finalStep: number
+): number {
+  return readiness === 'ready' || durableRequest ? finalStep : 0;
+}
+
 export function onboardingWizardStateKey(
   durableRequest: ModerationActionRequestSummary | null
 ): string {

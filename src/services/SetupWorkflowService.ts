@@ -1,6 +1,7 @@
 import type { Guild, Role } from 'discord.js';
 import type { DetectionResponseMode } from '../../packages/contracts/src/setup';
 import { IConfigService } from '../config/ConfigService';
+import type { VerificationChannelPermissionSyncState } from '../repositories/types';
 import { INotificationManager, type VerificationPermissionSnapshot } from './NotificationManager';
 import { IProductAnalyticsService } from './ProductAnalyticsService';
 import { ISetupDiagnosticsService, SetupDiagnosticReport } from './SetupDiagnosticsService';
@@ -90,14 +91,23 @@ export class SetupWorkflowService {
     const setupArtifacts: {
       verificationChannelId?: string;
       permissionSnapshot?: VerificationPermissionSnapshot;
+      permissionSyncState?: VerificationChannelPermissionSyncState;
     } = {};
 
     if (!verificationChannelId) {
-      const onChannelCreated = (channelId: string): void => {
+      const onChannelCreated = (
+        channelId: string,
+        state?: VerificationChannelPermissionSyncState
+      ): void => {
         setupArtifacts.verificationChannelId = channelId;
+        setupArtifacts.permissionSyncState = state;
       };
-      const onPermissionsUpdated = (snapshot: VerificationPermissionSnapshot): void => {
+      const onPermissionsUpdated = (
+        snapshot: VerificationPermissionSnapshot,
+        state?: VerificationChannelPermissionSyncState
+      ): void => {
         setupArtifacts.permissionSnapshot = snapshot;
+        setupArtifacts.permissionSyncState = state;
       };
       verificationChannelId = input.candidateVerificationChannelId
         ? typeof this.notificationManager.restoreVerificationChannelPermissions === 'function'
@@ -181,13 +191,20 @@ export class SetupWorkflowService {
         caseRoleId: input.caseRole.id,
         adminChannelId: input.adminChannelId,
         verificationChannelId,
-        settingsPatch: input.detectionResponseMode
-          ? {
-              detection_response_mode: input.detectionResponseMode,
-              message_detection_response_mode: null,
-              join_detection_response_mode: null,
-            }
-          : {},
+        settingsPatch: {
+          ...(input.detectionResponseMode
+            ? {
+                detection_response_mode: input.detectionResponseMode,
+                message_detection_response_mode: null,
+                join_detection_response_mode: null,
+              }
+            : {}),
+          ...(setupArtifacts.permissionSyncState
+            ? {
+                verification_channel_permission_sync: setupArtifacts.permissionSyncState,
+              }
+            : {}),
+        },
       });
     } catch (error) {
       const setupFailureDetail = await this.rollbackCreatedArtifacts(

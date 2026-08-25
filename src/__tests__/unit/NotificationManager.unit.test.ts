@@ -1301,8 +1301,19 @@ describe('NotificationManager (unit)', () => {
     const createChannel = jest.fn();
     const fetchChannel = jest.fn().mockResolvedValue(existingChannel);
     configService.getServerConfig = jest.fn().mockResolvedValue({
+      case_role_id: 'case-role-1',
       verification_channel_id: 'verification-channel-1',
-      settings: {},
+      settings: {
+        verification_channel_permission_sync: {
+          channel_id: 'verification-channel-1',
+          case_role_id: 'case-role-1',
+          original_case_role_overwrite: {
+            existed: true,
+            allow: PermissionFlagsBits.AttachFiles.toString(),
+            deny: PermissionFlagsBits.MentionEveryone.toString(),
+          },
+        },
+      },
     } as any);
     const guild = {
       id: 'guild-1',
@@ -1356,10 +1367,21 @@ describe('NotificationManager (unit)', () => {
     expect(createChannel).not.toHaveBeenCalled();
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       verification_channel_id: 'verification-channel-1',
+      settings: {
+        verification_channel_permission_sync: {
+          channel_id: 'verification-channel-1',
+          case_role_id: 'case-role-1',
+          original_case_role_overwrite: {
+            existed: true,
+            allow: PermissionFlagsBits.AttachFiles.toString(),
+            deny: PermissionFlagsBits.MentionEveryone.toString(),
+          },
+        },
+      },
     });
   });
 
-  it('removes Drasil-managed permissions from the previous case role', async () => {
+  it('restores preexisting managed bits when retiring the previous case role', async () => {
     const overwriteSet = jest.fn().mockResolvedValue(undefined);
     const existingChannel = {
       id: 'verification-channel-1',
@@ -1383,6 +1405,90 @@ describe('NotificationManager (unit)', () => {
                   PermissionFlagsBits.CreatePrivateThreads |
                   PermissionFlagsBits.MentionEveryone,
               },
+            },
+          ],
+        ]),
+        set: overwriteSet,
+      },
+    };
+    configService.getServerConfig = jest.fn().mockResolvedValue({
+      case_role_id: 'old-case-role',
+      verification_channel_id: 'verification-channel-1',
+      settings: {
+        verification_channel_permission_sync: {
+          channel_id: 'verification-channel-1',
+          case_role_id: 'old-case-role',
+          original_case_role_overwrite: {
+            existed: true,
+            allow: PermissionFlagsBits.ViewChannel.toString(),
+            deny: PermissionFlagsBits.SendMessages.toString(),
+          },
+        },
+      },
+    } as any);
+    const guild = {
+      id: 'guild-1',
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: { filter: jest.fn().mockReturnValue([]) },
+      },
+      channels: {
+        cache: buildChannelCollection([]),
+        fetch: jest.fn().mockResolvedValue(existingChannel),
+        create: jest.fn(),
+      },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    const onPermissionsUpdated = jest.fn();
+    await manager.setupVerificationChannel(
+      guild,
+      'new-case-role',
+      false,
+      undefined,
+      'verification-channel-1',
+      onPermissionsUpdated
+    );
+
+    const previousRoleOverwrite = overwriteSet.mock.calls[0][0].find(
+      (overwrite: { id: string }) => overwrite.id === 'old-case-role'
+    );
+    expect(previousRoleOverwrite.allow).toBe(
+      PermissionFlagsBits.ViewChannel | PermissionFlagsBits.AttachFiles
+    );
+    expect(previousRoleOverwrite.deny).toBe(
+      PermissionFlagsBits.SendMessages | PermissionFlagsBits.MentionEveryone
+    );
+    expect(onPermissionsUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ channelId: 'verification-channel-1' }),
+      {
+        channel_id: 'verification-channel-1',
+        case_role_id: 'new-case-role',
+        original_case_role_overwrite: {
+          existed: false,
+          allow: '0',
+          deny: '0',
+        },
+      }
+    );
+  });
+
+  it('preserves a previous case-role overwrite when no Drasil provenance exists', async () => {
+    const overwriteSet = jest.fn().mockResolvedValue(undefined);
+    const originalAllow = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.AttachFiles;
+    const originalDeny = PermissionFlagsBits.SendMessages | PermissionFlagsBits.MentionEveryone;
+    const existingChannel = {
+      id: 'verification-channel-1',
+      type: ChannelType.GuildText,
+      permissionOverwrites: {
+        cache: new Map([
+          [
+            'old-case-role',
+            {
+              id: 'old-case-role',
+              type: 0,
+              allow: { bitfield: originalAllow },
+              deny: { bitfield: originalDeny },
             },
           ],
         ]),
@@ -1419,8 +1525,12 @@ describe('NotificationManager (unit)', () => {
     const previousRoleOverwrite = overwriteSet.mock.calls[0][0].find(
       (overwrite: { id: string }) => overwrite.id === 'old-case-role'
     );
-    expect(previousRoleOverwrite.allow).toBe(PermissionFlagsBits.AttachFiles);
-    expect(previousRoleOverwrite.deny).toBe(PermissionFlagsBits.MentionEveryone);
+    expect(previousRoleOverwrite).toEqual({
+      id: 'old-case-role',
+      type: 0,
+      allow: originalAllow,
+      deny: originalDeny,
+    });
   });
 
   it('syncs an already resolved verification channel and checks the prior case role', async () => {

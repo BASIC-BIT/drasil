@@ -5,6 +5,7 @@ import {
   onboardingWizardStateKey,
   resolveOnboardingDurableRequest,
   resolveOnboardingInitialState,
+  resolveOnboardingInitialStep,
 } from './onboardingState';
 
 const server: SetupServerRecord = {
@@ -132,6 +133,19 @@ describe('resolveOnboardingDurableRequest', () => {
 
     expect(resolveOnboardingDurableRequest(request, 'ready', request.id)).toBe(request);
     expect(resolveOnboardingDurableRequest(request, 'ready', null)).toBeNull();
+  });
+});
+
+describe('resolveOnboardingInitialStep', () => {
+  it.each(['queued', 'processing', 'failed'] as const)(
+    'resumes a %s setup request on the review and status step',
+    (status) => {
+      expect(resolveOnboardingInitialStep('needs_setup', setupRequest(status), 6)).toBe(6);
+    }
+  );
+
+  it('starts an incomplete setup without a request at welcome', () => {
+    expect(resolveOnboardingInitialStep('needs_setup', null, 6)).toBe(0);
   });
 });
 

@@ -28,6 +28,7 @@ import {
   VerificationStatus,
   AdminActionType,
   VerificationEvent,
+  type VerificationChannelPermissionSyncState,
 } from '../repositories/types';
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
 import type { VerificationThreadAnalysisResult } from './GPTService';
@@ -111,9 +112,12 @@ export interface INotificationManager {
     guild: Guild,
     caseRoleId: string,
     persistConfig?: boolean,
-    onChannelCreated?: (channelId: string) => void,
+    onChannelCreated?: (channelId: string, state: VerificationChannelPermissionSyncState) => void,
     configuredVerificationChannelId?: string,
-    onPermissionsUpdated?: (snapshot: VerificationPermissionSnapshot) => void
+    onPermissionsUpdated?: (
+      snapshot: VerificationPermissionSnapshot,
+      state: VerificationChannelPermissionSyncState
+    ) => void
   ): Promise<string | null>;
   restoreVerificationChannelPermissions?(
     guild: Guild,
@@ -857,9 +861,12 @@ export class NotificationManager implements INotificationManager {
     guild: Guild,
     caseRoleId: string,
     persistConfig = true,
-    onChannelCreated?: (channelId: string) => void,
+    onChannelCreated?: (channelId: string, state: VerificationChannelPermissionSyncState) => void,
     configuredVerificationChannelId?: string,
-    onPermissionsUpdated?: (snapshot: VerificationPermissionSnapshot) => void
+    onPermissionsUpdated?: (
+      snapshot: VerificationPermissionSnapshot,
+      state: VerificationChannelPermissionSyncState
+    ) => void
   ): Promise<string | null> {
     if (!caseRoleId) {
       console.error('Case role ID is required to set up verification channel');
@@ -867,6 +874,8 @@ export class NotificationManager implements INotificationManager {
     }
 
     try {
+      const serverConfig = await this.configService.getServerConfig(guild.id);
+      const previousSyncState = serverConfig.settings.verification_channel_permission_sync;
       const permissionOverwrites = this.buildVerificationChannelPermissionOverwrites(
         guild,
         caseRoleId
@@ -877,15 +886,20 @@ export class NotificationManager implements INotificationManager {
       );
       if (configuredVerificationChannel) {
         const snapshot = this.snapshotPermissionOverwrites(configuredVerificationChannel);
-        const previousCaseRoleId =
-          (await this.configService.getServerConfig(guild.id)).case_role_id ?? null;
-        onPermissionsUpdated?.(snapshot);
+        const previousCaseRoleId = serverConfig.case_role_id ?? null;
+        const nextSyncState = this.buildVerificationPermissionSyncState(
+          snapshot,
+          previousSyncState,
+          caseRoleId
+        );
+        onPermissionsUpdated?.(snapshot, nextSyncState);
         await configuredVerificationChannel.permissionOverwrites.set(
           this.mergeVerificationChannelPermissionOverwrites(
             snapshot,
             permissionOverwrites,
             previousCaseRoleId,
-            caseRoleId
+            caseRoleId,
+            previousSyncState
           ),
           'Sync Drasil verification channel permissions'
         );
@@ -893,6 +907,10 @@ export class NotificationManager implements INotificationManager {
         if (persistConfig) {
           await this.configService.updateServerConfig(guild.id, {
             verification_channel_id: configuredVerificationChannel.id,
+            settings: {
+              ...serverConfig.settings,
+              verification_channel_permission_sync: nextSyncState,
+            },
           });
         }
 
@@ -909,11 +927,20 @@ export class NotificationManager implements INotificationManager {
       };
 
       const verificationChannel = await guild.channels.create(channelOptions);
-      onChannelCreated?.(verificationChannel.id);
+      const nextSyncState = this.buildVerificationPermissionSyncState(
+        { channelId: verificationChannel.id, entries: [] },
+        undefined,
+        caseRoleId
+      );
+      onChannelCreated?.(verificationChannel.id, nextSyncState);
 
       if (persistConfig) {
         await this.configService.updateServerConfig(guild.id, {
           verification_channel_id: verificationChannel.id,
+          settings: {
+            ...serverConfig.settings,
+            verification_channel_permission_sync: nextSyncState,
+          },
         });
       }
 
@@ -1036,7 +1063,8 @@ export class NotificationManager implements INotificationManager {
     snapshot: VerificationPermissionSnapshot,
     desired: readonly VerificationPermissionOverwrite[],
     previousCaseRoleId: string | null,
-    caseRoleId: string
+    caseRoleId: string,
+    previousSyncState: VerificationChannelPermissionSyncState | undefined
   ): OverwriteResolvable[] {
     const desiredIds = new Set(desired.map((overwrite) => overwrite.id));
     const existingById = new Map(snapshot.entries.map((entry) => [entry.id, entry]));
@@ -1047,12 +1075,20 @@ export class NotificationManager implements INotificationManager {
           return [{ id: entry.id, type: entry.type, allow: entry.allow, deny: entry.deny }];
         }
 
-        const managedBits =
-          this.combinePermissionBits(CASE_ROLE_VERIFICATION_ALLOW_PERMISSIONS) |
-          this.combinePermissionBits(CASE_ROLE_VERIFICATION_DENY_PERMISSIONS);
-        const allow = entry.allow & ~managedBits;
-        const deny = entry.deny & ~managedBits;
-        return allow === 0n && deny === 0n ? [] : [{ id: entry.id, type: entry.type, allow, deny }];
+        if (
+          previousSyncState?.channel_id !== snapshot.channelId ||
+          previousSyncState.case_role_id !== previousCaseRoleId
+        ) {
+          return [{ id: entry.id, type: entry.type, allow: entry.allow, deny: entry.deny }];
+        }
+
+        const managedBits = this.getCaseRoleVerificationManagedBits();
+        const original = previousSyncState.original_case_role_overwrite;
+        const allow = (entry.allow & ~managedBits) | (BigInt(original.allow) & managedBits);
+        const deny = (entry.deny & ~managedBits) | (BigInt(original.deny) & managedBits);
+        return !original.existed && allow === 0n && deny === 0n
+          ? []
+          : [{ id: entry.id, type: entry.type, allow, deny }];
       });
     const merged = desired.map((overwrite) => {
       const existing = existingById.get(overwrite.id);
@@ -1072,6 +1108,39 @@ export class NotificationManager implements INotificationManager {
     });
 
     return [...preserved, ...merged];
+  }
+
+  private buildVerificationPermissionSyncState(
+    snapshot: VerificationPermissionSnapshot,
+    previousSyncState: VerificationChannelPermissionSyncState | undefined,
+    caseRoleId: string
+  ): VerificationChannelPermissionSyncState {
+    if (
+      previousSyncState?.channel_id === snapshot.channelId &&
+      previousSyncState.case_role_id === caseRoleId
+    ) {
+      return previousSyncState;
+    }
+
+    const originalOverwrite = snapshot.entries.find(
+      (entry) => entry.type === 0 && entry.id === caseRoleId
+    );
+    return {
+      channel_id: snapshot.channelId,
+      case_role_id: caseRoleId,
+      original_case_role_overwrite: {
+        existed: Boolean(originalOverwrite),
+        allow: (originalOverwrite?.allow ?? 0n).toString(),
+        deny: (originalOverwrite?.deny ?? 0n).toString(),
+      },
+    };
+  }
+
+  private getCaseRoleVerificationManagedBits(): bigint {
+    return (
+      this.combinePermissionBits(CASE_ROLE_VERIFICATION_ALLOW_PERMISSIONS) |
+      this.combinePermissionBits(CASE_ROLE_VERIFICATION_DENY_PERMISSIONS)
+    );
   }
 
   private combinePermissionBits(bits: readonly bigint[] | undefined): bigint {

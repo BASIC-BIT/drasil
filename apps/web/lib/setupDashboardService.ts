@@ -72,6 +72,11 @@ interface BuildChecklistArgs {
   readonly resourcesError: string | null;
 }
 
+interface LoadDashboardOptions {
+  readonly knownBotUser?: DiscordUser;
+  readonly botIdentityError?: string;
+}
+
 interface GuildPermissionChecklistArgs {
   readonly checklist: SetupChecklistItem[];
   readonly guildPermissions: bigint;
@@ -502,9 +507,19 @@ export class SetupDashboardService {
     const guilds = (await fetchDiscordGuilds(accessToken)).filter((guild) => {
       return canManageGuild(guild.permissions, guild.owner);
     });
-    const botUser = await fetchDiscordBotUser();
+    let botUser: DiscordUser | undefined;
+    let botIdentityError: string | undefined;
+    try {
+      botUser = await fetchDiscordBotUser();
+    } catch (error) {
+      botIdentityError =
+        error instanceof Error ? error.message : 'Unable to load Drasil bot identity.';
+    }
     return mapWithConcurrency(guilds, GUILD_READINESS_CONCURRENCY, async (guild) => {
-      const { dashboard } = await this.loadDashboard(guild, botUser);
+      const { dashboard } = await this.loadDashboard(guild, {
+        botIdentityError,
+        knownBotUser: botUser,
+      });
       return {
         id: guild.id,
         name: guild.name,
@@ -535,20 +550,23 @@ export class SetupDashboardService {
 
   private async loadDashboard(
     manageableGuild: DiscordGuildSummary,
-    knownBotUser?: DiscordUser
+    options: LoadDashboardOptions = {}
   ): Promise<SetupDashboardContext> {
     const guildId = manageableGuild.id;
 
     const server = await this.adapter.getServer(guildId);
     let resources: DiscordGuildResources | null = null;
-    let resourcesError: string | null = null;
+    let resourcesError: string | null = options.botIdentityError ?? null;
     let installed = true;
-    try {
-      resources = await fetchGuildResources(guildId, knownBotUser);
-    } catch (error) {
-      resourcesError = error instanceof Error ? error.message : 'Unable to load Discord resources.';
-      installed =
-        !(error instanceof DiscordApiError) || (error.status !== 403 && error.status !== 404);
+    if (!resourcesError) {
+      try {
+        resources = await fetchGuildResources(guildId, options.knownBotUser);
+      } catch (error) {
+        resourcesError =
+          error instanceof Error ? error.message : 'Unable to load Discord resources.';
+        installed =
+          !(error instanceof DiscordApiError) || (error.status !== 403 && error.status !== 404);
+      }
     }
 
     const checklist = buildChecklist({

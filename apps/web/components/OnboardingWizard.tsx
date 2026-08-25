@@ -9,7 +9,10 @@ import type {
 } from '@drasil/contracts';
 import { InboxActionForm, type InboxStateAction } from './inbox/InboxActionForm';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
-import type { OnboardingWizardValues } from '@/lib/onboardingState';
+import {
+  resolveOnboardingInitialStep,
+  type OnboardingWizardValues,
+} from '@/lib/onboardingState';
 
 interface Option {
   readonly id: string;
@@ -48,7 +51,9 @@ export function OnboardingWizard({
   readonly readiness: SetupReadinessStatus;
   readonly roles: readonly Option[];
 }) {
-  const [step, setStep] = useState(readiness === 'ready' ? STEPS.length - 1 : 0);
+  const [step, setStep] = useState(
+    resolveOnboardingInitialStep(readiness, durableRequest, STEPS.length - 1)
+  );
   const [values, setValues] = useState(initialValues);
   const [submissionId] = useState(initialSubmissionId);
   const blockingIssues = checklist.filter((item) => item.status === 'error');

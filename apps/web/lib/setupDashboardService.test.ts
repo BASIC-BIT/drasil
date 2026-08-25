@@ -240,7 +240,7 @@ describe('SetupDashboardService', () => {
     expect(maxActive).toBeLessThanOrEqual(3);
   });
 
-  it('surfaces a bot identity lookup outage instead of misclassifying every guild', async () => {
+  it('keeps the guild list available with degraded readiness when bot identity lookup fails', async () => {
     vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
     vi.mocked(fetchDiscordBotUser).mockRejectedValue(
       new DiscordApiError(503, 'Discord is temporarily unavailable.')
@@ -248,9 +248,9 @@ describe('SetupDashboardService', () => {
 
     const service = new SetupDashboardService(createAdapter(inactiveServer));
 
-    await expect(service.listManageableGuilds('access-token')).rejects.toThrow(
-      'Discord is temporarily unavailable.'
-    );
+    await expect(service.listManageableGuilds('access-token')).resolves.toEqual([
+      expect.objectContaining({ id: 'guild-1', readiness: 'needs_setup' }),
+    ]);
     expect(fetchGuildResources).not.toHaveBeenCalled();
   });
 

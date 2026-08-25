@@ -5,6 +5,7 @@ import {
   DEFAULT_DETECTION_RESPONSE_MODE,
   DEFAULT_FIRST_SETUP_DETECTION_RESPONSE_MODE,
 } from '../utils/detectionResponseSettings';
+import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { ISetupDiagnosticsService } from './SetupDiagnosticsService';
 import { SetupWorkflowService, type SetupWorkflowResult } from './SetupWorkflowService';
 
@@ -98,6 +99,17 @@ export class SetupProvisioningService {
         roleIds: caseRoleCandidate.ambiguousRoleIds,
       };
     }
+    const manualIntakeSettings = getManualIntakeSettings(existingConfig?.settings);
+    if (
+      manualIntakeSettings.enabled &&
+      manualIntakeSettings.roleId &&
+      caseRoleCandidate.role?.id === manualIntakeSettings.roleId
+    ) {
+      return {
+        status: 'invalid_selection',
+        detail: 'The case role must be separate from the configured manual-intake trigger role.',
+      };
+    }
 
     return this.provisionWithCaseRole(input, caseRoleCandidate, detectionResponseMode);
   }
@@ -119,6 +131,15 @@ export class SetupProvisioningService {
       return {
         status: 'ambiguous_verification_channel',
         channelIds: verificationCandidate.ambiguousChannelIds,
+      };
+    }
+    if (
+      input.reportInstructionsChannelId &&
+      input.reportInstructionsChannelId === verificationCandidate.channelId
+    ) {
+      return {
+        status: 'invalid_selection',
+        detail: 'Report instructions must use a different channel from verification.',
       };
     }
 

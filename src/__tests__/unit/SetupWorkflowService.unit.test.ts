@@ -139,4 +139,60 @@ describe('SetupWorkflowService (unit)', () => {
       })
     );
   });
+
+  it('saves verification permission provenance with the completed setup', async () => {
+    const permissionSyncState = {
+      channel_id: 'verification-channel-1',
+      case_role_id: 'role-1',
+      original_case_role_overwrite: { existed: false, allow: '0', deny: '0' },
+    };
+    const configService = {
+      updateSetupConfiguration: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const notificationManager = {
+      setupVerificationChannel: jest
+        .fn()
+        .mockImplementation(
+          async (
+            _guild: unknown,
+            _caseRoleId: string,
+            _persistConfig: boolean,
+            onChannelCreated: jest.Mock
+          ) => {
+            onChannelCreated('verification-channel-1', permissionSyncState);
+            return 'verification-channel-1';
+          }
+        ),
+    } as any;
+    const setupDiagnosticsService = {
+      validateSetupCandidate: jest.fn().mockResolvedValue(readyReport),
+    } as any;
+    const service = new SetupWorkflowService(
+      configService,
+      notificationManager,
+      { captureGuildEvent: jest.fn() } as any,
+      setupDiagnosticsService
+    );
+
+    await expect(
+      service.completeSetup({
+        guild: { id: 'guild-1' } as any,
+        caseRole: { id: 'role-1' } as any,
+        adminChannelId: 'admin-channel-1',
+        initialVerificationChannelId: null,
+        candidateVerificationChannelId: null,
+        reportInstructionsChannelId: null,
+        candidateReport: readyReport,
+      })
+    ).resolves.toMatchObject({ status: 'completed' });
+
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      adminChannelId: 'admin-channel-1',
+      caseRoleId: 'role-1',
+      settingsPatch: {
+        verification_channel_permission_sync: permissionSyncState,
+      },
+      verificationChannelId: 'verification-channel-1',
+    });
+  });
 });

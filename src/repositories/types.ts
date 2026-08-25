@@ -107,6 +107,17 @@ export interface ServerSettings {
   setup_nudge_last_result?: 'sent' | 'dm_failed' | 'no_recipient' | null;
   setup_nudge_last_source?: 'audit_log_installer' | 'owner' | null;
   setup_warning_last_fingerprint?: string | null;
+  verification_channel_permission_sync?: VerificationChannelPermissionSyncState;
+}
+
+export interface VerificationChannelPermissionSyncState {
+  readonly channel_id: string;
+  readonly case_role_id: string;
+  readonly original_case_role_overwrite: {
+    readonly existed: boolean;
+    readonly allow: string;
+    readonly deny: string;
+  };
 }
 
 export interface GlobalMessageWatchlistEntry {

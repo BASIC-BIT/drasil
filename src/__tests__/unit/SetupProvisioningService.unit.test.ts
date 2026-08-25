@@ -130,4 +130,85 @@ describe('SetupProvisioningService (unit)', () => {
       })
     );
   });
+
+  it('rejects the configured manual-intake role as the case role', async () => {
+    const manualIntakeRole = { id: 'manual-intake-role', name: 'Pending Investigation' };
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        admin_channel_id: 'admin-channel-1',
+        case_role_id: 'case-role-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: {
+          manual_intake_enabled: true,
+          manual_intake_role_id: manualIntakeRole.id,
+        },
+      }),
+    } as any;
+    const setupDiagnosticsService = { validateSetupCandidate: jest.fn() } as any;
+    const setupWorkflowService = { completeSetup: jest.fn() } as any;
+    const service = new SetupProvisioningService(
+      configService,
+      setupDiagnosticsService,
+      setupWorkflowService
+    );
+
+    await expect(
+      service.provision({
+        actorLabel: 'web administrator admin-1',
+        adminChannelId: 'admin-channel-1',
+        caseRole: manualIntakeRole as any,
+        guild: { id: 'guild-1' } as any,
+      })
+    ).resolves.toEqual({
+      status: 'invalid_selection',
+      detail: 'The case role must be separate from the configured manual-intake trigger role.',
+    });
+
+    expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();
+    expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
+  });
+
+  it('rejects report instructions in the resolved verification channel', async () => {
+    const caseRole = { id: 'case-role-1', name: 'Drasil Case' };
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        admin_channel_id: 'admin-channel-1',
+        case_role_id: caseRole.id,
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    } as any;
+    const setupDiagnosticsService = { validateSetupCandidate: jest.fn() } as any;
+    const setupWorkflowService = { completeSetup: jest.fn() } as any;
+    const guild = {
+      id: 'guild-1',
+      channels: {
+        fetch: jest.fn().mockResolvedValue({
+          id: 'verification-channel-1',
+          type: 0,
+        }),
+      },
+    } as any;
+    const service = new SetupProvisioningService(
+      configService,
+      setupDiagnosticsService,
+      setupWorkflowService
+    );
+
+    await expect(
+      service.provision({
+        actorLabel: 'web administrator admin-1',
+        adminChannelId: 'admin-channel-1',
+        caseRole: caseRole as any,
+        guild,
+        reportInstructionsChannelId: 'verification-channel-1',
+      })
+    ).resolves.toEqual({
+      status: 'invalid_selection',
+      detail: 'Report instructions must use a different channel from verification.',
+    });
+
+    expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();
+    expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
+  });
 });
