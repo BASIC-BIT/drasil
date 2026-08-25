@@ -191,6 +191,29 @@ describe('SetupDiagnosticsService (unit)', () => {
     ).toBe('warning');
   });
 
+  it('reports optional observed notification delivery failures as warnings', async () => {
+    const { guild } = buildConfiguredGuild({
+      channelHas: (permission) => permission !== PermissionFlagsBits.SendMessages,
+    });
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: { observed_detection_notification_channel_id: 'observed-channel-1' },
+      }),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateGuildSetup(guild);
+
+    expect(
+      report.issues.find((issue) => issue.code === 'observed-notification-channel-send')?.severity
+    ).toBe('warning');
+    expect(report.errorCount).toBe(2);
+  });
+
   it('requires read message history in configured verification channels', async () => {
     const { guild } = buildConfiguredGuild({
       channelHas: (permission) => permission !== PermissionFlagsBits.ReadMessageHistory,

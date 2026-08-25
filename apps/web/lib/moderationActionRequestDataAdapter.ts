@@ -77,6 +77,10 @@ export interface ModerationActionRequestDataAdapter {
     guildId: string,
     recentLimit?: number
   ): Promise<ModerationActionRequestSummary[]>;
+  getSetupRequest(
+    guildId: string,
+    requestId: string
+  ): Promise<ModerationActionRequestSummary | null>;
 }
 
 interface ModerationActionRequestRow {
@@ -387,6 +391,38 @@ export function parseModerationActionRequestRow(
 }
 
 export class PostgresModerationActionRequestDataAdapter implements ModerationActionRequestDataAdapter {
+  public async getSetupRequest(
+    guildId: string,
+    requestId: string
+  ): Promise<ModerationActionRequestSummary | null> {
+    const result = await getPostgresPool().query<ModerationActionRequestRow>(
+      `select
+         id::text,
+         action_type::text as action_type,
+         actor_surface,
+         completed_at,
+         detection_event_id::text,
+         failed_at,
+         last_error,
+         message_deletion_job_id::text,
+         metadata,
+         requested_at,
+         report_intake_id::text,
+         result,
+         status::text as status,
+         target_user_id,
+         updated_at,
+         verification_event_id::text
+       from moderation_action_requests
+       where server_id = $1
+         and id::text = $2
+         and action_type = 'complete_setup_verification'
+       limit 1`,
+      [guildId, requestId]
+    );
+    return result.rows[0] ? parseModerationActionRequestRow(result.rows[0]) : null;
+  }
+
   public async listInboxRequests(
     guildId: string,
     recentLimit = 8
@@ -494,6 +530,16 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
 }
 
 export class FixtureModerationActionRequestDataAdapter implements ModerationActionRequestDataAdapter {
+  public async getSetupRequest(
+    guildId: string,
+    requestId: string
+  ): Promise<ModerationActionRequestSummary | null> {
+    return (
+      (await this.listSetupRequests(guildId, 25)).find((request) => request.id === requestId) ??
+      null
+    );
+  }
+
   public async listInboxRequests(
     guildId: string,
     recentLimit = 8

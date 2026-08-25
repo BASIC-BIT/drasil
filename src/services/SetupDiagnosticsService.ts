@@ -146,6 +146,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
 
     const detectionSettings = getDetectionResponseSettings(serverConfig.settings);
     if (detectionSettings.observedNotificationChannelId) {
+      const observedNotificationIssues: SetupDiagnosticIssue[] = [];
       await this.checkConfiguredTextChannel(
         guild,
         botMember,
@@ -153,7 +154,10 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         'observed-notification-channel',
         'Observed detection notification channel',
         ADMIN_CHANNEL_PERMISSIONS,
-        issues
+        observedNotificationIssues
+      );
+      issues.push(
+        ...observedNotificationIssues.map((issue) => ({ ...issue, severity: 'warning' as const }))
       );
     }
 

@@ -14,21 +14,36 @@ import { completeOnboarding } from './actions';
 
 export default async function OnboardingPage({
   params,
+  searchParams,
 }: {
   readonly params: Promise<{ guildId: string }>;
+  readonly searchParams: Promise<{ setupRequestId?: string | string[] }>;
 }) {
   const { guildId } = await params;
+  const rawTrackedRequestId = (await searchParams).setupRequestId;
+  const trackedRequestId =
+    typeof rawTrackedRequestId === 'string' && rawTrackedRequestId.trim().length <= 100
+      ? rawTrackedRequestId.trim() || null
+      : null;
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
     redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/onboarding`);
   }
 
-  const [{ dashboard, channels, roles, canApplySetup }, requests] = await Promise.all([
-    createSetupDashboardService().getDashboard(guildId, token.accessToken),
-    createModerationActionRequestDataAdapter().listSetupRequests(guildId, 10),
-  ]);
-  const setupRequests = requests;
-  const latestSetupRequest = setupRequests[0] ?? null;
+  const requestAdapter = createModerationActionRequestDataAdapter();
+  const [{ dashboard, channels, roles, canApplySetup }, requests, trackedRequest] =
+    await Promise.all([
+      createSetupDashboardService().getDashboard(guildId, token.accessToken),
+      requestAdapter.listSetupRequests(guildId, 10),
+      trackedRequestId
+        ? requestAdapter.getSetupRequest(guildId, trackedRequestId)
+        : Promise.resolve(null),
+    ]);
+  const setupRequests =
+    trackedRequest && !requests.some((request) => request.id === trackedRequest.id)
+      ? [trackedRequest, ...requests]
+      : requests;
+  const latestSetupRequest = trackedRequestId ? trackedRequest : (setupRequests[0] ?? null);
   const durableRequest =
     latestSetupRequest?.status === 'completed' && dashboard.readiness !== 'ready'
       ? null

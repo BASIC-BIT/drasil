@@ -11,8 +11,7 @@ describe('SetupWorkflowService (unit)', () => {
 
   it('preserves detection settings when a repair omits protection mode', async () => {
     const configService = {
-      getServerConfig: jest.fn(),
-      updateServerConfig: jest.fn().mockResolvedValue(undefined),
+      updateSetupConfiguration: jest.fn().mockResolvedValue(undefined),
     } as any;
     const service = new SetupWorkflowService(
       configService,
@@ -33,26 +32,17 @@ describe('SetupWorkflowService (unit)', () => {
       })
     ).resolves.toMatchObject({ status: 'completed' });
 
-    expect(configService.getServerConfig).not.toHaveBeenCalled();
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      admin_channel_id: 'admin-channel-1',
-      case_role_id: 'role-1',
-      verification_channel_id: 'verification-channel-1',
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      adminChannelId: 'admin-channel-1',
+      caseRoleId: 'role-1',
+      settingsPatch: {},
+      verificationChannelId: 'verification-channel-1',
     });
   });
 
   it('makes an explicit unified protection mode authoritative over per-event overrides', async () => {
     const configService = {
-      getServerConfig: jest.fn().mockResolvedValue({
-        guild_id: 'guild-1',
-        settings: {
-          detection_response_mode: 'restrict',
-          message_detection_response_mode: 'restrict',
-          join_detection_response_mode: 'record_only',
-          report_enabled: true,
-        },
-      }),
-      updateServerConfig: jest.fn().mockResolvedValue(undefined),
+      updateSetupConfiguration: jest.fn().mockResolvedValue(undefined),
     } as any;
     const service = new SetupWorkflowService(
       configService,
@@ -74,16 +64,15 @@ describe('SetupWorkflowService (unit)', () => {
       })
     ).resolves.toMatchObject({ status: 'completed' });
 
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      admin_channel_id: 'admin-channel-1',
-      case_role_id: 'role-1',
-      verification_channel_id: 'verification-channel-1',
-      settings: {
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      adminChannelId: 'admin-channel-1',
+      caseRoleId: 'role-1',
+      settingsPatch: {
         detection_response_mode: 'off',
         message_detection_response_mode: null,
         join_detection_response_mode: null,
-        report_enabled: true,
       },
+      verificationChannelId: 'verification-channel-1',
     });
   });
 

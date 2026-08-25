@@ -1,7 +1,10 @@
 import { injectable, inject } from 'inversify';
 import { Client, Role, TextChannel } from 'discord.js';
 import { z } from 'zod';
-import { IServerRepository } from '../repositories/ServerRepository';
+import {
+  IServerRepository,
+  type ServerSetupConfigurationUpdate,
+} from '../repositories/ServerRepository';
 import { Server, ServerSettings } from '../repositories/types';
 import { globalConfig } from './GlobalConfig';
 import { TYPES } from '../di/symbols';
@@ -175,6 +178,12 @@ export interface IConfigService {
    * @returns The updated server configuration
    */
   updateServerConfig(guildId: string, data: Partial<Server>): Promise<Server>;
+
+  /** Atomically update core setup fields while merging only the supplied JSON settings keys. */
+  updateSetupConfiguration(
+    guildId: string,
+    update: ServerSetupConfigurationUpdate
+  ): Promise<Server>;
 
   /**
    * Update specific settings for a server
@@ -610,6 +619,37 @@ export class ConfigService implements IConfigService {
       updated_at: new Date().toISOString(),
     };
 
+    this.cacheServerConfig(updatedServer);
+    return updatedServer;
+  }
+
+  async updateSetupConfiguration(
+    guildId: string,
+    update: ServerSetupConfigurationUpdate
+  ): Promise<Server> {
+    if (process.env.DATABASE_URL) {
+      try {
+        const server = await this.serverRepository.upsertSetupConfiguration(guildId, update);
+        this.cacheServerConfig(server);
+        return server;
+      } catch (error) {
+        console.error(`Failed to update setup configuration for guild ${guildId}:`, error);
+        throw error instanceof Error
+          ? error
+          : new Error(`Failed to update setup configuration for guild ${guildId}`);
+      }
+    }
+
+    const currentConfig =
+      this.serverCache.get(guildId) || (await this.createDefaultServerConfig(guildId));
+    const updatedServer: Server = {
+      ...currentConfig,
+      case_role_id: update.caseRoleId,
+      admin_channel_id: update.adminChannelId,
+      verification_channel_id: update.verificationChannelId,
+      settings: { ...currentConfig.settings, ...update.settingsPatch },
+      updated_at: new Date().toISOString(),
+    };
     this.cacheServerConfig(updatedServer);
     return updatedServer;
   }

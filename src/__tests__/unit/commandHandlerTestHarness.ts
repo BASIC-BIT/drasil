@@ -15,6 +15,7 @@ export function restoreUserInstallReportingEnvAfterEach(): void {
 export type HandlerOverrides = Partial<{
   banUser: jest.Mock;
   banUserById: jest.Mock;
+  updateSetupConfiguration: jest.Mock;
   updateServerConfig: jest.Mock;
   updateServerSettings: jest.Mock;
   getCachedServerConfig: jest.Mock;
@@ -46,7 +47,12 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
     banUserById: overrides.banUserById ?? jest.fn().mockResolvedValue(true),
   } as any;
 
+  const updateSetupConfiguration =
+    overrides.updateSetupConfiguration ??
+    overrides.updateServerConfig ??
+    jest.fn().mockResolvedValue({});
   const configService = {
+    updateSetupConfiguration,
     updateServerConfig: overrides.updateServerConfig ?? jest.fn().mockResolvedValue({}),
     updateServerSettings: overrides.updateServerSettings ?? jest.fn().mockResolvedValue({}),
     getCachedServerConfig: overrides.getCachedServerConfig ?? jest.fn().mockReturnValue(null),

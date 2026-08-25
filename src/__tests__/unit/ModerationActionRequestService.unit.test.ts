@@ -818,6 +818,7 @@ describe('ModerationActionRequestService', () => {
         guild_id: 'guild-1',
         settings: serverSettings,
       })),
+      updateSetupConfiguration: jest.fn(async () => undefined),
       updateServerConfig: jest.fn(async () => undefined),
       updateServerSettings: jest.fn(async () => undefined),
     };
@@ -2099,11 +2100,11 @@ describe('ModerationActionRequestService', () => {
       false,
       expect.any(Function)
     );
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      admin_channel_id: 'admin-channel-1',
-      case_role_id: 'role-1',
-      verification_channel_id: 'created-verification-channel',
-      settings: {
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      adminChannelId: 'admin-channel-1',
+      caseRoleId: 'role-1',
+      verificationChannelId: 'created-verification-channel',
+      settingsPatch: {
         detection_response_mode: 'notify_only',
         join_detection_response_mode: null,
         message_detection_response_mode: null,

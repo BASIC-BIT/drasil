@@ -177,23 +177,17 @@ export class SetupWorkflowService {
     }
 
     try {
-      const currentConfig = input.detectionResponseMode
-        ? await this.configService.getServerConfig(guildId)
-        : null;
-      await this.configService.updateServerConfig(guildId, {
-        case_role_id: input.caseRole.id,
-        admin_channel_id: input.adminChannelId,
-        verification_channel_id: verificationChannelId,
-        ...(currentConfig && input.detectionResponseMode
+      await this.configService.updateSetupConfiguration(guildId, {
+        caseRoleId: input.caseRole.id,
+        adminChannelId: input.adminChannelId,
+        verificationChannelId,
+        settingsPatch: input.detectionResponseMode
           ? {
-              settings: {
-                ...currentConfig.settings,
-                detection_response_mode: input.detectionResponseMode,
-                message_detection_response_mode: null,
-                join_detection_response_mode: null,
-              },
+              detection_response_mode: input.detectionResponseMode,
+              message_detection_response_mode: null,
+              join_detection_response_mode: null,
             }
-          : {}),
+          : {},
       });
     } catch (error) {
       const setupFailureDetail = await this.rollbackCreatedArtifacts(

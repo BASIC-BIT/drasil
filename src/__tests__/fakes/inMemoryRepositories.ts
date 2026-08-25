@@ -1,7 +1,10 @@
 import type { IAdminActionRepository } from '../../repositories/AdminActionRepository';
 import type { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import type { IServerMemberRepository } from '../../repositories/ServerMemberRepository';
-import type { IServerRepository } from '../../repositories/ServerRepository';
+import type {
+  IServerRepository,
+  ServerSetupConfigurationUpdate,
+} from '../../repositories/ServerRepository';
 import type { IUserRepository } from '../../repositories/UserRepository';
 import type {
   IVerificationEventRepository,
@@ -1389,6 +1392,30 @@ export class InMemoryServerRepository implements IServerRepository {
           updated_at: new Date().toISOString(),
         }
       : this.buildServer(guildId, data);
+    this.servers.set(guildId, updated);
+    return this.cloneServer(updated);
+  }
+
+  async upsertSetupConfiguration(
+    guildId: string,
+    update: ServerSetupConfigurationUpdate
+  ): Promise<Server> {
+    const existing = this.servers.get(guildId);
+    const updated = existing
+      ? {
+          ...existing,
+          case_role_id: update.caseRoleId,
+          admin_channel_id: update.adminChannelId,
+          verification_channel_id: update.verificationChannelId,
+          settings: { ...existing.settings, ...update.settingsPatch },
+          updated_at: new Date().toISOString(),
+        }
+      : this.buildServer(guildId, {
+          case_role_id: update.caseRoleId,
+          admin_channel_id: update.adminChannelId,
+          verification_channel_id: update.verificationChannelId,
+          settings: { ...update.settingsPatch },
+        });
     this.servers.set(guildId, updated);
     return this.cloneServer(updated);
   }

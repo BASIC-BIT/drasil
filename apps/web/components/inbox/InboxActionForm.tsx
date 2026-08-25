@@ -12,6 +12,7 @@ import {
   type InboxActionStatus,
 } from '@/lib/inboxActionState';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
+import { buildTrackedRequestUrl } from '@/lib/requestTrackingUrl';
 import { useInboxActionRequestPolling } from './InboxActionRequestPoller';
 
 export type InboxStateAction = (
@@ -80,6 +81,7 @@ export function InboxActionForm({
   formClassName,
   pendingLabel = 'Submitting...',
   requestBaseHref,
+  requestIdQueryParameter,
 }: {
   readonly action: InboxStateAction;
   readonly buttonClassName?: string;
@@ -89,6 +91,7 @@ export function InboxActionForm({
   readonly formClassName?: string;
   readonly pendingLabel?: string;
   readonly requestBaseHref?: string;
+  readonly requestIdQueryParameter?: string;
 }) {
   const [localState, formAction] = useActionState(action, initialInboxActionState);
   const [submitting, setSubmitting] = useState(false);
@@ -109,6 +112,20 @@ export function InboxActionForm({
     : (localState.message ?? defaultMessage(status));
   const actionInFlight = isInboxActionInFlight(status);
   const showReceipt = status !== 'idle';
+
+  useEffect(() => {
+    if (!requestIdQueryParameter || !requestId) {
+      return;
+    }
+    const nextUrl = buildTrackedRequestUrl(
+      window.location.href,
+      requestIdQueryParameter,
+      requestId
+    );
+    if (nextUrl !== window.location.href) {
+      window.history.replaceState(window.history.state, '', nextUrl);
+    }
+  }, [requestId, requestIdQueryParameter]);
 
   useEffect(() => {
     if (!requestId) {

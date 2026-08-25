@@ -364,6 +364,7 @@ describe('InteractionHandler (unit)', () => {
       initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn(),
       getServerConfig: jest.fn().mockResolvedValue({ settings: {} }),
+      updateSetupConfiguration: jest.fn().mockResolvedValue({}),
       updateServerConfig: jest.fn().mockResolvedValue({}),
       getServerSettings: jest.fn(),
       updateServerSettings: jest.fn(),
@@ -2688,10 +2689,11 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleModalSubmit(interaction);
 
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      case_role_id: '123456789012345678',
-      admin_channel_id: '123456789012345679',
-      verification_channel_id: '123456789012345680',
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      caseRoleId: '123456789012345678',
+      adminChannelId: '123456789012345679',
+      verificationChannelId: '123456789012345680',
+      settingsPatch: {},
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content:
@@ -2766,10 +2768,11 @@ describe('InteractionHandler (unit)', () => {
       false,
       expect.any(Function)
     );
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      case_role_id: '123456789012345678',
-      admin_channel_id: '123456789012345679',
-      verification_channel_id: '123456789012345681',
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      caseRoleId: '123456789012345678',
+      adminChannelId: '123456789012345679',
+      verificationChannelId: '123456789012345681',
+      settingsPatch: {},
     });
     expect(interaction.reply).toHaveBeenCalledWith({
       content:

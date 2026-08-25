@@ -257,6 +257,38 @@ describe('ConfigService (unit)', () => {
     ).toBe('restrict');
   });
 
+  it('merges setup keys against repository state instead of stale cached settings', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const service = new ConfigService(serverRepository, buildClient());
+
+    await serverRepository.upsertByGuildId('guild-setup', {
+      settings: { report_ai_triage_enabled: true },
+    });
+    await service.getServerConfig('guild-setup');
+    await serverRepository.updateSettings('guild-setup', {
+      report_ai_triage_enabled: false,
+      report_ai_max_action: 'hints',
+    });
+
+    const updated = await service.updateSetupConfiguration('guild-setup', {
+      adminChannelId: 'admin-channel-1',
+      caseRoleId: 'case-role-1',
+      verificationChannelId: 'verification-channel-1',
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        message_detection_response_mode: null,
+        join_detection_response_mode: null,
+      },
+    });
+
+    expect(updated.settings).toMatchObject({
+      detection_response_mode: 'notify_only',
+      report_ai_triage_enabled: false,
+      report_ai_max_action: 'hints',
+    });
+  });
+
   it('does not persist per-event detection overrides in default server settings', async () => {
     process.env.DATABASE_URL = 'in-memory';
     const serverRepository = new InMemoryServerRepository();

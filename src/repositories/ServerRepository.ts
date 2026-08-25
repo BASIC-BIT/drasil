@@ -4,6 +4,29 @@ import { Server, ServerSettings } from './types'; // Keep existing domain types
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository'; // Keep using RepositoryError for consistency
 
+export interface ServerSetupConfigurationUpdate {
+  readonly caseRoleId: string;
+  readonly adminChannelId: string;
+  readonly verificationChannelId: string;
+  readonly settingsPatch: Partial<ServerSettings>;
+}
+
+interface ServerDatabaseRecord {
+  readonly guild_id: string;
+  readonly case_role_id: string | null;
+  readonly admin_channel_id: string | null;
+  readonly verification_channel_id: string | null;
+  readonly admin_notification_role_id: string | null;
+  readonly heuristic_message_threshold: number;
+  readonly heuristic_message_timeframe_seconds: number;
+  readonly heuristic_suspicious_keywords: string[];
+  readonly created_at: Date | null;
+  readonly updated_at: Date | null;
+  readonly updated_by: string | null;
+  readonly settings: Prisma.JsonValue | null;
+  readonly is_active: boolean | null;
+}
+
 /**
  * Interface for the ServerRepository (Remains the same)
  */
@@ -11,6 +34,10 @@ export interface IServerRepository {
   findById(id: string): Promise<Server | null>;
   findByGuildId(guildId: string): Promise<Server | null>;
   upsertByGuildId(guildId: string, data: Partial<Server>): Promise<Server>;
+  upsertSetupConfiguration(
+    guildId: string,
+    update: ServerSetupConfigurationUpdate
+  ): Promise<Server>;
   updateSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server | null>;
   setActive(guildId: string, isActive: boolean): Promise<Server | null>;
   findAllActive(): Promise<Server[]>;
@@ -25,21 +52,7 @@ export class ServerRepository implements IServerRepository {
   // Inject PrismaClient instead of SupabaseClient
   constructor(@inject(TYPES.PrismaClient) private prisma: PrismaClient) {}
 
-  private toDomainServer(server: {
-    guild_id: string;
-    case_role_id: string | null;
-    admin_channel_id: string | null;
-    verification_channel_id: string | null;
-    admin_notification_role_id: string | null;
-    heuristic_message_threshold: number;
-    heuristic_message_timeframe_seconds: number;
-    heuristic_suspicious_keywords: string[];
-    created_at: Date | null;
-    updated_at: Date | null;
-    updated_by: string | null;
-    settings: Prisma.JsonValue | null;
-    is_active: boolean | null;
-  }): Server {
+  private toDomainServer(server: ServerDatabaseRecord): Server {
     return {
       guild_id: server.guild_id,
       case_role_id: server.case_role_id,
@@ -153,6 +166,59 @@ export class ServerRepository implements IServerRepository {
       return this.toDomainServer(upserted);
     } catch (error) {
       this.handleError(error, 'upsertByGuildId');
+    }
+  }
+
+  async upsertSetupConfiguration(
+    guildId: string,
+    update: ServerSetupConfigurationUpdate
+  ): Promise<Server> {
+    try {
+      const settingsPatch = JSON.stringify(update.settingsPatch);
+      const rows = await this.prisma.$queryRaw<ServerDatabaseRecord[]>(Prisma.sql`
+        insert into servers (
+          guild_id,
+          case_role_id,
+          admin_channel_id,
+          verification_channel_id,
+          settings,
+          updated_at
+        ) values (
+          ${guildId},
+          ${update.caseRoleId},
+          ${update.adminChannelId},
+          ${update.verificationChannelId},
+          ${settingsPatch}::jsonb,
+          now()
+        )
+        on conflict (guild_id) do update set
+          case_role_id = excluded.case_role_id,
+          admin_channel_id = excluded.admin_channel_id,
+          verification_channel_id = excluded.verification_channel_id,
+          settings = coalesce(servers.settings, '{}'::jsonb) || excluded.settings,
+          updated_at = now()
+        returning
+          guild_id,
+          case_role_id,
+          admin_channel_id,
+          verification_channel_id,
+          admin_notification_role_id,
+          heuristic_message_threshold,
+          heuristic_message_timeframe_seconds,
+          heuristic_suspicious_keywords,
+          created_at,
+          updated_at,
+          updated_by,
+          settings,
+          is_active
+      `);
+      const server = rows.at(0);
+      if (!server) {
+        throw new Error(`Setup configuration upsert returned no server for ${guildId}`);
+      }
+      return this.toDomainServer(server);
+    } catch (error) {
+      this.handleError(error, 'upsertSetupConfiguration');
     }
   }
 

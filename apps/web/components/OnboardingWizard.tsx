@@ -81,7 +81,9 @@ export function OnboardingWizard({
     );
   }
 
-  const nextDisabled = step === 1 && !values.adminChannelId;
+  const nextDisabled =
+    (step === 1 && !values.adminChannelId) ||
+    (step === 2 && values.caseRoleId === '__create__' && !values.caseRoleName.trim());
   const selected = (options: readonly Option[], id: string, fallback: string) =>
     options.find((option) => option.id === id)?.name ?? fallback;
 
@@ -158,6 +160,7 @@ export function OnboardingWizard({
               <input
                 maxLength={100}
                 onChange={(event) => update('caseRoleName', event.target.value)}
+                required
                 value={values.caseRoleName}
               />
             </label>
@@ -289,6 +292,7 @@ export function OnboardingWizard({
               formClassName="stack"
               pendingLabel="Queueing setup..."
               requestBaseHref={`/admin/guild/${guildId}/operations`}
+              requestIdQueryParameter="setupRequestId"
             >
               <input name="adminChannelId" type="hidden" value={values.adminChannelId} />
               <input name="caseRoleId" type="hidden" value={values.caseRoleId} />
