@@ -641,4 +641,35 @@ describe('CommandHandler report commands (unit)', () => {
     expect(client.channels.fetch).not.toHaveBeenCalled();
     expect(oldMessage.delete).not.toHaveBeenCalled();
   });
+
+  it('preserves old report instructions when clearing settings fails', async () => {
+    const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
+    const client = {
+      channels: {
+        fetch: jest.fn().mockResolvedValue({
+          messages: { fetch: jest.fn().mockResolvedValue(oldMessage) },
+        }),
+      },
+    } as any;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          report_instructions_channel_id: 'old-channel-1',
+          report_instructions_message_id: 'old-message-1',
+        },
+      }),
+      updateServerSettings: jest.fn().mockRejectedValue(new Error('database unavailable')),
+    } as any;
+
+    await expect(
+      new ReportInstructionsManager(client, configService).clearReportInstructions('guild-1')
+    ).rejects.toThrow('database unavailable');
+
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      report_instructions_channel_id: null,
+      report_instructions_message_id: null,
+    });
+    expect(client.channels.fetch).not.toHaveBeenCalled();
+    expect(oldMessage.delete).not.toHaveBeenCalled();
+  });
 });

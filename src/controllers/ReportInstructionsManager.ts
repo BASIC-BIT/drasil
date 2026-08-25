@@ -75,11 +75,11 @@ export class ReportInstructionsManager {
     const existingChannelId = serverConfig.settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
     const existingMessageId = serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
 
-    await this.deleteStaleReportInstructionsMessage(existingChannelId, existingMessageId);
     await this.configService.updateServerSettings(guildId, {
       [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: null,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: null,
     });
+    await this.deleteStaleReportInstructionsMessage(existingChannelId, existingMessageId);
 
     return { action: existingChannelId || existingMessageId ? 'cleared' : 'unchanged' };
   }
