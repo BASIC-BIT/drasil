@@ -37,7 +37,6 @@ export interface ProvisionSetupInput {
   readonly caseRole?: Role | null;
   readonly caseRoleId?: string | null;
   readonly caseRoleName?: string | null;
-  readonly createCaseRole?: boolean;
   readonly verificationChannelId?: string | null;
   readonly verificationChannel?: TextChannel | null;
   readonly reportInstructionsChannelId?: string | null;

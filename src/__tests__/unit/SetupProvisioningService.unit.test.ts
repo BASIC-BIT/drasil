@@ -110,7 +110,6 @@ describe('SetupProvisioningService (unit)', () => {
         actorLabel: 'web administrator admin-1',
         adminChannelId: 'admin-channel-1',
         caseRoleName: 'Drasil Case',
-        createCaseRole: true,
         guild,
         verificationChannel: { id: 'verification-channel-1' } as any,
       })
@@ -304,7 +303,6 @@ describe('SetupProvisioningService (unit)', () => {
       service.provision({
         actorLabel: 'web administrator admin-1',
         adminChannelId: 'admin-channel-1',
-        createCaseRole: true,
         guild,
       })
     ).rejects.toThrow('database unavailable');

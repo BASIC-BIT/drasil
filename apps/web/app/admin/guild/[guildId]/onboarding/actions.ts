@@ -55,7 +55,6 @@ export async function completeOnboarding(
       adminChannelId,
       caseRoleId: selectedCaseRole === '__create__' ? null : selectedCaseRole,
       caseRoleName: selectedCaseRole === '__create__' ? read(formData, 'caseRoleName') : undefined,
-      createCaseRole: selectedCaseRole === '__create__',
       detectionResponseMode,
       guildId,
       onboardingWizard: true,

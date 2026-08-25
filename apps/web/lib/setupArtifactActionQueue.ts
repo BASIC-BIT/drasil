@@ -35,7 +35,6 @@ export async function queueCompleteSetupVerificationRequest(input: {
   readonly adminChannelId: string;
   readonly caseRoleId?: string | null;
   readonly caseRoleName?: string | null;
-  readonly createCaseRole?: boolean;
   readonly detectionResponseMode?: 'off' | 'record_only' | 'notify_only' | 'restrict';
   readonly guildId: string;
   readonly reportInstructionsChannelId?: string | null;
@@ -51,7 +50,6 @@ export async function queueCompleteSetupVerificationRequestWithReceipt(input: {
   readonly adminChannelId: string;
   readonly caseRoleId?: string | null;
   readonly caseRoleName?: string | null;
-  readonly createCaseRole?: boolean;
   readonly detectionResponseMode?: 'off' | 'record_only' | 'notify_only' | 'restrict';
   readonly guildId: string;
   readonly reportInstructionsChannelId?: string | null;
@@ -72,7 +70,6 @@ export async function queueCompleteSetupVerificationRequestWithReceipt(input: {
       admin_channel_id: input.adminChannelId,
       case_role_id: input.caseRoleId,
       case_role_name: input.caseRoleName ?? undefined,
-      create_case_role: input.createCaseRole ?? false,
       ...(input.onboardingWizard === true
         ? { detection_response_mode: input.detectionResponseMode ?? null }
         : input.detectionResponseMode

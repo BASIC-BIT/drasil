@@ -1470,7 +1470,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       'report_instructions_channel_id'
     );
     const caseRoleName = this.readMetadataString(request.metadata, 'case_role_name');
-    const createCaseRole = this.readMetadataBoolean(request.metadata, 'create_case_role') === true;
     const detectionResponseMode = this.readSetupDetectionResponseMode(request.metadata);
     const previousPermissionSyncState = this.readVerificationPermissionSyncState(
       request.metadata,
@@ -1499,7 +1498,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       captureAnalytics: true,
       caseRoleId,
       caseRoleName,
-      createCaseRole,
       candidatePermissionSyncState,
       detectionResponseMode,
       guild,

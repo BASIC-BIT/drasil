@@ -21,7 +21,9 @@ async function expectVisualSchemes(page: Page, name: string): Promise<void> {
   await page.addStyleTag({ content: nextDevOverlayStyle });
   for (const scheme of visualSchemes) {
     await page.emulateMedia({ colorScheme: scheme });
-    await expect(page).toHaveScreenshot(platformSnapshotName(name, scheme), { fullPage: true });
+    await expect
+      .soft(page)
+      .toHaveScreenshot(platformSnapshotName(name, scheme), { fullPage: true });
   }
 }
 
