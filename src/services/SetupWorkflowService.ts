@@ -101,12 +101,15 @@ export class SetupWorkflowService {
     } = { permissionSnapshots: [] };
 
     if (!verificationChannelId) {
-      const onChannelCreated = (
+      const onChannelCreated = async (
         channelId: string,
         state?: VerificationChannelPermissionSyncState
-      ): void => {
+      ): Promise<void> => {
         setupArtifacts.verificationChannelId = channelId;
         setupArtifacts.permissionSyncState = state;
+        if (state && input.persistPermissionSyncState) {
+          await input.persistPermissionSyncState(state, input.previousPermissionSyncState);
+        }
       };
       const onPermissionsUpdated = async (
         snapshot: VerificationPermissionSnapshot,

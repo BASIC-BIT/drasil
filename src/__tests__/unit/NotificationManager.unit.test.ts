@@ -1531,6 +1531,57 @@ describe('NotificationManager (unit)', () => {
     );
   });
 
+  it('waits for created-channel provenance persistence before returning', async () => {
+    configService.getServerConfig = jest.fn().mockResolvedValue({
+      verification_channel_id: null,
+      settings: {},
+    } as any);
+    const createChannel = jest.fn().mockResolvedValue({ id: 'created-verification-channel' });
+    const guild = {
+      id: 'guild-1',
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: { filter: jest.fn().mockReturnValue([]) },
+      },
+      channels: {
+        cache: buildChannelCollection([]),
+        fetch: jest.fn(),
+        create: createChannel,
+      },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    let markPersistenceStarted!: () => void;
+    let releasePersistence!: () => void;
+    const persistenceStarted = new Promise<void>((resolve) => {
+      markPersistenceStarted = resolve;
+    });
+    const persistenceReleased = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const onChannelCreated = jest.fn(async () => {
+      markPersistenceStarted();
+      await persistenceReleased;
+    });
+    let setupFinished = false;
+    const setupPromise = manager
+      .setupVerificationChannel(guild, 'case-role-1', false, onChannelCreated)
+      .then((channelId) => {
+        setupFinished = true;
+        return channelId;
+      });
+
+    await persistenceStarted;
+    expect(setupFinished).toBe(false);
+    releasePersistence();
+
+    await expect(setupPromise).resolves.toBe('created-verification-channel');
+    expect(onChannelCreated).toHaveBeenCalledWith(
+      'created-verification-channel',
+      expect.objectContaining({ channel_id: 'created-verification-channel' })
+    );
+  });
+
   it('restores Drasil-managed permissions when an administrator role is retired', async () => {
     const managedBits =
       PermissionFlagsBits.ViewChannel |

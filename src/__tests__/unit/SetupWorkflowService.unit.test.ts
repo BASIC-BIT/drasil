@@ -165,7 +165,7 @@ describe('SetupWorkflowService (unit)', () => {
             _persistConfig: boolean,
             onChannelCreated: jest.Mock
           ) => {
-            onChannelCreated('verification-channel-1', permissionSyncState);
+            await onChannelCreated('verification-channel-1', permissionSyncState);
             return 'verification-channel-1';
           }
         ),
@@ -179,6 +179,7 @@ describe('SetupWorkflowService (unit)', () => {
       { captureGuildEvent: jest.fn() } as any,
       setupDiagnosticsService
     );
+    const persistPermissionSyncState = jest.fn().mockResolvedValue(undefined);
 
     await expect(
       service.completeSetup({
@@ -189,9 +190,14 @@ describe('SetupWorkflowService (unit)', () => {
         candidateVerificationChannelId: null,
         reportInstructionsChannelId: null,
         candidateReport: readyReport,
+        persistPermissionSyncState,
       })
     ).resolves.toMatchObject({ status: 'completed' });
 
+    expect(persistPermissionSyncState).toHaveBeenCalledWith(permissionSyncState, undefined);
+    expect(persistPermissionSyncState.mock.invocationCallOrder[0]).toBeLessThan(
+      configService.updateSetupConfiguration.mock.invocationCallOrder[0]
+    );
     expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
       adminChannelId: 'admin-channel-1',
       caseRoleId: 'role-1',

@@ -879,7 +879,17 @@ describe('ModerationActionRequestService', () => {
         }
         const onChannelCreated = args[3];
         if (typeof onChannelCreated === 'function') {
-          onChannelCreated('created-verification-channel');
+          await onChannelCreated('created-verification-channel', {
+            channel_id: 'created-verification-channel',
+            managed_overwrites: [
+              {
+                id: 'guild-1',
+                type: 0,
+                managed_bits: '1',
+                original_overwrite: { existed: false, allow: '0', deny: '0' },
+              },
+            ],
+          });
         }
         return 'created-verification-channel';
       }),
@@ -2161,6 +2171,10 @@ describe('ModerationActionRequestService', () => {
         detection_response_mode: 'notify_only',
         join_detection_response_mode: null,
         message_detection_response_mode: null,
+        verification_channel_permission_sync: {
+          channel_id: 'created-verification-channel',
+          managed_overwrites: expect.any(Array),
+        },
       },
     });
     expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
@@ -2194,6 +2208,18 @@ describe('ModerationActionRequestService', () => {
         embeds: expect.any(Array),
       })
     );
+    expect(repository.metadataMerges).toEqual([
+      {
+        id: 'setup-verification-request-1',
+        metadata: {
+          previous_verification_channel_permission_sync: null,
+          candidate_verification_channel_permission_sync: expect.objectContaining({
+            channel_id: 'created-verification-channel',
+            managed_overwrites: expect.any(Array),
+          }),
+        },
+      },
+    ]);
     expect(repository.completed).toEqual([
       {
         id: 'setup-verification-request-1',

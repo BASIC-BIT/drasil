@@ -108,7 +108,10 @@ export interface INotificationManager {
     guild: Guild,
     caseRoleId: string,
     persistConfig?: boolean,
-    onChannelCreated?: (channelId: string, state: VerificationChannelPermissionSyncState) => void,
+    onChannelCreated?: (
+      channelId: string,
+      state: VerificationChannelPermissionSyncState
+    ) => void | Promise<void>,
     configuredVerificationChannelId?: string,
     onPermissionsUpdated?: (
       snapshot: VerificationPermissionSnapshot,
@@ -864,7 +867,10 @@ export class NotificationManager implements INotificationManager {
     guild: Guild,
     caseRoleId: string,
     persistConfig = true,
-    onChannelCreated?: (channelId: string, state: VerificationChannelPermissionSyncState) => void,
+    onChannelCreated?: (
+      channelId: string,
+      state: VerificationChannelPermissionSyncState
+    ) => void | Promise<void>,
     configuredVerificationChannelId?: string,
     onPermissionsUpdated?: (
       snapshot: VerificationPermissionSnapshot,
@@ -931,7 +937,7 @@ export class NotificationManager implements INotificationManager {
         undefined,
         permissionOverwrites
       );
-      onChannelCreated?.(verificationChannel.id, nextSyncState);
+      await onChannelCreated?.(verificationChannel.id, nextSyncState);
 
       if (persistConfig) {
         await this.persistVerificationChannelConfiguration(
