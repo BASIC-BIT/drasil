@@ -1,19 +1,27 @@
 import { SetupProvisioningService } from '../../services/SetupProvisioningService';
 
 describe('SetupProvisioningService (unit)', () => {
-  it('preserves surface-specific protection modes when rerunning incomplete setup', async () => {
+  it('defaults legacy first setup to notify-only without replacing surface-specific modes', async () => {
     const caseRole = { id: 'case-role', name: 'Drasil Case' };
     const verificationChannel = { id: 'verification-channel-1' };
     const configService = {
-      getServerConfig: jest.fn().mockResolvedValue({
-        admin_channel_id: null,
-        case_role_id: caseRole.id,
-        verification_channel_id: verificationChannel.id,
-        settings: {
-          message_detection_response_mode: 'notify_only',
-          join_detection_response_mode: 'off',
-        },
-      }),
+      getServerConfig: jest
+        .fn()
+        .mockResolvedValueOnce({
+          admin_channel_id: null,
+          case_role_id: caseRole.id,
+          verification_channel_id: verificationChannel.id,
+          settings: { detection_response_mode: 'restrict' },
+        })
+        .mockResolvedValueOnce({
+          admin_channel_id: null,
+          case_role_id: caseRole.id,
+          verification_channel_id: verificationChannel.id,
+          settings: {
+            message_detection_response_mode: 'notify_only',
+            join_detection_response_mode: 'off',
+          },
+        }),
     } as any;
     const setupDiagnosticsService = {
       validateSetupCandidate: jest.fn().mockResolvedValue({
@@ -42,7 +50,22 @@ describe('SetupProvisioningService (unit)', () => {
       })
     ).resolves.toEqual({ status: 'completed' });
 
-    expect(setupWorkflowService.completeSetup).toHaveBeenCalledWith(
+    await expect(
+      service.provision({
+        actorLabel: 'administrator admin-1',
+        adminChannelId: 'admin-channel-1',
+        caseRole: caseRole as any,
+        guild: { id: 'guild-1' } as any,
+        verificationChannel: verificationChannel as any,
+      })
+    ).resolves.toEqual({ status: 'completed' });
+
+    expect(setupWorkflowService.completeSetup).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ detectionResponseMode: 'notify_only' })
+    );
+    expect(setupWorkflowService.completeSetup).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({ detectionResponseMode: undefined })
     );
   });

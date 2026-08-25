@@ -1,6 +1,10 @@
 import type { DetectionResponseMode } from '../../packages/contracts/src/setup';
 import { ChannelType, Guild, Role, TextChannel } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
+import {
+  DEFAULT_DETECTION_RESPONSE_MODE,
+  DEFAULT_FIRST_SETUP_DETECTION_RESPONSE_MODE,
+} from '../utils/detectionResponseSettings';
 import { ISetupDiagnosticsService } from './SetupDiagnosticsService';
 import { SetupWorkflowService, type SetupWorkflowResult } from './SetupWorkflowService';
 
@@ -65,13 +69,18 @@ export class SetupProvisioningService {
       !existingConfig?.case_role_id ||
       !existingConfig.admin_channel_id ||
       !existingConfig.verification_channel_id;
-    const protectionModeAlreadyConfigured =
-      existingConfig?.settings.detection_response_mode !== undefined ||
+    const surfaceProtectionModeAlreadyConfigured =
       existingConfig?.settings.message_detection_response_mode != null ||
       existingConfig?.settings.join_detection_response_mode != null;
+    const persistedDefaultMode = existingConfig?.settings.detection_response_mode;
+    const needsFirstSetupProtectionDefault =
+      coreSetupIncomplete &&
+      !surfaceProtectionModeAlreadyConfigured &&
+      (persistedDefaultMode === undefined ||
+        persistedDefaultMode === DEFAULT_DETECTION_RESPONSE_MODE);
     const detectionResponseMode =
       input.detectionResponseMode ??
-      (!protectionModeAlreadyConfigured && coreSetupIncomplete ? 'notify_only' : undefined);
+      (needsFirstSetupProtectionDefault ? DEFAULT_FIRST_SETUP_DETECTION_RESPONSE_MODE : undefined);
     const caseRoleCandidate = await this.resolveCaseRoleCandidate(
       input.guild,
       input.caseRole ?? null,

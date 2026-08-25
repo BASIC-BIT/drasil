@@ -70,7 +70,7 @@ describe('ConfigService (unit)', () => {
       globalConfig.getSettings().defaultServerSettings.messageThreshold
     );
     expect(config.heuristic_suspicious_keywords.length).toBeGreaterThan(0);
-    expect(getDetectionResponseSettings(config.settings).mode).toBe('restrict');
+    expect(getDetectionResponseSettings(config.settings).mode).toBe('notify_only');
     expect(getDetectionResponseSettings(config.settings).moderatorBanActionEnabled).toBe(true);
     expect(getReportAiSettings(config.settings).enabled).toBe(true);
     expect(getVerificationThreadAnalysisSettings(config.settings).enabled).toBe(true);

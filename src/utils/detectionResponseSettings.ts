@@ -31,6 +31,7 @@ export type DetectionResponseMode = (typeof DETECTION_RESPONSE_MODES)[number];
 export type DetectionResponseEvent = 'message' | 'join';
 
 export const DEFAULT_DETECTION_RESPONSE_MODE: DetectionResponseMode = 'restrict';
+export const DEFAULT_FIRST_SETUP_DETECTION_RESPONSE_MODE: DetectionResponseMode = 'notify_only';
 export const DEFAULT_MODERATOR_BAN_ACTION_ENABLED = true;
 export const DEFAULT_MODERATOR_KICK_ACTION_ENABLED = true;
 export const DEFAULT_ADMIN_CASE_OPEN_REQUIRES_REASON = false;
