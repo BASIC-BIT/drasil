@@ -351,7 +351,13 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     serverConfig: Server,
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
-    await this.checkCaseRoleId(guild, botMember, serverConfig.case_role_id, 'warning', issues);
+    await this.checkCaseRoleId(
+      guild,
+      botMember,
+      serverConfig.case_role_id,
+      serverConfig.verification_channel_id,
+      issues
+    );
   }
 
   private async checkCaseRoleCandidate(
@@ -361,7 +367,13 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
     if (candidate.caseRoleId) {
-      await this.checkCaseRoleId(guild, botMember, candidate.caseRoleId, 'error', issues);
+      await this.checkCaseRoleId(
+        guild,
+        botMember,
+        candidate.caseRoleId,
+        candidate.verificationChannelId,
+        issues
+      );
       return;
     }
 
@@ -380,7 +392,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     guild: Guild,
     botMember: GuildMember,
     caseRoleId: string | null | undefined,
-    permissionSeverity: SetupDiagnosticSeverity,
+    verificationChannelId: string | null | undefined,
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
     if (!caseRoleId) {
@@ -420,12 +432,19 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
 
     if (caseRole.permissions.bitfield !== 0n) {
       issues.push({
-        severity: permissionSeverity,
+        severity: 'error',
         code: 'case-role-permissions',
         message:
-          permissionSeverity === 'error'
-            ? 'The selected case role must not grant server permissions. Use a dedicated permission-free role; Drasil grants verification-channel access separately.'
-            : 'The configured case role grants server permissions. Replace it with a dedicated permission-free role; Drasil grants verification-channel access separately.',
+          'The case role must not grant server permissions. Use a dedicated permission-free role; Drasil grants verification-channel access separately.',
+      });
+    }
+
+    if (this.hasUnrelatedCaseRoleChannelAllows(guild, caseRole.id, verificationChannelId)) {
+      issues.push({
+        severity: 'error',
+        code: 'case-role-channel-overwrites',
+        message:
+          'The case role has allow permissions outside the verification channel. Use a dedicated role that cannot grant unrelated channel access.',
       });
     }
 
@@ -436,6 +455,37 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         message: `Move the Drasil role above the selected case role <@&${caseRole.id}>.`,
       });
     }
+  }
+
+  private hasUnrelatedCaseRoleChannelAllows(
+    guild: Guild,
+    caseRoleId: string,
+    verificationChannelId: string | null | undefined
+  ): boolean {
+    const cache = (guild.channels as { cache?: { values?: () => Iterable<unknown> } }).cache;
+    if (typeof cache?.values !== 'function') {
+      return false;
+    }
+
+    for (const channel of cache.values()) {
+      const candidate = channel as {
+        id?: string;
+        permissionOverwrites?: {
+          cache?: {
+            get?: (id: string) => { allow?: { bitfield?: bigint } } | undefined;
+          };
+        };
+      };
+      if (candidate.id === verificationChannelId) {
+        continue;
+      }
+      const overwrite = candidate.permissionOverwrites?.cache?.get?.(caseRoleId);
+      if (overwrite?.allow?.bitfield && overwrite.allow.bitfield !== 0n) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private async checkManualIntakeRole(

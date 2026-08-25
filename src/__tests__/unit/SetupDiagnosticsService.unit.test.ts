@@ -133,7 +133,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     expect(report.errorCount).toBeGreaterThanOrEqual(3);
   });
 
-  it('warns without blocking an existing case role that grants server permissions', async () => {
+  it('blocks an existing case role that grants server permissions', async () => {
     const { guild, caseRole } = buildConfiguredGuild();
     caseRole.permissions.bitfield = PermissionFlagsBits.Administrator;
     const configService = {
@@ -150,9 +150,52 @@ describe('SetupDiagnosticsService (unit)', () => {
     const report = await service.validateGuildSetup(guild);
 
     expect(report.issues.find((issue) => issue.code === 'case-role-permissions')?.severity).toBe(
-      'warning'
+      'error'
     );
-    expect(report.errorCount).toBe(0);
+    expect(report.errorCount).toBe(1);
+  });
+
+  it('rejects a case role with allow overwrites outside the verification channel', async () => {
+    const { guild } = buildConfiguredGuild();
+    guild.channels.cache = new Map([
+      [
+        'verification-channel-1',
+        {
+          id: 'verification-channel-1',
+          permissionOverwrites: {
+            cache: new Map([['role-1', { allow: { bitfield: PermissionFlagsBits.ViewChannel } }]]),
+          },
+        },
+      ],
+      [
+        'staff-channel-1',
+        {
+          id: 'staff-channel-1',
+          permissionOverwrites: {
+            cache: new Map([['role-1', { allow: { bitfield: PermissionFlagsBits.ViewChannel } }]]),
+          },
+        },
+      ],
+    ]);
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateGuildSetup(guild);
+
+    expect(report.issues).toContainEqual({
+      severity: 'error',
+      code: 'case-role-channel-overwrites',
+      message:
+        'The case role has allow permissions outside the verification channel. Use a dedicated role that cannot grant unrelated channel access.',
+    });
   });
 
   it('rejects a setup candidate role that grants server permissions', async () => {

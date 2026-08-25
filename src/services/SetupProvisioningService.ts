@@ -45,8 +45,10 @@ export interface ProvisionSetupInput {
   readonly actorLabel: string;
   readonly captureAnalytics?: boolean;
   readonly previousPermissionSyncState?: VerificationChannelPermissionSyncState;
+  readonly candidatePermissionSyncState?: VerificationChannelPermissionSyncState;
   readonly persistPermissionSyncState?: (
-    state: VerificationChannelPermissionSyncState
+    state: VerificationChannelPermissionSyncState,
+    previousState?: VerificationChannelPermissionSyncState
   ) => Promise<void>;
 }
 
@@ -95,7 +97,6 @@ export class SetupProvisioningService {
       input.caseRole ?? null,
       input.caseRoleId ?? null,
       input.caseRoleName?.trim() || null,
-      input.createCaseRole === true,
       existingConfig
     );
     if ('invalidDetail' in caseRoleCandidate) {
@@ -204,6 +205,7 @@ export class SetupProvisioningService {
       previousPermissionSyncState:
         input.previousPermissionSyncState ??
         existingConfig.settings.verification_channel_permission_sync,
+      candidatePermissionSyncState: input.candidatePermissionSyncState,
       persistPermissionSyncState: input.persistPermissionSyncState,
     });
   }
@@ -250,16 +252,8 @@ export class SetupProvisioningService {
     explicitCaseRole: Role | null,
     explicitCaseRoleId: string | null,
     requestedRoleName: string | null,
-    createCaseRole: boolean,
     serverConfig: Server
   ): Promise<CaseRoleCandidate> {
-    if (createCaseRole) {
-      return {
-        role: null,
-        roleName: requestedRoleName ?? DEFAULT_CASE_ROLE_NAME,
-        ambiguousRoleIds: [],
-      };
-    }
     if (explicitCaseRole) {
       return { role: explicitCaseRole, roleName: explicitCaseRole.name, ambiguousRoleIds: [] };
     }

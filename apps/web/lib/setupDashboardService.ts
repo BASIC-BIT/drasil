@@ -90,7 +90,9 @@ const GUILD_READINESS_CONCURRENCY = 3;
 export function filterAssignableCaseRoles(
   roles: readonly DiscordRole[],
   botRoleIds: readonly string[],
-  guildId: string
+  guildId: string,
+  channels: readonly DiscordChannel[] = [],
+  verificationChannelId?: string | null
 ): DiscordRole[] {
   const botRoleIdSet = new Set(botRoleIds);
   const highestBotRolePosition = roles
@@ -103,7 +105,25 @@ export function filterAssignableCaseRoles(
       !role.managed &&
       !botRoleIdSet.has(role.id) &&
       parsePermissions(role.permissions) === 0n &&
+      !hasUnrelatedCaseRoleChannelAllows(role.id, channels, verificationChannelId) &&
       role.position < highestBotRolePosition
+  );
+}
+
+function hasUnrelatedCaseRoleChannelAllows(
+  roleId: string,
+  channels: readonly DiscordChannel[],
+  verificationChannelId?: string | null
+): boolean {
+  return channels.some(
+    (channel) =>
+      channel.id !== verificationChannelId &&
+      (channel.permission_overwrites ?? []).some(
+        (overwrite) =>
+          overwrite.type === 0 &&
+          overwrite.id === roleId &&
+          parsePermissions(overwrite.allow) !== 0n
+      )
   );
 }
 
@@ -370,6 +390,30 @@ function buildChecklist(args: BuildChecklistArgs) {
         `${formatRoleName(caseRole)} is managed by an integration.`
       )
     );
+  } else if (parsePermissions(caseRole.permissions) !== 0n) {
+    checklist.push(
+      item(
+        'case-role',
+        'Case role',
+        'error',
+        `${formatRoleName(caseRole)} grants server permissions. Use a dedicated permission-free role.`
+      )
+    );
+  } else if (
+    hasUnrelatedCaseRoleChannelAllows(
+      caseRole.id,
+      resources.channels,
+      server?.verification_channel_id
+    )
+  ) {
+    checklist.push(
+      item(
+        'case-role',
+        'Case role',
+        'error',
+        `${formatRoleName(caseRole)} grants access outside the verification channel.`
+      )
+    );
   } else if (highestBotRolePosition <= caseRole.position) {
     checklist.push(
       item(
@@ -449,12 +493,19 @@ function buildChecklist(args: BuildChecklistArgs) {
         channel: reportChannel,
         required: adminRequired,
       })
-      ? item(
-          'report-channel',
-          'Report instructions channel',
-          'ok',
-          `${formatChannelName(reportChannel)} is configured for public report instructions.`
-        )
+      ? isChannelVisibleToEveryone(reportChannel, resources.roles, guild.id)
+        ? item(
+            'report-channel',
+            'Report instructions channel',
+            'ok',
+            `${formatChannelName(reportChannel)} is configured for public report instructions.`
+          )
+        : item(
+            'report-channel',
+            'Report instructions channel',
+            'warning',
+            `${formatChannelName(reportChannel)} is not visible to @everyone.`
+          )
       : reportChannel
         ? item(
             'report-channel',

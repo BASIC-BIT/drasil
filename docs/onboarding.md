@@ -58,7 +58,8 @@ Core readiness requires:
 
 - Drasil is installed and visible as a guild member;
 - **Manage Roles**, with the Drasil bot role above the selected case role;
-- an assignable, non-managed case role;
+- an assignable, non-managed, permission-free case role with no allow overwrites outside the
+  verification channel;
 - an admin alert text channel where Drasil can View Channel, Send Messages, and Embed Links;
 - a verification text channel where Drasil can also Read Message History, Create Private Threads,
   and Send Messages in Threads;

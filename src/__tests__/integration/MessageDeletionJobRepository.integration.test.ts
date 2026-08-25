@@ -359,7 +359,7 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
     ).resolves.toMatchObject({ status: ModerationActionRequestStatus.QUEUED });
   });
 
-  it('merges setup permission provenance into request metadata', async () => {
+  it('merges prior and candidate setup permission provenance into request metadata', async () => {
     const servers = new ServerRepository(prisma);
     await servers.getOrCreateServer('guild-1');
     const request = await requests.enqueue({
@@ -373,7 +373,8 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
 
     await expect(
       requests.mergeMetadata(request.id, {
-        verification_channel_permission_sync: {
+        previous_verification_channel_permission_sync: null,
+        candidate_verification_channel_permission_sync: {
           channel_id: 'verification-channel-1',
           managed_overwrites: [],
         },
@@ -381,7 +382,8 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
     ).resolves.toMatchObject({
       metadata: {
         admin_channel_id: 'admin-channel-1',
-        verification_channel_permission_sync: {
+        previous_verification_channel_permission_sync: null,
+        candidate_verification_channel_permission_sync: {
           channel_id: 'verification-channel-1',
           managed_overwrites: [],
         },

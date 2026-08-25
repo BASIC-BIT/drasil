@@ -89,6 +89,47 @@ describe('SetupDashboardService', () => {
     ]);
   });
 
+  it('omits roles with allow overwrites outside the configured verification channel', () => {
+    const roles = [
+      { id: 'guild-1', name: '@everyone', permissions: '0', position: 0, managed: false },
+      { id: 'safe-role', name: 'Safe', permissions: '0', position: 2, managed: false },
+      { id: 'access-role', name: 'Access', permissions: '0', position: 2, managed: false },
+      { id: 'bot-role', name: 'Drasil', permissions: '0', position: 5, managed: false },
+    ];
+    const channels = [
+      {
+        id: 'verification-channel-1',
+        name: 'verification',
+        type: 0,
+        permission_overwrites: [
+          {
+            id: 'safe-role',
+            type: 0,
+            allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+            deny: '0',
+          },
+        ],
+      },
+      {
+        id: 'staff-channel-1',
+        name: 'staff',
+        type: 0,
+        permission_overwrites: [
+          {
+            id: 'access-role',
+            type: 0,
+            allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+            deny: '0',
+          },
+        ],
+      },
+    ];
+
+    expect(
+      filterAssignableCaseRoles(roles, ['bot-role'], 'guild-1', channels, 'verification-channel-1')
+    ).toEqual([expect.objectContaining({ id: 'safe-role' })]);
+  });
+
   it('offers only private standard text channels for admin alerts', () => {
     const roles = [
       {
@@ -159,6 +200,157 @@ describe('SetupDashboardService', () => {
         detail: 'The @everyone role cannot be used as a case role.',
       })
     );
+  });
+
+  it('blocks a configured case role that grants server permissions', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockResolvedValue({
+      ...resources,
+      roles: [
+        resources.roles[0],
+        {
+          ...resources.roles[1],
+          permissions: DISCORD_PERMISSIONS.Administrator.toString(),
+          position: 3,
+        },
+        {
+          id: 'case-role-1',
+          name: 'Case',
+          permissions: DISCORD_PERMISSIONS.ManageRoles.toString(),
+          position: 1,
+          managed: false,
+        },
+      ],
+      channels: [
+        { id: 'admin-channel-1', name: 'admin', type: 0 },
+        { id: 'verification-channel-1', name: 'verification', type: 0 },
+      ],
+    });
+    const service = new SetupDashboardService(
+      createAdapter({
+        ...inactiveServer,
+        is_active: true,
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+      })
+    );
+
+    const result = await service.getDashboard('guild-1', 'access-token');
+
+    expect(result.dashboard.readiness).toBe('blocked');
+    expect(result.dashboard.checklist).toContainEqual(
+      expect.objectContaining({
+        key: 'case-role',
+        status: 'error',
+        detail: expect.stringContaining('grants server permissions'),
+      })
+    );
+  });
+
+  it('blocks a configured case role with access outside verification', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockResolvedValue({
+      ...resources,
+      roles: [
+        resources.roles[0],
+        {
+          ...resources.roles[1],
+          permissions: DISCORD_PERMISSIONS.Administrator.toString(),
+          position: 3,
+        },
+        { id: 'case-role-1', name: 'Case', permissions: '0', position: 1, managed: false },
+      ],
+      channels: [
+        { id: 'admin-channel-1', name: 'admin', type: 0 },
+        {
+          id: 'verification-channel-1',
+          name: 'verification',
+          type: 0,
+          permission_overwrites: [
+            {
+              id: 'case-role-1',
+              type: 0,
+              allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+              deny: '0',
+            },
+          ],
+        },
+        {
+          id: 'staff-channel-1',
+          name: 'staff',
+          type: 0,
+          permission_overwrites: [
+            {
+              id: 'case-role-1',
+              type: 0,
+              allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+              deny: '0',
+            },
+          ],
+        },
+      ],
+    });
+    const service = new SetupDashboardService(
+      createAdapter({
+        ...inactiveServer,
+        is_active: true,
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+      })
+    );
+
+    const result = await service.getDashboard('guild-1', 'access-token');
+
+    expect(result.dashboard.readiness).toBe('blocked');
+    expect(result.dashboard.checklist).toContainEqual(
+      expect.objectContaining({
+        key: 'case-role',
+        status: 'error',
+        detail: '@Case grants access outside the verification channel.',
+      })
+    );
+  });
+
+  it('warns when persisted report instructions are not public', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockResolvedValue({
+      ...resources,
+      roles: [
+        resources.roles[0],
+        {
+          ...resources.roles[1],
+          permissions: DISCORD_PERMISSIONS.Administrator.toString(),
+          position: 3,
+        },
+        { id: 'case-role-1', name: 'Case', permissions: '0', position: 1, managed: false },
+      ],
+      channels: [
+        { id: 'admin-channel-1', name: 'admin', type: 0 },
+        { id: 'verification-channel-1', name: 'verification', type: 0 },
+        { id: 'report-channel-1', name: 'reporting', type: 0 },
+      ],
+    });
+    const service = new SetupDashboardService(
+      createAdapter({
+        ...inactiveServer,
+        is_active: true,
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: { report_instructions_channel_id: 'report-channel-1' },
+      })
+    );
+
+    const result = await service.getDashboard('guild-1', 'access-token');
+
+    expect(result.dashboard.checklist).toContainEqual({
+      key: 'report-channel',
+      label: 'Report instructions channel',
+      status: 'warning',
+      detail: '#reporting is not visible to @everyone.',
+    });
   });
 
   it.each([

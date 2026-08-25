@@ -70,13 +70,12 @@ describe('SetupProvisioningService (unit)', () => {
     );
   });
 
-  it('creates a new role when the wizard explicitly selected create', async () => {
-    const configuredRole = { id: 'configured-role', name: 'Drasil Case' };
-    const createdRole = { id: 'created-role', name: 'Drasil Case' };
+  it('reuses a unique matching role when the wizard allows creation', async () => {
+    const matchingRole = { id: 'matching-role', name: 'Drasil Case' };
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
         admin_channel_id: 'admin-channel-1',
-        case_role_id: configuredRole.id,
+        case_role_id: null,
         verification_channel_id: 'verification-channel-1',
         settings: {},
       }),
@@ -95,9 +94,9 @@ describe('SetupProvisioningService (unit)', () => {
     const guild = {
       id: 'guild-1',
       roles: {
-        cache: new Map([[configuredRole.id, configuredRole]]),
-        create: jest.fn().mockResolvedValue(createdRole),
-        fetch: jest.fn().mockResolvedValue(configuredRole),
+        cache: new Map([[matchingRole.id, matchingRole]]),
+        create: jest.fn(),
+        fetch: jest.fn(),
       },
     } as any;
     const service = new SetupProvisioningService(
@@ -118,15 +117,11 @@ describe('SetupProvisioningService (unit)', () => {
     ).resolves.toEqual({ status: 'completed' });
 
     expect(guild.roles.fetch).not.toHaveBeenCalled();
-    expect(guild.roles.create).toHaveBeenCalledWith({
-      name: 'Drasil Case',
-      permissions: [],
-      reason: 'Drasil setup requested by web administrator admin-1',
-    });
+    expect(guild.roles.create).not.toHaveBeenCalled();
     expect(setupWorkflowService.completeSetup).toHaveBeenCalledWith(
       expect.objectContaining({
-        caseRole: createdRole,
-        createdCaseRole: createdRole,
+        caseRole: matchingRole,
+        createdCaseRole: null,
       })
     );
   });

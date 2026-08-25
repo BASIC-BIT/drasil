@@ -61,7 +61,13 @@ export default async function OnboardingPage({
   const server = dashboard.server;
   const selectableChannels = channels.filter((channel) => channel.type === 0);
   const selectableAdminChannels = filterPrivateAdminChannels(channels, roles, guildId);
-  const selectableRoles = filterAssignableCaseRoles(roles, botRoleIds, guildId);
+  const selectableRoles = filterAssignableCaseRoles(
+    roles,
+    botRoleIds,
+    guildId,
+    channels,
+    server?.verification_channel_id
+  );
   const initialState = resolveOnboardingInitialState(server, durableRequest, randomUUID(), {
     adminChannelIds: selectableAdminChannels.map((channel) => channel.id),
     channelIds: selectableChannels.map((channel) => channel.id),

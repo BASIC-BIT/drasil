@@ -1472,7 +1472,14 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     const caseRoleName = this.readMetadataString(request.metadata, 'case_role_name');
     const createCaseRole = this.readMetadataBoolean(request.metadata, 'create_case_role') === true;
     const detectionResponseMode = this.readSetupDetectionResponseMode(request.metadata);
-    const previousPermissionSyncState = this.readVerificationPermissionSyncState(request.metadata);
+    const previousPermissionSyncState = this.readVerificationPermissionSyncState(
+      request.metadata,
+      'previous_verification_channel_permission_sync'
+    );
+    const candidatePermissionSyncState = this.readVerificationPermissionSyncState(
+      request.metadata,
+      'candidate_verification_channel_permission_sync'
+    );
     const guild = await this.fetchGuild(request.server_id);
     await this.fetchRequestTextChannel(request.server_id, adminChannelId, 'Admin channel');
 
@@ -1493,12 +1500,16 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       caseRoleId,
       caseRoleName,
       createCaseRole,
+      candidatePermissionSyncState,
       detectionResponseMode,
       guild,
       previousPermissionSyncState,
-      persistPermissionSyncState: async (state) => {
+      persistPermissionSyncState: async (state, previousState) => {
         const updated = await this.repository.mergeMetadata(request.id, {
-          verification_channel_permission_sync: state as unknown as Prisma.JsonObject,
+          previous_verification_channel_permission_sync: previousState
+            ? (previousState as unknown as Prisma.JsonObject)
+            : null,
+          candidate_verification_channel_permission_sync: state as unknown as Prisma.JsonObject,
         });
         if (!updated) {
           throw new Error('Setup request disappeared while saving permission provenance.');
@@ -1601,9 +1612,10 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   }
 
   private readVerificationPermissionSyncState(
-    metadata: Prisma.JsonValue
+    metadata: Prisma.JsonValue,
+    key: string
   ): VerificationChannelPermissionSyncState | undefined {
-    const value = this.readMetadataRecord(metadata, 'verification_channel_permission_sync');
+    const value = this.readMetadataRecord(metadata, key);
     return value && typeof value.channel_id === 'string' && Array.isArray(value.managed_overwrites)
       ? (value as unknown as VerificationChannelPermissionSyncState)
       : undefined;

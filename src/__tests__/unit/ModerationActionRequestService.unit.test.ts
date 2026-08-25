@@ -2224,6 +2224,15 @@ describe('ModerationActionRequestService', () => {
         },
       ],
     };
+    const candidatePermissionSyncState = {
+      ...previousPermissionSyncState,
+      managed_overwrites: [
+        {
+          ...previousPermissionSyncState.managed_overwrites[0],
+          original_overwrite: { existed: true, allow: '3', deny: '4' },
+        },
+      ],
+    };
     const request: ModerationActionRequest = {
       ...completeSetupVerificationRequest,
       id: 'setup-permission-sync-request-1',
@@ -2231,7 +2240,8 @@ describe('ModerationActionRequestService', () => {
       metadata: {
         ...(completeSetupVerificationRequest.metadata as Record<string, unknown>),
         verification_channel_id: 'verification-channel-1',
-        verification_channel_permission_sync: previousPermissionSyncState,
+        previous_verification_channel_permission_sync: previousPermissionSyncState,
+        candidate_verification_channel_permission_sync: candidatePermissionSyncState,
       },
     };
     const { notificationManager, repository, service } = buildService([request]);
@@ -2245,13 +2255,14 @@ describe('ModerationActionRequestService', () => {
       expect.any(Function),
       'verification-channel-1',
       expect.any(Function),
-      previousPermissionSyncState
+      candidatePermissionSyncState
     );
     expect(repository.metadataMerges).toEqual([
       {
         id: 'setup-permission-sync-request-1',
         metadata: {
-          verification_channel_permission_sync: expect.objectContaining({
+          previous_verification_channel_permission_sync: previousPermissionSyncState,
+          candidate_verification_channel_permission_sync: expect.objectContaining({
             channel_id: 'verification-channel-1',
             managed_overwrites: expect.any(Array),
           }),
