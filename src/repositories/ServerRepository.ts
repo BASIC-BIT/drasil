@@ -134,7 +134,6 @@ export class ServerRepository implements IServerRepository {
       // Prisma's upsert handles create vs update logic
       const serverData = {
         guild_id: guildId,
-        is_active: data.is_active ?? true,
         // Cast settings to unknown then JsonValue for Prisma input
         // data.settings should always be an object based on the Server interface,
         // so the ?? fallback is unnecessary.
@@ -154,10 +153,12 @@ export class ServerRepository implements IServerRepository {
         where: { guild_id: guildId },
         create: {
           ...serverData,
+          is_active: data.is_active ?? true,
           // created_at will use the database default
         },
         update: {
           ...serverData,
+          is_active: data.is_active,
           // Do not overwrite created_at on update
           created_at: undefined,
         },

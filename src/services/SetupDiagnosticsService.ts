@@ -173,6 +173,12 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         reportIssues
       );
       issues.push(...reportIssues.map((issue) => ({ ...issue, severity: 'warning' as const })));
+      await this.checkReportInstructionsPublicVisibility(
+        guild,
+        serverConfig.settings.report_instructions_channel_id,
+        'warning',
+        issues
+      );
     }
 
     await this.checkCaseResponderRoles(guild, serverConfig, issues);
@@ -223,6 +229,12 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         reportIssues
       );
       issues.push(...reportIssues.map((issue) => ({ ...issue, severity: 'warning' as const })));
+      await this.checkReportInstructionsPublicVisibility(
+        guild,
+        candidate.reportInstructionsChannelId,
+        'error',
+        issues
+      );
     }
 
     return this.toReport(guild.id, issues);
@@ -234,6 +246,27 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
 
     return guild.members.fetchMe().catch(() => null);
+  }
+
+  private async checkReportInstructionsPublicVisibility(
+    guild: Guild,
+    channelId: string,
+    severity: SetupDiagnosticSeverity,
+    issues: SetupDiagnosticIssue[]
+  ): Promise<void> {
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    if (channel?.type !== ChannelType.GuildText) {
+      return;
+    }
+    const everyonePermissions = channel.permissionsFor(guild.roles.everyone);
+    if (!everyonePermissions.has(PermissionFlagsBits.ViewChannel)) {
+      issues.push({
+        severity,
+        code: 'report-instructions-channel-public-view',
+        message:
+          'The report instructions channel must be visible to @everyone so members can read how to report concerns.',
+      });
+    }
   }
 
   private checkGuildPermissions(botMember: GuildMember, issues: SetupDiagnosticIssue[]): void {

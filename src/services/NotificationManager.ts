@@ -28,6 +28,7 @@ import {
   VerificationStatus,
   AdminActionType,
   VerificationEvent,
+  type VerificationChannelManagedOverwriteState,
   type VerificationChannelPermissionSyncState,
 } from '../repositories/types';
 import { DetectionHistoryFormatter } from '../utils/DetectionHistoryFormatter';
@@ -123,6 +124,11 @@ export interface INotificationManager {
     guild: Guild,
     snapshot: VerificationPermissionSnapshot
   ): Promise<boolean>;
+  restoreVerificationChannelManagedPermissions?(
+    guild: Guild,
+    state: VerificationChannelPermissionSyncState,
+    onPermissionsUpdated?: (snapshot: VerificationPermissionSnapshot) => void
+  ): Promise<boolean>;
 
   /**
    * Handle the history button interaction by sending a private ephemeral message with full detection history
@@ -193,6 +199,7 @@ export interface VerificationPermissionSnapshot {
 
 interface VerificationPermissionOverwrite {
   readonly id: string;
+  readonly type: 0 | 1;
   readonly allow?: readonly bigint[];
   readonly deny?: readonly bigint[];
 }
@@ -886,19 +893,16 @@ export class NotificationManager implements INotificationManager {
       );
       if (configuredVerificationChannel) {
         const snapshot = this.snapshotPermissionOverwrites(configuredVerificationChannel);
-        const previousCaseRoleId = serverConfig.case_role_id ?? null;
         const nextSyncState = this.buildVerificationPermissionSyncState(
           snapshot,
           previousSyncState,
-          caseRoleId
+          permissionOverwrites
         );
         onPermissionsUpdated?.(snapshot, nextSyncState);
         await configuredVerificationChannel.permissionOverwrites.set(
           this.mergeVerificationChannelPermissionOverwrites(
             snapshot,
             permissionOverwrites,
-            previousCaseRoleId,
-            caseRoleId,
             previousSyncState
           ),
           'Sync Drasil verification channel permissions'
@@ -930,7 +934,7 @@ export class NotificationManager implements INotificationManager {
       const nextSyncState = this.buildVerificationPermissionSyncState(
         { channelId: verificationChannel.id, entries: [] },
         undefined,
-        caseRoleId
+        permissionOverwrites
       );
       onChannelCreated?.(verificationChannel.id, nextSyncState);
 
@@ -976,6 +980,32 @@ export class NotificationManager implements INotificationManager {
     }
   }
 
+  public async restoreVerificationChannelManagedPermissions(
+    guild: Guild,
+    state: VerificationChannelPermissionSyncState,
+    onPermissionsUpdated?: (snapshot: VerificationPermissionSnapshot) => void
+  ): Promise<boolean> {
+    try {
+      const channel = await guild.channels.fetch(state.channel_id).catch(() => null);
+      if (channel?.type !== ChannelType.GuildText) {
+        return false;
+      }
+      const snapshot = this.snapshotPermissionOverwrites(channel);
+      onPermissionsUpdated?.(snapshot);
+      await channel.permissionOverwrites.set(
+        this.restoreManagedPermissionOverwrites(snapshot, state),
+        'Restore retired Drasil verification channel permissions'
+      );
+      return true;
+    } catch (error) {
+      console.error(
+        `Failed to restore Drasil-managed verification permissions for ${state.channel_id}:`,
+        error
+      );
+      return false;
+    }
+  }
+
   private snapshotPermissionOverwrites(channel: TextChannel): VerificationPermissionSnapshot {
     type ExistingOverwrite = {
       readonly id: string;
@@ -1006,6 +1036,7 @@ export class NotificationManager implements INotificationManager {
       // Default role (everyone) - deny access
       {
         id: guild.roles.everyone.id,
+        type: 0,
         deny: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
@@ -1017,6 +1048,7 @@ export class NotificationManager implements INotificationManager {
       // Case role - can use its private thread without posting in the shared parent channel.
       {
         id: caseRoleId,
+        type: 0,
         allow: CASE_ROLE_VERIFICATION_ALLOW_PERMISSIONS,
         deny: CASE_ROLE_VERIFICATION_DENY_PERMISSIONS,
       },
@@ -1025,6 +1057,7 @@ export class NotificationManager implements INotificationManager {
     if (this.client.user?.id) {
       permissionOverwrites.push({
         id: this.client.user.id,
+        type: 1,
         allow: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
@@ -1048,6 +1081,7 @@ export class NotificationManager implements INotificationManager {
     adminRoles.forEach((role) => {
       permissionOverwrites.push({
         id: role.id,
+        type: 0,
         allow: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
@@ -1062,8 +1096,6 @@ export class NotificationManager implements INotificationManager {
   private mergeVerificationChannelPermissionOverwrites(
     snapshot: VerificationPermissionSnapshot,
     desired: readonly VerificationPermissionOverwrite[],
-    previousCaseRoleId: string | null,
-    caseRoleId: string,
     previousSyncState: VerificationChannelPermissionSyncState | undefined
   ): OverwriteResolvable[] {
     const desiredIds = new Set(desired.map((overwrite) => overwrite.id));
@@ -1071,19 +1103,18 @@ export class NotificationManager implements INotificationManager {
     const preserved = snapshot.entries
       .filter((entry) => !desiredIds.has(entry.id))
       .flatMap((entry) => {
-        if (entry.type !== 0 || entry.id !== previousCaseRoleId || entry.id === caseRoleId) {
+        const previousManagedOverwrite = this.findManagedOverwriteState(
+          previousSyncState,
+          snapshot.channelId,
+          entry.id,
+          entry.type
+        );
+        if (!previousManagedOverwrite) {
           return [{ id: entry.id, type: entry.type, allow: entry.allow, deny: entry.deny }];
         }
 
-        if (
-          previousSyncState?.channel_id !== snapshot.channelId ||
-          previousSyncState.case_role_id !== previousCaseRoleId
-        ) {
-          return [{ id: entry.id, type: entry.type, allow: entry.allow, deny: entry.deny }];
-        }
-
-        const managedBits = this.getCaseRoleVerificationManagedBits();
-        const original = previousSyncState.original_case_role_overwrite;
+        const managedBits = BigInt(previousManagedOverwrite.managed_bits);
+        const original = previousManagedOverwrite.original_overwrite;
         const allow = (entry.allow & ~managedBits) | (BigInt(original.allow) & managedBits);
         const deny = (entry.deny & ~managedBits) | (BigInt(original.deny) & managedBits);
         return !original.existed && allow === 0n && deny === 0n
@@ -1098,12 +1129,29 @@ export class NotificationManager implements INotificationManager {
 
       const desiredAllow = this.combinePermissionBits(overwrite.allow);
       const desiredDeny = this.combinePermissionBits(overwrite.deny);
-      const managedBits = desiredAllow | desiredDeny;
+      const desiredManagedBits = desiredAllow | desiredDeny;
+      const previousManagedOverwrite = this.findManagedOverwriteState(
+        previousSyncState,
+        snapshot.channelId,
+        overwrite.id,
+        existing.type
+      );
+      const previousManagedBits = previousManagedOverwrite
+        ? BigInt(previousManagedOverwrite.managed_bits)
+        : 0n;
+      const managedBits = desiredManagedBits | previousManagedBits;
+      const original = previousManagedOverwrite?.original_overwrite;
+      const restoredPreviousAllow = original
+        ? BigInt(original.allow) & (previousManagedBits & ~desiredManagedBits)
+        : 0n;
+      const restoredPreviousDeny = original
+        ? BigInt(original.deny) & (previousManagedBits & ~desiredManagedBits)
+        : 0n;
       return {
         id: overwrite.id,
         type: existing.type,
-        allow: (existing.allow & ~managedBits) | desiredAllow,
-        deny: (existing.deny & ~managedBits) | desiredDeny,
+        allow: (existing.allow & ~managedBits) | restoredPreviousAllow | desiredAllow,
+        deny: (existing.deny & ~managedBits) | restoredPreviousDeny | desiredDeny,
       };
     });
 
@@ -1113,34 +1161,86 @@ export class NotificationManager implements INotificationManager {
   private buildVerificationPermissionSyncState(
     snapshot: VerificationPermissionSnapshot,
     previousSyncState: VerificationChannelPermissionSyncState | undefined,
-    caseRoleId: string
+    desired: readonly VerificationPermissionOverwrite[]
   ): VerificationChannelPermissionSyncState {
-    if (
-      previousSyncState?.channel_id === snapshot.channelId &&
-      previousSyncState.case_role_id === caseRoleId
-    ) {
-      return previousSyncState;
-    }
-
-    const originalOverwrite = snapshot.entries.find(
-      (entry) => entry.type === 0 && entry.id === caseRoleId
-    );
     return {
       channel_id: snapshot.channelId,
-      case_role_id: caseRoleId,
-      original_case_role_overwrite: {
-        existed: Boolean(originalOverwrite),
-        allow: (originalOverwrite?.allow ?? 0n).toString(),
-        deny: (originalOverwrite?.deny ?? 0n).toString(),
-      },
+      managed_overwrites: desired.map((overwrite) => {
+        const previous = this.findManagedOverwriteState(
+          previousSyncState,
+          snapshot.channelId,
+          overwrite.id,
+          overwrite.type
+        );
+        if (previous) {
+          return {
+            ...previous,
+            managed_bits: (
+              this.combinePermissionBits(overwrite.allow) |
+              this.combinePermissionBits(overwrite.deny)
+            ).toString(),
+          };
+        }
+        const original = snapshot.entries.find(
+          (entry) => entry.id === overwrite.id && entry.type === overwrite.type
+        );
+        return {
+          id: overwrite.id,
+          type: overwrite.type,
+          managed_bits: (
+            this.combinePermissionBits(overwrite.allow) | this.combinePermissionBits(overwrite.deny)
+          ).toString(),
+          original_overwrite: {
+            existed: Boolean(original),
+            allow: (original?.allow ?? 0n).toString(),
+            deny: (original?.deny ?? 0n).toString(),
+          },
+        };
+      }),
     };
   }
 
-  private getCaseRoleVerificationManagedBits(): bigint {
-    return (
-      this.combinePermissionBits(CASE_ROLE_VERIFICATION_ALLOW_PERMISSIONS) |
-      this.combinePermissionBits(CASE_ROLE_VERIFICATION_DENY_PERMISSIONS)
+  private findManagedOverwriteState(
+    state: VerificationChannelPermissionSyncState | undefined,
+    channelId: string,
+    id: string,
+    type: 0 | 1
+  ): VerificationChannelManagedOverwriteState | undefined {
+    return state?.channel_id === channelId
+      ? state.managed_overwrites.find((entry) => entry.id === id && entry.type === type)
+      : undefined;
+  }
+
+  private restoreManagedPermissionOverwrites(
+    snapshot: VerificationPermissionSnapshot,
+    state: VerificationChannelPermissionSyncState
+  ): OverwriteResolvable[] {
+    const managedIds = new Set(
+      state.managed_overwrites.map((entry) => `${entry.type}:${entry.id}`)
     );
+    const preserved = snapshot.entries
+      .filter((entry) => !managedIds.has(`${entry.type}:${entry.id}`))
+      .map((entry) => ({
+        id: entry.id,
+        type: entry.type,
+        allow: entry.allow,
+        deny: entry.deny,
+      }));
+    const currentById = new Map(
+      snapshot.entries.map((entry) => [`${entry.type}:${entry.id}`, entry])
+    );
+    const restored = state.managed_overwrites.flatMap((managed) => {
+      const current = currentById.get(`${managed.type}:${managed.id}`);
+      const managedBits = BigInt(managed.managed_bits);
+      const original = managed.original_overwrite;
+      const allow =
+        ((current?.allow ?? 0n) & ~managedBits) | (BigInt(original.allow) & managedBits);
+      const deny = ((current?.deny ?? 0n) & ~managedBits) | (BigInt(original.deny) & managedBits);
+      return !original.existed && allow === 0n && deny === 0n
+        ? []
+        : [{ id: managed.id, type: managed.type, allow, deny }];
+    });
+    return [...preserved, ...restored];
   }
 
   private combinePermissionBits(bits: readonly bigint[] | undefined): bigint {

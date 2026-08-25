@@ -168,6 +168,43 @@ describe('SetupProvisioningService (unit)', () => {
     expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
   });
 
+  it('rejects the configured honeypot role as the case role', async () => {
+    const honeypotRole = { id: '111111111111111111', name: 'New Member' };
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        admin_channel_id: 'admin-channel-1',
+        case_role_id: 'case-role-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: {
+          role_gate_enabled: true,
+          honeypot_role_id: honeypotRole.id,
+        },
+      }),
+    } as any;
+    const setupDiagnosticsService = { validateSetupCandidate: jest.fn() } as any;
+    const setupWorkflowService = { completeSetup: jest.fn() } as any;
+    const service = new SetupProvisioningService(
+      configService,
+      setupDiagnosticsService,
+      setupWorkflowService
+    );
+
+    await expect(
+      service.provision({
+        actorLabel: 'web administrator admin-1',
+        adminChannelId: 'admin-channel-1',
+        caseRole: honeypotRole as any,
+        guild: { id: 'guild-1' } as any,
+      })
+    ).resolves.toEqual({
+      status: 'invalid_selection',
+      detail: 'The case role must be separate from the configured honeypot trigger role.',
+    });
+
+    expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();
+    expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
+  });
+
   it('rejects report instructions in the resolved verification channel', async () => {
     const caseRole = { id: 'case-role-1', name: 'Drasil Case' };
     const configService = {

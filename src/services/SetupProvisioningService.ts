@@ -1,11 +1,13 @@
 import type { DetectionResponseMode } from '../../packages/contracts/src/setup';
 import { ChannelType, Guild, Role, TextChannel } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
+import type { Server } from '../repositories/types';
 import {
   DEFAULT_DETECTION_RESPONSE_MODE,
   DEFAULT_FIRST_SETUP_DETECTION_RESPONSE_MODE,
 } from '../utils/detectionResponseSettings';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
+import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { ISetupDiagnosticsService } from './SetupDiagnosticsService';
 import { SetupWorkflowService, type SetupWorkflowResult } from './SetupWorkflowService';
 
@@ -110,14 +112,31 @@ export class SetupProvisioningService {
         detail: 'The case role must be separate from the configured manual-intake trigger role.',
       };
     }
+    const roleGateSettings = getRoleGateSettings(existingConfig?.settings);
+    if (
+      roleGateSettings.enabled &&
+      roleGateSettings.honeypotRoleId &&
+      caseRoleCandidate.role?.id === roleGateSettings.honeypotRoleId
+    ) {
+      return {
+        status: 'invalid_selection',
+        detail: 'The case role must be separate from the configured honeypot trigger role.',
+      };
+    }
 
-    return this.provisionWithCaseRole(input, caseRoleCandidate, detectionResponseMode);
+    return this.provisionWithCaseRole(
+      input,
+      caseRoleCandidate,
+      detectionResponseMode,
+      existingConfig
+    );
   }
 
   private async provisionWithCaseRole(
     input: ProvisionSetupInput,
     caseRoleCandidate: Exclude<CaseRoleCandidate, { invalidDetail: string }>,
-    detectionResponseMode: DetectionResponseMode | undefined
+    detectionResponseMode: DetectionResponseMode | undefined,
+    existingConfig: Server | null
   ): Promise<SetupProvisioningResult> {
     const verificationCandidate = await this.resolveVerificationChannelCandidate(
       input.guild,
@@ -185,6 +204,8 @@ export class SetupProvisioningService {
       createdCaseRole,
       captureAnalytics: input.captureAnalytics,
       detectionResponseMode,
+      previousVerificationChannelId: existingConfig?.verification_channel_id ?? null,
+      previousPermissionSyncState: existingConfig?.settings.verification_channel_permission_sync,
     });
   }
 

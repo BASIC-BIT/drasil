@@ -36,6 +36,7 @@ describe('SetupDiagnosticsService (unit)', () => {
           fetchMe: jest.fn(),
         },
         roles: {
+          everyone: { id: 'guild-1' },
           fetch: jest.fn().mockResolvedValue(caseRole),
         },
         channels: {
@@ -385,6 +386,38 @@ describe('SetupDiagnosticsService (unit)', () => {
     expect(
       report.issues.find((issue) => issue.code === 'report-instructions-channel-send')?.severity
     ).toBe('warning');
+  });
+
+  it('rejects a report instructions channel that members cannot view', async () => {
+    const { guild, channel, botMember } = buildConfiguredGuild();
+    const reportChannel = {
+      ...channel,
+      id: 'report-channel-1',
+      permissionsFor: jest.fn((memberOrRole: unknown) => ({
+        has: jest.fn(
+          (permission: bigint) =>
+            memberOrRole === botMember || permission !== PermissionFlagsBits.ViewChannel
+        ),
+      })),
+    };
+    guild.channels.fetch.mockImplementation((channelId: string) =>
+      Promise.resolve(channelId === 'report-channel-1' ? reportChannel : channel)
+    );
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: 'report-channel-1',
+    });
+
+    expect(
+      report.issues.find((issue) => issue.code === 'report-instructions-channel-public-view')
+        ?.severity
+    ).toBe('error');
   });
 
   it('requires Manage Channels when setup will create the verification channel', async () => {

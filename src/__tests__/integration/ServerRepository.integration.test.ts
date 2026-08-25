@@ -51,4 +51,17 @@ describeIntegration('ServerRepository setup configuration (integration)', () => 
       },
     });
   });
+
+  it('preserves an inactive server during a settings-only upsert', async () => {
+    await repository.upsertByGuildId('guild-inactive-settings', {
+      is_active: false,
+      settings: { setup_nudge_dismissed_at: '2026-08-25T12:00:00.000Z' },
+    });
+
+    const updated = await repository.upsertByGuildId('guild-inactive-settings', {
+      settings: { setup_nudge_last_sent_at: '2026-08-25T13:00:00.000Z' },
+    });
+
+    expect(updated.is_active).toBe(false);
+  });
 });

@@ -143,8 +143,14 @@ describe('SetupWorkflowService (unit)', () => {
   it('saves verification permission provenance with the completed setup', async () => {
     const permissionSyncState = {
       channel_id: 'verification-channel-1',
-      case_role_id: 'role-1',
-      original_case_role_overwrite: { existed: false, allow: '0', deny: '0' },
+      managed_overwrites: [
+        {
+          id: 'role-1',
+          type: 0 as const,
+          managed_bits: '1',
+          original_overwrite: { existed: false, allow: '0', deny: '0' },
+        },
+      ],
     };
     const configService = {
       updateSetupConfiguration: jest.fn().mockResolvedValue(undefined),
@@ -194,5 +200,154 @@ describe('SetupWorkflowService (unit)', () => {
       },
       verificationChannelId: 'verification-channel-1',
     });
+  });
+
+  it('restores the prior verification channel before syncing its replacement', async () => {
+    const priorState = {
+      channel_id: 'old-verification-channel',
+      managed_overwrites: [
+        {
+          id: 'role-1',
+          type: 0 as const,
+          managed_bits: '1',
+          original_overwrite: { existed: false, allow: '0', deny: '0' },
+        },
+      ],
+    };
+    const nextState = {
+      channel_id: 'new-verification-channel',
+      managed_overwrites: [
+        {
+          id: 'role-1',
+          type: 0 as const,
+          managed_bits: '1',
+          original_overwrite: { existed: false, allow: '0', deny: '0' },
+        },
+      ],
+    };
+    const restoreManaged = jest
+      .fn()
+      .mockImplementation(
+        async (_guild: unknown, _state: unknown, onPermissionsUpdated: jest.Mock) => {
+          onPermissionsUpdated({ channelId: 'old-verification-channel', entries: [] });
+          return true;
+        }
+      );
+    const setupVerificationChannel = jest
+      .fn()
+      .mockImplementation(
+        async (
+          _guild: unknown,
+          _caseRoleId: string,
+          _persistConfig: boolean,
+          _onChannelCreated: unknown,
+          channelId: string,
+          onPermissionsUpdated: jest.Mock
+        ) => {
+          onPermissionsUpdated({ channelId, entries: [] }, nextState);
+          return channelId;
+        }
+      );
+    const configService = {
+      updateSetupConfiguration: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const service = new SetupWorkflowService(
+      configService,
+      {
+        restoreVerificationChannelManagedPermissions: restoreManaged,
+        restoreVerificationChannelPermissions: jest.fn().mockResolvedValue(true),
+        setupVerificationChannel,
+      } as any,
+      { captureGuildEvent: jest.fn() } as any,
+      { validateSetupCandidate: jest.fn().mockResolvedValue(readyReport) } as any
+    );
+
+    await expect(
+      service.completeSetup({
+        guild: { id: 'guild-1' } as any,
+        caseRole: { id: 'role-1' } as any,
+        adminChannelId: 'admin-channel-1',
+        initialVerificationChannelId: null,
+        candidateVerificationChannelId: 'new-verification-channel',
+        previousVerificationChannelId: 'old-verification-channel',
+        previousPermissionSyncState: priorState,
+        willSyncVerificationChannelPermissions: true,
+        reportInstructionsChannelId: null,
+        candidateReport: readyReport,
+      })
+    ).resolves.toMatchObject({ status: 'completed' });
+
+    expect(restoreManaged.mock.invocationCallOrder[0]).toBeLessThan(
+      setupVerificationChannel.mock.invocationCallOrder[0]
+    );
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith(
+      'guild-1',
+      expect.objectContaining({
+        verificationChannelId: 'new-verification-channel',
+        settingsPatch: { verification_channel_permission_sync: nextState },
+      })
+    );
+  });
+
+  it('rolls back both channels when saving a replacement verification channel fails', async () => {
+    const priorState = {
+      channel_id: 'old-verification-channel',
+      managed_overwrites: [],
+    };
+    const restorePermissions = jest.fn().mockResolvedValue(true);
+    const notificationManager = {
+      restoreVerificationChannelManagedPermissions: jest
+        .fn()
+        .mockImplementation(
+          async (_guild: unknown, _state: unknown, onPermissionsUpdated: jest.Mock) => {
+            onPermissionsUpdated({ channelId: 'old-verification-channel', entries: [] });
+            return true;
+          }
+        ),
+      setupVerificationChannel: jest
+        .fn()
+        .mockImplementation(
+          async (
+            _guild: unknown,
+            _caseRoleId: string,
+            _persistConfig: boolean,
+            _onChannelCreated: unknown,
+            channelId: string,
+            onPermissionsUpdated: jest.Mock
+          ) => {
+            onPermissionsUpdated(
+              { channelId, entries: [] },
+              { channel_id: channelId, managed_overwrites: [] }
+            );
+            return channelId;
+          }
+        ),
+      restoreVerificationChannelPermissions: restorePermissions,
+    } as any;
+    const service = new SetupWorkflowService(
+      { updateSetupConfiguration: jest.fn().mockRejectedValue(new Error('save failed')) } as any,
+      notificationManager,
+      { captureGuildEvent: jest.fn() } as any,
+      { validateSetupCandidate: jest.fn().mockResolvedValue(readyReport) } as any
+    );
+
+    const result = await service.completeSetup({
+      guild: { id: 'guild-1' } as any,
+      caseRole: { id: 'role-1' } as any,
+      adminChannelId: 'admin-channel-1',
+      initialVerificationChannelId: null,
+      candidateVerificationChannelId: 'new-verification-channel',
+      previousVerificationChannelId: 'old-verification-channel',
+      previousPermissionSyncState: priorState,
+      willSyncVerificationChannelPermissions: true,
+      reportInstructionsChannelId: null,
+      candidateReport: readyReport,
+    });
+
+    expect(result.status).toBe('config_save_failed');
+    expect(restorePermissions.mock.calls.map((call) => call[1].channelId)).toEqual([
+      'new-verification-channel',
+      'old-verification-channel',
+    ]);
   });
 });

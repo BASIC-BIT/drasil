@@ -1306,12 +1306,25 @@ describe('NotificationManager (unit)', () => {
       settings: {
         verification_channel_permission_sync: {
           channel_id: 'verification-channel-1',
-          case_role_id: 'case-role-1',
-          original_case_role_overwrite: {
-            existed: true,
-            allow: PermissionFlagsBits.AttachFiles.toString(),
-            deny: PermissionFlagsBits.MentionEveryone.toString(),
-          },
+          managed_overwrites: [
+            {
+              id: 'case-role-1',
+              type: 0,
+              managed_bits: (
+                PermissionFlagsBits.ViewChannel |
+                PermissionFlagsBits.ReadMessageHistory |
+                PermissionFlagsBits.SendMessagesInThreads |
+                PermissionFlagsBits.SendMessages |
+                PermissionFlagsBits.CreatePublicThreads |
+                PermissionFlagsBits.CreatePrivateThreads
+              ).toString(),
+              original_overwrite: {
+                existed: true,
+                allow: PermissionFlagsBits.AttachFiles.toString(),
+                deny: PermissionFlagsBits.MentionEveryone.toString(),
+              },
+            },
+          ],
         },
       },
     } as any);
@@ -1370,12 +1383,17 @@ describe('NotificationManager (unit)', () => {
       settings: {
         verification_channel_permission_sync: {
           channel_id: 'verification-channel-1',
-          case_role_id: 'case-role-1',
-          original_case_role_overwrite: {
-            existed: true,
-            allow: PermissionFlagsBits.AttachFiles.toString(),
-            deny: PermissionFlagsBits.MentionEveryone.toString(),
-          },
+          managed_overwrites: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'case-role-1',
+              type: 0,
+              original_overwrite: {
+                existed: true,
+                allow: PermissionFlagsBits.AttachFiles.toString(),
+                deny: PermissionFlagsBits.MentionEveryone.toString(),
+              },
+            }),
+          ]),
         },
       },
     });
@@ -1417,12 +1435,25 @@ describe('NotificationManager (unit)', () => {
       settings: {
         verification_channel_permission_sync: {
           channel_id: 'verification-channel-1',
-          case_role_id: 'old-case-role',
-          original_case_role_overwrite: {
-            existed: true,
-            allow: PermissionFlagsBits.ViewChannel.toString(),
-            deny: PermissionFlagsBits.SendMessages.toString(),
-          },
+          managed_overwrites: [
+            {
+              id: 'old-case-role',
+              type: 0,
+              managed_bits: (
+                PermissionFlagsBits.ViewChannel |
+                PermissionFlagsBits.ReadMessageHistory |
+                PermissionFlagsBits.SendMessagesInThreads |
+                PermissionFlagsBits.SendMessages |
+                PermissionFlagsBits.CreatePublicThreads |
+                PermissionFlagsBits.CreatePrivateThreads
+              ).toString(),
+              original_overwrite: {
+                existed: true,
+                allow: PermissionFlagsBits.ViewChannel.toString(),
+                deny: PermissionFlagsBits.SendMessages.toString(),
+              },
+            },
+          ],
         },
       },
     } as any);
@@ -1461,16 +1492,99 @@ describe('NotificationManager (unit)', () => {
     );
     expect(onPermissionsUpdated).toHaveBeenCalledWith(
       expect.objectContaining({ channelId: 'verification-channel-1' }),
-      {
+      expect.objectContaining({
         channel_id: 'verification-channel-1',
-        case_role_id: 'new-case-role',
-        original_case_role_overwrite: {
-          existed: false,
-          allow: '0',
-          deny: '0',
-        },
-      }
+        managed_overwrites: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'new-case-role',
+            type: 0,
+            original_overwrite: {
+              existed: false,
+              allow: '0',
+              deny: '0',
+            },
+          }),
+        ]),
+      })
     );
+  });
+
+  it('restores Drasil-managed permissions when an administrator role is retired', async () => {
+    const managedBits =
+      PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.SendMessages |
+      PermissionFlagsBits.ReadMessageHistory;
+    const overwriteSet = jest.fn().mockResolvedValue(undefined);
+    const existingChannel = {
+      id: 'verification-channel-1',
+      type: ChannelType.GuildText,
+      permissionOverwrites: {
+        cache: new Map([
+          [
+            'retired-admin-role',
+            {
+              id: 'retired-admin-role',
+              type: 0,
+              allow: { bitfield: managedBits | PermissionFlagsBits.AttachFiles },
+              deny: { bitfield: PermissionFlagsBits.MentionEveryone },
+            },
+          ],
+        ]),
+        set: overwriteSet,
+      },
+    };
+    configService.getServerConfig = jest.fn().mockResolvedValue({
+      case_role_id: 'case-role-1',
+      verification_channel_id: 'verification-channel-1',
+      settings: {
+        verification_channel_permission_sync: {
+          channel_id: 'verification-channel-1',
+          managed_overwrites: [
+            {
+              id: 'retired-admin-role',
+              type: 0,
+              managed_bits: managedBits.toString(),
+              original_overwrite: {
+                existed: true,
+                allow: PermissionFlagsBits.AttachFiles.toString(),
+                deny: PermissionFlagsBits.MentionEveryone.toString(),
+              },
+            },
+          ],
+        },
+      },
+    } as any);
+    const guild = {
+      id: 'guild-1',
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: { filter: jest.fn().mockReturnValue([]) },
+      },
+      channels: {
+        cache: buildChannelCollection([]),
+        fetch: jest.fn().mockResolvedValue(existingChannel),
+        create: jest.fn(),
+      },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await manager.setupVerificationChannel(
+      guild,
+      'case-role-1',
+      false,
+      undefined,
+      'verification-channel-1'
+    );
+
+    const retiredAdminOverwrite = overwriteSet.mock.calls[0][0].find(
+      (overwrite: { id: string }) => overwrite.id === 'retired-admin-role'
+    );
+    expect(retiredAdminOverwrite).toEqual({
+      id: 'retired-admin-role',
+      type: 0,
+      allow: PermissionFlagsBits.AttachFiles,
+      deny: PermissionFlagsBits.MentionEveryone,
+    });
   });
 
   it('preserves a previous case-role overwrite when no Drasil provenance exists', async () => {

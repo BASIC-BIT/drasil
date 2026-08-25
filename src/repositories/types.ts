@@ -112,8 +112,14 @@ export interface ServerSettings {
 
 export interface VerificationChannelPermissionSyncState {
   readonly channel_id: string;
-  readonly case_role_id: string;
-  readonly original_case_role_overwrite: {
+  readonly managed_overwrites: readonly VerificationChannelManagedOverwriteState[];
+}
+
+export interface VerificationChannelManagedOverwriteState {
+  readonly id: string;
+  readonly type: 0 | 1;
+  readonly managed_bits: string;
+  readonly original_overwrite: {
     readonly existed: boolean;
     readonly allow: string;
     readonly deny: string;
