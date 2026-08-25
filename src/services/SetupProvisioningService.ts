@@ -63,6 +63,7 @@ export class SetupProvisioningService {
       .catch(() => null);
     const detectionResponseMode =
       input.detectionResponseMode ??
+      existingConfig?.settings.detection_response_mode ??
       (existingConfig?.case_role_id &&
       existingConfig.admin_channel_id &&
       existingConfig.verification_channel_id
