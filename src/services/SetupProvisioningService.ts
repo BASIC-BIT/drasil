@@ -15,7 +15,26 @@ import { SetupWorkflowService, type SetupWorkflowResult } from './SetupWorkflowS
 export const DEFAULT_CASE_ROLE_NAME = 'Drasil Case';
 export const DEFAULT_VERIFICATION_CHANNEL_NAME = 'verification';
 const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10003;
+const DISCORD_UNKNOWN_ROLE_ERROR_CODE = 10011;
 const setupExecutionChains = new Map<string, Promise<unknown>>();
+
+export async function runSerializedGuildSetup<T>(
+  guildId: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  // Setup surfaces may construct separate services, so the lock must be module-scoped.
+  const previous = setupExecutionChains.get(guildId) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(operation);
+  setupExecutionChains.set(guildId, next);
+
+  try {
+    return await next;
+  } finally {
+    if (setupExecutionChains.get(guildId) === next) {
+      setupExecutionChains.delete(guildId);
+    }
+  }
+}
 
 export type SetupProvisioningResult =
   | SetupWorkflowResult
@@ -73,7 +92,7 @@ export class SetupProvisioningService {
   ) {}
 
   public async provision(input: ProvisionSetupInput): Promise<SetupProvisioningResult> {
-    return this.runSerialized(input.guild.id, () => this.provisionExclusive(input));
+    return runSerializedGuildSetup(input.guild.id, () => this.provisionExclusive(input));
   }
 
   private async provisionExclusive(input: ProvisionSetupInput): Promise<SetupProvisioningResult> {
@@ -128,22 +147,6 @@ export class SetupProvisioningService {
       detectionResponseMode,
       existingConfig
     );
-  }
-
-  private async runSerialized<T>(guildId: string, operation: () => Promise<T>): Promise<T> {
-    // Every setup surface executes in the bot runtime, but each may construct its own service.
-    // A module-scoped chain keeps their Discord mutations and final config writes per-guild atomic.
-    const previous = setupExecutionChains.get(guildId) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(operation);
-    setupExecutionChains.set(guildId, next);
-
-    try {
-      return await next;
-    } finally {
-      if (setupExecutionChains.get(guildId) === next) {
-        setupExecutionChains.delete(guildId);
-      }
-    }
   }
 
   private async provisionWithCaseRole(
@@ -391,6 +394,18 @@ export class SetupProvisioningService {
         ) ?? null
       );
     }
-    return roleManager.fetch(roleId).catch(() => null);
+    try {
+      return await roleManager.fetch(roleId);
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === DISCORD_UNKNOWN_ROLE_ERROR_CODE
+      ) {
+        return null;
+      }
+      throw error;
+    }
   }
 }

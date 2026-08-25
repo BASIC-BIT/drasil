@@ -237,6 +237,8 @@ export const serverSettingsSchema = z
       .optional(),
     report_instructions_channel_id: z.string().nullable().optional(),
     report_instructions_message_id: z.string().nullable().optional(),
+    report_instructions_cleanup_channel_id: z.string().nullable().optional(),
+    report_instructions_cleanup_message_id: z.string().nullable().optional(),
     message_deletion_enabled: z.boolean().optional(),
     message_deletion_source_message_enabled: z.boolean().optional(),
     message_deletion_watchlist_enabled: z.boolean().optional(),

@@ -593,9 +593,15 @@ describe('CommandHandler report commands (unit)', () => {
       embeds: expect.any(Array),
       components: expect.any(Array),
     });
-    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(1, 'guild-1', {
       report_instructions_channel_id: 'new-channel-1',
       report_instructions_message_id: 'new-message-1',
+      report_instructions_cleanup_channel_id: 'old-channel-1',
+      report_instructions_cleanup_message_id: 'old-message-1',
+    });
+    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(2, 'guild-1', {
+      report_instructions_cleanup_channel_id: null,
+      report_instructions_cleanup_message_id: null,
     });
     expect(targetChannel.send.mock.invocationCallOrder[0]).toBeLessThan(
       updateServerSettings.mock.invocationCallOrder[0]
@@ -668,8 +674,71 @@ describe('CommandHandler report commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: null,
       report_instructions_message_id: null,
+      report_instructions_cleanup_channel_id: 'old-channel-1',
+      report_instructions_cleanup_message_id: 'old-message-1',
     });
     expect(client.channels.fetch).not.toHaveBeenCalled();
     expect(oldMessage.delete).not.toHaveBeenCalled();
+  });
+
+  it('retains durable cleanup metadata when report-message deletion fails transiently', async () => {
+    const client = {
+      channels: {
+        fetch: jest.fn().mockRejectedValue(new Error('Discord unavailable')),
+      },
+    } as any;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          report_instructions_channel_id: 'old-channel-1',
+          report_instructions_message_id: 'old-message-1',
+        },
+      }),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    } as any;
+
+    await expect(
+      new ReportInstructionsManager(client, configService).clearReportInstructions('guild-1')
+    ).rejects.toThrow('Retry setup to finish cleanup');
+
+    expect(configService.updateServerSettings).toHaveBeenCalledTimes(1);
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      report_instructions_channel_id: null,
+      report_instructions_message_id: null,
+      report_instructions_cleanup_channel_id: 'old-channel-1',
+      report_instructions_cleanup_message_id: 'old-message-1',
+    });
+  });
+
+  it('retries durable report-message cleanup after the active routing metadata was cleared', async () => {
+    const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
+    const client = {
+      channels: {
+        fetch: jest.fn().mockResolvedValue({
+          messages: { fetch: jest.fn().mockResolvedValue(oldMessage) },
+        }),
+      },
+    } as any;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          report_instructions_channel_id: null,
+          report_instructions_message_id: null,
+          report_instructions_cleanup_channel_id: 'old-channel-1',
+          report_instructions_cleanup_message_id: 'old-message-1',
+        },
+      }),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    } as any;
+
+    await expect(
+      new ReportInstructionsManager(client, configService).clearReportInstructions('guild-1')
+    ).resolves.toEqual({ action: 'cleared' });
+
+    expect(oldMessage.delete).toHaveBeenCalledTimes(1);
+    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(1, 'guild-1', {
+      report_instructions_cleanup_channel_id: null,
+      report_instructions_cleanup_message_id: null,
+    });
   });
 });

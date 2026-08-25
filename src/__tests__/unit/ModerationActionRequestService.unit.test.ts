@@ -2367,9 +2367,15 @@ describe('ModerationActionRequestService', () => {
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
     expect(reportInstructionsMessage.delete).toHaveBeenCalled();
-    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(1, 'guild-1', {
       report_instructions_channel_id: null,
       report_instructions_message_id: null,
+      report_instructions_cleanup_channel_id: 'report-channel-1',
+      report_instructions_cleanup_message_id: 'report-message-1',
+    });
+    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(2, 'guild-1', {
+      report_instructions_cleanup_channel_id: null,
+      report_instructions_cleanup_message_id: null,
     });
     expect(repository.completed[0]?.result).toEqual(
       expect.objectContaining({

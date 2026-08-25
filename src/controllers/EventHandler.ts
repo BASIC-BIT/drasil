@@ -96,6 +96,7 @@ import {
   IActiveAccountQuarantineCache,
 } from '../services/ActiveAccountQuarantineCache';
 import { buildAdminGuildOnboardingUrl } from '../utils/publicWebLinks';
+import { runSerializedGuildSetup } from '../services/SetupProvisioningService';
 
 const CHANNEL_CONTEXT_MESSAGE_LIMIT = 5;
 const MESSAGE_CONTEXT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
@@ -1870,26 +1871,35 @@ export class EventHandler implements IEventHandler {
     try {
       console.log(`Bot joined new guild: ${guild.name} (${guild.id})`);
 
-      // Create default configuration for the new guild
-      let config = await this.configService.getServerConfig(guild.id);
-      console.log(`Created default configuration for guild: ${guild.name} (${guild.id})`);
+      const { config, verificationChannelWasCreated } = await runSerializedGuildSetup(
+        guild.id,
+        async () => {
+          // Create or refresh configuration inside the same lock as every setup mutation surface.
+          let lockedConfig = await this.configService.getServerConfig(guild.id, {
+            failOnReadError: true,
+            forceRefresh: true,
+          });
+          console.log(`Created default configuration for guild: ${guild.name} (${guild.id})`);
 
-      // Set up verification channel if auto_setup is enabled globally
-      let verificationChannelWasCreated = false;
-      if (globalConfig.getSettings().autoSetupVerificationChannels) {
-        const caseRoleId = config.case_role_id;
-        if (caseRoleId) {
-          const channelId = await this.notificationManager.setupVerificationChannel(
-            guild,
-            caseRoleId
-          );
-          if (channelId) {
-            config = { ...config, verification_channel_id: channelId };
-            verificationChannelWasCreated = true;
-            console.log(`Set up verification channel for guild: ${guild.name} (${guild.id})`);
+          let channelWasCreated = false;
+          if (globalConfig.getSettings().autoSetupVerificationChannels) {
+            const caseRoleId = lockedConfig.case_role_id;
+            if (caseRoleId) {
+              const channelId = await this.notificationManager.setupVerificationChannel(
+                guild,
+                caseRoleId
+              );
+              if (channelId) {
+                lockedConfig = { ...lockedConfig, verification_channel_id: channelId };
+                channelWasCreated = true;
+                console.log(`Set up verification channel for guild: ${guild.name} (${guild.id})`);
+              }
+            }
           }
+
+          return { config: lockedConfig, verificationChannelWasCreated: channelWasCreated };
         }
-      }
+      );
 
       void this.productAnalyticsService.captureGuildEvent(guild.id, 'guild installed', {
         auto_setup_verification_channels: globalConfig.getSettings().autoSetupVerificationChannels,

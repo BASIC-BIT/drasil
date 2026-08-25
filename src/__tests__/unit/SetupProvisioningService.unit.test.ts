@@ -144,6 +144,95 @@ describe('SetupProvisioningService (unit)', () => {
     );
   });
 
+  it('propagates transient configured-role fetch failures before creating artifacts', async () => {
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        admin_channel_id: 'admin-channel-1',
+        case_role_id: 'configured-case-role',
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    } as any;
+    const setupDiagnosticsService = { validateSetupCandidate: jest.fn() } as any;
+    const setupWorkflowService = { completeSetup: jest.fn() } as any;
+    const guild = {
+      id: 'guild-1',
+      roles: {
+        cache: new Map(),
+        create: jest.fn(),
+        fetch: jest.fn().mockRejectedValue(new Error('Discord unavailable')),
+      },
+    } as any;
+    const service = new SetupProvisioningService(
+      configService,
+      setupDiagnosticsService,
+      setupWorkflowService
+    );
+
+    await expect(
+      service.provision({
+        actorLabel: 'web administrator admin-1',
+        adminChannelId: 'admin-channel-1',
+        guild,
+        verificationChannel: { id: 'verification-channel-1' } as any,
+      })
+    ).rejects.toThrow('Discord unavailable');
+
+    expect(guild.roles.create).not.toHaveBeenCalled();
+    expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();
+    expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
+  });
+
+  it('creates a replacement only after Discord confirms the configured role is missing', async () => {
+    const createdRole = { id: 'replacement-case-role', name: 'Drasil Case' };
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        admin_channel_id: 'admin-channel-1',
+        case_role_id: 'missing-case-role',
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    } as any;
+    const setupDiagnosticsService = {
+      validateSetupCandidate: jest.fn().mockResolvedValue({
+        errorCount: 0,
+        guildId: 'guild-1',
+        issues: [],
+        warningCount: 0,
+      }),
+    } as any;
+    const setupWorkflowService = {
+      completeSetup: jest.fn().mockResolvedValue({ status: 'completed' }),
+    } as any;
+    const guild = {
+      id: 'guild-1',
+      roles: {
+        cache: new Map(),
+        create: jest.fn().mockResolvedValue(createdRole),
+        fetch: jest.fn().mockRejectedValue({ code: 10011, message: 'Unknown Role' }),
+      },
+    } as any;
+    const service = new SetupProvisioningService(
+      configService,
+      setupDiagnosticsService,
+      setupWorkflowService
+    );
+
+    await expect(
+      service.provision({
+        actorLabel: 'web administrator admin-1',
+        adminChannelId: 'admin-channel-1',
+        guild,
+        verificationChannel: { id: 'verification-channel-1' } as any,
+      })
+    ).resolves.toEqual({ status: 'completed' });
+
+    expect(guild.roles.create).toHaveBeenCalled();
+    expect(setupWorkflowService.completeSetup).toHaveBeenCalledWith(
+      expect.objectContaining({ caseRole: createdRole, createdCaseRole: createdRole })
+    );
+  });
+
   it('reuses a unique matching role when the wizard allows creation', async () => {
     const matchingRole = { id: 'matching-role', name: 'Drasil Case' };
     const configService = {

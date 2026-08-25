@@ -79,6 +79,8 @@ export interface ServerSettings {
   manual_intake_grace_period_seconds?: number;
   report_instructions_channel_id?: string | null;
   report_instructions_message_id?: string | null;
+  report_instructions_cleanup_channel_id?: string | null;
+  report_instructions_cleanup_message_id?: string | null;
   case_role_lockdown_enabled?: boolean;
   case_role_lockdown_allowed_channel_ids?: string[];
   case_role_lockdown_allowed_category_ids?: string[];

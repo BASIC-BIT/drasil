@@ -8,9 +8,16 @@ import {
   TextChannel,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
+import type { ServerSettings } from '../repositories/types';
 
 const REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY = 'report_instructions_channel_id';
 const REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY = 'report_instructions_message_id';
+const REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY = 'report_instructions_cleanup_channel_id';
+const REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY = 'report_instructions_cleanup_message_id';
+const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10003;
+const DISCORD_UNKNOWN_MESSAGE_ERROR_CODE = 10008;
+const REPORT_INSTRUCTIONS_CLEANUP_PENDING_ERROR =
+  'Report instructions were disabled, but the previous message could not be removed. Retry setup to finish cleanup.';
 
 export class ReportInstructionsManager {
   public constructor(
@@ -24,6 +31,7 @@ export class ReportInstructionsManager {
   ): Promise<{ action: 'sent' | 'updated' | 'recreated'; messageId: string }> {
     const messagePayload = this.buildReportInstructionsMessagePayload();
     const serverConfig = await this.configService.getServerConfig(guildId);
+    await this.retryPendingReportInstructionsCleanup(guildId, serverConfig.settings);
     const existingChannelId = serverConfig.settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
     const existingMessageId = serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
     let messageId: string;
@@ -56,13 +64,18 @@ export class ReportInstructionsManager {
       }
     }
 
-    await this.configService.updateServerSettings(guildId, {
+    const settingsPatch: Partial<ServerSettings> = {
       [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: targetChannel.id,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: messageId,
-    });
+    };
+    if (movedChannels && existingChannelId && existingMessageId) {
+      settingsPatch[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY] = existingChannelId;
+      settingsPatch[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY] = existingMessageId;
+    }
+    await this.configService.updateServerSettings(guildId, settingsPatch);
 
-    if (movedChannels) {
-      await this.deleteStaleReportInstructionsMessage(existingChannelId, existingMessageId);
+    if (movedChannels && existingChannelId && existingMessageId) {
+      await this.finishReportInstructionsCleanup(guildId, existingChannelId, existingMessageId);
     }
 
     return { action, messageId };
@@ -72,16 +85,32 @@ export class ReportInstructionsManager {
     guildId: string
   ): Promise<{ action: 'cleared' | 'unchanged' }> {
     const serverConfig = await this.configService.getServerConfig(guildId);
+    const hadPendingCleanup = Boolean(
+      serverConfig.settings[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY] ||
+      serverConfig.settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]
+    );
+    await this.retryPendingReportInstructionsCleanup(guildId, serverConfig.settings);
     const existingChannelId = serverConfig.settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
     const existingMessageId = serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
+    const hasCleanupTarget = Boolean(existingChannelId && existingMessageId);
 
     await this.configService.updateServerSettings(guildId, {
       [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: null,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: null,
+      [REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY]: hasCleanupTarget
+        ? existingChannelId
+        : null,
+      [REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]: hasCleanupTarget
+        ? existingMessageId
+        : null,
     });
-    await this.deleteStaleReportInstructionsMessage(existingChannelId, existingMessageId);
+    if (existingChannelId && existingMessageId) {
+      await this.finishReportInstructionsCleanup(guildId, existingChannelId, existingMessageId);
+    }
 
-    return { action: existingChannelId || existingMessageId ? 'cleared' : 'unchanged' };
+    return {
+      action: existingChannelId || existingMessageId || hadPendingCleanup ? 'cleared' : 'unchanged',
+    };
   }
 
   private async findExistingReportInstructionsMessage(
@@ -112,29 +141,82 @@ export class ReportInstructionsManager {
     );
   }
 
-  private async deleteStaleReportInstructionsMessage(
-    existingChannelId: string | null | undefined,
-    existingMessageId: string | null | undefined
+  private async retryPendingReportInstructionsCleanup(
+    guildId: string,
+    settings: ServerSettings
   ): Promise<void> {
-    if (!existingChannelId || !existingMessageId) {
+    const channelId = settings[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY];
+    const messageId = settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY];
+    if (!channelId && !messageId) {
       return;
     }
-
-    try {
-      const existingChannel = await this.client.channels.fetch(existingChannelId).catch(() => null);
-      if (!existingChannel || !('messages' in existingChannel)) {
-        return;
-      }
-
-      const existingMessage = await existingChannel.messages
-        .fetch(existingMessageId)
-        .catch(() => null);
-      await existingMessage?.delete().catch((error) => {
-        console.warn('Failed to delete stale report instructions message:', error);
-      });
-    } catch (error) {
-      console.warn('Failed to clean up stale report instructions message:', error);
+    if (!channelId || !messageId) {
+      await this.clearPendingReportInstructionsCleanup(guildId);
+      return;
     }
+    await this.finishReportInstructionsCleanup(guildId, channelId, messageId);
+  }
+
+  private async finishReportInstructionsCleanup(
+    guildId: string,
+    channelId: string,
+    messageId: string
+  ): Promise<void> {
+    if (!(await this.deleteReportInstructionsMessage(channelId, messageId))) {
+      throw new Error(REPORT_INSTRUCTIONS_CLEANUP_PENDING_ERROR);
+    }
+    await this.clearPendingReportInstructionsCleanup(guildId);
+  }
+
+  private async clearPendingReportInstructionsCleanup(guildId: string): Promise<void> {
+    await this.configService.updateServerSettings(guildId, {
+      [REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY]: null,
+      [REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]: null,
+    });
+  }
+
+  private async deleteReportInstructionsMessage(
+    channelId: string,
+    messageId: string
+  ): Promise<boolean> {
+    let existingChannel;
+    try {
+      existingChannel = await this.client.channels.fetch(channelId);
+    } catch (error) {
+      if (this.isUnknownDiscordResource(error, DISCORD_UNKNOWN_CHANNEL_ERROR_CODE)) {
+        return true;
+      }
+      console.warn('Failed to fetch stale report instructions channel:', error);
+      return false;
+    }
+    if (!existingChannel || !('messages' in existingChannel)) {
+      return true;
+    }
+
+    let existingMessage;
+    try {
+      existingMessage = await existingChannel.messages.fetch(messageId);
+    } catch (error) {
+      if (this.isUnknownDiscordResource(error, DISCORD_UNKNOWN_MESSAGE_ERROR_CODE)) {
+        return true;
+      }
+      console.warn('Failed to fetch stale report instructions message:', error);
+      return false;
+    }
+    try {
+      await existingMessage.delete();
+      return true;
+    } catch (error) {
+      if (this.isUnknownDiscordResource(error, DISCORD_UNKNOWN_MESSAGE_ERROR_CODE)) {
+        return true;
+      }
+      console.warn('Failed to delete stale report instructions message:', error);
+      return false;
+    }
+  }
+
+  private isUnknownDiscordResource(error: unknown, code: number): boolean {
+    return typeof error === 'object' && error !== null && 'code' in error && error.code === code;
   }
 
   private buildReportInstructionsMessagePayload(): {

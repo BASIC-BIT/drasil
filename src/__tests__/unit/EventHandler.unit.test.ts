@@ -13,6 +13,8 @@ import {
   ActiveAccountQuarantineCache,
   IActiveAccountQuarantineCache,
 } from '../../services/ActiveAccountQuarantineCache';
+import { globalConfig } from '../../config/GlobalConfig';
+import { runSerializedGuildSetup } from '../../services/SetupProvisioningService';
 import {
   CaseAttentionState,
   CaseContainmentStatus,
@@ -3423,6 +3425,66 @@ describe('EventHandler (unit)', () => {
       setup_nudge_last_source: 'audit_log_installer',
     });
     expect(guild.fetchOwner).not.toHaveBeenCalled();
+  });
+
+  it('waits for in-flight setup before guild-create auto setup reads configuration', async () => {
+    const previousAutoSetup = globalConfig.getSettings().autoSetupVerificationChannels;
+    globalConfig.updateSettings({ autoSetupVerificationChannels: true });
+    const serverConfig = {
+      guild_id: 'guild-1',
+      case_role_id: 'case-role-1',
+      admin_channel_id: 'admin-channel-1',
+      verification_channel_id: 'verification-channel-1',
+      settings: {},
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue(serverConfig),
+      getServerConfig: jest.fn().mockResolvedValue(serverConfig),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const notificationManager = {
+      upsertObservedDetectionNotification: jest.fn(),
+      setupVerificationChannel: jest.fn().mockResolvedValue('verification-channel-1'),
+    };
+    const handler = buildHandler({ configService, notificationManager });
+    const guild = { id: 'guild-1', name: 'Test Guild' } as any;
+    let markLockAcquired!: () => void;
+    let releaseLock!: () => void;
+    const lockAcquired = new Promise<void>((resolve) => {
+      markLockAcquired = resolve;
+    });
+    const lockReleased = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const heldSetup = runSerializedGuildSetup('guild-1', async () => {
+      markLockAcquired();
+      await lockReleased;
+    });
+
+    try {
+      await lockAcquired;
+      const guildCreate = (handler as any).handleGuildCreate(guild);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(configService.getServerConfig).not.toHaveBeenCalled();
+      expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+
+      releaseLock();
+      await heldSetup;
+      await guildCreate;
+
+      expect(configService.getServerConfig).toHaveBeenCalledTimes(2);
+      expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
+        guild,
+        'case-role-1'
+      );
+    } finally {
+      releaseLock();
+      await heldSetup;
+      globalConfig.updateSettings({ autoSetupVerificationChannels: previousAutoSetup });
+    }
   });
 
   it('falls back to the guild owner when installer attribution is unavailable', async () => {
