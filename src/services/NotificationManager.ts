@@ -1050,24 +1050,25 @@ export class NotificationManager implements INotificationManager {
     onPermissionsUpdated?: (snapshot: VerificationPermissionSnapshot) => void
   ): Promise<boolean> {
     // The shipped pre-provenance path replaced the complete overwrite set, so no prior values
-    // can be reconstructed. Treat its deterministic Drasil entries as created and remove only
-    // their managed bits while preserving any unrelated permissions added later.
+    // can be reconstructed. Only stable identities can safely be treated as Drasil-managed:
+    // current admin-role permissions may not match the roles setup originally selected.
     const legacyState: VerificationChannelPermissionSyncState = {
       channel_id: channelId,
-      managed_overwrites: this.buildVerificationChannelPermissionOverwrites(guild, caseRoleId).map(
-        (overwrite) => ({
-          id: overwrite.id,
-          type: overwrite.type,
-          managed_bits: (
-            this.combinePermissionBits(overwrite.allow) | this.combinePermissionBits(overwrite.deny)
-          ).toString(),
-          original_overwrite: {
-            existed: false,
-            allow: '0',
-            deny: '0',
-          },
-        })
-      ),
+      managed_overwrites: this.buildLegacyVerificationChannelPermissionOverwrites(
+        guild,
+        caseRoleId
+      ).map((overwrite) => ({
+        id: overwrite.id,
+        type: overwrite.type,
+        managed_bits: (
+          this.combinePermissionBits(overwrite.allow) | this.combinePermissionBits(overwrite.deny)
+        ).toString(),
+        original_overwrite: {
+          existed: false,
+          allow: '0',
+          deny: '0',
+        },
+      })),
     };
     return this.restoreVerificationChannelManagedPermissions(
       guild,
@@ -1111,6 +1112,36 @@ export class NotificationManager implements INotificationManager {
     guild: Guild,
     caseRoleId: string
   ): VerificationPermissionOverwrite[] {
+    const permissionOverwrites = this.buildLegacyVerificationChannelPermissionOverwrites(
+      guild,
+      caseRoleId
+    );
+
+    // Find admin roles by checking for manage channels permission
+    const adminRoles = guild.roles.cache.filter((role) =>
+      role.permissions.has(PermissionFlagsBits.ManageChannels)
+    );
+
+    // Add admin roles to permission overwrites
+    adminRoles.forEach((role) => {
+      permissionOverwrites.push({
+        id: role.id,
+        type: 0,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+        ],
+      });
+    });
+
+    return permissionOverwrites;
+  }
+
+  private buildLegacyVerificationChannelPermissionOverwrites(
+    guild: Guild,
+    caseRoleId: string
+  ): VerificationPermissionOverwrite[] {
     const permissionOverwrites: VerificationPermissionOverwrite[] = [
       // Default role (everyone) - deny access
       {
@@ -1150,24 +1181,6 @@ export class NotificationManager implements INotificationManager {
         ],
       });
     }
-
-    // Find admin roles by checking for manage channels permission
-    const adminRoles = guild.roles.cache.filter((role) =>
-      role.permissions.has(PermissionFlagsBits.ManageChannels)
-    );
-
-    // Add admin roles to permission overwrites
-    adminRoles.forEach((role) => {
-      permissionOverwrites.push({
-        id: role.id,
-        type: 0,
-        allow: [
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.ReadMessageHistory,
-        ],
-      });
-    });
 
     return permissionOverwrites;
   }

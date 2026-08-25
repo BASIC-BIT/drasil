@@ -3848,6 +3848,39 @@ describe('EventHandler (unit)', () => {
     ).resolves.toMatchObject({ ready: false });
   });
 
+  it('reuses setup readiness briefly across a burst of automatic detections', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        is_active: true,
+        settings: {},
+      }),
+    };
+    const setupDiagnosticsService = buildReadySetupDiagnosticsService();
+    const handler = buildHandler({ configService, setupDiagnosticsService });
+    const guild = { id: 'guild-1' } as any;
+
+    await Promise.all([
+      (handler as any).evaluateAutomaticDetectionSetupSafety(guild),
+      (handler as any).evaluateAutomaticDetectionSetupSafety(guild),
+    ]);
+    await (handler as any).evaluateAutomaticDetectionSetupSafety(guild);
+
+    expect(configService.getServerConfig).toHaveBeenCalledTimes(1);
+    expect(setupDiagnosticsService.validateGuildSetup).toHaveBeenCalledTimes(1);
+
+    now.mockReturnValue(31_001);
+    await (handler as any).evaluateAutomaticDetectionSetupSafety(guild);
+
+    expect(configService.getServerConfig).toHaveBeenCalledTimes(2);
+    expect(setupDiagnosticsService.validateGuildSetup).toHaveBeenCalledTimes(2);
+    now.mockRestore();
+  });
+
   it('skips detection-time setup validation immediately after a warning attempt', async () => {
     const configService = {
       initialize: jest.fn().mockResolvedValue(undefined),

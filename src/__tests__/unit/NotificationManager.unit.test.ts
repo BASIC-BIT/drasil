@@ -1891,6 +1891,10 @@ describe('NotificationManager (unit)', () => {
       PermissionFlagsBits.CreatePrivateThreads |
       PermissionFlagsBits.SendMessagesInThreads |
       PermissionFlagsBits.ModerateMembers;
+    const currentAdminAllow =
+      PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.SendMessages |
+      PermissionFlagsBits.ReadMessageHistory;
     const channel = {
       id: 'legacy-channel',
       type: ChannelType.GuildText,
@@ -1924,6 +1928,15 @@ describe('NotificationManager (unit)', () => {
             },
           ],
           [
+            'current-admin-role',
+            {
+              id: 'current-admin-role',
+              type: 0,
+              allow: { bitfield: currentAdminAllow },
+              deny: { bitfield: 0n },
+            },
+          ],
+          [
             'unrelated-role',
             {
               id: 'unrelated-role',
@@ -1939,7 +1952,19 @@ describe('NotificationManager (unit)', () => {
     const guild = {
       roles: {
         everyone: { id: 'guild-1' },
-        cache: { filter: jest.fn().mockReturnValue(new Collection()) },
+        cache: {
+          filter: jest.fn().mockReturnValue(
+            new Collection([
+              [
+                'current-admin-role',
+                {
+                  id: 'current-admin-role',
+                  permissions: { has: jest.fn().mockReturnValue(true) },
+                },
+              ],
+            ])
+          ),
+        },
       },
       channels: { fetch: jest.fn().mockResolvedValue(channel) },
     } as unknown as Guild;
@@ -1955,6 +1980,12 @@ describe('NotificationManager (unit)', () => {
 
     expect(overwriteSet).toHaveBeenCalledWith(
       [
+        {
+          id: 'current-admin-role',
+          type: 0,
+          allow: currentAdminAllow,
+          deny: 0n,
+        },
         {
           id: 'unrelated-role',
           type: 0,

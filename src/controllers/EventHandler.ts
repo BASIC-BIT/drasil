@@ -104,6 +104,7 @@ const GLOBAL_MESSAGE_WATCHLIST_CACHE_TTL_MS = 30_000;
 const GLOBAL_MESSAGE_WATCHLIST_INITIAL_FAILURE_RETRY_MS = 5_000;
 const SETUP_NUDGE_SUPPRESSION_MS = 7 * 24 * 60 * 60 * 1000;
 const SETUP_WARNING_VALIDATION_PRECHECK_MS = 5 * 60 * 1000;
+const AUTOMATIC_DETECTION_SETUP_SAFETY_CACHE_TTL_MS = 30_000;
 const SETUP_WARNING_LAST_FINGERPRINT_SETTING_KEY = 'setup_warning_last_fingerprint';
 const DISCORD_RECENT_AUDIT_WINDOW_MS = 60 * 1000;
 const MANUAL_INTAKE_ROLE_REMOVAL_REASON = 'Manual intake trigger role consumed by Drasil';
@@ -120,6 +121,12 @@ interface SetupNudgeUser {
   readonly id: string;
   readonly bot?: boolean;
   send(content: string | MessageCreateOptions): Promise<unknown>;
+}
+
+interface AutomaticDetectionSetupSafety {
+  readonly ready: boolean;
+  readonly config?: Server;
+  readonly report?: SetupDiagnosticReport;
 }
 
 type CachedMessageChannel = Message['channel'] & {
@@ -170,6 +177,13 @@ export class EventHandler implements IEventHandler {
   private globalMessageWatchlistLoadedAt = 0;
   private globalMessageWatchlistRetryAfter = 0;
   private globalMessageWatchlistHasLoaded = false;
+  private automaticDetectionSetupSafetyCache = new Map<
+    string,
+    {
+      readonly expiresAt: number;
+      readonly result: Promise<AutomaticDetectionSetupSafety>;
+    }
+  >();
   private activeQuarantineCache: IActiveAccountQuarantineCache;
   private globalMessageWatchlistLoadPromise: Promise<
     readonly GlobalMessageWatchlistEntry[]
@@ -793,11 +807,26 @@ export class EventHandler implements IEventHandler {
     }
   }
 
-  private async evaluateAutomaticDetectionSetupSafety(guild: Guild): Promise<{
-    readonly ready: boolean;
-    readonly config?: Server;
-    readonly report?: SetupDiagnosticReport;
-  }> {
+  private evaluateAutomaticDetectionSetupSafety(
+    guild: Guild
+  ): Promise<AutomaticDetectionSetupSafety> {
+    const now = Date.now();
+    const cached = this.automaticDetectionSetupSafetyCache.get(guild.id);
+    if (cached && cached.expiresAt > now) {
+      return cached.result;
+    }
+
+    const result = this.loadAutomaticDetectionSetupSafety(guild);
+    this.automaticDetectionSetupSafetyCache.set(guild.id, {
+      expiresAt: now + AUTOMATIC_DETECTION_SETUP_SAFETY_CACHE_TTL_MS,
+      result,
+    });
+    return result;
+  }
+
+  private async loadAutomaticDetectionSetupSafety(
+    guild: Guild
+  ): Promise<AutomaticDetectionSetupSafety> {
     if (!this.setupDiagnosticsService) {
       return { ready: false };
     }
