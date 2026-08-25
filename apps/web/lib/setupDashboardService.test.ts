@@ -216,6 +216,48 @@ describe('SetupDashboardService', () => {
     ]);
   });
 
+  it('does not trust an ordinary role merely because the bot also has it', () => {
+    const roles = [
+      {
+        id: 'guild-1',
+        name: '@everyone',
+        permissions: DISCORD_PERMISSIONS.ViewChannel.toString(),
+        position: 0,
+        managed: false,
+      },
+      { id: 'shared-role', name: 'Members', permissions: '0', position: 1, managed: false },
+      { id: 'managed-bot-role', name: 'Drasil', permissions: '0', position: 2, managed: true },
+    ];
+    const privateDeny = DISCORD_PERMISSIONS.ViewChannel.toString();
+    const privateChannel = (id: string, roleId: string) => ({
+      id,
+      name: id,
+      type: 0,
+      permission_overwrites: [
+        { id: 'guild-1', type: 0, allow: '0', deny: privateDeny },
+        {
+          id: roleId,
+          type: 0,
+          allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+          deny: '0',
+        },
+      ],
+    });
+
+    expect(
+      filterPrivateAdminChannels(
+        [
+          privateChannel('shared-role-channel', 'shared-role'),
+          privateChannel('managed-bot-channel', 'managed-bot-role'),
+        ],
+        roles,
+        'guild-1',
+        ['shared-role', 'managed-bot-role'],
+        'bot-1'
+      )
+    ).toEqual([expect.objectContaining({ id: 'managed-bot-channel' })]);
+  });
+
   it('marks inactive server records as needing setup', async () => {
     vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
     vi.mocked(fetchGuildResources).mockResolvedValue(resources);

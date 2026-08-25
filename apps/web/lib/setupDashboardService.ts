@@ -232,10 +232,13 @@ function hasUnsafeAdminChannelVisibility(
     if (overwrite.type === 1) {
       return overwrite.id !== botUserId;
     }
-    if (overwrite.id === guildId || botRoleIdSet.has(overwrite.id)) {
+    if (overwrite.id === guildId) {
       return false;
     }
     const role = roles.find((candidate) => candidate.id === overwrite.id);
+    if (botRoleIdSet.has(overwrite.id) && role?.managed) {
+      return false;
+    }
     return (
       !role ||
       !ADMIN_CHANNEL_STAFF_PERMISSIONS.some((permission) =>

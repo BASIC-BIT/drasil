@@ -326,6 +326,75 @@ describe('SetupDiagnosticsService (unit)', () => {
     });
   });
 
+  it('rejects a non-moderator role shared with the bot from admin channel visibility', async () => {
+    const { guild, channel } = buildConfiguredGuild();
+    channel.permissionOverwrites.cache = new Map([
+      [
+        'bot-role',
+        {
+          id: 'bot-role',
+          type: 0,
+          allow: { bitfield: PermissionFlagsBits.ViewChannel },
+        },
+      ],
+    ]);
+    guild.roles.fetch.mockResolvedValue({
+      id: 'bot-role',
+      managed: false,
+      permissions: { has: jest.fn(() => false) },
+    });
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: null,
+    });
+
+    expect(report.issues).toContainEqual({
+      severity: 'error',
+      code: 'admin-channel-non-moderator-view',
+      message:
+        'The admin notification channel grants View Channel to a role without moderator permissions.',
+    });
+  });
+
+  it('allows an admin channel overwrite for the bot managed role', async () => {
+    const { guild, channel } = buildConfiguredGuild();
+    channel.permissionOverwrites.cache = new Map([
+      [
+        'bot-role',
+        {
+          id: 'bot-role',
+          type: 0,
+          allow: { bitfield: PermissionFlagsBits.ViewChannel },
+        },
+      ],
+    ]);
+    guild.roles.fetch.mockResolvedValue({
+      id: 'bot-role',
+      managed: true,
+      permissions: { has: jest.fn(() => false) },
+    });
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: null,
+    });
+
+    expect(report.issues.map((issue) => issue.code)).not.toContain(
+      'admin-channel-non-moderator-view'
+    );
+  });
+
   it('requires thread-send permission in configured verification channels', async () => {
     const { guild } = buildConfiguredGuild({
       channelHas: (permission) => permission !== PermissionFlagsBits.SendMessagesInThreads,

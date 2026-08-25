@@ -18,6 +18,24 @@ const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10003;
 const DISCORD_UNKNOWN_MESSAGE_ERROR_CODE = 10008;
 const REPORT_INSTRUCTIONS_CLEANUP_PENDING_ERROR =
   'Report instructions were disabled, but the previous message could not be removed. Retry setup to finish cleanup.';
+const reportInstructionsExecutionChains = new Map<string, Promise<unknown>>();
+
+async function runSerializedReportInstructions<T>(
+  guildId: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  const previous = reportInstructionsExecutionChains.get(guildId) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(operation);
+  reportInstructionsExecutionChains.set(guildId, next);
+
+  try {
+    return await next;
+  } finally {
+    if (reportInstructionsExecutionChains.get(guildId) === next) {
+      reportInstructionsExecutionChains.delete(guildId);
+    }
+  }
+}
 
 export class ReportInstructionsManager {
   public constructor(
@@ -26,6 +44,15 @@ export class ReportInstructionsManager {
   ) {}
 
   public async upsertReportInstructionsMessage(
+    guildId: string,
+    targetChannel: TextChannel
+  ): Promise<{ action: 'sent' | 'updated' | 'recreated'; messageId: string }> {
+    return runSerializedReportInstructions(guildId, () =>
+      this.upsertReportInstructionsMessageExclusive(guildId, targetChannel)
+    );
+  }
+
+  private async upsertReportInstructionsMessageExclusive(
     guildId: string,
     targetChannel: TextChannel
   ): Promise<{ action: 'sent' | 'updated' | 'recreated'; messageId: string }> {
@@ -82,6 +109,14 @@ export class ReportInstructionsManager {
   }
 
   public async clearReportInstructions(
+    guildId: string
+  ): Promise<{ action: 'cleared' | 'unchanged' }> {
+    return runSerializedReportInstructions(guildId, () =>
+      this.clearReportInstructionsExclusive(guildId)
+    );
+  }
+
+  private async clearReportInstructionsExclusive(
     guildId: string
   ): Promise<{ action: 'cleared' | 'unchanged' }> {
     const serverConfig = await this.configService.getServerConfig(guildId);

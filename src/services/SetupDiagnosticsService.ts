@@ -341,10 +341,13 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         }
         continue;
       }
-      if (overwrite.id === guild.id || botRoleIds.has(overwrite.id)) {
+      if (overwrite.id === guild.id) {
         continue;
       }
       const role = await guild.roles.fetch(overwrite.id).catch(() => null);
+      if (botRoleIds.has(overwrite.id) && role?.managed) {
+        continue;
+      }
       if (
         !role ||
         !ADMIN_CHANNEL_STAFF_PERMISSIONS.some((permission) => role.permissions.has(permission))

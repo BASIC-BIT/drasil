@@ -741,4 +741,76 @@ describe('CommandHandler report commands (unit)', () => {
       report_instructions_cleanup_message_id: null,
     });
   });
+
+  it('serializes report instruction updates across manager instances for the same guild', async () => {
+    let releaseFirstSend!: () => void;
+    let markFirstSendStarted!: () => void;
+    const firstSendStarted = new Promise<void>((resolve) => {
+      markFirstSendStarted = resolve;
+    });
+    const firstSendRelease = new Promise<void>((resolve) => {
+      releaseFirstSend = resolve;
+    });
+    const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
+    const client = {
+      channels: {
+        fetch: jest.fn().mockResolvedValue({
+          messages: { fetch: jest.fn().mockResolvedValue(oldMessage) },
+        }),
+      },
+      user: { id: 'bot-1' },
+    } as any;
+    let settings: Record<string, string | null> = {};
+    const configService = {
+      getServerConfig: jest.fn(async () => ({ settings: { ...settings } })),
+      updateServerSettings: jest.fn(
+        async (_guildId: string, patch: Record<string, string | null>) => {
+          settings = { ...settings, ...patch };
+          return {};
+        }
+      ),
+    } as any;
+    const firstChannel = {
+      id: 'first-channel',
+      messages: { fetch: jest.fn().mockResolvedValue({ find: jest.fn(() => undefined) }) },
+      send: jest.fn(async () => {
+        markFirstSendStarted();
+        await firstSendRelease;
+        return { id: 'first-message' };
+      }),
+    } as any;
+    const secondChannel = {
+      id: 'second-channel',
+      messages: { fetch: jest.fn().mockResolvedValue({ find: jest.fn(() => undefined) }) },
+      send: jest.fn().mockResolvedValue({ id: 'second-message' }),
+    } as any;
+    const firstManager = new ReportInstructionsManager(client, configService);
+    const secondManager = new ReportInstructionsManager(client, configService);
+
+    const firstUpdate = firstManager.upsertReportInstructionsMessage(
+      'guild-serialized',
+      firstChannel
+    );
+    await firstSendStarted;
+    const secondUpdate = secondManager.upsertReportInstructionsMessage(
+      'guild-serialized',
+      secondChannel
+    );
+    await Promise.resolve();
+
+    expect(configService.getServerConfig).toHaveBeenCalledTimes(1);
+    expect(secondChannel.send).not.toHaveBeenCalled();
+
+    releaseFirstSend();
+    await expect(firstUpdate).resolves.toEqual({ action: 'sent', messageId: 'first-message' });
+    await expect(secondUpdate).resolves.toEqual({ action: 'sent', messageId: 'second-message' });
+    expect(configService.getServerConfig).toHaveBeenCalledTimes(2);
+    expect(oldMessage.delete).toHaveBeenCalledTimes(1);
+    expect(settings).toMatchObject({
+      report_instructions_channel_id: 'second-channel',
+      report_instructions_message_id: 'second-message',
+      report_instructions_cleanup_channel_id: null,
+      report_instructions_cleanup_message_id: null,
+    });
+  });
 });
