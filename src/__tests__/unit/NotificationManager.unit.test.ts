@@ -1582,6 +1582,40 @@ describe('NotificationManager (unit)', () => {
     );
   });
 
+  it('deletes a created verification channel when its initial config persistence fails', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    configService.getServerConfig = jest.fn().mockResolvedValue({
+      verification_channel_id: null,
+      settings: {},
+    } as any);
+    configService.updateServerSettings = jest.fn().mockRejectedValue(new Error('save failed'));
+    const deleteChannel = jest.fn().mockResolvedValue(undefined);
+    const createChannel = jest.fn().mockResolvedValue({
+      id: 'created-verification-channel',
+      delete: deleteChannel,
+    });
+    const guild = {
+      id: 'guild-1',
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: { filter: jest.fn().mockReturnValue([]) },
+      },
+      channels: {
+        cache: buildChannelCollection([]),
+        fetch: jest.fn(),
+        create: createChannel,
+      },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await expect(manager.setupVerificationChannel(guild, 'case-role-1')).resolves.toBeNull();
+
+    expect(deleteChannel).toHaveBeenCalledWith(
+      'Rolling back Drasil verification channel after setup persistence failed'
+    );
+    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+  });
+
   it('restores Drasil-managed permissions when an administrator role is retired', async () => {
     const managedBits =
       PermissionFlagsBits.ViewChannel |

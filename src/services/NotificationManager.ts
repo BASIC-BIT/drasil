@@ -883,6 +883,7 @@ export class NotificationManager implements INotificationManager {
       return null;
     }
 
+    let createdVerificationChannel: GuildBasedChannel | null = null;
     try {
       const serverConfig = await this.configService.getServerConfig(guild.id);
       const previousSyncState =
@@ -932,6 +933,7 @@ export class NotificationManager implements INotificationManager {
       };
 
       const verificationChannel = await guild.channels.create(channelOptions);
+      createdVerificationChannel = verificationChannel;
       const nextSyncState = this.buildVerificationPermissionSyncState(
         { channelId: verificationChannel.id, entries: [] },
         undefined,
@@ -949,6 +951,15 @@ export class NotificationManager implements INotificationManager {
 
       return verificationChannel.id;
     } catch (error) {
+      if (createdVerificationChannel) {
+        try {
+          await createdVerificationChannel.delete(
+            'Rolling back Drasil verification channel after setup persistence failed'
+          );
+        } catch (rollbackError) {
+          console.error('Failed to roll back created verification channel:', rollbackError);
+        }
+      }
       console.error('Failed to set up verification channel:', error);
       return null;
     }
