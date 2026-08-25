@@ -6,6 +6,7 @@ import {
   DEFAULT_DETECTION_RESPONSE_MODE,
   DEFAULT_FIRST_SETUP_DETECTION_RESPONSE_MODE,
 } from '../utils/detectionResponseSettings';
+import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { ISetupDiagnosticsService } from './SetupDiagnosticsService';
@@ -65,17 +66,17 @@ export class SetupProvisioningService {
   ) {}
 
   public async provision(input: ProvisionSetupInput): Promise<SetupProvisioningResult> {
-    const existingConfig = await this.configService
-      .getServerConfig(input.guild.id)
-      .catch(() => null);
+    const existingConfig = await this.configService.getServerConfig(input.guild.id, {
+      failOnReadError: true,
+    });
     const coreSetupIncomplete =
-      !existingConfig?.case_role_id ||
+      !existingConfig.case_role_id ||
       !existingConfig.admin_channel_id ||
       !existingConfig.verification_channel_id;
     const surfaceProtectionModeAlreadyConfigured =
-      existingConfig?.settings.message_detection_response_mode != null ||
-      existingConfig?.settings.join_detection_response_mode != null;
-    const persistedDefaultMode = existingConfig?.settings.detection_response_mode;
+      existingConfig.settings.message_detection_response_mode != null ||
+      existingConfig.settings.join_detection_response_mode != null;
+    const persistedDefaultMode = existingConfig.settings.detection_response_mode;
     const needsFirstSetupProtectionDefault =
       coreSetupIncomplete &&
       !surfaceProtectionModeAlreadyConfigured &&
@@ -89,7 +90,8 @@ export class SetupProvisioningService {
       input.caseRole ?? null,
       input.caseRoleId ?? null,
       input.caseRoleName?.trim() || null,
-      input.createCaseRole === true
+      input.createCaseRole === true,
+      existingConfig
     );
     if ('invalidDetail' in caseRoleCandidate) {
       return { status: 'invalid_selection', detail: caseRoleCandidate.invalidDetail };
@@ -101,27 +103,12 @@ export class SetupProvisioningService {
         roleIds: caseRoleCandidate.ambiguousRoleIds,
       };
     }
-    const manualIntakeSettings = getManualIntakeSettings(existingConfig?.settings);
-    if (
-      manualIntakeSettings.enabled &&
-      manualIntakeSettings.roleId &&
-      caseRoleCandidate.role?.id === manualIntakeSettings.roleId
-    ) {
-      return {
-        status: 'invalid_selection',
-        detail: 'The case role must be separate from the configured manual-intake trigger role.',
-      };
-    }
-    const roleGateSettings = getRoleGateSettings(existingConfig?.settings);
-    if (
-      roleGateSettings.enabled &&
-      roleGateSettings.honeypotRoleId &&
-      caseRoleCandidate.role?.id === roleGateSettings.honeypotRoleId
-    ) {
-      return {
-        status: 'invalid_selection',
-        detail: 'The case role must be separate from the configured honeypot trigger role.',
-      };
+    const operationalRoleConflict = this.getOperationalRoleConflict(
+      caseRoleCandidate.role?.id ?? null,
+      existingConfig
+    );
+    if (operationalRoleConflict) {
+      return { status: 'invalid_selection', detail: operationalRoleConflict };
     }
 
     return this.provisionWithCaseRole(
@@ -136,12 +123,13 @@ export class SetupProvisioningService {
     input: ProvisionSetupInput,
     caseRoleCandidate: Exclude<CaseRoleCandidate, { invalidDetail: string }>,
     detectionResponseMode: DetectionResponseMode | undefined,
-    existingConfig: Server | null
+    existingConfig: Server
   ): Promise<SetupProvisioningResult> {
     const verificationCandidate = await this.resolveVerificationChannelCandidate(
       input.guild,
       input.verificationChannel ?? null,
-      input.verificationChannelId ?? null
+      input.verificationChannelId ?? null,
+      existingConfig
     );
     if ('invalidDetail' in verificationCandidate) {
       return { status: 'invalid_selection', detail: verificationCandidate.invalidDetail };
@@ -208,8 +196,8 @@ export class SetupProvisioningService {
       createdCaseRole,
       captureAnalytics: input.captureAnalytics,
       detectionResponseMode,
-      previousVerificationChannelId: existingConfig?.verification_channel_id ?? null,
-      previousPermissionSyncState: existingConfig?.settings.verification_channel_permission_sync,
+      previousVerificationChannelId: existingConfig.verification_channel_id,
+      previousPermissionSyncState: existingConfig.settings.verification_channel_permission_sync,
     });
   }
 
@@ -226,12 +214,37 @@ export class SetupProvisioningService {
     return null;
   }
 
+  private getOperationalRoleConflict(roleId: string | null, serverConfig: Server): string | null {
+    if (!roleId) {
+      return null;
+    }
+    const manualIntakeSettings = getManualIntakeSettings(serverConfig.settings);
+    if (roleId === manualIntakeSettings.roleId) {
+      return 'The case role must be separate from the configured manual-intake trigger role.';
+    }
+    const roleGateSettings = getRoleGateSettings(serverConfig.settings);
+    if (roleId === roleGateSettings.honeypotRoleId) {
+      return 'The case role must be separate from the configured honeypot trigger role.';
+    }
+    if (roleId === roleGateSettings.memberAccessRoleId) {
+      return 'The case role must be separate from the configured member-access role.';
+    }
+    if (roleId === serverConfig.admin_notification_role_id) {
+      return 'The case role must be separate from the configured admin-notification role.';
+    }
+    if (getCaseResponderSettings(serverConfig.settings).roleIds.includes(roleId)) {
+      return 'The case role must be separate from configured case-responder roles.';
+    }
+    return null;
+  }
+
   private async resolveCaseRoleCandidate(
     guild: Guild,
     explicitCaseRole: Role | null,
     explicitCaseRoleId: string | null,
     requestedRoleName: string | null,
-    createCaseRole: boolean
+    createCaseRole: boolean,
+    serverConfig: Server
   ): Promise<CaseRoleCandidate> {
     if (createCaseRole) {
       return {
@@ -251,8 +264,7 @@ export class SetupProvisioningService {
     }
 
     const roleName = requestedRoleName ?? DEFAULT_CASE_ROLE_NAME;
-    const serverConfig = await this.configService.getServerConfig(guild.id).catch(() => null);
-    if (serverConfig?.case_role_id) {
+    if (serverConfig.case_role_id) {
       const configuredRole = await this.fetchRole(guild, serverConfig.case_role_id);
       if (configuredRole && (!requestedRoleName || configuredRole.name === roleName)) {
         return { role: configuredRole, roleName: configuredRole.name, ambiguousRoleIds: [] };
@@ -274,7 +286,8 @@ export class SetupProvisioningService {
   private async resolveVerificationChannelCandidate(
     guild: Guild,
     explicitChannel: TextChannel | null,
-    explicitChannelId: string | null
+    explicitChannelId: string | null,
+    serverConfig: Server
   ): Promise<VerificationChannelCandidate> {
     if (explicitChannel) {
       return { channelId: explicitChannel.id, willSyncPermissions: true, ambiguousChannelIds: [] };
@@ -286,8 +299,7 @@ export class SetupProvisioningService {
         : { invalidDetail: 'The selected verification channel is not an available text channel.' };
     }
 
-    const serverConfig = await this.configService.getServerConfig(guild.id).catch(() => null);
-    if (serverConfig?.verification_channel_id) {
+    if (serverConfig.verification_channel_id) {
       const configuredChannel = await guild.channels
         .fetch(serverConfig.verification_channel_id)
         .catch(() => null);

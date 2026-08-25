@@ -205,6 +205,123 @@ describe('SetupProvisioningService (unit)', () => {
     expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      'member-access',
+      'member_access_role_id',
+      'The case role must be separate from the configured member-access role.',
+    ],
+    [
+      'case-responder',
+      'case_responder_role_ids',
+      'The case role must be separate from configured case-responder roles.',
+    ],
+  ] as const)(
+    'rejects the configured %s role as the case role',
+    async (_label, setting, detail) => {
+      const operationalRole = { id: '111111111111111111', name: 'Operational' };
+      const configService = {
+        getServerConfig: jest.fn().mockResolvedValue({
+          admin_channel_id: 'admin-channel-1',
+          admin_notification_role_id: null,
+          case_role_id: 'case-role-1',
+          verification_channel_id: 'verification-channel-1',
+          settings: {
+            [setting]:
+              setting === 'case_responder_role_ids' ? [operationalRole.id] : operationalRole.id,
+          },
+        }),
+      } as any;
+      const setupDiagnosticsService = { validateSetupCandidate: jest.fn() } as any;
+      const setupWorkflowService = { completeSetup: jest.fn() } as any;
+      const service = new SetupProvisioningService(
+        configService,
+        setupDiagnosticsService,
+        setupWorkflowService
+      );
+
+      await expect(
+        service.provision({
+          actorLabel: 'web administrator admin-1',
+          adminChannelId: 'admin-channel-1',
+          caseRole: operationalRole as any,
+          guild: { id: 'guild-1' } as any,
+        })
+      ).resolves.toEqual({ status: 'invalid_selection', detail });
+
+      expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();
+      expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects the configured admin-notification role as the case role', async () => {
+    const operationalRole = { id: '111111111111111111', name: 'Moderators' };
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        admin_channel_id: 'admin-channel-1',
+        admin_notification_role_id: operationalRole.id,
+        case_role_id: 'case-role-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    } as any;
+    const setupDiagnosticsService = { validateSetupCandidate: jest.fn() } as any;
+    const setupWorkflowService = { completeSetup: jest.fn() } as any;
+    const service = new SetupProvisioningService(
+      configService,
+      setupDiagnosticsService,
+      setupWorkflowService
+    );
+
+    await expect(
+      service.provision({
+        actorLabel: 'web administrator admin-1',
+        adminChannelId: 'admin-channel-1',
+        caseRole: operationalRole as any,
+        guild: { id: 'guild-1' } as any,
+      })
+    ).resolves.toEqual({
+      status: 'invalid_selection',
+      detail: 'The case role must be separate from the configured admin-notification role.',
+    });
+
+    expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();
+    expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
+  });
+
+  it('aborts before Discord mutations when the persisted configuration cannot be read', async () => {
+    const configService = {
+      getServerConfig: jest.fn().mockRejectedValue(new Error('database unavailable')),
+    } as any;
+    const setupDiagnosticsService = { validateSetupCandidate: jest.fn() } as any;
+    const setupWorkflowService = { completeSetup: jest.fn() } as any;
+    const guild = {
+      id: 'guild-1',
+      roles: { create: jest.fn() },
+    } as any;
+    const service = new SetupProvisioningService(
+      configService,
+      setupDiagnosticsService,
+      setupWorkflowService
+    );
+
+    await expect(
+      service.provision({
+        actorLabel: 'web administrator admin-1',
+        adminChannelId: 'admin-channel-1',
+        createCaseRole: true,
+        guild,
+      })
+    ).rejects.toThrow('database unavailable');
+
+    expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1', {
+      failOnReadError: true,
+    });
+    expect(guild.roles.create).not.toHaveBeenCalled();
+    expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();
+    expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
+  });
+
   it('rejects report instructions in the resolved verification channel', async () => {
     const caseRole = { id: 'case-role-1', name: 'Drasil Case' };
     const configService = {

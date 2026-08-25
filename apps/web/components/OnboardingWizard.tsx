@@ -20,6 +20,7 @@ const VERIFICATION_PERMISSION_PREVIEW =
 export function OnboardingWizard({
   action,
   canApplySetup,
+  canPreserveProtectionModes,
   channels,
   checklist,
   durableRequest,
@@ -33,6 +34,7 @@ export function OnboardingWizard({
 }: {
   readonly action: InboxStateAction;
   readonly canApplySetup: boolean;
+  readonly canPreserveProtectionModes: boolean;
   readonly channels: readonly Option[];
   readonly checklist: readonly SetupChecklistItem[];
   readonly durableRequest: ModerationActionRequestSummary | null;
@@ -51,7 +53,6 @@ export function OnboardingWizard({
   const [submissionId] = useState(initialSubmissionId);
   const blockingIssues = checklist.filter((item) => item.status === 'error');
   const textChannels = channels.filter((channel) => channel.type === 0);
-  const canPreserveProtectionModes = initialValues.detectionResponseMode === '__preserve__';
   const update = <K extends keyof OnboardingWizardValues>(
     key: K,
     value: OnboardingWizardValues[K]

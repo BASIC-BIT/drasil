@@ -86,6 +86,7 @@ export default async function OnboardingPage({
         <OnboardingWizard
           action={action}
           canApplySetup={canApplySetup}
+          canPreserveProtectionModes={initialState.canPreserveProtectionModes}
           channels={selectableChannels.map((channel) => ({
             id: channel.id,
             name: channel.name,

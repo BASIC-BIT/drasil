@@ -76,6 +76,20 @@ describe('ConfigService (unit)', () => {
     expect(getVerificationThreadAnalysisSettings(config.settings).enabled).toBe(true);
   });
 
+  it('propagates repository read failures when a confirmed read is required', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const service = new ConfigService(serverRepository, buildClient());
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    jest
+      .spyOn(serverRepository, 'findByGuildId')
+      .mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(
+      service.getServerConfig('guild-strict-read', { failOnReadError: true })
+    ).rejects.toThrow('database unavailable');
+  });
+
   it('returns default heuristic settings when guild is not cached', () => {
     const serverRepository = new InMemoryServerRepository();
     const discordClient = buildClient();
@@ -228,6 +242,37 @@ describe('ConfigService (unit)', () => {
     expect(updated.settings.detection_response_mode).toBe('notify_only');
     expect(updated.settings.min_confidence_threshold).toBe(80);
     expect(updated.heuristic_message_threshold).toBe(2);
+  });
+
+  it('atomically merges settings against repository state instead of a fresh cache entry', async () => {
+    process.env.DATABASE_URL = 'in-memory';
+    const serverRepository = new InMemoryServerRepository();
+    const service = new ConfigService(serverRepository, buildClient());
+
+    await serverRepository.upsertByGuildId('guild-settings-merge', {
+      settings: {
+        report_ai_triage_enabled: true,
+        report_instructions_channel_id: 'report-channel-1',
+        report_instructions_message_id: 'report-message-1',
+      },
+    });
+    await service.getServerConfig('guild-settings-merge');
+    await serverRepository.updateSettings('guild-settings-merge', {
+      report_ai_triage_enabled: false,
+      report_ai_max_action: 'hints',
+    });
+
+    const updated = await service.updateServerSettings('guild-settings-merge', {
+      report_instructions_channel_id: null,
+      report_instructions_message_id: null,
+    });
+
+    expect(updated.settings).toMatchObject({
+      report_ai_triage_enabled: false,
+      report_ai_max_action: 'hints',
+      report_instructions_channel_id: null,
+      report_instructions_message_id: null,
+    });
   });
 
   it('refreshes stale cached server configs so web-updated settings propagate', async () => {

@@ -103,6 +103,10 @@ export interface HeuristicSettingsUpdate {
   suspiciousKeywords?: string[];
 }
 
+export interface GetServerConfigOptions {
+  readonly failOnReadError?: boolean;
+}
+
 const CachedServerHeuristicSettingsSchema = z.object({
   heuristic_message_threshold: z.number().int().min(1).max(MAX_HEURISTIC_MESSAGE_THRESHOLD),
   heuristic_message_timeframe_seconds: z.number().int().min(1).max(MAX_HEURISTIC_TIMEFRAME_SECONDS),
@@ -139,7 +143,7 @@ export interface IConfigService {
    * @param guildId The Discord guild ID
    * @returns The server configuration
    */
-  getServerConfig(guildId: string): Promise<Server>;
+  getServerConfig(guildId: string, options?: GetServerConfigOptions): Promise<Server>;
 
   /**
    * Get a server configuration from in-memory cache only.
@@ -540,7 +544,7 @@ export class ConfigService implements IConfigService {
    * @param guildId The Discord guild ID
    * @returns The server configuration
    */
-  async getServerConfig(guildId: string): Promise<Server> {
+  async getServerConfig(guildId: string, options: GetServerConfigOptions = {}): Promise<Server> {
     const cachedServer = this.serverCache.get(guildId);
     if (cachedServer && this.isServerConfigCacheFresh(guildId)) {
       return cachedServer;
@@ -582,6 +586,11 @@ export class ConfigService implements IConfigService {
         console.error(`Failed to get server configuration for guild ${guildId}:`, error);
         if (cachedServer) {
           return cachedServer;
+        }
+        if (options.failOnReadError) {
+          throw error instanceof Error
+            ? error
+            : new Error(`Failed to get server configuration for guild ${guildId}`);
         }
       }
     }
@@ -662,6 +671,26 @@ export class ConfigService implements IConfigService {
    * @returns The updated server configuration
    */
   async updateServerSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server> {
+    if (process.env.DATABASE_URL) {
+      try {
+        let server = await this.serverRepository.updateSettings(guildId, settings);
+        if (!server) {
+          await this.getServerConfig(guildId, { failOnReadError: true });
+          server = await this.serverRepository.updateSettings(guildId, settings);
+        }
+        if (!server) {
+          throw new Error(`Server configuration does not exist for guild ${guildId}`);
+        }
+        this.cacheServerConfig(server);
+        return server;
+      } catch (error) {
+        console.error(`Failed to update server settings for guild ${guildId}:`, error);
+        throw error instanceof Error
+          ? error
+          : new Error(`Failed to update server settings for guild ${guildId}`);
+      }
+    }
+
     const currentConfig = await this.getServerConfig(guildId);
     const updatedSettings: ServerSettings = {
       ...currentConfig.settings,

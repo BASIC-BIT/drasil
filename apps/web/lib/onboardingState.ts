@@ -18,6 +18,7 @@ export interface OnboardingWizardValues {
 }
 
 export interface OnboardingInitialState {
+  readonly canPreserveProtectionModes: boolean;
   readonly submissionId: string;
   readonly values: OnboardingWizardValues;
 }
@@ -146,6 +147,7 @@ export function resolveOnboardingInitialState(
   const persisted = persistedValues(server);
 
   return {
+    canPreserveProtectionModes: persisted.detectionResponseMode === '__preserve__',
     submissionId: valueOr(input?.submissionId, durableRequest?.id ?? fallbackSubmissionId),
     values: normalizeResourceSelections(
       input ? resumedValues(input, persisted) : persisted,

@@ -231,34 +231,31 @@ export class ServerRepository implements IServerRepository {
    */
   async updateSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server | null> {
     try {
-      const server = await this.findByGuildId(guildId);
-      if (!server) return null;
-
-      // Merge existing settings with new ones
-      // server.settings is guaranteed to be an object by the Server interface,
-      // so the `|| {}` fallback is unnecessary.
-      const currentSettings = server.settings as ServerSettings;
-      const updatedSettings = {
-        ...currentSettings,
-        ...settings,
-      };
-
-      const updatedServer = await this.prisma.servers.update({
-        where: { guild_id: guildId },
-        data: {
-          // Cast settings to unknown then JsonValue for Prisma input
-          settings: updatedSettings as unknown as Prisma.InputJsonValue,
-          updated_at: new Date(),
-        },
-      });
-
-      return this.toDomainServer(updatedServer);
+      const settingsPatch = JSON.stringify(settings);
+      const rows = await this.prisma.$queryRaw<ServerDatabaseRecord[]>(Prisma.sql`
+        update servers
+        set
+          settings = coalesce(settings, '{}'::jsonb) || ${settingsPatch}::jsonb,
+          updated_at = now()
+        where guild_id = ${guildId}
+        returning
+          guild_id,
+          case_role_id,
+          admin_channel_id,
+          verification_channel_id,
+          admin_notification_role_id,
+          heuristic_message_threshold,
+          heuristic_message_timeframe_seconds,
+          heuristic_suspicious_keywords,
+          created_at,
+          updated_at,
+          updated_by,
+          settings,
+          is_active
+      `);
+      const server = rows.at(0);
+      return server ? this.toDomainServer(server) : null;
     } catch (error) {
-      // Handle potential "not found" error during update (P2025)
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-        console.warn(`Attempted to update settings for non-existent server: ${guildId}`);
-        return null;
-      }
       this.handleError(error, 'updateSettings');
     }
   }

@@ -64,4 +64,26 @@ describeIntegration('ServerRepository setup configuration (integration)', () => 
 
     expect(updated.is_active).toBe(false);
   });
+
+  it('atomically merges settings-only updates without replacing unrelated keys', async () => {
+    await repository.upsertByGuildId('guild-settings-only-merge', {
+      settings: {
+        report_ai_triage_enabled: false,
+        report_ai_max_action: 'hints',
+        report_instructions_channel_id: 'report-channel-1',
+      },
+    });
+
+    const updated = await repository.updateSettings('guild-settings-only-merge', {
+      report_instructions_channel_id: null,
+      report_instructions_message_id: null,
+    });
+
+    expect(updated?.settings).toMatchObject({
+      report_ai_triage_enabled: false,
+      report_ai_max_action: 'hints',
+      report_instructions_channel_id: null,
+      report_instructions_message_id: null,
+    });
+  });
 });

@@ -76,6 +76,7 @@ describe('resolveOnboardingInitialState', () => {
           availableResources
         )
       ).toEqual({
+        canPreserveProtectionModes: false,
         submissionId: 'submission-1',
         values: {
           adminChannelId: 'admin-new',
@@ -118,8 +119,33 @@ describe('resolveOnboardingInitialState', () => {
 
     expect(
       resolveOnboardingInitialState(serverWithOverrides, null, 'new-submission', availableResources)
-        .values.detectionResponseMode
-    ).toBe('__preserve__');
+    ).toMatchObject({
+      canPreserveProtectionModes: true,
+      values: { detectionResponseMode: '__preserve__' },
+    });
+  });
+
+  it('keeps the preserve option available when a failed request selected a unified mode', () => {
+    const serverWithOverrides: SetupServerRecord = {
+      ...server,
+      settings: {
+        ...server.settings,
+        join_detection_response_mode: 'off',
+        message_detection_response_mode: 'notify_only',
+      },
+    };
+
+    expect(
+      resolveOnboardingInitialState(
+        serverWithOverrides,
+        setupRequest('failed'),
+        'new-submission',
+        availableResources
+      )
+    ).toMatchObject({
+      canPreserveProtectionModes: true,
+      values: { detectionResponseMode: 'record_only' },
+    });
   });
 
   it('replaces deleted persisted resources with safe wizard defaults', () => {
