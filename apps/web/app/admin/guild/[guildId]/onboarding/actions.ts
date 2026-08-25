@@ -44,9 +44,11 @@ export async function completeOnboarding(
     const selectedCaseRole = read(formData, 'caseRoleId');
     const selectedVerificationChannel = read(formData, 'verificationChannelId');
     const selectedReportChannel = read(formData, 'reportInstructionsChannelId');
-    const detectionResponseMode = detectionResponseModeSchema.parse(
-      read(formData, 'detectionResponseMode') ?? 'notify_only'
-    );
+    const selectedDetectionResponseMode = read(formData, 'detectionResponseMode');
+    const detectionResponseMode =
+      selectedDetectionResponseMode === '__preserve__'
+        ? undefined
+        : detectionResponseModeSchema.parse(selectedDetectionResponseMode ?? 'notify_only');
 
     const receipt = await queueCompleteSetupVerificationRequestWithReceipt({
       actorId: session.userId,

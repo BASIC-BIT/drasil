@@ -1531,19 +1531,25 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     let reportInstructionsAction: string | null = null;
     let reportInstructionsMessageId: string | null = null;
     let reportInstructionsError: string | null = null;
-    if (reportInstructionsChannelId) {
+    if (reportInstructionsChannelId || isOnboardingWizard) {
       try {
-        const reportChannel = await this.fetchRequestTextChannel(
-          request.server_id,
-          reportInstructionsChannelId,
-          'Report instructions channel'
-        );
-        const reportInstructionsResult = await new ReportInstructionsManager(
+        const reportInstructionsManager = new ReportInstructionsManager(
           this.client,
           this.configService
-        ).upsertReportInstructionsMessage(request.server_id, reportChannel);
+        );
+        const reportInstructionsResult = reportInstructionsChannelId
+          ? await reportInstructionsManager.upsertReportInstructionsMessage(
+              request.server_id,
+              await this.fetchRequestTextChannel(
+                request.server_id,
+                reportInstructionsChannelId,
+                'Report instructions channel'
+              )
+            )
+          : await reportInstructionsManager.clearReportInstructions(request.server_id);
         reportInstructionsAction = reportInstructionsResult.action;
-        reportInstructionsMessageId = reportInstructionsResult.messageId;
+        reportInstructionsMessageId =
+          'messageId' in reportInstructionsResult ? reportInstructionsResult.messageId : null;
       } catch (error) {
         reportInstructionsError = this.errorMessage(error);
       }

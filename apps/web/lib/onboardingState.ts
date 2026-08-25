@@ -14,7 +14,7 @@ export interface OnboardingWizardValues {
   readonly caseRoleName: string;
   readonly verificationChannelId: string;
   readonly reportInstructionsChannelId: string;
-  readonly detectionResponseMode: DetectionResponseMode;
+  readonly detectionResponseMode: DetectionResponseMode | '__preserve__';
 }
 
 export interface OnboardingInitialState {
@@ -76,6 +76,10 @@ function persistedValues(server: SetupServerRecord | null): OnboardingWizardValu
     };
   }
 
+  const hasSurfaceSpecificProtectionMode =
+    server.settings.message_detection_response_mode != null ||
+    server.settings.join_detection_response_mode != null;
+
   return {
     adminChannelId: valueOr(server.admin_channel_id, ''),
     caseRoleId: valueOr(server.case_role_id, '__create__'),
@@ -85,7 +89,9 @@ function persistedValues(server: SetupServerRecord | null): OnboardingWizardValu
       server.settings.report_instructions_channel_id,
       '__none__'
     ),
-    detectionResponseMode: valueOr(server.settings.detection_response_mode, 'notify_only'),
+    detectionResponseMode: hasSurfaceSpecificProtectionMode
+      ? '__preserve__'
+      : valueOr(server.settings.detection_response_mode, 'notify_only'),
   };
 }
 

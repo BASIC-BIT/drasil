@@ -2,17 +2,10 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import type {
-  DetectionResponseMode,
-  SetupChecklistItem,
-  SetupReadinessStatus,
-} from '@drasil/contracts';
+import type { SetupChecklistItem, SetupReadinessStatus } from '@drasil/contracts';
 import { InboxActionForm, type InboxStateAction } from './inbox/InboxActionForm';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
-import {
-  resolveOnboardingInitialStep,
-  type OnboardingWizardValues,
-} from '@/lib/onboardingState';
+import { resolveOnboardingInitialStep, type OnboardingWizardValues } from '@/lib/onboardingState';
 
 interface Option {
   readonly id: string;
@@ -58,6 +51,7 @@ export function OnboardingWizard({
   const [submissionId] = useState(initialSubmissionId);
   const blockingIssues = checklist.filter((item) => item.status === 'error');
   const textChannels = channels.filter((channel) => channel.type === 0);
+  const canPreserveProtectionModes = initialValues.detectionResponseMode === '__preserve__';
   const update = <K extends keyof OnboardingWizardValues>(
     key: K,
     value: OnboardingWizardValues[K]
@@ -223,10 +217,16 @@ export function OnboardingWizard({
           </small>
           <select
             onChange={(event) =>
-              update('detectionResponseMode', event.target.value as DetectionResponseMode)
+              update(
+                'detectionResponseMode',
+                event.target.value as OnboardingWizardValues['detectionResponseMode']
+              )
             }
             value={values.detectionResponseMode}
           >
+            {canPreserveProtectionModes ? (
+              <option value="__preserve__">Keep current per-event settings</option>
+            ) : null}
             <option value="notify_only">Notify only (recommended)</option>
             <option value="restrict">Restrict automatically</option>
             <option value="record_only">Record only</option>
@@ -280,7 +280,11 @@ export function OnboardingWizard({
             </div>
             <div>
               <dt>Protection</dt>
-              <dd>{values.detectionResponseMode.replace(/_/g, ' ')}</dd>
+              <dd>
+                {values.detectionResponseMode === '__preserve__'
+                  ? 'Keep current per-event settings'
+                  : values.detectionResponseMode.replace(/_/g, ' ')}
+              </dd>
             </div>
           </dl>
           {readiness === 'ready' ? (

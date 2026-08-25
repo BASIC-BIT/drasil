@@ -106,6 +106,22 @@ describe('resolveOnboardingInitialState', () => {
     });
   });
 
+  it('preserves surface-specific protection modes during setup repair', () => {
+    const serverWithOverrides: SetupServerRecord = {
+      ...server,
+      settings: {
+        ...server.settings,
+        join_detection_response_mode: 'off',
+        message_detection_response_mode: 'notify_only',
+      },
+    };
+
+    expect(
+      resolveOnboardingInitialState(serverWithOverrides, null, 'new-submission', availableResources)
+        .values.detectionResponseMode
+    ).toBe('__preserve__');
+  });
+
   it('replaces deleted persisted resources with safe wizard defaults', () => {
     expect(
       resolveOnboardingInitialState(server, null, 'new-submission', {

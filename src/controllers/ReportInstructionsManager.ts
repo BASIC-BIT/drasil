@@ -64,6 +64,22 @@ export class ReportInstructionsManager {
     return { action, messageId };
   }
 
+  public async clearReportInstructions(
+    guildId: string
+  ): Promise<{ action: 'cleared' | 'unchanged' }> {
+    const serverConfig = await this.configService.getServerConfig(guildId);
+    const existingChannelId = serverConfig.settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
+    const existingMessageId = serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
+
+    await this.deleteStaleReportInstructionsMessage(existingChannelId, existingMessageId);
+    await this.configService.updateServerSettings(guildId, {
+      [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: null,
+      [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: null,
+    });
+
+    return { action: existingChannelId || existingMessageId ? 'cleared' : 'unchanged' };
+  }
+
   private async findExistingReportInstructionsMessage(
     targetChannel: TextChannel
   ): Promise<Message | null> {

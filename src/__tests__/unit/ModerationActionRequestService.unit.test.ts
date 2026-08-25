@@ -577,12 +577,17 @@ describe('ModerationActionRequestService', () => {
         fetch: jest.fn(async (id: string) => (id === sourceMessage.id ? sourceMessage : null)),
       },
     };
-    const reportInstructionsMessage = { id: 'report-message-1' };
+    const reportInstructionsMessage = {
+      delete: jest.fn(async () => undefined),
+      id: 'report-message-1',
+    };
     const reportInstructionsChannel = {
       guildId: 'guild-1',
       id: 'report-channel-1',
       messages: {
-        fetch: jest.fn(async () => null),
+        fetch: jest.fn(async (id: string) =>
+          id === reportInstructionsMessage.id ? reportInstructionsMessage : null
+        ),
       },
       send: jest.fn(async () => reportInstructionsMessage),
       type: ChannelType.GuildText,
@@ -2184,6 +2189,42 @@ describe('ModerationActionRequestService', () => {
       'guild-1',
       'setup wizard blocked',
       expect.anything()
+    );
+  });
+
+  it('clears existing report instructions when the onboarding wizard skips reports', async () => {
+    const skipReportsRequest: ModerationActionRequest = {
+      ...completeSetupVerificationRequest,
+      id: 'setup-skip-reports-request-1',
+      idempotency_key: 'web:setup:complete_setup_verification:guild-1:skip-reports-1',
+      metadata: {
+        admin_channel_id: 'admin-channel-1',
+        case_role_id: 'role-1',
+        onboarding_wizard: true,
+        report_instructions_channel_id: null,
+      },
+    };
+    const { configService, reportInstructionsMessage, repository, service } = buildService(
+      [skipReportsRequest],
+      {
+        report_instructions_channel_id: 'report-channel-1',
+        report_instructions_message_id: 'report-message-1',
+      }
+    );
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(reportInstructionsMessage.delete).toHaveBeenCalled();
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      report_instructions_channel_id: null,
+      report_instructions_message_id: null,
+    });
+    expect(repository.completed[0]?.result).toEqual(
+      expect.objectContaining({
+        report_instructions_action: 'cleared',
+        report_instructions_channel_id: null,
+        report_instructions_message_id: null,
+      })
     );
   });
 

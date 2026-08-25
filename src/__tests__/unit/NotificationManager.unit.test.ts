@@ -1741,4 +1741,34 @@ describe('NotificationManager (unit)', () => {
     );
     expect(createChannel).not.toHaveBeenCalled();
   });
+
+  it('treats a deleted previous verification channel as already restored', async () => {
+    const guild = {
+      channels: {
+        fetch: jest.fn().mockRejectedValue({ code: 10003, message: 'Unknown Channel' }),
+      },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await expect(
+      manager.restoreVerificationChannelManagedPermissions(guild, {
+        channel_id: 'deleted-channel',
+        managed_overwrites: [],
+      })
+    ).resolves.toBe(true);
+  });
+
+  it('blocks replacement when fetching the previous verification channel fails', async () => {
+    const guild = {
+      channels: { fetch: jest.fn().mockRejectedValue(new Error('Discord unavailable')) },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await expect(
+      manager.restoreVerificationChannelManagedPermissions(guild, {
+        channel_id: 'old-channel',
+        managed_overwrites: [],
+      })
+    ).resolves.toBe(false);
+  });
 });

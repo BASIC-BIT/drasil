@@ -85,4 +85,23 @@ describe('completeOnboarding', () => {
     ).rejects.toThrow('/api/auth/discord?returnTo=/admin/guild/guild-1/onboarding');
     expect(mocks.queueSetup).not.toHaveBeenCalled();
   });
+
+  it('omits the unified protection patch when preserving per-event settings', async () => {
+    const formData = new FormData();
+    formData.set('adminChannelId', 'admin-channel-1');
+    formData.set('caseRoleId', 'case-role-1');
+    formData.set('verificationChannelId', 'verification-channel-1');
+    formData.set('reportInstructionsChannelId', '__none__');
+    formData.set('detectionResponseMode', '__preserve__');
+
+    await completeOnboarding(
+      'guild-1',
+      { message: null, requestId: null, status: 'idle' },
+      formData
+    );
+
+    expect(mocks.queueSetup).toHaveBeenCalledWith(
+      expect.objectContaining({ detectionResponseMode: undefined })
+    );
+  });
 });

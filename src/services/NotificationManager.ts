@@ -43,6 +43,7 @@ import {
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 
 const VERIFICATION_CHANNEL_NAME = 'verification';
+const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10003;
 const CASE_ROLE_VERIFICATION_ALLOW_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.ReadMessageHistory,
@@ -986,8 +987,16 @@ export class NotificationManager implements INotificationManager {
     onPermissionsUpdated?: (snapshot: VerificationPermissionSnapshot) => void
   ): Promise<boolean> {
     try {
-      const channel = await guild.channels.fetch(state.channel_id).catch(() => null);
-      if (channel?.type !== ChannelType.GuildText) {
+      const channel = await guild.channels.fetch(state.channel_id).catch((error: unknown) => {
+        if (this.isUnknownChannelError(error)) {
+          return null;
+        }
+        throw error;
+      });
+      if (!channel) {
+        return true;
+      }
+      if (channel.type !== ChannelType.GuildText) {
         return false;
       }
       const snapshot = this.snapshotPermissionOverwrites(channel);
@@ -1026,6 +1035,15 @@ export class NotificationManager implements INotificationManager {
         deny: existing.deny.bitfield,
       })),
     };
+  }
+
+  private isUnknownChannelError(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === DISCORD_UNKNOWN_CHANNEL_ERROR_CODE
+    );
   }
 
   private buildVerificationChannelPermissionOverwrites(

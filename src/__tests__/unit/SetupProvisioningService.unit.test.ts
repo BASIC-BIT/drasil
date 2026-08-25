@@ -248,4 +248,48 @@ describe('SetupProvisioningService (unit)', () => {
     expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();
     expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
   });
+
+  it('rejects the admin alert channel as the verification channel', async () => {
+    const caseRole = { id: 'case-role-1', name: 'Drasil Case' };
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        admin_channel_id: 'old-admin-channel',
+        case_role_id: caseRole.id,
+        verification_channel_id: 'old-verification-channel',
+        settings: {},
+      }),
+    } as any;
+    const setupDiagnosticsService = { validateSetupCandidate: jest.fn() } as any;
+    const setupWorkflowService = { completeSetup: jest.fn() } as any;
+    const guild = {
+      id: 'guild-1',
+      channels: {
+        fetch: jest.fn().mockResolvedValue({
+          id: 'shared-channel',
+          type: 0,
+        }),
+      },
+    } as any;
+    const service = new SetupProvisioningService(
+      configService,
+      setupDiagnosticsService,
+      setupWorkflowService
+    );
+
+    await expect(
+      service.provision({
+        actorLabel: 'web administrator admin-1',
+        adminChannelId: 'shared-channel',
+        caseRole: caseRole as any,
+        guild,
+        verificationChannelId: 'shared-channel',
+      })
+    ).resolves.toEqual({
+      status: 'invalid_selection',
+      detail: 'The admin alert channel must be separate from the verification channel.',
+    });
+
+    expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();
+    expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
+  });
 });

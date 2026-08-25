@@ -153,6 +153,15 @@ export class SetupProvisioningService {
       };
     }
     if (
+      verificationCandidate.channelId &&
+      input.adminChannelId === verificationCandidate.channelId
+    ) {
+      return {
+        status: 'invalid_selection',
+        detail: 'The admin alert channel must be separate from the verification channel.',
+      };
+    }
+    if (
       input.reportInstructionsChannelId &&
       input.reportInstructionsChannelId === verificationCandidate.channelId
     ) {
