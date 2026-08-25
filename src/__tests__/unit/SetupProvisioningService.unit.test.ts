@@ -1,7 +1,7 @@
 import { SetupProvisioningService } from '../../services/SetupProvisioningService';
 
 describe('SetupProvisioningService (unit)', () => {
-  it('preserves the configured protection mode when rerunning incomplete setup', async () => {
+  it('leaves configured protection settings untouched when rerunning incomplete setup', async () => {
     const caseRole = { id: 'case-role', name: 'Drasil Case' };
     const verificationChannel = { id: 'verification-channel-1' };
     const configService = {
@@ -40,7 +40,7 @@ describe('SetupProvisioningService (unit)', () => {
     ).resolves.toEqual({ status: 'completed' });
 
     expect(setupWorkflowService.completeSetup).toHaveBeenCalledWith(
-      expect.objectContaining({ detectionResponseMode: 'restrict' })
+      expect.objectContaining({ detectionResponseMode: undefined })
     );
   });
 

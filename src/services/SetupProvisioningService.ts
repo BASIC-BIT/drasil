@@ -61,14 +61,15 @@ export class SetupProvisioningService {
     const existingConfig = await this.configService
       .getServerConfig(input.guild.id)
       .catch(() => null);
+    const coreSetupIncomplete =
+      !existingConfig?.case_role_id ||
+      !existingConfig.admin_channel_id ||
+      !existingConfig.verification_channel_id;
     const detectionResponseMode =
       input.detectionResponseMode ??
-      existingConfig?.settings.detection_response_mode ??
-      (existingConfig?.case_role_id &&
-      existingConfig.admin_channel_id &&
-      existingConfig.verification_channel_id
-        ? undefined
-        : 'notify_only');
+      (!existingConfig?.settings.detection_response_mode && coreSetupIncomplete
+        ? 'notify_only'
+        : undefined);
     const caseRoleCandidate = await this.resolveCaseRoleCandidate(
       input.guild,
       input.caseRole ?? null,
