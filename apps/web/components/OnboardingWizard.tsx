@@ -19,6 +19,7 @@ const VERIFICATION_PERMISSION_PREVIEW =
 
 export function OnboardingWizard({
   action,
+  adminChannels,
   canApplySetup,
   canPreserveProtectionModes,
   channels,
@@ -33,6 +34,7 @@ export function OnboardingWizard({
   roles,
 }: {
   readonly action: InboxStateAction;
+  readonly adminChannels: readonly Option[];
   readonly canApplySetup: boolean;
   readonly canPreserveProtectionModes: boolean;
   readonly channels: readonly Option[];
@@ -130,7 +132,7 @@ export function OnboardingWizard({
             value={values.adminChannelId}
           >
             <option value="">Choose a text channel</option>
-            {textChannels.map((channel) => (
+            {adminChannels.map((channel) => (
               <option key={channel.id} value={channel.id}>
                 #{channel.name}
               </option>

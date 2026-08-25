@@ -23,9 +23,13 @@ describe('SetupDiagnosticsService (unit)', () => {
     const channel = {
       id: 'channel-1',
       type: ChannelType.GuildText,
-      permissionsFor: jest.fn().mockReturnValue({
-        has: jest.fn(overrides.channelHas ?? defaultChannelHas),
-      }),
+      permissionsFor: jest.fn((memberOrRole: unknown) => ({
+        has: jest.fn(
+          memberOrRole === botMember
+            ? (overrides.channelHas ?? defaultChannelHas)
+            : (permission: bigint) => permission !== PermissionFlagsBits.ViewChannel
+        ),
+      })),
     };
 
     return {
@@ -169,6 +173,32 @@ describe('SetupDiagnosticsService (unit)', () => {
       'error'
     );
     expect(report.errorCount).toBe(1);
+  });
+
+  it('rejects a publicly visible admin notification channel candidate', async () => {
+    const { guild, channel, botMember } = buildConfiguredGuild();
+    channel.permissionsFor.mockImplementation((memberOrRole: unknown) => ({
+      has: jest.fn(
+        (permission: bigint) =>
+          memberOrRole === botMember || permission === PermissionFlagsBits.ViewChannel
+      ),
+    }));
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: null,
+    });
+
+    expect(report.issues).toContainEqual({
+      severity: 'error',
+      code: 'admin-channel-public-view',
+      message: 'The admin notification channel must not be visible to @everyone.',
+    });
   });
 
   it('requires thread-send permission in configured verification channels', async () => {

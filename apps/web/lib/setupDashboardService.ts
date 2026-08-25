@@ -63,6 +63,7 @@ interface CoreChannelChecklistArgs extends Omit<ChannelPermissionCheckArgs, 'cha
   readonly missingDetail: string;
   readonly successDetail: string;
   readonly permissionErrorDetail: string;
+  readonly requirePrivate?: boolean;
 }
 
 interface BuildChecklistArgs {
@@ -103,6 +104,18 @@ export function filterAssignableCaseRoles(
       !botRoleIdSet.has(role.id) &&
       parsePermissions(role.permissions) === 0n &&
       role.position < highestBotRolePosition
+  );
+}
+
+export function filterPrivateAdminChannels(
+  channels: readonly DiscordChannel[],
+  roles: readonly DiscordRole[],
+  guildId: string
+): DiscordChannel[] {
+  return channels.filter(
+    (channel) =>
+      channel.type === GUILD_TEXT_CHANNEL_TYPE &&
+      !isChannelVisibleToEveryone(channel, roles, guildId)
   );
 }
 
@@ -171,6 +184,22 @@ function hasRequiredChannelPermissions(args: ChannelPermissionCheckArgs) {
   return args.required.every((permission) => hasPermission(channelPermissions, permission));
 }
 
+function isChannelVisibleToEveryone(
+  channel: DiscordChannel,
+  roles: readonly DiscordRole[],
+  guildId: string
+): boolean {
+  const everyonePermissions = computeGuildPermissions({ guildId, roles, memberRoleIds: [] });
+  const channelPermissions = computeChannelPermissions({
+    guildId,
+    userId: '',
+    guildPermissions: everyonePermissions,
+    memberRoleIds: [],
+    overwrites: channel.permission_overwrites ?? [],
+  });
+  return hasPermission(channelPermissions, DISCORD_PERMISSIONS.ViewChannel);
+}
+
 function addCoreChannelChecklistItem(args: CoreChannelChecklistArgs) {
   const { channel, checklist, key, label } = args;
   if (!channel) {
@@ -180,6 +209,17 @@ function addCoreChannelChecklistItem(args: CoreChannelChecklistArgs) {
   if (channel.type !== GUILD_TEXT_CHANNEL_TYPE) {
     checklist.push(
       item(key, label, 'error', `${formatChannelName(channel)} must be a standard text channel.`)
+    );
+    return;
+  }
+  if (args.requirePrivate && isChannelVisibleToEveryone(channel, args.roles, args.guildId)) {
+    checklist.push(
+      item(
+        key,
+        label,
+        'error',
+        `${formatChannelName(channel)} is visible to @everyone. Choose a private moderator channel.`
+      )
     );
     return;
   }
@@ -381,6 +421,7 @@ function buildChecklist(args: BuildChecklistArgs) {
     missingDetail: 'Choose a channel for moderator notifications.',
     successDetail: 'is reachable.',
     permissionErrorDetail: 'is missing required bot permissions.',
+    requirePrivate: true,
   });
 
   addCoreChannelChecklistItem({

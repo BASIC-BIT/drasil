@@ -4,7 +4,11 @@ import type { DiscordGuildResources, DiscordGuildSummary } from './discordApi';
 import { DiscordApiError } from './discordApi';
 import { DISCORD_PERMISSIONS } from './discordPermissions';
 import { fetchDiscordBotUser, fetchDiscordGuilds, fetchGuildResources } from './discordApi';
-import { filterAssignableCaseRoles, SetupDashboardService } from './setupDashboardService';
+import {
+  filterAssignableCaseRoles,
+  filterPrivateAdminChannels,
+  SetupDashboardService,
+} from './setupDashboardService';
 import type { SetupDataAdapter } from './setupDataAdapter';
 
 vi.mock('./discordApi', async (importOriginal) => ({
@@ -83,6 +87,36 @@ describe('SetupDashboardService', () => {
     expect(filterAssignableCaseRoles(roles, ['bot-role'], 'guild-1')).toEqual([
       expect.objectContaining({ id: 'assignable' }),
     ]);
+  });
+
+  it('offers only private standard text channels for admin alerts', () => {
+    const roles = [
+      {
+        id: 'guild-1',
+        name: '@everyone',
+        permissions: DISCORD_PERMISSIONS.ViewChannel.toString(),
+        position: 0,
+        managed: false,
+      },
+    ];
+    const privateDeny = DISCORD_PERMISSIONS.ViewChannel.toString();
+
+    expect(
+      filterPrivateAdminChannels(
+        [
+          { id: 'public', name: 'general', type: 0 },
+          {
+            id: 'private',
+            name: 'staff',
+            type: 0,
+            permission_overwrites: [{ id: 'guild-1', type: 0, allow: '0', deny: privateDeny }],
+          },
+          { id: 'forum', name: 'staff-forum', type: 15 },
+        ],
+        roles,
+        'guild-1'
+      )
+    ).toEqual([expect.objectContaining({ id: 'private' })]);
   });
 
   it('marks inactive server records as needing setup', async () => {

@@ -133,6 +133,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       ADMIN_CHANNEL_PERMISSIONS,
       issues
     );
+    await this.checkAdminChannelPrivateVisibility(guild, serverConfig.admin_channel_id, issues);
     await this.checkAdminNotificationRole(guild, botMember, serverConfig, issues);
     await this.checkConfiguredTextChannel(
       guild,
@@ -215,6 +216,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       ADMIN_CHANNEL_PERMISSIONS,
       issues
     );
+    await this.checkAdminChannelPrivateVisibility(guild, candidate.adminChannelId, issues);
     await this.checkVerificationChannelCandidate(guild, botMember, candidate, issues);
 
     if (candidate.reportInstructionsChannelId) {
@@ -265,6 +267,27 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         code: 'report-instructions-channel-public-view',
         message:
           'The report instructions channel must be visible to @everyone so members can read how to report concerns.',
+      });
+    }
+  }
+
+  private async checkAdminChannelPrivateVisibility(
+    guild: Guild,
+    channelId: string | null | undefined,
+    issues: SetupDiagnosticIssue[]
+  ): Promise<void> {
+    if (!channelId) {
+      return;
+    }
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    if (channel?.type !== ChannelType.GuildText) {
+      return;
+    }
+    if (channel.permissionsFor(guild.roles.everyone).has(PermissionFlagsBits.ViewChannel)) {
+      issues.push({
+        severity: 'error',
+        code: 'admin-channel-public-view',
+        message: 'The admin notification channel must not be visible to @everyone.',
       });
     }
   }

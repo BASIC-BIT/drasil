@@ -76,6 +76,25 @@ describe('ConfigService (unit)', () => {
     expect(getVerificationThreadAnalysisSettings(config.settings).enabled).toBe(true);
   });
 
+  it('retains cached configuration on a forced read when no database is configured', async () => {
+    delete process.env.DATABASE_URL;
+    const service = new ConfigService(new InMemoryServerRepository(), buildClient());
+    await service.updateServerConfig('guild-cache-source', {
+      admin_channel_id: 'admin-channel-1',
+      settings: { detection_response_mode: 'record_only' },
+    });
+
+    await expect(
+      service.getServerConfig('guild-cache-source', {
+        failOnReadError: true,
+        forceRefresh: true,
+      })
+    ).resolves.toMatchObject({
+      admin_channel_id: 'admin-channel-1',
+      settings: { detection_response_mode: 'record_only' },
+    });
+  });
+
   it('propagates repository read failures when a confirmed read is required', async () => {
     process.env.DATABASE_URL = 'in-memory';
     const serverRepository = new InMemoryServerRepository();

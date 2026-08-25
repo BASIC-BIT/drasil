@@ -28,6 +28,7 @@ const server: SetupServerRecord = {
 };
 
 const availableResources = {
+  adminChannelIds: ['admin-old', 'admin-new'],
   channelIds: ['admin-old', 'admin-new', 'verification-old', 'report-old'],
   roleIds: ['role-old'],
 };
@@ -151,6 +152,7 @@ describe('resolveOnboardingInitialState', () => {
   it('replaces deleted persisted resources with safe wizard defaults', () => {
     expect(
       resolveOnboardingInitialState(server, null, 'new-submission', {
+        adminChannelIds: [],
         channelIds: [],
         roleIds: [],
       }).values

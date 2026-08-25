@@ -550,6 +550,9 @@ export class ConfigService implements IConfigService {
     if (!options.forceRefresh && cachedServer && this.isServerConfigCacheFresh(guildId)) {
       return cachedServer;
     }
+    if (!process.env.DATABASE_URL && cachedServer) {
+      return cachedServer;
+    }
 
     if (process.env.DATABASE_URL) {
       try {

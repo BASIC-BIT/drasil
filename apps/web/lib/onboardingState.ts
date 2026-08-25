@@ -24,6 +24,7 @@ export interface OnboardingInitialState {
 }
 
 export interface OnboardingResourceOptions {
+  readonly adminChannelIds: readonly string[];
   readonly channelIds: readonly string[];
   readonly roleIds: readonly string[];
 }
@@ -115,11 +116,12 @@ function normalizeResourceSelections(
   options: OnboardingResourceOptions
 ): OnboardingWizardValues {
   const channelIds = new Set(options.channelIds);
+  const adminChannelIds = new Set(options.adminChannelIds);
   const roleIds = new Set(options.roleIds);
 
   return {
     ...values,
-    adminChannelId: channelIds.has(values.adminChannelId) ? values.adminChannelId : '',
+    adminChannelId: adminChannelIds.has(values.adminChannelId) ? values.adminChannelId : '',
     caseRoleId:
       values.caseRoleId === '__create__' || roleIds.has(values.caseRoleId)
         ? values.caseRoleId

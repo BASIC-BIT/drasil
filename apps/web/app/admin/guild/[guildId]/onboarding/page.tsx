@@ -12,6 +12,7 @@ import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import {
   createSetupDashboardService,
   filterAssignableCaseRoles,
+  filterPrivateAdminChannels,
 } from '@/lib/setupDashboardService';
 import {
   onboardingWizardStateKey,
@@ -59,8 +60,10 @@ export default async function OnboardingPage({
   );
   const server = dashboard.server;
   const selectableChannels = channels.filter((channel) => channel.type === 0);
+  const selectableAdminChannels = filterPrivateAdminChannels(channels, roles, guildId);
   const selectableRoles = filterAssignableCaseRoles(roles, botRoleIds, guildId);
   const initialState = resolveOnboardingInitialState(server, durableRequest, randomUUID(), {
+    adminChannelIds: selectableAdminChannels.map((channel) => channel.id),
     channelIds: selectableChannels.map((channel) => channel.id),
     roleIds: selectableRoles.map((role) => role.id),
   });
@@ -85,6 +88,11 @@ export default async function OnboardingPage({
       >
         <OnboardingWizard
           action={action}
+          adminChannels={selectableAdminChannels.map((channel) => ({
+            id: channel.id,
+            name: channel.name,
+            type: channel.type,
+          }))}
           canApplySetup={canApplySetup}
           canPreserveProtectionModes={initialState.canPreserveProtectionModes}
           channels={selectableChannels.map((channel) => ({
