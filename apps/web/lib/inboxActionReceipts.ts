@@ -1,6 +1,5 @@
 import type { ModerationInboxAction, ModerationInboxItem } from '@drasil/contracts';
 import type { ModerationActionRequestSummary } from './moderationActionRequestDataAdapter';
-import { inboxModerationActionRequestTypes } from './inboxActionRequestTypes';
 import type { ModerationActionRequestActionType } from './moderationActionRequestQueue';
 import type { MessageCleanupJobSummary } from '@drasil/contracts';
 
@@ -45,10 +44,6 @@ export function findAccountQuarantineActionRequests(
       ) ?? null,
   };
 }
-
-const inboxRequestTypes = new Set<ModerationActionRequestActionType>(
-  inboxModerationActionRequestTypes
-);
 
 function requestMatchesItem(
   request: ModerationActionRequestSummary,
@@ -110,11 +105,7 @@ export function findMessageCleanupActionRequest(
 export function hasActiveInboxActionRequests(
   requests: readonly ModerationActionRequestSummary[]
 ): boolean {
-  return requests.some(
-    (request) =>
-      inboxRequestTypes.has(request.actionType) &&
-      (request.status === 'queued' || request.status === 'processing')
-  );
+  return requests.some((request) => request.status === 'queued' || request.status === 'processing');
 }
 
 export function reconcileLocalInboxActionRequestIds(

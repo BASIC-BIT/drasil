@@ -57,6 +57,7 @@ describe('completeOnboarding', () => {
       adminChannelId: 'admin-channel-1',
       caseRoleId: null,
       caseRoleName: 'Drasil Case',
+      createCaseRole: true,
       detectionResponseMode: 'notify_only',
       guildId: 'guild-1',
       onboardingWizard: true,

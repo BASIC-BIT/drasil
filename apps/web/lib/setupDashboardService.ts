@@ -40,6 +40,7 @@ export interface SetupDashboardContext {
   readonly dashboard: SetupDashboard;
   readonly channels: readonly DiscordChannel[];
   readonly roles: readonly DiscordRole[];
+  readonly botRoleIds: readonly string[];
   readonly canApplySetup: boolean;
 }
 
@@ -79,6 +80,25 @@ interface GuildPermissionChecklistArgs {
 const GUILD_TEXT_CHANNEL_TYPE = 0;
 const TEXT_CHANNEL_TYPES = new Set([GUILD_TEXT_CHANNEL_TYPE, 5, 15]);
 const GUILD_READINESS_CONCURRENCY = 3;
+
+export function filterAssignableCaseRoles(
+  roles: readonly DiscordRole[],
+  botRoleIds: readonly string[],
+  guildId: string
+): DiscordRole[] {
+  const botRoleIdSet = new Set(botRoleIds);
+  const highestBotRolePosition = roles
+    .filter((role) => botRoleIdSet.has(role.id))
+    .reduce((highest, role) => Math.max(highest, role.position), -1);
+
+  return roles.filter(
+    (role) =>
+      role.id !== guildId &&
+      !role.managed &&
+      !botRoleIdSet.has(role.id) &&
+      role.position < highestBotRolePosition
+  );
+}
 
 async function mapWithConcurrency<T, U>(
   values: readonly T[],
@@ -564,6 +584,7 @@ export class SetupDashboardService {
         TEXT_CHANNEL_TYPES.has(channel.type)
       ),
       roles: resources?.roles ?? [],
+      botRoleIds: resources?.botMember.roles ?? [],
     };
   }
 

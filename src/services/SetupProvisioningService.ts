@@ -29,6 +29,7 @@ export interface ProvisionSetupInput {
   readonly caseRole?: Role | null;
   readonly caseRoleId?: string | null;
   readonly caseRoleName?: string | null;
+  readonly createCaseRole?: boolean;
   readonly verificationChannelId?: string | null;
   readonly verificationChannel?: TextChannel | null;
   readonly reportInstructionsChannelId?: string | null;
@@ -71,7 +72,8 @@ export class SetupProvisioningService {
       input.guild,
       input.caseRole ?? null,
       input.caseRoleId ?? null,
-      input.caseRoleName?.trim() || null
+      input.caseRoleName?.trim() || null,
+      input.createCaseRole === true
     );
     if ('invalidDetail' in caseRoleCandidate) {
       return { status: 'invalid_selection', detail: caseRoleCandidate.invalidDetail };
@@ -156,8 +158,16 @@ export class SetupProvisioningService {
     guild: Guild,
     explicitCaseRole: Role | null,
     explicitCaseRoleId: string | null,
-    requestedRoleName: string | null
+    requestedRoleName: string | null,
+    createCaseRole: boolean
   ): Promise<CaseRoleCandidate> {
+    if (createCaseRole) {
+      return {
+        role: null,
+        roleName: requestedRoleName ?? DEFAULT_CASE_ROLE_NAME,
+        ambiguousRoleIds: [],
+      };
+    }
     if (explicitCaseRole) {
       return { role: explicitCaseRole, roleName: explicitCaseRole.name, ambiguousRoleIds: [] };
     }

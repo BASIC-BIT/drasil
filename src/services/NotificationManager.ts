@@ -41,6 +41,16 @@ import {
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 
 const VERIFICATION_CHANNEL_NAME = 'verification';
+const CASE_ROLE_VERIFICATION_ALLOW_PERMISSIONS = [
+  PermissionFlagsBits.ViewChannel,
+  PermissionFlagsBits.ReadMessageHistory,
+  PermissionFlagsBits.SendMessagesInThreads,
+] as const;
+const CASE_ROLE_VERIFICATION_DENY_PERMISSIONS = [
+  PermissionFlagsBits.SendMessages,
+  PermissionFlagsBits.CreatePublicThreads,
+  PermissionFlagsBits.CreatePrivateThreads,
+] as const;
 const DISCORD_MESSAGE_CONTENT_MAX_LENGTH = 2000;
 const MIRRORED_THREAD_MESSAGE_CONTENT_MAX_LENGTH = 1200;
 const MIRRORED_THREAD_MESSAGE_ATTACHMENT_LIMIT = 5;
@@ -867,9 +877,16 @@ export class NotificationManager implements INotificationManager {
       );
       if (configuredVerificationChannel) {
         const snapshot = this.snapshotPermissionOverwrites(configuredVerificationChannel);
+        const previousCaseRoleId =
+          (await this.configService.getServerConfig(guild.id)).case_role_id ?? null;
         onPermissionsUpdated?.(snapshot);
         await configuredVerificationChannel.permissionOverwrites.set(
-          this.mergeVerificationChannelPermissionOverwrites(snapshot, permissionOverwrites),
+          this.mergeVerificationChannelPermissionOverwrites(
+            snapshot,
+            permissionOverwrites,
+            previousCaseRoleId,
+            caseRoleId
+          ),
           'Sync Drasil verification channel permissions'
         );
 
@@ -973,16 +990,8 @@ export class NotificationManager implements INotificationManager {
       // Case role - can use its private thread without posting in the shared parent channel.
       {
         id: caseRoleId,
-        allow: [
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.ReadMessageHistory, // TODO: Check if users need to be granted this to see history of private thread
-          PermissionFlagsBits.SendMessagesInThreads,
-        ],
-        deny: [
-          PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.CreatePublicThreads,
-          PermissionFlagsBits.CreatePrivateThreads,
-        ],
+        allow: CASE_ROLE_VERIFICATION_ALLOW_PERMISSIONS,
+        deny: CASE_ROLE_VERIFICATION_DENY_PERMISSIONS,
       },
     ];
 
@@ -1025,18 +1034,26 @@ export class NotificationManager implements INotificationManager {
 
   private mergeVerificationChannelPermissionOverwrites(
     snapshot: VerificationPermissionSnapshot,
-    desired: readonly VerificationPermissionOverwrite[]
+    desired: readonly VerificationPermissionOverwrite[],
+    previousCaseRoleId: string | null,
+    caseRoleId: string
   ): OverwriteResolvable[] {
     const desiredIds = new Set(desired.map((overwrite) => overwrite.id));
     const existingById = new Map(snapshot.entries.map((entry) => [entry.id, entry]));
     const preserved = snapshot.entries
       .filter((entry) => !desiredIds.has(entry.id))
-      .map((entry) => ({
-        id: entry.id,
-        type: entry.type,
-        allow: entry.allow,
-        deny: entry.deny,
-      }));
+      .flatMap((entry) => {
+        if (entry.type !== 0 || entry.id !== previousCaseRoleId || entry.id === caseRoleId) {
+          return [{ id: entry.id, type: entry.type, allow: entry.allow, deny: entry.deny }];
+        }
+
+        const managedBits =
+          this.combinePermissionBits(CASE_ROLE_VERIFICATION_ALLOW_PERMISSIONS) |
+          this.combinePermissionBits(CASE_ROLE_VERIFICATION_DENY_PERMISSIONS);
+        const allow = entry.allow & ~managedBits;
+        const deny = entry.deny & ~managedBits;
+        return allow === 0n && deny === 0n ? [] : [{ id: entry.id, type: entry.type, allow, deny }];
+      });
     const merged = desired.map((overwrite) => {
       const existing = existingById.get(overwrite.id);
       if (!existing) {

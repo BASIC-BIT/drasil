@@ -271,9 +271,21 @@ export function OnboardingWizard({
             </div>
           </dl>
           {readiness === 'ready' ? (
-            <div className="action-receipt">
-              <span className="status ok">ready</span>
-              <span>Drasil passed all core setup checks.</span>
+            <div className="stack">
+              <div className="action-receipt">
+                <span className="status ok">ready</span>
+                <span>Drasil passed all core setup checks.</span>
+              </div>
+              {durableRequest ? (
+                <InboxActionForm
+                  action={action}
+                  buttonLabel="Setup request status"
+                  durableRequest={durableRequest}
+                  hideSubmitButton
+                  requestBaseHref={`/admin/guild/${guildId}/operations`}
+                  requestIdQueryParameter="setupRequestId"
+                />
+              ) : null}
             </div>
           ) : !canApplySetup ? (
             <div className="action-receipt danger-text" role="alert">

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SetupServerRecord } from '@drasil/contracts';
 import type { ModerationActionRequestSummary } from './moderationActionRequestDataAdapter';
-import { resolveOnboardingInitialState } from './onboardingState';
+import { resolveOnboardingDurableRequest, resolveOnboardingInitialState } from './onboardingState';
 
 const server: SetupServerRecord = {
   guild_id: 'guild-1',
@@ -113,5 +113,20 @@ describe('resolveOnboardingInitialState', () => {
       reportInstructionsChannelId: '__none__',
       verificationChannelId: '__auto__',
     });
+  });
+});
+
+describe('resolveOnboardingDurableRequest', () => {
+  it('retains an active request after core readiness becomes ready', () => {
+    const request = setupRequest('processing');
+
+    expect(resolveOnboardingDurableRequest(request, 'ready', request.id)).toBe(request);
+  });
+
+  it('retains a tracked completed receipt but hides an untracked historical completion', () => {
+    const request = setupRequest('completed');
+
+    expect(resolveOnboardingDurableRequest(request, 'ready', request.id)).toBe(request);
+    expect(resolveOnboardingDurableRequest(request, 'ready', null)).toBeNull();
   });
 });

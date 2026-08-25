@@ -138,6 +138,11 @@ describe('inboxActionReceipts', () => {
     expect(hasActiveInboxActionRequests([buildRequest({ status: 'queued' })])).toBe(true);
     expect(hasActiveInboxActionRequests([buildRequest({ status: 'completed' })])).toBe(false);
     expect(hasActiveInboxActionRequests([buildRequest({ status: 'failed' })])).toBe(false);
+    expect(
+      hasActiveInboxActionRequests([
+        buildRequest({ actionType: 'complete_setup_verification', status: 'processing' }),
+      ])
+    ).toBe(true);
   });
 
   it('retains local polling ids until server data reports a terminal state', () => {

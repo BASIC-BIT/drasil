@@ -4,7 +4,7 @@ import type { DiscordGuildResources, DiscordGuildSummary } from './discordApi';
 import { DiscordApiError } from './discordApi';
 import { DISCORD_PERMISSIONS } from './discordPermissions';
 import { fetchDiscordBotUser, fetchDiscordGuilds, fetchGuildResources } from './discordApi';
-import { SetupDashboardService } from './setupDashboardService';
+import { filterAssignableCaseRoles, SetupDashboardService } from './setupDashboardService';
 import type { SetupDataAdapter } from './setupDataAdapter';
 
 vi.mock('./discordApi', async (importOriginal) => ({
@@ -61,6 +61,21 @@ describe('SetupDashboardService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(fetchDiscordBotUser).mockResolvedValue(resources.botUser);
+  });
+
+  it('offers only roles below the bot hierarchy for case-role selection', () => {
+    const roles = [
+      { id: 'guild-1', name: '@everyone', permissions: '0', position: 0, managed: false },
+      { id: 'assignable', name: 'Assignable', permissions: '0', position: 3, managed: false },
+      { id: 'managed', name: 'Managed', permissions: '0', position: 2, managed: true },
+      { id: 'bot-role', name: 'Drasil', permissions: '0', position: 5, managed: false },
+      { id: 'equal-role', name: 'Equal', permissions: '0', position: 5, managed: false },
+      { id: 'higher-role', name: 'Higher', permissions: '0', position: 6, managed: false },
+    ];
+
+    expect(filterAssignableCaseRoles(roles, ['bot-role'], 'guild-1')).toEqual([
+      expect.objectContaining({ id: 'assignable' }),
+    ]);
   });
 
   it('marks inactive server records as needing setup', async () => {

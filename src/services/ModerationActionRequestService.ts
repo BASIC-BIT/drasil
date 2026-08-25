@@ -1469,6 +1469,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       'report_instructions_channel_id'
     );
     const caseRoleName = this.readMetadataString(request.metadata, 'case_role_name');
+    const createCaseRole = this.readMetadataBoolean(request.metadata, 'create_case_role') === true;
     const detectionResponseMode = this.readSetupDetectionResponseMode(request.metadata);
     const guild = await this.fetchGuild(request.server_id);
     await this.fetchRequestTextChannel(request.server_id, adminChannelId, 'Admin channel');
@@ -1489,6 +1490,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       captureAnalytics: true,
       caseRoleId,
       caseRoleName,
+      createCaseRole,
       detectionResponseMode,
       guild,
       reportInstructionsChannelId,

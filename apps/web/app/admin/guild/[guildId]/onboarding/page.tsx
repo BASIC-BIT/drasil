@@ -6,10 +6,17 @@ import { OnboardingWizard } from '@/components/OnboardingWizard';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { InboxActionRequestPollingProvider } from '@/components/inbox/InboxActionRequestPoller';
 import { buildBotInviteUrl } from '@/lib/discordInvite';
+import { hasActiveInboxActionRequests } from '@/lib/inboxActionReceipts';
 import { createModerationActionRequestDataAdapter } from '@/lib/moderationActionRequestDataAdapter';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
-import { createSetupDashboardService } from '@/lib/setupDashboardService';
-import { resolveOnboardingInitialState } from '@/lib/onboardingState';
+import {
+  createSetupDashboardService,
+  filterAssignableCaseRoles,
+} from '@/lib/setupDashboardService';
+import {
+  resolveOnboardingDurableRequest,
+  resolveOnboardingInitialState,
+} from '@/lib/onboardingState';
 import { completeOnboarding } from './actions';
 
 export default async function OnboardingPage({
@@ -31,7 +38,7 @@ export default async function OnboardingPage({
   }
 
   const requestAdapter = createModerationActionRequestDataAdapter();
-  const [{ dashboard, channels, roles, canApplySetup }, requests, trackedRequest] =
+  const [{ dashboard, channels, roles, botRoleIds, canApplySetup }, requests, trackedRequest] =
     await Promise.all([
       createSetupDashboardService().getDashboard(guildId, token.accessToken),
       requestAdapter.listSetupRequests(guildId, 10),
@@ -44,13 +51,14 @@ export default async function OnboardingPage({
       ? [trackedRequest, ...requests]
       : requests;
   const latestSetupRequest = trackedRequestId ? trackedRequest : (setupRequests[0] ?? null);
-  const durableRequest =
-    latestSetupRequest?.status === 'completed' && dashboard.readiness !== 'ready'
-      ? null
-      : latestSetupRequest;
+  const durableRequest = resolveOnboardingDurableRequest(
+    latestSetupRequest,
+    dashboard.readiness,
+    trackedRequestId
+  );
   const server = dashboard.server;
   const selectableChannels = channels.filter((channel) => channel.type === 0);
-  const selectableRoles = roles.filter((role) => role.id !== guildId && !role.managed);
+  const selectableRoles = filterAssignableCaseRoles(roles, botRoleIds, guildId);
   const initialState = resolveOnboardingInitialState(server, durableRequest, randomUUID(), {
     channelIds: selectableChannels.map((channel) => channel.id),
     roleIds: selectableRoles.map((role) => role.id),
@@ -71,7 +79,7 @@ export default async function OnboardingPage({
         </div>
       </nav>
       <InboxActionRequestPollingProvider
-        enabled={dashboard.readiness !== 'ready'}
+        enabled={dashboard.readiness !== 'ready' || hasActiveInboxActionRequests(setupRequests)}
         serverRequests={setupRequests}
       >
         <OnboardingWizard

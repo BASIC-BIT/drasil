@@ -1,4 +1,8 @@
-import type { DetectionResponseMode, SetupServerRecord } from '@drasil/contracts';
+import type {
+  DetectionResponseMode,
+  SetupReadinessStatus,
+  SetupServerRecord,
+} from '@drasil/contracts';
 import type {
   ModerationActionRequestSummary,
   SetupRequestInputSummary,
@@ -21,6 +25,23 @@ export interface OnboardingInitialState {
 export interface OnboardingResourceOptions {
   readonly channelIds: readonly string[];
   readonly roleIds: readonly string[];
+}
+
+export function resolveOnboardingDurableRequest(
+  latestRequest: ModerationActionRequestSummary | null,
+  readiness: SetupReadinessStatus,
+  trackedRequestId: string | null
+): ModerationActionRequestSummary | null {
+  if (!latestRequest) {
+    return null;
+  }
+  if (latestRequest.status === 'completed' && readiness !== 'ready') {
+    return null;
+  }
+  if (latestRequest.status === 'completed' && readiness === 'ready' && !trackedRequestId) {
+    return null;
+  }
+  return latestRequest;
 }
 
 function valueOr<T>(value: T | null | undefined, fallback: T): T {
