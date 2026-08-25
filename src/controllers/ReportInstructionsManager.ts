@@ -28,6 +28,7 @@ export class ReportInstructionsManager {
     const existingMessageId = serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
     let messageId: string;
     let action: 'sent' | 'updated' | 'recreated' = 'sent';
+    const movedChannels = existingChannelId !== targetChannel.id;
 
     if (existingChannelId === targetChannel.id && existingMessageId) {
       const existingMessage = await targetChannel.messages
@@ -44,7 +45,6 @@ export class ReportInstructionsManager {
         action = 'recreated';
       }
     } else {
-      await this.deleteStaleReportInstructionsMessage(existingChannelId, existingMessageId);
       const existingMessage = await this.findExistingReportInstructionsMessage(targetChannel);
       if (existingMessage) {
         await existingMessage.edit(messagePayload);
@@ -60,6 +60,10 @@ export class ReportInstructionsManager {
       [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: targetChannel.id,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: messageId,
     });
+
+    if (movedChannels) {
+      await this.deleteStaleReportInstructionsMessage(existingChannelId, existingMessageId);
+    }
 
     return { action, messageId };
   }

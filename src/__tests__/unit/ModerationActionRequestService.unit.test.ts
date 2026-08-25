@@ -650,7 +650,8 @@ describe('ModerationActionRequestService', () => {
       setArchived: jest.fn(async () => undefined),
       url: 'https://discord.com/channels/guild-1/report-thread-1',
     };
-    guild.members.fetch.mockImplementation(async (id: string) => {
+    guild.members.fetch.mockImplementation(async (value: string | { user: string }) => {
+      const id = typeof value === 'string' ? value : value.user;
       if (id === 'moderator-1') {
         return reporterMember;
       }
@@ -2210,6 +2211,24 @@ describe('ModerationActionRequestService', () => {
       },
     ]);
     expect(repository.failed).toEqual([]);
+  });
+
+  it('rejects queued setup when the actor no longer has Administrator permission', async () => {
+    const { notificationManager, reporterMember, repository, service } = buildService([
+      completeSetupVerificationRequest,
+    ]);
+    reporterMember.permissions.has.mockReturnValue(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'setup-verification-request-1',
+        error: 'Setup requires current Administrator permission.',
+      },
+    ]);
   });
 
   it('persists verification permission provenance before syncing a selected channel', async () => {

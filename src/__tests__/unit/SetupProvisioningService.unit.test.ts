@@ -403,4 +403,40 @@ describe('SetupProvisioningService (unit)', () => {
     expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();
     expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
   });
+
+  it('propagates transient failures while fetching the configured verification channel', async () => {
+    const caseRole = { id: 'case-role-1', name: 'Drasil Case' };
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        admin_channel_id: 'admin-channel-1',
+        case_role_id: caseRole.id,
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    } as any;
+    const setupDiagnosticsService = { validateSetupCandidate: jest.fn() } as any;
+    const setupWorkflowService = { completeSetup: jest.fn() } as any;
+    const transientError = Object.assign(new Error('Discord unavailable'), { code: 500 });
+    const guild = {
+      id: 'guild-1',
+      channels: { fetch: jest.fn().mockRejectedValue(transientError) },
+    } as any;
+    const service = new SetupProvisioningService(
+      configService,
+      setupDiagnosticsService,
+      setupWorkflowService
+    );
+
+    await expect(
+      service.provision({
+        actorLabel: 'web administrator admin-1',
+        adminChannelId: 'admin-channel-1',
+        caseRole: caseRole as any,
+        guild,
+      })
+    ).rejects.toThrow('Discord unavailable');
+
+    expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();
+    expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
+  });
 });

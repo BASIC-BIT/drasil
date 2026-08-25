@@ -94,6 +94,7 @@ describe('SetupDashboardService', () => {
       { id: 'guild-1', name: '@everyone', permissions: '0', position: 0, managed: false },
       { id: 'safe-role', name: 'Safe', permissions: '0', position: 2, managed: false },
       { id: 'access-role', name: 'Access', permissions: '0', position: 2, managed: false },
+      { id: 'unsafe-role', name: 'Unsafe', permissions: '0', position: 2, managed: false },
       { id: 'bot-role', name: 'Drasil', permissions: '0', position: 5, managed: false },
     ];
     const channels = [
@@ -106,6 +107,14 @@ describe('SetupDashboardService', () => {
             id: 'safe-role',
             type: 0,
             allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+            deny: '0',
+          },
+          {
+            id: 'unsafe-role',
+            type: 0,
+            allow: (
+              DISCORD_PERMISSIONS.ViewChannel | DISCORD_PERMISSIONS.ManageChannels
+            ).toString(),
             deny: '0',
           },
         ],
@@ -139,6 +148,14 @@ describe('SetupDashboardService', () => {
         position: 0,
         managed: false,
       },
+      {
+        id: 'moderator-role',
+        name: 'Moderators',
+        permissions: DISCORD_PERMISSIONS.ManageMessages.toString(),
+        position: 1,
+        managed: false,
+      },
+      { id: 'ordinary-role', name: 'Members', permissions: '0', position: 1, managed: false },
     ];
     const privateDeny = DISCORD_PERMISSIONS.ViewChannel.toString();
 
@@ -152,12 +169,43 @@ describe('SetupDashboardService', () => {
             type: 0,
             permission_overwrites: [{ id: 'guild-1', type: 0, allow: '0', deny: privateDeny }],
           },
+          {
+            id: 'moderator-private',
+            name: 'moderators',
+            type: 0,
+            permission_overwrites: [
+              { id: 'guild-1', type: 0, allow: '0', deny: privateDeny },
+              {
+                id: 'moderator-role',
+                type: 0,
+                allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+                deny: '0',
+              },
+            ],
+          },
+          {
+            id: 'ordinary-private',
+            name: 'ordinary',
+            type: 0,
+            permission_overwrites: [
+              { id: 'guild-1', type: 0, allow: '0', deny: privateDeny },
+              {
+                id: 'ordinary-role',
+                type: 0,
+                allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+                deny: '0',
+              },
+            ],
+          },
           { id: 'forum', name: 'staff-forum', type: 15 },
         ],
         roles,
         'guild-1'
       )
-    ).toEqual([expect.objectContaining({ id: 'private' })]);
+    ).toEqual([
+      expect.objectContaining({ id: 'private' }),
+      expect.objectContaining({ id: 'moderator-private' }),
+    ]);
   });
 
   it('marks inactive server records as needing setup', async () => {
@@ -308,7 +356,7 @@ describe('SetupDashboardService', () => {
       expect.objectContaining({
         key: 'case-role',
         status: 'error',
-        detail: '@Case grants access outside the verification channel.',
+        detail: "@Case grants channel access outside Drasil's managed verification permissions.",
       })
     );
   });

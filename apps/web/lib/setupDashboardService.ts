@@ -41,6 +41,7 @@ export interface SetupDashboardContext {
   readonly channels: readonly DiscordChannel[];
   readonly roles: readonly DiscordRole[];
   readonly botRoleIds: readonly string[];
+  readonly botUserId: string;
   readonly canApplySetup: boolean;
 }
 
@@ -86,6 +87,23 @@ interface GuildPermissionChecklistArgs {
 const GUILD_TEXT_CHANNEL_TYPE = 0;
 const TEXT_CHANNEL_TYPES = new Set([GUILD_TEXT_CHANNEL_TYPE, 5, 15]);
 const GUILD_READINESS_CONCURRENCY = 3;
+const CASE_ROLE_VERIFICATION_MANAGED_PERMISSION_BITS =
+  DISCORD_PERMISSIONS.ViewChannel |
+  DISCORD_PERMISSIONS.ReadMessageHistory |
+  DISCORD_PERMISSIONS.SendMessagesInThreads |
+  DISCORD_PERMISSIONS.SendMessages |
+  DISCORD_PERMISSIONS.CreatePublicThreads |
+  DISCORD_PERMISSIONS.CreatePrivateThreads;
+const ADMIN_CHANNEL_STAFF_PERMISSIONS = [
+  DISCORD_PERMISSIONS.Administrator,
+  DISCORD_PERMISSIONS.ManageGuild,
+  DISCORD_PERMISSIONS.ManageRoles,
+  DISCORD_PERMISSIONS.ManageChannels,
+  DISCORD_PERMISSIONS.ManageMessages,
+  DISCORD_PERMISSIONS.ModerateMembers,
+  DISCORD_PERMISSIONS.KickMembers,
+  DISCORD_PERMISSIONS.BanMembers,
+] as const;
 
 export function filterAssignableCaseRoles(
   roles: readonly DiscordRole[],
@@ -105,37 +123,40 @@ export function filterAssignableCaseRoles(
       !role.managed &&
       !botRoleIdSet.has(role.id) &&
       parsePermissions(role.permissions) === 0n &&
-      !hasUnrelatedCaseRoleChannelAllows(role.id, channels, verificationChannelId) &&
+      !hasUnsafeCaseRoleChannelAllows(role.id, channels, verificationChannelId) &&
       role.position < highestBotRolePosition
   );
 }
 
-function hasUnrelatedCaseRoleChannelAllows(
+function hasUnsafeCaseRoleChannelAllows(
   roleId: string,
   channels: readonly DiscordChannel[],
   verificationChannelId?: string | null
 ): boolean {
-  return channels.some(
-    (channel) =>
-      channel.id !== verificationChannelId &&
-      (channel.permission_overwrites ?? []).some(
-        (overwrite) =>
-          overwrite.type === 0 &&
-          overwrite.id === roleId &&
-          parsePermissions(overwrite.allow) !== 0n
-      )
+  return channels.some((channel) =>
+    (channel.permission_overwrites ?? []).some((overwrite) => {
+      if (overwrite.type !== 0 || overwrite.id !== roleId) {
+        return false;
+      }
+      const allow = parsePermissions(overwrite.allow);
+      return channel.id === verificationChannelId
+        ? (allow & ~CASE_ROLE_VERIFICATION_MANAGED_PERMISSION_BITS) !== 0n
+        : allow !== 0n;
+    })
   );
 }
 
 export function filterPrivateAdminChannels(
   channels: readonly DiscordChannel[],
   roles: readonly DiscordRole[],
-  guildId: string
+  guildId: string,
+  botRoleIds: readonly string[] = [],
+  botUserId = ''
 ): DiscordChannel[] {
   return channels.filter(
     (channel) =>
       channel.type === GUILD_TEXT_CHANNEL_TYPE &&
-      !isChannelVisibleToEveryone(channel, roles, guildId)
+      !hasUnsafeAdminChannelVisibility(channel, roles, guildId, botRoleIds, botUserId)
   );
 }
 
@@ -220,6 +241,38 @@ function isChannelVisibleToEveryone(
   return hasPermission(channelPermissions, DISCORD_PERMISSIONS.ViewChannel);
 }
 
+function hasUnsafeAdminChannelVisibility(
+  channel: DiscordChannel,
+  roles: readonly DiscordRole[],
+  guildId: string,
+  botRoleIds: readonly string[],
+  botUserId: string
+): boolean {
+  if (isChannelVisibleToEveryone(channel, roles, guildId)) {
+    return true;
+  }
+
+  const botRoleIdSet = new Set(botRoleIds);
+  return (channel.permission_overwrites ?? []).some((overwrite) => {
+    if ((parsePermissions(overwrite.allow) & DISCORD_PERMISSIONS.ViewChannel) === 0n) {
+      return false;
+    }
+    if (overwrite.type === 1) {
+      return overwrite.id !== botUserId;
+    }
+    if (overwrite.id === guildId || botRoleIdSet.has(overwrite.id)) {
+      return false;
+    }
+    const role = roles.find((candidate) => candidate.id === overwrite.id);
+    return (
+      !role ||
+      !ADMIN_CHANNEL_STAFF_PERMISSIONS.some((permission) =>
+        hasPermission(parsePermissions(role.permissions), permission)
+      )
+    );
+  });
+}
+
 function addCoreChannelChecklistItem(args: CoreChannelChecklistArgs) {
   const { channel, checklist, key, label } = args;
   if (!channel) {
@@ -232,13 +285,22 @@ function addCoreChannelChecklistItem(args: CoreChannelChecklistArgs) {
     );
     return;
   }
-  if (args.requirePrivate && isChannelVisibleToEveryone(channel, args.roles, args.guildId)) {
+  if (
+    args.requirePrivate &&
+    hasUnsafeAdminChannelVisibility(
+      channel,
+      args.roles,
+      args.guildId,
+      args.botRoleIds,
+      args.botUserId
+    )
+  ) {
     checklist.push(
       item(
         key,
         label,
         'error',
-        `${formatChannelName(channel)} is visible to @everyone. Choose a private moderator channel.`
+        `${formatChannelName(channel)} is visible beyond moderator-capable roles. Choose a private moderator channel.`
       )
     );
     return;
@@ -400,18 +462,14 @@ function buildChecklist(args: BuildChecklistArgs) {
       )
     );
   } else if (
-    hasUnrelatedCaseRoleChannelAllows(
-      caseRole.id,
-      resources.channels,
-      server?.verification_channel_id
-    )
+    hasUnsafeCaseRoleChannelAllows(caseRole.id, resources.channels, server?.verification_channel_id)
   ) {
     checklist.push(
       item(
         'case-role',
         'Case role',
         'error',
-        `${formatRoleName(caseRole)} grants access outside the verification channel.`
+        `${formatRoleName(caseRole)} grants channel access outside Drasil's managed verification permissions.`
       )
     );
   } else if (highestBotRolePosition <= caseRole.position) {
@@ -693,6 +751,7 @@ export class SetupDashboardService {
       ),
       roles: resources?.roles ?? [],
       botRoleIds: resources?.botMember.roles ?? [],
+      botUserId: resources?.botUser.id ?? '',
     };
   }
 

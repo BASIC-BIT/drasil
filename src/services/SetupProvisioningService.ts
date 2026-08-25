@@ -14,6 +14,7 @@ import { SetupWorkflowService, type SetupWorkflowResult } from './SetupWorkflowS
 
 export const DEFAULT_CASE_ROLE_NAME = 'Drasil Case';
 export const DEFAULT_VERIFICATION_CHANNEL_NAME = 'verification';
+const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10003;
 
 export type SetupProvisioningResult =
   | SetupWorkflowResult
@@ -293,16 +294,17 @@ export class SetupProvisioningService {
       return { channelId: explicitChannel.id, willSyncPermissions: true, ambiguousChannelIds: [] };
     }
     if (explicitChannelId) {
-      const fetchedChannel = await guild.channels.fetch(explicitChannelId).catch(() => null);
+      const fetchedChannel = await this.fetchVerificationChannel(guild, explicitChannelId);
       return fetchedChannel?.type === ChannelType.GuildText
         ? { channelId: explicitChannelId, willSyncPermissions: true, ambiguousChannelIds: [] }
         : { invalidDetail: 'The selected verification channel is not an available text channel.' };
     }
 
     if (serverConfig.verification_channel_id) {
-      const configuredChannel = await guild.channels
-        .fetch(serverConfig.verification_channel_id)
-        .catch(() => null);
+      const configuredChannel = await this.fetchVerificationChannel(
+        guild,
+        serverConfig.verification_channel_id
+      );
       if (configuredChannel?.type === ChannelType.GuildText) {
         return {
           channelId: serverConfig.verification_channel_id,
@@ -337,6 +339,26 @@ export class SetupProvisioningService {
   private cachedValues<T>(cache: { values(): IterableIterator<T> } | unknown): T[] {
     const candidate = cache as { values?: () => IterableIterator<T> } | null;
     return typeof candidate?.values === 'function' ? [...candidate.values()] : [];
+  }
+
+  private async fetchVerificationChannel(
+    guild: Guild,
+    channelId: string
+  ): Promise<TextChannel | null> {
+    try {
+      const channel = await guild.channels.fetch(channelId, { force: true });
+      return channel?.type === ChannelType.GuildText ? channel : null;
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === DISCORD_UNKNOWN_CHANNEL_ERROR_CODE
+      ) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   private async fetchRole(guild: Guild, roleId: string): Promise<Role | null> {

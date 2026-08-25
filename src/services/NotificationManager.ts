@@ -41,19 +41,13 @@ import {
   selectEligibleMessageReportImageAttachments,
 } from '../utils/reportAttachments';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
+import {
+  CASE_ROLE_VERIFICATION_ALLOW_PERMISSIONS,
+  CASE_ROLE_VERIFICATION_DENY_PERMISSIONS,
+} from '../utils/verificationChannelPermissions';
 
 const VERIFICATION_CHANNEL_NAME = 'verification';
 const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10003;
-const CASE_ROLE_VERIFICATION_ALLOW_PERMISSIONS = [
-  PermissionFlagsBits.ViewChannel,
-  PermissionFlagsBits.ReadMessageHistory,
-  PermissionFlagsBits.SendMessagesInThreads,
-] as const;
-const CASE_ROLE_VERIFICATION_DENY_PERMISSIONS = [
-  PermissionFlagsBits.SendMessages,
-  PermissionFlagsBits.CreatePublicThreads,
-  PermissionFlagsBits.CreatePrivateThreads,
-] as const;
 const DISCORD_MESSAGE_CONTENT_MAX_LENGTH = 2000;
 const MIRRORED_THREAD_MESSAGE_CONTENT_MAX_LENGTH = 1200;
 const MIRRORED_THREAD_MESSAGE_ATTACHMENT_LIMIT = 5;

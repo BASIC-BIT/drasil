@@ -8,13 +8,14 @@ describe('SetupDiagnosticsService (unit)', () => {
     const caseRole = {
       id: 'role-1',
       managed: false,
-      permissions: { bitfield: 0n as bigint },
+      permissions: { bitfield: 0n as bigint, has: jest.fn(() => false) },
     };
     const botMember = {
       permissions: {
         has: jest.fn((permission: bigint) => permission !== PermissionFlagsBits.Administrator),
       },
       roles: {
+        cache: new Map([['bot-role', { id: 'bot-role' }]]),
         highest: {
           comparePositionTo: jest.fn().mockReturnValue(1),
         },
@@ -23,6 +24,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     const channel = {
       id: 'channel-1',
       type: ChannelType.GuildText,
+      permissionOverwrites: { cache: new Map() },
       permissionsFor: jest.fn((memberOrRole: unknown) => ({
         has: jest.fn(
           memberOrRole === botMember
@@ -41,6 +43,7 @@ describe('SetupDiagnosticsService (unit)', () => {
         },
         roles: {
           everyone: { id: 'guild-1' },
+          cache: new Map([['role-1', caseRole]]),
           fetch: jest.fn().mockResolvedValue(caseRole),
         },
         channels: {
@@ -194,8 +197,45 @@ describe('SetupDiagnosticsService (unit)', () => {
       severity: 'error',
       code: 'case-role-channel-overwrites',
       message:
-        'The case role has allow permissions outside the verification channel. Use a dedicated role that cannot grant unrelated channel access.',
+        'The case role has unmanaged channel allow permissions. Use a dedicated role that grants only Drasil-managed verification access.',
     });
+  });
+
+  it('rejects unmanaged case-role allows in the selected verification channel', async () => {
+    const { guild } = buildConfiguredGuild();
+    guild.channels.cache = new Map([
+      [
+        'verification-channel-1',
+        {
+          id: 'verification-channel-1',
+          permissionOverwrites: {
+            cache: new Map([
+              [
+                'role-1',
+                {
+                  allow: {
+                    bitfield: PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ManageChannels,
+                  },
+                },
+              ],
+            ]),
+          },
+        },
+      ],
+    ]);
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    } as any;
+
+    const report = await new SetupDiagnosticsService(configService).validateGuildSetup(guild);
+
+    expect(report.issues.map((issue) => issue.code)).toContain('case-role-channel-overwrites');
   });
 
   it('rejects a setup candidate role that grants server permissions', async () => {
@@ -241,6 +281,48 @@ describe('SetupDiagnosticsService (unit)', () => {
       severity: 'error',
       code: 'admin-channel-public-view',
       message: 'The admin notification channel must not be visible to @everyone.',
+    });
+  });
+
+  it('rejects an admin channel visible to a non-moderator role', async () => {
+    const { guild, channel } = buildConfiguredGuild();
+    channel.permissionOverwrites.cache = new Map([
+      [
+        'ordinary-role',
+        {
+          id: 'ordinary-role',
+          type: 0,
+          allow: { bitfield: PermissionFlagsBits.ViewChannel },
+        },
+      ],
+    ]);
+    guild.roles.fetch.mockImplementation((roleId: string) =>
+      Promise.resolve(
+        roleId === 'ordinary-role'
+          ? { id: roleId, permissions: { has: jest.fn(() => false) } }
+          : {
+              id: 'role-1',
+              managed: false,
+              permissions: { bitfield: 0n, has: jest.fn(() => false) },
+            }
+      )
+    );
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: null,
+    });
+
+    expect(report.issues).toContainEqual({
+      severity: 'error',
+      code: 'admin-channel-non-moderator-view',
+      message:
+        'The admin notification channel grants View Channel to a role without moderator permissions.',
     });
   });
 

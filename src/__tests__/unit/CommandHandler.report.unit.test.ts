@@ -1,4 +1,5 @@
 import { ChannelType, InteractionContextType, MessageFlags } from 'discord.js';
+import { ReportInstructionsManager } from '../../controllers/ReportInstructionsManager';
 import { USER_REPORT_REASON_REQUIRED_SETTING_KEY } from '../../utils/userReportSettings';
 import { buildHandler, restoreUserInstallReportingEnvAfterEach } from './commandHandlerTestHarness';
 
@@ -596,5 +597,48 @@ describe('CommandHandler report commands (unit)', () => {
       report_instructions_channel_id: 'new-channel-1',
       report_instructions_message_id: 'new-message-1',
     });
+    expect(targetChannel.send.mock.invocationCallOrder[0]).toBeLessThan(
+      updateServerSettings.mock.invocationCallOrder[0]
+    );
+    expect(updateServerSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      oldMessage.delete.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('preserves old report instructions when publishing the replacement fails', async () => {
+    const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
+    const client = {
+      channels: {
+        fetch: jest.fn().mockResolvedValue({
+          messages: { fetch: jest.fn().mockResolvedValue(oldMessage) },
+        }),
+      },
+      user: { id: 'bot-1' },
+    } as any;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          report_instructions_channel_id: 'old-channel-1',
+          report_instructions_message_id: 'old-message-1',
+        },
+      }),
+      updateServerSettings: jest.fn(),
+    } as any;
+    const targetChannel = {
+      id: 'new-channel-1',
+      messages: { fetch: jest.fn().mockResolvedValue({ find: jest.fn(() => undefined) }) },
+      send: jest.fn().mockRejectedValue(new Error('missing permission')),
+    } as any;
+
+    await expect(
+      new ReportInstructionsManager(client, configService).upsertReportInstructionsMessage(
+        'guild-1',
+        targetChannel
+      )
+    ).rejects.toThrow('missing permission');
+
+    expect(configService.updateServerSettings).not.toHaveBeenCalled();
+    expect(client.channels.fetch).not.toHaveBeenCalled();
+    expect(oldMessage.delete).not.toHaveBeenCalled();
   });
 });

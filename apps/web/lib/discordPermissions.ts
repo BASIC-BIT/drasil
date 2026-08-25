@@ -13,7 +13,8 @@ export const DISCORD_PERMISSIONS = {
   MentionEveryone: 1n << 17n,
   ManageRoles: 1n << 28n,
   ManageThreads: 1n << 34n,
-  CreatePrivateThreads: 1n << 35n,
+  CreatePublicThreads: 1n << 35n,
+  CreatePrivateThreads: 1n << 36n,
   SendMessagesInThreads: 1n << 38n,
   ModerateMembers: 1n << 40n,
 } as const;

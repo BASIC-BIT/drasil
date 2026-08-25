@@ -1480,6 +1480,12 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       'candidate_verification_channel_permission_sync'
     );
     const guild = await this.fetchGuild(request.server_id);
+    const administrator = await guild.members
+      .fetch({ user: request.actor_id, force: true })
+      .catch(() => null);
+    if (!administrator?.permissions.has(PermissionFlagsBits.Administrator)) {
+      throw new Error('Setup requires current Administrator permission.');
+    }
     await this.fetchRequestTextChannel(request.server_id, adminChannelId, 'Admin channel');
 
     const setupWorkflowService = new SetupWorkflowService(
