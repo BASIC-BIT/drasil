@@ -97,6 +97,7 @@ test('guided onboarding shows readiness and keeps apply actions administrator-on
   for (let step = 0; step < 4; step += 1) {
     await page.getByRole('button', { name: 'Continue' }).click();
   }
+  await expect(page.getByText(/^Permission sync: @everyone loses channel access/)).toBeVisible();
   await expect(page.getByText('Administrator required')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Apply and verify setup' })).toHaveCount(0);
 });

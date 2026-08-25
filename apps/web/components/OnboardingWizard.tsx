@@ -18,6 +18,8 @@ interface Option {
 }
 
 const STEPS = ['Welcome', 'Alerts', 'Case role', 'Verification', 'Reports', 'Protection', 'Review'];
+const VERIFICATION_PERMISSION_PREVIEW =
+  'Permission sync: @everyone loses channel access; the case role can view and reply in case threads but cannot post or create threads; Drasil can manage the channel and threads; roles with Manage Channels can view and post. Existing unrelated overwrites stay unchanged.';
 
 export function OnboardingWizard({
   action,
@@ -185,6 +187,7 @@ export function OnboardingWizard({
               </option>
             ))}
           </select>
+          <small className="onboarding-permission-preview">{VERIFICATION_PERMISSION_PREVIEW}</small>
         </label>
       ) : null}
 
@@ -252,9 +255,14 @@ export function OnboardingWizard({
             <div>
               <dt>Verification</dt>
               <dd>
-                {values.verificationChannelId === '__auto__'
-                  ? 'Reuse or create #verification'
-                  : `#${selected(channels, values.verificationChannelId, 'Missing channel')}`}
+                <span>
+                  {values.verificationChannelId === '__auto__'
+                    ? 'Reuse or create #verification'
+                    : `#${selected(channels, values.verificationChannelId, 'Missing channel')}`}
+                </span>
+                <small className="onboarding-permission-preview">
+                  {VERIFICATION_PERMISSION_PREVIEW}
+                </small>
               </dd>
             </div>
             <div>
