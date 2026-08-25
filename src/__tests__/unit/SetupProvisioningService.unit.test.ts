@@ -1,7 +1,7 @@
 import { SetupProvisioningService } from '../../services/SetupProvisioningService';
 
 describe('SetupProvisioningService (unit)', () => {
-  it('leaves configured protection settings untouched when rerunning incomplete setup', async () => {
+  it('preserves surface-specific protection modes when rerunning incomplete setup', async () => {
     const caseRole = { id: 'case-role', name: 'Drasil Case' };
     const verificationChannel = { id: 'verification-channel-1' };
     const configService = {
@@ -9,7 +9,10 @@ describe('SetupProvisioningService (unit)', () => {
         admin_channel_id: null,
         case_role_id: caseRole.id,
         verification_channel_id: verificationChannel.id,
-        settings: { detection_response_mode: 'restrict' },
+        settings: {
+          message_detection_response_mode: 'notify_only',
+          join_detection_response_mode: 'off',
+        },
       }),
     } as any;
     const setupDiagnosticsService = {

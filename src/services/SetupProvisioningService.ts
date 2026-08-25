@@ -65,11 +65,13 @@ export class SetupProvisioningService {
       !existingConfig?.case_role_id ||
       !existingConfig.admin_channel_id ||
       !existingConfig.verification_channel_id;
+    const protectionModeAlreadyConfigured =
+      existingConfig?.settings.detection_response_mode !== undefined ||
+      existingConfig?.settings.message_detection_response_mode != null ||
+      existingConfig?.settings.join_detection_response_mode != null;
     const detectionResponseMode =
       input.detectionResponseMode ??
-      (!existingConfig?.settings.detection_response_mode && coreSetupIncomplete
-        ? 'notify_only'
-        : undefined);
+      (!protectionModeAlreadyConfigured && coreSetupIncomplete ? 'notify_only' : undefined);
     const caseRoleCandidate = await this.resolveCaseRoleCandidate(
       input.guild,
       input.caseRole ?? null,
