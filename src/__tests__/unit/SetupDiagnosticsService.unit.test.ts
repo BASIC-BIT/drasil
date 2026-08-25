@@ -128,7 +128,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     expect(report.errorCount).toBeGreaterThanOrEqual(3);
   });
 
-  it('rejects case roles that grant server permissions', async () => {
+  it('warns without blocking an existing case role that grants server permissions', async () => {
     const { guild, caseRole } = buildConfiguredGuild();
     caseRole.permissions.bitfield = PermissionFlagsBits.Administrator;
     const configService = {
@@ -144,7 +144,30 @@ describe('SetupDiagnosticsService (unit)', () => {
 
     const report = await service.validateGuildSetup(guild);
 
-    expect(report.issues.map((issue) => issue.code)).toContain('case-role-permissions');
+    expect(report.issues.find((issue) => issue.code === 'case-role-permissions')?.severity).toBe(
+      'warning'
+    );
+    expect(report.errorCount).toBe(0);
+  });
+
+  it('rejects a setup candidate role that grants server permissions', async () => {
+    const { guild, caseRole } = buildConfiguredGuild();
+    caseRole.permissions.bitfield = PermissionFlagsBits.Administrator;
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: 'role-1',
+      willCreateCaseRole: false,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: 'verification-channel-1',
+      willCreateVerificationChannel: false,
+      reportInstructionsChannelId: null,
+    });
+
+    expect(report.issues.find((issue) => issue.code === 'case-role-permissions')?.severity).toBe(
+      'error'
+    );
+    expect(report.errorCount).toBe(1);
   });
 
   it('requires thread-send permission in configured verification channels', async () => {

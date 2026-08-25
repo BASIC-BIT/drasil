@@ -295,7 +295,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     serverConfig: Server,
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
-    await this.checkCaseRoleId(guild, botMember, serverConfig.case_role_id, issues);
+    await this.checkCaseRoleId(guild, botMember, serverConfig.case_role_id, 'warning', issues);
   }
 
   private async checkCaseRoleCandidate(
@@ -305,7 +305,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
     if (candidate.caseRoleId) {
-      await this.checkCaseRoleId(guild, botMember, candidate.caseRoleId, issues);
+      await this.checkCaseRoleId(guild, botMember, candidate.caseRoleId, 'error', issues);
       return;
     }
 
@@ -324,6 +324,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     guild: Guild,
     botMember: GuildMember,
     caseRoleId: string | null | undefined,
+    permissionSeverity: SetupDiagnosticSeverity,
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
     if (!caseRoleId) {
@@ -363,10 +364,12 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
 
     if (caseRole.permissions.bitfield !== 0n) {
       issues.push({
-        severity: 'error',
+        severity: permissionSeverity,
         code: 'case-role-permissions',
         message:
-          'The case role must not grant server permissions. Use a dedicated permission-free role; Drasil grants verification-channel access separately.',
+          permissionSeverity === 'error'
+            ? 'The selected case role must not grant server permissions. Use a dedicated permission-free role; Drasil grants verification-channel access separately.'
+            : 'The configured case role grants server permissions. Replace it with a dedicated permission-free role; Drasil grants verification-channel access separately.',
       });
     }
 
