@@ -27,6 +27,14 @@ export interface OnboardingResourceOptions {
   readonly roleIds: readonly string[];
 }
 
+export function onboardingWizardStateKey(
+  durableRequest: ModerationActionRequestSummary | null
+): string {
+  return durableRequest?.status === 'completed' || durableRequest?.status === 'failed'
+    ? `${durableRequest.id}:${durableRequest.status}`
+    : 'onboarding-active';
+}
+
 export function resolveOnboardingDurableRequest(
   latestRequest: ModerationActionRequestSummary | null,
   readiness: SetupReadinessStatus,

@@ -68,6 +68,13 @@ describe('SetupDashboardService', () => {
       { id: 'guild-1', name: '@everyone', permissions: '0', position: 0, managed: false },
       { id: 'assignable', name: 'Assignable', permissions: '0', position: 3, managed: false },
       { id: 'managed', name: 'Managed', permissions: '0', position: 2, managed: true },
+      {
+        id: 'privileged',
+        name: 'Privileged',
+        permissions: DISCORD_PERMISSIONS.Administrator.toString(),
+        position: 2,
+        managed: false,
+      },
       { id: 'bot-role', name: 'Drasil', permissions: '0', position: 5, managed: false },
       { id: 'equal-role', name: 'Equal', permissions: '0', position: 5, managed: false },
       { id: 'higher-role', name: 'Higher', permissions: '0', position: 6, managed: false },

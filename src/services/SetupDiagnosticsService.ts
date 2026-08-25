@@ -361,6 +361,15 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       });
     }
 
+    if (caseRole.permissions.bitfield !== 0n) {
+      issues.push({
+        severity: 'error',
+        code: 'case-role-permissions',
+        message:
+          'The case role must not grant server permissions. Use a dedicated permission-free role; Drasil grants verification-channel access separately.',
+      });
+    }
+
     if (botMember.roles.highest.comparePositionTo(caseRole) <= 0) {
       issues.push({
         severity: 'error',

@@ -96,6 +96,7 @@ export function filterAssignableCaseRoles(
       role.id !== guildId &&
       !role.managed &&
       !botRoleIdSet.has(role.id) &&
+      parsePermissions(role.permissions) === 0n &&
       role.position < highestBotRolePosition
   );
 }

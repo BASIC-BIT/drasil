@@ -14,6 +14,7 @@ import {
   filterAssignableCaseRoles,
 } from '@/lib/setupDashboardService';
 import {
+  onboardingWizardStateKey,
   resolveOnboardingDurableRequest,
   resolveOnboardingInitialState,
 } from '@/lib/onboardingState';
@@ -97,6 +98,7 @@ export default async function OnboardingPage({
           initialValues={initialState.values}
           initialSubmissionId={initialState.submissionId}
           inviteUrl={buildBotInviteUrl('standard', guildId)}
+          key={onboardingWizardStateKey(durableRequest)}
           readiness={dashboard.readiness}
           roles={selectableRoles.map((role) => ({ id: role.id, name: role.name }))}
         />

@@ -5,7 +5,11 @@ describe('SetupDiagnosticsService (unit)', () => {
   const defaultChannelHas = (permission: bigint): boolean => typeof permission === 'bigint';
 
   const buildConfiguredGuild = (overrides: { channelHas?: typeof defaultChannelHas } = {}) => {
-    const caseRole = { id: 'role-1', managed: false };
+    const caseRole = {
+      id: 'role-1',
+      managed: false,
+      permissions: { bitfield: 0n as bigint },
+    };
     const botMember = {
       permissions: {
         has: jest.fn((permission: bigint) => permission !== PermissionFlagsBits.Administrator),
@@ -122,6 +126,25 @@ describe('SetupDiagnosticsService (unit)', () => {
       ])
     );
     expect(report.errorCount).toBeGreaterThanOrEqual(3);
+  });
+
+  it('rejects case roles that grant server permissions', async () => {
+    const { guild, caseRole } = buildConfiguredGuild();
+    caseRole.permissions.bitfield = PermissionFlagsBits.Administrator;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateGuildSetup(guild);
+
+    expect(report.issues.map((issue) => issue.code)).toContain('case-role-permissions');
   });
 
   it('requires thread-send permission in configured verification channels', async () => {

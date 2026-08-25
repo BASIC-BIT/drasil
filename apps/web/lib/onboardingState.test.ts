@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { SetupServerRecord } from '@drasil/contracts';
 import type { ModerationActionRequestSummary } from './moderationActionRequestDataAdapter';
-import { resolveOnboardingDurableRequest, resolveOnboardingInitialState } from './onboardingState';
+import {
+  onboardingWizardStateKey,
+  resolveOnboardingDurableRequest,
+  resolveOnboardingInitialState,
+} from './onboardingState';
 
 const server: SetupServerRecord = {
   guild_id: 'guild-1',
@@ -128,5 +132,15 @@ describe('resolveOnboardingDurableRequest', () => {
 
     expect(resolveOnboardingDurableRequest(request, 'ready', request.id)).toBe(request);
     expect(resolveOnboardingDurableRequest(request, 'ready', null)).toBeNull();
+  });
+});
+
+describe('onboardingWizardStateKey', () => {
+  it('remounts only after a durable setup request reaches a terminal state', () => {
+    expect(onboardingWizardStateKey(null)).toBe('onboarding-active');
+    expect(onboardingWizardStateKey(setupRequest('queued'))).toBe('onboarding-active');
+    expect(onboardingWizardStateKey(setupRequest('processing'))).toBe('onboarding-active');
+    expect(onboardingWizardStateKey(setupRequest('completed'))).toBe('request-1:completed');
+    expect(onboardingWizardStateKey(setupRequest('failed'))).toBe('request-1:failed');
   });
 });

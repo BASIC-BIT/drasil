@@ -500,18 +500,37 @@ export class EventHandler implements IEventHandler {
       // Source deletion never applies to staff/admin posters; the general exemption
       // setting only controls ordinary automatic detections.
       if (watchlistMatch && hasExemptPermissions) {
+        const staffDetectionResult = {
+          ...detectionResult,
+          reasons: [
+            ...detectionResult.reasons,
+            'Poster has moderation or administration permissions; automatic deletion and restriction skipped.',
+          ],
+          messageAction: detectionResult.messageAction
+            ? { ...detectionResult.messageAction, kind: 'review_only' as const }
+            : undefined,
+        };
+        const setupSafety = await this.evaluateAutomaticDetectionSetupSafety(message.member.guild);
+        if (!setupSafety.ready) {
+          await this.securityActionService.recordSuspiciousMessage(
+            message.member,
+            staffDetectionResult,
+            message
+          );
+          if (setupSafety.config && setupSafety.report) {
+            void this.maybeSendDetectionSetupWarning(
+              message.member.guild,
+              setupSafety.config,
+              setupSafety.report
+            ).catch((error) => {
+              console.warn(`Failed to process setup warning for guild ${serverId}:`, error);
+            });
+          }
+          return;
+        }
         await this.securityActionService.observeSuspiciousMessage(
           message.member,
-          {
-            ...detectionResult,
-            reasons: [
-              ...detectionResult.reasons,
-              'Poster has moderation or administration permissions; automatic deletion and restriction skipped.',
-            ],
-            messageAction: detectionResult.messageAction
-              ? { ...detectionResult.messageAction, kind: 'review_only' }
-              : undefined,
-          },
+          staffDetectionResult,
           message
         );
         return;
@@ -2004,7 +2023,12 @@ export class EventHandler implements IEventHandler {
   }
 
   private isSetupIncomplete(config: Server): boolean {
-    return !config.case_role_id || !config.admin_channel_id || !config.verification_channel_id;
+    return (
+      config.is_active === false ||
+      !config.case_role_id ||
+      !config.admin_channel_id ||
+      !config.verification_channel_id
+    );
   }
 
   private wasSetupNudgeRecentlyAttempted(
