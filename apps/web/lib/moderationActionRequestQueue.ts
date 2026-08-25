@@ -1,3 +1,4 @@
+import type { Pool, PoolClient } from 'pg';
 import { getPostgresPool } from './setupDataAdapter';
 
 export type ModerationActionRequestActionType =
@@ -68,7 +69,14 @@ export async function queueModerationActionRequest(
 export async function queueModerationActionRequestWithReceipt(
   input: QueueModerationActionRequestInput
 ): Promise<ModerationActionRequestReceipt> {
-  const result = await getPostgresPool().query<ModerationActionRequestReceipt>(
+  return insertModerationActionRequestWithReceipt(getPostgresPool(), input);
+}
+
+async function insertModerationActionRequestWithReceipt(
+  client: Pool | PoolClient,
+  input: QueueModerationActionRequestInput
+): Promise<ModerationActionRequestReceipt> {
+  const result = await client.query<ModerationActionRequestReceipt>(
     `insert into moderation_action_requests (
        server_id,
        action_type,
@@ -137,4 +145,41 @@ export async function queueModerationActionRequestWithReceipt(
       status: 'failed',
     }
   );
+}
+
+export async function queueSerializedModerationActionRequestWithReceipt(
+  input: QueueModerationActionRequestInput
+): Promise<ModerationActionRequestReceipt> {
+  const client = await getPostgresPool().connect();
+
+  try {
+    await client.query('begin');
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      `drasil:${input.actionType}:${input.serverId}`,
+    ]);
+
+    const active = await client.query<ModerationActionRequestReceipt>(
+      `select
+         id::text,
+         message_deletion_job_id::text as "messageDeletionJobId",
+         status::text as status
+       from moderation_action_requests
+       where server_id = $1
+         and action_type = $2::moderation_action_request_type
+         and status in ('queued', 'processing')
+       order by requested_at asc
+       limit 1`,
+      [input.serverId, input.actionType]
+    );
+
+    const receipt =
+      active.rows[0] ?? (await insertModerationActionRequestWithReceipt(client, input));
+    await client.query('commit');
+    return receipt;
+  } catch (error) {
+    await client.query('rollback').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }

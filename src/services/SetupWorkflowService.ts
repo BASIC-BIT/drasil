@@ -52,6 +52,7 @@ export interface CompleteSetupWorkflowInput {
   captureAnalytics?: boolean;
   detectionResponseMode?: DetectionResponseMode;
   previousPermissionSyncState?: VerificationChannelPermissionSyncState;
+  persistPermissionSyncState?: (state: VerificationChannelPermissionSyncState) => Promise<void>;
 }
 
 export class SetupWorkflowService {
@@ -103,12 +104,15 @@ export class SetupWorkflowService {
         setupArtifacts.verificationChannelId = channelId;
         setupArtifacts.permissionSyncState = state;
       };
-      const onPermissionsUpdated = (
+      const onPermissionsUpdated = async (
         snapshot: VerificationPermissionSnapshot,
         state?: VerificationChannelPermissionSyncState
-      ): void => {
+      ): Promise<void> => {
         setupArtifacts.permissionSnapshots.push(snapshot);
         setupArtifacts.permissionSyncState = state;
+        if (state && input.persistPermissionSyncState) {
+          await input.persistPermissionSyncState(state);
+        }
       };
       const replacingVerificationChannel = Boolean(
         input.candidateVerificationChannelId &&
@@ -148,7 +152,8 @@ export class SetupWorkflowService {
               false,
               onChannelCreated,
               input.candidateVerificationChannelId,
-              onPermissionsUpdated
+              onPermissionsUpdated,
+              input.previousPermissionSyncState
             )
           : await this.notificationManager.setupVerificationChannel(
               input.guild,

@@ -1471,8 +1471,19 @@ describe('NotificationManager (unit)', () => {
     } as unknown as Guild;
     const manager = new NotificationManager({} as any, configService, detectionRepository);
 
-    const onPermissionsUpdated = jest.fn();
-    await manager.setupVerificationChannel(
+    let markPersistenceStarted!: () => void;
+    let releasePersistence!: () => void;
+    const persistenceStarted = new Promise<void>((resolve) => {
+      markPersistenceStarted = resolve;
+    });
+    const persistenceReleased = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const onPermissionsUpdated = jest.fn(async () => {
+      markPersistenceStarted();
+      await persistenceReleased;
+    });
+    const setupPromise = manager.setupVerificationChannel(
       guild,
       'new-case-role',
       false,
@@ -1480,6 +1491,10 @@ describe('NotificationManager (unit)', () => {
       'verification-channel-1',
       onPermissionsUpdated
     );
+    await persistenceStarted;
+    expect(overwriteSet).not.toHaveBeenCalled();
+    releasePersistence();
+    await setupPromise;
 
     const previousRoleOverwrite = overwriteSet.mock.calls[0][0].find(
       (overwrite: { id: string }) => overwrite.id === 'old-case-role'

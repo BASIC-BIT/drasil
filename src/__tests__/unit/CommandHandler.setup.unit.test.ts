@@ -12,6 +12,7 @@ describe('CommandHandler setup commands (unit)', () => {
 
     const interaction = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -39,16 +40,26 @@ describe('CommandHandler setup commands (unit)', () => {
       caseRoleId: 'role-1',
       adminChannelId: 'channel-1',
       verificationChannelId: 'channel-2',
-      settingsPatch: {},
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
-    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+    expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
+      guild,
+      'role-1',
+      false,
+      expect.any(Function),
+      'channel-2'
+    );
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
       updateServerConfig.mock.invocationCallOrder[0]
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
+        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nSynced verification channel permissions: <#channel-2>',
       allowedMentions: { parse: [] },
     });
   });
@@ -63,6 +74,7 @@ describe('CommandHandler setup commands (unit)', () => {
 
     const interaction = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -97,7 +109,11 @@ describe('CommandHandler setup commands (unit)', () => {
       caseRoleId: 'role-1',
       adminChannelId: 'channel-1',
       verificationChannelId: 'created-channel-1',
-      settingsPatch: {},
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
@@ -135,6 +151,7 @@ describe('CommandHandler setup commands (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -185,6 +202,7 @@ describe('CommandHandler setup commands (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -210,6 +228,42 @@ describe('CommandHandler setup commands (unit)', () => {
       flags: MessageFlags.Ephemeral,
     });
     expect(interaction.deferReply).not.toHaveBeenCalled();
+    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+    expect(configService.updateSetupConfiguration).not.toHaveBeenCalled();
+  });
+
+  it('blocks setupverification when the case role is an operational trigger role', async () => {
+    const { handler, configService, notificationManager } = buildHandler({
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          role_gate_enabled: true,
+          honeypot_role_id: '111111111111111111',
+        },
+      }),
+    });
+    const guild = { id: 'guild-1' } as any;
+    const interaction = {
+      commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
+      guild,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      options: {
+        getRole: jest.fn().mockReturnValue({ id: '111111111111111111' }),
+        getChannel: jest.fn((name: string) =>
+          name === 'admin-channel' ? { id: 'channel-1', type: ChannelType.GuildText } : null
+        ),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content:
+        'Setup not saved. The case role must be separate from the configured honeypot trigger role.',
+    });
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
     expect(configService.updateSetupConfiguration).not.toHaveBeenCalled();
   });
@@ -243,6 +297,7 @@ describe('CommandHandler setup commands (unit)', () => {
     } as any;
     const interaction: any = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -271,7 +326,11 @@ describe('CommandHandler setup commands (unit)', () => {
       caseRoleId: 'role-1',
       adminChannelId: 'channel-1',
       verificationChannelId: 'created-channel-1',
-      settingsPatch: {},
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(createdChannel.delete).toHaveBeenCalledWith(
       'Rolling back Drasil setup after config save failed'
@@ -303,7 +362,7 @@ describe('CommandHandler setup commands (unit)', () => {
       commandName: 'setupverification',
       guild,
       channelId: 'channel-1',
-      user: { id: 'admin-1' },
+      user: { id: 'admin-1', username: 'Admin' },
       memberPermissions: null,
       options: {
         getRole: jest.fn().mockReturnValue({ id: 'role-1' }),
@@ -329,7 +388,7 @@ describe('CommandHandler setup commands (unit)', () => {
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
+        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nSynced verification channel permissions: <#channel-2>',
       allowedMentions: { parse: [] },
     });
   });
@@ -358,6 +417,7 @@ describe('CommandHandler setup commands (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -441,6 +501,7 @@ describe('CommandHandler setup commands (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),

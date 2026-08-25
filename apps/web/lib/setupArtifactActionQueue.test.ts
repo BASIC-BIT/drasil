@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({ queue: vi.fn() }));
 vi.mock('./e2eFixtures', () => ({ isWebE2eFixtureMode: () => false }));
 vi.mock('./moderationActionRequestQueue', () => ({
   queueModerationActionRequest: vi.fn(),
-  queueModerationActionRequestWithReceipt: mocks.queue,
+  queueSerializedModerationActionRequestWithReceipt: mocks.queue,
 }));
 
 import { queueCompleteSetupVerificationRequestWithReceipt } from './setupArtifactActionQueue';

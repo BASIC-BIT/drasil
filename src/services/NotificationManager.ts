@@ -119,7 +119,8 @@ export interface INotificationManager {
     onPermissionsUpdated?: (
       snapshot: VerificationPermissionSnapshot,
       state: VerificationChannelPermissionSyncState
-    ) => void
+    ) => void | Promise<void>,
+    previousSyncStateOverride?: VerificationChannelPermissionSyncState
   ): Promise<string | null>;
   restoreVerificationChannelPermissions?(
     guild: Guild,
@@ -874,7 +875,8 @@ export class NotificationManager implements INotificationManager {
     onPermissionsUpdated?: (
       snapshot: VerificationPermissionSnapshot,
       state: VerificationChannelPermissionSyncState
-    ) => void
+    ) => void | Promise<void>,
+    previousSyncStateOverride?: VerificationChannelPermissionSyncState
   ): Promise<string | null> {
     if (!caseRoleId) {
       console.error('Case role ID is required to set up verification channel');
@@ -883,7 +885,8 @@ export class NotificationManager implements INotificationManager {
 
     try {
       const serverConfig = await this.configService.getServerConfig(guild.id);
-      const previousSyncState = serverConfig.settings.verification_channel_permission_sync;
+      const previousSyncState =
+        previousSyncStateOverride ?? serverConfig.settings.verification_channel_permission_sync;
       const permissionOverwrites = this.buildVerificationChannelPermissionOverwrites(
         guild,
         caseRoleId
@@ -899,7 +902,7 @@ export class NotificationManager implements INotificationManager {
           previousSyncState,
           permissionOverwrites
         );
-        onPermissionsUpdated?.(snapshot, nextSyncState);
+        await onPermissionsUpdated?.(snapshot, nextSyncState);
         await configuredVerificationChannel.permissionOverwrites.set(
           this.mergeVerificationChannelPermissionOverwrites(
             snapshot,

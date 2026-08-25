@@ -13,6 +13,7 @@ export interface IModerationActionRequestRepository {
   findById(id: string): Promise<ModerationActionRequest | null>;
   claimNext(): Promise<ModerationActionRequest | null>;
   heartbeat(id: string): Promise<ModerationActionRequest | null>;
+  mergeMetadata(id: string, metadata: Prisma.JsonObject): Promise<ModerationActionRequest | null>;
   complete(id: string, result?: Prisma.JsonValue | null): Promise<ModerationActionRequest | null>;
   fail(id: string, error: string): Promise<ModerationActionRequest | null>;
 }
@@ -172,6 +173,24 @@ export class ModerationActionRequestRepository implements IModerationActionReque
       return rows[0] ?? null;
     } catch (error) {
       this.handleError(error, 'heartbeatModerationActionRequest');
+    }
+  }
+
+  public async mergeMetadata(
+    id: string,
+    metadata: Prisma.JsonObject
+  ): Promise<ModerationActionRequest | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<ModerationActionRequest[]>`
+        update moderation_action_requests
+        set metadata = coalesce(metadata, '{}'::jsonb) || ${JSON.stringify(metadata)}::jsonb,
+            updated_at = now()
+        where id = ${id}::uuid
+        returning *
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'mergeModerationActionRequestMetadata');
     }
   }
 

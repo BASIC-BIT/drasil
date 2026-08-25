@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isWebE2eFixtureMode } from './e2eFixtures';
 import {
   queueModerationActionRequest,
-  queueModerationActionRequestWithReceipt,
+  queueSerializedModerationActionRequestWithReceipt,
   type ModerationActionRequestReceipt,
   type ModerationActionRequestQueueStatus,
 } from './moderationActionRequestQueue';
@@ -63,7 +63,7 @@ export async function queueCompleteSetupVerificationRequestWithReceipt(input: {
     return { id: input.submissionId ?? 'fixture-setup-request', status: 'queued' };
   }
 
-  return queueModerationActionRequestWithReceipt({
+  return queueSerializedModerationActionRequestWithReceipt({
     actionType: 'complete_setup_verification',
     actorId: input.actorId,
     actorSurface: 'web',

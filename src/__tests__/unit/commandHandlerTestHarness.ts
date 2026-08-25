@@ -142,7 +142,8 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
 
   const notificationManager = {
     setupVerificationChannel:
-      overrides.setupVerificationChannel ?? jest.fn().mockResolvedValue('created-channel-1'),
+      overrides.setupVerificationChannel ??
+      jest.fn().mockImplementation(async (...args: unknown[]) => args[4] ?? 'created-channel-1'),
   } as any;
   const setupDiagnosticsService =
     overrides.setupDiagnosticsService === null

@@ -358,4 +358,34 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
       })
     ).resolves.toMatchObject({ status: ModerationActionRequestStatus.QUEUED });
   });
+
+  it('merges setup permission provenance into request metadata', async () => {
+    const servers = new ServerRepository(prisma);
+    await servers.getOrCreateServer('guild-1');
+    const request = await requests.enqueue({
+      serverId: 'guild-1',
+      actionType: ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION,
+      actorId: 'administrator-1',
+      actorSurface: 'web',
+      idempotencyKey: 'web:setup:complete_setup_verification:guild-1:permission-provenance-1',
+      metadata: { admin_channel_id: 'admin-channel-1' },
+    });
+
+    await expect(
+      requests.mergeMetadata(request.id, {
+        verification_channel_permission_sync: {
+          channel_id: 'verification-channel-1',
+          managed_overwrites: [],
+        },
+      })
+    ).resolves.toMatchObject({
+      metadata: {
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_permission_sync: {
+          channel_id: 'verification-channel-1',
+          managed_overwrites: [],
+        },
+      },
+    });
+  });
 });

@@ -81,8 +81,8 @@ export class SetupCommandHandler {
       return;
     }
 
-    const setupWorkflowService = this.setupWorkflowService;
-    if (!this.setupDiagnosticsService || !setupWorkflowService) {
+    const setupProvisioningService = this.setupProvisioningService;
+    if (!this.setupDiagnosticsService || !setupProvisioningService) {
       await interaction.reply({
         content: 'Setup diagnostics are not available in this runtime.',
         flags: MessageFlags.Ephemeral,
@@ -115,36 +115,38 @@ export class SetupCommandHandler {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-      const verificationChannelCandidate = await this.resolveVerificationChannelCandidate(
+      const setupResult = await setupProvisioningService.provision({
         guild,
-        verificationChannel?.id ?? null
-      );
+        adminChannelId: adminChannel.id,
+        caseRole: caseRole as Role,
+        caseRoleId: caseRole.id,
+        verificationChannel: verificationChannel as TextChannel | null,
+        verificationChannelId: verificationChannel?.id ?? null,
+        reportInstructionsChannelId: null,
+        actorLabel: interaction.user.username,
+        captureAnalytics: true,
+      });
 
-      if (verificationChannelCandidate.ambiguousChannelIds.length > 0) {
+      if (setupResult.status === 'ambiguous_case_role') {
+        await interaction.editReply({
+          content: 'Setup not saved. Choose one case role before rerunning setup.',
+        });
+        return;
+      }
+      if (setupResult.status === 'ambiguous_verification_channel') {
         await interaction.editReply({
           content:
             `Setup not saved. Multiple #${DEFAULT_VERIFICATION_CHANNEL_NAME} channels already exist: ` +
-            verificationChannelCandidate.ambiguousChannelIds
-              .map((channelId) => `<#${channelId}>`)
-              .join(', ') +
+            setupResult.channelIds.map((channelId) => `<#${channelId}>`).join(', ') +
             '. Choose one with `verification-channel` before rerunning setup.',
           allowedMentions: { parse: [] },
         });
         return;
       }
-
-      const setupResult = await setupWorkflowService.completeSetup({
-        guild,
-        caseRole: caseRole as Role,
-        adminChannelId: adminChannel.id,
-        initialVerificationChannelId: verificationChannel?.id ?? null,
-        candidateVerificationChannelId: verificationChannelCandidate.channelId,
-        ...(verificationChannelCandidate.willSyncPermissions
-          ? { willSyncVerificationChannelPermissions: true }
-          : {}),
-        reportInstructionsChannelId: null,
-        captureAnalytics: true,
-      });
+      if (setupResult.status === 'invalid_selection') {
+        await interaction.editReply({ content: `Setup not saved. ${setupResult.detail}` });
+        return;
+      }
 
       if (setupResult.status === 'candidate_validation_failed') {
         await interaction.editReply({
@@ -232,90 +234,6 @@ export class SetupCommandHandler {
     }
 
     return invokingMember.permissions.has(PermissionFlagsBits.Administrator);
-  }
-
-  private async resolveVerificationChannelCandidate(
-    guild: NonNullable<ChatInputCommandInteraction['guild']>,
-    explicitVerificationChannelId: string | null
-  ): Promise<{
-    channelId: string | null;
-    willSyncPermissions: boolean;
-    ambiguousChannelIds: readonly string[];
-  }> {
-    if (explicitVerificationChannelId) {
-      return {
-        channelId: explicitVerificationChannelId,
-        willSyncPermissions: false,
-        ambiguousChannelIds: [],
-      };
-    }
-
-    const serverConfig = await this.configService.getServerConfig(guild.id).catch(() => null);
-    const configuredVerificationChannelId = serverConfig?.verification_channel_id ?? null;
-    if (configuredVerificationChannelId) {
-      const configuredChannel = await guild.channels
-        .fetch(configuredVerificationChannelId)
-        .catch(() => null);
-      if (configuredChannel?.type === ChannelType.GuildText) {
-        return {
-          channelId: configuredVerificationChannelId,
-          willSyncPermissions: true,
-          ambiguousChannelIds: [],
-        };
-      }
-    }
-
-    const matchingChannels = this.findMatchingVerificationChannels(guild);
-    if (matchingChannels.length === 1) {
-      return {
-        channelId: matchingChannels[0].id,
-        willSyncPermissions: true,
-        ambiguousChannelIds: [],
-      };
-    }
-
-    return {
-      channelId: null,
-      willSyncPermissions: false,
-      ambiguousChannelIds: matchingChannels.map((channel) => channel.id),
-    };
-  }
-
-  private findMatchingVerificationChannels(
-    guild: NonNullable<ChatInputCommandInteraction['guild']>
-  ): TextChannel[] {
-    const guildLike = guild as { channels?: { cache?: unknown } };
-    const values = this.getCachedCollectionValues(guildLike.channels?.cache);
-
-    return values.filter((channel): channel is TextChannel =>
-      this.isVerificationTextChannel(channel)
-    );
-  }
-
-  private getCachedCollectionValues(cache: unknown): unknown[] {
-    const cacheWithValues = cache as { values?: unknown } | null;
-    if (typeof cacheWithValues?.values === 'function') {
-      return [...(cacheWithValues.values as () => Iterable<unknown>)()];
-    }
-
-    const iterableCache = cache as { [Symbol.iterator]?: unknown } | null;
-    if (typeof iterableCache?.[Symbol.iterator] === 'function') {
-      return [...(cache as Iterable<unknown>)];
-    }
-
-    return [];
-  }
-
-  private isVerificationTextChannel(channel: unknown): channel is TextChannel {
-    const maybeChannel = channel as { type?: ChannelType; name?: string } | null;
-    if (!maybeChannel) {
-      return false;
-    }
-
-    return (
-      maybeChannel.type === ChannelType.GuildText &&
-      maybeChannel.name === DEFAULT_VERIFICATION_CHANNEL_NAME
-    );
   }
 
   public async handleConfigSetupCommand(

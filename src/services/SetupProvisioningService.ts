@@ -1,7 +1,7 @@
 import type { DetectionResponseMode } from '../../packages/contracts/src/setup';
 import { ChannelType, Guild, Role, TextChannel } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
-import type { Server } from '../repositories/types';
+import type { Server, VerificationChannelPermissionSyncState } from '../repositories/types';
 import {
   DEFAULT_DETECTION_RESPONSE_MODE,
   DEFAULT_FIRST_SETUP_DETECTION_RESPONSE_MODE,
@@ -44,6 +44,10 @@ export interface ProvisionSetupInput {
   readonly detectionResponseMode?: DetectionResponseMode;
   readonly actorLabel: string;
   readonly captureAnalytics?: boolean;
+  readonly previousPermissionSyncState?: VerificationChannelPermissionSyncState;
+  readonly persistPermissionSyncState?: (
+    state: VerificationChannelPermissionSyncState
+  ) => Promise<void>;
 }
 
 type CaseRoleCandidate =
@@ -197,7 +201,10 @@ export class SetupProvisioningService {
       createdCaseRole,
       captureAnalytics: input.captureAnalytics,
       detectionResponseMode,
-      previousPermissionSyncState: existingConfig.settings.verification_channel_permission_sync,
+      previousPermissionSyncState:
+        input.previousPermissionSyncState ??
+        existingConfig.settings.verification_channel_permission_sync,
+      persistPermissionSyncState: input.persistPermissionSyncState,
     });
   }
 

@@ -1,0 +1,70 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  connect: vi.fn(),
+  query: vi.fn(),
+  release: vi.fn(),
+}));
+
+vi.mock('./setupDataAdapter', () => ({
+  getPostgresPool: () => ({ connect: mocks.connect, query: mocks.query }),
+}));
+
+import { queueSerializedModerationActionRequestWithReceipt } from './moderationActionRequestQueue';
+
+describe('queueSerializedModerationActionRequestWithReceipt', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.connect.mockResolvedValue({ query: mocks.query, release: mocks.release });
+  });
+
+  it('returns the active setup request after taking the guild transaction lock', async () => {
+    mocks.query
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'active-1', status: 'processing' }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = await queueSerializedModerationActionRequestWithReceipt({
+      actionType: 'complete_setup_verification',
+      actorId: 'admin-2',
+      actorSurface: 'web',
+      idempotencyKey: 'setup-2',
+      serverId: 'guild-1',
+    });
+
+    expect(result).toEqual({ id: 'active-1', status: 'processing' });
+    expect(mocks.query.mock.calls.map(([sql]) => sql)).toEqual([
+      'begin',
+      'select pg_advisory_xact_lock(hashtextextended($1, 0))',
+      expect.stringContaining("status in ('queued', 'processing')"),
+      'commit',
+    ]);
+    expect(mocks.query).toHaveBeenNthCalledWith(2, expect.any(String), [
+      'drasil:complete_setup_verification:guild-1',
+    ]);
+    expect(mocks.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('inserts a setup request when no request is active', async () => {
+    mocks.query
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'request-2', status: 'queued' }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = await queueSerializedModerationActionRequestWithReceipt({
+      actionType: 'complete_setup_verification',
+      actorId: 'admin-2',
+      actorSurface: 'web',
+      idempotencyKey: 'setup-2',
+      serverId: 'guild-1',
+    });
+
+    expect(result).toEqual({ id: 'request-2', status: 'queued' });
+    expect(mocks.query.mock.calls[3]?.[0]).toContain('insert into moderation_action_requests');
+    expect(mocks.query).toHaveBeenLastCalledWith('commit');
+    expect(mocks.release).toHaveBeenCalledTimes(1);
+  });
+});

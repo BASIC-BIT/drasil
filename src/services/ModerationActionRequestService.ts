@@ -34,6 +34,7 @@ import {
   ModerationActionRequest,
   ModerationActionRequestStatus,
   ModerationActionRequestType,
+  type VerificationChannelPermissionSyncState,
 } from '../repositories/types';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { buildReportIntakeAdminActionsCustomId } from '../utils/reportIntakeAdminActions';
@@ -1471,6 +1472,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     const caseRoleName = this.readMetadataString(request.metadata, 'case_role_name');
     const createCaseRole = this.readMetadataBoolean(request.metadata, 'create_case_role') === true;
     const detectionResponseMode = this.readSetupDetectionResponseMode(request.metadata);
+    const previousPermissionSyncState = this.readVerificationPermissionSyncState(request.metadata);
     const guild = await this.fetchGuild(request.server_id);
     await this.fetchRequestTextChannel(request.server_id, adminChannelId, 'Admin channel');
 
@@ -1493,6 +1495,15 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       createCaseRole,
       detectionResponseMode,
       guild,
+      previousPermissionSyncState,
+      persistPermissionSyncState: async (state) => {
+        const updated = await this.repository.mergeMetadata(request.id, {
+          verification_channel_permission_sync: state as unknown as Prisma.JsonObject,
+        });
+        if (!updated) {
+          throw new Error('Setup request disappeared while saving permission provenance.');
+        }
+      },
       reportInstructionsChannelId,
       verificationChannelId,
     });
@@ -1586,6 +1597,15 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       value === 'notify_only' ||
       value === 'restrict'
       ? value
+      : undefined;
+  }
+
+  private readVerificationPermissionSyncState(
+    metadata: Prisma.JsonValue
+  ): VerificationChannelPermissionSyncState | undefined {
+    const value = this.readMetadataRecord(metadata, 'verification_channel_permission_sync');
+    return value && typeof value.channel_id === 'string' && Array.isArray(value.managed_overwrites)
+      ? (value as unknown as VerificationChannelPermissionSyncState)
       : undefined;
   }
 

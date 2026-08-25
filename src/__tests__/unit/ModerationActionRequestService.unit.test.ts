@@ -1,4 +1,5 @@
 import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
+import type { Prisma } from '../../db/prisma';
 import { ChannelType } from 'discord.js';
 import {
   AdminActionType,
@@ -490,6 +491,7 @@ class FakeModerationActionRequestRepository implements IModerationActionRequestR
   public completed: Array<{ id: string; result: unknown }> = [];
   public failed: Array<{ error: string; id: string }> = [];
   public heartbeats: string[] = [];
+  public metadataMerges: Array<{ id: string; metadata: unknown }> = [];
 
   public async enqueue(): Promise<ModerationActionRequest> {
     throw new Error('not used');
@@ -506,6 +508,23 @@ class FakeModerationActionRequestRepository implements IModerationActionRequestR
   public async heartbeat(id: string): Promise<ModerationActionRequest | null> {
     this.heartbeats.push(id);
     return { ...baseRequest, id, status: ModerationActionRequestStatus.PROCESSING };
+  }
+
+  public async mergeMetadata(
+    id: string,
+    metadata: Prisma.JsonObject
+  ): Promise<ModerationActionRequest | null> {
+    this.metadataMerges.push({ id, metadata });
+    const request = this.byId.get(id);
+    if (!request) {
+      return null;
+    }
+    const updated = {
+      ...request,
+      metadata: { ...(request.metadata as Prisma.JsonObject), ...metadata },
+    };
+    this.byId.set(id, updated);
+    return updated;
   }
 
   public complete = jest.fn(
@@ -607,6 +626,12 @@ describe('ModerationActionRequestService', () => {
       guildId: 'guild-1',
       id: 'verification-channel-1',
       type: ChannelType.GuildText,
+    };
+    (guild as any).channels = {
+      cache: new Map(),
+      fetch: jest.fn(async (id: string) =>
+        id === verificationChannel.id ? verificationChannel : null
+      ),
     };
     const verificationThread = {
       archived: false,
@@ -828,7 +853,29 @@ describe('ModerationActionRequestService', () => {
       updateServerSettings: jest.fn(async () => undefined),
     };
     const notificationManager = {
+      restoreVerificationChannelPermissions: jest.fn(async () => true),
       setupVerificationChannel: jest.fn(async (...args: unknown[]) => {
+        const configuredChannelId = args[4];
+        const onPermissionsUpdated = args[5];
+        if (typeof configuredChannelId === 'string') {
+          if (typeof onPermissionsUpdated === 'function') {
+            await onPermissionsUpdated(
+              { channelId: configuredChannelId, entries: [] },
+              {
+                channel_id: configuredChannelId,
+                managed_overwrites: [
+                  {
+                    id: 'guild-1',
+                    type: 0,
+                    managed_bits: '1',
+                    original_overwrite: { existed: false, allow: '0', deny: '0' },
+                  },
+                ],
+              }
+            );
+          }
+          return configuredChannelId;
+        }
         const onChannelCreated = args[3];
         if (typeof onChannelCreated === 'function') {
           onChannelCreated('created-verification-channel');
@@ -2160,6 +2207,55 @@ describe('ModerationActionRequestService', () => {
           verification_channel_action: 'created',
           verification_channel_id: 'created-verification-channel',
         }),
+      },
+    ]);
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('persists verification permission provenance before syncing a selected channel', async () => {
+    const previousPermissionSyncState = {
+      channel_id: 'verification-channel-1',
+      managed_overwrites: [
+        {
+          id: 'role-1',
+          type: 0 as const,
+          managed_bits: '7',
+          original_overwrite: { existed: true, allow: '1', deny: '2' },
+        },
+      ],
+    };
+    const request: ModerationActionRequest = {
+      ...completeSetupVerificationRequest,
+      id: 'setup-permission-sync-request-1',
+      idempotency_key: 'web:setup:complete_setup_verification:guild-1:permission-sync-1',
+      metadata: {
+        ...(completeSetupVerificationRequest.metadata as Record<string, unknown>),
+        verification_channel_id: 'verification-channel-1',
+        verification_channel_permission_sync: previousPermissionSyncState,
+      },
+    };
+    const { notificationManager, repository, service } = buildService([request]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'guild-1' }),
+      'role-1',
+      false,
+      expect.any(Function),
+      'verification-channel-1',
+      expect.any(Function),
+      previousPermissionSyncState
+    );
+    expect(repository.metadataMerges).toEqual([
+      {
+        id: 'setup-permission-sync-request-1',
+        metadata: {
+          verification_channel_permission_sync: expect.objectContaining({
+            channel_id: 'verification-channel-1',
+            managed_overwrites: expect.any(Array),
+          }),
+        },
       },
     ]);
     expect(repository.failed).toEqual([]);
