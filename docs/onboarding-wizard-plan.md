@@ -1,6 +1,6 @@
 # Onboarding Wizard Implementation Plan
 
-Status: Approved direction; implementation not started
+Status: Implemented by [#216](https://github.com/BASIC-BIT/drasil/pull/216)
 
 Tracking issue: [#84](https://github.com/BASIC-BIT/drasil/issues/84)
 

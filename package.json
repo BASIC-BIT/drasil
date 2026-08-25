@@ -94,6 +94,7 @@
     "typescript-eslint": "^8.28.0"
   },
   "dependencies": {
+    "@drasil/contracts": "file:packages/contracts",
     "@arizeai/openinference-instrumentation-openai": "^4.1.4",
     "@arizeai/phoenix-otel": "^1.0.2",
     "@opentelemetry/api": "^1.9.0",

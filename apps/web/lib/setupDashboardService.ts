@@ -501,7 +501,7 @@ export class SetupDashboardService {
     const guilds = (await fetchDiscordGuilds(accessToken)).filter((guild) => {
       return canManageGuild(guild.permissions, guild.owner);
     });
-    const botUser = await fetchDiscordBotUser().catch(() => null);
+    const botUser = await fetchDiscordBotUser();
     return mapWithConcurrency(guilds, GUILD_READINESS_CONCURRENCY, async (guild) => {
       const { dashboard } = await this.loadDashboard(guild, botUser);
       return {
@@ -534,7 +534,7 @@ export class SetupDashboardService {
 
   private async loadDashboard(
     manageableGuild: DiscordGuildSummary,
-    knownBotUser?: DiscordUser | null
+    knownBotUser?: DiscordUser
   ): Promise<SetupDashboardContext> {
     const guildId = manageableGuild.id;
 
@@ -543,9 +543,6 @@ export class SetupDashboardService {
     let resourcesError: string | null = null;
     let installed = true;
     try {
-      if (knownBotUser === null) {
-        throw new Error('Unable to load the Drasil bot identity from Discord.');
-      }
       resources = await fetchGuildResources(guildId, knownBotUser);
     } catch (error) {
       resourcesError = error instanceof Error ? error.message : 'Unable to load Discord resources.';
