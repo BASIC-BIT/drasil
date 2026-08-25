@@ -194,6 +194,18 @@ describe('EventHandler (unit)', () => {
     } as unknown as GuildMember;
   }
 
+  function buildReadySetupDiagnosticsService(): Record<string, jest.Mock> {
+    return {
+      validateGuildSetup: jest.fn().mockResolvedValue({
+        guildId: 'guild-1',
+        checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+        issues: [],
+        errorCount: 0,
+        warningCount: 0,
+      }),
+    };
+  }
+
   function buildGlobalWatchlistRepository(): Record<string, jest.Mock> {
     return {
       findEnabled: jest.fn().mockResolvedValue([GLOBAL_WATCHLIST_ENTRY]),
@@ -2276,6 +2288,9 @@ describe('EventHandler (unit)', () => {
         initialize: jest.fn().mockResolvedValue(undefined),
         getCachedServerConfig: jest.fn().mockReturnValue({}),
         getServerConfig: jest.fn().mockResolvedValue({
+          case_role_id: 'case-role-1',
+          admin_channel_id: 'admin-channel-1',
+          verification_channel_id: 'verification-channel-1',
           settings: {
             detection_response_mode: 'restrict',
             min_confidence_threshold: 70,
@@ -2297,6 +2312,7 @@ describe('EventHandler (unit)', () => {
         detectionOrchestrator,
         configService,
         securityActionService,
+        setupDiagnosticsService: buildReadySetupDiagnosticsService(),
         globalMessageWatchlistRepository,
       });
       const firstMessage = buildMessage(new PermissionsBitField()) as any;
@@ -2333,6 +2349,9 @@ describe('EventHandler (unit)', () => {
       initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
         settings: {
           detection_response_mode: 'restrict',
           min_confidence_threshold: 70,
@@ -2348,6 +2367,7 @@ describe('EventHandler (unit)', () => {
       detectionOrchestrator,
       configService,
       securityActionService,
+      setupDiagnosticsService: buildReadySetupDiagnosticsService(),
       globalMessageWatchlistRepository: buildGlobalWatchlistRepository(),
     });
     const message = buildMessage(new PermissionsBitField()) as any;
@@ -2427,6 +2447,9 @@ describe('EventHandler (unit)', () => {
       initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
         settings: {
           detection_response_mode: 'notify_only',
           min_confidence_threshold: 70,
@@ -2447,6 +2470,7 @@ describe('EventHandler (unit)', () => {
       configService,
       notificationManager,
       securityActionService,
+      setupDiagnosticsService: buildReadySetupDiagnosticsService(),
       globalMessageWatchlistRepository: buildGlobalWatchlistRepository(),
     });
     const message = buildMessage(new PermissionsBitField()) as any;
@@ -3229,10 +3253,25 @@ describe('EventHandler (unit)', () => {
     const userModerationService = {
       findLatestKickOutcome: jest.fn().mockResolvedValue(priorKick),
     };
+    const serverConfig = {
+      case_role_id: 'case-role-1',
+      admin_channel_id: 'admin-channel-1',
+      verification_channel_id: 'verification-channel-1',
+      settings: { detection_response_mode: 'notify_only' },
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue(serverConfig),
+      getServerConfig: jest.fn().mockResolvedValue(serverConfig),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
     const handler = buildHandler({
+      configService,
       detectionOrchestrator,
       securityActionService,
       notificationManager,
+      setupDiagnosticsService: buildReadySetupDiagnosticsService(),
       userModerationService,
     });
     const member = buildMember(new PermissionsBitField());
@@ -3616,6 +3655,14 @@ describe('EventHandler (unit)', () => {
     );
     expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
     expect(securityActionService.handleSuspiciousJoin).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when automatic detection setup diagnostics are unavailable', async () => {
+    const handler = buildHandler();
+
+    await expect(
+      (handler as any).evaluateAutomaticDetectionSetupSafety({ id: 'guild-1' })
+    ).resolves.toEqual({ ready: false });
   });
 
   it('skips detection-time setup validation immediately after a warning attempt', async () => {

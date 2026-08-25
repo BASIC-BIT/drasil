@@ -779,7 +779,7 @@ export class EventHandler implements IEventHandler {
     readonly report?: SetupDiagnosticReport;
   }> {
     if (!this.setupDiagnosticsService) {
-      return { ready: true };
+      return { ready: false };
     }
 
     try {
