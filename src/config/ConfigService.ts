@@ -1,7 +1,10 @@
 import { injectable, inject } from 'inversify';
 import { Client, Role, TextChannel } from 'discord.js';
 import { z } from 'zod';
-import { IServerRepository } from '../repositories/ServerRepository';
+import {
+  IServerRepository,
+  type ServerSetupConfigurationUpdate,
+} from '../repositories/ServerRepository';
 import { Server, ServerSettings } from '../repositories/types';
 import { globalConfig } from './GlobalConfig';
 import { TYPES } from '../di/symbols';
@@ -16,7 +19,7 @@ import {
 import {
   DEFAULT_OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD,
   DEFAULT_OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES,
-  DEFAULT_DETECTION_RESPONSE_MODE,
+  DEFAULT_FIRST_SETUP_DETECTION_RESPONSE_MODE,
   DEFAULT_MODERATOR_BAN_ACTION_ENABLED,
   DEFAULT_MODERATOR_BAN_ACTION_REQUIRES_REASON,
   AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY,
@@ -100,6 +103,11 @@ export interface HeuristicSettingsUpdate {
   suspiciousKeywords?: string[];
 }
 
+export interface GetServerConfigOptions {
+  readonly failOnReadError?: boolean;
+  readonly forceRefresh?: boolean;
+}
+
 const CachedServerHeuristicSettingsSchema = z.object({
   heuristic_message_threshold: z.number().int().min(1).max(MAX_HEURISTIC_MESSAGE_THRESHOLD),
   heuristic_message_timeframe_seconds: z.number().int().min(1).max(MAX_HEURISTIC_TIMEFRAME_SECONDS),
@@ -136,7 +144,7 @@ export interface IConfigService {
    * @param guildId The Discord guild ID
    * @returns The server configuration
    */
-  getServerConfig(guildId: string): Promise<Server>;
+  getServerConfig(guildId: string, options?: GetServerConfigOptions): Promise<Server>;
 
   /**
    * Get a server configuration from in-memory cache only.
@@ -175,6 +183,12 @@ export interface IConfigService {
    * @returns The updated server configuration
    */
   updateServerConfig(guildId: string, data: Partial<Server>): Promise<Server>;
+
+  /** Atomically update core setup fields while merging only the supplied JSON settings keys. */
+  updateSetupConfiguration(
+    guildId: string,
+    update: ServerSetupConfigurationUpdate
+  ): Promise<Server>;
 
   /**
    * Update specific settings for a server
@@ -312,7 +326,7 @@ export class ConfigService implements IConfigService {
         DEFAULT_VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT,
       [VERIFICATION_AI_MAX_ACTION_SETTING_KEY]: DEFAULT_VERIFICATION_AI_MAX_ACTION,
       [VERIFICATION_AI_RESTRICT_THRESHOLD_SETTING_KEY]: DEFAULT_VERIFICATION_AI_RESTRICT_THRESHOLD,
-      [DETECTION_RESPONSE_MODE_SETTING_KEY]: DEFAULT_DETECTION_RESPONSE_MODE,
+      [DETECTION_RESPONSE_MODE_SETTING_KEY]: DEFAULT_FIRST_SETUP_DETECTION_RESPONSE_MODE,
       [OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY]:
         DEFAULT_OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD,
       [OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES_SETTING_KEY]:
@@ -531,9 +545,12 @@ export class ConfigService implements IConfigService {
    * @param guildId The Discord guild ID
    * @returns The server configuration
    */
-  async getServerConfig(guildId: string): Promise<Server> {
+  async getServerConfig(guildId: string, options: GetServerConfigOptions = {}): Promise<Server> {
     const cachedServer = this.serverCache.get(guildId);
-    if (cachedServer && this.isServerConfigCacheFresh(guildId)) {
+    if (!options.forceRefresh && cachedServer && this.isServerConfigCacheFresh(guildId)) {
+      return cachedServer;
+    }
+    if (!process.env.DATABASE_URL && cachedServer) {
       return cachedServer;
     }
 
@@ -571,6 +588,11 @@ export class ConfigService implements IConfigService {
         return defaultConfig;
       } catch (error) {
         console.error(`Failed to get server configuration for guild ${guildId}:`, error);
+        if (options.failOnReadError) {
+          throw error instanceof Error
+            ? error
+            : new Error(`Failed to get server configuration for guild ${guildId}`);
+        }
         if (cachedServer) {
           return cachedServer;
         }
@@ -614,6 +636,38 @@ export class ConfigService implements IConfigService {
     return updatedServer;
   }
 
+  async updateSetupConfiguration(
+    guildId: string,
+    update: ServerSetupConfigurationUpdate
+  ): Promise<Server> {
+    if (process.env.DATABASE_URL) {
+      try {
+        const server = await this.serverRepository.upsertSetupConfiguration(guildId, update);
+        this.cacheServerConfig(server);
+        return server;
+      } catch (error) {
+        console.error(`Failed to update setup configuration for guild ${guildId}:`, error);
+        throw error instanceof Error
+          ? error
+          : new Error(`Failed to update setup configuration for guild ${guildId}`);
+      }
+    }
+
+    const currentConfig =
+      this.serverCache.get(guildId) || (await this.createDefaultServerConfig(guildId));
+    const updatedServer: Server = {
+      ...currentConfig,
+      case_role_id: update.caseRoleId,
+      admin_channel_id: update.adminChannelId,
+      verification_channel_id: update.verificationChannelId,
+      settings: { ...currentConfig.settings, ...update.settingsPatch },
+      is_active: true,
+      updated_at: new Date().toISOString(),
+    };
+    this.cacheServerConfig(updatedServer);
+    return updatedServer;
+  }
+
   /**
    * Update specific settings for a server
    * @param guildId The Discord guild ID
@@ -621,6 +675,26 @@ export class ConfigService implements IConfigService {
    * @returns The updated server configuration
    */
   async updateServerSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server> {
+    if (process.env.DATABASE_URL) {
+      try {
+        let server = await this.serverRepository.updateSettings(guildId, settings);
+        if (!server) {
+          await this.getServerConfig(guildId, { failOnReadError: true, forceRefresh: true });
+          server = await this.serverRepository.updateSettings(guildId, settings);
+        }
+        if (!server) {
+          throw new Error(`Server configuration does not exist for guild ${guildId}`);
+        }
+        this.cacheServerConfig(server);
+        return server;
+      } catch (error) {
+        console.error(`Failed to update server settings for guild ${guildId}:`, error);
+        throw error instanceof Error
+          ? error
+          : new Error(`Failed to update server settings for guild ${guildId}`);
+      }
+    }
+
     const currentConfig = await this.getServerConfig(guildId);
     const updatedSettings: ServerSettings = {
       ...currentConfig.settings,

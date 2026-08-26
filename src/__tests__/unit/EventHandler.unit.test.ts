@@ -1,6 +1,7 @@
 import {
   AuditLogEvent,
   Events,
+  Guild,
   GuildMember,
   Message,
   MessageFlags,
@@ -13,6 +14,8 @@ import {
   ActiveAccountQuarantineCache,
   IActiveAccountQuarantineCache,
 } from '../../services/ActiveAccountQuarantineCache';
+import { globalConfig } from '../../config/GlobalConfig';
+import { runSerializedGuildSetup } from '../../services/SetupProvisioningService';
 import {
   CaseAttentionState,
   CaseContainmentStatus,
@@ -194,6 +197,18 @@ describe('EventHandler (unit)', () => {
     } as unknown as GuildMember;
   }
 
+  function buildReadySetupDiagnosticsService(): Record<string, jest.Mock> {
+    return {
+      validateGuildSetup: jest.fn().mockResolvedValue({
+        guildId: 'guild-1',
+        checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+        issues: [],
+        errorCount: 0,
+        warningCount: 0,
+      }),
+    };
+  }
+
   function buildGlobalWatchlistRepository(): Record<string, jest.Mock> {
     return {
       findEnabled: jest.fn().mockResolvedValue([GLOBAL_WATCHLIST_ENTRY]),
@@ -272,7 +287,28 @@ describe('EventHandler (unit)', () => {
     expect(client.on).toHaveBeenCalledWith(Events.GuildBanAdd, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.InteractionCreate, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildCreate, expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith(Events.GuildDelete, expect.any(Function));
     expect(client.on).not.toHaveBeenCalledWith('ready', expect.any(Function));
+  });
+
+  it('marks a configured server inactive when Drasil leaves the guild', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const configService = {
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+    };
+    const handler = buildHandler({ client, configService });
+    await handler.setupEventHandlers();
+    const guildDeleteHandler = client.on.mock.calls.find(
+      ([event]) => event === Events.GuildDelete
+    )?.[1];
+
+    await expect(
+      guildDeleteHandler?.({ id: 'guild-1' } as unknown as Guild)
+    ).resolves.toBeUndefined();
+
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      is_active: false,
+    });
   });
 
   it('contains expired interactions without attempting another response', async () => {
@@ -2276,6 +2312,9 @@ describe('EventHandler (unit)', () => {
         initialize: jest.fn().mockResolvedValue(undefined),
         getCachedServerConfig: jest.fn().mockReturnValue({}),
         getServerConfig: jest.fn().mockResolvedValue({
+          case_role_id: 'case-role-1',
+          admin_channel_id: 'admin-channel-1',
+          verification_channel_id: 'verification-channel-1',
           settings: {
             detection_response_mode: 'restrict',
             min_confidence_threshold: 70,
@@ -2297,6 +2336,7 @@ describe('EventHandler (unit)', () => {
         detectionOrchestrator,
         configService,
         securityActionService,
+        setupDiagnosticsService: buildReadySetupDiagnosticsService(),
         globalMessageWatchlistRepository,
       });
       const firstMessage = buildMessage(new PermissionsBitField()) as any;
@@ -2333,6 +2373,9 @@ describe('EventHandler (unit)', () => {
       initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
         settings: {
           detection_response_mode: 'restrict',
           min_confidence_threshold: 70,
@@ -2348,6 +2391,7 @@ describe('EventHandler (unit)', () => {
       detectionOrchestrator,
       configService,
       securityActionService,
+      setupDiagnosticsService: buildReadySetupDiagnosticsService(),
       globalMessageWatchlistRepository: buildGlobalWatchlistRepository(),
     });
     const message = buildMessage(new PermissionsBitField()) as any;
@@ -2427,6 +2471,9 @@ describe('EventHandler (unit)', () => {
       initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
         settings: {
           detection_response_mode: 'notify_only',
           min_confidence_threshold: 70,
@@ -2447,6 +2494,7 @@ describe('EventHandler (unit)', () => {
       configService,
       notificationManager,
       securityActionService,
+      setupDiagnosticsService: buildReadySetupDiagnosticsService(),
       globalMessageWatchlistRepository: buildGlobalWatchlistRepository(),
     });
     const message = buildMessage(new PermissionsBitField()) as any;
@@ -2476,6 +2524,11 @@ describe('EventHandler (unit)', () => {
       initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        is_active: true,
         settings: {
           detection_response_mode: 'restrict',
           min_confidence_threshold: 70,
@@ -2491,6 +2544,7 @@ describe('EventHandler (unit)', () => {
       detectionOrchestrator,
       configService,
       securityActionService,
+      setupDiagnosticsService: buildReadySetupDiagnosticsService(),
       globalMessageWatchlistRepository: buildGlobalWatchlistRepository(),
     });
     const message = buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers)) as any;
@@ -2529,8 +2583,60 @@ describe('EventHandler (unit)', () => {
       initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn().mockReturnValue({}),
       getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        is_active: true,
         settings: {
           automatic_detection_exempt_moderators: false,
+          detection_response_mode: 'restrict',
+          min_confidence_threshold: 70,
+        },
+      }),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      observeSuspiciousMessage: jest.fn().mockResolvedValue(true),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+    };
+    const handler = buildHandler({
+      detectionOrchestrator,
+      configService,
+      securityActionService,
+      setupDiagnosticsService: buildReadySetupDiagnosticsService(),
+      globalMessageWatchlistRepository: buildGlobalWatchlistRepository(),
+    });
+    const message = buildMessage(new PermissionsBitField(PermissionFlagsBits.KickMembers)) as any;
+    message.content = GLOBAL_WATCHLIST_MESSAGE;
+
+    await (handler as any).handleMessage(message);
+
+    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
+    expect(securityActionService.observeSuspiciousMessage).toHaveBeenCalledWith(
+      message.member,
+      expect.objectContaining({
+        messageAction: expect.objectContaining({ kind: 'review_only' }),
+      }),
+      message
+    );
+  });
+
+  it('records staff watchlist matches without opening review when setup is incomplete', async () => {
+    const detectionOrchestrator = {
+      detectMessage: jest.fn(),
+      detectNewJoin: jest.fn(),
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue({}),
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: null,
+        admin_channel_id: null,
+        verification_channel_id: null,
+        is_active: false,
+        settings: {
           detection_response_mode: 'restrict',
           min_confidence_threshold: 70,
         },
@@ -2552,14 +2658,15 @@ describe('EventHandler (unit)', () => {
 
     await (handler as any).handleMessage(message);
 
-    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
-    expect(securityActionService.observeSuspiciousMessage).toHaveBeenCalledWith(
+    expect(securityActionService.recordSuspiciousMessage).toHaveBeenCalledWith(
       message.member,
       expect.objectContaining({
         messageAction: expect.objectContaining({ kind: 'review_only' }),
       }),
       message
     );
+    expect(securityActionService.observeSuspiciousMessage).not.toHaveBeenCalled();
+    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
   });
 
   it('skips automatic detection for Discord system messages', async () => {
@@ -3229,10 +3336,25 @@ describe('EventHandler (unit)', () => {
     const userModerationService = {
       findLatestKickOutcome: jest.fn().mockResolvedValue(priorKick),
     };
+    const serverConfig = {
+      case_role_id: 'case-role-1',
+      admin_channel_id: 'admin-channel-1',
+      verification_channel_id: 'verification-channel-1',
+      settings: { detection_response_mode: 'notify_only' },
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue(serverConfig),
+      getServerConfig: jest.fn().mockResolvedValue(serverConfig),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
     const handler = buildHandler({
+      configService,
       detectionOrchestrator,
       securityActionService,
       notificationManager,
+      setupDiagnosticsService: buildReadySetupDiagnosticsService(),
       userModerationService,
     });
     const member = buildMember(new PermissionsBitField());
@@ -3265,7 +3387,7 @@ describe('EventHandler (unit)', () => {
       getServerConfig: jest.fn().mockResolvedValue({
         guild_id: 'guild-1',
         case_role_id: null,
-        admin_channel_id: null,
+        admin_channel_id: 'admin-channel-1',
         verification_channel_id: null,
         settings: {},
       }),
@@ -3296,9 +3418,28 @@ describe('EventHandler (unit)', () => {
       fetchOwner: jest.fn(),
     } as any;
 
-    await (handler as any).handleGuildCreate(guild);
+    const originalPublicUrl = process.env.DRASIL_WEB_PUBLIC_URL;
+    process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasil.example';
+    try {
+      await (handler as any).handleGuildCreate(guild);
+    } finally {
+      if (originalPublicUrl === undefined) {
+        delete process.env.DRASIL_WEB_PUBLIC_URL;
+      } else {
+        process.env.DRASIL_WEB_PUBLIC_URL = originalPublicUrl;
+      }
+    }
 
-    expect(installer.send).toHaveBeenCalledWith(expect.stringContaining('/config setup'));
+    expect(installer.send).toHaveBeenCalledWith(
+      expect.objectContaining({ components: [expect.anything()], embeds: [expect.anything()] })
+    );
+    const setupDm = installer.send.mock.calls[0][0];
+    expect(setupDm.components[0].toJSON().components[0].url).toBe(
+      'https://drasil.example/admin/guild/guild-1/onboarding'
+    );
+    expect(setupDm.embeds[0].data.footer?.text).toBe(
+      'Setup incomplete - 1 of 3 required steps complete'
+    );
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       setup_nudge_last_attempt_at: expect.any(String),
       setup_nudge_last_recipient_id: 'installer-1',
@@ -3306,6 +3447,124 @@ describe('EventHandler (unit)', () => {
       setup_nudge_last_source: 'audit_log_installer',
     });
     expect(guild.fetchOwner).not.toHaveBeenCalled();
+  });
+
+  it('waits for in-flight setup before guild-create auto setup reads configuration', async () => {
+    const previousAutoSetup = globalConfig.getSettings().autoSetupVerificationChannels;
+    globalConfig.updateSettings({ autoSetupVerificationChannels: true });
+    const serverConfig = {
+      guild_id: 'guild-1',
+      case_role_id: 'case-role-1',
+      admin_channel_id: 'admin-channel-1',
+      verification_channel_id: 'verification-channel-1',
+      settings: {},
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn().mockReturnValue(serverConfig),
+      getServerConfig: jest.fn().mockResolvedValue(serverConfig),
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const notificationManager = {
+      upsertObservedDetectionNotification: jest.fn(),
+      setupVerificationChannel: jest.fn().mockResolvedValue('verification-channel-1'),
+    };
+    const handler = buildHandler({ configService, notificationManager });
+    const guild = { id: 'guild-1', name: 'Test Guild' } as any;
+    let markLockAcquired!: () => void;
+    let releaseLock!: () => void;
+    const lockAcquired = new Promise<void>((resolve) => {
+      markLockAcquired = resolve;
+    });
+    const lockReleased = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const heldSetup = runSerializedGuildSetup('guild-1', async () => {
+      markLockAcquired();
+      await lockReleased;
+    });
+
+    try {
+      await lockAcquired;
+      const guildCreate = (handler as any).handleGuildCreate(guild);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(configService.getServerConfig).not.toHaveBeenCalled();
+      expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+
+      releaseLock();
+      await heldSetup;
+      await guildCreate;
+
+      expect(configService.getServerConfig).toHaveBeenCalledTimes(2);
+      expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
+        guild,
+        'case-role-1',
+        true,
+        expect.any(Function)
+      );
+    } finally {
+      releaseLock();
+      await heldSetup;
+      globalConfig.updateSettings({ autoSetupVerificationChannels: previousAutoSetup });
+    }
+  });
+
+  it('reactivates a configured server record when the bot rejoins', async () => {
+    const previousAutoSetup = globalConfig.getSettings().autoSetupVerificationChannels;
+    globalConfig.updateSettings({ autoSetupVerificationChannels: true });
+    let serverConfig = {
+      guild_id: 'guild-1',
+      case_role_id: 'case-role-1',
+      admin_channel_id: 'admin-channel-1',
+      verification_channel_id: 'verification-channel-1',
+      settings: {},
+      is_active: false,
+    };
+    const configService = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      getCachedServerConfig: jest.fn(() => serverConfig),
+      getServerConfig: jest.fn(async () => serverConfig),
+      updateServerConfig: jest.fn(async (_guildId: string, patch: { is_active?: boolean }) => {
+        serverConfig = { ...serverConfig, ...patch };
+        return serverConfig;
+      }),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
+    };
+    const notificationManager = {
+      upsertObservedDetectionNotification: jest.fn(),
+      setupVerificationChannel: jest.fn().mockResolvedValue('verification-channel-1'),
+    };
+    const productAnalyticsService = { captureGuildEvent: jest.fn().mockResolvedValue(undefined) };
+    const handler = buildHandler({
+      configService,
+      notificationManager,
+      productAnalyticsService,
+    });
+    const guild = { id: 'guild-1', name: 'Test Guild' } as any;
+
+    try {
+      await (handler as any).handleGuildCreate(guild);
+    } finally {
+      globalConfig.updateSettings({ autoSetupVerificationChannels: previousAutoSetup });
+    }
+
+    expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
+      guild,
+      'case-role-1',
+      true,
+      expect.any(Function)
+    );
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      is_active: true,
+    });
+    expect(serverConfig.is_active).toBe(true);
+    expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
+      'guild-1',
+      'guild installed',
+      expect.objectContaining({ verification_channel_auto_created: false })
+    );
   });
 
   it('falls back to the guild owner when installer attribution is unavailable', async () => {
@@ -3341,7 +3600,9 @@ describe('EventHandler (unit)', () => {
       warnSpy.mockRestore();
     }
 
-    expect(ownerUser.send).toHaveBeenCalledWith(expect.stringContaining('/config validate'));
+    expect(ownerUser.send).toHaveBeenCalledWith(
+      expect.objectContaining({ embeds: [expect.anything()] })
+    );
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       setup_nudge_last_attempt_at: expect.any(String),
       setup_nudge_last_recipient_id: 'owner-1',
@@ -3439,7 +3700,9 @@ describe('EventHandler (unit)', () => {
       warnSpy.mockRestore();
     }
 
-    expect(installer.send).toHaveBeenCalledWith(expect.stringContaining('/config setup'));
+    expect(installer.send).toHaveBeenCalledWith(
+      expect.objectContaining({ embeds: [expect.anything()] })
+    );
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       setup_nudge_last_attempt_at: expect.any(String),
       setup_nudge_last_recipient_id: 'installer-1',
@@ -3535,6 +3798,126 @@ describe('EventHandler (unit)', () => {
       setup_warning_last_fingerprint: 'case-role-missing',
     });
     expect(installer.send.mock.calls[0][0]).toContain('No message content is included in this DM.');
+  });
+
+  it('downgrades restrictive automatic detection to record-only while setup is incomplete', async () => {
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: null,
+        admin_channel_id: 'admin-1',
+        verification_channel_id: 'verification-1',
+        settings: { setup_nudge_last_attempt_at: new Date().toISOString() },
+      }),
+    };
+    const setupDiagnosticsService = {
+      validateGuildSetup: jest.fn().mockResolvedValue({
+        guildId: 'guild-1',
+        checkedAt: new Date(),
+        issues: [{ severity: 'error', code: 'case-role-missing', message: 'Missing role.' }],
+        errorCount: 1,
+        warningCount: 0,
+      }),
+    };
+    const securityActionService = {
+      handleSuspiciousMessage: jest.fn(),
+      handleSuspiciousJoin: jest.fn(),
+      recordSuspiciousMessage: jest.fn().mockResolvedValue('detection-1'),
+    };
+    const handler = buildHandler({
+      configService,
+      setupDiagnosticsService,
+      securityActionService,
+    });
+    const member = {
+      guild: { id: 'guild-1' },
+      user: { tag: 'test-user#0001' },
+    } as any;
+    const message = {} as any;
+
+    await (handler as any).handleAutomaticDetection(
+      member,
+      {
+        label: 'SUSPICIOUS',
+        confidence: 1,
+        reasons: ['test'],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'test',
+      },
+      { mode: 'restrict' },
+      70,
+      message
+    );
+
+    expect(securityActionService.recordSuspiciousMessage).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ label: 'SUSPICIOUS' }),
+      message
+    );
+    expect(securityActionService.handleSuspiciousMessage).not.toHaveBeenCalled();
+    expect(securityActionService.handleSuspiciousJoin).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when automatic detection setup diagnostics are unavailable', async () => {
+    const handler = buildHandler();
+
+    await expect(
+      (handler as any).evaluateAutomaticDetectionSetupSafety({ id: 'guild-1' })
+    ).resolves.toEqual({ ready: false });
+  });
+
+  it('treats inactive server records as unsafe even when core setup IDs remain', async () => {
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        is_active: false,
+        settings: {},
+      }),
+    };
+    const handler = buildHandler({
+      configService,
+      setupDiagnosticsService: buildReadySetupDiagnosticsService(),
+    });
+
+    await expect(
+      (handler as any).evaluateAutomaticDetectionSetupSafety({ id: 'guild-1' })
+    ).resolves.toMatchObject({ ready: false });
+  });
+
+  it('reuses setup readiness briefly across a burst of automatic detections', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        is_active: true,
+        settings: {},
+      }),
+    };
+    const setupDiagnosticsService = buildReadySetupDiagnosticsService();
+    const handler = buildHandler({ configService, setupDiagnosticsService });
+    const guild = { id: 'guild-1' } as any;
+
+    await Promise.all([
+      (handler as any).evaluateAutomaticDetectionSetupSafety(guild),
+      (handler as any).evaluateAutomaticDetectionSetupSafety(guild),
+    ]);
+    await (handler as any).evaluateAutomaticDetectionSetupSafety(guild);
+
+    expect(configService.getServerConfig).toHaveBeenCalledTimes(1);
+    expect(setupDiagnosticsService.validateGuildSetup).toHaveBeenCalledTimes(1);
+
+    now.mockReturnValue(31_001);
+    await (handler as any).evaluateAutomaticDetectionSetupSafety(guild);
+
+    expect(configService.getServerConfig).toHaveBeenCalledTimes(2);
+    expect(setupDiagnosticsService.validateGuildSetup).toHaveBeenCalledTimes(2);
+    now.mockRestore();
   });
 
   it('skips detection-time setup validation immediately after a warning attempt', async () => {
@@ -3669,7 +4052,9 @@ describe('EventHandler (unit)', () => {
 
     await (handler as any).handleGuildCreate(guild);
 
-    expect(installer.send).toHaveBeenCalledWith(expect.stringContaining('/config setup'));
+    expect(installer.send).toHaveBeenCalledWith(
+      expect.objectContaining({ embeds: [expect.anything()] })
+    );
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       setup_nudge_last_attempt_at: expect.any(String),
       setup_nudge_last_recipient_id: 'installer-2',

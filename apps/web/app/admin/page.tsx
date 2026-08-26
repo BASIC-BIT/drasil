@@ -5,6 +5,13 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 
+const READINESS_LABELS = {
+  not_installed: 'Install Drasil',
+  needs_setup: 'Needs setup',
+  blocked: 'Setup blocked',
+  ready: 'Ready',
+} as const;
+
 export default async function AdminPage() {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
@@ -61,19 +68,24 @@ export default async function AdminPage() {
                     <Link className="button secondary" href={`/admin/guild/${guild.id}/operations`}>
                       Operations
                     </Link>
-                    <Link className="button secondary" href={`/admin/guild/${guild.id}/setup`}>
-                      Setup
+                    <Link
+                      className="button secondary"
+                      href={`/admin/guild/${guild.id}/${guild.readiness === 'ready' ? 'setup' : 'onboarding'}`}
+                    >
+                      {guild.readiness === 'ready' ? 'Setup' : 'Finish setup'}
                     </Link>
                   </div>
                 </div>
                 <span
                   className={
-                    guild.configured
+                    guild.readiness === 'ready'
                       ? 'status ok server-row-status'
-                      : 'status warning server-row-status'
+                      : guild.readiness === 'blocked'
+                        ? 'status error server-row-status'
+                        : 'status warning server-row-status'
                   }
                 >
-                  {guild.configured ? 'Configured' : 'Needs setup'}
+                  {READINESS_LABELS[guild.readiness]}
                 </span>
               </article>
             ))}

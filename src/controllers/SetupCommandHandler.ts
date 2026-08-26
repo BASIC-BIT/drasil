@@ -6,6 +6,7 @@ import {
   Role,
   TextChannel,
 } from 'discord.js';
+import type { DetectionResponseMode } from '../contracts/setup';
 import { IConfigService } from '../config/ConfigService';
 import { INotificationManager } from '../services/NotificationManager';
 import { IProductAnalyticsService } from '../services/ProductAnalyticsService';
@@ -15,12 +16,14 @@ import {
   SetupDiagnosticReport,
 } from '../services/SetupDiagnosticsService';
 import { SetupWorkflowService, type SetupWorkflowResult } from '../services/SetupWorkflowService';
+import {
+  DEFAULT_VERIFICATION_CHANNEL_NAME,
+  SetupProvisioningService,
+} from '../services/SetupProvisioningService';
 import { truncatePreview } from '../utils/textPreview';
 import { ReportInstructionsManager } from './ReportInstructionsManager';
 
-const DEFAULT_CASE_ROLE_NAME = 'Drasil Case';
 const DEFAULT_SETUP_FAILURE_DETAIL = 'Please check permissions and try again.';
-const VERIFICATION_CHANNEL_NAME = 'verification';
 
 type ReplyGuildInstallRequired = (interaction: ChatInputCommandInteraction) => Promise<void>;
 type CompletedSetupWorkflowResult = Extract<SetupWorkflowResult, { status: 'completed' }>;
@@ -31,6 +34,7 @@ type ConfigSetupReportInstructionsStatus = {
 
 export class SetupCommandHandler {
   private readonly setupWorkflowService?: SetupWorkflowService;
+  private readonly setupProvisioningService?: SetupProvisioningService;
 
   public constructor(
     private readonly configService: IConfigService,
@@ -48,6 +52,14 @@ export class SetupCommandHandler {
           setupDiagnosticsService
         )
       : undefined;
+    this.setupProvisioningService =
+      setupDiagnosticsService && this.setupWorkflowService
+        ? new SetupProvisioningService(
+            configService,
+            setupDiagnosticsService,
+            this.setupWorkflowService
+          )
+        : undefined;
   }
 
   public async handleSetupVerificationCommand(
@@ -69,8 +81,8 @@ export class SetupCommandHandler {
       return;
     }
 
-    const setupWorkflowService = this.setupWorkflowService;
-    if (!this.setupDiagnosticsService || !setupWorkflowService) {
+    const setupProvisioningService = this.setupProvisioningService;
+    if (!this.setupDiagnosticsService || !setupProvisioningService) {
       await interaction.reply({
         content: 'Setup diagnostics are not available in this runtime.',
         flags: MessageFlags.Ephemeral,
@@ -103,36 +115,38 @@ export class SetupCommandHandler {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-      const verificationChannelCandidate = await this.resolveVerificationChannelCandidate(
+      const setupResult = await setupProvisioningService.provision({
         guild,
-        verificationChannel?.id ?? null
-      );
+        adminChannelId: adminChannel.id,
+        caseRole: caseRole as Role,
+        caseRoleId: caseRole.id,
+        verificationChannel: verificationChannel as TextChannel | null,
+        verificationChannelId: verificationChannel?.id ?? null,
+        reportInstructionsChannelId: null,
+        actorLabel: interaction.user.username,
+        captureAnalytics: true,
+      });
 
-      if (verificationChannelCandidate.ambiguousChannelIds.length > 0) {
+      if (setupResult.status === 'ambiguous_case_role') {
+        await interaction.editReply({
+          content: 'Setup not saved. Choose one case role before rerunning setup.',
+        });
+        return;
+      }
+      if (setupResult.status === 'ambiguous_verification_channel') {
         await interaction.editReply({
           content:
-            `Setup not saved. Multiple #${VERIFICATION_CHANNEL_NAME} channels already exist: ` +
-            verificationChannelCandidate.ambiguousChannelIds
-              .map((channelId) => `<#${channelId}>`)
-              .join(', ') +
+            `Setup not saved. Multiple #${DEFAULT_VERIFICATION_CHANNEL_NAME} channels already exist: ` +
+            setupResult.channelIds.map((channelId) => `<#${channelId}>`).join(', ') +
             '. Choose one with `verification-channel` before rerunning setup.',
           allowedMentions: { parse: [] },
         });
         return;
       }
-
-      const setupResult = await setupWorkflowService.completeSetup({
-        guild,
-        caseRole: caseRole as Role,
-        adminChannelId: adminChannel.id,
-        initialVerificationChannelId: verificationChannel?.id ?? null,
-        candidateVerificationChannelId: verificationChannelCandidate.channelId,
-        ...(verificationChannelCandidate.willSyncPermissions
-          ? { willSyncVerificationChannelPermissions: true }
-          : {}),
-        reportInstructionsChannelId: null,
-        captureAnalytics: true,
-      });
+      if (setupResult.status === 'invalid_selection') {
+        await interaction.editReply({ content: `Setup not saved. ${setupResult.detail}` });
+        return;
+      }
 
       if (setupResult.status === 'candidate_validation_failed') {
         await interaction.editReply({
@@ -222,145 +236,12 @@ export class SetupCommandHandler {
     return invokingMember.permissions.has(PermissionFlagsBits.Administrator);
   }
 
-  private async resolveVerificationChannelCandidate(
-    guild: NonNullable<ChatInputCommandInteraction['guild']>,
-    explicitVerificationChannelId: string | null
-  ): Promise<{
-    channelId: string | null;
-    willSyncPermissions: boolean;
-    ambiguousChannelIds: readonly string[];
-  }> {
-    if (explicitVerificationChannelId) {
-      return {
-        channelId: explicitVerificationChannelId,
-        willSyncPermissions: false,
-        ambiguousChannelIds: [],
-      };
-    }
-
-    const serverConfig = await this.configService.getServerConfig(guild.id).catch(() => null);
-    const configuredVerificationChannelId = serverConfig?.verification_channel_id ?? null;
-    if (configuredVerificationChannelId) {
-      const configuredChannel = await guild.channels
-        .fetch(configuredVerificationChannelId)
-        .catch(() => null);
-      if (configuredChannel?.type === ChannelType.GuildText) {
-        return {
-          channelId: configuredVerificationChannelId,
-          willSyncPermissions: true,
-          ambiguousChannelIds: [],
-        };
-      }
-    }
-
-    const matchingChannels = this.findMatchingVerificationChannels(guild);
-    if (matchingChannels.length === 1) {
-      return {
-        channelId: matchingChannels[0].id,
-        willSyncPermissions: true,
-        ambiguousChannelIds: [],
-      };
-    }
-
-    return {
-      channelId: null,
-      willSyncPermissions: false,
-      ambiguousChannelIds: matchingChannels.map((channel) => channel.id),
-    };
-  }
-
-  private findMatchingVerificationChannels(
-    guild: NonNullable<ChatInputCommandInteraction['guild']>
-  ): TextChannel[] {
-    const guildLike = guild as { channels?: { cache?: unknown } };
-    const values = this.getCachedCollectionValues(guildLike.channels?.cache);
-
-    return values.filter((channel): channel is TextChannel =>
-      this.isVerificationTextChannel(channel)
-    );
-  }
-
-  private getCachedCollectionValues(cache: unknown): unknown[] {
-    const cacheWithValues = cache as { values?: unknown } | null;
-    if (typeof cacheWithValues?.values === 'function') {
-      return [...(cacheWithValues.values as () => Iterable<unknown>)()];
-    }
-
-    const iterableCache = cache as { [Symbol.iterator]?: unknown } | null;
-    if (typeof iterableCache?.[Symbol.iterator] === 'function') {
-      return [...(cache as Iterable<unknown>)];
-    }
-
-    return [];
-  }
-
-  private isVerificationTextChannel(channel: unknown): channel is TextChannel {
-    const maybeChannel = channel as { type?: ChannelType; name?: string } | null;
-    if (!maybeChannel) {
-      return false;
-    }
-
-    return (
-      maybeChannel.type === ChannelType.GuildText && maybeChannel.name === VERIFICATION_CHANNEL_NAME
-    );
-  }
-
-  private async resolveCaseRoleCandidate(
-    guild: NonNullable<ChatInputCommandInteraction['guild']>,
-    explicitCaseRole: Role | null,
-    requestedRoleName: string | null
-  ): Promise<{ role: Role | null; roleName: string; ambiguousRoleIds: readonly string[] }> {
-    if (explicitCaseRole) {
-      return {
-        role: explicitCaseRole,
-        roleName: explicitCaseRole.name,
-        ambiguousRoleIds: [],
-      };
-    }
-
-    const roleName = requestedRoleName ?? DEFAULT_CASE_ROLE_NAME;
-    const serverConfig = await this.configService.getServerConfig(guild.id).catch(() => null);
-    const configuredCaseRoleId = serverConfig?.case_role_id ?? null;
-    if (configuredCaseRoleId) {
-      const configuredRole = await guild.roles.fetch(configuredCaseRoleId).catch(() => null);
-      if (configuredRole && (!requestedRoleName || configuredRole.name === roleName)) {
-        return { role: configuredRole, roleName: configuredRole.name, ambiguousRoleIds: [] };
-      }
-    }
-
-    const matchingRoles = this.findMatchingRolesByName(guild, roleName);
-    if (matchingRoles.length === 1) {
-      return { role: matchingRoles[0], roleName, ambiguousRoleIds: [] };
-    }
-
-    return {
-      role: null,
-      roleName,
-      ambiguousRoleIds: matchingRoles.map((role) => role.id),
-    };
-  }
-
-  private findMatchingRolesByName(
-    guild: NonNullable<ChatInputCommandInteraction['guild']>,
-    roleName: string
-  ): Role[] {
-    const guildLike = guild as { roles?: { cache?: unknown } };
-    const values = this.getCachedCollectionValues(guildLike.roles?.cache);
-
-    return values.filter((role): role is Role => this.isRoleNamed(role, roleName));
-  }
-
-  private isRoleNamed(role: unknown, roleName: string): role is Role {
-    const maybeRole = role as { name?: string } | null;
-    return Boolean(maybeRole) && maybeRole?.name === roleName;
-  }
-
   public async handleConfigSetupCommand(
     interaction: ChatInputCommandInteraction,
     guild: NonNullable<ChatInputCommandInteraction['guild']>
   ): Promise<void> {
-    const setupWorkflowService = this.setupWorkflowService;
-    if (!this.setupDiagnosticsService || !setupWorkflowService) {
+    const setupProvisioningService = this.setupProvisioningService;
+    if (!this.setupDiagnosticsService || !setupProvisioningService) {
       await interaction.reply({
         content: 'Setup diagnostics are not available in this runtime.',
         flags: MessageFlags.Ephemeral,
@@ -373,6 +254,9 @@ export class SetupCommandHandler {
     const requestedRoleName = interaction.options.getString('case-role-name')?.trim() || null;
     const verificationChannel = interaction.options.getChannel('verification-channel');
     const reportChannel = interaction.options.getChannel('report-channel');
+    const protectionMode = interaction.options.getString(
+      'protection-mode'
+    ) as DetectionResponseMode | null;
 
     if (
       await this.replyIfInvalidConfigSetupOptions(interaction, {
@@ -391,66 +275,54 @@ export class SetupCommandHandler {
     let setupFailureDetail: string | null = null;
 
     try {
-      const verificationChannelCandidate = await this.resolveVerificationChannelCandidate(
+      let reportInstructionsStatus: ConfigSetupReportInstructionsStatus = {
+        line: null,
+        warningLine: null,
+      };
+      const setupResult = await setupProvisioningService.provision({
         guild,
-        verificationChannel?.id ?? null
-      );
-      const caseRoleCandidate = await this.resolveCaseRoleCandidate(
-        guild,
-        existingCaseRole as Role | null,
-        requestedRoleName
-      );
-
-      if (
-        await this.replyIfAmbiguousConfigSetupCandidates(
-          interaction,
-          caseRoleCandidate,
-          verificationChannelCandidate
-        )
-      ) {
-        return;
-      }
-
-      const candidateReport = await this.setupDiagnosticsService.validateSetupCandidate(guild, {
-        caseRoleId: caseRoleCandidate.role?.id ?? null,
-        willCreateCaseRole: !caseRoleCandidate.role,
         adminChannelId: adminChannel.id,
-        verificationChannelId: verificationChannelCandidate.channelId,
-        willCreateVerificationChannel: !verificationChannelCandidate.channelId,
-        ...(verificationChannelCandidate.willSyncPermissions
-          ? { willSyncVerificationChannelPermissions: true }
-          : {}),
+        caseRole: existingCaseRole as Role | null,
+        caseRoleId: existingCaseRole?.id ?? null,
+        caseRoleName: requestedRoleName,
+        verificationChannelId: verificationChannel?.id ?? null,
+        verificationChannel: verificationChannel as TextChannel | null,
         reportInstructionsChannelId: reportChannel?.id ?? null,
+        detectionResponseMode: protectionMode ?? undefined,
+        actorLabel: interaction.user.username,
+        captureAnalytics: true,
+        afterSetupCompleted: async () => {
+          reportInstructionsStatus = await this.upsertReportInstructionsStatus(
+            guild.id,
+            reportChannel as TextChannel | null
+          );
+        },
       });
 
-      if (await this.replyIfConfigSetupCandidateHasErrors(interaction, candidateReport)) {
-        return;
-      }
-
-      let createdCaseRole: Role | null = null;
-      let caseRole = caseRoleCandidate.role;
-      if (!caseRole) {
-        createdCaseRole = await guild.roles.create({
-          name: caseRoleCandidate.roleName,
-          permissions: [],
-          reason: `Drasil setup requested by ${interaction.user.username}`,
+      if (setupResult.status === 'ambiguous_case_role') {
+        await interaction.editReply({
+          content:
+            `Setup not saved. Multiple roles named \`${setupResult.roleName}\` already exist: ` +
+            setupResult.roleIds.map((roleId) => `<@&${roleId}>`).join(', ') +
+            '. Choose one with `case-role` before rerunning /config setup.',
+          allowedMentions: { parse: [] },
         });
-        caseRole = createdCaseRole;
+        return;
       }
-
-      const setupResult = await setupWorkflowService.completeSetup({
-        guild,
-        caseRole,
-        adminChannelId: adminChannel.id,
-        initialVerificationChannelId: verificationChannel?.id ?? null,
-        candidateVerificationChannelId: verificationChannelCandidate.channelId,
-        ...(verificationChannelCandidate.willSyncPermissions
-          ? { willSyncVerificationChannelPermissions: true }
-          : {}),
-        reportInstructionsChannelId: reportChannel?.id ?? null,
-        candidateReport,
-        createdCaseRole,
-      });
+      if (setupResult.status === 'ambiguous_verification_channel') {
+        await interaction.editReply({
+          content:
+            `Setup not saved. Multiple #${DEFAULT_VERIFICATION_CHANNEL_NAME} channels already exist: ` +
+            setupResult.channelIds.map((channelId) => `<#${channelId}>`).join(', ') +
+            '. Choose one with `verification-channel` before rerunning /config setup.',
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+      if (setupResult.status === 'invalid_selection') {
+        await interaction.editReply({ content: `Setup not saved. ${setupResult.detail}` });
+        return;
+      }
 
       if (setupResult.status !== 'completed') {
         const incompleteResult = await this.resolveIncompleteConfigSetupResult(
@@ -466,10 +338,6 @@ export class SetupCommandHandler {
         return;
       }
 
-      const reportInstructionsStatus = await this.upsertReportInstructionsStatus(
-        guild.id,
-        reportChannel as TextChannel | null
-      );
       const lines = this.buildConfigSetupSuccessLines(
         setupResult,
         adminChannel.id,
@@ -534,53 +402,6 @@ export class SetupCommandHandler {
     }
 
     return false;
-  }
-
-  private async replyIfAmbiguousConfigSetupCandidates(
-    interaction: ChatInputCommandInteraction,
-    caseRoleCandidate: { roleName: string; ambiguousRoleIds: readonly string[] },
-    verificationChannelCandidate: { ambiguousChannelIds: readonly string[] }
-  ): Promise<boolean> {
-    if (caseRoleCandidate.ambiguousRoleIds.length > 0) {
-      await interaction.editReply({
-        content:
-          `Setup not saved. Multiple roles named \`${caseRoleCandidate.roleName}\` already exist: ` +
-          caseRoleCandidate.ambiguousRoleIds.map((roleId) => `<@&${roleId}>`).join(', ') +
-          '. Choose one with `case-role` before rerunning /config setup.',
-        allowedMentions: { parse: [] },
-      });
-      return true;
-    }
-
-    if (verificationChannelCandidate.ambiguousChannelIds.length > 0) {
-      await interaction.editReply({
-        content:
-          `Setup not saved. Multiple #${VERIFICATION_CHANNEL_NAME} channels already exist: ` +
-          verificationChannelCandidate.ambiguousChannelIds
-            .map((channelId) => `<#${channelId}>`)
-            .join(', ') +
-          '. Choose one with `verification-channel` before rerunning /config setup.',
-        allowedMentions: { parse: [] },
-      });
-      return true;
-    }
-
-    return false;
-  }
-
-  private async replyIfConfigSetupCandidateHasErrors(
-    interaction: ChatInputCommandInteraction,
-    candidateReport: SetupDiagnosticReport
-  ): Promise<boolean> {
-    if (candidateReport.errorCount === 0) {
-      return false;
-    }
-
-    await interaction.editReply({
-      content: `Setup not saved. Fix the errors below and rerun /config setup.\n\n${this.formatSetupDiagnosticsReport(candidateReport)}`,
-      allowedMentions: { parse: [] },
-    });
-    return true;
   }
 
   private async resolveIncompleteConfigSetupResult(

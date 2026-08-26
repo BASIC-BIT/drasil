@@ -147,6 +147,7 @@ describe('NotificationManager (unit)', () => {
         settings: {},
       } as any),
       updateServerConfig: jest.fn().mockResolvedValue({}),
+      updateServerSettings: jest.fn().mockResolvedValue({}),
     } as unknown as IConfigService;
   });
 
@@ -1271,14 +1272,62 @@ describe('NotificationManager (unit)', () => {
       name: 'verification',
       type: ChannelType.GuildText,
       permissionOverwrites: {
+        cache: new Map([
+          [
+            'staff-role-1',
+            {
+              id: 'staff-role-1',
+              type: 0,
+              allow: { bitfield: PermissionFlagsBits.ViewChannel },
+              deny: { bitfield: 0n },
+            },
+          ],
+          [
+            'case-role-1',
+            {
+              id: 'case-role-1',
+              type: 0,
+              allow: {
+                bitfield: PermissionFlagsBits.AttachFiles | PermissionFlagsBits.SendMessages,
+              },
+              deny: {
+                bitfield: PermissionFlagsBits.MentionEveryone | PermissionFlagsBits.ViewChannel,
+              },
+            },
+          ],
+        ]),
         set: overwriteSet,
       },
     };
     const createChannel = jest.fn();
     const fetchChannel = jest.fn().mockResolvedValue(existingChannel);
     configService.getServerConfig = jest.fn().mockResolvedValue({
+      case_role_id: 'case-role-1',
       verification_channel_id: 'verification-channel-1',
-      settings: {},
+      settings: {
+        verification_channel_permission_sync: {
+          channel_id: 'verification-channel-1',
+          managed_overwrites: [
+            {
+              id: 'case-role-1',
+              type: 0,
+              managed_bits: (
+                PermissionFlagsBits.ViewChannel |
+                PermissionFlagsBits.ReadMessageHistory |
+                PermissionFlagsBits.SendMessagesInThreads |
+                PermissionFlagsBits.SendMessages |
+                PermissionFlagsBits.CreatePublicThreads |
+                PermissionFlagsBits.CreatePrivateThreads
+              ).toString(),
+              original_overwrite: {
+                existed: true,
+                allow: PermissionFlagsBits.AttachFiles.toString(),
+                deny: PermissionFlagsBits.MentionEveryone.toString(),
+              },
+            },
+          ],
+        },
+      },
     } as any);
     const guild = {
       id: 'guild-1',
@@ -1305,33 +1354,407 @@ describe('NotificationManager (unit)', () => {
       expect.arrayContaining([
         expect.objectContaining({ id: 'guild-1' }),
         expect.objectContaining({ id: 'case-role-1' }),
+        expect.objectContaining({
+          id: 'staff-role-1',
+          allow: PermissionFlagsBits.ViewChannel,
+        }),
       ]),
       'Sync Drasil verification channel permissions'
     );
     const caseRoleOverwrite = overwriteSet.mock.calls[0][0].find(
       (overwrite: { id: string }) => overwrite.id === 'case-role-1'
     );
-    expect(caseRoleOverwrite).toEqual(
-      expect.objectContaining({
-        allow: expect.arrayContaining([
-          PermissionFlagsBits.ViewChannel,
-          PermissionFlagsBits.SendMessagesInThreads,
-        ]),
-        deny: expect.arrayContaining([
-          PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.CreatePublicThreads,
-          PermissionFlagsBits.CreatePrivateThreads,
-        ]),
-      })
+    expect(caseRoleOverwrite.allow & PermissionFlagsBits.AttachFiles).toBe(
+      PermissionFlagsBits.AttachFiles
     );
-    expect(caseRoleOverwrite.allow).not.toContain(PermissionFlagsBits.SendMessages);
+    expect(caseRoleOverwrite.allow & PermissionFlagsBits.ViewChannel).toBe(
+      PermissionFlagsBits.ViewChannel
+    );
+    expect(caseRoleOverwrite.allow & PermissionFlagsBits.SendMessages).toBe(0n);
+    expect(caseRoleOverwrite.deny & PermissionFlagsBits.MentionEveryone).toBe(
+      PermissionFlagsBits.MentionEveryone
+    );
+    expect(caseRoleOverwrite.deny & PermissionFlagsBits.SendMessages).toBe(
+      PermissionFlagsBits.SendMessages
+    );
+    expect(caseRoleOverwrite.deny & PermissionFlagsBits.ViewChannel).toBe(0n);
     expect(createChannel).not.toHaveBeenCalled();
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      verification_channel_permission_sync: {
+        channel_id: 'verification-channel-1',
+        managed_overwrites: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'case-role-1',
+            type: 0,
+            original_overwrite: {
+              existed: true,
+              allow: PermissionFlagsBits.AttachFiles.toString(),
+              deny: PermissionFlagsBits.MentionEveryone.toString(),
+            },
+          }),
+        ]),
+      },
+    });
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       verification_channel_id: 'verification-channel-1',
     });
+    expect(
+      (configService.updateServerSettings as jest.Mock).mock.invocationCallOrder[0]
+    ).toBeLessThan((configService.updateServerConfig as jest.Mock).mock.invocationCallOrder[0]);
+    expect(
+      (configService.updateServerConfig as jest.Mock).mock.invocationCallOrder[0]
+    ).toBeLessThan(overwriteSet.mock.invocationCallOrder[0]);
   });
 
-  it('syncs an already resolved verification channel without rereading config', async () => {
+  it('restores preexisting managed bits when retiring the previous case role', async () => {
+    const overwriteSet = jest.fn().mockResolvedValue(undefined);
+    const existingChannel = {
+      id: 'verification-channel-1',
+      type: ChannelType.GuildText,
+      permissionOverwrites: {
+        cache: new Map([
+          [
+            'old-case-role',
+            {
+              id: 'old-case-role',
+              type: 0,
+              allow: {
+                bitfield:
+                  PermissionFlagsBits.ViewChannel |
+                  PermissionFlagsBits.ReadMessageHistory |
+                  PermissionFlagsBits.AttachFiles,
+              },
+              deny: {
+                bitfield:
+                  PermissionFlagsBits.SendMessages |
+                  PermissionFlagsBits.CreatePrivateThreads |
+                  PermissionFlagsBits.MentionEveryone,
+              },
+            },
+          ],
+        ]),
+        set: overwriteSet,
+      },
+    };
+    configService.getServerConfig = jest.fn().mockResolvedValue({
+      case_role_id: 'old-case-role',
+      verification_channel_id: 'verification-channel-1',
+      settings: {
+        verification_channel_permission_sync: {
+          channel_id: 'verification-channel-1',
+          managed_overwrites: [
+            {
+              id: 'old-case-role',
+              type: 0,
+              managed_bits: (
+                PermissionFlagsBits.ViewChannel |
+                PermissionFlagsBits.ReadMessageHistory |
+                PermissionFlagsBits.SendMessagesInThreads |
+                PermissionFlagsBits.SendMessages |
+                PermissionFlagsBits.CreatePublicThreads |
+                PermissionFlagsBits.CreatePrivateThreads
+              ).toString(),
+              original_overwrite: {
+                existed: true,
+                allow: PermissionFlagsBits.ViewChannel.toString(),
+                deny: PermissionFlagsBits.SendMessages.toString(),
+              },
+            },
+          ],
+        },
+      },
+    } as any);
+    const guild = {
+      id: 'guild-1',
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: { filter: jest.fn().mockReturnValue([]) },
+      },
+      channels: {
+        cache: buildChannelCollection([]),
+        fetch: jest.fn().mockResolvedValue(existingChannel),
+        create: jest.fn(),
+      },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    let markPersistenceStarted!: () => void;
+    let releasePersistence!: () => void;
+    const persistenceStarted = new Promise<void>((resolve) => {
+      markPersistenceStarted = resolve;
+    });
+    const persistenceReleased = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const onPermissionsUpdated = jest.fn(async () => {
+      markPersistenceStarted();
+      await persistenceReleased;
+    });
+    const setupPromise = manager.setupVerificationChannel(
+      guild,
+      'new-case-role',
+      false,
+      undefined,
+      'verification-channel-1',
+      onPermissionsUpdated
+    );
+    await persistenceStarted;
+    expect(overwriteSet).not.toHaveBeenCalled();
+    releasePersistence();
+    await setupPromise;
+
+    const previousRoleOverwrite = overwriteSet.mock.calls[0][0].find(
+      (overwrite: { id: string }) => overwrite.id === 'old-case-role'
+    );
+    expect(previousRoleOverwrite.allow).toBe(
+      PermissionFlagsBits.ViewChannel | PermissionFlagsBits.AttachFiles
+    );
+    expect(previousRoleOverwrite.deny).toBe(
+      PermissionFlagsBits.SendMessages | PermissionFlagsBits.MentionEveryone
+    );
+    expect(onPermissionsUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ channelId: 'verification-channel-1' }),
+      expect.objectContaining({
+        channel_id: 'verification-channel-1',
+        managed_overwrites: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'new-case-role',
+            type: 0,
+            original_overwrite: {
+              existed: false,
+              allow: '0',
+              deny: '0',
+            },
+          }),
+        ]),
+      })
+    );
+  });
+
+  it('waits for created-channel provenance persistence before returning', async () => {
+    configService.getServerConfig = jest.fn().mockResolvedValue({
+      verification_channel_id: null,
+      settings: {},
+    } as any);
+    const createChannel = jest.fn().mockResolvedValue({ id: 'created-verification-channel' });
+    const guild = {
+      id: 'guild-1',
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: { filter: jest.fn().mockReturnValue([]) },
+      },
+      channels: {
+        cache: buildChannelCollection([]),
+        fetch: jest.fn(),
+        create: createChannel,
+      },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    let markPersistenceStarted!: () => void;
+    let releasePersistence!: () => void;
+    const persistenceStarted = new Promise<void>((resolve) => {
+      markPersistenceStarted = resolve;
+    });
+    const persistenceReleased = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const onChannelCreated = jest.fn(async () => {
+      markPersistenceStarted();
+      await persistenceReleased;
+    });
+    let setupFinished = false;
+    const setupPromise = manager
+      .setupVerificationChannel(guild, 'case-role-1', false, onChannelCreated)
+      .then((channelId) => {
+        setupFinished = true;
+        return channelId;
+      });
+
+    await persistenceStarted;
+    expect(setupFinished).toBe(false);
+    releasePersistence();
+
+    await expect(setupPromise).resolves.toBe('created-verification-channel');
+    expect(onChannelCreated).toHaveBeenCalledWith(
+      'created-verification-channel',
+      expect.objectContaining({ channel_id: 'created-verification-channel' })
+    );
+  });
+
+  it('deletes a created verification channel when its initial config persistence fails', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    configService.getServerConfig = jest.fn().mockResolvedValue({
+      verification_channel_id: null,
+      settings: {},
+    } as any);
+    configService.updateServerSettings = jest.fn().mockRejectedValue(new Error('save failed'));
+    const deleteChannel = jest.fn().mockResolvedValue(undefined);
+    const createChannel = jest.fn().mockResolvedValue({
+      id: 'created-verification-channel',
+      delete: deleteChannel,
+    });
+    const guild = {
+      id: 'guild-1',
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: { filter: jest.fn().mockReturnValue([]) },
+      },
+      channels: {
+        cache: buildChannelCollection([]),
+        fetch: jest.fn(),
+        create: createChannel,
+      },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await expect(manager.setupVerificationChannel(guild, 'case-role-1')).resolves.toBeNull();
+
+    expect(deleteChannel).toHaveBeenCalledWith(
+      'Rolling back Drasil verification channel after setup persistence failed'
+    );
+    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+  });
+
+  it('restores Drasil-managed permissions when an administrator role is retired', async () => {
+    const managedBits =
+      PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.SendMessages |
+      PermissionFlagsBits.ReadMessageHistory;
+    const overwriteSet = jest.fn().mockResolvedValue(undefined);
+    const existingChannel = {
+      id: 'verification-channel-1',
+      type: ChannelType.GuildText,
+      permissionOverwrites: {
+        cache: new Map([
+          [
+            'retired-admin-role',
+            {
+              id: 'retired-admin-role',
+              type: 0,
+              allow: { bitfield: managedBits | PermissionFlagsBits.AttachFiles },
+              deny: { bitfield: PermissionFlagsBits.MentionEveryone },
+            },
+          ],
+        ]),
+        set: overwriteSet,
+      },
+    };
+    configService.getServerConfig = jest.fn().mockResolvedValue({
+      case_role_id: 'case-role-1',
+      verification_channel_id: 'verification-channel-1',
+      settings: {
+        verification_channel_permission_sync: {
+          channel_id: 'verification-channel-1',
+          managed_overwrites: [
+            {
+              id: 'retired-admin-role',
+              type: 0,
+              managed_bits: managedBits.toString(),
+              original_overwrite: {
+                existed: true,
+                allow: PermissionFlagsBits.AttachFiles.toString(),
+                deny: PermissionFlagsBits.MentionEveryone.toString(),
+              },
+            },
+          ],
+        },
+      },
+    } as any);
+    const guild = {
+      id: 'guild-1',
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: { filter: jest.fn().mockReturnValue([]) },
+      },
+      channels: {
+        cache: buildChannelCollection([]),
+        fetch: jest.fn().mockResolvedValue(existingChannel),
+        create: jest.fn(),
+      },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await manager.setupVerificationChannel(
+      guild,
+      'case-role-1',
+      false,
+      undefined,
+      'verification-channel-1'
+    );
+
+    const retiredAdminOverwrite = overwriteSet.mock.calls[0][0].find(
+      (overwrite: { id: string }) => overwrite.id === 'retired-admin-role'
+    );
+    expect(retiredAdminOverwrite).toEqual({
+      id: 'retired-admin-role',
+      type: 0,
+      allow: PermissionFlagsBits.AttachFiles,
+      deny: PermissionFlagsBits.MentionEveryone,
+    });
+  });
+
+  it('preserves a previous case-role overwrite when no Drasil provenance exists', async () => {
+    const overwriteSet = jest.fn().mockResolvedValue(undefined);
+    const originalAllow = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.AttachFiles;
+    const originalDeny = PermissionFlagsBits.SendMessages | PermissionFlagsBits.MentionEveryone;
+    const existingChannel = {
+      id: 'verification-channel-1',
+      type: ChannelType.GuildText,
+      permissionOverwrites: {
+        cache: new Map([
+          [
+            'old-case-role',
+            {
+              id: 'old-case-role',
+              type: 0,
+              allow: { bitfield: originalAllow },
+              deny: { bitfield: originalDeny },
+            },
+          ],
+        ]),
+        set: overwriteSet,
+      },
+    };
+    configService.getServerConfig = jest.fn().mockResolvedValue({
+      case_role_id: 'old-case-role',
+      verification_channel_id: 'verification-channel-1',
+      settings: {},
+    } as any);
+    const guild = {
+      id: 'guild-1',
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: { filter: jest.fn().mockReturnValue([]) },
+      },
+      channels: {
+        cache: buildChannelCollection([]),
+        fetch: jest.fn().mockResolvedValue(existingChannel),
+        create: jest.fn(),
+      },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await manager.setupVerificationChannel(
+      guild,
+      'new-case-role',
+      false,
+      undefined,
+      'verification-channel-1'
+    );
+
+    const previousRoleOverwrite = overwriteSet.mock.calls[0][0].find(
+      (overwrite: { id: string }) => overwrite.id === 'old-case-role'
+    );
+    expect(previousRoleOverwrite).toEqual({
+      id: 'old-case-role',
+      type: 0,
+      allow: originalAllow,
+      deny: originalDeny,
+    });
+  });
+
+  it('syncs an already resolved verification channel and checks the prior case role', async () => {
     const overwriteSet = jest.fn().mockResolvedValue(undefined);
     const existingChannel = {
       id: 'verification-channel-1',
@@ -1342,7 +1765,10 @@ describe('NotificationManager (unit)', () => {
     };
     const createChannel = jest.fn();
     const fetchChannel = jest.fn().mockResolvedValue(existingChannel);
-    configService.getServerConfig = jest.fn();
+    configService.getServerConfig = jest.fn().mockResolvedValue({
+      case_role_id: 'case-role-1',
+      settings: {},
+    } as any);
     const guild = {
       id: 'guild-1',
       roles: {
@@ -1369,7 +1795,7 @@ describe('NotificationManager (unit)', () => {
     );
 
     expect(channelId).toBe('verification-channel-1');
-    expect(configService.getServerConfig).not.toHaveBeenCalled();
+    expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1');
     expect(fetchChannel).toHaveBeenCalledWith('verification-channel-1');
     expect(overwriteSet).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ id: 'case-role-1' })]),
@@ -1421,5 +1847,167 @@ describe('NotificationManager (unit)', () => {
       'Sync Drasil verification channel permissions'
     );
     expect(createChannel).not.toHaveBeenCalled();
+  });
+
+  it('treats a deleted previous verification channel as already restored', async () => {
+    const guild = {
+      channels: {
+        fetch: jest.fn().mockRejectedValue({ code: 10003, message: 'Unknown Channel' }),
+      },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await expect(
+      manager.restoreVerificationChannelManagedPermissions(guild, {
+        channel_id: 'deleted-channel',
+        managed_overwrites: [],
+      })
+    ).resolves.toBe(true);
+  });
+
+  it('removes shipped legacy verification overwrites while preserving unrelated access', async () => {
+    const overwriteSet = jest.fn().mockResolvedValue(undefined);
+    const legacyEveryoneDeny =
+      PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.SendMessages |
+      PermissionFlagsBits.ReadMessageHistory |
+      PermissionFlagsBits.CreatePublicThreads |
+      PermissionFlagsBits.CreatePrivateThreads;
+    const legacyCaseAllow =
+      PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.ReadMessageHistory |
+      PermissionFlagsBits.SendMessagesInThreads;
+    const legacyCaseDeny =
+      PermissionFlagsBits.SendMessages |
+      PermissionFlagsBits.CreatePublicThreads |
+      PermissionFlagsBits.CreatePrivateThreads;
+    const legacyBotAllow =
+      PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.SendMessages |
+      PermissionFlagsBits.ReadMessageHistory |
+      PermissionFlagsBits.ManageChannels |
+      PermissionFlagsBits.ManageThreads |
+      PermissionFlagsBits.CreatePublicThreads |
+      PermissionFlagsBits.CreatePrivateThreads |
+      PermissionFlagsBits.SendMessagesInThreads |
+      PermissionFlagsBits.ModerateMembers;
+    const currentAdminAllow =
+      PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.SendMessages |
+      PermissionFlagsBits.ReadMessageHistory;
+    const channel = {
+      id: 'legacy-channel',
+      type: ChannelType.GuildText,
+      permissionOverwrites: {
+        cache: new Map([
+          [
+            'guild-1',
+            {
+              id: 'guild-1',
+              type: 0,
+              allow: { bitfield: 0n },
+              deny: { bitfield: legacyEveryoneDeny },
+            },
+          ],
+          [
+            'old-case-role',
+            {
+              id: 'old-case-role',
+              type: 0,
+              allow: { bitfield: legacyCaseAllow },
+              deny: { bitfield: legacyCaseDeny },
+            },
+          ],
+          [
+            'bot-1',
+            {
+              id: 'bot-1',
+              type: 1,
+              allow: { bitfield: legacyBotAllow },
+              deny: { bitfield: 0n },
+            },
+          ],
+          [
+            'current-admin-role',
+            {
+              id: 'current-admin-role',
+              type: 0,
+              allow: { bitfield: currentAdminAllow },
+              deny: { bitfield: 0n },
+            },
+          ],
+          [
+            'unrelated-role',
+            {
+              id: 'unrelated-role',
+              type: 0,
+              allow: { bitfield: PermissionFlagsBits.AttachFiles },
+              deny: { bitfield: 0n },
+            },
+          ],
+        ]),
+        set: overwriteSet,
+      },
+    };
+    const guild = {
+      roles: {
+        everyone: { id: 'guild-1' },
+        cache: {
+          filter: jest.fn().mockReturnValue(
+            new Collection([
+              [
+                'current-admin-role',
+                {
+                  id: 'current-admin-role',
+                  permissions: { has: jest.fn().mockReturnValue(true) },
+                },
+              ],
+            ])
+          ),
+        },
+      },
+      channels: { fetch: jest.fn().mockResolvedValue(channel) },
+    } as unknown as Guild;
+    const manager = new NotificationManager(
+      { user: { id: 'bot-1' } } as any,
+      configService,
+      detectionRepository
+    );
+
+    await expect(
+      manager.restoreLegacyVerificationChannelPermissions(guild, 'legacy-channel', 'old-case-role')
+    ).resolves.toBe(true);
+
+    expect(overwriteSet).toHaveBeenCalledWith(
+      [
+        {
+          id: 'current-admin-role',
+          type: 0,
+          allow: currentAdminAllow,
+          deny: 0n,
+        },
+        {
+          id: 'unrelated-role',
+          type: 0,
+          allow: PermissionFlagsBits.AttachFiles,
+          deny: 0n,
+        },
+      ],
+      'Restore retired Drasil verification channel permissions'
+    );
+  });
+
+  it('blocks replacement when fetching the previous verification channel fails', async () => {
+    const guild = {
+      channels: { fetch: jest.fn().mockRejectedValue(new Error('Discord unavailable')) },
+    } as unknown as Guild;
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await expect(
+      manager.restoreVerificationChannelManagedPermissions(guild, {
+        channel_id: 'old-channel',
+        managed_overwrites: [],
+      })
+    ).resolves.toBe(false);
   });
 });

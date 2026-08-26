@@ -1,12 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SetupServerRecord } from '@drasil/contracts';
 import type { DiscordGuildResources, DiscordGuildSummary } from './discordApi';
+import { DiscordApiError } from './discordApi';
+import { DISCORD_PERMISSIONS } from './discordPermissions';
 import { fetchDiscordGuilds, fetchGuildResources } from './discordApi';
-import { SetupDashboardService } from './setupDashboardService';
+import {
+  filterAssignableCaseRoles,
+  filterPrivateAdminChannels,
+  SetupDashboardService,
+} from './setupDashboardService';
 import type { SetupDataAdapter } from './setupDataAdapter';
 
-vi.mock('./discordApi', () => ({
+vi.mock('./discordApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./discordApi')>()),
   fetchDiscordGuilds: vi.fn(),
+  fetchDiscordBotUser: vi.fn(),
   fetchGuildResources: vi.fn(),
 }));
 
@@ -44,10 +52,19 @@ const inactiveServer: SetupServerRecord = {
   is_active: false,
 };
 
-function createAdapter(server: SetupServerRecord | null): SetupDataAdapter {
+function createAdapter(
+  server: SetupServerRecord | null,
+  summary: {
+    installedGuildIds?: readonly string[];
+    coreConfiguredGuildIds?: readonly string[];
+  } = {}
+): SetupDataAdapter {
   return {
     provider: 'postgres',
-    listConfiguredGuildIds: vi.fn(async () => new Set<string>()),
+    listConfiguredGuildIds: vi.fn(async () => new Set<string>(summary.installedGuildIds ?? [])),
+    listCoreConfiguredGuildIds: vi.fn(
+      async () => new Set<string>(summary.coreConfiguredGuildIds ?? [])
+    ),
     getServer: vi.fn(async () => server),
     updateGuildSetup: vi.fn(),
   };
@@ -58,15 +75,512 @@ describe('SetupDashboardService', () => {
     vi.clearAllMocks();
   });
 
-  it('does not mark inactive server records as configured', async () => {
+  it('offers only roles below the bot hierarchy for case-role selection', () => {
+    const roles = [
+      { id: 'guild-1', name: '@everyone', permissions: '0', position: 0, managed: false },
+      { id: 'assignable', name: 'Assignable', permissions: '0', position: 3, managed: false },
+      { id: 'managed', name: 'Managed', permissions: '0', position: 2, managed: true },
+      {
+        id: 'privileged',
+        name: 'Privileged',
+        permissions: DISCORD_PERMISSIONS.Administrator.toString(),
+        position: 2,
+        managed: false,
+      },
+      { id: 'bot-role', name: 'Drasil', permissions: '0', position: 5, managed: false },
+      { id: 'equal-role', name: 'Equal', permissions: '0', position: 5, managed: false },
+      { id: 'higher-role', name: 'Higher', permissions: '0', position: 6, managed: false },
+    ];
+
+    expect(filterAssignableCaseRoles(roles, ['bot-role'], 'guild-1')).toEqual([
+      expect.objectContaining({ id: 'assignable' }),
+    ]);
+  });
+
+  it('omits roles with allow overwrites outside the configured verification channel', () => {
+    const roles = [
+      { id: 'guild-1', name: '@everyone', permissions: '0', position: 0, managed: false },
+      { id: 'safe-role', name: 'Safe', permissions: '0', position: 2, managed: false },
+      { id: 'access-role', name: 'Access', permissions: '0', position: 2, managed: false },
+      { id: 'unsafe-role', name: 'Unsafe', permissions: '0', position: 2, managed: false },
+      { id: 'bot-role', name: 'Drasil', permissions: '0', position: 5, managed: false },
+    ];
+    const channels = [
+      {
+        id: 'verification-channel-1',
+        name: 'verification',
+        type: 0,
+        permission_overwrites: [
+          {
+            id: 'safe-role',
+            type: 0,
+            allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+            deny: '0',
+          },
+          {
+            id: 'unsafe-role',
+            type: 0,
+            allow: (
+              DISCORD_PERMISSIONS.ViewChannel | DISCORD_PERMISSIONS.ManageChannels
+            ).toString(),
+            deny: '0',
+          },
+        ],
+      },
+      {
+        id: 'staff-channel-1',
+        name: 'staff',
+        type: 0,
+        permission_overwrites: [
+          {
+            id: 'access-role',
+            type: 0,
+            allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+            deny: '0',
+          },
+        ],
+      },
+    ];
+
+    expect(
+      filterAssignableCaseRoles(roles, ['bot-role'], 'guild-1', channels, 'verification-channel-1')
+    ).toEqual([expect.objectContaining({ id: 'safe-role' })]);
+  });
+
+  it('offers only private standard text channels for admin alerts', () => {
+    const roles = [
+      {
+        id: 'guild-1',
+        name: '@everyone',
+        permissions: DISCORD_PERMISSIONS.ViewChannel.toString(),
+        position: 0,
+        managed: false,
+      },
+      {
+        id: 'moderator-role',
+        name: 'Moderators',
+        permissions: DISCORD_PERMISSIONS.ManageMessages.toString(),
+        position: 1,
+        managed: false,
+      },
+      { id: 'ordinary-role', name: 'Members', permissions: '0', position: 1, managed: false },
+    ];
+    const privateDeny = DISCORD_PERMISSIONS.ViewChannel.toString();
+
+    expect(
+      filterPrivateAdminChannels(
+        [
+          { id: 'public', name: 'general', type: 0 },
+          {
+            id: 'private',
+            name: 'staff',
+            type: 0,
+            permission_overwrites: [{ id: 'guild-1', type: 0, allow: '0', deny: privateDeny }],
+          },
+          {
+            id: 'moderator-private',
+            name: 'moderators',
+            type: 0,
+            permission_overwrites: [
+              { id: 'guild-1', type: 0, allow: '0', deny: privateDeny },
+              {
+                id: 'moderator-role',
+                type: 0,
+                allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+                deny: '0',
+              },
+            ],
+          },
+          {
+            id: 'ordinary-private',
+            name: 'ordinary',
+            type: 0,
+            permission_overwrites: [
+              { id: 'guild-1', type: 0, allow: '0', deny: privateDeny },
+              {
+                id: 'ordinary-role',
+                type: 0,
+                allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+                deny: '0',
+              },
+            ],
+          },
+          { id: 'forum', name: 'staff-forum', type: 15 },
+        ],
+        roles,
+        'guild-1'
+      )
+    ).toEqual([
+      expect.objectContaining({ id: 'private' }),
+      expect.objectContaining({ id: 'moderator-private' }),
+    ]);
+  });
+
+  it('does not trust an ordinary role merely because the bot also has it', () => {
+    const roles = [
+      {
+        id: 'guild-1',
+        name: '@everyone',
+        permissions: DISCORD_PERMISSIONS.ViewChannel.toString(),
+        position: 0,
+        managed: false,
+      },
+      { id: 'shared-role', name: 'Members', permissions: '0', position: 1, managed: false },
+      { id: 'managed-bot-role', name: 'Drasil', permissions: '0', position: 2, managed: true },
+    ];
+    const privateDeny = DISCORD_PERMISSIONS.ViewChannel.toString();
+    const privateChannel = (id: string, roleId: string) => ({
+      id,
+      name: id,
+      type: 0,
+      permission_overwrites: [
+        { id: 'guild-1', type: 0, allow: '0', deny: privateDeny },
+        {
+          id: roleId,
+          type: 0,
+          allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+          deny: '0',
+        },
+      ],
+    });
+
+    expect(
+      filterPrivateAdminChannels(
+        [
+          privateChannel('shared-role-channel', 'shared-role'),
+          privateChannel('managed-bot-channel', 'managed-bot-role'),
+        ],
+        roles,
+        'guild-1',
+        ['shared-role', 'managed-bot-role'],
+        'bot-1'
+      )
+    ).toEqual([expect.objectContaining({ id: 'managed-bot-channel' })]);
+  });
+
+  it('marks inactive server records as needing setup', async () => {
     vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
     vi.mocked(fetchGuildResources).mockResolvedValue(resources);
 
     const service = new SetupDashboardService(createAdapter(inactiveServer));
 
     await expect(service.getDashboard('guild-1', 'access-token')).resolves.toMatchObject({
-      dashboard: { configured: false },
+      dashboard: { readiness: 'needs_setup' },
     });
+  });
+
+  it('rejects @everyone as the configured case role', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockResolvedValue({
+      ...resources,
+      channels: [
+        { id: 'admin-channel-1', name: 'admin', type: 0 },
+        { id: 'verification-channel-1', name: 'verification', type: 0 },
+      ],
+    });
+    const service = new SetupDashboardService(
+      createAdapter({
+        ...inactiveServer,
+        is_active: true,
+        case_role_id: 'guild-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+      })
+    );
+
+    const result = await service.getDashboard('guild-1', 'access-token');
+
+    expect(result.dashboard.readiness).toBe('needs_setup');
+    expect(result.dashboard.checklist).toContainEqual(
+      expect.objectContaining({
+        key: 'case-role',
+        status: 'error',
+        detail: 'The @everyone role cannot be used as a case role.',
+      })
+    );
+  });
+
+  it('blocks a configured case role that grants server permissions', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockResolvedValue({
+      ...resources,
+      roles: [
+        resources.roles[0],
+        {
+          ...resources.roles[1],
+          permissions: DISCORD_PERMISSIONS.Administrator.toString(),
+          position: 3,
+        },
+        {
+          id: 'case-role-1',
+          name: 'Case',
+          permissions: DISCORD_PERMISSIONS.ManageRoles.toString(),
+          position: 1,
+          managed: false,
+        },
+      ],
+      channels: [
+        { id: 'admin-channel-1', name: 'admin', type: 0 },
+        { id: 'verification-channel-1', name: 'verification', type: 0 },
+      ],
+    });
+    const service = new SetupDashboardService(
+      createAdapter({
+        ...inactiveServer,
+        is_active: true,
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+      })
+    );
+
+    const result = await service.getDashboard('guild-1', 'access-token');
+
+    expect(result.dashboard.readiness).toBe('blocked');
+    expect(result.dashboard.checklist).toContainEqual(
+      expect.objectContaining({
+        key: 'case-role',
+        status: 'error',
+        detail: expect.stringContaining('grants server permissions'),
+      })
+    );
+  });
+
+  it('blocks a configured case role with access outside verification', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockResolvedValue({
+      ...resources,
+      roles: [
+        resources.roles[0],
+        {
+          ...resources.roles[1],
+          permissions: DISCORD_PERMISSIONS.Administrator.toString(),
+          position: 3,
+        },
+        { id: 'case-role-1', name: 'Case', permissions: '0', position: 1, managed: false },
+      ],
+      channels: [
+        { id: 'admin-channel-1', name: 'admin', type: 0 },
+        {
+          id: 'verification-channel-1',
+          name: 'verification',
+          type: 0,
+          permission_overwrites: [
+            {
+              id: 'case-role-1',
+              type: 0,
+              allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+              deny: '0',
+            },
+          ],
+        },
+        {
+          id: 'staff-channel-1',
+          name: 'staff',
+          type: 0,
+          permission_overwrites: [
+            {
+              id: 'case-role-1',
+              type: 0,
+              allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+              deny: '0',
+            },
+          ],
+        },
+      ],
+    });
+    const service = new SetupDashboardService(
+      createAdapter({
+        ...inactiveServer,
+        is_active: true,
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+      })
+    );
+
+    const result = await service.getDashboard('guild-1', 'access-token');
+
+    expect(result.dashboard.readiness).toBe('blocked');
+    expect(result.dashboard.checklist).toContainEqual(
+      expect.objectContaining({
+        key: 'case-role',
+        status: 'error',
+        detail: "@Case grants channel access outside Drasil's managed verification permissions.",
+      })
+    );
+  });
+
+  it('warns when persisted report instructions are not public', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockResolvedValue({
+      ...resources,
+      roles: [
+        resources.roles[0],
+        {
+          ...resources.roles[1],
+          permissions: DISCORD_PERMISSIONS.Administrator.toString(),
+          position: 3,
+        },
+        { id: 'case-role-1', name: 'Case', permissions: '0', position: 1, managed: false },
+      ],
+      channels: [
+        { id: 'admin-channel-1', name: 'admin', type: 0 },
+        { id: 'verification-channel-1', name: 'verification', type: 0 },
+        { id: 'report-channel-1', name: 'reporting', type: 0 },
+      ],
+    });
+    const service = new SetupDashboardService(
+      createAdapter({
+        ...inactiveServer,
+        is_active: true,
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: { report_instructions_channel_id: 'report-channel-1' },
+      })
+    );
+
+    const result = await service.getDashboard('guild-1', 'access-token');
+
+    expect(result.dashboard.checklist).toContainEqual({
+      key: 'report-channel',
+      label: 'Report instructions channel',
+      status: 'warning',
+      detail: '#reporting is not visible to @everyone.',
+    });
+  });
+
+  it.each([
+    {
+      label: 'admin alert',
+      invalidChannelId: 'admin-channel-1',
+      invalidChannelType: 5,
+      checklistKey: 'admin-channel',
+    },
+    {
+      label: 'verification',
+      invalidChannelId: 'verification-channel-1',
+      invalidChannelType: 15,
+      checklistKey: 'verification-channel',
+    },
+  ])(
+    'does not report ready when the $label channel is not a standard text channel',
+    async ({ invalidChannelId, invalidChannelType, checklistKey }) => {
+      vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+      vi.mocked(fetchGuildResources).mockResolvedValue({
+        ...resources,
+        roles: [
+          resources.roles[0],
+          {
+            ...resources.roles[1],
+            permissions: DISCORD_PERMISSIONS.Administrator.toString(),
+            position: 2,
+          },
+          { id: 'case-role-1', name: 'Case', permissions: '0', position: 1, managed: false },
+        ],
+        channels: [
+          {
+            id: 'admin-channel-1',
+            name: 'admin',
+            type: invalidChannelId === 'admin-channel-1' ? invalidChannelType : 0,
+          },
+          {
+            id: 'verification-channel-1',
+            name: 'verification',
+            type: invalidChannelId === 'verification-channel-1' ? invalidChannelType : 0,
+          },
+        ],
+      });
+      const service = new SetupDashboardService(
+        createAdapter({
+          ...inactiveServer,
+          is_active: true,
+          case_role_id: 'case-role-1',
+          admin_channel_id: 'admin-channel-1',
+          verification_channel_id: 'verification-channel-1',
+        })
+      );
+
+      const result = await service.getDashboard('guild-1', 'access-token');
+
+      expect(result.dashboard.readiness).toBe('blocked');
+      expect(result.dashboard.checklist).toContainEqual(
+        expect.objectContaining({
+          key: checklistKey,
+          status: 'error',
+          detail: expect.stringContaining('must be a standard text channel'),
+        })
+      );
+    }
+  );
+
+  it('uses persisted install state for the manageable guild readiness summary', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    const adapter = createAdapter(null);
+    const service = new SetupDashboardService(adapter);
+
+    await expect(service.listManageableGuilds('access-token')).resolves.toEqual([
+      expect.objectContaining({ id: 'guild-1', readiness: 'not_installed' }),
+    ]);
+    expect(adapter.listConfiguredGuildIds).toHaveBeenCalledWith(['guild-1']);
+    expect(adapter.listCoreConfiguredGuildIds).toHaveBeenCalledWith(['guild-1']);
+    expect(fetchGuildResources).not.toHaveBeenCalled();
+  });
+
+  it('reports an installed incomplete guild as needing setup without live Discord reads', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockRejectedValue(
+      new DiscordApiError(429, 'You are being rate limited.')
+    );
+
+    const service = new SetupDashboardService(
+      createAdapter(null, { installedGuildIds: ['guild-1'] })
+    );
+
+    await expect(service.listManageableGuilds('access-token')).resolves.toEqual([
+      expect.objectContaining({ id: 'guild-1', readiness: 'needs_setup' }),
+    ]);
+    expect(fetchGuildResources).not.toHaveBeenCalled();
+  });
+
+  it('loads guild readiness through two batch summary reads', async () => {
+    const guilds = Array.from({ length: 7 }, (_, index) => ({
+      ...guild,
+      id: `guild-${index + 1}`,
+      name: `Guild ${index + 1}`,
+    }));
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue(guilds);
+    const adapter = createAdapter(inactiveServer, {
+      installedGuildIds: ['guild-1', 'guild-2'],
+      coreConfiguredGuildIds: ['guild-1'],
+    });
+    const service = new SetupDashboardService(adapter);
+
+    const result = await service.listManageableGuilds('access-token');
+
+    expect(result).toHaveLength(7);
+    expect(result[0].readiness).toBe('ready');
+    expect(result[1].readiness).toBe('needs_setup');
+    expect(result[2].readiness).toBe('not_installed');
+    expect(adapter.listConfiguredGuildIds).toHaveBeenCalledTimes(1);
+    expect(adapter.listCoreConfiguredGuildIds).toHaveBeenCalledTimes(1);
+    expect(fetchGuildResources).not.toHaveBeenCalled();
+  });
+
+  it('does not load bot identity or guild resources for a core-configured guild summary', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    const service = new SetupDashboardService(
+      createAdapter(inactiveServer, {
+        installedGuildIds: ['guild-1'],
+        coreConfiguredGuildIds: ['guild-1'],
+      })
+    );
+
+    await expect(service.listManageableGuilds('access-token')).resolves.toEqual([
+      expect.objectContaining({ id: 'guild-1', readiness: 'ready' }),
+    ]);
+    expect(fetchGuildResources).not.toHaveBeenCalled();
   });
 
   it('checks guild management access without fetching live resources', async () => {
@@ -89,6 +603,33 @@ describe('SetupDashboardService', () => {
 
     await expect(service.getDashboard('guild-1', 'access-token')).resolves.toMatchObject({
       dashboard: { checkedAt: '2026-06-08T01:16:02.000Z' },
+    });
+  });
+
+  it.each([
+    { label: 'server owner', owner: true, permissions: 0n, expected: true },
+    {
+      label: 'Administrator',
+      owner: false,
+      permissions: DISCORD_PERMISSIONS.Administrator,
+      expected: true,
+    },
+    {
+      label: 'Manage Server only',
+      owner: false,
+      permissions: DISCORD_PERMISSIONS.ManageGuild,
+      expected: false,
+    },
+  ])('sets apply authority for a $label', async ({ owner, permissions, expected }) => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([
+      { ...guild, owner, permissions: permissions.toString() },
+    ]);
+    vi.mocked(fetchGuildResources).mockResolvedValue(resources);
+
+    const service = new SetupDashboardService(createAdapter(inactiveServer));
+
+    await expect(service.getDashboard('guild-1', 'access-token')).resolves.toMatchObject({
+      canApplySetup: expected,
     });
   });
 });

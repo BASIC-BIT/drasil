@@ -33,6 +33,7 @@ import {
   SERVER_ABOUT_MAX_LENGTH,
   VERIFICATION_CONTEXT_MAX_LENGTH,
   VERIFICATION_PROMPT_TEMPLATE_MAX_LENGTH,
+  deriveSetupReadiness,
   guildSetupUpdateSchema,
   MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH,
   MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES,
@@ -44,14 +45,29 @@ describe('setup contracts', () => {
     const parsed = setupDashboardSchema.parse({
       guildId: '123',
       guildName: 'Test Guild',
-      configured: false,
+      readiness: 'needs_setup',
       dataProvider: 'postgres',
       checkedAt: new Date(0).toISOString(),
       checklist: [],
       server: null,
     });
 
-    expect(parsed.configured).toBe(false);
+    expect(parsed.readiness).toBe('needs_setup');
+  });
+
+  it('derives setup readiness from installation, core config, and diagnostics', () => {
+    expect(
+      deriveSetupReadiness({ installed: false, coreConfigured: false, blockingErrorCount: 1 })
+    ).toBe('not_installed');
+    expect(
+      deriveSetupReadiness({ installed: true, coreConfigured: false, blockingErrorCount: 1 })
+    ).toBe('needs_setup');
+    expect(
+      deriveSetupReadiness({ installed: true, coreConfigured: true, blockingErrorCount: 1 })
+    ).toBe('blocked');
+    expect(
+      deriveSetupReadiness({ installed: true, coreConfigured: true, blockingErrorCount: 0 })
+    ).toBe('ready');
   });
 
   it('rejects unsupported setup update modes', () => {
@@ -319,7 +335,7 @@ describe('setup contracts', () => {
     const parsed = setupDashboardSchema.parse({
       guildId: '123',
       guildName: 'Test Guild',
-      configured: true,
+      readiness: 'ready',
       dataProvider: 'postgres',
       checkedAt: new Date(0).toISOString(),
       checklist: [],

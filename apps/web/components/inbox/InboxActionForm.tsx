@@ -12,6 +12,7 @@ import {
   type InboxActionStatus,
 } from '@/lib/inboxActionState';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
+import { buildTrackedRequestUrl } from '@/lib/requestTrackingUrl';
 import { useInboxActionRequestPolling } from './InboxActionRequestPoller';
 
 export type InboxStateAction = (
@@ -78,8 +79,10 @@ export function InboxActionForm({
   children,
   durableRequest,
   formClassName,
+  hideSubmitButton = false,
   pendingLabel = 'Submitting...',
   requestBaseHref,
+  requestIdQueryParameter,
 }: {
   readonly action: InboxStateAction;
   readonly buttonClassName?: string;
@@ -87,8 +90,10 @@ export function InboxActionForm({
   readonly children?: ReactNode;
   readonly durableRequest?: ModerationActionRequestSummary | null;
   readonly formClassName?: string;
+  readonly hideSubmitButton?: boolean;
   readonly pendingLabel?: string;
   readonly requestBaseHref?: string;
+  readonly requestIdQueryParameter?: string;
 }) {
   const [localState, formAction] = useActionState(action, initialInboxActionState);
   const [submitting, setSubmitting] = useState(false);
@@ -111,6 +116,20 @@ export function InboxActionForm({
   const showReceipt = status !== 'idle';
 
   useEffect(() => {
+    if (!requestIdQueryParameter || !requestId) {
+      return;
+    }
+    const nextUrl = buildTrackedRequestUrl(
+      window.location.href,
+      requestIdQueryParameter,
+      requestId
+    );
+    if (nextUrl !== window.location.href) {
+      window.history.replaceState(window.history.state, '', nextUrl);
+    }
+  }, [requestId, requestIdQueryParameter]);
+
+  useEffect(() => {
     if (!requestId) {
       return;
     }
@@ -128,13 +147,15 @@ export function InboxActionForm({
       }}
     >
       {children}
-      <InboxSubmitButton
-        blocked={isInboxActionSubmitBlocked(status)}
-        buttonClassName={buttonClassName}
-        buttonLabel={buttonLabel}
-        pendingLabel={pendingLabel}
-        submitting={submitting}
-      />
+      {!hideSubmitButton ? (
+        <InboxSubmitButton
+          blocked={isInboxActionSubmitBlocked(status)}
+          buttonClassName={buttonClassName}
+          buttonLabel={buttonLabel}
+          pendingLabel={pendingLabel}
+          submitting={submitting}
+        />
+      ) : null}
       {showReceipt ? (
         <div
           aria-live="polite"

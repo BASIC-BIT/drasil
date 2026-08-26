@@ -15,6 +15,7 @@ export function restoreUserInstallReportingEnvAfterEach(): void {
 export type HandlerOverrides = Partial<{
   banUser: jest.Mock;
   banUserById: jest.Mock;
+  updateSetupConfiguration: jest.Mock;
   updateServerConfig: jest.Mock;
   updateServerSettings: jest.Mock;
   getCachedServerConfig: jest.Mock;
@@ -46,7 +47,12 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
     banUserById: overrides.banUserById ?? jest.fn().mockResolvedValue(true),
   } as any;
 
+  const updateSetupConfiguration =
+    overrides.updateSetupConfiguration ??
+    overrides.updateServerConfig ??
+    jest.fn().mockResolvedValue({});
   const configService = {
+    updateSetupConfiguration,
     updateServerConfig: overrides.updateServerConfig ?? jest.fn().mockResolvedValue({}),
     updateServerSettings: overrides.updateServerSettings ?? jest.fn().mockResolvedValue({}),
     getCachedServerConfig: overrides.getCachedServerConfig ?? jest.fn().mockReturnValue(null),
@@ -136,7 +142,8 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
 
   const notificationManager = {
     setupVerificationChannel:
-      overrides.setupVerificationChannel ?? jest.fn().mockResolvedValue('created-channel-1'),
+      overrides.setupVerificationChannel ??
+      jest.fn().mockImplementation(async (...args: unknown[]) => args[4] ?? 'created-channel-1'),
   } as any;
   const setupDiagnosticsService =
     overrides.setupDiagnosticsService === null

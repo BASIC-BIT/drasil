@@ -5,12 +5,17 @@ describe('SetupDiagnosticsService (unit)', () => {
   const defaultChannelHas = (permission: bigint): boolean => typeof permission === 'bigint';
 
   const buildConfiguredGuild = (overrides: { channelHas?: typeof defaultChannelHas } = {}) => {
-    const caseRole = { id: 'role-1', managed: false };
+    const caseRole = {
+      id: 'role-1',
+      managed: false,
+      permissions: { bitfield: 0n as bigint, has: jest.fn(() => false) },
+    };
     const botMember = {
       permissions: {
         has: jest.fn((permission: bigint) => permission !== PermissionFlagsBits.Administrator),
       },
       roles: {
+        cache: new Map([['bot-role', { id: 'bot-role' }]]),
         highest: {
           comparePositionTo: jest.fn().mockReturnValue(1),
         },
@@ -19,9 +24,14 @@ describe('SetupDiagnosticsService (unit)', () => {
     const channel = {
       id: 'channel-1',
       type: ChannelType.GuildText,
-      permissionsFor: jest.fn().mockReturnValue({
-        has: jest.fn(overrides.channelHas ?? defaultChannelHas),
-      }),
+      permissionOverwrites: { cache: new Map() },
+      permissionsFor: jest.fn((memberOrRole: unknown) => ({
+        has: jest.fn(
+          memberOrRole === botMember
+            ? (overrides.channelHas ?? defaultChannelHas)
+            : (permission: bigint) => permission !== PermissionFlagsBits.ViewChannel
+        ),
+      })),
     };
 
     return {
@@ -32,6 +42,8 @@ describe('SetupDiagnosticsService (unit)', () => {
           fetchMe: jest.fn(),
         },
         roles: {
+          everyone: { id: 'guild-1' },
+          cache: new Map([['role-1', caseRole]]),
           fetch: jest.fn().mockResolvedValue(caseRole),
         },
         channels: {
@@ -124,6 +136,265 @@ describe('SetupDiagnosticsService (unit)', () => {
     expect(report.errorCount).toBeGreaterThanOrEqual(3);
   });
 
+  it('blocks an existing case role that grants server permissions', async () => {
+    const { guild, caseRole } = buildConfiguredGuild();
+    caseRole.permissions.bitfield = PermissionFlagsBits.Administrator;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateGuildSetup(guild);
+
+    expect(report.issues.find((issue) => issue.code === 'case-role-permissions')?.severity).toBe(
+      'error'
+    );
+    expect(report.errorCount).toBe(1);
+  });
+
+  it('rejects a case role with allow overwrites outside the verification channel', async () => {
+    const { guild } = buildConfiguredGuild();
+    guild.channels.cache = new Map([
+      [
+        'verification-channel-1',
+        {
+          id: 'verification-channel-1',
+          permissionOverwrites: {
+            cache: new Map([['role-1', { allow: { bitfield: PermissionFlagsBits.ViewChannel } }]]),
+          },
+        },
+      ],
+      [
+        'staff-channel-1',
+        {
+          id: 'staff-channel-1',
+          permissionOverwrites: {
+            cache: new Map([['role-1', { allow: { bitfield: PermissionFlagsBits.ViewChannel } }]]),
+          },
+        },
+      ],
+    ]);
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateGuildSetup(guild);
+
+    expect(report.issues).toContainEqual({
+      severity: 'error',
+      code: 'case-role-channel-overwrites',
+      message:
+        'The case role has unmanaged channel allow permissions. Use a dedicated role that grants only Drasil-managed verification access.',
+    });
+  });
+
+  it('rejects unmanaged case-role allows in the selected verification channel', async () => {
+    const { guild } = buildConfiguredGuild();
+    guild.channels.cache = new Map([
+      [
+        'verification-channel-1',
+        {
+          id: 'verification-channel-1',
+          permissionOverwrites: {
+            cache: new Map([
+              [
+                'role-1',
+                {
+                  allow: {
+                    bitfield: PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ManageChannels,
+                  },
+                },
+              ],
+            ]),
+          },
+        },
+      ],
+    ]);
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: {},
+      }),
+    } as any;
+
+    const report = await new SetupDiagnosticsService(configService).validateGuildSetup(guild);
+
+    expect(report.issues.map((issue) => issue.code)).toContain('case-role-channel-overwrites');
+  });
+
+  it('rejects a setup candidate role that grants server permissions', async () => {
+    const { guild, caseRole } = buildConfiguredGuild();
+    caseRole.permissions.bitfield = PermissionFlagsBits.Administrator;
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: 'role-1',
+      willCreateCaseRole: false,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: 'verification-channel-1',
+      willCreateVerificationChannel: false,
+      reportInstructionsChannelId: null,
+    });
+
+    expect(report.issues.find((issue) => issue.code === 'case-role-permissions')?.severity).toBe(
+      'error'
+    );
+    expect(report.errorCount).toBe(1);
+  });
+
+  it('rejects a publicly visible admin notification channel candidate', async () => {
+    const { guild, channel, botMember } = buildConfiguredGuild();
+    channel.permissionsFor.mockImplementation((memberOrRole: unknown) => ({
+      has: jest.fn(
+        (permission: bigint) =>
+          memberOrRole === botMember || permission === PermissionFlagsBits.ViewChannel
+      ),
+    }));
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: null,
+    });
+
+    expect(report.issues).toContainEqual({
+      severity: 'error',
+      code: 'admin-channel-public-view',
+      message: 'The admin notification channel must not be visible to @everyone.',
+    });
+  });
+
+  it('rejects an admin channel visible to a non-moderator role', async () => {
+    const { guild, channel } = buildConfiguredGuild();
+    channel.permissionOverwrites.cache = new Map([
+      [
+        'ordinary-role',
+        {
+          id: 'ordinary-role',
+          type: 0,
+          allow: { bitfield: PermissionFlagsBits.ViewChannel },
+        },
+      ],
+    ]);
+    guild.roles.fetch.mockImplementation((roleId: string) =>
+      Promise.resolve(
+        roleId === 'ordinary-role'
+          ? { id: roleId, permissions: { has: jest.fn(() => false) } }
+          : {
+              id: 'role-1',
+              managed: false,
+              permissions: { bitfield: 0n, has: jest.fn(() => false) },
+            }
+      )
+    );
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: null,
+    });
+
+    expect(report.issues).toContainEqual({
+      severity: 'error',
+      code: 'admin-channel-non-moderator-view',
+      message:
+        'The admin notification channel grants View Channel to a role without moderator permissions.',
+    });
+  });
+
+  it('rejects a non-moderator role shared with the bot from admin channel visibility', async () => {
+    const { guild, channel } = buildConfiguredGuild();
+    channel.permissionOverwrites.cache = new Map([
+      [
+        'bot-role',
+        {
+          id: 'bot-role',
+          type: 0,
+          allow: { bitfield: PermissionFlagsBits.ViewChannel },
+        },
+      ],
+    ]);
+    guild.roles.fetch.mockResolvedValue({
+      id: 'bot-role',
+      managed: false,
+      permissions: { has: jest.fn(() => false) },
+    });
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: null,
+    });
+
+    expect(report.issues).toContainEqual({
+      severity: 'error',
+      code: 'admin-channel-non-moderator-view',
+      message:
+        'The admin notification channel grants View Channel to a role without moderator permissions.',
+    });
+  });
+
+  it('allows an admin channel overwrite for the bot managed role', async () => {
+    const { guild, channel } = buildConfiguredGuild();
+    channel.permissionOverwrites.cache = new Map([
+      [
+        'bot-role',
+        {
+          id: 'bot-role',
+          type: 0,
+          allow: { bitfield: PermissionFlagsBits.ViewChannel },
+        },
+      ],
+    ]);
+    guild.roles.fetch.mockResolvedValue({
+      id: 'bot-role',
+      managed: true,
+      permissions: { has: jest.fn(() => false) },
+    });
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: null,
+    });
+
+    expect(report.issues.map((issue) => issue.code)).not.toContain(
+      'admin-channel-non-moderator-view'
+    );
+  });
+
   it('requires thread-send permission in configured verification channels', async () => {
     const { guild } = buildConfiguredGuild({
       channelHas: (permission) => permission !== PermissionFlagsBits.SendMessagesInThreads,
@@ -147,7 +418,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     expect(report.errorCount).toBeGreaterThanOrEqual(1);
   });
 
-  it('requires thread permissions in configured report instructions channels', async () => {
+  it('does not require private-thread permissions in optional report instructions channels', async () => {
     const { guild } = buildConfiguredGuild({
       channelHas: (permission) => permission !== PermissionFlagsBits.SendMessagesInThreads,
     });
@@ -164,9 +435,54 @@ describe('SetupDiagnosticsService (unit)', () => {
 
     const report = await service.validateGuildSetup(guild);
 
-    expect(report.issues.map((issue) => issue.code)).toContain(
+    expect(report.issues.map((issue) => issue.code)).not.toContain(
       'report-instructions-channel-send-messages-in-threads'
     );
+  });
+
+  it('reports optional report instructions delivery failures as warnings', async () => {
+    const { guild } = buildConfiguredGuild({
+      channelHas: (permission) => permission !== PermissionFlagsBits.SendMessages,
+    });
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: { report_instructions_channel_id: 'report-channel-1' },
+      }),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateGuildSetup(guild);
+
+    expect(
+      report.issues.find((issue) => issue.code === 'report-instructions-channel-send')?.severity
+    ).toBe('warning');
+  });
+
+  it('reports optional observed notification delivery failures as warnings', async () => {
+    const { guild } = buildConfiguredGuild({
+      channelHas: (permission) => permission !== PermissionFlagsBits.SendMessages,
+    });
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        guild_id: 'guild-1',
+        case_role_id: 'role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+        settings: { observed_detection_notification_channel_id: 'observed-channel-1' },
+      }),
+    } as any;
+    const service = new SetupDiagnosticsService(configService);
+
+    const report = await service.validateGuildSetup(guild);
+
+    expect(
+      report.issues.find((issue) => issue.code === 'observed-notification-channel-send')?.severity
+    ).toBe('warning');
+    expect(report.errorCount).toBe(2);
   });
 
   it('requires read message history in configured verification channels', async () => {
@@ -265,6 +581,67 @@ describe('SetupDiagnosticsService (unit)', () => {
 
     expect(report.errorCount).toBe(0);
     expect(report.warningCount).toBe(0);
+  });
+
+  it('does not block a setup candidate on optional report channel permissions', async () => {
+    const { guild, channel } = buildConfiguredGuild();
+    const reportChannel = {
+      ...channel,
+      id: 'report-channel-1',
+      permissionsFor: jest.fn().mockReturnValue({
+        has: jest.fn((permission: bigint) => permission !== PermissionFlagsBits.SendMessages),
+      }),
+    };
+    guild.channels.fetch.mockImplementation((channelId: string) =>
+      Promise.resolve(channelId === 'report-channel-1' ? reportChannel : channel)
+    );
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: 'report-channel-1',
+    });
+
+    expect(report.errorCount).toBe(0);
+    expect(
+      report.issues.find((issue) => issue.code === 'report-instructions-channel-send')?.severity
+    ).toBe('warning');
+  });
+
+  it('rejects a report instructions channel that members cannot view', async () => {
+    const { guild, channel, botMember } = buildConfiguredGuild();
+    const reportChannel = {
+      ...channel,
+      id: 'report-channel-1',
+      permissionsFor: jest.fn((memberOrRole: unknown) => ({
+        has: jest.fn(
+          (permission: bigint) =>
+            memberOrRole === botMember || permission !== PermissionFlagsBits.ViewChannel
+        ),
+      })),
+    };
+    guild.channels.fetch.mockImplementation((channelId: string) =>
+      Promise.resolve(channelId === 'report-channel-1' ? reportChannel : channel)
+    );
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: 'report-channel-1',
+    });
+
+    expect(
+      report.issues.find((issue) => issue.code === 'report-instructions-channel-public-view')
+        ?.severity
+    ).toBe('error');
   });
 
   it('requires Manage Channels when setup will create the verification channel', async () => {

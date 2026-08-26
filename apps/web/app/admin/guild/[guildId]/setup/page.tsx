@@ -321,8 +321,8 @@ export default async function GuildSetupPage({ params }: PageProps) {
 
       <section className="panel stack">
         <div className="section-heading">
-          <span className={dashboard.configured ? 'status ok' : 'status warning'}>
-            {dashboard.configured ? 'Configured' : 'First setup'}
+          <span className={dashboard.readiness === 'ready' ? 'status ok' : 'status warning'}>
+            {dashboard.readiness === 'ready' ? 'Ready' : 'Setup incomplete'}
           </span>
           <h1 className="page-title">{dashboard.guildName}</h1>
           <p className="lede">

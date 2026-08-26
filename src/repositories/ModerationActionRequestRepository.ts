@@ -13,6 +13,7 @@ export interface IModerationActionRequestRepository {
   findById(id: string): Promise<ModerationActionRequest | null>;
   claimNext(): Promise<ModerationActionRequest | null>;
   heartbeat(id: string): Promise<ModerationActionRequest | null>;
+  mergeMetadata(id: string, metadata: Prisma.JsonObject): Promise<ModerationActionRequest | null>;
   complete(id: string, result?: Prisma.JsonValue | null): Promise<ModerationActionRequest | null>;
   fail(id: string, error: string): Promise<ModerationActionRequest | null>;
 }
@@ -77,6 +78,16 @@ export class ModerationActionRequestRepository implements IModerationActionReque
             updated_at = now(),
             failed_at = null,
             last_error = null,
+            actor_id = case
+              when moderation_action_requests.status in ('processing', 'completed')
+                then moderation_action_requests.actor_id
+              else excluded.actor_id
+            end,
+            actor_surface = case
+              when moderation_action_requests.status in ('processing', 'completed')
+                then moderation_action_requests.actor_surface
+              else excluded.actor_surface
+            end,
             message_deletion_job_id = coalesce(
               moderation_action_requests.message_deletion_job_id,
               excluded.message_deletion_job_id
@@ -112,7 +123,10 @@ export class ModerationActionRequestRepository implements IModerationActionReque
             updated_at = now(),
             last_error = 'Worker interrupted before this action completed.'
         where status = 'processing'::moderation_action_request_status
-          and verification_event_id is not null
+          and (
+            verification_event_id is not null
+            or action_type = 'complete_setup_verification'::moderation_action_request_type
+          )
           and action_type not in (
             'preview_account_quarantine'::moderation_action_request_type,
             'quarantine_compromised_account'::moderation_action_request_type,
@@ -169,6 +183,24 @@ export class ModerationActionRequestRepository implements IModerationActionReque
       return rows[0] ?? null;
     } catch (error) {
       this.handleError(error, 'heartbeatModerationActionRequest');
+    }
+  }
+
+  public async mergeMetadata(
+    id: string,
+    metadata: Prisma.JsonObject
+  ): Promise<ModerationActionRequest | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<ModerationActionRequest[]>`
+        update moderation_action_requests
+        set metadata = coalesce(metadata, '{}'::jsonb) || ${JSON.stringify(metadata)}::jsonb,
+            updated_at = now()
+        where id = ${id}::uuid
+        returning *
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'mergeModerationActionRequestMetadata');
     }
   }
 

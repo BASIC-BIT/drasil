@@ -19,8 +19,41 @@ export type SetupDataProvider = 'postgres' | 'convex';
 export interface SetupDataAdapter {
   readonly provider: SetupDataProvider;
   listConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>>;
+  listCoreConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>>;
   getServer(guildId: string): Promise<SetupServerRecord | null>;
   updateGuildSetup(update: GuildSetupUpdate): Promise<SetupServerRecord>;
+}
+
+const SETUP_SUMMARY_READ_CONCURRENCY = 8;
+
+async function mapWithConcurrency<T, U>(
+  values: readonly T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<U>
+): Promise<U[]> {
+  const results = new Array<U>(values.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(values[index]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, () => worker()));
+  return results;
+}
+
+function hasCoreSetupConfiguration(server: SetupServerRecord | null): boolean {
+  return Boolean(
+    server?.is_active &&
+    server.case_role_id &&
+    server.case_role_id !== server.guild_id &&
+    server.admin_channel_id &&
+    server.verification_channel_id
+  );
 }
 
 let postgresPool: Pool | null = null;
@@ -223,6 +256,23 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
     return new Set(result.rows.map((row) => row.guild_id));
   }
 
+  public async listCoreConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>> {
+    if (guildIds.length === 0) {
+      return new Set();
+    }
+    const result = await getPostgresPool().query<{ guild_id: string }>(
+      `select guild_id from servers
+       where guild_id = any($1::text[])
+         and coalesce(is_active, true) = true
+         and case_role_id is not null
+         and case_role_id <> guild_id
+         and admin_channel_id is not null
+         and verification_channel_id is not null`,
+      [guildIds]
+    );
+    return new Set(result.rows.map((row) => row.guild_id));
+  }
+
   public async getServer(guildId: string): Promise<SetupServerRecord | null> {
     const result = await getPostgresPool().query(
       'select * from servers where guild_id = $1 limit 1',
@@ -326,6 +376,18 @@ export class ConvexSetupDataAdapter implements SetupDataAdapter {
     return new Set(result.guildIds);
   }
 
+  public async listCoreConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>> {
+    const activeGuildIds = [...(await this.listConfiguredGuildIds(guildIds))];
+    const servers = await mapWithConcurrency(
+      activeGuildIds,
+      SETUP_SUMMARY_READ_CONCURRENCY,
+      async (guildId) => this.getServer(guildId)
+    );
+    return new Set(
+      activeGuildIds.filter((_guildId, index) => hasCoreSetupConfiguration(servers[index]))
+    );
+  }
+
   public async getServer(guildId: string): Promise<SetupServerRecord | null> {
     const url = this.buildUrl('/api/setup/guild');
     url.searchParams.set('guildId', guildId);
@@ -356,6 +418,14 @@ export class FixtureSetupDataAdapter implements SetupDataAdapter {
 
   public async listConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>> {
     return new Set(guildIds.includes(fixtureGuildId) ? [fixtureGuildId] : []);
+  }
+
+  public async listCoreConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>> {
+    return new Set(
+      guildIds.includes(fixtureGuildId) && hasCoreSetupConfiguration(fixtureServerRecord())
+        ? [fixtureGuildId]
+        : []
+    );
   }
 
   public async getServer(guildId: string): Promise<SetupServerRecord | null> {

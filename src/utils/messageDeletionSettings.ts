@@ -3,7 +3,7 @@ import {
   MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS,
   MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH,
   MESSAGE_DELETION_MAX_DISABLED_DEFAULT_IDS,
-} from '../../packages/contracts/src/setup';
+} from '../contracts/setup';
 import type { ServerSettings } from '../repositories/types';
 import type { ReportAttachmentMetadata } from './reportAiSettings';
 

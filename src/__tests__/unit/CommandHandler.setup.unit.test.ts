@@ -12,6 +12,7 @@ describe('CommandHandler setup commands (unit)', () => {
 
     const interaction = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -35,19 +36,30 @@ describe('CommandHandler setup commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      case_role_id: 'role-1',
-      admin_channel_id: 'channel-1',
-      verification_channel_id: 'channel-2',
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      caseRoleId: 'role-1',
+      adminChannelId: 'channel-1',
+      verificationChannelId: 'channel-2',
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
-    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+    expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
+      guild,
+      'role-1',
+      false,
+      expect.any(Function),
+      'channel-2'
+    );
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
       updateServerConfig.mock.invocationCallOrder[0]
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
+        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nSynced verification channel permissions: <#channel-2>',
       allowedMentions: { parse: [] },
     });
   });
@@ -62,6 +74,7 @@ describe('CommandHandler setup commands (unit)', () => {
 
     const interaction = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -92,10 +105,15 @@ describe('CommandHandler setup commands (unit)', () => {
       false,
       expect.any(Function)
     );
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      case_role_id: 'role-1',
-      admin_channel_id: 'channel-1',
-      verification_channel_id: 'created-channel-1',
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      caseRoleId: 'role-1',
+      adminChannelId: 'channel-1',
+      verificationChannelId: 'created-channel-1',
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
@@ -133,6 +151,7 @@ describe('CommandHandler setup commands (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -183,6 +202,7 @@ describe('CommandHandler setup commands (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -209,7 +229,43 @@ describe('CommandHandler setup commands (unit)', () => {
     });
     expect(interaction.deferReply).not.toHaveBeenCalled();
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
-    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(configService.updateSetupConfiguration).not.toHaveBeenCalled();
+  });
+
+  it('blocks setupverification when the case role is an operational trigger role', async () => {
+    const { handler, configService, notificationManager } = buildHandler({
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: {
+          role_gate_enabled: true,
+          honeypot_role_id: '111111111111111111',
+        },
+      }),
+    });
+    const guild = { id: 'guild-1' } as any;
+    const interaction = {
+      commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
+      guild,
+      memberPermissions: { has: jest.fn().mockReturnValue(true) },
+      options: {
+        getRole: jest.fn().mockReturnValue({ id: '111111111111111111' }),
+        getChannel: jest.fn((name: string) =>
+          name === 'admin-channel' ? { id: 'channel-1', type: ChannelType.GuildText } : null
+        ),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content:
+        'Setup not saved. The case role must be separate from the configured honeypot trigger role.',
+    });
+    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+    expect(configService.updateSetupConfiguration).not.toHaveBeenCalled();
   });
 
   it('rolls back a created setupverification channel when config saving fails', async () => {
@@ -241,6 +297,7 @@ describe('CommandHandler setup commands (unit)', () => {
     } as any;
     const interaction: any = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -265,10 +322,15 @@ describe('CommandHandler setup commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      case_role_id: 'role-1',
-      admin_channel_id: 'channel-1',
-      verification_channel_id: 'created-channel-1',
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      caseRoleId: 'role-1',
+      adminChannelId: 'channel-1',
+      verificationChannelId: 'created-channel-1',
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(createdChannel.delete).toHaveBeenCalledWith(
       'Rolling back Drasil setup after config save failed'
@@ -300,7 +362,7 @@ describe('CommandHandler setup commands (unit)', () => {
       commandName: 'setupverification',
       guild,
       channelId: 'channel-1',
-      user: { id: 'admin-1' },
+      user: { id: 'admin-1', username: 'Admin' },
       memberPermissions: null,
       options: {
         getRole: jest.fn().mockReturnValue({ id: 'role-1' }),
@@ -326,7 +388,7 @@ describe('CommandHandler setup commands (unit)', () => {
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nVerification channel: <#channel-2>',
+        'Setup complete.\nCase role: <@&role-1>\nAdmin channel: <#channel-1>\nSynced verification channel permissions: <#channel-2>',
       allowedMentions: { parse: [] },
     });
   });
@@ -355,6 +417,7 @@ describe('CommandHandler setup commands (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -378,7 +441,7 @@ describe('CommandHandler setup commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(configService.updateSetupConfiguration).not.toHaveBeenCalled();
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Setup not saved.'),
@@ -438,6 +501,7 @@ describe('CommandHandler setup commands (unit)', () => {
     } as any;
     const interaction = {
       commandName: 'setupverification',
+      user: { id: 'admin-1', username: 'Admin' },
       guild,
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
@@ -458,7 +522,7 @@ describe('CommandHandler setup commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(configService.updateSetupConfiguration).not.toHaveBeenCalled();
     expect(createdChannel.delete).toHaveBeenCalledWith(
       'Rolling back Drasil setup after final validation failed'
     );
@@ -480,9 +544,11 @@ describe('CommandHandler setup commands (unit)', () => {
       warningCount: 0,
     });
     const updateServerConfig = jest.fn().mockResolvedValue({});
+    const setupVerificationChannel = jest.fn().mockResolvedValue('verification-channel-1');
     const { handler, configService, notificationManager, setupDiagnosticsService } = buildHandler({
       validateSetupCandidate,
       updateServerConfig,
+      setupVerificationChannel,
     });
     const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
     const verificationChannel = {
@@ -520,7 +586,7 @@ describe('CommandHandler setup commands (unit)', () => {
           return null;
         }),
         getRole: jest.fn().mockReturnValue(caseRole),
-        getString: jest.fn().mockReturnValue(null),
+        getString: jest.fn((name: string) => (name === 'protection-mode' ? 'restrict' : null)),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -536,14 +602,26 @@ describe('CommandHandler setup commands (unit)', () => {
       adminChannelId: 'admin-channel-1',
       verificationChannelId: 'verification-channel-1',
       willCreateVerificationChannel: false,
+      willSyncVerificationChannelPermissions: true,
       reportInstructionsChannelId: null,
     });
     expect(guild.roles.create).not.toHaveBeenCalled();
-    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      case_role_id: 'role-1',
-      admin_channel_id: 'admin-channel-1',
-      verification_channel_id: 'verification-channel-1',
+    expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
+      guild,
+      'role-1',
+      false,
+      expect.any(Function),
+      'verification-channel-1'
+    );
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      caseRoleId: 'role-1',
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: 'verification-channel-1',
+      settingsPatch: {
+        detection_response_mode: 'restrict',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Setup complete.'),
@@ -688,10 +766,15 @@ describe('CommandHandler setup commands (unit)', () => {
       false,
       expect.any(Function)
     );
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      case_role_id: 'created-role-1',
-      admin_channel_id: 'admin-channel-1',
-      verification_channel_id: 'created-channel-1',
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      caseRoleId: 'created-role-1',
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: 'created-channel-1',
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Created case role: <@&created-role-1>'),
@@ -777,10 +860,15 @@ describe('CommandHandler setup commands (unit)', () => {
       false,
       expect.any(Function)
     );
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      case_role_id: 'default-role-1',
-      admin_channel_id: 'admin-channel-1',
-      verification_channel_id: 'created-channel-1',
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      caseRoleId: 'default-role-1',
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: 'created-channel-1',
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Case role: <@&default-role-1>'),
@@ -862,10 +950,15 @@ describe('CommandHandler setup commands (unit)', () => {
       willCreateVerificationChannel: true,
       reportInstructionsChannelId: null,
     });
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      case_role_id: 'named-role-1',
-      admin_channel_id: 'admin-channel-1',
-      verification_channel_id: 'created-channel-1',
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      caseRoleId: 'named-role-1',
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: 'created-channel-1',
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(interaction.editReply.mock.calls[0][0].content).toContain('Case role: <@&named-role-1>');
     expect(interaction.editReply.mock.calls[0][0].content).not.toContain('<@&old-role-1>');
@@ -930,7 +1023,7 @@ describe('CommandHandler setup commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(configService.updateSetupConfiguration).not.toHaveBeenCalled();
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
     expect(validateSetupCandidate).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
@@ -991,7 +1084,7 @@ describe('CommandHandler setup commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(configService.updateSetupConfiguration).not.toHaveBeenCalled();
     expect(createdRole.delete).toHaveBeenCalledWith(
       'Rolling back Drasil setup after verification channel setup failed'
     );
@@ -1070,10 +1163,15 @@ describe('CommandHandler setup commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      case_role_id: 'created-role-1',
-      admin_channel_id: 'admin-channel-1',
-      verification_channel_id: 'created-channel-1',
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      caseRoleId: 'created-role-1',
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: 'created-channel-1',
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(createdChannel.delete).toHaveBeenCalledWith(
       'Rolling back Drasil setup after config save failed'
@@ -1177,7 +1275,7 @@ describe('CommandHandler setup commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(configService.updateSetupConfiguration).not.toHaveBeenCalled();
     expect(createdChannel.delete).toHaveBeenCalledWith(
       'Rolling back Drasil setup after final validation failed'
     );
@@ -1209,11 +1307,13 @@ describe('CommandHandler setup commands (unit)', () => {
     const updateServerConfig = jest.fn().mockResolvedValue({});
     const updateServerSettings = jest.fn().mockResolvedValue({});
     const getServerConfig = jest.fn().mockResolvedValue({ settings: {} });
+    const setupVerificationChannel = jest.fn().mockResolvedValue('verification-channel-1');
     const { handler, configService } = buildHandler({
       validateSetupCandidate,
       updateServerConfig,
       updateServerSettings,
       getServerConfig,
+      setupVerificationChannel,
     });
     const adminChannel = { id: 'admin-channel-1', type: ChannelType.GuildText } as any;
     const verificationChannel = {
@@ -1268,10 +1368,15 @@ describe('CommandHandler setup commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      case_role_id: 'role-1',
-      admin_channel_id: 'admin-channel-1',
-      verification_channel_id: 'verification-channel-1',
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      caseRoleId: 'role-1',
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: 'verification-channel-1',
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+      },
     });
     expect(reportChannel.send).toHaveBeenCalledTimes(1);
     expect(configService.updateServerSettings).not.toHaveBeenCalled();
@@ -1339,7 +1444,7 @@ describe('CommandHandler setup commands (unit)', () => {
 
     expect(guild.roles.create).not.toHaveBeenCalled();
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
-    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(configService.updateSetupConfiguration).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Setup not saved.'),
       allowedMentions: { parse: [] },
@@ -1392,7 +1497,7 @@ describe('CommandHandler setup commands (unit)', () => {
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(guild.roles.create).not.toHaveBeenCalled();
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
-    expect(configService.updateServerConfig).not.toHaveBeenCalled();
+    expect(configService.updateSetupConfiguration).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Failed to complete setup. Please check permissions and try again.',
       allowedMentions: { parse: [] },

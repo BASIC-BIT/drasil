@@ -2,6 +2,7 @@ import {
   buildAdminCaseDetailUrl,
   buildAdminCaseQueueUrl,
   buildAdminGuildSetupUrl,
+  buildAdminGuildOnboardingUrl,
   buildAdminModerationInboxUrl,
   getPublicWebBaseUrl,
 } from '../../utils/publicWebLinks';
@@ -40,6 +41,9 @@ describe('publicWebLinks', () => {
     expect(getPublicWebBaseUrl()).toBe('https://drasilbot.com');
     expect(buildAdminGuildSetupUrl('guild-1')).toBe(
       'https://drasilbot.com/admin/guild/guild-1/setup'
+    );
+    expect(buildAdminGuildOnboardingUrl('guild-1')).toBe(
+      'https://drasilbot.com/admin/guild/guild-1/onboarding'
     );
     expect(buildAdminCaseQueueUrl('guild-1')).toBe(
       'https://drasilbot.com/admin/guild/guild-1/cases'

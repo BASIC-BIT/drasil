@@ -1,6 +1,8 @@
 import type { Guild, Role } from 'discord.js';
+import type { DetectionResponseMode } from '../contracts/setup';
 import { IConfigService } from '../config/ConfigService';
-import { INotificationManager } from './NotificationManager';
+import type { VerificationChannelPermissionSyncState } from '../repositories/types';
+import { INotificationManager, type VerificationPermissionSnapshot } from './NotificationManager';
 import { IProductAnalyticsService } from './ProductAnalyticsService';
 import { ISetupDiagnosticsService, SetupDiagnosticReport } from './SetupDiagnosticsService';
 
@@ -48,7 +50,31 @@ export interface CompleteSetupWorkflowInput {
   candidateReport?: SetupDiagnosticReport;
   createdCaseRole?: Role | null;
   captureAnalytics?: boolean;
+  detectionResponseMode?: DetectionResponseMode;
+  previousPermissionSyncState?: VerificationChannelPermissionSyncState;
+  previousVerificationChannelId?: string | null;
+  previousCaseRoleId?: string | null;
+  candidatePermissionSyncState?: VerificationChannelPermissionSyncState;
+  persistPermissionSyncState?: (
+    state: VerificationChannelPermissionSyncState,
+    previousState?: VerificationChannelPermissionSyncState
+  ) => Promise<void>;
 }
+
+interface SetupArtifacts {
+  verificationChannelId?: string;
+  permissionSnapshots: VerificationPermissionSnapshot[];
+  permissionSyncState?: VerificationChannelPermissionSyncState;
+}
+
+type VerificationChannelPreparationResult =
+  | {
+      verificationChannelId: string;
+      verificationChannelAction: VerificationChannelSetupAction;
+    }
+  | {
+      failure: Extract<SetupWorkflowResult, { status: 'verification_channel_failed' }>;
+    };
 
 export class SetupWorkflowService {
   public constructor(
@@ -82,51 +108,16 @@ export class SetupWorkflowService {
     }
 
     let verificationChannelId = input.initialVerificationChannelId;
-    let verificationChannelAction: VerificationChannelSetupAction = verificationChannelId
-      ? 'configured'
-      : 'created';
-    const createdSetupArtifacts: { verificationChannelId?: string } = {};
+    let verificationChannelAction: VerificationChannelSetupAction = 'configured';
+    const setupArtifacts: SetupArtifacts = { permissionSnapshots: [] };
 
     if (!verificationChannelId) {
-      const onChannelCreated = (channelId: string): void => {
-        createdSetupArtifacts.verificationChannelId = channelId;
-      };
-      verificationChannelId = input.candidateVerificationChannelId
-        ? await this.notificationManager.setupVerificationChannel(
-            input.guild,
-            input.caseRole.id,
-            false,
-            onChannelCreated,
-            input.candidateVerificationChannelId
-          )
-        : await this.notificationManager.setupVerificationChannel(
-            input.guild,
-            input.caseRole.id,
-            false,
-            onChannelCreated
-          );
-
-      if (!verificationChannelId) {
-        const setupFailureDetail = await this.rollbackCreatedArtifacts(
-          input.guild,
-          createdSetupArtifacts.verificationChannelId,
-          input.createdCaseRole,
-          guildId,
-          'Verification channel setup failed.',
-          'Rolling back Drasil setup after verification channel setup failed'
-        );
-        return {
-          status: 'verification_channel_failed',
-          error: new Error('Failed to create a verification channel during setup.'),
-          setupFailureDetail,
-          createdVerificationChannelId: createdSetupArtifacts.verificationChannelId,
-        };
+      const preparation = await this.prepareVerificationChannel(input, guildId, setupArtifacts);
+      if ('failure' in preparation) {
+        return preparation.failure;
       }
-
-      verificationChannelAction =
-        input.candidateVerificationChannelId && !createdSetupArtifacts.verificationChannelId
-          ? 'synced'
-          : 'created';
+      verificationChannelId = preparation.verificationChannelId;
+      verificationChannelAction = preparation.verificationChannelAction;
     }
 
     const finalCandidateReport = await this.setupDiagnosticsService.validateSetupCandidate(
@@ -143,7 +134,8 @@ export class SetupWorkflowService {
     if (finalCandidateReport.errorCount > 0) {
       const setupFailureDetail = await this.rollbackCreatedArtifacts(
         input.guild,
-        createdSetupArtifacts.verificationChannelId,
+        setupArtifacts.verificationChannelId,
+        setupArtifacts.permissionSnapshots,
         input.createdCaseRole,
         guildId,
         'Final validation failed.',
@@ -153,20 +145,35 @@ export class SetupWorkflowService {
         status: 'final_validation_failed',
         report: finalCandidateReport,
         setupFailureDetail,
-        createdVerificationChannelId: createdSetupArtifacts.verificationChannelId,
+        createdVerificationChannelId: setupArtifacts.verificationChannelId,
       };
     }
 
     try {
-      await this.configService.updateServerConfig(guildId, {
-        case_role_id: input.caseRole.id,
-        admin_channel_id: input.adminChannelId,
-        verification_channel_id: verificationChannelId,
+      await this.configService.updateSetupConfiguration(guildId, {
+        caseRoleId: input.caseRole.id,
+        adminChannelId: input.adminChannelId,
+        verificationChannelId,
+        settingsPatch: {
+          ...(input.detectionResponseMode
+            ? {
+                detection_response_mode: input.detectionResponseMode,
+                message_detection_response_mode: null,
+                join_detection_response_mode: null,
+              }
+            : {}),
+          ...(setupArtifacts.permissionSyncState
+            ? {
+                verification_channel_permission_sync: setupArtifacts.permissionSyncState,
+              }
+            : {}),
+        },
       });
     } catch (error) {
       const setupFailureDetail = await this.rollbackCreatedArtifacts(
         input.guild,
-        createdSetupArtifacts.verificationChannelId,
+        setupArtifacts.verificationChannelId,
+        setupArtifacts.permissionSnapshots,
         input.createdCaseRole,
         guildId,
         'Configuration could not be saved.',
@@ -176,7 +183,7 @@ export class SetupWorkflowService {
         status: 'config_save_failed',
         error,
         setupFailureDetail,
-        createdVerificationChannelId: createdSetupArtifacts.verificationChannelId,
+        createdVerificationChannelId: setupArtifacts.verificationChannelId,
       };
     }
 
@@ -200,15 +207,155 @@ export class SetupWorkflowService {
     };
   }
 
+  private async prepareVerificationChannel(
+    input: CompleteSetupWorkflowInput,
+    guildId: string,
+    setupArtifacts: SetupArtifacts
+  ): Promise<VerificationChannelPreparationResult> {
+    const onChannelCreated = async (
+      channelId: string,
+      state?: VerificationChannelPermissionSyncState
+    ): Promise<void> => {
+      setupArtifacts.verificationChannelId = channelId;
+      setupArtifacts.permissionSyncState = state;
+      if (state && input.persistPermissionSyncState) {
+        await input.persistPermissionSyncState(state, input.previousPermissionSyncState);
+      }
+    };
+    const onPermissionsUpdated = async (
+      snapshot: VerificationPermissionSnapshot,
+      state?: VerificationChannelPermissionSyncState
+    ): Promise<void> => {
+      setupArtifacts.permissionSnapshots.push(snapshot);
+      setupArtifacts.permissionSyncState = state;
+      if (state && input.persistPermissionSyncState) {
+        await input.persistPermissionSyncState(state, input.previousPermissionSyncState);
+      }
+    };
+    const previousVerificationChannelId =
+      input.previousPermissionSyncState?.channel_id ?? input.previousVerificationChannelId;
+    const replacingVerificationChannel = Boolean(
+      input.candidateVerificationChannelId &&
+      previousVerificationChannelId &&
+      input.candidateVerificationChannelId !== previousVerificationChannelId
+    );
+    if (replacingVerificationChannel) {
+      const restored = input.previousPermissionSyncState
+        ? this.notificationManager.restoreVerificationChannelManagedPermissions
+          ? await this.notificationManager.restoreVerificationChannelManagedPermissions(
+              input.guild,
+              input.previousPermissionSyncState,
+              (snapshot) => setupArtifacts.permissionSnapshots.push(snapshot)
+            )
+          : false
+        : previousVerificationChannelId &&
+            input.previousCaseRoleId &&
+            this.notificationManager.restoreLegacyVerificationChannelPermissions
+          ? await this.notificationManager.restoreLegacyVerificationChannelPermissions(
+              input.guild,
+              previousVerificationChannelId,
+              input.previousCaseRoleId,
+              (snapshot) => setupArtifacts.permissionSnapshots.push(snapshot)
+            )
+          : false;
+      if (!restored) {
+        const setupFailureDetail = await this.rollbackCreatedArtifacts(
+          input.guild,
+          setupArtifacts.verificationChannelId,
+          setupArtifacts.permissionSnapshots,
+          input.createdCaseRole,
+          guildId,
+          'The previous verification channel permissions could not be restored.',
+          'Rolling back Drasil setup after previous verification channel restoration failed'
+        );
+        return {
+          failure: {
+            status: 'verification_channel_failed',
+            error: new Error('Failed to restore the previous verification channel during setup.'),
+            setupFailureDetail,
+          },
+        };
+      }
+    }
+
+    const verificationChannelId = input.candidateVerificationChannelId
+      ? typeof this.notificationManager.restoreVerificationChannelPermissions === 'function'
+        ? await this.notificationManager.setupVerificationChannel(
+            input.guild,
+            input.caseRole.id,
+            false,
+            onChannelCreated,
+            input.candidateVerificationChannelId,
+            onPermissionsUpdated,
+            input.candidatePermissionSyncState ?? input.previousPermissionSyncState
+          )
+        : await this.notificationManager.setupVerificationChannel(
+            input.guild,
+            input.caseRole.id,
+            false,
+            onChannelCreated,
+            input.candidateVerificationChannelId
+          )
+      : await this.notificationManager.setupVerificationChannel(
+          input.guild,
+          input.caseRole.id,
+          false,
+          onChannelCreated
+        );
+
+    if (!verificationChannelId) {
+      const setupFailureDetail = await this.rollbackCreatedArtifacts(
+        input.guild,
+        setupArtifacts.verificationChannelId,
+        setupArtifacts.permissionSnapshots,
+        input.createdCaseRole,
+        guildId,
+        'Verification channel setup failed.',
+        'Rolling back Drasil setup after verification channel setup failed'
+      );
+      return {
+        failure: {
+          status: 'verification_channel_failed',
+          error: new Error('Failed to create a verification channel during setup.'),
+          setupFailureDetail,
+          createdVerificationChannelId: setupArtifacts.verificationChannelId,
+        },
+      };
+    }
+
+    return {
+      verificationChannelId,
+      verificationChannelAction:
+        input.candidateVerificationChannelId && !setupArtifacts.verificationChannelId
+          ? 'synced'
+          : 'created',
+    };
+  }
+
   private async rollbackCreatedArtifacts(
     guild: Guild,
     createdVerificationChannelId: string | undefined,
+    permissionSnapshots: readonly VerificationPermissionSnapshot[],
     createdCaseRole: Role | null | undefined,
     guildId: string,
     prefix: string,
     rollbackReason: string
   ): Promise<string> {
     const rollbackDetails = [prefix];
+
+    for (const permissionSnapshot of [...permissionSnapshots].reverse()) {
+      const rolledBack = this.notificationManager.restoreVerificationChannelPermissions
+        ? await this.notificationManager.restoreVerificationChannelPermissions(
+            guild,
+            permissionSnapshot
+          )
+        : false;
+      rollbackDetails.push(
+        rolledBack
+          ? 'The verification channel permission changes were restored.'
+          : `The permission changes in <#${permissionSnapshot.channelId}> could not be restored; review them before rerunning setup.`
+      );
+    }
 
     if (createdVerificationChannelId) {
       const rolledBack = await this.rollbackCreatedVerificationChannel(

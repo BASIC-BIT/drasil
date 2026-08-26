@@ -79,6 +79,8 @@ export interface ServerSettings {
   manual_intake_grace_period_seconds?: number;
   report_instructions_channel_id?: string | null;
   report_instructions_message_id?: string | null;
+  report_instructions_cleanup_channel_id?: string | null;
+  report_instructions_cleanup_message_id?: string | null;
   case_role_lockdown_enabled?: boolean;
   case_role_lockdown_allowed_channel_ids?: string[];
   case_role_lockdown_allowed_category_ids?: string[];
@@ -107,6 +109,23 @@ export interface ServerSettings {
   setup_nudge_last_result?: 'sent' | 'dm_failed' | 'no_recipient' | null;
   setup_nudge_last_source?: 'audit_log_installer' | 'owner' | null;
   setup_warning_last_fingerprint?: string | null;
+  verification_channel_permission_sync?: VerificationChannelPermissionSyncState;
+}
+
+export interface VerificationChannelPermissionSyncState {
+  readonly channel_id: string;
+  readonly managed_overwrites: readonly VerificationChannelManagedOverwriteState[];
+}
+
+export interface VerificationChannelManagedOverwriteState {
+  readonly id: string;
+  readonly type: 0 | 1;
+  readonly managed_bits: string;
+  readonly original_overwrite: {
+    readonly existed: boolean;
+    readonly allow: string;
+    readonly deny: string;
+  };
 }
 
 export interface GlobalMessageWatchlistEntry {

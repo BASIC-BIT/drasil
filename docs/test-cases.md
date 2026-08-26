@@ -4,6 +4,18 @@
 
 For a real-server walkthrough, use `docs/manual-qa.md`.
 
+- Fresh install onboarding: installer receives one private embed with a guided-setup link; failed
+  DMs do not produce a public server message.
+- Guild selector readiness: uninstalled, incomplete, blocked, and ready servers show distinct live
+  states and incomplete servers link to the onboarding wizard.
+- Wizard completion: owner/Administrator can reuse or create the case role and verification channel,
+  select notify-only or explicit restrict behavior, and observe durable queued/processing/completed
+  status.
+- Setup rollback: final validation or config-save failure removes newly created artifacts and
+  restores existing verification-channel overwrites; unrelated overwrites survive successful sync.
+- Incomplete setup safety: suspicious message/join detection is recorded but does not create a case,
+  apply roles, notify, or kick until live readiness passes.
+
 - Suspicious message: user gets the case role, verification thread auto-created, admin notification sent.
 - Additional suspicious message while pending: no new verification event; notification updated.
 - New suspicious message after verification resolved: new verification event and new notification message.

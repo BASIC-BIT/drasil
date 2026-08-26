@@ -157,6 +157,18 @@ const baseApplicationCommandBuilders = [
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(false)
         )
+        .addStringOption((option) =>
+          option
+            .setName('protection-mode')
+            .setDescription('Automatic response after setup (defaults to notify only)')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Notify only (recommended)', value: 'notify_only' },
+              { name: 'Restrict automatically', value: 'restrict' },
+              { name: 'Record only', value: 'record_only' },
+              { name: 'Off', value: 'off' }
+            )
+        )
     )
     .addSubcommand((subcommand) =>
       subcommand

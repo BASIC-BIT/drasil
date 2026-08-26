@@ -237,6 +237,8 @@ export const serverSettingsSchema = z
       .optional(),
     report_instructions_channel_id: z.string().nullable().optional(),
     report_instructions_message_id: z.string().nullable().optional(),
+    report_instructions_cleanup_channel_id: z.string().nullable().optional(),
+    report_instructions_cleanup_message_id: z.string().nullable().optional(),
     message_deletion_enabled: z.boolean().optional(),
     message_deletion_source_message_enabled: z.boolean().optional(),
     message_deletion_watchlist_enabled: z.boolean().optional(),
@@ -263,6 +265,28 @@ export const setupServerRecordSchema = z.object({
 });
 
 export const setupDiagnosticSeveritySchema = z.enum(['error', 'warning', 'ok']);
+export const setupReadinessStatusSchema = z.enum([
+  'not_installed',
+  'needs_setup',
+  'blocked',
+  'ready',
+]);
+
+export interface DeriveSetupReadinessInput {
+  readonly installed: boolean;
+  readonly coreConfigured: boolean;
+  readonly blockingErrorCount: number;
+}
+
+export function deriveSetupReadiness(input: DeriveSetupReadinessInput): SetupReadinessStatus {
+  if (!input.installed) {
+    return 'not_installed';
+  }
+  if (!input.coreConfigured) {
+    return 'needs_setup';
+  }
+  return input.blockingErrorCount > 0 ? 'blocked' : 'ready';
+}
 
 export const setupChecklistItemSchema = z.object({
   key: z.string(),
@@ -274,7 +298,7 @@ export const setupChecklistItemSchema = z.object({
 export const setupDashboardSchema = z.object({
   guildId: z.string(),
   guildName: z.string(),
-  configured: z.boolean(),
+  readiness: setupReadinessStatusSchema,
   dataProvider: z.enum(['postgres', 'convex']),
   checkedAt: z.string(),
   checklist: z.array(setupChecklistItemSchema),
@@ -468,6 +492,7 @@ export type CaseResponderRoutingMode = z.infer<typeof caseResponderRoutingModeSc
 export type VerificationAiMaxAction = z.infer<typeof verificationAiMaxActionSchema>;
 export type RoleQuarantineMode = z.infer<typeof roleQuarantineModeSchema>;
 export type SetupDiagnosticSeverity = z.infer<typeof setupDiagnosticSeveritySchema>;
+export type SetupReadinessStatus = z.infer<typeof setupReadinessStatusSchema>;
 export type ServerSettingsContract = z.infer<typeof serverSettingsSchema>;
 export type SetupServerRecord = z.infer<typeof setupServerRecordSchema>;
 export type SetupChecklistItem = z.infer<typeof setupChecklistItemSchema>;

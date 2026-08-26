@@ -1,12 +1,15 @@
 import {
+  deriveSetupReadiness,
   type GuildSetupUpdate,
   type SetupChecklistItem,
   type SetupDashboard,
   type SetupDiagnosticSeverity,
+  type SetupReadinessStatus,
   type SetupServerRecord,
 } from '@drasil/contracts';
 import {
   type DiscordChannel,
+  DiscordApiError,
   type DiscordGuildResources,
   type DiscordGuildSummary,
   type DiscordRole,
@@ -19,6 +22,7 @@ import {
   computeChannelPermissions,
   computeGuildPermissions,
   hasPermission,
+  parsePermissions,
 } from './discordPermissions';
 import { fixtureTimestampIso, isWebE2eFixtureMode } from './e2eFixtures';
 import { createSetupDataAdapter, type SetupDataAdapter } from './setupDataAdapter';
@@ -26,7 +30,7 @@ import { createSetupDataAdapter, type SetupDataAdapter } from './setupDataAdapte
 export interface ManageableGuild {
   readonly id: string;
   readonly name: string;
-  readonly configured: boolean;
+  readonly readiness: SetupReadinessStatus;
   readonly icon: string | null;
 }
 
@@ -34,6 +38,9 @@ export interface SetupDashboardContext {
   readonly dashboard: SetupDashboard;
   readonly channels: readonly DiscordChannel[];
   readonly roles: readonly DiscordRole[];
+  readonly botRoleIds: readonly string[];
+  readonly botUserId: string;
+  readonly canApplySetup: boolean;
 }
 
 type Clock = () => Date;
@@ -45,6 +52,17 @@ interface ChannelPermissionCheckArgs {
   readonly roles: readonly DiscordRole[];
   readonly channel: DiscordChannel;
   readonly required: readonly bigint[];
+}
+
+interface CoreChannelChecklistArgs extends Omit<ChannelPermissionCheckArgs, 'channel'> {
+  readonly checklist: SetupChecklistItem[];
+  readonly channel: DiscordChannel | null;
+  readonly key: string;
+  readonly label: string;
+  readonly missingDetail: string;
+  readonly successDetail: string;
+  readonly permissionErrorDetail: string;
+  readonly requirePrivate?: boolean;
 }
 
 interface BuildChecklistArgs {
@@ -59,7 +77,80 @@ interface GuildPermissionChecklistArgs {
   readonly guildPermissions: bigint;
 }
 
-const TEXT_CHANNEL_TYPES = new Set([0, 5, 15]);
+const GUILD_TEXT_CHANNEL_TYPE = 0;
+const TEXT_CHANNEL_TYPES = new Set([GUILD_TEXT_CHANNEL_TYPE, 5, 15]);
+const CASE_ROLE_VERIFICATION_MANAGED_PERMISSION_BITS =
+  DISCORD_PERMISSIONS.ViewChannel |
+  DISCORD_PERMISSIONS.ReadMessageHistory |
+  DISCORD_PERMISSIONS.SendMessagesInThreads |
+  DISCORD_PERMISSIONS.SendMessages |
+  DISCORD_PERMISSIONS.CreatePublicThreads |
+  DISCORD_PERMISSIONS.CreatePrivateThreads;
+const ADMIN_CHANNEL_STAFF_PERMISSIONS = [
+  DISCORD_PERMISSIONS.Administrator,
+  DISCORD_PERMISSIONS.ManageGuild,
+  DISCORD_PERMISSIONS.ManageRoles,
+  DISCORD_PERMISSIONS.ManageChannels,
+  DISCORD_PERMISSIONS.ManageMessages,
+  DISCORD_PERMISSIONS.ModerateMembers,
+  DISCORD_PERMISSIONS.KickMembers,
+  DISCORD_PERMISSIONS.BanMembers,
+] as const;
+
+export function filterAssignableCaseRoles(
+  roles: readonly DiscordRole[],
+  botRoleIds: readonly string[],
+  guildId: string,
+  channels: readonly DiscordChannel[] = [],
+  verificationChannelId?: string | null
+): DiscordRole[] {
+  const botRoleIdSet = new Set(botRoleIds);
+  const highestBotRolePosition = roles
+    .filter((role) => botRoleIdSet.has(role.id))
+    .reduce((highest, role) => Math.max(highest, role.position), -1);
+
+  return roles.filter(
+    (role) =>
+      role.id !== guildId &&
+      !role.managed &&
+      !botRoleIdSet.has(role.id) &&
+      parsePermissions(role.permissions) === 0n &&
+      !hasUnsafeCaseRoleChannelAllows(role.id, channels, verificationChannelId) &&
+      role.position < highestBotRolePosition
+  );
+}
+
+function hasUnsafeCaseRoleChannelAllows(
+  roleId: string,
+  channels: readonly DiscordChannel[],
+  verificationChannelId?: string | null
+): boolean {
+  return channels.some((channel) =>
+    (channel.permission_overwrites ?? []).some((overwrite) => {
+      if (overwrite.type !== 0 || overwrite.id !== roleId) {
+        return false;
+      }
+      const allow = parsePermissions(overwrite.allow);
+      return channel.id === verificationChannelId
+        ? (allow & ~CASE_ROLE_VERIFICATION_MANAGED_PERMISSION_BITS) !== 0n
+        : allow !== 0n;
+    })
+  );
+}
+
+export function filterPrivateAdminChannels(
+  channels: readonly DiscordChannel[],
+  roles: readonly DiscordRole[],
+  guildId: string,
+  botRoleIds: readonly string[] = [],
+  botUserId = ''
+): DiscordChannel[] {
+  return channels.filter(
+    (channel) =>
+      channel.type === GUILD_TEXT_CHANNEL_TYPE &&
+      !hasUnsafeAdminChannelVisibility(channel, roles, guildId, botRoleIds, botUserId)
+  );
+}
 
 const item = (
   key: string,
@@ -104,6 +195,104 @@ function hasRequiredChannelPermissions(args: ChannelPermissionCheckArgs) {
     overwrites: args.channel.permission_overwrites ?? [],
   });
   return args.required.every((permission) => hasPermission(channelPermissions, permission));
+}
+
+function isChannelVisibleToEveryone(
+  channel: DiscordChannel,
+  roles: readonly DiscordRole[],
+  guildId: string
+): boolean {
+  const everyonePermissions = computeGuildPermissions({ guildId, roles, memberRoleIds: [] });
+  const channelPermissions = computeChannelPermissions({
+    guildId,
+    userId: '',
+    guildPermissions: everyonePermissions,
+    memberRoleIds: [],
+    overwrites: channel.permission_overwrites ?? [],
+  });
+  return hasPermission(channelPermissions, DISCORD_PERMISSIONS.ViewChannel);
+}
+
+function hasUnsafeAdminChannelVisibility(
+  channel: DiscordChannel,
+  roles: readonly DiscordRole[],
+  guildId: string,
+  botRoleIds: readonly string[],
+  botUserId: string
+): boolean {
+  if (isChannelVisibleToEveryone(channel, roles, guildId)) {
+    return true;
+  }
+
+  const botRoleIdSet = new Set(botRoleIds);
+  return (channel.permission_overwrites ?? []).some((overwrite) => {
+    if ((parsePermissions(overwrite.allow) & DISCORD_PERMISSIONS.ViewChannel) === 0n) {
+      return false;
+    }
+    if (overwrite.type === 1) {
+      return overwrite.id !== botUserId;
+    }
+    if (overwrite.id === guildId) {
+      return false;
+    }
+    const role = roles.find((candidate) => candidate.id === overwrite.id);
+    if (botRoleIdSet.has(overwrite.id) && role?.managed) {
+      return false;
+    }
+    return (
+      !role ||
+      !ADMIN_CHANNEL_STAFF_PERMISSIONS.some((permission) =>
+        hasPermission(parsePermissions(role.permissions), permission)
+      )
+    );
+  });
+}
+
+function addCoreChannelChecklistItem(args: CoreChannelChecklistArgs) {
+  const { channel, checklist, key, label } = args;
+  if (!channel) {
+    checklist.push(item(key, label, 'error', args.missingDetail));
+    return;
+  }
+  if (channel.type !== GUILD_TEXT_CHANNEL_TYPE) {
+    checklist.push(
+      item(key, label, 'error', `${formatChannelName(channel)} must be a standard text channel.`)
+    );
+    return;
+  }
+  if (
+    args.requirePrivate &&
+    hasUnsafeAdminChannelVisibility(
+      channel,
+      args.roles,
+      args.guildId,
+      args.botRoleIds,
+      args.botUserId
+    )
+  ) {
+    checklist.push(
+      item(
+        key,
+        label,
+        'error',
+        `${formatChannelName(channel)} is visible beyond moderator-capable roles. Choose a private moderator channel.`
+      )
+    );
+    return;
+  }
+
+  checklist.push(
+    hasRequiredChannelPermissions({
+      guildId: args.guildId,
+      botUserId: args.botUserId,
+      botRoleIds: args.botRoleIds,
+      roles: args.roles,
+      channel,
+      required: args.required,
+    })
+      ? item(key, label, 'ok', `${formatChannelName(channel)} ${args.successDetail}`)
+      : item(key, label, 'error', `${formatChannelName(channel)} ${args.permissionErrorDetail}`)
+  );
 }
 
 function addGuildPermissionChecklistItems(args: GuildPermissionChecklistArgs) {
@@ -225,6 +414,10 @@ function buildChecklist(args: BuildChecklistArgs) {
     checklist.push(
       item('case-role', 'Case role', 'error', 'The configured case role no longer exists.')
     );
+  } else if (caseRole.id === guild.id) {
+    checklist.push(
+      item('case-role', 'Case role', 'error', 'The @everyone role cannot be used as a case role.')
+    );
   } else if (caseRole.managed) {
     checklist.push(
       item(
@@ -232,6 +425,26 @@ function buildChecklist(args: BuildChecklistArgs) {
         'Case role',
         'error',
         `${formatRoleName(caseRole)} is managed by an integration.`
+      )
+    );
+  } else if (parsePermissions(caseRole.permissions) !== 0n) {
+    checklist.push(
+      item(
+        'case-role',
+        'Case role',
+        'error',
+        `${formatRoleName(caseRole)} grants server permissions. Use a dedicated permission-free role.`
+      )
+    );
+  } else if (
+    hasUnsafeCaseRoleChannelAllows(caseRole.id, resources.channels, server?.verification_channel_id)
+  ) {
+    checklist.push(
+      item(
+        'case-role',
+        'Case role',
+        'error',
+        `${formatRoleName(caseRole)} grants channel access outside Drasil's managed verification permissions.`
       )
     );
   } else if (highestBotRolePosition <= caseRole.position) {
@@ -272,96 +485,73 @@ function buildChecklist(args: BuildChecklistArgs) {
     DISCORD_PERMISSIONS.SendMessagesInThreads,
   ];
 
-  if (!adminChannel) {
-    checklist.push(
-      item(
-        'admin-channel',
-        'Admin alert channel',
-        'error',
-        'Choose a channel for moderator notifications.'
-      )
-    );
-  } else if (
-    hasRequiredChannelPermissions({
-      guildId: guild.id,
-      botUserId: resources.botUser.id,
-      botRoleIds,
-      roles: resources.roles,
-      channel: adminChannel,
-      required: adminRequired,
-    })
-  ) {
-    checklist.push(
-      item(
-        'admin-channel',
-        'Admin alert channel',
-        'ok',
-        `${formatChannelName(adminChannel)} is reachable.`
-      )
-    );
-  } else {
-    checklist.push(
-      item(
-        'admin-channel',
-        'Admin alert channel',
-        'error',
-        `${formatChannelName(adminChannel)} is missing required bot permissions.`
-      )
-    );
-  }
+  addCoreChannelChecklistItem({
+    checklist,
+    guildId: guild.id,
+    botUserId: resources.botUser.id,
+    botRoleIds,
+    roles: resources.roles,
+    channel: adminChannel,
+    required: adminRequired,
+    key: 'admin-channel',
+    label: 'Admin alert channel',
+    missingDetail: 'Choose a channel for moderator notifications.',
+    successDetail: 'is reachable.',
+    permissionErrorDetail: 'is missing required bot permissions.',
+    requirePrivate: true,
+  });
 
-  if (!verificationChannel) {
-    checklist.push(
-      item(
-        'verification-channel',
-        'Verification channel',
-        'error',
-        'Choose a channel where private verification threads can be opened.'
-      )
-    );
-  } else if (
-    hasRequiredChannelPermissions({
-      guildId: guild.id,
-      botUserId: resources.botUser.id,
-      botRoleIds,
-      roles: resources.roles,
-      channel: verificationChannel,
-      required: verificationRequired,
-    })
-  ) {
-    checklist.push(
-      item(
-        'verification-channel',
-        'Verification channel',
-        'ok',
-        `${formatChannelName(verificationChannel)} can host case threads.`
-      )
-    );
-  } else {
-    checklist.push(
-      item(
-        'verification-channel',
-        'Verification channel',
-        'error',
-        `${formatChannelName(verificationChannel)} is missing thread or message permissions.`
-      )
-    );
-  }
+  addCoreChannelChecklistItem({
+    checklist,
+    guildId: guild.id,
+    botUserId: resources.botUser.id,
+    botRoleIds,
+    roles: resources.roles,
+    channel: verificationChannel,
+    required: verificationRequired,
+    key: 'verification-channel',
+    label: 'Verification channel',
+    missingDetail: 'Choose a channel where private verification threads can be opened.',
+    successDetail: 'can host case threads.',
+    permissionErrorDetail: 'is missing thread or message permissions.',
+  });
 
   checklist.push(
-    reportChannel
-      ? item(
-          'report-channel',
-          'Report instructions channel',
-          'ok',
-          `${formatChannelName(reportChannel)} is configured for public report instructions.`
-        )
-      : item(
-          'report-channel',
-          'Report instructions channel',
-          'warning',
-          'No report instructions channel is configured yet.'
-        )
+    reportChannel &&
+      hasRequiredChannelPermissions({
+        guildId: guild.id,
+        botUserId: resources.botUser.id,
+        botRoleIds,
+        roles: resources.roles,
+        channel: reportChannel,
+        required: adminRequired,
+      })
+      ? isChannelVisibleToEveryone(reportChannel, resources.roles, guild.id)
+        ? item(
+            'report-channel',
+            'Report instructions channel',
+            'ok',
+            `${formatChannelName(reportChannel)} is configured for public report instructions.`
+          )
+        : item(
+            'report-channel',
+            'Report instructions channel',
+            'warning',
+            `${formatChannelName(reportChannel)} is not visible to @everyone.`
+          )
+      : reportChannel
+        ? item(
+            'report-channel',
+            'Report instructions channel',
+            'warning',
+            `${formatChannelName(reportChannel)} is missing required bot permissions.`
+          )
+        : item(
+            'report-channel',
+            'Report instructions channel',
+            'warning',
+            'No report instructions channel is configured yet.'
+          )
   );
 
   checklist.push(
@@ -422,6 +612,16 @@ function buildChecklist(args: BuildChecklistArgs) {
   return checklist;
 }
 
+function hasCoreConfiguration(server: SetupServerRecord | null, guildId: string): boolean {
+  return Boolean(
+    server?.is_active &&
+    server.case_role_id &&
+    server.case_role_id !== guildId &&
+    server.admin_channel_id &&
+    server.verification_channel_id
+  );
+}
+
 export class SetupDashboardService {
   public constructor(
     private readonly adapter: SetupDataAdapter = createSetupDataAdapter(),
@@ -432,12 +632,20 @@ export class SetupDashboardService {
     const guilds = (await fetchDiscordGuilds(accessToken)).filter((guild) => {
       return canManageGuild(guild.permissions, guild.owner);
     });
-    const configured = await this.adapter.listConfiguredGuildIds(guilds.map((guild) => guild.id));
+    const guildIds = guilds.map((guild) => guild.id);
+    const [installedGuildIds, coreConfiguredGuildIds] = await Promise.all([
+      this.adapter.listConfiguredGuildIds(guildIds),
+      this.adapter.listCoreConfiguredGuildIds(guildIds),
+    ]);
     return guilds.map((guild) => ({
       id: guild.id,
       name: guild.name,
       icon: guild.icon,
-      configured: configured.has(guild.id),
+      readiness: coreConfiguredGuildIds.has(guild.id)
+        ? 'ready'
+        : installedGuildIds.has(guild.id)
+          ? 'needs_setup'
+          : 'not_installed',
     }));
   }
 
@@ -457,29 +665,59 @@ export class SetupDashboardService {
   public async getDashboard(guildId: string, accessToken: string): Promise<SetupDashboardContext> {
     const manageableGuild = await this.assertCanManageGuild(guildId, accessToken);
 
+    return this.loadDashboard(manageableGuild);
+  }
+
+  private async loadDashboard(
+    manageableGuild: DiscordGuildSummary
+  ): Promise<SetupDashboardContext> {
+    const guildId = manageableGuild.id;
+
     const server = await this.adapter.getServer(guildId);
     let resources: DiscordGuildResources | null = null;
     let resourcesError: string | null = null;
+    let installed = true;
     try {
       resources = await fetchGuildResources(guildId);
     } catch (error) {
       resourcesError = error instanceof Error ? error.message : 'Unable to load Discord resources.';
+      installed =
+        !(error instanceof DiscordApiError) || (error.status !== 403 && error.status !== 404);
     }
 
+    const checklist = buildChecklist({
+      guild: manageableGuild,
+      server,
+      resources,
+      resourcesError,
+    });
+
     return {
+      canApplySetup:
+        manageableGuild.owner ||
+        hasPermission(
+          parsePermissions(manageableGuild.permissions),
+          DISCORD_PERMISSIONS.Administrator
+        ),
       dashboard: {
         guildId,
         guildName: manageableGuild.name,
-        configured: Boolean(server?.is_active),
+        readiness: deriveSetupReadiness({
+          installed,
+          coreConfigured: hasCoreConfiguration(server, guildId),
+          blockingErrorCount: checklist.filter((entry) => entry.status === 'error').length,
+        }),
         dataProvider: this.adapter.provider,
         checkedAt: this.clock().toISOString(),
-        checklist: buildChecklist({ guild: manageableGuild, server, resources, resourcesError }),
+        checklist,
         server,
       },
       channels: (resources?.channels ?? []).filter((channel) =>
         TEXT_CHANNEL_TYPES.has(channel.type)
       ),
       roles: resources?.roles ?? [],
+      botRoleIds: resources?.botMember.roles ?? [],
+      botUserId: resources?.botUser.id ?? '',
     };
   }
 

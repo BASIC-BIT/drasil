@@ -1,4 +1,5 @@
 import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
+import type { Prisma } from '../../db/prisma';
 import { ChannelType } from 'discord.js';
 import {
   AdminActionType,
@@ -464,6 +465,7 @@ const completeSetupVerificationRequest: ModerationActionRequest = {
   metadata: {
     admin_channel_id: 'admin-channel-1',
     case_role_id: 'role-1',
+    onboarding_wizard: true,
     report_instructions_channel_id: 'report-channel-1',
   },
   report_intake_id: null,
@@ -489,6 +491,7 @@ class FakeModerationActionRequestRepository implements IModerationActionRequestR
   public completed: Array<{ id: string; result: unknown }> = [];
   public failed: Array<{ error: string; id: string }> = [];
   public heartbeats: string[] = [];
+  public metadataMerges: Array<{ id: string; metadata: unknown }> = [];
 
   public async enqueue(): Promise<ModerationActionRequest> {
     throw new Error('not used');
@@ -505,6 +508,23 @@ class FakeModerationActionRequestRepository implements IModerationActionRequestR
   public async heartbeat(id: string): Promise<ModerationActionRequest | null> {
     this.heartbeats.push(id);
     return { ...baseRequest, id, status: ModerationActionRequestStatus.PROCESSING };
+  }
+
+  public async mergeMetadata(
+    id: string,
+    metadata: Prisma.JsonObject
+  ): Promise<ModerationActionRequest | null> {
+    this.metadataMerges.push({ id, metadata });
+    const request = this.byId.get(id);
+    if (!request) {
+      return null;
+    }
+    const updated = {
+      ...request,
+      metadata: { ...(request.metadata as Prisma.JsonObject), ...metadata },
+    };
+    this.byId.set(id, updated);
+    return updated;
   }
 
   public complete = jest.fn(
@@ -576,12 +596,17 @@ describe('ModerationActionRequestService', () => {
         fetch: jest.fn(async (id: string) => (id === sourceMessage.id ? sourceMessage : null)),
       },
     };
-    const reportInstructionsMessage = { id: 'report-message-1' };
+    const reportInstructionsMessage = {
+      delete: jest.fn(async () => undefined),
+      id: 'report-message-1',
+    };
     const reportInstructionsChannel = {
       guildId: 'guild-1',
       id: 'report-channel-1',
       messages: {
-        fetch: jest.fn(async () => null),
+        fetch: jest.fn(async (id: string) =>
+          id === reportInstructionsMessage.id ? reportInstructionsMessage : null
+        ),
       },
       send: jest.fn(async () => reportInstructionsMessage),
       type: ChannelType.GuildText,
@@ -602,6 +627,12 @@ describe('ModerationActionRequestService', () => {
       id: 'verification-channel-1',
       type: ChannelType.GuildText,
     };
+    (guild as any).channels = {
+      cache: new Map(),
+      fetch: jest.fn(async (id: string) =>
+        id === verificationChannel.id ? verificationChannel : null
+      ),
+    };
     const verificationThread = {
       archived: false,
       guildId: 'guild-1',
@@ -619,7 +650,8 @@ describe('ModerationActionRequestService', () => {
       setArchived: jest.fn(async () => undefined),
       url: 'https://discord.com/channels/guild-1/report-thread-1',
     };
-    guild.members.fetch.mockImplementation(async (id: string) => {
+    guild.members.fetch.mockImplementation(async (value: string | { user: string }) => {
+      const id = typeof value === 'string' ? value : value.user;
       if (id === 'moderator-1') {
         return reporterMember;
       }
@@ -817,14 +849,47 @@ describe('ModerationActionRequestService', () => {
         guild_id: 'guild-1',
         settings: serverSettings,
       })),
+      updateSetupConfiguration: jest.fn(async () => undefined),
       updateServerConfig: jest.fn(async () => undefined),
       updateServerSettings: jest.fn(async () => undefined),
     };
     const notificationManager = {
+      restoreVerificationChannelPermissions: jest.fn(async () => true),
       setupVerificationChannel: jest.fn(async (...args: unknown[]) => {
+        const configuredChannelId = args[4];
+        const onPermissionsUpdated = args[5];
+        if (typeof configuredChannelId === 'string') {
+          if (typeof onPermissionsUpdated === 'function') {
+            await onPermissionsUpdated(
+              { channelId: configuredChannelId, entries: [] },
+              {
+                channel_id: configuredChannelId,
+                managed_overwrites: [
+                  {
+                    id: 'guild-1',
+                    type: 0,
+                    managed_bits: '1',
+                    original_overwrite: { existed: false, allow: '0', deny: '0' },
+                  },
+                ],
+              }
+            );
+          }
+          return configuredChannelId;
+        }
         const onChannelCreated = args[3];
         if (typeof onChannelCreated === 'function') {
-          onChannelCreated('created-verification-channel');
+          await onChannelCreated('created-verification-channel', {
+            channel_id: 'created-verification-channel',
+            managed_overwrites: [
+              {
+                id: 'guild-1',
+                type: 0,
+                managed_bits: '1',
+                original_overwrite: { existed: false, allow: '0', deny: '0' },
+              },
+            ],
+          });
         }
         return 'created-verification-channel';
       }),
@@ -2098,10 +2163,19 @@ describe('ModerationActionRequestService', () => {
       false,
       expect.any(Function)
     );
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      admin_channel_id: 'admin-channel-1',
-      case_role_id: 'role-1',
-      verification_channel_id: 'created-verification-channel',
+    expect(configService.updateSetupConfiguration).toHaveBeenCalledWith('guild-1', {
+      adminChannelId: 'admin-channel-1',
+      caseRoleId: 'role-1',
+      verificationChannelId: 'created-verification-channel',
+      settingsPatch: {
+        detection_response_mode: 'notify_only',
+        join_detection_response_mode: null,
+        message_detection_response_mode: null,
+        verification_channel_permission_sync: {
+          channel_id: 'created-verification-channel',
+          managed_overwrites: expect.any(Array),
+        },
+      },
     });
     expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
       'guild-1',
@@ -2113,12 +2187,39 @@ describe('ModerationActionRequestService', () => {
         verification_channel_created: true,
       })
     );
+    expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
+      'guild-1',
+      'setup wizard completed',
+      { surface: 'web' }
+    );
+    expect(productAnalyticsService.captureGuildEvent).not.toHaveBeenCalledWith(
+      'guild-1',
+      'setup wizard opened',
+      expect.anything()
+    );
+    expect(productAnalyticsService.captureGuildEvent).not.toHaveBeenCalledWith(
+      'guild-1',
+      'setup wizard apply queued',
+      expect.anything()
+    );
     expect(reportInstructionsChannel.send).toHaveBeenCalledWith(
       expect.objectContaining({
         components: expect.any(Array),
         embeds: expect.any(Array),
       })
     );
+    expect(repository.metadataMerges).toEqual([
+      {
+        id: 'setup-verification-request-1',
+        metadata: {
+          previous_verification_channel_permission_sync: null,
+          candidate_verification_channel_permission_sync: expect.objectContaining({
+            channel_id: 'created-verification-channel',
+            managed_overwrites: expect.any(Array),
+          }),
+        },
+      },
+    ]);
     expect(repository.completed).toEqual([
       {
         id: 'setup-verification-request-1',
@@ -2136,6 +2237,172 @@ describe('ModerationActionRequestService', () => {
       },
     ]);
     expect(repository.failed).toEqual([]);
+  });
+
+  it('rejects queued setup when the actor no longer has Administrator permission', async () => {
+    const { notificationManager, reporterMember, repository, service } = buildService([
+      completeSetupVerificationRequest,
+    ]);
+    reporterMember.permissions.has.mockReturnValue(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'setup-verification-request-1',
+        error: 'Setup requires current Administrator permission.',
+      },
+    ]);
+  });
+
+  it('persists verification permission provenance before syncing a selected channel', async () => {
+    const previousPermissionSyncState = {
+      channel_id: 'verification-channel-1',
+      managed_overwrites: [
+        {
+          id: 'role-1',
+          type: 0 as const,
+          managed_bits: '7',
+          original_overwrite: { existed: true, allow: '1', deny: '2' },
+        },
+      ],
+    };
+    const candidatePermissionSyncState = {
+      ...previousPermissionSyncState,
+      managed_overwrites: [
+        {
+          ...previousPermissionSyncState.managed_overwrites[0],
+          original_overwrite: { existed: true, allow: '3', deny: '4' },
+        },
+      ],
+    };
+    const request: ModerationActionRequest = {
+      ...completeSetupVerificationRequest,
+      id: 'setup-permission-sync-request-1',
+      idempotency_key: 'web:setup:complete_setup_verification:guild-1:permission-sync-1',
+      metadata: {
+        ...(completeSetupVerificationRequest.metadata as Record<string, unknown>),
+        verification_channel_id: 'verification-channel-1',
+        previous_verification_channel_permission_sync: previousPermissionSyncState,
+        candidate_verification_channel_permission_sync: candidatePermissionSyncState,
+      },
+    };
+    const { notificationManager, repository, service } = buildService([request]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'guild-1' }),
+      'role-1',
+      false,
+      expect.any(Function),
+      'verification-channel-1',
+      expect.any(Function),
+      candidatePermissionSyncState
+    );
+    expect(repository.metadataMerges).toEqual([
+      {
+        id: 'setup-permission-sync-request-1',
+        metadata: {
+          previous_verification_channel_permission_sync: previousPermissionSyncState,
+          candidate_verification_channel_permission_sync: expect.objectContaining({
+            channel_id: 'verification-channel-1',
+            managed_overwrites: expect.any(Array),
+          }),
+        },
+      },
+    ]);
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('does not label a full-settings repair as a wizard outcome', async () => {
+    const repairRequest: ModerationActionRequest = {
+      ...completeSetupVerificationRequest,
+      id: 'setup-repair-request-1',
+      idempotency_key: 'web:setup:complete_setup_verification:guild-1:repair-1',
+      metadata: {
+        admin_channel_id: 'admin-channel-1',
+        case_role_id: 'role-1',
+      },
+    };
+    const { productAnalyticsService, repository, service } = buildService([repairRequest]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(repository.completed).toHaveLength(1);
+    expect(productAnalyticsService.captureGuildEvent).not.toHaveBeenCalledWith(
+      'guild-1',
+      'setup wizard completed',
+      expect.anything()
+    );
+    expect(productAnalyticsService.captureGuildEvent).not.toHaveBeenCalledWith(
+      'guild-1',
+      'setup wizard blocked',
+      expect.anything()
+    );
+  });
+
+  it('clears existing report instructions when the onboarding wizard skips reports', async () => {
+    const skipReportsRequest: ModerationActionRequest = {
+      ...completeSetupVerificationRequest,
+      id: 'setup-skip-reports-request-1',
+      idempotency_key: 'web:setup:complete_setup_verification:guild-1:skip-reports-1',
+      metadata: {
+        admin_channel_id: 'admin-channel-1',
+        case_role_id: 'role-1',
+        onboarding_wizard: true,
+        report_instructions_channel_id: null,
+      },
+    };
+    const { configService, reportInstructionsMessage, repository, service } = buildService(
+      [skipReportsRequest],
+      {
+        report_instructions_channel_id: 'report-channel-1',
+        report_instructions_message_id: 'report-message-1',
+      }
+    );
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(reportInstructionsMessage.delete).toHaveBeenCalled();
+    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(1, 'guild-1', {
+      report_instructions_channel_id: null,
+      report_instructions_message_id: null,
+      report_instructions_cleanup_channel_id: 'report-channel-1',
+      report_instructions_cleanup_message_id: 'report-message-1',
+    });
+    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(2, 'guild-1', {
+      report_instructions_cleanup_channel_id: null,
+      report_instructions_cleanup_message_id: null,
+    });
+    expect(repository.completed[0]?.result).toEqual(
+      expect.objectContaining({
+        report_instructions_action: 'cleared',
+        report_instructions_channel_id: null,
+        report_instructions_message_id: null,
+      })
+    );
+  });
+
+  it('fails setup for retry when an untracked report message cannot be removed', async () => {
+    const { configService, reportInstructionsMessage, repository, service } = buildService([
+      completeSetupVerificationRequest,
+    ]);
+    configService.updateServerSettings.mockRejectedValueOnce(new Error('database unavailable'));
+    reportInstructionsMessage.delete.mockRejectedValueOnce(new Error('Discord unavailable'));
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'setup-verification-request-1',
+        error:
+          'Report instructions were published but could not be tracked or removed. Retry setup to recover the message.',
+      },
+    ]);
   });
 
   it('repairs report instructions through the logged-in bot Discord client', async () => {

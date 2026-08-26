@@ -7,6 +7,7 @@ import { getDetectionResponseSettings } from '../utils/detectionResponseSettings
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
+import { CASE_ROLE_VERIFICATION_MANAGED_PERMISSION_BITS } from '../utils/verificationChannelPermissions';
 
 export type SetupDiagnosticSeverity = 'error' | 'warning';
 
@@ -104,6 +105,17 @@ const VERIFICATION_CHANNEL_SYNC_PERMISSIONS: readonly PermissionRequirement[] = 
   },
 ];
 
+const ADMIN_CHANNEL_STAFF_PERMISSIONS = [
+  PermissionFlagsBits.Administrator,
+  PermissionFlagsBits.ManageGuild,
+  PermissionFlagsBits.ManageRoles,
+  PermissionFlagsBits.ManageChannels,
+  PermissionFlagsBits.ManageMessages,
+  PermissionFlagsBits.ModerateMembers,
+  PermissionFlagsBits.KickMembers,
+  PermissionFlagsBits.BanMembers,
+] as const;
+
 @injectable()
 export class SetupDiagnosticsService implements ISetupDiagnosticsService {
   constructor(@inject(TYPES.ConfigService) private readonly configService: IConfigService) {}
@@ -133,6 +145,12 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       ADMIN_CHANNEL_PERMISSIONS,
       issues
     );
+    await this.checkAdminChannelPrivateVisibility(
+      guild,
+      botMember,
+      serverConfig.admin_channel_id,
+      issues
+    );
     await this.checkAdminNotificationRole(guild, botMember, serverConfig, issues);
     await this.checkConfiguredTextChannel(
       guild,
@@ -146,6 +164,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
 
     const detectionSettings = getDetectionResponseSettings(serverConfig.settings);
     if (detectionSettings.observedNotificationChannelId) {
+      const observedNotificationIssues: SetupDiagnosticIssue[] = [];
       await this.checkConfiguredTextChannel(
         guild,
         botMember,
@@ -153,18 +172,29 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         'observed-notification-channel',
         'Observed detection notification channel',
         ADMIN_CHANNEL_PERMISSIONS,
-        issues
+        observedNotificationIssues
+      );
+      issues.push(
+        ...observedNotificationIssues.map((issue) => ({ ...issue, severity: 'warning' as const }))
       );
     }
 
     if (serverConfig.settings.report_instructions_channel_id) {
+      const reportIssues: SetupDiagnosticIssue[] = [];
       await this.checkConfiguredTextChannel(
         guild,
         botMember,
         serverConfig.settings.report_instructions_channel_id,
         'report-instructions-channel',
         'Report instructions channel',
-        VERIFICATION_CHANNEL_PERMISSIONS,
+        ADMIN_CHANNEL_PERMISSIONS,
+        reportIssues
+      );
+      issues.push(...reportIssues.map((issue) => ({ ...issue, severity: 'warning' as const })));
+      await this.checkReportInstructionsPublicVisibility(
+        guild,
+        serverConfig.settings.report_instructions_channel_id,
+        'warning',
         issues
       );
     }
@@ -203,16 +233,30 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       ADMIN_CHANNEL_PERMISSIONS,
       issues
     );
+    await this.checkAdminChannelPrivateVisibility(
+      guild,
+      botMember,
+      candidate.adminChannelId,
+      issues
+    );
     await this.checkVerificationChannelCandidate(guild, botMember, candidate, issues);
 
     if (candidate.reportInstructionsChannelId) {
+      const reportIssues: SetupDiagnosticIssue[] = [];
       await this.checkConfiguredTextChannel(
         guild,
         botMember,
         candidate.reportInstructionsChannelId,
         'report-instructions-channel',
         'Report instructions channel',
-        VERIFICATION_CHANNEL_PERMISSIONS,
+        ADMIN_CHANNEL_PERMISSIONS,
+        reportIssues
+      );
+      issues.push(...reportIssues.map((issue) => ({ ...issue, severity: 'warning' as const })));
+      await this.checkReportInstructionsPublicVisibility(
+        guild,
+        candidate.reportInstructionsChannelId,
+        'error',
         issues
       );
     }
@@ -226,6 +270,97 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
 
     return guild.members.fetchMe().catch(() => null);
+  }
+
+  private async checkReportInstructionsPublicVisibility(
+    guild: Guild,
+    channelId: string,
+    severity: SetupDiagnosticSeverity,
+    issues: SetupDiagnosticIssue[]
+  ): Promise<void> {
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    if (channel?.type !== ChannelType.GuildText) {
+      return;
+    }
+    const everyonePermissions = channel.permissionsFor(guild.roles.everyone);
+    if (!everyonePermissions.has(PermissionFlagsBits.ViewChannel)) {
+      issues.push({
+        severity,
+        code: 'report-instructions-channel-public-view',
+        message:
+          'The report instructions channel must be visible to @everyone so members can read how to report concerns.',
+      });
+    }
+  }
+
+  private async checkAdminChannelPrivateVisibility(
+    guild: Guild,
+    botMember: GuildMember,
+    channelId: string | null | undefined,
+    issues: SetupDiagnosticIssue[]
+  ): Promise<void> {
+    if (!channelId) {
+      return;
+    }
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    if (channel?.type !== ChannelType.GuildText) {
+      return;
+    }
+    if (channel.permissionsFor(guild.roles.everyone).has(PermissionFlagsBits.ViewChannel)) {
+      issues.push({
+        severity: 'error',
+        code: 'admin-channel-public-view',
+        message: 'The admin notification channel must not be visible to @everyone.',
+      });
+      return;
+    }
+
+    const botRoleIds = new Set(
+      this.cachedValues<{ id: string }>((botMember.roles as { cache?: unknown }).cache).map(
+        (role) => role.id
+      )
+    );
+    const overwrites = this.cachedValues<{
+      id: string;
+      type: number;
+      allow: { bitfield: bigint };
+    }>((channel.permissionOverwrites as { cache?: unknown }).cache);
+    for (const overwrite of overwrites) {
+      if ((overwrite.allow.bitfield & PermissionFlagsBits.ViewChannel) === 0n) {
+        continue;
+      }
+      if (overwrite.type === 1) {
+        if (overwrite.id !== botMember.id) {
+          issues.push({
+            severity: 'error',
+            code: 'admin-channel-non-moderator-view',
+            message:
+              'The admin notification channel grants View Channel to a specific member. Use moderator-capable roles instead.',
+          });
+          return;
+        }
+        continue;
+      }
+      if (overwrite.id === guild.id) {
+        continue;
+      }
+      const role = await guild.roles.fetch(overwrite.id).catch(() => null);
+      if (botRoleIds.has(overwrite.id) && role?.managed) {
+        continue;
+      }
+      if (
+        !role ||
+        !ADMIN_CHANNEL_STAFF_PERMISSIONS.some((permission) => role.permissions.has(permission))
+      ) {
+        issues.push({
+          severity: 'error',
+          code: 'admin-channel-non-moderator-view',
+          message:
+            'The admin notification channel grants View Channel to a role without moderator permissions.',
+        });
+        return;
+      }
+    }
   }
 
   private checkGuildPermissions(botMember: GuildMember, issues: SetupDiagnosticIssue[]): void {
@@ -287,7 +422,13 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     serverConfig: Server,
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
-    await this.checkCaseRoleId(guild, botMember, serverConfig.case_role_id, issues);
+    await this.checkCaseRoleId(
+      guild,
+      botMember,
+      serverConfig.case_role_id,
+      serverConfig.verification_channel_id,
+      issues
+    );
   }
 
   private async checkCaseRoleCandidate(
@@ -297,7 +438,13 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
     if (candidate.caseRoleId) {
-      await this.checkCaseRoleId(guild, botMember, candidate.caseRoleId, issues);
+      await this.checkCaseRoleId(
+        guild,
+        botMember,
+        candidate.caseRoleId,
+        candidate.verificationChannelId,
+        issues
+      );
       return;
     }
 
@@ -316,6 +463,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     guild: Guild,
     botMember: GuildMember,
     caseRoleId: string | null | undefined,
+    verificationChannelId: string | null | undefined,
     issues: SetupDiagnosticIssue[]
   ): Promise<void> {
     if (!caseRoleId) {
@@ -353,6 +501,24 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       });
     }
 
+    if (caseRole.permissions.bitfield !== 0n) {
+      issues.push({
+        severity: 'error',
+        code: 'case-role-permissions',
+        message:
+          'The case role must not grant server permissions. Use a dedicated permission-free role; Drasil grants verification-channel access separately.',
+      });
+    }
+
+    if (this.hasUnsafeCaseRoleChannelAllows(guild, caseRole.id, verificationChannelId)) {
+      issues.push({
+        severity: 'error',
+        code: 'case-role-channel-overwrites',
+        message:
+          'The case role has unmanaged channel allow permissions. Use a dedicated role that grants only Drasil-managed verification access.',
+      });
+    }
+
     if (botMember.roles.highest.comparePositionTo(caseRole) <= 0) {
       issues.push({
         severity: 'error',
@@ -360,6 +526,44 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         message: `Move the Drasil role above the selected case role <@&${caseRole.id}>.`,
       });
     }
+  }
+
+  private hasUnsafeCaseRoleChannelAllows(
+    guild: Guild,
+    caseRoleId: string,
+    verificationChannelId: string | null | undefined
+  ): boolean {
+    const cache = (guild.channels as { cache?: { values?: () => Iterable<unknown> } }).cache;
+    if (typeof cache?.values !== 'function') {
+      return false;
+    }
+
+    for (const channel of cache.values()) {
+      const candidate = channel as {
+        id?: string;
+        permissionOverwrites?: {
+          cache?: {
+            get?: (id: string) => { allow?: { bitfield?: bigint } } | undefined;
+          };
+        };
+      };
+      const overwrite = candidate.permissionOverwrites?.cache?.get?.(caseRoleId);
+      const allow = overwrite?.allow?.bitfield ?? 0n;
+      const unmanagedAllow =
+        candidate.id === verificationChannelId
+          ? allow & ~CASE_ROLE_VERIFICATION_MANAGED_PERMISSION_BITS
+          : allow;
+      if (unmanagedAllow !== 0n) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private cachedValues<T>(cache: unknown): T[] {
+    const candidate = cache as { values?: () => IterableIterator<T> } | null;
+    return typeof candidate?.values === 'function' ? [...candidate.values()] : [];
   }
 
   private async checkManualIntakeRole(

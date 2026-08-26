@@ -79,6 +79,29 @@ test('theme toggle persists a selected mode', async ({ page }) => {
     .toBe('light');
 });
 
+test('guided onboarding shows readiness and keeps apply actions administrator-only', async ({
+  page,
+}) => {
+  await page.goto('/admin/guild/guild-1/onboarding');
+  await expect(page.getByRole('heading', { name: /review and finish/i })).toBeVisible();
+  await expect(page.getByText('Drasil passed all core setup checks.')).toBeVisible();
+
+  await page.goto('/admin/guild/guild-2/onboarding');
+  await expect(page.getByRole('heading', { name: /set up drasil for quiet guild/i })).toBeVisible();
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.getByLabel('Admin alert channel').selectOption('admin-channel-1');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.getByLabel('New role name').fill('');
+  await expect(page.getByRole('button', { name: 'Continue' })).toBeDisabled();
+  await page.getByLabel('New role name').fill('Drasil Case');
+  for (let step = 0; step < 4; step += 1) {
+    await page.getByRole('button', { name: 'Continue' }).click();
+  }
+  await expect(page.getByText(/^Permission sync: @everyone loses channel access/)).toBeVisible();
+  await expect(page.getByText('Administrator required')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Apply and verify setup' })).toHaveCount(0);
+});
+
 test('guild setup exposes moderation, report, role gate, and review policy controls', async ({
   page,
 }) => {

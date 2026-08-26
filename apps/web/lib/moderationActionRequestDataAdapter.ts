@@ -21,9 +21,20 @@ export interface ModerationActionRequestSummary {
   readonly requestedAction: string | null;
   readonly resultSummary: string | null;
   readonly status: ModerationActionRequestQueueStatus;
+  readonly setupInput?: SetupRequestInputSummary | null;
   readonly targetUserId: string | null;
   readonly updatedAt: string;
   readonly verificationEventId: string | null;
+}
+
+export interface SetupRequestInputSummary {
+  readonly adminChannelId: string | null;
+  readonly caseRoleId: string | null;
+  readonly caseRoleName: string | null;
+  readonly detectionResponseMode: 'off' | 'record_only' | 'notify_only' | 'restrict' | null;
+  readonly reportInstructionsChannelId: string | null;
+  readonly submissionId: string | null;
+  readonly verificationChannelId: string | null;
 }
 
 export interface AccountQuarantineRoleSummary {
@@ -62,6 +73,14 @@ export interface ModerationActionRequestDataAdapter {
     limit?: number
   ): Promise<ModerationActionRequestSummary[]>;
   listRecentRequests(guildId: string, limit?: number): Promise<ModerationActionRequestSummary[]>;
+  listSetupRequests(
+    guildId: string,
+    recentLimit?: number
+  ): Promise<ModerationActionRequestSummary[]>;
+  getSetupRequest(
+    guildId: string,
+    requestId: string
+  ): Promise<ModerationActionRequestSummary | null>;
 }
 
 interface ModerationActionRequestRow {
@@ -311,12 +330,43 @@ function buildResultSummary(result: unknown): string | null {
   return formatOperationResult(result as OperationResultRecord);
 }
 
+function parseSetupRequestInput(
+  actionType: ModerationActionRequestActionType,
+  metadata: unknown
+): SetupRequestInputSummary | null {
+  if (
+    actionType !== 'complete_setup_verification' ||
+    !metadata ||
+    typeof metadata !== 'object' ||
+    Array.isArray(metadata)
+  ) {
+    return null;
+  }
+
+  const record = metadata as OperationResultRecord;
+  const mode = readString(record.detection_response_mode);
+  return {
+    adminChannelId: readString(record.admin_channel_id),
+    caseRoleId: readString(record.case_role_id),
+    caseRoleName: readString(record.case_role_name),
+    detectionResponseMode:
+      mode === 'off' || mode === 'record_only' || mode === 'notify_only' || mode === 'restrict'
+        ? mode
+        : null,
+    reportInstructionsChannelId: readString(record.report_instructions_channel_id),
+    submissionId: readString(record.submission_id),
+    verificationChannelId: readString(record.verification_channel_id),
+  };
+}
+
 export function parseModerationActionRequestRow(
   row: ModerationActionRequestRow
 ): ModerationActionRequestSummary {
   const accountQuarantinePreview = parseAccountQuarantinePreview(row.result);
+  const setupInput = parseSetupRequestInput(row.action_type, row.metadata);
   return {
     ...(accountQuarantinePreview ? { accountQuarantinePreview } : {}),
+    ...(setupInput ? { setupInput } : {}),
     id: row.id,
     actionType: row.action_type,
     actorSurface: row.actor_surface,
@@ -341,6 +391,38 @@ export function parseModerationActionRequestRow(
 }
 
 export class PostgresModerationActionRequestDataAdapter implements ModerationActionRequestDataAdapter {
+  public async getSetupRequest(
+    guildId: string,
+    requestId: string
+  ): Promise<ModerationActionRequestSummary | null> {
+    const result = await getPostgresPool().query<ModerationActionRequestRow>(
+      `select
+         id::text,
+         action_type::text as action_type,
+         actor_surface,
+         completed_at,
+         detection_event_id::text,
+         failed_at,
+         last_error,
+         message_deletion_job_id::text,
+         metadata,
+         requested_at,
+         report_intake_id::text,
+         result,
+         status::text as status,
+         target_user_id,
+         updated_at,
+         verification_event_id::text
+       from moderation_action_requests
+       where server_id = $1
+         and id::text = $2
+         and action_type = 'complete_setup_verification'
+       limit 1`,
+      [guildId, requestId]
+    );
+    return result.rows[0] ? parseModerationActionRequestRow(result.rows[0]) : null;
+  }
+
   public async listInboxRequests(
     guildId: string,
     recentLimit = 8
@@ -353,6 +435,13 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
     limit = 8
   ): Promise<ModerationActionRequestSummary[]> {
     return this.listRequests(guildId, limit, false);
+  }
+
+  public async listSetupRequests(
+    guildId: string,
+    recentLimit = 10
+  ): Promise<ModerationActionRequestSummary[]> {
+    return this.listRequests(guildId, recentLimit, true, ['complete_setup_verification']);
   }
 
   public async listCaseRequests(
@@ -391,7 +480,8 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
   private async listRequests(
     guildId: string,
     limit: number,
-    includeAllActive: boolean
+    includeAllActive: boolean,
+    selectedActionTypes: readonly ModerationActionRequestActionType[] = inboxModerationActionRequestTypes
   ): Promise<ModerationActionRequestSummary[]> {
     const boundedLimit = Math.max(1, Math.min(Math.floor(limit), 25));
     const result = await getPostgresPool().query<ModerationActionRequestRow>(
@@ -432,7 +522,7 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
        from moderation_action_requests requests
        join inbox_request_ids selected on selected.id = requests.id
        order by requests.requested_at desc`,
-      [guildId, boundedLimit, includeAllActive, inboxModerationActionRequestTypes]
+      [guildId, boundedLimit, includeAllActive, selectedActionTypes]
     );
 
     return result.rows.map(parseModerationActionRequestRow);
@@ -440,6 +530,16 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
 }
 
 export class FixtureModerationActionRequestDataAdapter implements ModerationActionRequestDataAdapter {
+  public async getSetupRequest(
+    guildId: string,
+    requestId: string
+  ): Promise<ModerationActionRequestSummary | null> {
+    return (
+      (await this.listSetupRequests(guildId, 25)).find((request) => request.id === requestId) ??
+      null
+    );
+  }
+
   public async listInboxRequests(
     guildId: string,
     recentLimit = 8
@@ -579,6 +679,15 @@ export class FixtureModerationActionRequestDataAdapter implements ModerationActi
         verificationEventId: null,
       },
     ];
+  }
+
+  public async listSetupRequests(
+    guildId: string,
+    recentLimit = 10
+  ): Promise<ModerationActionRequestSummary[]> {
+    return (await this.listRecentRequests(guildId, recentLimit)).filter(
+      (request) => request.actionType === 'complete_setup_verification'
+    );
   }
 
   public async listCaseRequests(
