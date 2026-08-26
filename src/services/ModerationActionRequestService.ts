@@ -1497,6 +1497,9 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       this.productAnalyticsService,
       this.setupDiagnosticsService
     );
+    let reportInstructionsAction: string | null = null;
+    let reportInstructionsMessageId: string | null = null;
+    let reportInstructionsError: string | null = null;
     const setupResult = await new SetupProvisioningService(
       this.configService,
       this.setupDiagnosticsService,
@@ -1524,6 +1527,35 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       },
       reportInstructionsChannelId,
       verificationChannelId,
+      afterSetupCompleted: async () => {
+        if (!reportInstructionsChannelId && !isOnboardingWizard) {
+          return;
+        }
+        try {
+          const reportInstructionsManager = new ReportInstructionsManager(
+            this.client,
+            this.configService
+          );
+          const reportInstructionsResult = reportInstructionsChannelId
+            ? await reportInstructionsManager.upsertReportInstructionsMessage(
+                request.server_id,
+                await this.fetchRequestTextChannel(
+                  request.server_id,
+                  reportInstructionsChannelId,
+                  'Report instructions channel'
+                )
+              )
+            : await reportInstructionsManager.clearReportInstructions(request.server_id);
+          reportInstructionsAction = reportInstructionsResult.action;
+          reportInstructionsMessageId =
+            'messageId' in reportInstructionsResult ? reportInstructionsResult.messageId : null;
+        } catch (error) {
+          if (error instanceof ReportInstructionsRollbackRequiredError) {
+            throw error;
+          }
+          reportInstructionsError = this.errorMessage(error);
+        }
+      },
     });
 
     if (setupResult.status !== 'completed') {
@@ -1555,36 +1587,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
         throw new Error(setupResult.detail);
       }
       throw new Error(this.describeSetupWorkflowFailure(setupResult));
-    }
-
-    let reportInstructionsAction: string | null = null;
-    let reportInstructionsMessageId: string | null = null;
-    let reportInstructionsError: string | null = null;
-    if (reportInstructionsChannelId || isOnboardingWizard) {
-      try {
-        const reportInstructionsManager = new ReportInstructionsManager(
-          this.client,
-          this.configService
-        );
-        const reportInstructionsResult = reportInstructionsChannelId
-          ? await reportInstructionsManager.upsertReportInstructionsMessage(
-              request.server_id,
-              await this.fetchRequestTextChannel(
-                request.server_id,
-                reportInstructionsChannelId,
-                'Report instructions channel'
-              )
-            )
-          : await reportInstructionsManager.clearReportInstructions(request.server_id);
-        reportInstructionsAction = reportInstructionsResult.action;
-        reportInstructionsMessageId =
-          'messageId' in reportInstructionsResult ? reportInstructionsResult.messageId : null;
-      } catch (error) {
-        if (error instanceof ReportInstructionsRollbackRequiredError) {
-          throw error;
-        }
-        reportInstructionsError = this.errorMessage(error);
-      }
     }
 
     await this.repository.complete(request.id, {

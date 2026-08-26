@@ -18,11 +18,13 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
     mocks.connect.mockResolvedValue({ query: mocks.query, release: mocks.release });
   });
 
-  it('returns the active setup request after taking the guild transaction lock', async () => {
+  it('returns the same active setup submission after taking the guild transaction lock', async () => {
     mocks.query
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ id: 'active-1', status: 'processing' }] })
+      .mockResolvedValueOnce({
+        rows: [{ id: 'active-1', idempotencyKey: 'setup-2', status: 'processing' }],
+      })
       .mockResolvedValueOnce({ rows: [] });
 
     const result = await queueSerializedModerationActionRequestWithReceipt({
@@ -43,6 +45,29 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
     expect(mocks.query).toHaveBeenNthCalledWith(2, expect.any(String), [
       'drasil:complete_setup_verification:guild-1',
     ]);
+    expect(mocks.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a different setup submission while one is active', async () => {
+    mocks.query
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ id: 'active-1', idempotencyKey: 'setup-1', status: 'processing' }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await expect(
+      queueSerializedModerationActionRequestWithReceipt({
+        actionType: 'complete_setup_verification',
+        actorId: 'admin-2',
+        actorSurface: 'web',
+        idempotencyKey: 'setup-2',
+        serverId: 'guild-1',
+      })
+    ).rejects.toThrow('Another Drasil setup is already in progress for this server.');
+
+    expect(mocks.query).toHaveBeenLastCalledWith('rollback');
     expect(mocks.release).toHaveBeenCalledTimes(1);
   });
 

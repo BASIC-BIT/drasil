@@ -46,6 +46,10 @@ export interface ModerationActionRequestReceipt {
   readonly status: ModerationActionRequestQueueStatus;
 }
 
+interface ActiveModerationActionRequestReceipt extends ModerationActionRequestReceipt {
+  readonly idempotencyKey: string;
+}
+
 export interface QueueModerationActionRequestInput {
   readonly actionType: ModerationActionRequestActionType;
   readonly actorId: string;
@@ -168,11 +172,12 @@ export async function queueSerializedModerationActionRequestWithReceipt(
       `drasil:${input.actionType}:${input.serverId}`,
     ]);
 
-    const active = await client.query<ModerationActionRequestReceipt>(
+    const active = await client.query<ActiveModerationActionRequestReceipt>(
       `select
          id::text,
          message_deletion_job_id::text as "messageDeletionJobId",
-         status::text as status
+         status::text as status,
+         idempotency_key as "idempotencyKey"
        from moderation_action_requests
        where server_id = $1
          and action_type = $2::moderation_action_request_type
@@ -182,10 +187,20 @@ export async function queueSerializedModerationActionRequestWithReceipt(
       [input.serverId, input.actionType]
     );
 
+    const activeReceipt = active.rows[0];
+    if (activeReceipt && activeReceipt.idempotencyKey !== input.idempotencyKey) {
+      throw new Error(
+        'Another Drasil setup is already in progress for this server. Wait for it to finish, then review and submit your choices again.'
+      );
+    }
     const receipt =
-      active.rows[0] ?? (await insertModerationActionRequestWithReceipt(client, input));
+      activeReceipt ?? (await insertModerationActionRequestWithReceipt(client, input));
     await client.query('commit');
-    return receipt;
+    return {
+      id: receipt.id,
+      messageDeletionJobId: receipt.messageDeletionJobId,
+      status: receipt.status,
+    };
   } catch (error) {
     await client.query('rollback').catch(() => undefined);
     throw error;

@@ -1,6 +1,7 @@
 import {
   AuditLogEvent,
   Events,
+  Guild,
   GuildMember,
   Message,
   MessageFlags,
@@ -286,7 +287,28 @@ describe('EventHandler (unit)', () => {
     expect(client.on).toHaveBeenCalledWith(Events.GuildBanAdd, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.InteractionCreate, expect.any(Function));
     expect(client.on).toHaveBeenCalledWith(Events.GuildCreate, expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith(Events.GuildDelete, expect.any(Function));
     expect(client.on).not.toHaveBeenCalledWith('ready', expect.any(Function));
+  });
+
+  it('marks a configured server inactive when Drasil leaves the guild', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const configService = {
+      updateServerConfig: jest.fn().mockResolvedValue({}),
+    };
+    const handler = buildHandler({ client, configService });
+    await handler.setupEventHandlers();
+    const guildDeleteHandler = client.on.mock.calls.find(
+      ([event]) => event === Events.GuildDelete
+    )?.[1];
+
+    await expect(
+      guildDeleteHandler?.({ id: 'guild-1' } as unknown as Guild)
+    ).resolves.toBeUndefined();
+
+    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
+      is_active: false,
+    });
   });
 
   it('contains expired interactions without attempting another response', async () => {

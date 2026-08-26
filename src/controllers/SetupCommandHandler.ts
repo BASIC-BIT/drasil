@@ -275,6 +275,10 @@ export class SetupCommandHandler {
     let setupFailureDetail: string | null = null;
 
     try {
+      let reportInstructionsStatus: ConfigSetupReportInstructionsStatus = {
+        line: null,
+        warningLine: null,
+      };
       const setupResult = await setupProvisioningService.provision({
         guild,
         adminChannelId: adminChannel.id,
@@ -287,6 +291,12 @@ export class SetupCommandHandler {
         detectionResponseMode: protectionMode ?? undefined,
         actorLabel: interaction.user.username,
         captureAnalytics: true,
+        afterSetupCompleted: async () => {
+          reportInstructionsStatus = await this.upsertReportInstructionsStatus(
+            guild.id,
+            reportChannel as TextChannel | null
+          );
+        },
       });
 
       if (setupResult.status === 'ambiguous_case_role') {
@@ -328,10 +338,6 @@ export class SetupCommandHandler {
         return;
       }
 
-      const reportInstructionsStatus = await this.upsertReportInstructionsStatus(
-        guild.id,
-        reportChannel as TextChannel | null
-      );
       const lines = this.buildConfigSetupSuccessLines(
         setupResult,
         adminChannel.id,

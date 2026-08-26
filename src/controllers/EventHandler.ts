@@ -306,6 +306,10 @@ export class EventHandler implements IEventHandler {
       Events.GuildCreate,
       this.createRecoverableEventHandler(Events.GuildCreate, this.handleGuildCreate.bind(this))
     );
+    this.client.on(
+      Events.GuildDelete,
+      this.createRecoverableEventHandler(Events.GuildDelete, this.handleGuildDelete.bind(this))
+    );
   }
 
   private createRecoverableEventHandler<TArguments extends unknown[]>(
@@ -1948,6 +1952,12 @@ export class EventHandler implements IEventHandler {
     } catch (error) {
       console.error(`Failed to handle new guild ${guild.id}:`, error);
     }
+  }
+
+  private async handleGuildDelete(guild: Guild): Promise<void> {
+    await runSerializedGuildSetup(guild.id, () =>
+      this.configService.updateServerConfig(guild.id, { is_active: false })
+    );
   }
 
   private async maybeSendSetupNudge(guild: Guild, config: Server): Promise<void> {

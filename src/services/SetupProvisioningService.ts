@@ -72,6 +72,9 @@ export interface ProvisionSetupInput {
     state: VerificationChannelPermissionSyncState,
     previousState?: VerificationChannelPermissionSyncState
   ) => Promise<void>;
+  readonly afterSetupCompleted?: (
+    result: Extract<SetupWorkflowResult, { status: 'completed' }>
+  ) => Promise<void>;
 }
 
 type CaseRoleCandidate =
@@ -143,12 +146,16 @@ export class SetupProvisioningService {
       return { status: 'invalid_selection', detail: operationalRoleConflict };
     }
 
-    return this.provisionWithCaseRole(
+    const result = await this.provisionWithCaseRole(
       input,
       caseRoleCandidate,
       detectionResponseMode,
       existingConfig
     );
+    if (result.status === 'completed' && input.afterSetupCompleted) {
+      await input.afterSetupCompleted(result);
+    }
+    return result;
   }
 
   private async provisionWithCaseRole(

@@ -1,7 +1,7 @@
 import { SetupProvisioningService } from '../../services/SetupProvisioningService';
 
 describe('SetupProvisioningService (unit)', () => {
-  it('serializes setup execution for the same guild across service instances', async () => {
+  it('holds guild setup serialization through post-setup completion work', async () => {
     const serverConfig = {
       admin_channel_id: 'admin-channel-1',
       case_role_id: 'case-role-1',
@@ -22,20 +22,16 @@ describe('SetupProvisioningService (unit)', () => {
         warningCount: 0,
       }),
     } as any;
-    let markFirstWorkflowStarted!: () => void;
-    let releaseFirstWorkflow!: () => void;
-    const firstWorkflowStarted = new Promise<void>((resolve) => {
-      markFirstWorkflowStarted = resolve;
+    let markPostSetupStarted!: () => void;
+    let releasePostSetup!: () => void;
+    const postSetupStarted = new Promise<void>((resolve) => {
+      markPostSetupStarted = resolve;
     });
-    const firstWorkflowReleased = new Promise<void>((resolve) => {
-      releaseFirstWorkflow = resolve;
+    const postSetupReleased = new Promise<void>((resolve) => {
+      releasePostSetup = resolve;
     });
     const firstWorkflowService = {
-      completeSetup: jest.fn(async () => {
-        markFirstWorkflowStarted();
-        await firstWorkflowReleased;
-        return { status: 'completed' };
-      }),
+      completeSetup: jest.fn().mockResolvedValue({ status: 'completed' }),
     } as any;
     const secondWorkflowService = {
       completeSetup: jest.fn().mockResolvedValue({ status: 'completed' }),
@@ -58,15 +54,21 @@ describe('SetupProvisioningService (unit)', () => {
       verificationChannel: { id: 'verification-channel-1' } as any,
     };
 
-    const firstSetup = firstService.provision(input);
-    await firstWorkflowStarted;
+    const firstSetup = firstService.provision({
+      ...input,
+      afterSetupCompleted: async () => {
+        markPostSetupStarted();
+        await postSetupReleased;
+      },
+    });
+    await postSetupStarted;
     const secondSetup = secondService.provision(input);
     await Promise.resolve();
 
     expect(secondConfigService.getServerConfig).not.toHaveBeenCalled();
     expect(secondWorkflowService.completeSetup).not.toHaveBeenCalled();
 
-    releaseFirstWorkflow();
+    releasePostSetup();
     await expect(firstSetup).resolves.toEqual({ status: 'completed' });
     await expect(secondSetup).resolves.toEqual({ status: 'completed' });
     expect(secondConfigService.getServerConfig).toHaveBeenCalledTimes(1);
