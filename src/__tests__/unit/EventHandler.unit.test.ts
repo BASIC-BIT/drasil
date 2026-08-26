@@ -3478,7 +3478,9 @@ describe('EventHandler (unit)', () => {
       expect(configService.getServerConfig).toHaveBeenCalledTimes(2);
       expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
         guild,
-        'case-role-1'
+        'case-role-1',
+        true,
+        expect.any(Function)
       );
     } finally {
       releaseLock();
@@ -3512,7 +3514,12 @@ describe('EventHandler (unit)', () => {
       upsertObservedDetectionNotification: jest.fn(),
       setupVerificationChannel: jest.fn().mockResolvedValue('verification-channel-1'),
     };
-    const handler = buildHandler({ configService, notificationManager });
+    const productAnalyticsService = { captureGuildEvent: jest.fn().mockResolvedValue(undefined) };
+    const handler = buildHandler({
+      configService,
+      notificationManager,
+      productAnalyticsService,
+    });
     const guild = { id: 'guild-1', name: 'Test Guild' } as any;
 
     try {
@@ -3521,11 +3528,21 @@ describe('EventHandler (unit)', () => {
       globalConfig.updateSettings({ autoSetupVerificationChannels: previousAutoSetup });
     }
 
-    expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(guild, 'case-role-1');
+    expect(notificationManager.setupVerificationChannel).toHaveBeenCalledWith(
+      guild,
+      'case-role-1',
+      true,
+      expect.any(Function)
+    );
     expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
       is_active: true,
     });
     expect(serverConfig.is_active).toBe(true);
+    expect(productAnalyticsService.captureGuildEvent).toHaveBeenCalledWith(
+      'guild-1',
+      'guild installed',
+      expect.objectContaining({ verification_channel_auto_created: false })
+    );
   });
 
   it('falls back to the guild owner when installer attribution is unavailable', async () => {

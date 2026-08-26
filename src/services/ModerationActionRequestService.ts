@@ -15,7 +15,10 @@ import {
 import { inject, injectable, optional } from 'inversify';
 import type { DetectionResponseMode } from '../contracts/setup';
 import { IConfigService } from '../config/ConfigService';
-import { ReportInstructionsManager } from '../controllers/ReportInstructionsManager';
+import {
+  ReportInstructionsManager,
+  ReportInstructionsRollbackRequiredError,
+} from '../controllers/ReportInstructionsManager';
 import { Prisma } from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
@@ -1577,6 +1580,9 @@ export class ModerationActionRequestService implements IModerationActionRequestS
         reportInstructionsMessageId =
           'messageId' in reportInstructionsResult ? reportInstructionsResult.messageId : null;
       } catch (error) {
+        if (error instanceof ReportInstructionsRollbackRequiredError) {
+          throw error;
+        }
         reportInstructionsError = this.errorMessage(error);
       }
     }

@@ -18,7 +18,16 @@ const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10003;
 const DISCORD_UNKNOWN_MESSAGE_ERROR_CODE = 10008;
 const REPORT_INSTRUCTIONS_CLEANUP_PENDING_ERROR =
   'Report instructions were disabled, but the previous message could not be removed. Retry setup to finish cleanup.';
+const REPORT_INSTRUCTIONS_ROLLBACK_PENDING_ERROR =
+  'Report instructions were published but could not be tracked or removed. Retry setup to recover the message.';
 const reportInstructionsExecutionChains = new Map<string, Promise<unknown>>();
+
+export class ReportInstructionsRollbackRequiredError extends Error {
+  public constructor() {
+    super(REPORT_INSTRUCTIONS_ROLLBACK_PENDING_ERROR);
+    this.name = 'ReportInstructionsRollbackRequiredError';
+  }
+}
 
 async function runSerializedReportInstructions<T>(
   guildId: string,
@@ -62,6 +71,7 @@ export class ReportInstructionsManager {
     const existingChannelId = serverConfig.settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
     const existingMessageId = serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
     let messageId: string;
+    let createdMessage: Message | null = null;
     let action: 'sent' | 'updated' | 'recreated' = 'sent';
     const movedChannels = existingChannelId !== targetChannel.id;
 
@@ -76,6 +86,7 @@ export class ReportInstructionsManager {
         action = 'updated';
       } else {
         const sentMessage = await targetChannel.send(messagePayload);
+        createdMessage = sentMessage;
         messageId = sentMessage.id;
         action = 'recreated';
       }
@@ -87,6 +98,7 @@ export class ReportInstructionsManager {
         action = 'updated';
       } else {
         const sentMessage = await targetChannel.send(messagePayload);
+        createdMessage = sentMessage;
         messageId = sentMessage.id;
       }
     }
@@ -99,7 +111,17 @@ export class ReportInstructionsManager {
       settingsPatch[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY] = existingChannelId;
       settingsPatch[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY] = existingMessageId;
     }
-    await this.configService.updateServerSettings(guildId, settingsPatch);
+    try {
+      await this.configService.updateServerSettings(guildId, settingsPatch);
+    } catch (error) {
+      if (
+        createdMessage &&
+        !(await this.deleteUntrackedReportInstructionsMessage(createdMessage))
+      ) {
+        throw new ReportInstructionsRollbackRequiredError();
+      }
+      throw error;
+    }
 
     if (movedChannels && existingChannelId && existingMessageId) {
       await this.finishReportInstructionsCleanup(guildId, existingChannelId, existingMessageId);
@@ -246,6 +268,19 @@ export class ReportInstructionsManager {
         return true;
       }
       console.warn('Failed to delete stale report instructions message:', error);
+      return false;
+    }
+  }
+
+  private async deleteUntrackedReportInstructionsMessage(message: Message): Promise<boolean> {
+    try {
+      await message.delete();
+      return true;
+    } catch (error) {
+      if (this.isUnknownDiscordResource(error, DISCORD_UNKNOWN_MESSAGE_ERROR_CODE)) {
+        return true;
+      }
+      console.warn('Failed to remove untracked report instructions message:', error);
       return false;
     }
   }

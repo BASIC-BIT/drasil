@@ -648,6 +648,32 @@ describe('CommandHandler report commands (unit)', () => {
     expect(oldMessage.delete).not.toHaveBeenCalled();
   });
 
+  it('removes a newly published report message when saving its coordinates fails', async () => {
+    const sentMessage = {
+      delete: jest.fn().mockResolvedValue(undefined),
+      id: 'new-message-1',
+    };
+    const client = { channels: { fetch: jest.fn() }, user: { id: 'bot-1' } } as any;
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({ settings: {} }),
+      updateServerSettings: jest.fn().mockRejectedValue(new Error('database unavailable')),
+    } as any;
+    const targetChannel = {
+      id: 'new-channel-1',
+      messages: { fetch: jest.fn().mockResolvedValue({ find: jest.fn(() => undefined) }) },
+      send: jest.fn().mockResolvedValue(sentMessage),
+    } as any;
+
+    await expect(
+      new ReportInstructionsManager(client, configService).upsertReportInstructionsMessage(
+        'guild-1',
+        targetChannel
+      )
+    ).rejects.toThrow('database unavailable');
+
+    expect(sentMessage.delete).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves old report instructions when clearing settings fails', async () => {
     const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
     const client = {

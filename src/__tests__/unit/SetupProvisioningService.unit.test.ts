@@ -567,6 +567,53 @@ describe('SetupProvisioningService (unit)', () => {
     expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['moderation_queue_channel_id', 'moderation queue'],
+    ['observed_detection_notification_channel_id', 'observed-alert'],
+  ])('rejects the configured %s as the verification channel', async (settingKey, channelLabel) => {
+    const caseRole = { id: 'case-role-1', name: 'Drasil Case' };
+    const configService = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        admin_channel_id: 'admin-channel-1',
+        case_role_id: caseRole.id,
+        verification_channel_id: 'old-verification-channel',
+        settings: { [settingKey]: 'operational-channel' },
+      }),
+    } as any;
+    const setupDiagnosticsService = { validateSetupCandidate: jest.fn() } as any;
+    const setupWorkflowService = { completeSetup: jest.fn() } as any;
+    const guild = {
+      id: 'guild-1',
+      channels: {
+        fetch: jest.fn().mockResolvedValue({
+          id: 'operational-channel',
+          type: 0,
+        }),
+      },
+    } as any;
+    const service = new SetupProvisioningService(
+      configService,
+      setupDiagnosticsService,
+      setupWorkflowService
+    );
+
+    await expect(
+      service.provision({
+        actorLabel: 'web administrator admin-1',
+        adminChannelId: 'admin-channel-1',
+        caseRole: caseRole as any,
+        guild,
+        verificationChannelId: 'operational-channel',
+      })
+    ).resolves.toEqual({
+      status: 'invalid_selection',
+      detail: `The verification channel must be separate from the configured ${channelLabel} channel.`,
+    });
+
+    expect(setupDiagnosticsService.validateSetupCandidate).not.toHaveBeenCalled();
+    expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
+  });
+
   it('propagates transient failures while fetching the configured verification channel', async () => {
     const caseRole = { id: 'case-role-1', name: 'Drasil Case' };
     const configService = {

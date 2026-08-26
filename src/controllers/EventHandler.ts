@@ -1916,11 +1916,14 @@ export class EventHandler implements IEventHandler {
             if (caseRoleId) {
               const channelId = await this.notificationManager.setupVerificationChannel(
                 guild,
-                caseRoleId
+                caseRoleId,
+                true,
+                () => {
+                  channelWasCreated = true;
+                }
               );
               if (channelId) {
                 lockedConfig = { ...lockedConfig, verification_channel_id: channelId };
-                channelWasCreated = true;
                 console.log(`Set up verification channel for guild: ${guild.name} (${guild.id})`);
               }
             }

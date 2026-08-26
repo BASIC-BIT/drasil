@@ -5,9 +5,11 @@ import type { Server, VerificationChannelPermissionSyncState } from '../reposito
 import {
   DEFAULT_DETECTION_RESPONSE_MODE,
   DEFAULT_FIRST_SETUP_DETECTION_RESPONSE_MODE,
+  getDetectionResponseSettings,
 } from '../utils/detectionResponseSettings';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
+import { getModerationQueueSettings } from '../utils/moderationQueueSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { ISetupDiagnosticsService } from './SetupDiagnosticsService';
 import { SetupWorkflowService, type SetupWorkflowResult } from './SetupWorkflowService';
@@ -170,18 +172,13 @@ export class SetupProvisioningService {
         channelIds: verificationCandidate.ambiguousChannelIds,
       };
     }
-    const channelSelectionError = this.getChannelSelectionError(input, verificationCandidate);
+    const channelSelectionError = this.getChannelSelectionError(
+      input,
+      verificationCandidate,
+      existingConfig
+    );
     if (channelSelectionError) {
       return { status: 'invalid_selection', detail: channelSelectionError };
-    }
-    if (
-      input.reportInstructionsChannelId &&
-      input.reportInstructionsChannelId === verificationCandidate.channelId
-    ) {
-      return {
-        status: 'invalid_selection',
-        detail: 'Report instructions must use a different channel from verification.',
-      };
     }
 
     const candidateReport = await this.setupDiagnosticsService.validateSetupCandidate(input.guild, {
@@ -238,13 +235,34 @@ export class SetupProvisioningService {
 
   private getChannelSelectionError(
     input: ProvisionSetupInput,
-    verificationCandidate: Exclude<VerificationChannelCandidate, { invalidDetail: string }>
+    verificationCandidate: Exclude<VerificationChannelCandidate, { invalidDetail: string }>,
+    serverConfig: Server
   ): string | null {
-    if (
-      verificationCandidate.channelId &&
-      input.adminChannelId === verificationCandidate.channelId
-    ) {
+    const channelId = verificationCandidate.channelId;
+    if (!channelId) {
+      return null;
+    }
+    if (input.adminChannelId === channelId) {
       return 'The admin alert channel must be separate from the verification channel.';
+    }
+    if (input.reportInstructionsChannelId === channelId) {
+      return 'Report instructions must use a different channel from verification.';
+    }
+
+    const persistedConflicts: ReadonlyArray<readonly [string | null | undefined, string]> = [
+      [serverConfig.admin_channel_id, 'admin alert'],
+      [serverConfig.settings.report_instructions_channel_id, 'report instructions'],
+      [getModerationQueueSettings(serverConfig.settings).channelId, 'moderation queue'],
+      [
+        getDetectionResponseSettings(serverConfig.settings).observedNotificationChannelId,
+        'observed-alert',
+      ],
+    ];
+    const conflict = persistedConflicts.find(
+      ([configuredChannelId]) => configuredChannelId === channelId
+    );
+    if (conflict) {
+      return `The verification channel must be separate from the configured ${conflict[1]} channel.`;
     }
     return null;
   }

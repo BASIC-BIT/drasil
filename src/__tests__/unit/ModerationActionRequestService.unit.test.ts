@@ -2386,6 +2386,25 @@ describe('ModerationActionRequestService', () => {
     );
   });
 
+  it('fails setup for retry when an untracked report message cannot be removed', async () => {
+    const { configService, reportInstructionsMessage, repository, service } = buildService([
+      completeSetupVerificationRequest,
+    ]);
+    configService.updateServerSettings.mockRejectedValueOnce(new Error('database unavailable'));
+    reportInstructionsMessage.delete.mockRejectedValueOnce(new Error('Discord unavailable'));
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'setup-verification-request-1',
+        error:
+          'Report instructions were published but could not be tracked or removed. Retry setup to recover the message.',
+      },
+    ]);
+  });
+
   it('repairs report instructions through the logged-in bot Discord client', async () => {
     const { configService, reportInstructionsChannel, repository, service } = buildService([
       upsertReportInstructionsRequest,
