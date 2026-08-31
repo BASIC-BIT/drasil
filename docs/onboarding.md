@@ -60,8 +60,9 @@ Core readiness requires:
 - **Manage Roles**, with the Drasil bot role above the selected case role;
 - an assignable, non-managed, permission-free case role with no unmanaged channel allow
   overwrites; the verification channel may contain only the permission bits Drasil synchronizes;
-- a private admin alert text channel where access is limited to moderator-capable roles and Drasil
-  can View Channel, Send Messages, and Embed Links;
+- an admin alert text channel where Drasil can View Channel, Send Messages, and Embed Links;
+  private, moderator-limited access is strongly recommended, and broader visibility is reported as
+  a privacy warning;
 - a verification text channel where Drasil can also Read Message History, Create Private Threads,
   and Send Messages in Threads;
 - **Manage Channels** when Drasil must create a verification channel or synchronize permissions on

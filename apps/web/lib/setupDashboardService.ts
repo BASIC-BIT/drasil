@@ -101,6 +101,11 @@ const ADMIN_CHANNEL_STAFF_PERMISSIONS = [
   DISCORD_PERMISSIONS.KickMembers,
   DISCORD_PERMISSIONS.BanMembers,
 ] as const;
+const ADMIN_CHANNEL_REQUIRED_PERMISSIONS = [
+  DISCORD_PERMISSIONS.ViewChannel,
+  DISCORD_PERMISSIONS.SendMessages,
+  DISCORD_PERMISSIONS.EmbedLinks,
+] as const;
 
 export function filterAssignableCaseRoles(
   roles: readonly DiscordRole[],
@@ -264,6 +269,38 @@ export function getAdminChannelVisibilityWarnings(
     }
   }
 
+  return warnings;
+}
+
+export function getReportChannelWarnings(
+  channel: DiscordChannel,
+  roles: readonly DiscordRole[],
+  guildId: string,
+  botRoleIds: readonly string[],
+  botUserId: string
+): AdminChannelVisibilityWarning[] {
+  const warnings: AdminChannelVisibilityWarning[] = [];
+  if (
+    !hasRequiredChannelPermissions({
+      guildId,
+      botUserId,
+      botRoleIds,
+      roles,
+      channel,
+      required: ADMIN_CHANNEL_REQUIRED_PERMISSIONS,
+    })
+  ) {
+    warnings.push({
+      key: 'missing-bot-permissions',
+      detail: `${formatChannelName(channel)} is missing required bot permissions.`,
+    });
+  }
+  if (!isChannelVisibleToEveryone(channel, roles, guildId)) {
+    warnings.push({
+      key: 'not-public',
+      detail: `${formatChannelName(channel)} is not visible to @everyone.`,
+    });
+  }
   return warnings;
 }
 
@@ -485,13 +522,8 @@ function buildChecklist(args: BuildChecklistArgs) {
     server?.settings.observed_detection_notification_channel_id
   );
 
-  const adminRequired = [
-    DISCORD_PERMISSIONS.ViewChannel,
-    DISCORD_PERMISSIONS.SendMessages,
-    DISCORD_PERMISSIONS.EmbedLinks,
-  ];
   const verificationRequired = [
-    ...adminRequired,
+    ...ADMIN_CHANNEL_REQUIRED_PERMISSIONS,
     DISCORD_PERMISSIONS.ReadMessageHistory,
     DISCORD_PERMISSIONS.CreatePrivateThreads,
     DISCORD_PERMISSIONS.SendMessagesInThreads,
@@ -504,7 +536,7 @@ function buildChecklist(args: BuildChecklistArgs) {
     botRoleIds,
     roles: resources.roles,
     channel: adminChannel,
-    required: adminRequired,
+    required: ADMIN_CHANNEL_REQUIRED_PERMISSIONS,
     key: 'admin-channel',
     label: 'Admin alert channel',
     missingDetail: 'Choose a channel for moderator notifications.',
@@ -536,7 +568,7 @@ function buildChecklist(args: BuildChecklistArgs) {
         botRoleIds,
         roles: resources.roles,
         channel: reportChannel,
-        required: adminRequired,
+        required: ADMIN_CHANNEL_REQUIRED_PERMISSIONS,
       })
       ? isChannelVisibleToEveryone(reportChannel, resources.roles, guild.id)
         ? item(

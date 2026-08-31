@@ -14,6 +14,7 @@ import {
   filterAdminChannels,
   filterAssignableCaseRoles,
   getAdminChannelVisibilityWarnings,
+  getReportChannelWarnings,
 } from '@/lib/setupDashboardService';
 import {
   onboardingWizardStateKey,
@@ -71,6 +72,21 @@ export default async function OnboardingPage({
       getAdminChannelVisibilityWarnings(channel, roles, guildId, botRoleIds, botUserId),
     ])
   );
+  const reportChannelWarnings = {
+    __none__: [
+      {
+        key: 'not-selected',
+        detail:
+          'No report instructions channel is selected. Drasil will not post public reporting instructions.',
+      },
+    ],
+    ...Object.fromEntries(
+      selectableChannels.map((channel) => [
+        channel.id,
+        getReportChannelWarnings(channel, roles, guildId, botRoleIds, botUserId),
+      ])
+    ),
+  };
   const selectableRoles = filterAssignableCaseRoles(
     roles,
     botRoleIds,
@@ -126,6 +142,7 @@ export default async function OnboardingPage({
           inviteUrl={buildBotInviteUrl('standard', guildId)}
           key={onboardingWizardStateKey(durableRequest)}
           readiness={dashboard.readiness}
+          reportChannelWarnings={reportChannelWarnings}
           roles={selectableRoles.map((role) => ({ id: role.id, name: role.name }))}
         />
       </InboxActionRequestPollingProvider>

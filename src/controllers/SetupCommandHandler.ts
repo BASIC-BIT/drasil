@@ -20,7 +20,6 @@ import {
   DEFAULT_VERIFICATION_CHANNEL_NAME,
   SetupProvisioningService,
 } from '../services/SetupProvisioningService';
-import { truncatePreview } from '../utils/textPreview';
 import { ReportInstructionsManager } from './ReportInstructionsManager';
 
 const DEFAULT_SETUP_FAILURE_DETAIL = 'Please check permissions and try again.';
@@ -149,10 +148,11 @@ export class SetupCommandHandler {
       }
 
       if (setupResult.status === 'candidate_validation_failed') {
-        await interaction.editReply({
-          content: `Setup not saved. Fix the errors below and rerun setup.\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
-          allowedMentions: { parse: [] },
-        });
+        await this.editReplyWithPages(interaction, [
+          'Setup not saved. Fix the errors below and rerun setup.',
+          '',
+          ...this.buildSetupDiagnosticsLines(setupResult.report),
+        ]);
         return;
       }
 
@@ -160,10 +160,11 @@ export class SetupCommandHandler {
         setupFailureDetail = setupResult.setupFailureDetail;
         const rollbackNote =
           setupFailureDetail !== DEFAULT_SETUP_FAILURE_DETAIL ? `\n\n${setupFailureDetail}` : '';
-        await interaction.editReply({
-          content: `Setup not saved. Fix the errors below and rerun setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
-          allowedMentions: { parse: [] },
-        });
+        await this.editReplyWithPages(interaction, [
+          `Setup not saved. Fix the errors below and rerun setup.${rollbackNote}`,
+          '',
+          ...this.buildSetupDiagnosticsLines(setupResult.report),
+        ]);
         return;
       }
 
@@ -192,13 +193,10 @@ export class SetupCommandHandler {
       ];
 
       if (setupResult.candidateReport.warningCount > 0) {
-        this.appendSetupDiagnosticsReport(responseLines, setupResult.candidateReport);
+        this.appendSetupDiagnosticsLines(responseLines, setupResult.candidateReport);
       }
 
-      await interaction.editReply({
-        content: truncatePreview(responseLines.join('\n'), 1900),
-        allowedMentions: { parse: [] },
-      });
+      await this.editReplyWithPages(interaction, responseLines);
     } catch (error) {
       console.error('Failed to complete setup verification command:', error);
       const errorResponse = {
@@ -344,10 +342,7 @@ export class SetupCommandHandler {
         reportInstructionsStatus
       );
 
-      await interaction.editReply({
-        content: truncatePreview(lines.join('\n'), 1900),
-        allowedMentions: { parse: [] },
-      });
+      await this.editReplyWithPages(interaction, lines);
     } catch (error) {
       console.error(`Failed to complete config setup for guild ${guild.id}:`, error);
       await interaction.editReply({
@@ -410,20 +405,22 @@ export class SetupCommandHandler {
   ): Promise<{ setupFailureDetail: string | null; error?: unknown }> {
     switch (setupResult.status) {
       case 'candidate_validation_failed':
-        await interaction.editReply({
-          content: `Setup not saved. Fix the errors below and rerun /config setup.\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
-          allowedMentions: { parse: [] },
-        });
+        await this.editReplyWithPages(interaction, [
+          'Setup not saved. Fix the errors below and rerun /config setup.',
+          '',
+          ...this.buildSetupDiagnosticsLines(setupResult.report),
+        ]);
         return { setupFailureDetail: null };
       case 'final_validation_failed': {
         const rollbackNote =
           setupResult.setupFailureDetail !== DEFAULT_SETUP_FAILURE_DETAIL
             ? `\n\n${setupResult.setupFailureDetail}`
             : '';
-        await interaction.editReply({
-          content: `Setup not saved. Fix the errors below and rerun /config setup.${rollbackNote}\n\n${this.formatSetupDiagnosticsReport(setupResult.report)}`,
-          allowedMentions: { parse: [] },
-        });
+        await this.editReplyWithPages(interaction, [
+          `Setup not saved. Fix the errors below and rerun /config setup.${rollbackNote}`,
+          '',
+          ...this.buildSetupDiagnosticsLines(setupResult.report),
+        ]);
         return { setupFailureDetail: setupResult.setupFailureDetail };
       }
       case 'verification_channel_failed':
@@ -487,7 +484,7 @@ export class SetupCommandHandler {
     }
 
     if (setupResult.candidateReport.warningCount > 0) {
-      this.appendSetupDiagnosticsReport(lines, setupResult.candidateReport);
+      this.appendSetupDiagnosticsLines(lines, setupResult.candidateReport);
     }
 
     return lines;
@@ -509,10 +506,7 @@ export class SetupCommandHandler {
 
     try {
       const report = await this.setupDiagnosticsService.validateGuildSetup(guild);
-      await interaction.editReply({
-        content: this.formatSetupDiagnosticsReport(report),
-        allowedMentions: { parse: [] },
-      });
+      await this.editReplyWithPages(interaction, this.buildSetupDiagnosticsLines(report));
     } catch (error) {
       console.error(`Failed to validate setup for guild ${guild.id}:`, error);
       await interaction.editReply({
@@ -521,7 +515,7 @@ export class SetupCommandHandler {
     }
   }
 
-  private formatSetupDiagnosticsReport(report: SetupDiagnosticReport, maxLength = 1900): string {
+  private buildSetupDiagnosticsLines(report: SetupDiagnosticReport): string[] {
     const status =
       report.errorCount > 0
         ? `Setup validation failed with ${report.errorCount} error(s) and ${report.warningCount} warning(s).`
@@ -530,7 +524,7 @@ export class SetupCommandHandler {
           : 'Setup validation passed with no issues.';
 
     if (report.issues.length === 0) {
-      return `${status}\nGuild ID: \`${report.guildId}\``;
+      return [status, `Guild ID: \`${report.guildId}\``];
     }
 
     const errors = report.issues.filter((issue) => issue.severity === 'error');
@@ -553,10 +547,7 @@ export class SetupCommandHandler {
             ]
           : []),
     ];
-    return truncatePreview(
-      [status, `Guild ID: \`${report.guildId}\``, ...issueLines].join('\n'),
-      maxLength
-    );
+    return [status, `Guild ID: \`${report.guildId}\``, ...issueLines];
   }
 
   private formatSetupRemediationLines(issues: readonly SetupDiagnosticIssue[]): readonly string[] {
@@ -609,14 +600,54 @@ export class SetupCommandHandler {
     return expectedCodes.some((code) => codes.has(code));
   }
 
-  private appendSetupDiagnosticsReport(
-    lines: string[],
-    report: SetupDiagnosticReport,
-    maxLength = 1900
-  ): void {
-    const prefix = lines.join('\n');
-    const separatorLength = prefix.length > 0 ? 2 : 0;
-    const budget = Math.max(200, maxLength - prefix.length - separatorLength);
-    lines.push('', this.formatSetupDiagnosticsReport(report, budget));
+  private appendSetupDiagnosticsLines(lines: string[], report: SetupDiagnosticReport): void {
+    lines.push('', ...this.buildSetupDiagnosticsLines(report));
+  }
+
+  private paginateLines(lines: readonly string[], maxLength = 1900): string[] {
+    const pages: string[] = [];
+    let current = '';
+
+    for (const line of lines) {
+      const segments =
+        line.length > maxLength
+          ? Array.from({ length: Math.ceil(line.length / maxLength) }, (_, index) =>
+              line.slice(index * maxLength, (index + 1) * maxLength)
+            )
+          : [line];
+
+      for (const segment of segments) {
+        const candidate = current.length > 0 ? `${current}\n${segment}` : segment;
+        if (candidate.length > maxLength && current.length > 0) {
+          pages.push(current);
+          current = segment;
+        } else {
+          current = candidate;
+        }
+      }
+    }
+
+    if (current.length > 0 || pages.length === 0) {
+      pages.push(current);
+    }
+    return pages;
+  }
+
+  private async editReplyWithPages(
+    interaction: ChatInputCommandInteraction,
+    lines: readonly string[]
+  ): Promise<void> {
+    const [firstPage, ...additionalPages] = this.paginateLines(lines);
+    await interaction.editReply({
+      content: firstPage,
+      allowedMentions: { parse: [] },
+    });
+    for (const content of additionalPages) {
+      await interaction.followUp({
+        content,
+        allowedMentions: { parse: [] },
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   }
 }

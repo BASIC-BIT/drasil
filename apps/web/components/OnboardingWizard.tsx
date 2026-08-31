@@ -37,6 +37,7 @@ export function OnboardingWizard({
   initialSubmissionId,
   inviteUrl,
   readiness,
+  reportChannelWarnings,
   roles,
 }: {
   readonly action: InboxStateAction;
@@ -53,6 +54,7 @@ export function OnboardingWizard({
   readonly initialSubmissionId: string;
   readonly inviteUrl: string | null;
   readonly readiness: SetupReadinessStatus;
+  readonly reportChannelWarnings: Readonly<Record<string, readonly AdminChannelWarning[]>>;
   readonly roles: readonly Option[];
 }) {
   const [step, setStep] = useState(
@@ -64,10 +66,19 @@ export function OnboardingWizard({
   const blockingIssues = checklist.filter((item) => item.status === 'error');
   const warningIssues = [
     ...checklist
-      .filter((item) => item.status === 'warning' && !item.key.startsWith('admin-channel-privacy-'))
+      .filter(
+        (item) =>
+          item.status === 'warning' &&
+          item.key !== 'report-channel' &&
+          !item.key.startsWith('admin-channel-privacy-')
+      )
       .map((item) => ({ key: item.key, detail: item.detail })),
     ...(adminChannelWarnings[values.adminChannelId] ?? []).map((warning) => ({
       key: `selected-admin-channel-privacy-${warning.key}`,
+      detail: warning.detail,
+    })),
+    ...(reportChannelWarnings[values.reportInstructionsChannelId] ?? []).map((warning) => ({
+      key: `selected-report-channel-${warning.key}`,
       detail: warning.detail,
     })),
   ];
@@ -76,7 +87,7 @@ export function OnboardingWizard({
     key: K,
     value: OnboardingWizardValues[K]
   ) => {
-    if (key === 'adminChannelId') {
+    if (key === 'adminChannelId' || key === 'reportInstructionsChannelId') {
       setShowWarnings(true);
     }
     setValues((current) => ({ ...current, [key]: value }));
