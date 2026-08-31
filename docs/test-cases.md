@@ -15,6 +15,9 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
   restores existing verification-channel overwrites; unrelated overwrites survive successful sync.
 - Incomplete setup safety: suspicious message/join detection is recorded but does not create a case,
   apply roles, notify, or kick until live readiness passes.
+- Admin-channel privacy warning: a working channel that grants View Channel to `@everyone`, a
+  specific member, or a role without moderator permissions remains ready. `/config validate` names
+  every affected audience, and automatic notify or restrict behavior remains active.
 
 - Suspicious message: user gets the case role, verification thread auto-created, admin notification sent.
 - Additional suspicious message while pending: no new verification event; notification updated.

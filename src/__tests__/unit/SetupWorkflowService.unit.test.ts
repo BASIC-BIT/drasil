@@ -9,6 +9,46 @@ describe('SetupWorkflowService (unit)', () => {
     warningCount: 0,
   };
 
+  it('saves setup when diagnostics contain only privacy warnings', async () => {
+    const warningReport = {
+      guildId: 'guild-1',
+      checkedAt: new Date('2026-08-24T12:00:00.000Z'),
+      issues: [
+        {
+          severity: 'warning' as const,
+          code: 'admin-channel-non-moderator-view',
+          message:
+            'Privacy: Admin notification channel <#admin-channel-1> grants View Channel to <@&ordinary-role>.',
+        },
+      ],
+      errorCount: 0,
+      warningCount: 1,
+    };
+    const configService = {
+      updateSetupConfiguration: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const service = new SetupWorkflowService(
+      configService,
+      {} as any,
+      { captureGuildEvent: jest.fn() } as any,
+      { validateSetupCandidate: jest.fn().mockResolvedValue(warningReport) } as any
+    );
+
+    await expect(
+      service.completeSetup({
+        guild: { id: 'guild-1' } as any,
+        caseRole: { id: 'role-1' } as any,
+        adminChannelId: 'admin-channel-1',
+        initialVerificationChannelId: 'verification-channel-1',
+        candidateVerificationChannelId: 'verification-channel-1',
+        reportInstructionsChannelId: null,
+        candidateReport: warningReport,
+      })
+    ).resolves.toMatchObject({ status: 'completed', candidateReport: warningReport });
+
+    expect(configService.updateSetupConfiguration).toHaveBeenCalled();
+  });
+
   it('preserves detection settings when a repair omits protection mode', async () => {
     const configService = {
       updateSetupConfiguration: jest.fn().mockResolvedValue(undefined),

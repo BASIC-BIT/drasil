@@ -85,6 +85,12 @@ test('guided onboarding shows readiness and keeps apply actions administrator-on
   await page.goto('/admin/guild/guild-1/onboarding');
   await expect(page.getByRole('heading', { name: /review and finish/i })).toBeVisible();
   await expect(page.getByText('Drasil passed all core setup checks.')).toBeVisible();
+  await expect(page.getByText('Review these warnings')).toBeVisible();
+  await expect(
+    page.getByText(/#drasil-admin grants View Channel directly to member member-1/)
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(page.getByText('Review these warnings')).toHaveCount(0);
 
   await page.goto('/admin/guild/guild-2/onboarding');
   await expect(page.getByRole('heading', { name: /set up drasil for quiet guild/i })).toBeVisible();
@@ -94,10 +100,17 @@ test('guided onboarding shows readiness and keeps apply actions administrator-on
   await page.getByLabel('New role name').fill('');
   await expect(page.getByRole('button', { name: 'Continue' })).toBeDisabled();
   await page.getByLabel('New role name').fill('Drasil Case');
-  for (let step = 0; step < 4; step += 1) {
-    await page.getByRole('button', { name: 'Continue' }).click();
-  }
+  await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByText(/^Permission sync: @everyone loses channel access/)).toBeVisible();
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.getByLabel('Report instructions channel').selectOption('report-channel-1');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByText('Review these warnings')).toBeVisible();
+  await expect(
+    page.getByText(/#drasil-admin grants View Channel directly to member member-1/)
+  ).toBeVisible();
+  await expect(page.getByText('#report-scam is not visible to @everyone.')).toBeVisible();
   await expect(page.getByText('Administrator required')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Apply and verify setup' })).toHaveCount(0);
 });

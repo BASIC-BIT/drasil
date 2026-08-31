@@ -308,11 +308,12 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
     }
     if (channel.permissionsFor(guild.roles.everyone).has(PermissionFlagsBits.ViewChannel)) {
       issues.push({
-        severity: 'error',
+        severity: 'warning',
         code: 'admin-channel-public-view',
-        message: 'The admin notification channel must not be visible to @everyone.',
+        message:
+          `Privacy: Admin notification channel <#${channel.id}> grants View Channel to @everyone. ` +
+          'Every server member may be able to see moderation alerts and evidence. Review this channel or its category permissions if that access is not intentional.',
       });
-      return;
     }
 
     const botRoleIds = new Set(
@@ -332,12 +333,12 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
       if (overwrite.type === 1) {
         if (overwrite.id !== botMember.id) {
           issues.push({
-            severity: 'error',
+            severity: 'warning',
             code: 'admin-channel-non-moderator-view',
             message:
-              'The admin notification channel grants View Channel to a specific member. Use moderator-capable roles instead.',
+              `Privacy: Admin notification channel <#${channel.id}> grants View Channel directly to <@${overwrite.id}>. ` +
+              'That member may be able to see moderation alerts and evidence. Review this channel or its category permissions if that access is not intentional.',
           });
-          return;
         }
         continue;
       }
@@ -353,12 +354,12 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         !ADMIN_CHANNEL_STAFF_PERMISSIONS.some((permission) => role.permissions.has(permission))
       ) {
         issues.push({
-          severity: 'error',
+          severity: 'warning',
           code: 'admin-channel-non-moderator-view',
           message:
-            'The admin notification channel grants View Channel to a role without moderator permissions.',
+            `Privacy: Admin notification channel <#${channel.id}> grants View Channel to <@&${overwrite.id}>, which has no recognized moderator permissions. ` +
+            'Members with that role may be able to see moderation alerts and evidence. Review this channel or its category permissions if that access is not intentional.',
         });
-        return;
       }
     }
   }

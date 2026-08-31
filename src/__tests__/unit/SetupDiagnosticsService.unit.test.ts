@@ -258,7 +258,7 @@ describe('SetupDiagnosticsService (unit)', () => {
     expect(report.errorCount).toBe(1);
   });
 
-  it('rejects a publicly visible admin notification channel candidate', async () => {
+  it('warns specifically when an admin notification channel candidate is public', async () => {
     const { guild, channel, botMember } = buildConfiguredGuild();
     channel.permissionsFor.mockImplementation((memberOrRole: unknown) => ({
       has: jest.fn(
@@ -278,13 +278,15 @@ describe('SetupDiagnosticsService (unit)', () => {
     });
 
     expect(report.issues).toContainEqual({
-      severity: 'error',
+      severity: 'warning',
       code: 'admin-channel-public-view',
-      message: 'The admin notification channel must not be visible to @everyone.',
+      message:
+        'Privacy: Admin notification channel <#channel-1> grants View Channel to @everyone. Every server member may be able to see moderation alerts and evidence. Review this channel or its category permissions if that access is not intentional.',
     });
+    expect(report.errorCount).toBe(0);
   });
 
-  it('rejects an admin channel visible to a non-moderator role', async () => {
+  it('warns specifically when an admin channel is visible to a non-moderator role', async () => {
     const { guild, channel } = buildConfiguredGuild();
     channel.permissionOverwrites.cache = new Map([
       [
@@ -319,14 +321,15 @@ describe('SetupDiagnosticsService (unit)', () => {
     });
 
     expect(report.issues).toContainEqual({
-      severity: 'error',
+      severity: 'warning',
       code: 'admin-channel-non-moderator-view',
       message:
-        'The admin notification channel grants View Channel to a role without moderator permissions.',
+        'Privacy: Admin notification channel <#channel-1> grants View Channel to <@&ordinary-role>, which has no recognized moderator permissions. Members with that role may be able to see moderation alerts and evidence. Review this channel or its category permissions if that access is not intentional.',
     });
+    expect(report.errorCount).toBe(0);
   });
 
-  it('rejects a non-moderator role shared with the bot from admin channel visibility', async () => {
+  it('warns for a non-moderator role shared with the bot', async () => {
     const { guild, channel } = buildConfiguredGuild();
     channel.permissionOverwrites.cache = new Map([
       [
@@ -355,11 +358,76 @@ describe('SetupDiagnosticsService (unit)', () => {
     });
 
     expect(report.issues).toContainEqual({
-      severity: 'error',
+      severity: 'warning',
       code: 'admin-channel-non-moderator-view',
       message:
-        'The admin notification channel grants View Channel to a role without moderator permissions.',
+        'Privacy: Admin notification channel <#channel-1> grants View Channel to <@&bot-role>, which has no recognized moderator permissions. Members with that role may be able to see moderation alerts and evidence. Review this channel or its category permissions if that access is not intentional.',
     });
+    expect(report.errorCount).toBe(0);
+  });
+
+  it('warns specifically for direct member access and reports every broad visibility grant', async () => {
+    const { guild, channel } = buildConfiguredGuild();
+    channel.permissionOverwrites.cache = new Map([
+      [
+        'member-1',
+        {
+          id: 'member-1',
+          type: 1,
+          allow: { bitfield: PermissionFlagsBits.ViewChannel },
+        },
+      ],
+      [
+        'ordinary-role-1',
+        {
+          id: 'ordinary-role-1',
+          type: 0,
+          allow: { bitfield: PermissionFlagsBits.ViewChannel },
+        },
+      ],
+      [
+        'ordinary-role-2',
+        {
+          id: 'ordinary-role-2',
+          type: 0,
+          allow: { bitfield: PermissionFlagsBits.ViewChannel },
+        },
+      ],
+    ]);
+    guild.roles.fetch.mockImplementation((roleId: string) =>
+      Promise.resolve({ id: roleId, managed: false, permissions: { has: jest.fn(() => false) } })
+    );
+    const service = new SetupDiagnosticsService({ getServerConfig: jest.fn() } as any);
+
+    const report = await service.validateSetupCandidate(guild, {
+      caseRoleId: null,
+      willCreateCaseRole: true,
+      adminChannelId: 'admin-channel-1',
+      verificationChannelId: null,
+      willCreateVerificationChannel: true,
+      reportInstructionsChannelId: null,
+    });
+
+    expect(
+      report.issues.filter((issue) => issue.code === 'admin-channel-non-moderator-view')
+    ).toEqual([
+      expect.objectContaining({
+        severity: 'warning',
+        message: expect.stringContaining(
+          'Admin notification channel <#channel-1> grants View Channel directly to <@member-1>'
+        ),
+      }),
+      expect.objectContaining({
+        severity: 'warning',
+        message: expect.stringContaining('View Channel to <@&ordinary-role-1>'),
+      }),
+      expect.objectContaining({
+        severity: 'warning',
+        message: expect.stringContaining('View Channel to <@&ordinary-role-2>'),
+      }),
+    ]);
+    expect(report.errorCount).toBe(0);
+    expect(report.warningCount).toBe(3);
   });
 
   it('allows an admin channel overwrite for the bot managed role', async () => {

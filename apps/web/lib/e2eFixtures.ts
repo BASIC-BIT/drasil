@@ -108,7 +108,19 @@ export function fixtureGuildResources(): DiscordGuildResources {
     ],
     channels: [
       { id: 'public-category-1', name: 'public spaces', type: 4 },
-      { id: 'admin-channel-1', name: 'drasil-admin', type: 0 },
+      {
+        id: 'admin-channel-1',
+        name: 'drasil-admin',
+        type: 0,
+        permission_overwrites: [
+          {
+            id: 'member-1',
+            type: 1,
+            allow: String(DISCORD_PERMISSIONS.ViewChannel),
+            deny: '0',
+          },
+        ],
+      },
       { id: 'verification-channel-1', name: 'verification', type: 0 },
       { id: 'queue-channel-1', name: 'moderation-queue', type: 0 },
       { id: 'report-channel-1', name: 'report-scam', type: 0 },

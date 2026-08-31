@@ -535,13 +535,20 @@ describe('CommandHandler setup commands (unit)', () => {
     );
   });
 
-  it('handles /config setup with an existing case role and channels', async () => {
+  it('handles /config setup with existing resources and paginates every warning', async () => {
+    const privacyWarnings = Array.from({ length: 24 }, (_, index) => ({
+      severity: 'warning' as const,
+      code: 'admin-channel-non-moderator-view',
+      message:
+        `Privacy: Admin notification channel <#admin-channel-1> grants View Channel to ` +
+        `<@&ordinary-role-${index}>. Members of that role may be able to see moderation alerts and evidence.`,
+    }));
     const validateSetupCandidate = jest.fn().mockResolvedValue({
       guildId: 'guild-1',
       checkedAt: new Date('2026-01-01T00:00:00.000Z'),
-      issues: [],
+      issues: privacyWarnings,
       errorCount: 0,
-      warningCount: 0,
+      warningCount: privacyWarnings.length,
     });
     const updateServerConfig = jest.fn().mockResolvedValue({});
     const setupVerificationChannel = jest.fn().mockResolvedValue('verification-channel-1');
@@ -591,6 +598,7 @@ describe('CommandHandler setup commands (unit)', () => {
       reply: jest.fn().mockResolvedValue(undefined),
       deferReply: jest.fn().mockResolvedValue(undefined),
       editReply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -627,6 +635,16 @@ describe('CommandHandler setup commands (unit)', () => {
       content: expect.stringContaining('Setup complete.'),
       allowedMentions: { parse: [] },
     });
+    expect(interaction.followUp).toHaveBeenCalled();
+    const responsePages = [
+      interaction.editReply.mock.calls[0][0],
+      ...interaction.followUp.mock.calls.map(([payload]: [Record<string, unknown>]) => payload),
+    ];
+    expect(responsePages.every((payload) => String(payload.content).length <= 1900)).toBe(true);
+    const combinedContent = responsePages.map((payload) => payload.content).join('\n');
+    for (let index = 0; index < privacyWarnings.length; index += 1) {
+      expect(combinedContent).toContain(`<@&ordinary-role-${index}>`);
+    }
   });
 
   it('validates /config setup against a configured verification channel when omitted', async () => {
@@ -1567,5 +1585,111 @@ describe('CommandHandler setup commands (unit)', () => {
     expect(interaction.editReply.mock.calls[0][0].content).toContain(
       'Run `/config setup admin-channel:<moderator-channel>` to repair core setup.'
     );
+  });
+
+  it('paginates /config validate without dropping warnings', async () => {
+    const privacyWarnings = Array.from({ length: 24 }, (_, index) => ({
+      severity: 'warning' as const,
+      code: 'admin-channel-non-moderator-view',
+      message:
+        `Privacy: Admin notification channel <#admin-channel-1> grants View Channel to ` +
+        `<@&ordinary-role-${index}>. Members of that role may be able to see moderation alerts and evidence.`,
+    }));
+    const validateGuildSetup = jest.fn().mockResolvedValue({
+      guildId: 'guild-1',
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      issues: privacyWarnings,
+      errorCount: 0,
+      warningCount: privacyWarnings.length,
+    });
+    const { handler } = buildHandler({ validateGuildSetup });
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: { has: jest.fn().mockReturnValue(true) },
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue(null),
+        getSubcommand: jest.fn().mockReturnValue('validate'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      followUp: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    expect(interaction.followUp).toHaveBeenCalled();
+    const responsePages = [
+      interaction.editReply.mock.calls[0][0],
+      ...interaction.followUp.mock.calls.map(([payload]: [Record<string, unknown>]) => payload),
+    ];
+    expect(responsePages.every((payload) => String(payload.content).length <= 1900)).toBe(true);
+    expect(responsePages.slice(1)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ flags: MessageFlags.Ephemeral })])
+    );
+    const combinedContent = responsePages.map((payload) => payload.content).join('\n');
+    for (let index = 0; index < privacyWarnings.length; index += 1) {
+      expect(combinedContent).toContain(`<@&ordinary-role-${index}>`);
+    }
+  });
+
+  it('passes /config validate with specific privacy warnings and no setup instructions', async () => {
+    const validateGuildSetup = jest.fn().mockResolvedValue({
+      guildId: 'guild-1',
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      issues: [
+        {
+          severity: 'warning',
+          code: 'admin-channel-non-moderator-view',
+          message:
+            'Privacy: Admin notification channel <#admin-channel-1> grants View Channel to <@&ordinary-role>. Members of that role may be able to see moderation alerts and evidence.',
+        },
+      ],
+      errorCount: 0,
+      warningCount: 1,
+    });
+    const { handler } = buildHandler({ validateGuildSetup });
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: { has: jest.fn().mockReturnValue(true) },
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue(null),
+        getSubcommand: jest.fn().mockReturnValue('validate'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    const content = interaction.editReply.mock.calls[0][0].content;
+    expect(content).toContain('Setup validation passed with 1 warning(s).');
+    expect(content).toContain('Warnings:');
+    expect(content).toContain(
+      '[WARNING] Privacy: Admin notification channel <#admin-channel-1> grants View Channel to <@&ordinary-role>.'
+    );
+    expect(content).not.toContain('Setup validation failed');
+    expect(content).not.toContain('Setup incomplete');
+    expect(content).not.toContain('Next step:');
+    expect(content).not.toContain('rerun `/config validate`');
   });
 });

@@ -62,7 +62,12 @@ interface CoreChannelChecklistArgs extends Omit<ChannelPermissionCheckArgs, 'cha
   readonly missingDetail: string;
   readonly successDetail: string;
   readonly permissionErrorDetail: string;
-  readonly requirePrivate?: boolean;
+  readonly warnOnBroadVisibility?: boolean;
+}
+
+export interface AdminChannelVisibilityWarning {
+  readonly key: string;
+  readonly detail: string;
 }
 
 interface BuildChecklistArgs {
@@ -95,6 +100,11 @@ const ADMIN_CHANNEL_STAFF_PERMISSIONS = [
   DISCORD_PERMISSIONS.ModerateMembers,
   DISCORD_PERMISSIONS.KickMembers,
   DISCORD_PERMISSIONS.BanMembers,
+] as const;
+const ADMIN_CHANNEL_REQUIRED_PERMISSIONS = [
+  DISCORD_PERMISSIONS.ViewChannel,
+  DISCORD_PERMISSIONS.SendMessages,
+  DISCORD_PERMISSIONS.EmbedLinks,
 ] as const;
 
 export function filterAssignableCaseRoles(
@@ -138,18 +148,8 @@ function hasUnsafeCaseRoleChannelAllows(
   );
 }
 
-export function filterPrivateAdminChannels(
-  channels: readonly DiscordChannel[],
-  roles: readonly DiscordRole[],
-  guildId: string,
-  botRoleIds: readonly string[] = [],
-  botUserId = ''
-): DiscordChannel[] {
-  return channels.filter(
-    (channel) =>
-      channel.type === GUILD_TEXT_CHANNEL_TYPE &&
-      !hasUnsafeAdminChannelVisibility(channel, roles, guildId, botRoleIds, botUserId)
-  );
+export function filterAdminChannels(channels: readonly DiscordChannel[]): DiscordChannel[] {
+  return channels.filter((channel) => channel.type === GUILD_TEXT_CHANNEL_TYPE);
 }
 
 const item = (
@@ -213,39 +213,95 @@ function isChannelVisibleToEveryone(
   return hasPermission(channelPermissions, DISCORD_PERMISSIONS.ViewChannel);
 }
 
-function hasUnsafeAdminChannelVisibility(
+export function getAdminChannelVisibilityWarnings(
   channel: DiscordChannel,
   roles: readonly DiscordRole[],
   guildId: string,
   botRoleIds: readonly string[],
   botUserId: string
-): boolean {
+): AdminChannelVisibilityWarning[] {
+  const warnings: AdminChannelVisibilityWarning[] = [];
   if (isChannelVisibleToEveryone(channel, roles, guildId)) {
-    return true;
+    warnings.push({
+      key: 'everyone',
+      detail:
+        `${formatChannelName(channel)} grants View Channel to @everyone. ` +
+        'Every server member may be able to see moderation alerts and evidence. Review the channel or its category permissions if that access is not intentional.',
+    });
   }
 
   const botRoleIdSet = new Set(botRoleIds);
-  return (channel.permission_overwrites ?? []).some((overwrite) => {
+  for (const overwrite of channel.permission_overwrites ?? []) {
     if ((parsePermissions(overwrite.allow) & DISCORD_PERMISSIONS.ViewChannel) === 0n) {
-      return false;
+      continue;
     }
     if (overwrite.type === 1) {
-      return overwrite.id !== botUserId;
+      if (overwrite.id !== botUserId) {
+        warnings.push({
+          key: `member-${overwrite.id}`,
+          detail:
+            `${formatChannelName(channel)} grants View Channel directly to member ${overwrite.id}. ` +
+            'That member may be able to see moderation alerts and evidence. Review the channel or its category permissions if that access is not intentional.',
+        });
+      }
+      continue;
     }
     if (overwrite.id === guildId) {
-      return false;
+      continue;
     }
     const role = roles.find((candidate) => candidate.id === overwrite.id);
     if (botRoleIdSet.has(overwrite.id) && role?.managed) {
-      return false;
+      continue;
     }
-    return (
+    if (
       !role ||
       !ADMIN_CHANNEL_STAFF_PERMISSIONS.some((permission) =>
         hasPermission(parsePermissions(role.permissions), permission)
       )
-    );
-  });
+    ) {
+      const roleLabel = role ? formatRoleName(role) : `role ${overwrite.id}`;
+      warnings.push({
+        key: `role-${overwrite.id}`,
+        detail:
+          `${formatChannelName(channel)} grants View Channel to ${roleLabel}, which has no recognized moderator permissions. ` +
+          'Members with that role may be able to see moderation alerts and evidence. Review the channel or its category permissions if that access is not intentional.',
+      });
+    }
+  }
+
+  return warnings;
+}
+
+export function getReportChannelWarnings(
+  channel: DiscordChannel,
+  roles: readonly DiscordRole[],
+  guildId: string,
+  botRoleIds: readonly string[],
+  botUserId: string
+): AdminChannelVisibilityWarning[] {
+  const warnings: AdminChannelVisibilityWarning[] = [];
+  if (
+    !hasRequiredChannelPermissions({
+      guildId,
+      botUserId,
+      botRoleIds,
+      roles,
+      channel,
+      required: ADMIN_CHANNEL_REQUIRED_PERMISSIONS,
+    })
+  ) {
+    warnings.push({
+      key: 'missing-bot-permissions',
+      detail: `${formatChannelName(channel)} is missing required bot permissions.`,
+    });
+  }
+  if (!isChannelVisibleToEveryone(channel, roles, guildId)) {
+    warnings.push({
+      key: 'not-public',
+      detail: `${formatChannelName(channel)} is not visible to @everyone.`,
+    });
+  }
+  return warnings;
 }
 
 function addCoreChannelChecklistItem(args: CoreChannelChecklistArgs) {
@@ -260,27 +316,6 @@ function addCoreChannelChecklistItem(args: CoreChannelChecklistArgs) {
     );
     return;
   }
-  if (
-    args.requirePrivate &&
-    hasUnsafeAdminChannelVisibility(
-      channel,
-      args.roles,
-      args.guildId,
-      args.botRoleIds,
-      args.botUserId
-    )
-  ) {
-    checklist.push(
-      item(
-        key,
-        label,
-        'error',
-        `${formatChannelName(channel)} is visible beyond moderator-capable roles. Choose a private moderator channel.`
-      )
-    );
-    return;
-  }
-
   checklist.push(
     hasRequiredChannelPermissions({
       guildId: args.guildId,
@@ -293,6 +328,20 @@ function addCoreChannelChecklistItem(args: CoreChannelChecklistArgs) {
       ? item(key, label, 'ok', `${formatChannelName(channel)} ${args.successDetail}`)
       : item(key, label, 'error', `${formatChannelName(channel)} ${args.permissionErrorDetail}`)
   );
+
+  if (args.warnOnBroadVisibility) {
+    for (const warning of getAdminChannelVisibilityWarnings(
+      channel,
+      args.roles,
+      args.guildId,
+      args.botRoleIds,
+      args.botUserId
+    )) {
+      checklist.push(
+        item(`${key}-privacy-${warning.key}`, `${label} privacy`, 'warning', warning.detail)
+      );
+    }
+  }
 }
 
 function addGuildPermissionChecklistItems(args: GuildPermissionChecklistArgs) {
@@ -473,13 +522,8 @@ function buildChecklist(args: BuildChecklistArgs) {
     server?.settings.observed_detection_notification_channel_id
   );
 
-  const adminRequired = [
-    DISCORD_PERMISSIONS.ViewChannel,
-    DISCORD_PERMISSIONS.SendMessages,
-    DISCORD_PERMISSIONS.EmbedLinks,
-  ];
   const verificationRequired = [
-    ...adminRequired,
+    ...ADMIN_CHANNEL_REQUIRED_PERMISSIONS,
     DISCORD_PERMISSIONS.ReadMessageHistory,
     DISCORD_PERMISSIONS.CreatePrivateThreads,
     DISCORD_PERMISSIONS.SendMessagesInThreads,
@@ -492,13 +536,13 @@ function buildChecklist(args: BuildChecklistArgs) {
     botRoleIds,
     roles: resources.roles,
     channel: adminChannel,
-    required: adminRequired,
+    required: ADMIN_CHANNEL_REQUIRED_PERMISSIONS,
     key: 'admin-channel',
     label: 'Admin alert channel',
     missingDetail: 'Choose a channel for moderator notifications.',
     successDetail: 'is reachable.',
     permissionErrorDetail: 'is missing required bot permissions.',
-    requirePrivate: true,
+    warnOnBroadVisibility: true,
   });
 
   addCoreChannelChecklistItem({
@@ -524,7 +568,7 @@ function buildChecklist(args: BuildChecklistArgs) {
         botRoleIds,
         roles: resources.roles,
         channel: reportChannel,
-        required: adminRequired,
+        required: ADMIN_CHANNEL_REQUIRED_PERMISSIONS,
       })
       ? isChannelVisibleToEveryone(reportChannel, resources.roles, guild.id)
         ? item(

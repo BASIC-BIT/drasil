@@ -11,8 +11,10 @@ import { createModerationActionRequestDataAdapter } from '@/lib/moderationAction
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import {
   createSetupDashboardService,
+  filterAdminChannels,
   filterAssignableCaseRoles,
-  filterPrivateAdminChannels,
+  getAdminChannelVisibilityWarnings,
+  getReportChannelWarnings,
 } from '@/lib/setupDashboardService';
 import {
   onboardingWizardStateKey,
@@ -63,13 +65,28 @@ export default async function OnboardingPage({
   );
   const server = dashboard.server;
   const selectableChannels = channels.filter((channel) => channel.type === 0);
-  const selectableAdminChannels = filterPrivateAdminChannels(
-    channels,
-    roles,
-    guildId,
-    botRoleIds,
-    botUserId
+  const selectableAdminChannels = filterAdminChannels(channels);
+  const adminChannelWarnings = Object.fromEntries(
+    selectableAdminChannels.map((channel) => [
+      channel.id,
+      getAdminChannelVisibilityWarnings(channel, roles, guildId, botRoleIds, botUserId),
+    ])
   );
+  const reportChannelWarnings = {
+    __none__: [
+      {
+        key: 'not-selected',
+        detail:
+          'No report instructions channel is selected. Drasil will not post public reporting instructions.',
+      },
+    ],
+    ...Object.fromEntries(
+      selectableChannels.map((channel) => [
+        channel.id,
+        getReportChannelWarnings(channel, roles, guildId, botRoleIds, botUserId),
+      ])
+    ),
+  };
   const selectableRoles = filterAssignableCaseRoles(
     roles,
     botRoleIds,
@@ -108,6 +125,7 @@ export default async function OnboardingPage({
             name: channel.name,
             type: channel.type,
           }))}
+          adminChannelWarnings={adminChannelWarnings}
           canApplySetup={canApplySetup}
           canPreserveProtectionModes={initialState.canPreserveProtectionModes}
           channels={selectableChannels.map((channel) => ({
@@ -124,6 +142,7 @@ export default async function OnboardingPage({
           inviteUrl={buildBotInviteUrl('standard', guildId)}
           key={onboardingWizardStateKey(durableRequest)}
           readiness={dashboard.readiness}
+          reportChannelWarnings={reportChannelWarnings}
           roles={selectableRoles.map((role) => ({ id: role.id, name: role.name }))}
         />
       </InboxActionRequestPollingProvider>

@@ -13,6 +13,11 @@ interface Option {
   readonly type?: number;
 }
 
+interface AdminChannelWarning {
+  readonly key: string;
+  readonly detail: string;
+}
+
 const STEPS = ['Welcome', 'Alerts', 'Case role', 'Verification', 'Reports', 'Protection', 'Review'];
 const VERIFICATION_PERMISSION_PREVIEW =
   'Permission sync: @everyone loses channel access; the case role can view and reply in case threads but cannot post or create threads; Drasil can manage the channel and threads; roles with Manage Channels can view and post. Existing unrelated overwrites stay unchanged.';
@@ -20,6 +25,7 @@ const VERIFICATION_PERMISSION_PREVIEW =
 export function OnboardingWizard({
   action,
   adminChannels,
+  adminChannelWarnings,
   canApplySetup,
   canPreserveProtectionModes,
   channels,
@@ -31,10 +37,12 @@ export function OnboardingWizard({
   initialSubmissionId,
   inviteUrl,
   readiness,
+  reportChannelWarnings,
   roles,
 }: {
   readonly action: InboxStateAction;
   readonly adminChannels: readonly Option[];
+  readonly adminChannelWarnings: Readonly<Record<string, readonly AdminChannelWarning[]>>;
   readonly canApplySetup: boolean;
   readonly canPreserveProtectionModes: boolean;
   readonly channels: readonly Option[];
@@ -46,6 +54,7 @@ export function OnboardingWizard({
   readonly initialSubmissionId: string;
   readonly inviteUrl: string | null;
   readonly readiness: SetupReadinessStatus;
+  readonly reportChannelWarnings: Readonly<Record<string, readonly AdminChannelWarning[]>>;
   readonly roles: readonly Option[];
 }) {
   const [step, setStep] = useState(
@@ -53,12 +62,34 @@ export function OnboardingWizard({
   );
   const [values, setValues] = useState(initialValues);
   const [submissionId] = useState(initialSubmissionId);
+  const [showWarnings, setShowWarnings] = useState(true);
   const blockingIssues = checklist.filter((item) => item.status === 'error');
+  const warningIssues = [
+    ...checklist
+      .filter(
+        (item) =>
+          item.status === 'warning' &&
+          item.key !== 'report-channel' &&
+          !item.key.startsWith('admin-channel-privacy-')
+      )
+      .map((item) => ({ key: item.key, detail: item.detail })),
+    ...(adminChannelWarnings[values.adminChannelId] ?? []).map((warning) => ({
+      key: `selected-admin-channel-privacy-${warning.key}`,
+      detail: warning.detail,
+    })),
+    ...(reportChannelWarnings[values.reportInstructionsChannelId] ?? []).map((warning) => ({
+      key: `selected-report-channel-${warning.key}`,
+      detail: warning.detail,
+    })),
+  ];
   const textChannels = channels.filter((channel) => channel.type === 0);
   const update = <K extends keyof OnboardingWizardValues>(
     key: K,
     value: OnboardingWizardValues[K]
   ) => {
+    if (key === 'adminChannelId' || key === 'reportInstructionsChannelId') {
+      setShowWarnings(true);
+    }
     setValues((current) => ({ ...current, [key]: value }));
   };
 
@@ -290,6 +321,25 @@ export function OnboardingWizard({
               </dd>
             </div>
           </dl>
+          {showWarnings && warningIssues.length > 0 ? (
+            <div className="onboarding-issues">
+              <div className="onboarding-warning-heading">
+                <strong>Review these warnings</strong>
+                <button
+                  className="button secondary compact-button"
+                  onClick={() => setShowWarnings(false)}
+                  type="button"
+                >
+                  Dismiss
+                </button>
+              </div>
+              <ul>
+                {warningIssues.map((issue) => (
+                  <li key={issue.key}>{issue.detail}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {readiness === 'ready' ? (
             <div className="stack">
               <div className="action-receipt">

@@ -60,8 +60,9 @@ Core readiness requires:
 - **Manage Roles**, with the Drasil bot role above the selected case role;
 - an assignable, non-managed, permission-free case role with no unmanaged channel allow
   overwrites; the verification channel may contain only the permission bits Drasil synchronizes;
-- a private admin alert text channel where access is limited to moderator-capable roles and Drasil
-  can View Channel, Send Messages, and Embed Links;
+- an admin alert text channel where Drasil can View Channel, Send Messages, and Embed Links;
+  private, moderator-limited access is strongly recommended, and broader visibility is reported as
+  a privacy warning;
 - a verification text channel where Drasil can also Read Message History, Create Private Threads,
   and Send Messages in Threads;
 - **Manage Channels** when Drasil must create a verification channel or synchronize permissions on
@@ -86,6 +87,11 @@ explicit administrator moderation actions.
   run `/config setup`.
 - **Setup blocked:** core IDs exist, but a resource is missing, the role hierarchy is wrong, or a
   required permission is denied. The wizard and `/config validate` show the exact blocking checks.
+- **Admin-channel privacy warning:** setup remains ready when the admin channel grants View Channel
+  to `@everyone`, a specific member, or a role without recognized moderator permissions. Drasil
+  names the channel and audience so an administrator can review the channel or category override.
+  The warning does not disable automatic protection because it does not prevent Drasil from
+  operating.
 - **Multiple matching roles/channels:** choose the intended resource explicitly. Drasil will not
   guess between duplicate `Drasil Case` roles or `#verification` channels.
 - **Queued setup does not complete:** keep the page open to see the durable request status, then use
