@@ -5,8 +5,8 @@ import { DiscordApiError } from './discordApi';
 import { DISCORD_PERMISSIONS } from './discordPermissions';
 import { fetchDiscordGuilds, fetchGuildResources } from './discordApi';
 import {
+  filterAdminChannels,
   filterAssignableCaseRoles,
-  filterPrivateAdminChannels,
   SetupDashboardService,
 } from './setupDashboardService';
 import type { SetupDataAdapter } from './setupDataAdapter';
@@ -147,115 +147,19 @@ describe('SetupDashboardService', () => {
     ).toEqual([expect.objectContaining({ id: 'safe-role' })]);
   });
 
-  it('offers only private standard text channels for admin alerts', () => {
-    const roles = [
-      {
-        id: 'guild-1',
-        name: '@everyone',
-        permissions: DISCORD_PERMISSIONS.ViewChannel.toString(),
-        position: 0,
-        managed: false,
-      },
-      {
-        id: 'moderator-role',
-        name: 'Moderators',
-        permissions: DISCORD_PERMISSIONS.ManageMessages.toString(),
-        position: 1,
-        managed: false,
-      },
-      { id: 'ordinary-role', name: 'Members', permissions: '0', position: 1, managed: false },
-    ];
-    const privateDeny = DISCORD_PERMISSIONS.ViewChannel.toString();
-
+  it('offers every standard text channel for admin alerts', () => {
     expect(
-      filterPrivateAdminChannels(
-        [
-          { id: 'public', name: 'general', type: 0 },
-          {
-            id: 'private',
-            name: 'staff',
-            type: 0,
-            permission_overwrites: [{ id: 'guild-1', type: 0, allow: '0', deny: privateDeny }],
-          },
-          {
-            id: 'moderator-private',
-            name: 'moderators',
-            type: 0,
-            permission_overwrites: [
-              { id: 'guild-1', type: 0, allow: '0', deny: privateDeny },
-              {
-                id: 'moderator-role',
-                type: 0,
-                allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
-                deny: '0',
-              },
-            ],
-          },
-          {
-            id: 'ordinary-private',
-            name: 'ordinary',
-            type: 0,
-            permission_overwrites: [
-              { id: 'guild-1', type: 0, allow: '0', deny: privateDeny },
-              {
-                id: 'ordinary-role',
-                type: 0,
-                allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
-                deny: '0',
-              },
-            ],
-          },
-          { id: 'forum', name: 'staff-forum', type: 15 },
-        ],
-        roles,
-        'guild-1'
-      )
+      filterAdminChannels([
+        { id: 'public', name: 'general', type: 0 },
+        { id: 'private', name: 'staff', type: 0 },
+        { id: 'ordinary-private', name: 'ordinary', type: 0 },
+        { id: 'forum', name: 'staff-forum', type: 15 },
+      ])
     ).toEqual([
+      expect.objectContaining({ id: 'public' }),
       expect.objectContaining({ id: 'private' }),
-      expect.objectContaining({ id: 'moderator-private' }),
+      expect.objectContaining({ id: 'ordinary-private' }),
     ]);
-  });
-
-  it('does not trust an ordinary role merely because the bot also has it', () => {
-    const roles = [
-      {
-        id: 'guild-1',
-        name: '@everyone',
-        permissions: DISCORD_PERMISSIONS.ViewChannel.toString(),
-        position: 0,
-        managed: false,
-      },
-      { id: 'shared-role', name: 'Members', permissions: '0', position: 1, managed: false },
-      { id: 'managed-bot-role', name: 'Drasil', permissions: '0', position: 2, managed: true },
-    ];
-    const privateDeny = DISCORD_PERMISSIONS.ViewChannel.toString();
-    const privateChannel = (id: string, roleId: string) => ({
-      id,
-      name: id,
-      type: 0,
-      permission_overwrites: [
-        { id: 'guild-1', type: 0, allow: '0', deny: privateDeny },
-        {
-          id: roleId,
-          type: 0,
-          allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
-          deny: '0',
-        },
-      ],
-    });
-
-    expect(
-      filterPrivateAdminChannels(
-        [
-          privateChannel('shared-role-channel', 'shared-role'),
-          privateChannel('managed-bot-channel', 'managed-bot-role'),
-        ],
-        roles,
-        'guild-1',
-        ['shared-role', 'managed-bot-role'],
-        'bot-1'
-      )
-    ).toEqual([expect.objectContaining({ id: 'managed-bot-channel' })]);
   });
 
   it('marks inactive server records as needing setup', async () => {
@@ -267,6 +171,87 @@ describe('SetupDashboardService', () => {
     await expect(service.getDashboard('guild-1', 'access-token')).resolves.toMatchObject({
       dashboard: { readiness: 'needs_setup' },
     });
+  });
+
+  it('keeps configured setup ready while reporting every admin-channel privacy warning', async () => {
+    vi.mocked(fetchDiscordGuilds).mockResolvedValue([guild]);
+    vi.mocked(fetchGuildResources).mockResolvedValue({
+      ...resources,
+      roles: [
+        {
+          id: 'guild-1',
+          name: '@everyone',
+          permissions: DISCORD_PERMISSIONS.ViewChannel.toString(),
+          position: 0,
+          managed: false,
+        },
+        {
+          id: 'bot-role',
+          name: 'Drasil',
+          permissions: DISCORD_PERMISSIONS.Administrator.toString(),
+          position: 3,
+          managed: true,
+        },
+        { id: 'case-role-1', name: 'Case', permissions: '0', position: 1, managed: false },
+        { id: 'ordinary-role', name: 'Members', permissions: '0', position: 1, managed: false },
+      ],
+      channels: [
+        {
+          id: 'admin-channel-1',
+          name: 'admin',
+          type: 0,
+          permission_overwrites: [
+            {
+              id: 'ordinary-role',
+              type: 0,
+              allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+              deny: '0',
+            },
+            {
+              id: 'member-1',
+              type: 1,
+              allow: DISCORD_PERMISSIONS.ViewChannel.toString(),
+              deny: '0',
+            },
+          ],
+        },
+        { id: 'verification-channel-1', name: 'verification', type: 0 },
+      ],
+    });
+    const service = new SetupDashboardService(
+      createAdapter({
+        ...inactiveServer,
+        is_active: true,
+        case_role_id: 'case-role-1',
+        admin_channel_id: 'admin-channel-1',
+        verification_channel_id: 'verification-channel-1',
+      })
+    );
+
+    const result = await service.getDashboard('guild-1', 'access-token');
+
+    expect(result.dashboard.readiness).toBe('ready');
+    expect(
+      result.dashboard.checklist.filter((entry) => entry.label === 'Admin alert channel privacy')
+    ).toEqual([
+      expect.objectContaining({
+        key: 'admin-channel-privacy-everyone',
+        status: 'warning',
+        detail: expect.stringContaining('#admin grants View Channel to @everyone'),
+      }),
+      expect.objectContaining({
+        key: 'admin-channel-privacy-role-ordinary-role',
+        status: 'warning',
+        detail: expect.stringContaining(
+          '#admin grants View Channel to @Members, which has no recognized moderator permissions'
+        ),
+      }),
+      expect.objectContaining({
+        key: 'admin-channel-privacy-member-member-1',
+        status: 'warning',
+        detail: expect.stringContaining('#admin grants View Channel directly to member member-1'),
+      }),
+    ]);
   });
 
   it('rejects @everyone as the configured case role', async () => {

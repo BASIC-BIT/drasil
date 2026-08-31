@@ -541,15 +541,17 @@ export class SetupCommandHandler {
         ? ['Must fix before saving:', ...errors.map((issue) => `- [ERROR] ${issue.message}`)]
         : []),
       ...(warnings.length > 0
-        ? ['Saved but warnings:', ...warnings.map((issue) => `- [WARNING] ${issue.message}`)]
+        ? ['Warnings:', ...warnings.map((issue) => `- [WARNING] ${issue.message}`)]
         : []),
       ...(remediationLines.length > 0
         ? ['', 'Recommended fix:', ...remediationLines.map((line) => `- ${line}`)]
-        : [
-            '',
-            'Next step:',
-            '- Fix the listed Discord roles, channels, or permissions, then rerun `/config validate`.',
-          ]),
+        : errors.length > 0
+          ? [
+              '',
+              'Next step:',
+              '- Fix the listed Discord roles, channels, or permissions, then rerun `/config validate`.',
+            ]
+          : []),
     ];
     return truncatePreview(
       [status, `Guild ID: \`${report.guildId}\``, ...issueLines].join('\n'),

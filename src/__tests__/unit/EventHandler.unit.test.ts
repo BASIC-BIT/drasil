@@ -197,14 +197,20 @@ describe('EventHandler (unit)', () => {
     } as unknown as GuildMember;
   }
 
-  function buildReadySetupDiagnosticsService(): Record<string, jest.Mock> {
+  function buildReadySetupDiagnosticsService(
+    issues: readonly {
+      readonly severity: 'warning';
+      readonly code: string;
+      readonly message: string;
+    }[] = []
+  ): Record<string, jest.Mock> {
     return {
       validateGuildSetup: jest.fn().mockResolvedValue({
         guildId: 'guild-1',
         checkedAt: new Date('2026-01-01T00:00:00.000Z'),
-        issues: [],
+        issues,
         errorCount: 0,
-        warningCount: 0,
+        warningCount: issues.length,
       }),
     };
   }
@@ -2364,7 +2370,7 @@ describe('EventHandler (unit)', () => {
     }
   });
 
-  it('routes non-staff watchlist matches to restricted source-message deletion handling', async () => {
+  it('keeps restricted automatic protection active when setup has privacy warnings', async () => {
     const detectionOrchestrator = {
       detectMessage: jest.fn(),
       detectNewJoin: jest.fn(),
@@ -2391,7 +2397,14 @@ describe('EventHandler (unit)', () => {
       detectionOrchestrator,
       configService,
       securityActionService,
-      setupDiagnosticsService: buildReadySetupDiagnosticsService(),
+      setupDiagnosticsService: buildReadySetupDiagnosticsService([
+        {
+          severity: 'warning',
+          code: 'admin-channel-non-moderator-view',
+          message:
+            'Privacy: Admin notification channel <#admin-channel-1> grants View Channel to <@&ordinary-role>.',
+        },
+      ]),
       globalMessageWatchlistRepository: buildGlobalWatchlistRepository(),
     });
     const message = buildMessage(new PermissionsBitField()) as any;

@@ -85,6 +85,12 @@ test('guided onboarding shows readiness and keeps apply actions administrator-on
   await page.goto('/admin/guild/guild-1/onboarding');
   await expect(page.getByRole('heading', { name: /review and finish/i })).toBeVisible();
   await expect(page.getByText('Drasil passed all core setup checks.')).toBeVisible();
+  await expect(page.getByText('Review these warnings')).toBeVisible();
+  await expect(
+    page.getByText(/#drasil-admin grants View Channel directly to member member-1/)
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(page.getByText('Review these warnings')).toHaveCount(0);
 
   await page.goto('/admin/guild/guild-2/onboarding');
   await expect(page.getByRole('heading', { name: /set up drasil for quiet guild/i })).toBeVisible();

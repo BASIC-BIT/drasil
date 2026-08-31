@@ -1568,4 +1568,55 @@ describe('CommandHandler setup commands (unit)', () => {
       'Run `/config setup admin-channel:<moderator-channel>` to repair core setup.'
     );
   });
+
+  it('passes /config validate with specific privacy warnings and no setup instructions', async () => {
+    const validateGuildSetup = jest.fn().mockResolvedValue({
+      guildId: 'guild-1',
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      issues: [
+        {
+          severity: 'warning',
+          code: 'admin-channel-non-moderator-view',
+          message:
+            'Privacy: Admin notification channel <#admin-channel-1> grants View Channel to <@&ordinary-role>. Members of that role may be able to see moderation alerts and evidence.',
+        },
+      ],
+      errorCount: 0,
+      warningCount: 1,
+    });
+    const { handler } = buildHandler({ validateGuildSetup });
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest.fn().mockResolvedValue({
+          permissions: { has: jest.fn().mockReturnValue(true) },
+        }),
+      },
+    } as any;
+    const interaction = {
+      commandName: 'config',
+      user: { id: 'admin-1' },
+      guild,
+      options: {
+        getSubcommandGroup: jest.fn().mockReturnValue(null),
+        getSubcommand: jest.fn().mockReturnValue('validate'),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+
+    await handler.handleSlashCommand(interaction);
+
+    const content = interaction.editReply.mock.calls[0][0].content;
+    expect(content).toContain('Setup validation passed with 1 warning(s).');
+    expect(content).toContain('Warnings:');
+    expect(content).toContain(
+      '[WARNING] Privacy: Admin notification channel <#admin-channel-1> grants View Channel to <@&ordinary-role>.'
+    );
+    expect(content).not.toContain('Setup validation failed');
+    expect(content).not.toContain('Setup incomplete');
+    expect(content).not.toContain('Next step:');
+    expect(content).not.toContain('rerun `/config validate`');
+  });
 });

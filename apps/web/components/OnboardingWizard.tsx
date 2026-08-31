@@ -53,7 +53,9 @@ export function OnboardingWizard({
   );
   const [values, setValues] = useState(initialValues);
   const [submissionId] = useState(initialSubmissionId);
+  const [showWarnings, setShowWarnings] = useState(true);
   const blockingIssues = checklist.filter((item) => item.status === 'error');
+  const warningIssues = checklist.filter((item) => item.status === 'warning');
   const textChannels = channels.filter((channel) => channel.type === 0);
   const update = <K extends keyof OnboardingWizardValues>(
     key: K,
@@ -290,6 +292,25 @@ export function OnboardingWizard({
               </dd>
             </div>
           </dl>
+          {showWarnings && warningIssues.length > 0 ? (
+            <div className="onboarding-issues">
+              <div className="onboarding-warning-heading">
+                <strong>Review these warnings</strong>
+                <button
+                  className="button secondary compact-button"
+                  onClick={() => setShowWarnings(false)}
+                  type="button"
+                >
+                  Dismiss
+                </button>
+              </div>
+              <ul>
+                {warningIssues.map((issue) => (
+                  <li key={issue.key}>{issue.detail}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {readiness === 'ready' ? (
             <div className="stack">
               <div className="action-receipt">

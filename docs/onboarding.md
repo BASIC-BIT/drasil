@@ -86,6 +86,11 @@ explicit administrator moderation actions.
   run `/config setup`.
 - **Setup blocked:** core IDs exist, but a resource is missing, the role hierarchy is wrong, or a
   required permission is denied. The wizard and `/config validate` show the exact blocking checks.
+- **Admin-channel privacy warning:** setup remains ready when the admin channel grants View Channel
+  to `@everyone`, a specific member, or a role without recognized moderator permissions. Drasil
+  names the channel and audience so an administrator can review the channel or category override.
+  The warning does not disable automatic protection because it does not prevent Drasil from
+  operating.
 - **Multiple matching roles/channels:** choose the intended resource explicitly. Drasil will not
   guess between duplicate `Drasil Case` roles or `#verification` channels.
 - **Queued setup does not complete:** keep the page open to see the durable request status, then use
