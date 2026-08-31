@@ -104,6 +104,10 @@ test('guided onboarding shows readiness and keeps apply actions administrator-on
     await page.getByRole('button', { name: 'Continue' }).click();
   }
   await expect(page.getByText(/^Permission sync: @everyone loses channel access/)).toBeVisible();
+  await expect(page.getByText('Review these warnings')).toBeVisible();
+  await expect(
+    page.getByText(/#drasil-admin grants View Channel directly to member member-1/)
+  ).toBeVisible();
   await expect(page.getByText('Administrator required')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Apply and verify setup' })).toHaveCount(0);
 });

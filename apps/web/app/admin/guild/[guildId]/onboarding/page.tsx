@@ -13,6 +13,7 @@ import {
   createSetupDashboardService,
   filterAdminChannels,
   filterAssignableCaseRoles,
+  getAdminChannelVisibilityWarnings,
 } from '@/lib/setupDashboardService';
 import {
   onboardingWizardStateKey,
@@ -40,14 +41,17 @@ export default async function OnboardingPage({
   }
 
   const requestAdapter = createModerationActionRequestDataAdapter();
-  const [{ dashboard, channels, roles, botRoleIds, canApplySetup }, requests, trackedRequest] =
-    await Promise.all([
-      createSetupDashboardService().getDashboard(guildId, token.accessToken),
-      requestAdapter.listSetupRequests(guildId, 10),
-      trackedRequestId
-        ? requestAdapter.getSetupRequest(guildId, trackedRequestId)
-        : Promise.resolve(null),
-    ]);
+  const [
+    { dashboard, channels, roles, botRoleIds, botUserId, canApplySetup },
+    requests,
+    trackedRequest,
+  ] = await Promise.all([
+    createSetupDashboardService().getDashboard(guildId, token.accessToken),
+    requestAdapter.listSetupRequests(guildId, 10),
+    trackedRequestId
+      ? requestAdapter.getSetupRequest(guildId, trackedRequestId)
+      : Promise.resolve(null),
+  ]);
   const setupRequests =
     trackedRequest && !requests.some((request) => request.id === trackedRequest.id)
       ? [trackedRequest, ...requests]
@@ -61,6 +65,12 @@ export default async function OnboardingPage({
   const server = dashboard.server;
   const selectableChannels = channels.filter((channel) => channel.type === 0);
   const selectableAdminChannels = filterAdminChannels(channels);
+  const adminChannelWarnings = Object.fromEntries(
+    selectableAdminChannels.map((channel) => [
+      channel.id,
+      getAdminChannelVisibilityWarnings(channel, roles, guildId, botRoleIds, botUserId),
+    ])
+  );
   const selectableRoles = filterAssignableCaseRoles(
     roles,
     botRoleIds,
@@ -99,6 +109,7 @@ export default async function OnboardingPage({
             name: channel.name,
             type: channel.type,
           }))}
+          adminChannelWarnings={adminChannelWarnings}
           canApplySetup={canApplySetup}
           canPreserveProtectionModes={initialState.canPreserveProtectionModes}
           channels={selectableChannels.map((channel) => ({

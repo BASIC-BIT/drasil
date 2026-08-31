@@ -65,7 +65,7 @@ interface CoreChannelChecklistArgs extends Omit<ChannelPermissionCheckArgs, 'cha
   readonly warnOnBroadVisibility?: boolean;
 }
 
-interface AdminChannelVisibilityWarning {
+export interface AdminChannelVisibilityWarning {
   readonly key: string;
   readonly detail: string;
 }
@@ -208,7 +208,7 @@ function isChannelVisibleToEveryone(
   return hasPermission(channelPermissions, DISCORD_PERMISSIONS.ViewChannel);
 }
 
-function findAdminChannelVisibilityWarnings(
+export function getAdminChannelVisibilityWarnings(
   channel: DiscordChannel,
   roles: readonly DiscordRole[],
   guildId: string,
@@ -293,7 +293,7 @@ function addCoreChannelChecklistItem(args: CoreChannelChecklistArgs) {
   );
 
   if (args.warnOnBroadVisibility) {
-    for (const warning of findAdminChannelVisibilityWarnings(
+    for (const warning of getAdminChannelVisibilityWarnings(
       channel,
       args.roles,
       args.guildId,
