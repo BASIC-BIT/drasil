@@ -228,6 +228,24 @@ describe('UserModerationService (unit)', () => {
     const guildId = 'guild-captcha-resolve';
     const userId = 'user-captcha-resolve';
     const member = buildMember(guildId, userId);
+    const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
+      quarantineMember: jest.fn(),
+      enforceActiveCaseRoleUpdate: jest.fn(),
+      restoreMemberRoles: jest.fn().mockResolvedValue({
+        status: 'restored',
+        snapshotId: 'captcha-role-quarantine-1',
+        attemptedRoleIds: ['role-1'],
+        restoredRoleIds: ['role-1'],
+        skippedRoles: [],
+        failedRestores: [],
+      }),
+      abandonActiveSnapshot: jest.fn().mockResolvedValue({
+        status: 'no_active_snapshot',
+        snapshotId: null,
+      }),
+    };
     await serverRepository.getOrCreateServer(guildId);
     await userRepository.getOrCreateUser(userId, 'test-user');
     const verificationEvent = await verificationEventRepository.createFromDetection(
@@ -244,7 +262,9 @@ describe('UserModerationService (unit)', () => {
       adminActionService,
       threadManager,
       undefined,
-      moderationOutcomeService
+      moderationOutcomeService,
+      undefined,
+      roleQuarantineService
     );
 
     await expect(
@@ -264,6 +284,9 @@ describe('UserModerationService (unit)', () => {
       })
     );
     expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member);
+    expect(roleQuarantineService.restoreMemberRoles).toHaveBeenCalledWith(member, {
+      id: 'drasil:captcha',
+    });
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       VerificationStatus.VERIFIED,
@@ -274,9 +297,18 @@ describe('UserModerationService (unit)', () => {
       expect.objectContaining({
         action_type: AdminActionType.VERIFY,
         admin_id: 'drasil:captcha',
+        metadata: expect.objectContaining({
+          role_quarantine: expect.objectContaining({ restored_role_count: 1 }),
+        }),
         verification_event_id: verificationEvent.id,
       }),
     ]);
+    const outcomes = await moderationOutcomeRepository.findByUserAndServer(userId, guildId);
+    expect(outcomes[0]?.metadata).toEqual(
+      expect.objectContaining({
+        role_quarantine: expect.objectContaining({ restored_role_count: 1 }),
+      })
+    );
   });
 
   it('treats a repeated exact-case CAPTCHA resolution as a side-effect-free success', async () => {

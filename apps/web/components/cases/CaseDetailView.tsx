@@ -256,6 +256,7 @@ function DiscordSurfaces({
         accountQuarantineRequests={accountQuarantineRequests}
         canQueueCaseActions={canQueueCaseActions}
         caseId={detail.id}
+        captchaChallenge={detail.captchaChallenge}
         guildId={guildId}
         messageCleanup={messageCleanup}
         queueCaseAction={queueCaseAction}

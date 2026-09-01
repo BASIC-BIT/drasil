@@ -51,16 +51,20 @@ export interface EvaluateCaptchaPassInput {
   expectedCaseRevision: number;
 }
 
+export interface BypassCaptchaChallengeInput {
+  verificationEventId: string;
+  moderatorId: string;
+  reason: string;
+  expectedChallengeId: string;
+  expectedGeneration: number;
+}
+
 export interface ICaptchaChallengeService {
   start(): void;
   stop(): void;
   findByCaseId(verificationEventId: string): Promise<CaptchaChallenge | null>;
   requestChallenge(input: RequestCaptchaChallengeInput): Promise<CaptchaChallengeRequestResult>;
-  bypassChallenge(
-    verificationEventId: string,
-    moderatorId: string,
-    reason: string
-  ): Promise<CaptchaChallenge>;
+  bypassChallenge(input: BypassCaptchaChallengeInput): Promise<CaptchaChallenge>;
   expireChallenges(limit?: number): Promise<CaptchaChallenge[]>;
   evaluatePassedChallenge(input: EvaluateCaptchaPassInput): Promise<CaptchaAutoResolutionDecision>;
 }
@@ -165,12 +169,8 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     }
   }
 
-  public async bypassChallenge(
-    verificationEventId: string,
-    moderatorId: string,
-    reason: string
-  ): Promise<CaptchaChallenge> {
-    const verificationEvent = await this.verificationEvents.findById(verificationEventId);
+  public async bypassChallenge(input: BypassCaptchaChallengeInput): Promise<CaptchaChallenge> {
+    const verificationEvent = await this.verificationEvents.findById(input.verificationEventId);
     if (
       !verificationEvent ||
       verificationEvent.status !== VerificationStatus.PENDING ||
@@ -178,15 +178,21 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     ) {
       throw new Error('Only pending standard cases can bypass a security check.');
     }
-    const challenge = await this.challenges.findByCaseId(verificationEventId);
+    const challenge = await this.challenges.findByCaseId(input.verificationEventId);
     if (!challenge || challenge.status === CaptchaChallengeStatus.PASSED) {
       throw new Error('This case does not have a bypassable security check.');
+    }
+    if (
+      challenge.id !== input.expectedChallengeId ||
+      challenge.generation !== input.expectedGeneration
+    ) {
+      throw new Error('The security check changed before it could be bypassed.');
     }
     const bypassed = await this.challenges.bypass(
       challenge.id,
       challenge.generation,
-      moderatorId,
-      reason
+      input.moderatorId,
+      input.reason
     );
     if (!bypassed) {
       throw new Error('The security check changed before it could be bypassed.');

@@ -1641,8 +1641,19 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
+    const challenge = await this.captchaChallengeService.findByCaseId(parsed.verificationEventId);
+    if (!challenge) {
+      await interaction.reply({
+        content: 'This security check action is no longer available.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
     const modal = new ModalBuilder()
-      .setCustomId(`${CAPTCHA_BYPASS_MODAL_PREFIX}:${parsed.verificationEventId}:${parsed.userId}`)
+      .setCustomId(
+        `${CAPTCHA_BYPASS_MODAL_PREFIX}:${parsed.verificationEventId}:${challenge.id}:${challenge.generation}`
+      )
       .setTitle('Continue Without Security Check');
     const reason = new TextInputBuilder()
       .setCustomId(CAPTCHA_BYPASS_REASON_FIELD_ID)
@@ -1656,12 +1667,16 @@ export class InteractionHandler implements IInteractionHandler {
 
   private async handleCaptchaBypassModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
     const guildId = interaction.guildId;
-    const [prefix, action, verificationEventId, userId] = interaction.customId.split(':');
+    const [prefix, action, verificationEventId, challengeId, generationValue] =
+      interaction.customId.split(':');
+    const generation = Number(generationValue);
     if (
       !guildId ||
       `${prefix}:${action}` !== CAPTCHA_BYPASS_MODAL_PREFIX ||
       !verificationEventId ||
-      !userId ||
+      !challengeId ||
+      !Number.isInteger(generation) ||
+      generation < 1 ||
       !this.captchaChallengeService
     ) {
       await interaction.reply({
@@ -1682,19 +1697,17 @@ export class InteractionHandler implements IInteractionHandler {
     try {
       const verificationEvent =
         await this.verificationEventRepository.findById(verificationEventId);
-      if (
-        !verificationEvent ||
-        verificationEvent.server_id !== guildId ||
-        verificationEvent.user_id !== userId
-      ) {
+      if (!verificationEvent || verificationEvent.server_id !== guildId) {
         throw new Error('The bound case changed before the security check could be bypassed.');
       }
       const reason = interaction.fields.getTextInputValue(CAPTCHA_BYPASS_REASON_FIELD_ID).trim();
-      await this.captchaChallengeService.bypassChallenge(
+      await this.captchaChallengeService.bypassChallenge({
         verificationEventId,
-        interaction.user.id,
-        reason
-      );
+        moderatorId: interaction.user.id,
+        reason,
+        expectedChallengeId: challengeId,
+        expectedGeneration: generation,
+      });
       await interaction.editReply({ content: 'Security check bypass recorded.' });
     } catch (error) {
       console.error('Failed to bypass CAPTCHA challenge from Discord:', error);

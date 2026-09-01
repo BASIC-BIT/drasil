@@ -1263,6 +1263,100 @@ describe('InteractionHandler (unit)', () => {
     consoleError.mockRestore();
   });
 
+  it('binds the CAPTCHA bypass modal to the displayed challenge generation', async () => {
+    const captchaChallengeService = {
+      findByCaseId: jest.fn().mockResolvedValue({
+        generation: 2,
+        id: '11111111-1111-4111-8111-111111111111',
+      }),
+    } as any;
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const interaction = buildInteraction(
+      buildAdminActionCustomId('captcha_bypass', 'case', 'user-1', undefined, 'ver-1'),
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(captchaChallengeService.findByCaseId).toHaveBeenCalledWith('ver-1');
+    const modal = (interaction.showModal as jest.Mock).mock.calls[0][0];
+    expect(modal.toJSON().custom_id).toBe(
+      'captcha:bypass:ver-1:11111111-1111-4111-8111-111111111111:2'
+    );
+  });
+
+  it('submits the challenge identity carried by the CAPTCHA bypass modal', async () => {
+    const bypassChallenge = jest.fn().mockResolvedValue({
+      generation: 2,
+      id: '11111111-1111-4111-8111-111111111111',
+    });
+    const captchaChallengeService = { bypassChallenge } as any;
+    verificationEventRepository.findById.mockResolvedValue(
+      buildVerificationEvent('ver-1', 'user-1')
+    );
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const interaction = {
+      customId: 'captcha:bypass:ver-1:11111111-1111-4111-8111-111111111111:2',
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn().mockReturnValue('  Reviewed manually.  '),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(bypassChallenge).toHaveBeenCalledWith({
+      expectedChallengeId: '11111111-1111-4111-8111-111111111111',
+      expectedGeneration: 2,
+      moderatorId: 'admin-1',
+      reason: 'Reviewed manually.',
+      verificationEventId: 'ver-1',
+    });
+  });
+
   it('shows observed admin actions with a resolved display label and no confirmation copy', async () => {
     process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
     delete process.env.NEXT_PUBLIC_APP_URL;

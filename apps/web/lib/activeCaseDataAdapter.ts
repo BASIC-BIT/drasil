@@ -67,6 +67,8 @@ export interface QueueCaseActionInput {
   readonly adminId: string;
   readonly attemptId?: string | null;
   readonly caseId: string;
+  readonly expectedCaptchaChallengeId?: string | null;
+  readonly expectedCaptchaGeneration?: number | null;
   readonly guildId: string;
   readonly quarantinePhase?: 'preview' | 'execute' | null;
   readonly previewRequestId?: string | null;
@@ -128,6 +130,7 @@ interface CaseSummaryRow {
   user_username: string | null;
   user_metadata: unknown;
   member_user_id: string | null;
+  captcha_id?: string | null;
   captcha_status?: 'pending' | 'passed' | 'failed' | 'expired' | 'bypassed' | 'cancelled' | null;
   captcha_request_source?: 'moderator' | 'automatic_suspicious_join' | null;
   captcha_pass_effect?: 'evidence_only' | 'verify_join_only' | null;
@@ -562,6 +565,7 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
     allowedActions: resolveAllowedActions(row, presenceState),
     captchaChallenge: row.captcha_status
       ? {
+          id: row.captcha_id,
           status: row.captcha_status,
           requestSource: row.captcha_request_source,
           passEffect: row.captcha_pass_effect,
@@ -723,6 +727,7 @@ const SUMMARY_QUERY = `
     u.username as user_username,
     u.metadata as user_metadata,
     sm.user_id as member_user_id,
+    cc.id::text as captcha_id,
     cc.status as captcha_status,
     cc.request_source as captcha_request_source,
     cc.pass_effect as captcha_pass_effect,
@@ -952,6 +957,16 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
     ) {
       return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
     }
+    if (
+      input.action === 'bypass_captcha' &&
+      (!input.expectedCaptchaChallengeId ||
+        input.expectedCaptchaGeneration === null ||
+        input.expectedCaptchaGeneration === undefined ||
+        detail.captchaChallenge?.id !== input.expectedCaptchaChallengeId ||
+        detail.captchaChallenge.generation !== input.expectedCaptchaGeneration)
+    ) {
+      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
+    }
 
     const receipt = await queueModerationActionRequestWithReceipt({
       actionType: resolveCaseActionRequestType(input),
@@ -963,6 +978,12 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
         ...(input.quarantinePhase ? { quarantine_phase: input.quarantinePhase } : {}),
         ...(input.previewRequestId ? { preview_request_id: input.previewRequestId } : {}),
         ...(input.reason ? { reason: input.reason } : {}),
+        ...(input.action === 'bypass_captcha'
+          ? {
+              expected_challenge_id: input.expectedCaptchaChallengeId,
+              expected_generation: input.expectedCaptchaGeneration,
+            }
+          : {}),
         requested_surface: 'web',
       },
       serverId: input.guildId,

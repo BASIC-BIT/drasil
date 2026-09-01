@@ -102,6 +102,7 @@ describe('moderationInboxDataAdapter', () => {
       ...baseCase,
       caseKind: 'compromised_account',
       captchaChallenge: {
+        id: '11111111-1111-4111-8111-111111111111',
         status: 'pending',
         requestSource: 'moderator',
         passEffect: 'evidence_only',

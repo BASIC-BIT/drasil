@@ -29,6 +29,7 @@ import {
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
+  CaptchaChallengeStatus,
   CaptchaChallengeRequestSource,
   MessageDeletionBanStatus,
   MessageDeletionCaseFinalizationStatus,
@@ -38,6 +39,7 @@ import {
   ModerationActionRequest,
   ModerationActionRequestStatus,
   ModerationActionRequestType,
+  VerificationStatus,
   type VerificationChannelPermissionSyncState,
 } from '../repositories/types';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
@@ -982,11 +984,18 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (!reason) {
       throw new Error('A reason is required to continue without the browser check.');
     }
-    const challenge = await this.captchaChallengeService.bypassChallenge(
-      request.verification_event_id,
-      request.actor_id,
-      reason
-    );
+    const expectedChallengeId = this.readMetadataString(request.metadata, 'expected_challenge_id');
+    const expectedGeneration = this.readMetadataInteger(request.metadata, 'expected_generation');
+    if (!expectedChallengeId || expectedGeneration === null || expectedGeneration < 1) {
+      throw new Error('Security-check bypass metadata is invalid.');
+    }
+    const challenge = await this.captchaChallengeService.bypassChallenge({
+      verificationEventId: request.verification_event_id,
+      moderatorId: request.actor_id,
+      reason,
+      expectedChallengeId,
+      expectedGeneration,
+    });
     await this.repository.complete(request.id, {
       action_type: request.action_type,
       bypassed: true,
@@ -1135,16 +1144,45 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (this.readMetadataString(request.metadata, 'reason') !== 'submission_limit') {
       throw new Error('Security-check attention reason is invalid.');
     }
+    if (!this.captchaChallengeService) {
+      throw new Error('Security-check service is unavailable.');
+    }
 
-    const verificationEvent = await this.verificationEventRepository.findById(
-      request.verification_event_id
-    );
+    const challengeId = this.readMetadataString(request.metadata, 'challenge_id');
+    const generation = this.readMetadataInteger(request.metadata, 'generation');
+    if (!challengeId || generation === null || generation < 1) {
+      throw new Error('Security-check attention metadata is invalid.');
+    }
+
+    const [verificationEvent, challenge] = await Promise.all([
+      this.verificationEventRepository.findById(request.verification_event_id),
+      this.captchaChallengeService.findByCaseId(request.verification_event_id),
+    ]);
     if (
       !verificationEvent ||
       verificationEvent.server_id !== request.server_id ||
       verificationEvent.user_id !== request.target_user_id
     ) {
       throw new Error('Security-check attention case binding is invalid.');
+    }
+    if (
+      verificationEvent.status !== VerificationStatus.PENDING ||
+      !challenge ||
+      challenge.id !== challengeId ||
+      challenge.generation !== generation ||
+      challenge.status !== CaptchaChallengeStatus.FAILED
+    ) {
+      await this.repository.complete(request.id, {
+        action_type: request.action_type,
+        challenge_id: challengeId,
+        generation,
+        notified: false,
+        reason: 'submission_limit',
+        stale: true,
+        target_user_id: request.target_user_id,
+        verification_event_id: request.verification_event_id,
+      });
+      return;
     }
     await this.threadManager
       .sendCaptchaStatus(
@@ -1157,6 +1195,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       : false;
     await this.repository.complete(request.id, {
       action_type: request.action_type,
+      challenge_id: challengeId,
+      generation,
       notified,
       reason: 'submission_limit',
       target_user_id: request.target_user_id,

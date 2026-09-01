@@ -53,6 +53,8 @@ type DestructiveCaseAction = Extract<WebCaseAction, 'kick_user' | 'ban_user' | '
 
 interface CaseActionOptions {
   readonly attemptId: string | null;
+  readonly expectedCaptchaChallengeId?: string | null;
+  readonly expectedCaptchaGeneration?: number | null;
   readonly quarantinePhase: 'preview' | 'execute' | null;
   readonly previewRequestId: string | null;
   readonly reason: string | null;
@@ -123,6 +125,15 @@ function assertActorPermission(
 function readFormString(formData: FormData | undefined, key: string): string | null {
   const value = formData?.get(key);
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function readFormPositiveInteger(formData: FormData | undefined, key: string): number | null {
+  const value = readFormString(formData, key);
+  if (!value) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function assertDestructiveActionEnabled(
@@ -242,8 +253,24 @@ async function assertCanQueueCaseAction(
     if (action === 'bypass_captcha' && !reason) {
       throw new Error('A reason is required to continue without the browser check.');
     }
+    const expectedCaptchaChallengeId =
+      action === 'bypass_captcha' ? readFormString(formData, 'expectedCaptchaChallengeId') : null;
+    const expectedCaptchaGeneration =
+      action === 'bypass_captcha'
+        ? readFormPositiveInteger(formData, 'expectedCaptchaGeneration')
+        : null;
+    if (
+      action === 'bypass_captcha' &&
+      (!expectedCaptchaChallengeId || !expectedCaptchaGeneration)
+    ) {
+      throw new Error(
+        'The displayed security check is no longer available. Refresh and try again.'
+      );
+    }
     return {
       attemptId: action === 'retry_captcha' || action === 'bypass_captcha' ? randomUUID() : null,
+      expectedCaptchaChallengeId,
+      expectedCaptchaGeneration,
       quarantinePhase: null,
       previewRequestId: null,
       reason,
@@ -310,6 +337,8 @@ async function performQueueCaseAction(
     adminId: session.userId,
     attemptId: options.attemptId,
     caseId,
+    expectedCaptchaChallengeId: options.expectedCaptchaChallengeId,
+    expectedCaptchaGeneration: options.expectedCaptchaGeneration,
     guildId,
     quarantinePhase: options.quarantinePhase,
     previewRequestId: options.previewRequestId,

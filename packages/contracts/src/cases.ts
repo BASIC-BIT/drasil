@@ -27,6 +27,7 @@ export const caseActionSchema = z.enum([
 ]);
 
 export const captchaChallengeSummarySchema = z.object({
+  id: z.string().uuid(),
   status: z.enum(['pending', 'passed', 'failed', 'expired', 'bypassed', 'cancelled']),
   requestSource: z.enum(['moderator', 'automatic_suspicious_join']),
   passEffect: z.enum(['evidence_only', 'verify_join_only']),

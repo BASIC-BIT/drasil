@@ -138,7 +138,11 @@ const bypassCaptchaChallengeRequest: ModerationActionRequest = {
   action_type: ModerationActionRequestType.BYPASS_CAPTCHA_CHALLENGE,
   id: 'captcha-bypass-request-1',
   idempotency_key: 'web:case-action:bypass_captcha:guild-1:ver-1',
-  metadata: { reason: 'Moderator confirmed access another way.' },
+  metadata: {
+    expected_challenge_id: 'challenge-1',
+    expected_generation: 1,
+    reason: 'Moderator confirmed access another way.',
+  },
 };
 
 const notifyCaptchaAttentionRequest: ModerationActionRequest = {
@@ -979,6 +983,7 @@ describe('ModerationActionRequestService', () => {
         notification_channel_id: 'admin-channel-1',
         notification_message_id: 'admin-message-1',
         server_id: 'guild-1',
+        status: 'pending',
         thread_id: 'thread-1',
         user_id: 'user-1',
       })),
@@ -1004,6 +1009,11 @@ describe('ModerationActionRequestService', () => {
     const captchaChallengeService = {
       bypassChallenge: jest.fn(async () => ({ generation: 1, id: 'challenge-1' })),
       evaluatePassedChallenge: jest.fn(async () => ({ status: 'eligible' as const })),
+      findByCaseId: jest.fn(async () => ({
+        generation: 1,
+        id: 'challenge-1',
+        status: 'failed',
+      })),
       requestChallenge: jest.fn(async () => ({
         challenge: { generation: 1, id: 'challenge-1' },
         delivered: true,
@@ -1612,6 +1622,7 @@ describe('ModerationActionRequestService', () => {
       notification_channel_id: 'admin-channel-1',
       notification_message_id: 'admin-message-1',
       server_id: 'guild-1',
+      status: 'pending',
       thread_id: 'thread-1',
       user_id: 'different-user',
     });
@@ -1635,6 +1646,7 @@ describe('ModerationActionRequestService', () => {
       notification_channel_id: 'admin-channel-1',
       notification_message_id: 'admin-message-1',
       server_id: 'guild-1',
+      status: 'pending',
       thread_id: 'thread-1',
       user_id: 'different-user',
     });
@@ -1648,6 +1660,23 @@ describe('ModerationActionRequestService', () => {
         error: 'Security-check request does not match its case subject.',
       },
     ]);
+  });
+
+  it('binds a queued CAPTCHA bypass to the displayed challenge generation', async () => {
+    const { captchaChallengeService, repository, service } = buildService([
+      bypassCaptchaChallengeRequest,
+    ]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.bypassChallenge).toHaveBeenCalledWith({
+      expectedChallengeId: 'challenge-1',
+      expectedGeneration: 1,
+      moderatorId: 'moderator-1',
+      reason: 'Moderator confirmed access another way.',
+      verificationEventId: 'ver-1',
+    });
+    expect(repository.failed).toEqual([]);
   });
 
   it('resolves an eligible CAPTCHA pass through the exact-case system path', async () => {
@@ -1738,6 +1767,25 @@ describe('ModerationActionRequestService', () => {
     expect(repository.completed[0]).toEqual({
       id: 'captcha-attention-request-1',
       result: expect.objectContaining({ notified: true, reason: 'submission_limit' }),
+    });
+  });
+
+  it('discards submission-limit attention after the challenge generation changes', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([notifyCaptchaAttentionRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      generation: 2,
+      id: 'challenge-1',
+      status: 'pending',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-attention-request-1',
+      result: expect.objectContaining({ notified: false, stale: true }),
     });
   });
 

@@ -1,5 +1,6 @@
 import type {
   CaseAction,
+  CaptchaChallengeSummary,
   MessageCleanupCaseWorkspace,
   MessageCleanupJobDetail,
 } from '@drasil/contracts';
@@ -265,6 +266,7 @@ export function CaseActionControls({
   actionRequestsByAction,
   canQueueCaseActions,
   caseId,
+  captchaChallenge,
   guildId,
   messageCleanup,
   queueCaseAction,
@@ -278,6 +280,7 @@ export function CaseActionControls({
   >;
   readonly canQueueCaseActions: boolean;
   readonly caseId: string;
+  readonly captchaChallenge?: CaptchaChallengeSummary | null;
   readonly guildId: string;
   readonly messageCleanup?: CaseMessageCleanupIntegration;
   readonly queueCaseAction: QueueCaseAction;
@@ -416,9 +419,21 @@ export function CaseActionControls({
                     </p>
                   ) : null}
                   {action === 'bypass_captcha' ? (
-                    <p className="muted">
-                      Continue moderator review without treating the browser check as passed.
-                    </p>
+                    <>
+                      <input
+                        name="expectedCaptchaChallengeId"
+                        type="hidden"
+                        value={captchaChallenge?.id}
+                      />
+                      <input
+                        name="expectedCaptchaGeneration"
+                        type="hidden"
+                        value={captchaChallenge?.generation}
+                      />
+                      <p className="muted">
+                        Continue moderator review without treating the browser check as passed.
+                      </p>
+                    </>
                   ) : null}
                   {action === 'bypass_captcha' || destructiveCaseActionSet.has(action) ? (
                     <label className="field destructive-reason">
@@ -453,9 +468,21 @@ export function CaseActionControls({
                     </p>
                   ) : null}
                   {action === 'bypass_captcha' ? (
-                    <p className="muted">
-                      Continue moderator review without treating the browser check as passed.
-                    </p>
+                    <>
+                      <input
+                        name="expectedCaptchaChallengeId"
+                        type="hidden"
+                        value={captchaChallenge?.id}
+                      />
+                      <input
+                        name="expectedCaptchaGeneration"
+                        type="hidden"
+                        value={captchaChallenge?.generation}
+                      />
+                      <p className="muted">
+                        Continue moderator review without treating the browser check as passed.
+                      </p>
+                    </>
                   ) : null}
                   {action === 'bypass_captcha' || destructiveCaseActionSet.has(action) ? (
                     <label className="field destructive-reason">

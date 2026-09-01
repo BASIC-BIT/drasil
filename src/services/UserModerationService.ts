@@ -1332,6 +1332,11 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
     const memberVerificationStatus =
       remainingPending.length > 0 ? VerificationStatus.PENDING : VerificationStatus.VERIFIED;
+    const restoreResult =
+      remainingPending.length === 0
+        ? await this.tryRestoreRoleQuarantine(member, completed, { id: actorId } as User)
+        : { verificationEvent: completed, metadata: null };
+    completed = restoreResult.verificationEvent ?? completed;
     const memberStateChanged =
       !alreadyResolvedByCaptcha ||
       !storedMember ||
@@ -1344,8 +1349,20 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       ...(remainingPending.length === 0 ? { last_verified_at: resolvedAt.toISOString() } : {}),
       updated_by: actorId,
     });
-    await this.finalizeCaptchaResolvedVerificationEvent(member, completed, actorId, actorLabel);
-    await this.ensureCaptchaModerationOutcome(member, completed, actorId, input.challengeId);
+    await this.finalizeCaptchaResolvedVerificationEvent(
+      member,
+      completed,
+      actorId,
+      actorLabel,
+      restoreResult.metadata
+    );
+    await this.ensureCaptchaModerationOutcome(
+      member,
+      completed,
+      actorId,
+      input.challengeId,
+      restoreResult.metadata
+    );
     return { status: 'resolved' };
   }
 
@@ -1353,7 +1370,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     member: GuildMember,
     verificationEvent: VerificationEvent,
     actorId: string,
-    actorLabel: string
+    actorLabel: string,
+    roleQuarantineMetadata: Record<string, unknown> | null
   ): Promise<void> {
     const existingActions =
       (await this.adminActionService.getActionsForVerificationEvent?.(verificationEvent.id)) ?? [];
@@ -1396,7 +1414,11 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         previous_status: VerificationStatus.PENDING,
         new_status: VerificationStatus.VERIFIED,
         notes: 'Security check completed.',
-        metadata: { actor_kind: 'system', actor_label: actorLabel },
+        metadata: {
+          actor_kind: 'system',
+          actor_label: actorLabel,
+          ...(roleQuarantineMetadata ? { role_quarantine: roleQuarantineMetadata } : {}),
+        } as unknown as Prisma.JsonValue,
       });
     }
     await this.deleteLiveQueueCaseMirror(verificationEvent.id);
@@ -1407,7 +1429,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     member: GuildMember,
     verificationEvent: VerificationEvent,
     actorId: string,
-    challengeId: string
+    challengeId: string,
+    roleQuarantineMetadata: Record<string, unknown> | null
   ): Promise<void> {
     const outcomeType = getResolutionModerationOutcomeType(VerificationStatus.VERIFIED);
     const existingOutcomes =
@@ -1429,7 +1452,13 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       outcomeType,
       ModerationOutcomeSource.DRASIL,
       [verificationEvent],
-      { actorId, metadata: { captcha_challenge_id: challengeId } }
+      {
+        actorId,
+        metadata: {
+          captcha_challenge_id: challengeId,
+          ...(roleQuarantineMetadata ? { role_quarantine: roleQuarantineMetadata } : {}),
+        },
+      }
     );
   }
 

@@ -226,8 +226,31 @@ describe('CaptchaChallengeService', () => {
     );
 
     await expect(
-      service.bypassChallenge('case-1', 'moderator-1', 'Reviewed manually')
+      service.bypassChallenge({
+        verificationEventId: 'case-1',
+        moderatorId: 'moderator-1',
+        reason: 'Reviewed manually',
+        expectedChallengeId: 'challenge-1',
+        expectedGeneration: 1,
+      })
     ).rejects.toThrow('Only pending standard cases');
+  });
+
+  it('rejects a bypass submitted for an earlier challenge generation', async () => {
+    const { challenges, service } = createHarness();
+    challenges.findByCaseId.mockResolvedValue(buildChallenge({ generation: 2 }));
+
+    await expect(
+      service.bypassChallenge({
+        verificationEventId: 'case-1',
+        moderatorId: 'moderator-1',
+        reason: 'Reviewed manually',
+        expectedChallengeId: 'challenge-1',
+        expectedGeneration: 1,
+      })
+    ).rejects.toThrow('The security check changed before it could be bypassed.');
+
+    expect(challenges.bypass).not.toHaveBeenCalled();
   });
 
   it('keeps a passed moderator challenge as evidence only', async () => {

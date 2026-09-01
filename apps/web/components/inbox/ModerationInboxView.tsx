@@ -664,6 +664,7 @@ function InboxActions({
           actionRequestsByAction={actionRequestsByAction}
           canQueueCaseActions={canQueueCaseActions}
           caseId={item.sourceId}
+          captchaChallenge={item.captchaChallenge}
           guildId={item.guildId}
           messageCleanup={messageCleanup}
           queueCaseAction={queueCaseAction}
