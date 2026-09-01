@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FixtureMemberProfileDataAdapter } from './memberProfileDataAdapter';
+import { FixtureMemberProfileDataAdapter, parseReportRow } from './memberProfileDataAdapter';
 
 describe('memberProfileDataAdapter', () => {
   it('builds fixture member profiles from case and report history', async () => {
@@ -43,6 +43,27 @@ describe('memberProfileDataAdapter', () => {
             sourceMessageId: 'source-message-5',
           }),
         ],
+      })
+    );
+  });
+
+  it('preserves AI summary provenance in member report history', () => {
+    expect(
+      parseReportRow('guild-1', {
+        id: 'report-1',
+        reporter_id: 'reporter-1',
+        status: 'submitted',
+        summary: 'Possible impersonation attempt',
+        metadata: { summary_source: 'ai_report_intake_extraction' },
+        created_at: new Date('2026-06-01T00:00:00.000Z'),
+        updated_at: new Date('2026-06-01T00:30:00.000Z'),
+        thread_id: 'report-thread-1',
+        latest_case_id: null,
+      })
+    ).toEqual(
+      expect.objectContaining({
+        summary: 'Possible impersonation attempt',
+        summarySource: 'ai',
       })
     );
   });

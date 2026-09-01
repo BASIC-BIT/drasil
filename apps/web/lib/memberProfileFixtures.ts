@@ -125,6 +125,7 @@ export function fixtureMemberProfile(guildId: string, userId: string): MemberPro
       reporterId: report.reporterId,
       status: report.status,
       summary: report.summary,
+      summarySource: report.summarySource,
       createdAt: report.createdAt,
       updatedAt: report.updatedAt,
       reportThreadUrl: report.reportThreadUrl,
