@@ -1,9 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
+import { CAPTCHA_IDENTITY_MAX_AGE_SECONDS, OAUTH_STATE_MAX_AGE_SECONDS } from './cookies';
 import { decodeSignedJson, decryptJson, encodeSignedJson, encryptJson } from './crypto';
 import { getOauthEncryptionSecret, getSessionSecret } from './session';
-
-const CAPTCHA_SESSION_MAX_AGE_MS = 15 * 60 * 1000;
 
 const captchaOAuthStateSchema = z.object({
   state: z.string(),
@@ -29,7 +28,7 @@ export function createCaptchaOAuthState(token: string): CaptchaOAuthState {
     state: randomBytes(24).toString('base64url'),
     token,
     issuedAt,
-    expiresAt: issuedAt + CAPTCHA_SESSION_MAX_AGE_MS,
+    expiresAt: issuedAt + OAUTH_STATE_MAX_AGE_SECONDS * 1000,
   };
 }
 
@@ -54,7 +53,7 @@ export function createCaptchaIdentity(input: {
   return {
     ...input,
     issuedAt,
-    expiresAt: issuedAt + CAPTCHA_SESSION_MAX_AGE_MS,
+    expiresAt: issuedAt + CAPTCHA_IDENTITY_MAX_AGE_SECONDS * 1000,
   };
 }
 

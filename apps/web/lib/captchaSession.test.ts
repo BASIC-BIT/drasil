@@ -7,6 +7,7 @@ import {
   encodeCaptchaIdentity,
   encodeCaptchaOAuthState,
 } from './captchaSession';
+import { CAPTCHA_IDENTITY_MAX_AGE_SECONDS, OAUTH_STATE_MAX_AGE_SECONDS } from './cookies';
 
 describe('CAPTCHA browser session cookies', () => {
   it('encrypts the opaque challenge token in OAuth state', () => {
@@ -16,6 +17,7 @@ describe('CAPTCHA browser session cookies', () => {
 
     const encoded = encodeCaptchaOAuthState(state);
 
+    expect(state.expiresAt - state.issuedAt).toBe(OAUTH_STATE_MAX_AGE_SECONDS * 1000);
     expect(encoded).not.toContain('opaque-challenge-token');
     expect(encoded).not.toContain(state.state);
     expect(decodeCaptchaOAuthState(encoded)).toMatchObject({
@@ -34,6 +36,7 @@ describe('CAPTCHA browser session cookies', () => {
 
     const encoded = encodeCaptchaIdentity(identity);
 
+    expect(identity.expiresAt - identity.issuedAt).toBe(CAPTCHA_IDENTITY_MAX_AGE_SECONDS * 1000);
     expect(decodeCaptchaIdentity(encoded)).toMatchObject({
       challengeId: identity.challengeId,
       generation: 2,
