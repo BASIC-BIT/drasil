@@ -243,7 +243,10 @@ function resolveCaseActionRequestType(
 export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): string {
   const base = `web:case-action:${input.action}:${input.guildId}:${input.caseId}`;
   if (input.action === 'retry_captcha' || input.action === 'bypass_captcha') {
-    return `${base}:${input.attemptId ?? 'missing-attempt'}`;
+    if (!input.attemptId) {
+      throw new Error('A unique attempt ID is required for repeatable CAPTCHA actions.');
+    }
+    return `${base}:${input.attemptId}`;
   }
   if (input.action !== 'quarantine_compromised_account') {
     return base;
@@ -940,6 +943,12 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       input.action === 'quarantine_compromised_account' &&
       input.quarantinePhase === 'execute' &&
       !(await this.isValidAccountQuarantinePreview(input, detail.userId))
+    ) {
+      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
+    }
+    if (
+      (input.action === 'retry_captcha' || input.action === 'bypass_captcha') &&
+      !input.attemptId
     ) {
       return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
     }

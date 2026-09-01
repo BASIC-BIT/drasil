@@ -77,6 +77,14 @@ describe('activeCaseDataAdapter', () => {
     expect(buildCaseActionIdempotencyKey({ ...base, action: 'bypass_captcha' })).toBe(
       'web:case-action:bypass_captcha:guild-1:ver-1:attempt-2'
     );
+    expect(() =>
+      buildCaseActionIdempotencyKey({
+        action: 'retry_captcha',
+        adminId: 'moderator-1',
+        caseId: 'ver-1',
+        guildId: 'guild-1',
+      })
+    ).toThrow('A unique attempt ID is required for repeatable CAPTCHA actions.');
   });
 
   it('preserves failed queue receipts for inline action feedback', () => {
