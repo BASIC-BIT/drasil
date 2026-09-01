@@ -108,6 +108,27 @@ CREATE UNIQUE INDEX "captcha_attempts_generation_submission_key"
 CREATE INDEX "idx_captcha_attempts_challenge_generation"
   ON "captcha_challenge_attempts"("captcha_challenge_id", "generation");
 
+CREATE TABLE "captcha_challenge_bypasses" (
+  "id" uuid NOT NULL DEFAULT extensions.uuid_generate_v4(),
+  "captcha_challenge_id" uuid NOT NULL,
+  "generation" integer NOT NULL,
+  "moderator_id" text NOT NULL,
+  "reason" text NOT NULL,
+  "bypassed_at" timestamptz(6) NOT NULL DEFAULT now(),
+  CONSTRAINT "captcha_challenge_bypasses_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "captcha_bypasses_generation_positive" CHECK ("generation" > 0),
+  CONSTRAINT "captcha_bypasses_moderator_nonempty" CHECK (length(btrim("moderator_id")) > 0),
+  CONSTRAINT "captcha_bypasses_reason_bounded" CHECK (
+    length(btrim("reason")) > 0 AND length("reason") <= 1000
+  ),
+  CONSTRAINT "captcha_challenge_bypasses_challenge_id_fkey" FOREIGN KEY ("captcha_challenge_id") REFERENCES "captcha_challenges"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+);
+
+CREATE UNIQUE INDEX "captcha_bypasses_challenge_generation_key"
+  ON "captcha_challenge_bypasses"("captcha_challenge_id", "generation");
+CREATE INDEX "idx_captcha_bypasses_challenge_time"
+  ON "captcha_challenge_bypasses"("captcha_challenge_id", "bypassed_at");
+
 ALTER TABLE "moderation_action_requests" DROP CONSTRAINT "moderation_action_requests_required_targets";
 ALTER TABLE "moderation_action_requests" ADD CONSTRAINT "moderation_action_requests_required_targets" CHECK (
   (
@@ -155,16 +176,19 @@ ALTER TABLE "moderation_action_requests" ADD CONSTRAINT "moderation_action_reque
 
 ALTER TABLE "public"."captcha_challenges" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."captcha_challenge_attempts" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."captcha_challenge_bypasses" ENABLE ROW LEVEL SECURITY;
 
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
     REVOKE ALL ON TABLE "public"."captcha_challenges" FROM anon;
     REVOKE ALL ON TABLE "public"."captcha_challenge_attempts" FROM anon;
+    REVOKE ALL ON TABLE "public"."captcha_challenge_bypasses" FROM anon;
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     REVOKE ALL ON TABLE "public"."captcha_challenges" FROM authenticated;
     REVOKE ALL ON TABLE "public"."captcha_challenge_attempts" FROM authenticated;
+    REVOKE ALL ON TABLE "public"."captcha_challenge_bypasses" FROM authenticated;
   END IF;
 END $$;

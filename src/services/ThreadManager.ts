@@ -33,6 +33,7 @@ import {
   buildReportIntakeAdminActionsCustomId,
   buildReportIntakeThreadCloseCustomId,
 } from '../utils/reportIntakeAdminActions';
+import { getDiscordErrorCode } from '../utils/discordErrors';
 
 export const VERIFICATION_THREAD_TYPE_METADATA_KEY = 'thread_type';
 export const VERIFICATION_THREAD_TYPE = 'verification';
@@ -219,7 +220,10 @@ export class ThreadManager implements IThreadManager {
       });
       return true;
     } catch (error) {
-      console.warn(`Failed to deliver CAPTCHA challenge for case ${verificationEvent.id}:`, error);
+      const code = getDiscordErrorCode(error);
+      console.warn(
+        `Failed to deliver CAPTCHA challenge for case ${verificationEvent.id} (Discord code: ${String(code ?? 'unknown')}).`
+      );
       return false;
     }
   }

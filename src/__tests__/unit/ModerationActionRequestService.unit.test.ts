@@ -1719,9 +1719,13 @@ describe('ModerationActionRequestService', () => {
   });
 
   it('records a moderator-issued CAPTCHA pass as evidence without resolving the case', async () => {
-    const { captchaChallengeService, repository, service, userModerationService } = buildService([
-      applyCaptchaPassRequest,
-    ]);
+    const {
+      captchaChallengeService,
+      notificationManager,
+      repository,
+      service,
+      userModerationService,
+    } = buildService([applyCaptchaPassRequest]);
     captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
       status: 'evidence_only',
     } as any);
@@ -1729,6 +1733,10 @@ describe('ModerationActionRequestService', () => {
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
     expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'evidence_only_pass'
+    );
     expect(repository.completed[0]).toEqual({
       id: 'captcha-pass-request-1',
       result: expect.objectContaining({ effect: 'evidence_only', resolved: false }),

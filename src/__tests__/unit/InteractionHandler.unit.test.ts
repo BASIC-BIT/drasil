@@ -402,6 +402,7 @@ describe('InteractionHandler (unit)', () => {
       completeCaseRoleRelease: jest.fn(),
       completeVerificationRelease: jest.fn(),
       completeCaptchaVerification: jest.fn(),
+      reopen: jest.fn(),
       recordSubjectCaseEvidence: jest.fn(),
       rollbackCaseRoleRelease: jest.fn(),
       renewQuarantineAttempt: jest.fn(),

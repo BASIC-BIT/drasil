@@ -207,27 +207,43 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     if (!normalizedReason) {
       throw new Error('A reason is required to continue without the browser check.');
     }
-    const result = await this.prisma.captcha_challenges.updateMany({
-      where: {
-        id,
-        generation,
-        status: {
-          in: [
-            CaptchaChallengeStatus.PENDING,
-            CaptchaChallengeStatus.FAILED,
-            CaptchaChallengeStatus.EXPIRED,
-          ],
+    const boundedReason = normalizedReason.slice(0, 1000);
+    const bypassedAt = new Date();
+    return (await this.prisma.$transaction(async (transaction) => {
+      const result = await transaction.captcha_challenges.updateMany({
+        where: {
+          id,
+          generation,
+          status: {
+            in: [
+              CaptchaChallengeStatus.PENDING,
+              CaptchaChallengeStatus.FAILED,
+              CaptchaChallengeStatus.EXPIRED,
+            ],
+          },
         },
-      },
-      data: {
-        status: CaptchaChallengeStatus.BYPASSED,
-        bypassed_by: moderatorId,
-        bypassed_at: new Date(),
-        bypass_reason: normalizedReason.slice(0, 1000),
-        updated_at: new Date(),
-      },
-    });
-    return result.count === 1 ? this.findById(id) : null;
+        data: {
+          status: CaptchaChallengeStatus.BYPASSED,
+          bypassed_by: moderatorId,
+          bypassed_at: bypassedAt,
+          bypass_reason: boundedReason,
+          updated_at: bypassedAt,
+        },
+      });
+      if (result.count !== 1) {
+        return null;
+      }
+      await transaction.captcha_challenge_bypasses.create({
+        data: {
+          captcha_challenge_id: id,
+          generation,
+          moderator_id: moderatorId,
+          reason: boundedReason,
+          bypassed_at: bypassedAt,
+        },
+      });
+      return await transaction.captcha_challenges.findUnique({ where: { id } });
+    })) as CaptchaChallenge | null;
   }
 
   public async cancelPendingForCase(verificationEventId: string): Promise<boolean> {

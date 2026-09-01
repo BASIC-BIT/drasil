@@ -69,6 +69,7 @@ export type CaptchaAttentionReason =
   | 'delivery_failed'
   | 'expired'
   | 'submission_limit'
+  | 'evidence_only_pass'
   | 'automatic_resolution_held';
 
 /**
@@ -722,7 +723,9 @@ export class NotificationManager implements INotificationManager {
             ? 'A browser security check expired. The user remains restricted.'
             : reason === 'submission_limit'
               ? 'A browser security check reached its submission limit. The user remains restricted.'
-              : 'A browser security check passed, but current case state prevented automatic resolution.';
+              : reason === 'evidence_only_pass'
+                ? 'A browser security check was completed. Review the pending case.'
+                : 'A browser security check passed, but current case state prevented automatic resolution.';
       const roleMentions = this.presentationBuilder.formatRoleMentions(notificationRoleIds) ?? '';
       const lines = [
         `${roleMentions} ${summary}`.trim(),

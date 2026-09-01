@@ -4036,11 +4036,7 @@ export class SecurityActionService implements ISecurityActionService {
     try {
       const previousStatus = verificationEvent.status;
 
-      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
-        status: VerificationStatus.PENDING,
-        resolved_at: null,
-        resolved_by: null,
-      });
+      const updatedEvent = await this.verificationEventRepository.reopen(verificationEvent.id);
 
       if (!updatedEvent) {
         throw new Error(`Verification event ${verificationEvent.id} not found for reopen.`);

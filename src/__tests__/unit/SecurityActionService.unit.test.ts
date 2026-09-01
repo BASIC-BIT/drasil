@@ -3865,6 +3865,7 @@ describe('SecurityActionService (unit)', () => {
 
     const updatedEvent = await verificationEventRepository.findById(verificationEvent.id);
     expect(updatedEvent?.status).toBe(VerificationStatus.PENDING);
+    expect(updatedEvent?.case_revision).toBe(verificationEvent.case_revision + 1);
     expect(updatedEvent?.resolved_at).toBeNull();
     expect(updatedEvent?.resolved_by).toBeNull();
     expect(threadManager.reopenVerificationThread).toHaveBeenCalledWith(verificationEvent);

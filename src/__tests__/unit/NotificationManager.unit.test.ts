@@ -182,6 +182,22 @@ describe('NotificationManager (unit)', () => {
     );
   });
 
+  it('notifies moderators when a completed browser check leaves the case pending', async () => {
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await expect(
+      manager.notifyCaptchaAttention(buildVerificationEvent(), 'evidence_only_pass')
+    ).resolves.toBe(true);
+
+    expect(adminChannel.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining(
+          'A browser security check was completed. Review the pending case.'
+        ),
+      })
+    );
+  });
+
   it('sends a new notification when no existing message is set', async () => {
     const member = buildMember('guild-1', 'user-1');
     const detectionResult: DetectionResult = {

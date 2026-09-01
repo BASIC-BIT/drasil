@@ -1058,14 +1058,10 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     }
 
     if (decision.status !== 'eligible') {
-      if (
-        decision.status === 'held' &&
-        verificationEvent &&
-        this.notificationManager.notifyCaptchaAttention
-      ) {
+      if (verificationEvent && this.notificationManager.notifyCaptchaAttention) {
         await this.notificationManager.notifyCaptchaAttention(
           verificationEvent,
-          'automatic_resolution_held'
+          decision.status === 'held' ? 'automatic_resolution_held' : 'evidence_only_pass'
         );
       }
       await this.repository.complete(request.id, {

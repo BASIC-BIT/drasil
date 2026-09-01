@@ -47,7 +47,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     return { detection, detections, verification };
   }
 
-  it('keeps one aggregate per case and advances the generation on retry', async () => {
+  it('keeps one aggregate per case and preserves per-generation bypass audit on retry', async () => {
     const { verification } = await createCase('guild-captcha-retry', 'user-captcha-retry');
     const challenges = new CaptchaChallengeRepository(prisma);
     const initial = await challenges.create({
@@ -62,6 +62,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       requestedBy: 'moderator-1',
     });
     await challenges.expirePending(new Date(), 10);
+    await challenges.bypass(initial.id, initial.generation, 'moderator-bypass', 'Manual review');
 
     const retried = await challenges.retry({
       verificationEventId: verification.id,
@@ -82,8 +83,63 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       status: CaptchaChallengeStatus.PENDING,
       submission_count: 0,
       requested_by: 'moderator-2',
+      bypassed_by: null,
+      bypassed_at: null,
+      bypass_reason: null,
     });
     await expect(prisma.captcha_challenges.count()).resolves.toBe(1);
+    await expect(prisma.captcha_challenge_bypasses.findMany()).resolves.toEqual([
+      expect.objectContaining({
+        captcha_challenge_id: initial.id,
+        generation: initial.generation,
+        moderator_id: 'moderator-bypass',
+        reason: 'Manual review',
+      }),
+    ]);
+  });
+
+  it('invalidates a passed generation when its resolved case is reopened', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-reopen-revision',
+      'user-captcha-reopen-revision'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'reopen-revision-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
+    });
+    const completion = {
+      challengeId: challenge.id,
+      expectedCaseRevision: verification.case_revision,
+      generation: challenge.generation,
+      id: verification.id,
+      resolvedAt: new Date(),
+      resolvedBy: 'drasil:captcha',
+      serverId: verification.server_id,
+      userId: verification.user_id,
+    };
+
+    await expect(verifications.completeCaptchaVerification(completion)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.VERIFIED })
+    );
+    await expect(verifications.reopen(verification.id)).resolves.toEqual(
+      expect.objectContaining({
+        case_revision: verification.case_revision + 1,
+        status: VerificationStatus.PENDING,
+      })
+    );
+    await expect(verifications.completeCaptchaVerification(completion)).resolves.toBeNull();
   });
 
   it('distinguishes duplicate cases from public-link token collisions', async () => {

@@ -786,6 +786,37 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return { ...updated };
   }
 
+  public async reopen(id: string): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.status !== VerificationStatus.PENDING &&
+        event.containment_status !== CaseContainmentStatus.IN_PROGRESS
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+    const existing = this.events[eventIndex];
+    const reopened: VerificationEvent = {
+      ...existing,
+      status: VerificationStatus.PENDING,
+      case_revision: existing.case_revision + 1,
+      case_kind: CaseKind.STANDARD,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+      quarantine_attempt_id: null,
+      quarantine_lease_renewed_at: null,
+      quarantine_case_role_id: null,
+      parked_at: null,
+      parked_by: null,
+      resolved_at: null,
+      resolved_by: null,
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = reopened;
+    return { ...reopened };
+  }
+
   async claimQuarantineAttempt(
     id: string,
     serverId: string,

@@ -232,6 +232,10 @@ Do not store Turnstile response tokens, Discord OAuth access tokens, IP addresse
 or provider response bodies. Provider error codes must be allowlisted and bounded before storage or
 logs.
 
+Store each moderator bypass in `captcha_challenge_bypasses`, keyed by challenge and generation,
+with the moderator ID, bounded reason, and timestamp. Retrying clears the current generation's
+display fields but must not erase this durable per-generation audit history.
+
 ### Case evidence revision
 
 Add a monotonic evidence revision to `verification_events`, or an equivalent transactional evidence

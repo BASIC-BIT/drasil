@@ -341,5 +341,13 @@ describeIntegration('SecurityActionService (integration)', () => {
     expect(actions[0].server_id).toBe(guildId);
     expect(actions[0].user_id).toBe(userId);
     expect(actions[0].verification_event_id).toBe(verificationEvent.id);
+    await expect(
+      prisma.verification_events.findUnique({ where: { id: verificationEvent.id } })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        case_revision: verificationEvent.case_revision + 1,
+        status: VerificationStatus.PENDING,
+      })
+    );
   });
 });

@@ -163,7 +163,14 @@ describe('ThreadManager (unit)', () => {
   });
 
   it('returns false when a CAPTCHA challenge cannot be sent', async () => {
-    thread.send.mockRejectedValueOnce(new Error('Discord unavailable'));
+    const challengeUrl = 'https://drasil.example/captcha/plaintext-secret-token';
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    thread.send.mockRejectedValueOnce(
+      Object.assign(new Error(`Invalid request containing ${challengeUrl}`), {
+        code: 50035,
+        requestBody: { url: challengeUrl },
+      })
+    );
     const client = {
       channels: { fetch: jest.fn().mockResolvedValue(thread) },
     };
@@ -177,11 +184,13 @@ describe('ThreadManager (unit)', () => {
     );
 
     await expect(
-      manager.sendCaptchaChallenge(
-        buildVerificationEvent({ thread_id: thread.id }),
-        'https://drasil.example/captcha/token'
-      )
+      manager.sendCaptchaChallenge(buildVerificationEvent({ thread_id: thread.id }), challengeUrl)
     ).resolves.toBe(false);
+
+    expect(warn).toHaveBeenCalledWith(
+      'Failed to deliver CAPTCHA challenge for case ver-1 (Discord code: 50035).'
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(challengeUrl);
   });
 
   it('delivers a CAPTCHA challenge after confirming the subject belongs to the case thread', async () => {

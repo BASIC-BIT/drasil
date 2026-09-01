@@ -130,6 +130,7 @@ export interface IVerificationEventRepository {
   completeCaptchaVerification(
     input: CaptchaVerificationCompletionInput
   ): Promise<VerificationEvent | null>;
+  reopen(id: string): Promise<VerificationEvent | null>;
   recordSubjectCaseEvidence(id: string, messageId: string): Promise<VerificationEvent | null>;
   rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null>;
   renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean>;
@@ -635,6 +636,41 @@ export class VerificationEventRepository implements IVerificationEventRepository
       return rows[0] ?? null;
     } catch (error) {
       this.handleError(error, 'completeCaptchaVerification');
+    }
+  }
+
+  public async reopen(id: string): Promise<VerificationEvent | null> {
+    try {
+      const reopened = await this.prisma.verification_events.updateMany({
+        where: {
+          id,
+          status: { not: VerificationStatus.PENDING },
+          containment_status: { not: CaseContainmentStatus.IN_PROGRESS },
+        },
+        data: {
+          status: VerificationStatus.PENDING,
+          case_revision: { increment: 1 },
+          case_kind: CaseKind.STANDARD,
+          attention_state: CaseAttentionState.REVIEW_REQUIRED,
+          containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+          quarantine_attempt_id: null,
+          quarantine_lease_renewed_at: null,
+          quarantine_case_role_id: null,
+          parked_at: null,
+          parked_by: null,
+          resolved_at: null,
+          resolved_by: null,
+          updated_at: new Date(),
+        },
+      });
+      if (reopened.count !== 1) {
+        return null;
+      }
+      return (await this.prisma.verification_events.findUnique({
+        where: { id },
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'reopenVerification');
     }
   }
 
