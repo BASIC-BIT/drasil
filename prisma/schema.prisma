@@ -511,12 +511,28 @@ model captcha_challenges {
   updated_at             DateTime                         @default(now()) @db.Timestamptz(6)
   attempts               captcha_challenge_attempts[]
   bypasses               captcha_challenge_bypasses[]
+  requests               captcha_challenge_requests[]
   servers                servers                          @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
   users                  users                            @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
   verification_events    verification_events              @relation(fields: [verification_event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([server_id, status, expires_at], map: "idx_captcha_challenges_server_status_expiry")
   @@index([user_id, server_id], map: "idx_captcha_challenges_user_server")
+}
+
+model captcha_challenge_requests {
+  id                     String                           @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  captcha_challenge_id   String                           @db.Uuid
+  generation             Int
+  request_source         captcha_challenge_request_source
+  pass_effect            captcha_challenge_pass_effect
+  case_revision_at_issue Int
+  requested_by           String?
+  requested_at           DateTime                         @default(now()) @db.Timestamptz(6)
+  captcha_challenges     captcha_challenges               @relation(fields: [captcha_challenge_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([captcha_challenge_id, generation], map: "captcha_requests_challenge_generation_key")
+  @@index([captcha_challenge_id, requested_at], map: "idx_captcha_requests_challenge_time")
 }
 
 model captcha_challenge_bypasses {

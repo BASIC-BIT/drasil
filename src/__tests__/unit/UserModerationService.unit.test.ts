@@ -420,6 +420,64 @@ describe('UserModerationService (unit)', () => {
     ).resolves.toHaveLength(1);
   });
 
+  it('does not finalize a CAPTCHA resolution after the case is concurrently reopened', async () => {
+    const guildId = 'guild-captcha-concurrent-reopen';
+    const userId = 'user-captcha-concurrent-reopen';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const originalFindById = verificationEventRepository.findById.bind(verificationEventRepository);
+    let readCount = 0;
+    jest.spyOn(verificationEventRepository, 'findById').mockImplementation(async (id) => {
+      const current = await originalFindById(id);
+      readCount += 1;
+      if (readCount === 2 && current?.status === VerificationStatus.VERIFIED) {
+        return verificationEventRepository.reopen(id);
+      }
+      return current;
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-concurrent-reopen',
+        expectedCaseRevision: verificationEvent.case_revision,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'case_changed' });
+
+    await expect(originalFindById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        case_revision: verificationEvent.case_revision + 1,
+        status: VerificationStatus.PENDING,
+      })
+    );
+    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+    expect(notificationManager.logActionToMessage).not.toHaveBeenCalled();
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      0
+    );
+    await expect(
+      moderationOutcomeRepository.findByVerificationEvent(verificationEvent.id)
+    ).resolves.toHaveLength(0);
+  });
+
   it('keeps the case role when another pending case exists', async () => {
     const guildId = 'guild-captcha-other-case';
     const userId = 'user-captcha-other-case';

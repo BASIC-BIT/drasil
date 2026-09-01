@@ -98,6 +98,24 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         reason: 'Manual review',
       }),
     ]);
+    await expect(
+      prisma.captcha_challenge_requests.findMany({
+        orderBy: { generation: 'asc' },
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        captcha_challenge_id: initial.id,
+        generation: 1,
+        request_source: CaptchaChallengeRequestSource.MODERATOR,
+        requested_by: 'moderator-1',
+      }),
+      expect.objectContaining({
+        captcha_challenge_id: initial.id,
+        generation: 2,
+        request_source: CaptchaChallengeRequestSource.MODERATOR,
+        requested_by: 'moderator-2',
+      }),
+    ]);
   });
 
   it('refuses a stale retry after another moderator advances the challenge', async () => {

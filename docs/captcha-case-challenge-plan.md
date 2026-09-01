@@ -102,6 +102,7 @@ Moderator inclusion requires all of the following:
 `captcha_mode=off` disables new automatic and moderator challenges. `captcha_mode=manual` enables
 moderator challenges only. Disabling the mode does not erase audit history. Pending challenges
 should stop accepting new completions and move to `cancelled` so the operator has a clear cutoff.
+Already-passed challenges must also stop applying or replaying automatic case-resolution effects.
 
 ### Retry and bypass
 
@@ -209,6 +210,10 @@ generation. Never persist or log the plaintext link token.
 Capture `pass_effect` at issuance for audit clarity, but recheck the current server setting at pass
 time before automatic resolution. A later policy change may narrow an outstanding challenge but
 must not broaden its effect.
+
+Store every issuance and retry in `captcha_challenge_requests`, keyed by challenge and generation,
+with the request source, pass effect, case revision, requester, and timestamp. The challenge
+aggregate may expose the current generation, but retry must not overwrite prior request provenance.
 
 ### Attempts
 

@@ -16,6 +16,7 @@ export interface CaptchaRequestPolicyInput {
 }
 
 export interface CaptchaAutoResolutionPolicyInput {
+  currentMode: CaptchaMode;
   requestSource: CaptchaChallengeRequestSource;
   issuedPassEffect: CaptchaChallengePassEffect;
   currentPassAction: CaptchaPassAction;
@@ -85,7 +86,7 @@ export function evaluateCaptchaAutoResolution(
   ) {
     return { status: 'evidence_only' };
   }
-  if (input.currentPassAction !== 'verify_join_only') {
+  if (input.currentMode === 'off' || input.currentPassAction !== 'verify_join_only') {
     return { status: 'held', reason: 'policy_changed' };
   }
   if (

@@ -80,6 +80,7 @@ describe('CaptchaChallengePolicy', () => {
   it('allows automatic resolution only for an unchanged join-only case', () => {
     expect(
       canAutomaticallyResolveCaptchaCase({
+        currentMode: 'suspicious_join',
         requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
         issuedPassEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
         currentPassAction: 'verify_join_only',
@@ -96,6 +97,7 @@ describe('CaptchaChallengePolicy', () => {
   it.each([
     ['manual request', { requestSource: CaptchaChallengeRequestSource.MODERATOR }],
     ['evidence-only issue', { issuedPassEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY }],
+    ['disabled mode', { currentMode: 'off' as const }],
     ['policy narrowed', { currentPassAction: 'evidence_only' as const }],
     ['revision changed', { caseRevision: 2 }],
     ['message evidence', { linkedDetectionTypes: [DetectionType.SUSPICIOUS_CONTENT] }],
@@ -103,6 +105,7 @@ describe('CaptchaChallengePolicy', () => {
   ])('holds automatic resolution for %s', (_label, override) => {
     expect(
       canAutomaticallyResolveCaptchaCase({
+        currentMode: 'suspicious_join',
         requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
         issuedPassEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
         currentPassAction: 'verify_join_only',

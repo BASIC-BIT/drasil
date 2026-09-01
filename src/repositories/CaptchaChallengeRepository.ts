@@ -76,7 +76,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         if (!pendingCase[0]) {
           throw new Error('The case changed before the security check could be created.');
         }
-        return await transaction.captcha_challenges.create({
+        const challenge = await transaction.captcha_challenges.create({
           data: {
             verification_event_id: input.verificationEventId,
             server_id: input.serverId,
@@ -89,6 +89,18 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             requested_by: input.requestedBy ?? null,
           },
         });
+        await transaction.captcha_challenge_requests.create({
+          data: {
+            captcha_challenge_id: challenge.id,
+            generation: challenge.generation,
+            request_source: challenge.request_source,
+            pass_effect: challenge.pass_effect,
+            case_revision_at_issue: challenge.case_revision_at_issue,
+            requested_by: challenge.requested_by,
+            requested_at: challenge.requested_at,
+          },
+        });
+        return challenge;
       })) as CaptchaChallenge;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -178,9 +190,21 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       if (updated.count !== 1) {
         throw new Error('The CAPTCHA challenge changed while retrying.');
       }
-      return await transaction.captcha_challenges.findUniqueOrThrow({
+      const retried = await transaction.captcha_challenges.findUniqueOrThrow({
         where: { id: existing.id },
       });
+      await transaction.captcha_challenge_requests.create({
+        data: {
+          captcha_challenge_id: retried.id,
+          generation: retried.generation,
+          request_source: retried.request_source,
+          pass_effect: retried.pass_effect,
+          case_revision_at_issue: retried.case_revision_at_issue,
+          requested_by: retried.requested_by,
+          requested_at: retried.requested_at,
+        },
+      });
+      return retried;
     })) as CaptchaChallenge;
   }
 

@@ -265,6 +265,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     ]);
     const settings = getCaptchaSettings(server.settings);
     return evaluateCaptchaAutoResolution({
+      currentMode: settings.mode,
       requestSource: challenge.request_source,
       issuedPassEffect: challenge.pass_effect,
       currentPassAction: settings.passAction,

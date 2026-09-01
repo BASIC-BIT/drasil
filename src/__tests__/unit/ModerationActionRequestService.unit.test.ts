@@ -1772,6 +1772,26 @@ describe('ModerationActionRequestService', () => {
     });
   });
 
+  it('keeps an evidence-only CAPTCHA pass retryable when moderator attention fails', async () => {
+    const { captchaChallengeService, notificationManager, repository, service } = buildService([
+      applyCaptchaPassRequest,
+    ]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'evidence_only',
+    } as any);
+    notificationManager.notifyCaptchaAttention.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-pass-request-1',
+        error: 'Failed to notify moderators about CAPTCHA case ver-1.',
+      },
+    ]);
+  });
+
   it('rejects a CAPTCHA pass request that does not use the dedicated system actor', async () => {
     const { captchaChallengeService, repository, service, userModerationService } = buildService([
       { ...applyCaptchaPassRequest, actor_id: 'moderator-1' },

@@ -1349,6 +1349,27 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       ...(remainingPending.length === 0 ? { last_verified_at: resolvedAt.toISOString() } : {}),
       updated_by: actorId,
     });
+    const current = await this.verificationEventRepository.findById(completed.id);
+    const currentCaptchaResolutionValue = this.metadataToRecord(
+      current?.metadata ?? null
+    ).captcha_resolution;
+    const currentCaptchaResolution =
+      currentCaptchaResolutionValue &&
+      typeof currentCaptchaResolutionValue === 'object' &&
+      !Array.isArray(currentCaptchaResolutionValue)
+        ? (currentCaptchaResolutionValue as Record<string, unknown>)
+        : {};
+    if (
+      !current ||
+      current.status !== VerificationStatus.VERIFIED ||
+      current.resolved_by !== actorId ||
+      current.case_revision !== input.expectedCaseRevision ||
+      currentCaptchaResolution.challenge_id !== input.challengeId ||
+      currentCaptchaResolution.generation !== input.generation
+    ) {
+      return { status: 'held', reason: 'case_changed' };
+    }
+    completed = current;
     await this.finalizeCaptchaResolvedVerificationEvent(
       member,
       completed,

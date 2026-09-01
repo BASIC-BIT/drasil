@@ -318,6 +318,33 @@ describe('CaptchaChallengeService', () => {
     ).resolves.toEqual({ status: 'eligible' });
   });
 
+  it('holds a previously passed automatic challenge after CAPTCHA is disabled', async () => {
+    const { challenges, detectionEvents, service } = createHarness({
+      captcha_mode: 'off',
+      captcha_pass_action: 'verify_join_only',
+    });
+    challenges.findById.mockResolvedValue(
+      buildChallenge({
+        pass_effect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+        request_source: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+        status: CaptchaChallengeStatus.PASSED,
+      })
+    );
+    detectionEvents.findByVerificationEventId.mockResolvedValue([
+      { detection_type: DetectionType.NEW_ACCOUNT } as any,
+    ]);
+
+    await expect(
+      service.evaluatePassedChallenge({
+        challengeId: 'challenge-1',
+        expectedCaseRevision: 2,
+        generation: 1,
+        targetUserId: 'user-1',
+        verificationEventId: 'case-1',
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'policy_changed' });
+  });
+
   it('holds automatic resolution when another pending case exists', async () => {
     const { challenges, detectionEvents, service, verificationEvents } = createHarness({
       captcha_mode: 'suspicious_join',

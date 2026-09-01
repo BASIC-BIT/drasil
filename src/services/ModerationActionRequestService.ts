@@ -39,13 +39,14 @@ import {
   ModerationActionRequest,
   ModerationActionRequestStatus,
   ModerationActionRequestType,
+  VerificationEvent,
   VerificationStatus,
   type VerificationChannelPermissionSyncState,
 } from '../repositories/types';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { buildReportIntakeAdminActionsCustomId } from '../utils/reportIntakeAdminActions';
 import { IModerationQueueService } from './ModerationQueueService';
-import { INotificationManager } from './NotificationManager';
+import { CaptchaAttentionReason, INotificationManager } from './NotificationManager';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 import { IProductAnalyticsService } from './ProductAnalyticsService';
 import { ReportSubmissionService } from './ReportSubmissionService';
@@ -1073,8 +1074,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     }
 
     if (decision.status !== 'eligible') {
-      if (verificationEvent && this.notificationManager.notifyCaptchaAttention) {
-        await this.notificationManager.notifyCaptchaAttention(
+      if (verificationEvent?.status === VerificationStatus.PENDING) {
+        await this.requireCaptchaAttention(
           verificationEvent,
           decision.status === 'held' ? 'automatic_resolution_held' : 'evidence_only_pass'
         );
@@ -1096,11 +1097,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       () => null
     );
     if (!member) {
-      if (verificationEvent && this.notificationManager.notifyCaptchaAttention) {
-        await this.notificationManager.notifyCaptchaAttention(
-          verificationEvent,
-          'automatic_resolution_held'
-        );
+      if (verificationEvent?.status === VerificationStatus.PENDING) {
+        await this.requireCaptchaAttention(verificationEvent, 'automatic_resolution_held');
       }
       await this.repository.complete(request.id, {
         action_type: request.action_type,
@@ -1121,15 +1119,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       generation,
       expectedCaseRevision,
     });
-    if (
-      result.status === 'held' &&
-      verificationEvent &&
-      this.notificationManager.notifyCaptchaAttention
-    ) {
-      await this.notificationManager.notifyCaptchaAttention(
-        verificationEvent,
-        'automatic_resolution_held'
-      );
+    if (result.status === 'held' && verificationEvent?.status === VerificationStatus.PENDING) {
+      await this.requireCaptchaAttention(verificationEvent, 'automatic_resolution_held');
     }
     await this.repository.complete(request.id, {
       action_type: request.action_type,
@@ -1141,6 +1132,18 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       target_user_id: request.target_user_id,
       verification_event_id: request.verification_event_id,
     });
+  }
+
+  private async requireCaptchaAttention(
+    verificationEvent: VerificationEvent,
+    reason: CaptchaAttentionReason
+  ): Promise<void> {
+    const notified = this.notificationManager.notifyCaptchaAttention
+      ? await this.notificationManager.notifyCaptchaAttention(verificationEvent, reason)
+      : false;
+    if (!notified) {
+      throw new Error(`Failed to notify moderators about CAPTCHA case ${verificationEvent.id}.`);
+    }
   }
 
   private async notifyCaptchaAttention(request: ModerationActionRequest): Promise<void> {
